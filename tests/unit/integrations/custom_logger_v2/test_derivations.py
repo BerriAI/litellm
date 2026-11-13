@@ -1,5 +1,6 @@
 import json
 import math
+import re
 from collections.abc import Callable, Generator, Mapping
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -14,7 +15,6 @@ from litellm.integrations.custom_logger_v2 import derivations
 from litellm.integrations.custom_logger_v2.derivations import RECORD_TYPES
 from litellm.integrations.custom_logger_v2.slots import HookArgs
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 from litellm.types.integrations.custom_logger_v2 import (
     AttemptTiming,
     BudgetPlan,
@@ -43,6 +43,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     coerce_record,
     reset_coercion_reports_for_tests,
 )
+from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
 RECORDS_JSON: Final = Path(__file__).parents[4] / "litellm/rust/crates/callbacks/records.json"
 
@@ -197,30 +198,141 @@ def test_nan_is_carried_as_the_float_python_reads() -> None:
 
 
 _CARRIED: Final = (
-    pytest.param(["a1"], Stringified(text="['a1']", truthy=True, hashable=False, integer=False), id="list"),
-    pytest.param([], Stringified(text="[]", truthy=False, hashable=False, integer=False), id="empty_list"),
-    pytest.param({"a": 1}, Stringified(text="{'a': 1}", truthy=True, hashable=False, integer=False), id="dict"),
-    pytest.param({}, Stringified(text="{}", truthy=False, hashable=False, integer=False), id="empty_dict"),
-    pytest.param({"a"}, Stringified(text="{'a'}", truthy=True, hashable=False, integer=False), id="set"),
-    pytest.param(set(), Stringified(text="set()", truthy=False, hashable=False, integer=False), id="empty_set"),
-    pytest.param(("a",), Stringified(text="('a',)", truthy=True, hashable=True, integer=False), id="tuple"),
     pytest.param(
-        ("a", ["b"]), Stringified(text="('a', ['b'])", truthy=True, hashable=False, integer=False), id="tuple_of_list"
+        ["a1"],
+        Stringified(
+            text="['a1']",
+            truthy=True,
+            hashable=False,
+            integer=False,
+            type_name="list",
+            hash_error="unhashable type: 'list'",
+        ),
+        id="list",
     ),
     pytest.param(
-        frozenset(), Stringified(text="frozenset()", truthy=False, hashable=True, integer=False), id="frozenset"
+        [],
+        Stringified(
+            text="[]",
+            truthy=False,
+            hashable=False,
+            integer=False,
+            type_name="list",
+            hash_error="unhashable type: 'list'",
+        ),
+        id="empty_list",
     ),
-    pytest.param(b"7", Stringified(text="b'7'", truthy=True, hashable=True, integer=False), id="bytes"),
-    pytest.param(b"", Stringified(text="b''", truthy=False, hashable=True, integer=False), id="empty_bytes"),
-    pytest.param(_Falsy(), Stringified(text="falsy object", truthy=False, hashable=True, integer=False), id="object"),
+    pytest.param(
+        {"a": 1},
+        Stringified(
+            text="{'a': 1}",
+            truthy=True,
+            hashable=False,
+            integer=False,
+            type_name="dict",
+            hash_error="unhashable type: 'dict'",
+        ),
+        id="dict",
+    ),
+    pytest.param(
+        {},
+        Stringified(
+            text="{}",
+            truthy=False,
+            hashable=False,
+            integer=False,
+            type_name="dict",
+            hash_error="unhashable type: 'dict'",
+        ),
+        id="empty_dict",
+    ),
+    pytest.param(
+        {"a"},
+        Stringified(
+            text="{'a'}",
+            truthy=True,
+            hashable=False,
+            integer=False,
+            type_name="set",
+            hash_error="unhashable type: 'set'",
+        ),
+        id="set",
+    ),
+    pytest.param(
+        set(),
+        Stringified(
+            text="set()",
+            truthy=False,
+            hashable=False,
+            integer=False,
+            type_name="set",
+            hash_error="unhashable type: 'set'",
+        ),
+        id="empty_set",
+    ),
+    pytest.param(
+        ("a",),
+        Stringified(text="('a',)", truthy=True, hashable=True, integer=False, type_name="tuple", hash_error=None),
+        id="tuple",
+    ),
+    pytest.param(
+        ("a", ["b"]),
+        Stringified(
+            text="('a', ['b'])",
+            truthy=True,
+            hashable=False,
+            integer=False,
+            type_name="tuple",
+            hash_error="unhashable type: 'list'",
+        ),
+        id="tuple_of_list",
+    ),
+    pytest.param(
+        frozenset(),
+        Stringified(
+            text="frozenset()", truthy=False, hashable=True, integer=False, type_name="frozenset", hash_error=None
+        ),
+        id="frozenset",
+    ),
+    pytest.param(
+        b"7",
+        Stringified(text="b'7'", truthy=True, hashable=True, integer=False, type_name="bytes", hash_error=None),
+        id="bytes",
+    ),
+    pytest.param(
+        b"",
+        Stringified(text="b''", truthy=False, hashable=True, integer=False, type_name="bytes", hash_error=None),
+        id="empty_bytes",
+    ),
+    pytest.param(
+        _Falsy(),
+        Stringified(
+            text="falsy object", truthy=False, hashable=True, integer=False, type_name="_Falsy", hash_error=None
+        ),
+        id="object",
+    ),
     pytest.param(
         2**127,
-        Stringified(text="170141183460469231731687303715884105728", truthy=True, hashable=True, integer=True),
+        Stringified(
+            text="170141183460469231731687303715884105728",
+            truthy=True,
+            hashable=True,
+            integer=True,
+            type_name="int",
+            hash_error=None,
+        ),
         id="past_i128",
     ),
     pytest.param(
         -(2**127) - 1,
-        Stringified(text="-170141183460469231731687303715884105729", truthy=True, hashable=True, integer=True),
+        Stringified(
+            text="-170141183460469231731687303715884105729",
+            truthy=True,
+            hashable=True,
+            integer=True,
+            type_name="int",
+            hash_error=None,
+        ),
         id="below_i128",
     ),
 )
@@ -266,6 +378,45 @@ def test_hashable_says_whether_capacity_and_the_limiter_raise_when_they_hash_the
     assert carried.hashable is not _priority_lookup_raises(raw)
     assert carried.hashable is not _descriptor_identities_raise(raw)
     assert carried.integer is isinstance(raw, int)
+
+
+def _raised(call: Callable[[], object]) -> str | None:
+    try:
+        _ = call()
+    except TypeError as error:
+        return str(error)
+    return None
+
+
+def _match_error_from_type_name(type_name: str) -> str:
+    if type_name in ("bytes", "bytearray", "memoryview"):
+        return "cannot use a string pattern on a bytes-like object"
+    return f"expected string or bytes-like object, got '{type_name}'"
+
+
+@pytest.mark.parametrize(("raw", "carried"), _CARRIED)
+def test_a_stringified_value_carries_the_error_text_python_raises_when_it_hashes_or_matches_it(
+    raw: object, carried: Stringified
+) -> None:
+    identity: Final = coerce_record(KeyIdentity, {"team_priority": raw})
+
+    assert identity.team_priority == carried
+    assert carried.hash_error == _raised(lambda: raw in {"gold": 0.5})
+    assert carried.hash_error == _raised(lambda: dict.fromkeys((("team", raw),)))
+    assert _raised(lambda: re.match("prod.*", raw)) == _match_error_from_type_name(carried.type_name)  # pyright: ignore[reportCallIssue, reportArgumentType]  # what prometheus does with a non-str tag
+
+
+@pytest.mark.parametrize(
+    ("raw", "type_name"),
+    [([], "list"), ({}, "dict"), (set(), "set"), ((), "tuple"), (frozenset(), "frozenset"), (_Falsy(), "_Falsy")],
+    ids=repr,
+)
+def test_a_stringified_value_carries_the_type_name_float_names_when_it_refuses_it(raw: object, type_name: str) -> None:
+    carried: Final = coerce_record(UsageRecord, {"prompt_tokens": raw}).prompt_tokens
+
+    assert isinstance(carried, Stringified)
+    assert carried.type_name == type_name
+    assert _raised(lambda: float(raw)) == f"float() argument must be a string or a real number, not '{type_name}'"  # pyright: ignore[reportArgumentType]  # what prometheus and capacity do with a non-number
 
 
 @pytest.mark.parametrize(
@@ -667,8 +818,22 @@ def test_key_identity_carries_a_list_priority_and_agent_id_as_the_text_python_fo
     assert identity is not None
     assert identity.rejected is None
     assert (identity.agent_id, identity.team_priority) == (
-        Stringified(text="['a1']", truthy=True, hashable=False, integer=False),
-        Stringified(text="['gold']", truthy=True, hashable=False, integer=False),
+        Stringified(
+            text="['a1']",
+            truthy=True,
+            hashable=False,
+            integer=False,
+            type_name="list",
+            hash_error="unhashable type: 'list'",
+        ),
+        Stringified(
+            text="['gold']",
+            truthy=True,
+            hashable=False,
+            integer=False,
+            type_name="list",
+            hash_error="unhashable type: 'list'",
+        ),
     )
 
 
@@ -922,7 +1087,14 @@ def test_prometheus_parity_values_cross_as_python_holds_them() -> None:
     assert usage.logged == UsageRecord(
         prompt_tokens="ten",
         completion_tokens=float("inf"),
-        total_tokens=Stringified(text="[10]", truthy=True, hashable=False, integer=False),
+        total_tokens=Stringified(
+            text="[10]",
+            truthy=True,
+            hashable=False,
+            integer=False,
+            type_name="list",
+            hash_error="unhashable type: 'list'",
+        ),
     )
     assert cost == Cost(response_cost=0.5, zero_cost=ZeroCost(reason_present=False))
     assert timing is not None
@@ -951,7 +1123,18 @@ def test_prometheus_parity_values_cross_as_python_holds_them() -> None:
             (
                 GuardrailEntry(
                     mapping=True,
-                    modes=("pre_call", 7, Stringified(text="{'x': 1}", truthy=True, hashable=False, integer=False)),
+                    modes=(
+                        "pre_call",
+                        7,
+                        Stringified(
+                            text="{'x': 1}",
+                            truthy=True,
+                            hashable=False,
+                            integer=False,
+                            type_name="dict",
+                            hash_error="unhashable type: 'dict'",
+                        ),
+                    ),
                 ),
                 GuardrailEntry(mapping=False),
             ),
@@ -962,7 +1145,16 @@ def test_prometheus_parity_values_cross_as_python_holds_them() -> None:
             (
                 GuardrailEntry(
                     mapping=True,
-                    modes=(Stringified(text="('pre_call',)", truthy=True, hashable=True, integer=False),),
+                    modes=(
+                        Stringified(
+                            text="('pre_call',)",
+                            truthy=True,
+                            hashable=True,
+                            integer=False,
+                            type_name="tuple",
+                            hash_error=None,
+                        ),
+                    ),
                 ),
             ),
         ),
@@ -1030,8 +1222,22 @@ def test_request_tags_keep_scalar_tags_and_carry_others_as_their_text() -> None:
     assert derivations.request_tags(HookArgs(request={"standard_logging_object": payload})) == (
         "prod",
         7,
-        Stringified(text="{'a': 1}", truthy=True, hashable=False, integer=False),
-        Stringified(text="[]", truthy=False, hashable=False, integer=False),
+        Stringified(
+            text="{'a': 1}",
+            truthy=True,
+            hashable=False,
+            integer=False,
+            type_name="dict",
+            hash_error="unhashable type: 'dict'",
+        ),
+        Stringified(
+            text="[]",
+            truthy=False,
+            hashable=False,
+            integer=False,
+            type_name="list",
+            hash_error="unhashable type: 'list'",
+        ),
         None,
     )
 

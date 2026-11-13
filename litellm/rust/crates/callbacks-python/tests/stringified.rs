@@ -93,12 +93,19 @@ asyncio.run(
 )
 "#;
 
-fn stringified(text: &str, truthy: bool, hashable: bool, integer: bool) -> Option<Scalar> {
+fn stringified(
+    text: &str,
+    (truthy, hashable, integer): (bool, bool, bool),
+    type_name: &str,
+    hash_error: Option<&str>,
+) -> Option<Scalar> {
     Some(Scalar::Stringified {
         text: text.to_owned(),
         truthy,
         hashable,
         integer,
+        type_name: type_name.to_owned(),
+        hash_error: hash_error.map(str::to_owned),
     })
 }
 
@@ -144,19 +151,45 @@ fn values_python_derives_reach_rust_as_their_str_text_truthiness_and_iteration()
         .expect("the native ran");
     let identity = identity.unwrap();
     assert_eq!(identity.rejected, None);
-    assert_eq!(identity.team_id, stringified("['t1']", true, false, false));
+    assert_eq!(
+        identity.team_id,
+        stringified(
+            "['t1']",
+            (true, false, false),
+            "list",
+            Some("unhashable type: 'list'")
+        )
+    );
     assert_eq!(
         identity.key_alias,
-        stringified("\u{f8ff}litellm-raw-json:x", true, true, false)
+        stringified(
+            "\u{f8ff}litellm-raw-json:x",
+            (true, true, false),
+            "Marked",
+            None
+        )
     );
-    assert_eq!(identity.org_id, stringified("set()", false, false, false));
+    assert_eq!(
+        identity.org_id,
+        stringified(
+            "set()",
+            (false, false, false),
+            "set",
+            Some("unhashable type: 'set'")
+        )
+    );
     assert_eq!(
         identity.project_id,
-        stringified("('p1',)", true, true, false)
+        stringified("('p1',)", (true, true, false), "tuple", None)
     );
     assert_eq!(
         identity.user_id,
-        stringified("170141183460469231731687303715884105728", true, true, true)
+        stringified(
+            "170141183460469231731687303715884105728",
+            (true, true, true),
+            "int",
+            None
+        )
     );
     assert_eq!(
         tags,

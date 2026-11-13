@@ -18,6 +18,8 @@ pub enum Scalar {
         truthy: bool,
         hashable: bool,
         integer: bool,
+        type_name: String,
+        hash_error: Option<String>,
     },
 }
 
@@ -29,6 +31,23 @@ impl Scalar {
             Self::Float(number) => *number != 0.0,
             Self::Text(text) => !text.is_empty(),
             Self::Stringified { truthy, .. } => *truthy,
+        }
+    }
+
+    pub fn type_name(&self) -> &str {
+        match self {
+            Self::Bool(_) => "bool",
+            Self::Int(_) => "int",
+            Self::Float(_) => "float",
+            Self::Text(_) => "str",
+            Self::Stringified { type_name, .. } => type_name,
+        }
+    }
+
+    pub fn hash_error(&self) -> Option<&str> {
+        match self {
+            Self::Stringified { hash_error, .. } => hash_error.as_deref(),
+            _ => None,
         }
     }
 }
@@ -96,12 +115,16 @@ impl Serialize for Scalar {
                 truthy,
                 hashable,
                 integer,
+                type_name,
+                hash_error,
             } => {
-                let mut members = serializer.serialize_struct("Stringified", 4)?;
+                let mut members = serializer.serialize_struct("Stringified", 6)?;
                 members.serialize_field("text", &TextOut(text))?;
                 members.serialize_field("truthy", truthy)?;
                 members.serialize_field("hashable", hashable)?;
                 members.serialize_field("integer", integer)?;
+                members.serialize_field("type_name", &TextOut(type_name))?;
+                members.serialize_field("hash_error", &hash_error.as_deref().map(TextOut))?;
                 members.end()
             }
         }
@@ -136,7 +159,14 @@ impl<'de> Deserialize<'de> for TextIn {
     }
 }
 
-const STRINGIFIED: &[&str] = &["text", "truthy", "hashable", "integer"];
+const STRINGIFIED: &[&str] = &[
+    "text",
+    "truthy",
+    "hashable",
+    "integer",
+    "type_name",
+    "hash_error",
+];
 
 struct ScalarVisitor;
 
@@ -152,12 +182,18 @@ impl<'de> Visitor<'de> for ScalarVisitor {
         let mut truthy = None;
         let mut hashable = None;
         let mut integer = None;
+        let mut type_name = None;
+        let mut hash_error = None;
         while let Some(name) = members.next_key::<String>()? {
             match name.as_str() {
                 "text" => text = Some(members.next_value::<TextIn>()?.0),
                 "truthy" => truthy = Some(members.next_value::<bool>()?),
                 "hashable" => hashable = Some(members.next_value::<bool>()?),
                 "integer" => integer = Some(members.next_value::<bool>()?),
+                "type_name" => type_name = Some(members.next_value::<TextIn>()?.0),
+                "hash_error" => {
+                    hash_error = Some(members.next_value::<Option<TextIn>>()?.map(|text| text.0));
+                }
                 other => return Err(de::Error::unknown_field(other, STRINGIFIED)),
             }
         }
@@ -166,6 +202,8 @@ impl<'de> Visitor<'de> for ScalarVisitor {
             truthy: truthy.ok_or_else(|| de::Error::missing_field("truthy"))?,
             hashable: hashable.ok_or_else(|| de::Error::missing_field("hashable"))?,
             integer: integer.ok_or_else(|| de::Error::missing_field("integer"))?,
+            type_name: type_name.ok_or_else(|| de::Error::missing_field("type_name"))?,
+            hash_error: hash_error.ok_or_else(|| de::Error::missing_field("hash_error"))?,
         })
     }
 
@@ -235,6 +273,24 @@ mod tests {
 
     use super::*;
 
+    fn stringified(
+        text: &str,
+        truthy: bool,
+        hashable: bool,
+        integer: bool,
+        type_name: &str,
+        hash_error: Option<&str>,
+    ) -> Scalar {
+        Scalar::Stringified {
+            text: text.to_owned(),
+            truthy,
+            hashable,
+            integer,
+            type_name: type_name.to_owned(),
+            hash_error: hash_error.map(str::to_owned),
+        }
+    }
+
     #[rstest]
     #[case::flag(json!(true), Scalar::Bool(true))]
     #[case::int(json!(123), Scalar::Int(123))]
@@ -247,11 +303,11 @@ mod tests {
     #[case::infinity(json!(raw_json::encode("Infinity")), Scalar::Float(f64::INFINITY))]
     #[case::negative_infinity(json!(raw_json::encode("-Infinity")), Scalar::Float(f64::NEG_INFINITY))]
     #[case::marked_text(json!(raw_json::encode(r#""\uf8fflitellm-raw-json:\n\"\u00e9\ud83d\ude00""#)), Scalar::Text("\u{f8ff}litellm-raw-json:\n\"\u{e9}\u{1f600}".to_owned()))]
-    #[case::stringified_list(json!({"text": "['a1']", "truthy": true, "hashable": false, "integer": false}), Scalar::Stringified { text: "['a1']".to_owned(), truthy: true, hashable: false, integer: false })]
-    #[case::stringified_empty_set(json!({"text": "set()", "truthy": false, "hashable": false, "integer": false}), Scalar::Stringified { text: "set()".to_owned(), truthy: false, hashable: false, integer: false })]
-    #[case::stringified_tuple(json!({"text": "('a',)", "truthy": true, "hashable": true, "integer": false}), Scalar::Stringified { text: "('a',)".to_owned(), truthy: true, hashable: true, integer: false })]
-    #[case::stringified_past_i128(json!({"text": "170141183460469231731687303715884105728", "truthy": true, "hashable": true, "integer": true}), Scalar::Stringified { text: "170141183460469231731687303715884105728".to_owned(), truthy: true, hashable: true, integer: true })]
-    #[case::stringified_marked_text(json!({"text": raw_json::encode(r#""\uf8fflitellm-raw-json:x""#), "truthy": true, "hashable": true, "integer": false}), Scalar::Stringified { text: "\u{f8ff}litellm-raw-json:x".to_owned(), truthy: true, hashable: true, integer: false })]
+    #[case::stringified_list(json!({"text": "['a1']", "truthy": true, "hashable": false, "integer": false, "type_name": "list", "hash_error": "unhashable type: 'list'"}), stringified("['a1']", true, false, false, "list", Some("unhashable type: 'list'")))]
+    #[case::stringified_empty_set(json!({"text": "set()", "truthy": false, "hashable": false, "integer": false, "type_name": "set", "hash_error": "unhashable type: 'set'"}), stringified("set()", false, false, false, "set", Some("unhashable type: 'set'")))]
+    #[case::stringified_tuple(json!({"text": "('a',)", "truthy": true, "hashable": true, "integer": false, "type_name": "tuple", "hash_error": null}), stringified("('a',)", true, true, false, "tuple", None))]
+    #[case::stringified_past_i128(json!({"text": "170141183460469231731687303715884105728", "truthy": true, "hashable": true, "integer": true, "type_name": "int", "hash_error": null}), stringified("170141183460469231731687303715884105728", true, true, true, "int", None))]
+    #[case::stringified_marked_text(json!({"text": raw_json::encode(r#""\uf8fflitellm-raw-json:x""#), "truthy": true, "hashable": true, "integer": false, "type_name": "Marked", "hash_error": null}), stringified("\u{f8ff}litellm-raw-json:x", true, true, false, "Marked", None))]
     fn a_python_scalar_keeps_its_type_and_value(#[case] sent: Value, #[case] read: Scalar) {
         let decoded: Scalar = serde_json::from_value(sent.clone()).unwrap();
         assert_eq!(decoded, read);
@@ -305,7 +361,7 @@ mod tests {
     #[rstest]
     fn a_stringified_value_never_equals_the_text_it_carries() {
         let stringified: Scalar = serde_json::from_value(
-            json!({"text": "prod", "truthy": true, "hashable": true, "integer": false}),
+            json!({"text": "prod", "truthy": true, "hashable": true, "integer": false, "type_name": "Tag", "hash_error": null}),
         )
         .unwrap();
         assert_ne!(stringified, Scalar::Text("prod".to_owned()));
@@ -320,21 +376,56 @@ mod tests {
     #[case::nan(Scalar::Float(f64::NAN), true)]
     #[case::empty_text(Scalar::Text(String::new()), false)]
     #[case::text(Scalar::Text("0".to_owned()), true)]
-    #[case::empty_list(Scalar::Stringified { text: "[]".to_owned(), truthy: false, hashable: false, integer: false }, false)]
-    #[case::object(Scalar::Stringified { text: String::new(), truthy: true, hashable: true, integer: false }, true)]
+    #[case::empty_list(
+        stringified("[]", false, false, false, "list", Some("unhashable type: 'list'")),
+        false
+    )]
+    #[case::object(stringified("", true, true, false, "object", None), true)]
     fn truthiness_is_what_python_bool_gives(#[case] value: Scalar, #[case] truthy: bool) {
         assert_eq!(value.truthy(), truthy);
     }
 
     #[rstest]
+    #[case::flag(Scalar::Bool(false), "bool", None)]
+    #[case::int(Scalar::Int(7), "int", None)]
+    #[case::float(Scalar::Float(1.5), "float", None)]
+    #[case::text(Scalar::Text("prod".to_owned()), "str", None)]
+    #[case::bytes(stringified("b'7'", true, true, false, "bytes", None), "bytes", None)]
+    #[case::tuple_of_list(
+        stringified(
+            "('a', ['b'])",
+            true,
+            false,
+            false,
+            "tuple",
+            Some("unhashable type: 'list'")
+        ),
+        "tuple",
+        Some("unhashable type: 'list'")
+    )]
+    fn the_type_name_and_hash_error_are_what_python_names_in_its_errors(
+        #[case] value: Scalar,
+        #[case] type_name: &str,
+        #[case] hash_error: Option<&str>,
+    ) {
+        assert_eq!(
+            (value.type_name(), value.hash_error()),
+            (type_name, hash_error)
+        );
+    }
+
+    #[rstest]
     #[case::list(json!(["a1"]))]
     #[case::object(json!({"a": 1}))]
-    #[case::stringified_without_truthiness(json!({"text": "[]", "hashable": false, "integer": false}))]
-    #[case::stringified_without_text(json!({"truthy": false, "hashable": false, "integer": false}))]
-    #[case::stringified_without_hashable(json!({"text": "[]", "truthy": false, "integer": false}))]
-    #[case::stringified_without_integer(json!({"text": "[]", "truthy": false, "hashable": false}))]
-    #[case::stringified_with_a_number_as_text(json!({"text": 7, "truthy": true, "hashable": true, "integer": false}))]
-    #[case::stringified_with_another_member(json!({"text": "[]", "truthy": false, "hashable": false, "integer": false, "type": "list"}))]
+    #[case::stringified_without_truthiness(json!({"text": "[]", "hashable": false, "integer": false, "type_name": "list", "hash_error": null}))]
+    #[case::stringified_without_text(json!({"truthy": false, "hashable": false, "integer": false, "type_name": "list", "hash_error": null}))]
+    #[case::stringified_without_hashable(json!({"text": "[]", "truthy": false, "integer": false, "type_name": "list", "hash_error": null}))]
+    #[case::stringified_without_integer(json!({"text": "[]", "truthy": false, "hashable": false, "type_name": "list", "hash_error": null}))]
+    #[case::stringified_without_type_name(json!({"text": "[]", "truthy": false, "hashable": false, "integer": false, "hash_error": null}))]
+    #[case::stringified_without_hash_error(json!({"text": "[]", "truthy": false, "hashable": false, "integer": false, "type_name": "list"}))]
+    #[case::stringified_with_a_number_as_type_name(json!({"text": "[]", "truthy": false, "hashable": false, "integer": false, "type_name": 7, "hash_error": null}))]
+    #[case::stringified_with_a_number_as_text(json!({"text": 7, "truthy": true, "hashable": true, "integer": false, "type_name": "list", "hash_error": null}))]
+    #[case::stringified_with_another_member(json!({"text": "[]", "truthy": false, "hashable": false, "integer": false, "type_name": "list", "hash_error": null, "type": "list"}))]
     #[case::null(Value::Null)]
     #[case::beyond_i128(json!(raw_json::encode("1000000000000000000000000000000000000000")))]
     fn a_value_that_is_not_a_scalar_does_not_decode(#[case] sent: Value) {

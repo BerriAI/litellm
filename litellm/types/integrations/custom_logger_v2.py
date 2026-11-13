@@ -50,20 +50,28 @@ class Stringified(Strict):
     truthy: bool
     hashable: bool
     integer: bool
+    type_name: str
+    hash_error: str | None
 
 
-def _hashable(value: object) -> bool:
+def _hash_error(value: object) -> str | None:
     try:
         _ = hash(value)
-    except TypeError:
-        return False
-    return True
+    except TypeError as error:
+        return str(error)
+    return None
 
 
 def _stringified(value: object) -> Stringified:
     try:
+        hash_error: Final = _hash_error(value)
         return Stringified(
-            text=str(value), truthy=bool(value), hashable=_hashable(value), integer=isinstance(value, int)
+            text=str(value),
+            truthy=bool(value),
+            hashable=hash_error is None,
+            integer=isinstance(value, int),
+            type_name=type(value).__name__,
+            hash_error=hash_error,
         )
     except Exception as error:
         raise ValueError(f"str(), bool() or hash() of a {type(value).__name__} raises") from error

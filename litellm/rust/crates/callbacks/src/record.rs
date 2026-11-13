@@ -448,7 +448,7 @@ mod tests {
     #[rstest]
     fn identity_members_carry_a_stringified_value_apart_from_text() {
         let identity: LoggedKeyIdentity = serde_json::from_value(json!({
-            "team_id": {"text": "['t1']", "truthy": true, "hashable": false, "integer": false},
+            "team_id": {"text": "['t1']", "truthy": true, "hashable": false, "integer": false, "type_name": "list", "hash_error": "unhashable type: 'list'"},
             "team_alias": "['t1']",
         }))
         .unwrap();
@@ -459,6 +459,8 @@ mod tests {
                 truthy: true,
                 hashable: false,
                 integer: false,
+                type_name: "list".to_owned(),
+                hash_error: Some("unhashable type: 'list'".to_owned()),
             })
         );
         assert_ne!(identity.team_id, identity.team_alias);

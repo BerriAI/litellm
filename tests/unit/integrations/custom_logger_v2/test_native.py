@@ -394,7 +394,17 @@ async def test_a_value_carried_as_its_text_reaches_the_native_as_text_and_truthi
     assert isinstance(logger, NativeLogger)
     view: Final = SimpleNamespace(
         key_identity=KeyIdentity(team_id=["t1"], team_priority={}),
-        request_tags=(Stringified(text="[]", truthy=False, hashable=False, integer=False), "prod"),
+        request_tags=(
+            Stringified(
+                text="[]",
+                truthy=False,
+                hashable=False,
+                integer=False,
+                type_name="list",
+                hash_error="unhashable type: 'list'",
+            ),
+            "prod",
+        ),
         budget_reservation=BudgetReservation(entries=(), entries_is_list=False),
     )
 
@@ -409,10 +419,34 @@ async def test_a_value_carried_as_its_text_reaches_the_native_as_text_and_truthi
     identity: Final = _REQUEST.validate_python(fields["key_identity"])
     reservation: Final = _REQUEST.validate_python(fields["budget_reservation"])
     assert (identity["team_id"], identity["team_priority"]) == (
-        {"text": "['t1']", "truthy": True, "hashable": False, "integer": False},
-        {"text": "{}", "truthy": False, "hashable": False, "integer": False},
+        {
+            "text": "['t1']",
+            "truthy": True,
+            "hashable": False,
+            "integer": False,
+            "type_name": "list",
+            "hash_error": "unhashable type: 'list'",
+        },
+        {
+            "text": "{}",
+            "truthy": False,
+            "hashable": False,
+            "integer": False,
+            "type_name": "dict",
+            "hash_error": "unhashable type: 'dict'",
+        },
     )
-    assert fields["request_tags"] == ({"text": "[]", "truthy": False, "hashable": False, "integer": False}, "prod")
+    assert fields["request_tags"] == (
+        {
+            "text": "[]",
+            "truthy": False,
+            "hashable": False,
+            "integer": False,
+            "type_name": "list",
+            "hash_error": "unhashable type: 'list'",
+        },
+        "prod",
+    )
     assert (reservation["entries"], reservation["entries_is_list"]) == ((), False)
 
 
