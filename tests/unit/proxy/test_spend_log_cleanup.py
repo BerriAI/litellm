@@ -575,19 +575,20 @@ async def test_delete_old_tool_index_rows_deletes_on_composite_key():
 @pytest.mark.asyncio
 async def test_age_cleanup_prunes_the_guardrail_index_on_the_spend_log_cutoff():
     """One run deletes spend logs, tool index rows and guardrail index rows on one cutoff."""
-    mock_prisma_client = MagicMock()
-    _wire_tx(mock_prisma_client.db)
-    mock_db = MagicMock()
+    mock_db: Final = MagicMock()
     _wire_tx(mock_db)
-    mock_db.execute_raw = AsyncMock(side_effect=[10, 0, 0, 0])
+    mock_db.execute_raw = AsyncMock(side_effect=[10, 0, 0, 7, 0])
+    mock_prisma_client: Final = MagicMock()
     mock_prisma_client.db = mock_db
+    cleaner: Final = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
+    assert cleaner._should_delete_spend_logs()
 
-    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
-    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+    results: Final = await cleaner._clean_spend_log_tables(mock_prisma_client, _far_deadline())
 
-    deletes = [(call[0][0], call[0][1]) for call in mock_db.execute_raw.call_args_list]
-    assert any('DELETE FROM "LiteLLM_SpendLogGuardrailIndex"' in sql for sql, _ in deletes), deletes
-    assert len({cutoff for _, cutoff in deletes}) == 1, deletes
+    deleted: Final = {result.table_name: result.rows_deleted for result in results}
+    assert deleted == {"LiteLLM_SpendLogs": 10, "LiteLLM_SpendLogToolIndex": 0, "LiteLLM_SpendLogGuardrailIndex": 7}
+    cutoffs: Final = frozenset(call.args[1] for call in mock_db.execute_raw.call_args_list)
+    assert len(cutoffs) == 1, cutoffs
 
 
 @pytest.mark.asyncio
