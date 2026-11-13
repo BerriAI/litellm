@@ -24,6 +24,10 @@ logger: Final = logging.getLogger(__name__)
 BASE_URL: Final = "https://router.huggingface.co"
 
 
+def _api_base_from_env() -> str | None:
+    return os.getenv("HF_API_BASE") or os.getenv("HUGGINGFACE_API_BASE") or None
+
+
 def _build_chat_completion_url(model_url: str) -> str:
     # Strip trailing /
     model_url = model_url.rstrip("/")
@@ -96,8 +100,8 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         if api_base is not None:
             complete_url = api_base
             complete_url = _build_chat_completion_url(complete_url)
-        elif os.getenv("HF_API_BASE") or os.getenv("HUGGINGFACE_API_BASE"):
-            complete_url = str(os.getenv("HF_API_BASE")) or str(os.getenv("HUGGINGFACE_API_BASE"))
+        elif env_api_base := _api_base_from_env():
+            complete_url = env_api_base
         elif model.startswith(("http://", "https://")):
             complete_url = model
             complete_url = _build_chat_completion_url(complete_url)
@@ -134,9 +138,9 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         if "max_retries" in optional_params:
             logger.warning("`max_retries` is not supported. It will be ignored.")
             optional_params.pop("max_retries", None)
-        first_part, remaining = model.split("/", 1)
+        first_part, _, remaining = model.partition("/")
         mapped_model = model
-        if "/" in remaining:
+        if "/" in remaining and _api_base_from_env() is None:
             provider: Final = first_part
             model_id: Final = remaining
             provider_mapping = fetch_inference_provider_mapping(model_id)
