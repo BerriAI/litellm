@@ -800,9 +800,17 @@ class CustomerHierarchyStore:
             where={"customer_member_id": member_id},
             data={
                 **alias_patch(payload),
-                "budget_id": selected,
-                "budget_override_id": override_id,
-                "budget_override_expires_at": override_expiry(member.budget_override_expires_at, payload, override_id),
+                **({"budget_id": selected} if "budget_id" in payload.model_fields_set else {}),
+                **(
+                    {
+                        "budget_override_id": override_id,
+                        "budget_override_expires_at": override_expiry(
+                            member.budget_override_expires_at, payload, override_id
+                        ),
+                    }
+                    if payload.model_fields_set & {"budget_override", "budget_override_expires_at"}
+                    else {}
+                ),
                 "updated_by": actor,
             },
         )

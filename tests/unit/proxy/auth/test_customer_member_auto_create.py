@@ -9,6 +9,7 @@ from litellm.proxy.auth.customer_member_auto_create import (
 )
 from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, ErrorCode, Failure
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    Budget,
     BudgetTemplate,
     CustomerMember,
     MemberCreate,
@@ -114,3 +115,24 @@ async def test_an_unknown_alias_becomes_an_organization_once_and_a_known_one_is_
         page=1, page_size=10
     )
     assert not isinstance(listed, Failure) and len(listed.data) == 1
+
+
+@pytest.mark.asyncio
+async def test_renaming_a_member_keeps_a_budget_assigned_after_the_rename_read_the_member() -> None:
+    database: Final = Database()
+    await _organization(database, "org-1", default_budget=False)
+    hierarchy: Final = CustomerHierarchy(_prisma(database), clock=lambda: NOW)
+    registered: Final = await ensure_customer_member("org-1", "user-7", _prisma(database))
+    assert isinstance(registered, CustomerMember), registered
+    capped: Final = await hierarchy.update_member("user-7", MemberPatch(budget_override=Budget(max_budget=3.0)), "a")
+    assert isinstance(capped, CustomerMember), capped
+
+    written: Final = await hierarchy.update_member("user-7", MemberPatch(alias="Seven"), "admin")
+
+    assert isinstance(written, CustomerMember), written
+    row: Final = database.litellm_customermembertable.rows["user-7"].model_dump()
+    assert (written.alias, row["budget_override_id"], written.effective_budget.max_budget) == (
+        "Seven",
+        capped.budget_override_id,
+        3.0,
+    )
