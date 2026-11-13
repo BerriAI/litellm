@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
 if TYPE_CHECKING:
@@ -76,6 +77,18 @@ class PrismaTableRepository(Generic[RowT_co]):
         return wrap_table_actions_for_config_sync(actions=actions, table_name=self.table_name)
 
 
+class CustomerOrganizationRepository(PrismaTableRepository["prisma_models.LiteLLM_CustomerOrganizationTable"]):
+    table_name = "litellm_customerorganizationtable"
+
+
+class CustomerMemberRepository(PrismaTableRepository["prisma_models.LiteLLM_CustomerMemberTable"]):
+    table_name = "litellm_customermembertable"
+
+
+class CustomerTeamRepository(PrismaTableRepository["prisma_models.LiteLLM_CustomerTeamTable"]):
+    table_name = "litellm_customerteamtable"
+
+
 class PolicyRepository(PrismaTableRepository["prisma_models.LiteLLM_PolicyTable"]):
     table_name = "litellm_policytable"
 
@@ -102,6 +115,10 @@ class ObjectPermissionRepository(PrismaTableRepository["prisma_models.LiteLLM_Ob
 
 class GuardrailsRepository(PrismaTableRepository["prisma_models.LiteLLM_GuardrailsTable"]):
     table_name = "litellm_guardrailstable"
+
+    async def find_active_guardrail_names(self, names: frozenset[str]) -> frozenset[str]:
+        rows: Final = await find_many_in(self.table, "guardrail_name", sorted(names), where={"status": "active"})
+        return frozenset(row.guardrail_name for row in rows)
 
 
 class MCPServerRepository(PrismaTableRepository["prisma_models.LiteLLM_MCPServerTable"]):

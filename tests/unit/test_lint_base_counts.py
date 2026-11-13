@@ -1,4 +1,4 @@
-"""Tests for scripts/lint_base_counts.py, the merge-base counting shared by the
+"""Tests for litellm/scripts/lint_base_counts.py, the merge-base counting shared by the
 four lint gates: the ceiling rule with its optional per-rule caps, the on-disk cache and
 its eviction, the CI artifact fetch, the artifact emit, and the merge-base
 resolution."""

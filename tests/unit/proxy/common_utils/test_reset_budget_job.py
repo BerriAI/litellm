@@ -12,15 +12,14 @@ import httpx
 import prisma
 import pytest
 
-
-from litellm.proxy._types import LiteLLM_BudgetTableFull, LiteLLM_VerificationToken
-from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     RESET_BUDGET_JOB_BATCH_SIZE,
     RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
     RESET_BUDGET_JOB_NAME,
 )
+from litellm.proxy._types import LiteLLM_BudgetTableFull, LiteLLM_VerificationToken
+from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.proxy.common_utils.reset_budget_job import (
     ResetBudgetJob,
     _RowReset,
@@ -28,9 +27,69 @@ from litellm.proxy.common_utils.reset_budget_job import (
     _write_team_windows,
 )
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
+from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.utils import PrismaClient
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reset_at,now",
+    (
+        ("2027-01-01T00:00:00-05:00", "2027-01-01T04:59:59+00:00"),
+        ("2027-01-01T00:00:00+05:45", "2026-12-31T18:14:59+00:00"),
+    ),
+)
+async def test_annual_window_reset_waits_for_the_saved_instant(reset_at: str, now: str) -> None:
+    store: Final = FakeSpendCounters().store()
+    counter: Final = "spend:key:offset-budget:window:12mo"
+    await store.set(counter, 10.0)
+    window: Final = {"budget_duration": "12mo", "reset_at": reset_at, "max_budget": 10.0}
+    client: Final = MagicMock(spec=PrismaClient)
+    changed: Final = await ResetBudgetJob._reset_expired_window(
+        window,
+        counter,
+        store,
+        datetime.fromisoformat(now),
+        BudgetResetSettings(timezone="America/New_York"),
+        client,
+        reset_budget_job_module.Litellm_EntityType.KEY,
+        "offset-budget",
+    )
+
+    assert changed is False
+    assert (await store.read(counter))[0] == 10.0
+    assert window["reset_at"] == reset_at
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("today", ["2028-03-01", "2029-03-01"])
+async def test_annual_reset_persists_the_same_calendar_start_as_admission(today: str) -> None:  # test-quality-ok: the SQL write is the reset job's observable persistence contract
+    client: Final = MagicMock(spec=PrismaClient)
+    client.db = MagicMock()
+    client.db.execute_raw = AsyncMock(return_value=1)
+
+    with patch("time.time", return_value=datetime.fromisoformat(today).replace(tzinfo=timezone.utc).timestamp()):
+        await ResetBudgetJob._roll_window_spend_row(
+            prisma_client=client,
+            entity_type=reset_budget_job_module.Litellm_EntityType.KEY,
+            entity_id="annual-key",
+            budget_duration="12mo",
+            next_reset_at=datetime(2029, 1, 1, tzinfo=timezone.utc),
+            reset_settings=BudgetResetSettings(),
+        )
+
+    assert client.db.execute_raw.await_count == 1
+    assert client.db.execute_raw.await_args.args[1:5] == (
+        "key",
+        "annual-key",
+        "12mo",
+        datetime(2028, 1, 1),
+    )
+    assert get_budget_window_start(
+        {"budget_duration": "12mo", "reset_at": datetime(2029, 1, 1, tzinfo=timezone.utc)}
+    ) == client.db.execute_raw.await_args.args[4].replace(tzinfo=timezone.utc)
 
 
 # Mock classes for testing
@@ -56,6 +115,7 @@ class MockTable:
         where: Dict[str, Any],
         order: Optional[Dict[str, str]] = None,
         take: Optional[int] = None,
+        include: Optional[Dict[str, bool]] = None,
     ) -> List[Any]:
         """Replays canned rows, honouring the keyset cursor + ``take`` a paged
         caller relies on: without that a paged walk never advances and the
@@ -160,6 +220,9 @@ class MockDB:
         self.litellm_tagtable = MockTable()
         self.litellm_modelaccessgroupbudgettable = MockTable()
         self.litellm_projecttable = MockTable()
+        self.litellm_customermembertable = MockTable()
+        self.litellm_customerteamtable = MockTable()
+        self.litellm_customerorganizationtable = MockTable()
         self.batch_calls: List[Dict[str, Any]] = []
         self.batchers: List[MockBatcher] = []
 
@@ -197,6 +260,7 @@ class MockPrismaClient:
         }
         self.get_data_calls: List[Dict[str, Any]] = []
         self.db = MockDB()
+        self.writer_db = self.db
 
     async def get_data(self, table_name, query_type, **kwargs):
         self.get_data_calls.append({"table_name": table_name, "query_type": query_type, **kwargs})
@@ -4277,6 +4341,9 @@ async def test_reset_budget_continues_other_categories_on_failure(frozen_reset_c
         **{t["team_id"]: t["spend"] for t in [team1, team2]},
     }
     _wire_cascade_reads_for_test(prisma_client, endusers=[enduser1])
+    prisma_client.writer_db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
+    prisma_client.writer_db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
+    prisma_client.writer_db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
 
     proxy_logging_obj: Final = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
