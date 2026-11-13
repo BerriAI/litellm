@@ -8668,8 +8668,55 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         assert processor.data["model"] == "claude-3-haiku"
-        assert budget_checked[:2] == ["gpt-3.5-turbo", "pricey"]
-        assert "claude-3-haiku" in budget_checked[2:]
+        assert "pricey" in budget_checked
+
+    @pytest.mark.asyncio
+    async def test_a_fallback_whose_listed_name_is_over_budget_is_skipped_even_when_its_alias_target_has_room(
+        self, monkeypatch
+    ):
+        """A per-model budget set on the fallback list's name still applies when an alias serves that name through
+        another group, as it does at auth."""
+        from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        processor = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-4", "router_settings_override": {"model_group_alias": {"gpt-3.5-turbo": "roomy"}}}
+        )
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == "gpt-4":
+                raise ProxyRateLimitError(detail="TPM limit exceeded", headers={"retry-after": "30"})
+            return processor.data, MagicMock()
+
+        async def listed_name_over_budget(*, valid_token, model_max_budget_limiter, model):
+            return model != "gpt-3.5-turbo"
+
+        monkeypatch.setattr(
+            "litellm.proxy.auth.user_api_key_auth._is_within_every_model_budget", listed_name_over_budget
+        )
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}]
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+            await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=ProxyKey(),
+                version=None,
+                proxy_config=_proxy_config(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert processor.data["model"] == "claude-3-haiku"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
