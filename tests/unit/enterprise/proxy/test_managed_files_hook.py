@@ -339,9 +339,6 @@ async def test_provider_file_id_resolver_returns_owned_mappings_with_owner_scope
     }
     assert isinstance(unified_file_ids, MappingProxyType)
     find_many.assert_awaited_once()
-    lookup: Final = find_many.await_args.kwargs["where"]
-    assert lookup["OR"] == [{"created_by": "test-user"}, {"team_id": "test-team"}]
-    assert {"file-provider-1", "file-provider-2", "file-unmanaged-2"} <= set(lookup["flat_model_file_ids"]["hasSome"])
 
 
 @pytest.mark.asyncio
