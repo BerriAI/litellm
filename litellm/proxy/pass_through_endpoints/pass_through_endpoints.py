@@ -6,7 +6,16 @@ import posixpath
 import re
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Coroutine,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from datetime import datetime
 from functools import reduce
@@ -158,8 +167,10 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    DeploymentPricingResolver,
     EndpointType,
     PassthroughStandardLoggingPayload,
     WebSocketSessionMeter,
@@ -278,6 +289,11 @@ async def set_env_variables_in_header(custom_headers: dict | None) -> dict | Non
     return headers
 
 
+class _AdapterCompletionRouter(Protocol):
+    @property
+    def aadapter_completion(self) -> Callable[..., Coroutine[object, object, object]]: ...
+
+
 async def chat_completion_pass_through_endpoint(
     fastapi_response: Response,
     request: Request,
@@ -368,7 +384,8 @@ async def chat_completion_pass_through_endpoint(
             and data["model"] is not None
             and llm_router.registry().resolve(data["model"], kind="recognized")
         ):
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data))
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
@@ -377,11 +394,13 @@ async def chat_completion_pass_through_endpoint(
                 or len(llm_router.registry().patterns().patterns) > 0
             )
         ):  # check for wildcard routes or default deployment before checking deployment_names
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data))
         elif llm_router is not None and data["model"] in llm_router.registry().names(
             kind="deployment_names"
         ):  # model in router deployments, calling a specific deployment on the router (lowest priority)
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data, specific_deployment=True))
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data, specific_deployment=True))
         elif user_model is not None:  # `litellm --model <your-model-name>`
             llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
         else:
@@ -429,6 +448,20 @@ async def chat_completion_pass_through_endpoint(
             headers=litellm_call_id_headers(litellm_call_id),
             code=error_status_code(e, 500),
         )
+
+
+_PASS_THROUGH_REQUEST_STATE_KEYS: Final = (
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
+)
+
+
+def _clear_pass_through_request_state(state: object) -> None:
+    for key in _PASS_THROUGH_REQUEST_STATE_KEYS:
+        if hasattr(state, key):
+            delattr(state, key)
 
 
 def _is_provider_payload(request: Request) -> bool:
@@ -781,6 +814,14 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
         if isinstance(deployment_model_info, Mapping):
             _metadata["model_info"] = dict(deployment_model_info)
+        deployment_pricing: Final = getattr(_request_state, LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY, None)
+        priced_model_info: Final = (
+            deployment_pricing.resolve(server_marker_free_body)
+            if isinstance(deployment_pricing, DeploymentPricingResolver)
+            else None
+        )
+        if priced_model_info is not None:
+            _metadata["model_info"] = dict(priced_model_info)
 
         kwargs: Final = {
             "litellm_params": {
@@ -2519,12 +2560,7 @@ def create_pass_through_route(
                         keep_target_query=keep_target_query,
                     )
                 finally:
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY)
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY)
+                    _clear_pass_through_request_state(request.state)
 
             # The upstream withholds its response headers until its first token, so
             # the whole time-to-first-token is spent inside _relay with nothing on
@@ -2611,6 +2647,21 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     if rewritten_model == setup_model:
         return text_data
     return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})
+
+
+VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON: Final = "Rejected Request: binary messages must be UTF-8 encoded JSON"
+
+
+def _rewrite_vertex_live_binary_setup_model(
+    bytes_data: bytes, setup_model_rewriter: Callable[[str], str] | None
+) -> bytes | None:
+    if setup_model_rewriter is None:
+        return bytes_data
+    try:
+        text_data: Final = bytes_data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return _rewrite_vertex_live_setup_model(text_data, setup_model_rewriter).encode("utf-8")
 
 
 def _resolved_vertex_live_setup(
@@ -3042,6 +3093,28 @@ async def _relay_client_frame(
     return verdict
 
 
+_UNDECODABLE_BINARY_CLIENT_FRAME: Final = _RefuseClientFrame(
+    refusal=WebsocketFrameModelRefused(
+        message=VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON, error_type="invalid_request_error"
+    )
+)
+
+
+async def _relay_client_binary_frame(
+    websocket: WebSocket,
+    upstream_ws: ClientConnection,
+    bytes_data: bytes,
+    setup_model_rewriter: Callable[[str], str] | None,
+    gate: WebsocketFrameModelGate | None,
+    ledger: _WebsocketTurnLedger,
+) -> _ForwardClientFrame | _RefuseClientFrame:
+    rewritten_bytes: Final = _rewrite_vertex_live_binary_setup_model(bytes_data, setup_model_rewriter)
+    if rewritten_bytes is None:
+        await websocket.close(code=CloseCode.POLICY_VIOLATION, reason=VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON)
+        return _UNDECODABLE_BINARY_CLIENT_FRAME
+    return await _relay_client_frame(websocket, upstream_ws, bytes_data, rewritten_bytes, gate, ledger)
+
+
 _EXPLICIT_SUCCESS_KWARGS: Final = frozenset({"logging_obj", "passthrough_logging_payload", "custom_llm_provider"})
 WALKOUT_TURN_DRAIN_SECONDS: Final = 600.0
 
@@ -3409,8 +3482,13 @@ async def websocket_passthrough_request(
                             metered_total += _metered_client_text(meter, text_data)
                         elif bytes_data is not None:
                             if isinstance(
-                                await _relay_client_frame(
-                                    websocket, upstream_ws, bytes_data, bytes_data, client_frame_model_gate, ledger
+                                await _relay_client_binary_frame(
+                                    websocket,
+                                    upstream_ws,
+                                    bytes_data,
+                                    setup_model_rewriter,
+                                    client_frame_model_gate,
+                                    ledger,
                                 ),
                                 _RefuseClientFrame,
                             ):
@@ -4670,7 +4748,7 @@ async def update_pass_through_endpoints(
     # Find the index for updating the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -4903,7 +4981,7 @@ async def delete_pass_through_endpoints(
     # Find the index for deleting from the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -4951,7 +5029,7 @@ def _find_endpoint_by_id(
     for endpoint in endpoints_data:
         _endpoint: PassThroughGenericEndpoint | None = None
         if isinstance(endpoint, dict):
-            _endpoint = PassThroughGenericEndpoint(**endpoint)
+            _endpoint = PassThroughGenericEndpoint.model_validate(endpoint)
         elif isinstance(endpoint, PassThroughGenericEndpoint):
             _endpoint = endpoint
 

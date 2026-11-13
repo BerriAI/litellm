@@ -514,3 +514,37 @@ async def test_update_budget_serializes_model_max_budget_for_prisma(
         "gpt4o": {"max_budget": 5.0, "budget_duration": "1d"},
         "glm-5.2": {"max_budget": 7.5, "budget_duration": "30d"},
     }
+
+
+@pytest.fixture
+def admin_client(client_and_mocks):
+    client, mock_prisma, mock_table = client_and_mocks
+    mock_table.delete = AsyncMock(return_value={"budget_id": "tpl-1"})
+    mock_prisma.db.litellm_customerorganizationtable = MagicMock()
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    return client, mock_prisma, mock_table
+
+
+@pytest.mark.asyncio
+async def test_delete_budget_refuses_customer_organization_default_budget(admin_client):
+    client, mock_prisma, mock_table = admin_client
+    mock_prisma.db.litellm_customerorganizationtable.count = AsyncMock(return_value=1)
+
+    resp: Final = client.post("/budget/delete", json={"id": "tpl-1"})
+
+    assert resp.status_code == 409, resp.text
+    assert "/default_budgets/" in resp.json()["detail"]["error"]
+    mock_table.delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_budget_deletes_budget_no_customer_organization_uses(admin_client):
+    client, mock_prisma, mock_table = admin_client
+    mock_prisma.db.litellm_customerorganizationtable.count = AsyncMock(return_value=0)
+
+    resp: Final = client.post("/budget/delete", json={"id": "tpl-1"})
+
+    assert resp.status_code == 200, resp.text
+    mock_table.delete.assert_awaited_once_with(where={"budget_id": "tpl-1"})
