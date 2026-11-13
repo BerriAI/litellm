@@ -23,13 +23,98 @@ class GenAIHubOrchestrationError(BaseLLMException):
         self.message = message
 
 
-# -------------------------------
-# Stream parsing helpers
-# -------------------------------
+# ----------------------------------
+# Parsing and transformation helpers
+# ----------------------------------
 
 
 def _now_ts() -> int:
     return int(time.time())
+
+
+def normalize_choice(
+    choice: dict[str, object],  # mutable-ok: wire dicts from httpx JSON; callers own them
+) -> dict[str, object]:  # mutable-ok: wire dicts from httpx JSON; callers own them
+    """Normalize a single choice dict (message or delta shape) in isolation."""
+    for key in ("message", "delta"):
+        carrier = choice.get(key)
+        if not isinstance(carrier, dict):
+            continue
+        reasoning_content = carrier.get("reasoning_content")
+        if not isinstance(reasoning_content, list):
+            continue
+        thinking_blocks: list[dict[str, object]] = [  # mutable-ok: consumed immediately below; never escapes as mutable
+            {
+                "type": "thinking",
+                "thinking": item.get("content") or "",  # pyright: ignore[reportUnknownMemberType]  # isinstance guard in comprehension filter; pyright can't narrow
+                "signature": item.get(  # pyright: ignore[reportUnknownMemberType]  # isinstance guard in comprehension filter; pyright can't narrow
+                    "signature"
+                ),
+            }
+            for item in reasoning_content  # pyright: ignore[reportUnknownVariableType]  # isinstance(reasoning_content, list) guard above; pyright can't narrow into comprehension
+            if isinstance(item, dict)
+        ]
+        carrier["thinking_blocks"] = thinking_blocks
+        carrier["reasoning_content"] = (
+            "\n".join(str(block["thinking"]) for block in thinking_blocks if block["thinking"]) or None
+        )
+    return choice
+
+
+def normalize_reasoning_content(
+    raw: dict[str, object],  # mutable-ok: wire dicts from httpx JSON; callers own them
+) -> dict[str, object]:  # mutable-ok: wire dicts from httpx JSON; callers own them
+    """Transform reasoning_content from SAP Orchestration format [{"content": ..., "signature": ...}] to Optional[str] and a thinking_blocks list."""
+    choices: Final[list[object]] = list(  # mutable-ok: wire list from httpx JSON
+        raw.get("choices") or []  # pyright: ignore[reportArgumentType, reportUnknownArgumentType]  # wire JSON; choices is always a list
+    )
+    normalized_choices: Final[list[dict[str, object]]] = [  # mutable-ok: wire list passed to pydantic model_validate
+        normalize_choice(choice)  # pyright: ignore[reportUnknownArgumentType]  # isinstance guard in comprehension filter; pyright can't narrow
+        for choice in choices
+        if isinstance(choice, dict)
+    ]
+    normalized_result: Final[dict[str, object]] = {  # mutable-ok: wire dict consumed by pydantic model_validate
+        **raw,
+        "choices": normalized_choices,
+    }
+    return normalized_result
+
+
+def denormalize_reasoning_content(
+    message: dict[str, object],  # mutable-ok: wire dicts from httpx JSON; callers own them
+) -> dict[str, object]:  # mutable-ok: wire dicts from httpx JSON; callers own them
+    """Inverse of normalize_reasoning_content: rebuild list[ReasoningBlock] from thinking_blocks.
+
+    LiteLLM normalizes SAP's reasoning_content list into a str + thinking_blocks before
+    returning a ModelResponse. When that response is replayed as a history message the dict
+    must be converted back to the SAP shape before SAPAssistantMessage validation.
+
+    If thinking_blocks is absent but reasoning_content is a plain str (e.g. from a
+    non-SAP provider), drop the field: we cannot reconstruct SAP ReasoningBlocks without
+    the original signatures.
+    """
+    if message.get("role") != "assistant":
+        return message
+    thinking_blocks: Final = message.get("thinking_blocks")
+    if isinstance(thinking_blocks, list):
+        reasoning_content: Final[list[dict[str, str | None]]] = [  # mutable-ok: wire list passed to validate_dict
+            {
+                "content": str(
+                    block.get("thinking") or ""  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # isinstance guard in comprehension filter; pyright can't narrow
+                ),
+                "signature": block.get(  # pyright: ignore[reportUnknownMemberType]  # isinstance guard in comprehension filter; pyright can't narrow
+                    "signature"
+                ),
+            }
+            for block in thinking_blocks  # pyright: ignore[reportUnknownVariableType]  # isinstance(thinking_blocks, list) guard above; pyright can't narrow into comprehension
+            if isinstance(block, dict)
+        ]
+        return {k: v for k, v in message.items() if k not in ("thinking_blocks", "reasoning_content")} | {
+            "reasoning_content": reasoning_content
+        }
+    if isinstance(message.get("reasoning_content"), str):
+        return {k: v for k, v in message.items() if k not in ("thinking_blocks", "reasoning_content")}
+    return message
 
 
 def _is_terminal_chunk(chunk: OpenAIChatCompletionChunk) -> bool:
@@ -47,33 +132,37 @@ class _StreamParser:
     """Normalize orchestration streaming events into OpenAI-like chunks."""
 
     @staticmethod
-    def _from_orchestration_result(evt: dict) -> OpenAIChatCompletionChunk | None:
+    def _from_orchestration_result(evt: dict[str, object]) -> OpenAIChatCompletionChunk | None:
         """
         Accepts orchestration_result shape and maps it to an OpenAI-like *chunk*.
         """
-        orc: Final = evt.get("orchestration_result") or {}
+        orc: Final[dict[str, object]] = evt.get("orchestration_result") or {}  # pyright: ignore[reportAssignmentType]  # wire JSON; orchestration_result is always a dict
         if not orc:
             return None
 
         return OpenAIChatCompletionChunk.model_validate(
-            {
-                "id": orc.get("id") or evt.get("request_id") or "stream-chunk",
-                "object": orc.get("object") or "chat.completion.chunk",
-                "created": orc.get("created") or evt.get("created") or _now_ts(),
-                "model": orc.get("model") or "unknown",
-                "choices": [
-                    {
-                        "index": c.get("index", 0),
-                        "delta": c.get("delta") or {},
-                        "finish_reason": c.get("finish_reason"),
-                    }
-                    for c in (orc.get("choices") or [])
-                ],
-            }
+            normalize_reasoning_content(
+                {
+                    "id": orc.get("id")
+                    or evt.get("request_id")  # pyright: ignore[reportUnknownMemberType]  # wire JSON string field
+                    or "stream-chunk",
+                    "object": orc.get("object") or "chat.completion.chunk",
+                    "created": orc.get("created") or evt.get("created") or _now_ts(),
+                    "model": orc.get("model") or "unknown",
+                    "choices": [
+                        {
+                            "index": choice.get("index", 0),
+                            "delta": choice.get("delta") or {},
+                            "finish_reason": choice.get("finish_reason"),
+                        }
+                        for choice in orc.get("choices") or []  # pyright: ignore[reportUnknownVariableType, reportGeneralTypeIssues]  # wire JSON; choices is always list[dict]
+                    ],
+                }
+            )
         )
 
     @staticmethod
-    def to_openai_chunk(event_obj: dict) -> OpenAIChatCompletionChunk | None:
+    def to_openai_chunk(event_obj: dict[str, object]) -> OpenAIChatCompletionChunk | None:
         """
         Accepts:
           - {"final_result": <openai-style CHUNK>}   (IMPORTANT: this is just another chunk, NOT terminal)
@@ -89,11 +178,14 @@ class _StreamParser:
 
         # FINAL RESULT IS *NOT* TERMINAL: treat it as the next chunk
         if "final_result" in event_obj:
-            fr: Final = event_obj["final_result"] or {}
-            # ensure it looks like an OpenAI chunk
-            if "object" not in fr:
-                fr["object"] = "chat.completion.chunk"
-            return OpenAIChatCompletionChunk.model_validate(fr)
+            fr_raw: Final = event_obj["final_result"] or {}
+            if not isinstance(fr_raw, dict):
+                return None
+            fr: Final[dict[str, object]] = {  # mutable-ok: wire dict consumed by model_validate
+                **fr_raw,
+                **(({"object": "chat.completion.chunk"}) if "object" not in fr_raw else {}),
+            }
+            return OpenAIChatCompletionChunk.model_validate(normalize_reasoning_content(fr))
 
         # Orchestration incremental delta
         if "orchestration_result" in event_obj:
@@ -101,7 +193,7 @@ class _StreamParser:
 
         # Already an OpenAI-like chunk
         if "choices" in event_obj and "object" in event_obj:
-            return OpenAIChatCompletionChunk.model_validate(event_obj)
+            return OpenAIChatCompletionChunk.model_validate(normalize_reasoning_content(event_obj))
 
         # Unknown / heartbeat / metrics
         return None
@@ -248,7 +340,8 @@ class AsyncSAPStreamIterator:
 # -------------------------------
 class GenAIHubOrchestration(BaseLLMHTTPHandler):
     def _add_stream_param_to_request_body(self, data: dict, provider_config: BaseConfig, fake_stream: bool):
-        if data.get("config", {}).get("stream", None) is not None:
+        config = data.get("config") or {}  # pyright: ignore[reportUnknownVariableType]  # wire JSON; config is always a dict when present
+        if isinstance(config, dict) and config.get("stream") is not None:
             data["config"]["stream"]["enabled"] = True
         else:
             data["config"]["stream"] = {"enabled": True}
