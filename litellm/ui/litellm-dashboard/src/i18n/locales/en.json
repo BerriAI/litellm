@@ -9667,6 +9667,8 @@
         "budgets": "Customer budgets",
         "spend": "Spend {{value}}",
         "remaining": "Remaining {{value}}",
+        "spendLabel": "Spend",
+        "remainingLabel": "Remaining",
         "unlimited": "Unlimited",
         "refreshing": "Refreshing customer budgets…",
         "settled": "Spend reflects settled requests",

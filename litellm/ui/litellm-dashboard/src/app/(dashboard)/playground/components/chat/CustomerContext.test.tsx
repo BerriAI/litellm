@@ -26,9 +26,14 @@ it("shows settled spend and remaining customer org budget without a customer mem
       unavailable={false}
     />,
   );
-  expect(screen.getByRole("region", { name: "Customer budgets" })).toHaveTextContent(
-    "Customer org · customer-alias Spend $3.00 · Remaining $7.00",
-  );
+  const region = screen.getByRole("region", { name: "Customer budgets" });
+  expect(region).toHaveTextContent("Customer org");
+  expect(region).toHaveTextContent("customer-alias");
+  expect(region).toHaveTextContent("$3.00");
+  expect(region).toHaveTextContent("$7.00");
+  expect(screen.getByText("Customer org")).toHaveClass("text-muted-foreground");
+  expect(screen.getByText("$3.00")).toHaveClass("font-medium");
+  expect(screen.getByRole("progressbar", { name: "Customer org" })).toHaveAttribute("aria-valuenow", "30");
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 

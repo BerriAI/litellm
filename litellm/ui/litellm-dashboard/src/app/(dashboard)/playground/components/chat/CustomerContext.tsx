@@ -3,6 +3,7 @@
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import type { ResolvedCustomerHierarchy } from "../../../customers/_components/customerHierarchyApi";
 import { TargetPicker } from "./Pickers";
@@ -15,14 +16,14 @@ export function CustomerControl({ customer }: { customer: CustomerState }) {
   const { t } = useTranslation();
   const organizations = customer.organizations.data ?? [];
   const error = customer.linkError ?? customer.organizations.error ?? customer.members.error;
+  const customerLabel = `${t("playground.chat.customer.title")}${customer.alias ? ` · ${customer.alias}` : ""}`;
   return (
     <Popover>
-      <PopoverTrigger render={<Button variant="ghost" size="sm" className="h-7 max-w-52 truncate text-xs" />}>
-        <span className="truncate">
-          {t("playground.chat.customer.title")}
-          {customer.alias ? ` · ${customer.alias}` : ""}
-        </span>
-      </PopoverTrigger>
+      <SimpleTooltip content={customerLabel}>
+        <PopoverTrigger render={<Button variant="ghost" size="sm" className="h-7 max-w-52 truncate text-xs" />}>
+          <span className="truncate">{customerLabel}</span>
+        </PopoverTrigger>
+      </SimpleTooltip>
       <PopoverContent side="top" align="start" className="w-96 space-y-3">
         <p className="text-sm font-medium">{t("playground.chat.customer.title")}</p>
         <TargetPicker
@@ -89,6 +90,12 @@ const money = (value: number): string =>
     maximumFractionDigits: 6,
   }).format(value);
 
+const usagePercent = (spend: number, max: number | null | undefined): number | null => {
+  if (max == null) return null;
+  if (max > 0) return Math.min(100, (spend / max) * 100);
+  return spend > 0 ? 100 : 0;
+};
+
 export function CustomerBudgetStrip({
   context,
   error,
@@ -127,20 +134,39 @@ export function CustomerBudgetStrip({
       aria-live="polite"
       className="mx-4 mt-2 space-y-1 rounded-md border bg-muted/30 px-3 py-2 text-xs"
     >
-      <div className="flex flex-wrap gap-x-5 gap-y-1">
+      <div className="space-y-2">
         {scopes.map((scope) => {
           const remaining = remainingCustomerBudget(scope.spend, scope.max);
+          const usage = usagePercent(scope.spend, scope.max);
           return (
-            <p key={scope.label}>
-              <span className="font-medium">
-                {scope.label} · {scope.id}
-              </span>{" "}
-              {t("playground.chat.customer.spend", { value: money(scope.spend) })}
-              {" · "}
-              {t("playground.chat.customer.remaining", {
-                value: remaining === null ? t("playground.chat.customer.unlimited") : money(remaining),
-              })}
-            </p>
+            <div key={scope.label} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-end gap-x-4 gap-y-1">
+              <div className="min-w-0">
+                <p className="truncate text-muted-foreground">{scope.label}</p>
+                <p className="truncate font-medium" title={scope.id}>{scope.id}</p>
+                {usage !== null && (
+                  <div
+                    className="mt-1 h-1 w-full overflow-hidden rounded-full bg-muted"
+                    role="progressbar"
+                    aria-label={scope.label}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={usage}
+                  >
+                    <div className="h-full rounded-full bg-primary" style={{ width: `${usage}%` }} />
+                  </div>
+                )}
+              </div>
+              <div className="text-right">
+                <p className="text-muted-foreground">{t("playground.chat.customer.spendLabel")}</p>
+                <p className="font-medium tabular-nums">{money(scope.spend)}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-muted-foreground">{t("playground.chat.customer.remainingLabel")}</p>
+                <p className="font-medium tabular-nums">
+                  {remaining === null ? t("playground.chat.customer.unlimited") : money(remaining)}
+                </p>
+              </div>
+            </div>
           );
         })}
       </div>
@@ -153,7 +179,7 @@ export function CustomerBudgetStrip({
         </p>
       )}
       {error && (
-        <p role="alert" className="break-words font-medium text-destructive">
+        <p role="alert" className="mt-2 border-t border-destructive/20 pt-2 break-words font-medium text-destructive">
           {error.status !== null ? `HTTP ${error.status} · ` : ""}
           {error.message}
         </p>

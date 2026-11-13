@@ -31,7 +31,8 @@ export const customerRequestFailure = (error: unknown): CustomerRequestFailure |
   const detail = record(body?.error) ?? body;
   const message = typeof detail?.message === "string" ? detail.message : extractProxyErrorMessage(error);
   const fallbackCode = typeof detail?.code === "string" ? detail.code : null;
-  const code = typeof detail?.type === "string" ? detail.type : fallbackCode;
+  const typeCode = typeof detail?.type === "string" ? detail.type : null;
+  const code = typeof detail?.litellm_error_type === "string" ? detail.litellm_error_type : (typeCode ?? fallbackCode);
   return { status, message: code && !message.includes(code) ? `${code}: ${message}` : message };
 };
 

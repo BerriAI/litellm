@@ -348,8 +348,9 @@ export function InspectorPanel({
   endpoint?: EndpointType;
 }) {
   const { t } = useTranslation();
+  const [tab, setTab] = useState<"trace" | "code">("trace");
   return (
-    <Tabs defaultValue="trace" className="min-h-0 flex-1 gap-0">
+    <Tabs value={tab} onValueChange={(value) => setTab(value as "trace" | "code")} className="min-h-0 flex-1 gap-0">
       <div className="flex h-12 shrink-0 items-center border-b border-border px-4">
         <TabsList className="w-full">
           <TabsTrigger value="trace">{t("playground.chat.inspector.tabs.trace")}</TabsTrigger>

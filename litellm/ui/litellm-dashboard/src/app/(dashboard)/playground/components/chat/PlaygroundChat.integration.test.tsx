@@ -149,7 +149,7 @@ describe("PlaygroundChat", () => {
       { searchParams, onUrlUpdate },
     );
 
-    expect(await screen.findByText("Customer org · customer-alias")).toBeInTheDocument();
+    expect(await screen.findByText("Customer org", { exact: true })).toBeInTheDocument();
     await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
     expect(onUrlUpdate.mock.lastCall![0].searchParams.get("customerOrg")).toBeNull();
     expect(onUrlUpdate.mock.lastCall![0].searchParams.get("customerMember")).toBeNull();

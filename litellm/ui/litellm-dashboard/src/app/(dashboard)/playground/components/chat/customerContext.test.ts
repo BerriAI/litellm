@@ -34,6 +34,17 @@ it("keeps a budget denial's status and useful message", () => {
       }),
     ),
   ).toEqual({ status: 422, message: "budget_exceeded: Customer member limit reached" });
+  expect(
+    customerRequestFailure(
+      new ApiError("Request failed", 422, {
+        error: {
+          type: "invalid_request_error",
+          message: "ExceededBudget: customer member is over budget",
+          litellm_error_type: "budget_exceeded",
+        },
+      }),
+    ),
+  ).toEqual({ status: 422, message: "budget_exceeded: ExceededBudget: customer member is over budget" });
   expect(remainingCustomerBudget(3, 10)).toBe(7);
   expect(remainingCustomerBudget(12, 10)).toBe(0);
   expect(remainingCustomerBudget(12, null)).toBeNull();
