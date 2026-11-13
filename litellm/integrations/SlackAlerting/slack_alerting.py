@@ -39,6 +39,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy.common_utils.model_deprecation import escape_slack_mrkdwn
 from litellm.proxy.spend_tracking.customer_budget_alerts import (
     claim_customer_budget_alert,
     customer_budget_alert_id,
@@ -731,7 +732,7 @@ class SlackAlerting(CustomBatchLogger):
         for k, v in _all_fields_as_dict.items():
             if isinstance(v, Litellm_EntityType):
                 v = v.value
-            msg += f"*{k}:* `{v}`\n"
+            msg += f"*{k}:* `{escape_slack_mrkdwn(str(v)) if customer_budget_alert_id(user_info) is not None else v}`\n"
 
         return msg
 

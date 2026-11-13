@@ -64,9 +64,10 @@ async def alerts(monkeypatch: pytest.MonkeyPatch) -> ProxyLogging:
 
 
 @pytest.mark.parametrize("expires", (None, _NOW - timedelta(seconds=1)))
+@pytest.mark.parametrize("customer_member_id", ("customer-member-1", "<!channel> <http://x|y> &"))
 @pytest.mark.asyncio
 async def test_customer_member_alert_uses_effective_override_and_customer_identity(
-    alerts: ProxyLogging, respx_mock: respx.MockRouter, expires: datetime | None
+    alerts: ProxyLogging, respx_mock: respx.MockRouter, expires: datetime | None, customer_member_id: str
 ) -> None:
     receiver: Final = respx_mock.post(_URL).respond(200)
     record: Final = _Record(
@@ -82,8 +83,8 @@ async def test_customer_member_alert_uses_effective_override_and_customer_identi
         }
     )
     await send_customer_budget_alerts(
-        {"customer_member_list_transactions": {"customer-member-1": 3.0}},
-        _database({"customer-member-1": record}),
+        {"customer_member_list_transactions": {customer_member_id: 3.0}},
+        _database({customer_member_id: record}),
         alerts,
         now=_NOW,
     )
@@ -98,7 +99,7 @@ async def test_customer_member_alert_uses_effective_override_and_customer_identi
         assert payload["customer_org_id"] == "customer-org-1"
         assert payload["customer_org_alias"] == "customer-test"
         assert payload["customer_team_id"] == "customer-team-1"
-        assert payload["customer_member_id"] == "customer-member-1"
+        assert payload["customer_member_id"] == customer_member_id
         assert "team_id" not in payload
         assert "organization_id" not in payload
 
