@@ -267,11 +267,14 @@ def _budget_link_where(
     return {"budget_id": {"in": list(budget_ids)}, **extra}
 
 
-def _enduser_invalidation_where(budget_ids: Sequence[str]) -> dict[str, object]:
-    """Customers whose cached spend a committed reset of these tiers invalidated.
+def _enduser_tier_where(budget_ids: Sequence[str]) -> dict[str, object]:
+    """Every customer an expiring tier gates: linked to it, or carrying no
+    link and riding the default tier (litellm.max_end_user_budget_id).
 
-    ``_enduser_reset_where`` adds the ``spend > 0`` filter, which post-commit
-    would match nobody.
+    No spend filter on purpose. The reset walk must revisit customers an
+    earlier failed tick already zeroed, so the tier advances only after one
+    tick walks the whole population without failing (#50661). The post-commit
+    invalidation walk reads the same population.
     """
     linked: Final = _budget_link_where(budget_ids)
     default_budget_id: Final = litellm.max_end_user_budget_id
@@ -297,12 +300,6 @@ def _queue_budget_linked_resets(
     plain_ids: Final = tuple(bid for bid in cascade.budget_ids if bid not in cascade.rollover_caps)
     if plain_ids:
         writes.queue_spend_zero(where=_budget_link_where(plain_ids, extra))
-
-
-def _enduser_reset_where(cascade: "_BudgetCascade") -> Mapping[str, object]:
-    """End users with spend to reset: linked to an expiring tier, or carrying
-    no link and riding the default tier (litellm.max_end_user_budget_id)."""
-    return {**_enduser_invalidation_where(cascade.budget_ids), **_SPENT_ROWS_WHERE}
 
 
 def _enduser_tier(row: _EndUserRow) -> str | None:
@@ -873,7 +870,7 @@ class ResetBudgetJob:
         """
         if not budget_ids:
             return _ENDUSER_WALK_DONE
-        where: Final = _enduser_invalidation_where(budget_ids)
+        where: Final = _enduser_tier_where(budget_ids)
         walk = _EndUserWalk()
         while walk.cursor is not None:
             walk = await self._invalidate_enduser_page(where=where, cursor=walk.cursor, reached=walk.invalidated)
@@ -1006,14 +1003,19 @@ class ResetBudgetJob:
         """Reset the end users the expiring tiers gate, one committed page at a time.
 
         Runs before ``_commit_budget_cascade`` so a failure here leaves the
-        tiers due: the next tick resumes with the pages still carrying spend.
-        Each page invalidates its own caches right after its commit, so no
-        zeroed row sits behind a cached spend that still rejects requests.
-        Capless like ``_invalidate_enduser_caches``, for its reason.
+        tiers due. The walk reads every customer the tiers gate, spend or
+        not, and the spend predicates still apply at write time, so a page an
+        earlier failed tick already zeroed matches nothing. The next tick
+        re-walks the whole population from the first user, so the tier
+        advances only after one tick walks every due user without failing
+        (#50661). Each page invalidates its own caches right after its
+        commit, so no zeroed row sits behind a cached spend that still
+        rejects requests. Capless like ``_invalidate_enduser_caches``, for its
+        reason.
         """
         if not cascade.budget_ids:
             return 0
-        where: Final = _enduser_reset_where(cascade)
+        where: Final = _enduser_tier_where(cascade.budget_ids)
         walk = _EndUserWalk()  # rebind-ok: keyset cursor advances one committed page at a time
         while walk.cursor is not None:
             walk = await self._reset_enduser_page(cascade, where=where, cursor=walk.cursor, reached=walk.invalidated)
@@ -1153,8 +1155,8 @@ class ResetBudgetJob:
             case _BudgetCascadeFailed(cascade=cascade, error=error):
                 verbose_proxy_logger.exception(
                     "Failed to reset the budget table cascade (team member, enduser, org, tag and model access "
-                    "group spend, plus budget_reset_at); the budgets stay due for the next run, which resumes "
-                    "with the end-user pages not committed yet: %s",
+                    "group spend, plus budget_reset_at); the budgets stay due for the next run, which re-walks "
+                    "the linked end users from the first page: %s",
                     error,
                     exc_info=error,
                 )

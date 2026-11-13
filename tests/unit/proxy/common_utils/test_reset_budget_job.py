@@ -110,6 +110,9 @@ class MockTable:
         dropping partway through a paged walk does."""
         self._find_many_error = (after_reads, error)
 
+    def clear_find_many_error(self):
+        self._find_many_error = None
+
     async def find_many(
         self,
         where: Dict[str, Any],
@@ -608,8 +611,8 @@ def test_enduser_reset_commits_in_pages_before_the_window_advances(reset_budget_
 
 def test_enduser_page_failure_leaves_the_tier_due(reset_budget_job, mock_prisma_client):
     """A page that fails after earlier pages committed must not advance the
-    window: the committed pages are at spend 0 and drop out of the next tick's
-    ``spend > 0`` read, so the next tick resumes where this one stopped."""
+    window: the next tick re-walks the whole tier from the first user and only
+    advances after one tick walks every due user without failing (#50661)."""
     mock_prisma_client.data["budget"] = [_budget_row(budget_id="shared-tier", budget_duration="1d")]
     endusers: Final = mock_prisma_client.db.litellm_endusertable
     endusers.set_find_many_results(
@@ -626,6 +629,99 @@ def test_enduser_page_failure_leaves_the_tier_due(reset_budget_job, mock_prisma_
     enduser_writes: Final = _batch_writes(mock_prisma_client, "enduser")
     assert len(enduser_writes) == 1
     assert len(enduser_writes[0]["where"]["user_id"]["in"]) == RESET_BUDGET_JOB_BATCH_SIZE
+
+
+def _due_endusers(mock_prisma_client, monkeypatch):
+    """Five customers on one due tier, paged two at a time: the #50661 harness."""
+    monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 2)
+    mock_prisma_client.data["budget"] = [_budget_row(budget_id="shared-tier", budget_duration="1d")]
+    endusers: Final = mock_prisma_client.db.litellm_endusertable
+    endusers.set_find_many_results(
+        [types.SimpleNamespace(spend=4.0, user_id=f"u{index}", budget_id="shared-tier") for index in range(1, 6)]
+    )
+    return endusers
+
+
+def _committed_writes(mock_prisma_client, table: str, *, after: int = 0) -> List[Dict[str, Any]]:
+    """Writes from batches that actually committed, optionally only batches created after ``after``.
+
+    ``_batch_writes`` reads the global call log, which also collects a batch whose commit raised,
+    so it cannot tell a failed cascade from a committed one.
+    """
+    return [
+        call
+        for batcher in mock_prisma_client.db.batchers[after:]
+        if batcher.committed
+        for call in batcher.calls
+        if call["table"] == table
+    ]
+
+
+def _enduser_read_wheres(mock_prisma_client) -> List[Dict[str, Any]]:
+    return [call["where"] for call in mock_prisma_client.db.litellm_endusertable.find_many_calls]
+
+
+def test_failed_enduser_page_is_rewalked_before_the_tier_advances(reset_budget_job, mock_prisma_client, monkeypatch):
+    """A page that fails after earlier pages committed must not advance the
+    window, and the next tick must re-walk the whole tier from the first user:
+    the committed pages sit at spend 0, so a ``spend > 0`` read would never
+    revisit them and the tier would advance on a walk that saw only the tail
+    (#50661)."""
+    now = datetime.now(timezone.utc)
+    endusers: Final = _due_endusers(mock_prisma_client, monkeypatch)
+    endusers.set_find_many_error(1, RuntimeError("connection reset while paging end users"))
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    assert _committed_writes(mock_prisma_client, "budget") == []
+    page_writes: Final = _committed_writes(mock_prisma_client, "enduser")
+    assert len(page_writes) == 1
+    assert page_writes[0]["where"]["user_id"]["in"] == ["u1", "u2"]
+    batchers_before_retry: Final = len(mock_prisma_client.db.batchers)
+    endusers.clear_find_many_error()
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    assert all("spend" not in where for where in _enduser_read_wheres(mock_prisma_client))
+    retry_writes: Final = _committed_writes(mock_prisma_client, "enduser", after=batchers_before_retry)
+    assert [write["where"]["user_id"]["in"] for write in retry_writes] == [["u1", "u2"], ["u3", "u4"], ["u5"]]
+    budget_writes: Final = _committed_writes(mock_prisma_client, "budget")
+    assert len(budget_writes) == 1
+    assert budget_writes[0]["where"] == {"budget_id": "shared-tier"}
+    assert budget_writes[0]["data"]["budget_reset_at"] > now
+
+
+def test_failed_cascade_commit_is_rewalked_before_the_tier_advances(reset_budget_job, mock_prisma_client, monkeypatch):
+    """Every end-user page can commit and the cascade commit still fail: the
+    next tick must re-walk the whole tier before advancing it, or the tier
+    advances on a walk that read no end users at all (#50661)."""
+    now = datetime.now(timezone.utc)
+    _due_endusers(mock_prisma_client, monkeypatch)
+    original_commit = MockBatcher.commit
+
+    async def _fail_cascade_commit(self):
+        # Three page batches commit first, then the cascade batch.
+        if len(mock_prisma_client.db.batchers) == 4:
+            raise RuntimeError("cascade commit failed")
+        return await original_commit(self)
+
+    monkeypatch.setattr(MockBatcher, "commit", _fail_cascade_commit)
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    assert [batcher.committed for batcher in mock_prisma_client.db.batchers] == [True, True, True, False]
+    assert _committed_writes(mock_prisma_client, "budget") == []
+    batchers_before_retry: Final = len(mock_prisma_client.db.batchers)
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    assert all("spend" not in where for where in _enduser_read_wheres(mock_prisma_client))
+    retry_writes: Final = _committed_writes(mock_prisma_client, "enduser", after=batchers_before_retry)
+    assert [write["where"]["user_id"]["in"] for write in retry_writes] == [["u1", "u2"], ["u3", "u4"], ["u5"]]
+    budget_writes: Final = _committed_writes(mock_prisma_client, "budget")
+    assert len(budget_writes) == 1
+    assert budget_writes[0]["where"] == {"budget_id": "shared-tier"}
+    assert budget_writes[0]["data"]["budget_reset_at"] > now
 
 
 def test_enduser_page_keeps_each_tier_s_rollover_statements_to_its_own_users(
@@ -1040,11 +1136,14 @@ def test_reset_budget_resets_endusers_with_null_budget_id(reset_budget_job, mock
 
     # The paged reset and the post-commit invalidation walk both cover both
     # branches, so implicitly created customers on the default tier are reset
-    # and get their cached spend dropped too.
+    # and get their cached spend dropped too. Neither walk filters on spend:
+    # the reset walk must revisit customers an earlier failed tick already
+    # zeroed, or the tier would advance on a walk that saw only the tail
+    # (#50661); the write still zeroes only rows carrying spend.
     find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
     assert len(find_many_calls) == 2
-    assert find_many_calls[0]["where"]["spend"] == {"gt": 0}
     for call in find_many_calls:
+        assert "spend" not in call["where"]
         assert call["where"]["OR"] == [
             {"budget_id": {"in": [default_budget_id]}},
             {"budget_id": None},
@@ -1082,9 +1181,10 @@ def test_reset_budget_skips_null_budget_id_endusers_when_default_not_configured(
 
     # The invalidation walk must not reach for NULL-budget-id customers: they
     # ride a default tier that is not expiring, so their spend stays put.
+    # The reset walk reads the same population (no spend filter, #50661).
     find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
     assert [call["where"] for call in find_many_calls] == [
-        {"budget_id": {"in": ["some-budget"]}, "spend": {"gt": 0}, "user_id": {"gt": ""}},
+        {"budget_id": {"in": ["some-budget"]}, "user_id": {"gt": ""}},
         {"budget_id": {"in": ["some-budget"]}, "user_id": {"gt": ""}},
     ]
 
@@ -1123,9 +1223,10 @@ def test_reset_budget_skips_null_budget_id_endusers_when_default_not_in_reset_li
 
     # The invalidation walk must not reach for NULL-budget-id customers: they
     # ride a default tier that is not expiring, so their spend stays put.
+    # The reset walk reads the same population (no spend filter, #50661).
     find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
     assert [call["where"] for call in find_many_calls] == [
-        {"budget_id": {"in": ["other-budget"]}, "spend": {"gt": 0}, "user_id": {"gt": ""}},
+        {"budget_id": {"in": ["other-budget"]}, "user_id": {"gt": ""}},
         {"budget_id": {"in": ["other-budget"]}, "user_id": {"gt": ""}},
     ]
 
@@ -1899,7 +2000,9 @@ def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma
     per customer makes the last customer wait out every customer ahead of it.
     Both regress silently, so pin the page size, the strictly advancing cursor,
     and one batched call per page. The paged reset ahead of the commit
-    invalidates its pages too, so the cache calls count both walks.
+    invalidates its pages too, so the cache calls count both walks. The reset
+    walk reads the same population as this walk (no spend filter, #50661), so
+    both walks page identically and the reads cannot be told apart by filter.
     """
     counter_cache: Final = _make_counter_invalidation_job(monkeypatch)
     mock_prisma_client.data["budget"] = [_budget_row(budget_id="budget-1")]
@@ -1914,10 +2017,12 @@ def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     all_reads: Final = mock_prisma_client.db.litellm_endusertable.find_many_calls
-    reads: Final = [read for read in all_reads if "spend" not in read["where"]]
     assert len(all_reads) == 6
-    assert [read["take"] for read in reads] == [RESET_BUDGET_JOB_BATCH_SIZE] * 3
-    assert [read["where"]["user_id"]["gt"] for read in reads] == [
+    assert [read["take"] for read in all_reads] == [RESET_BUDGET_JOB_BATCH_SIZE] * 6
+    assert [read["where"]["user_id"]["gt"] for read in all_reads] == [
+        "",
+        f"cust-{RESET_BUDGET_JOB_BATCH_SIZE - 1:06d}",
+        f"cust-{RESET_BUDGET_JOB_BATCH_SIZE * 2 - 1:06d}",
         "",
         f"cust-{RESET_BUDGET_JOB_BATCH_SIZE - 1:06d}",
         f"cust-{RESET_BUDGET_JOB_BATCH_SIZE * 2 - 1:06d}",
