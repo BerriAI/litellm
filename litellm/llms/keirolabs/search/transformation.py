@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -58,6 +59,9 @@ class KeirolabsSearchConfig(BaseSearchConfig):
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig interface
     ) -> dict[str, str]:  # mutable-ok: HTTP handler requires a dict
+        effective_base: Final = api_base or get_secret_str("KEIROLABS_API_BASE") or self.DEFAULT_API_BASE
+        if urlsplit(effective_base).scheme != "https":
+            raise ValueError("Keirolabs search requires an HTTPS api_base, so the API key is never sent in plaintext")
         resolved_key: Final = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,

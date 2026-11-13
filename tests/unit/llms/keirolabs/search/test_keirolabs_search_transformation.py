@@ -87,6 +87,20 @@ async def test_asearch_uses_environment_key_and_custom_base(
     assert response.results == []
 
 
+@pytest.mark.parametrize("source", ["argument", "environment"])
+def test_plaintext_api_base_is_rejected_before_sending_the_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    route: Final = respx_mock.post("http://api.keirolabs.cloud/api/v2/search/lite").respond(json={"results": []})
+    if source == "environment":
+        monkeypatch.setenv("KEIROLABS_API_BASE", "http://api.keirolabs.cloud")
+    api_base: Final = "http://api.keirolabs.cloud" if source == "argument" else None
+
+    with pytest.raises(openai.APIConnectionError, match="HTTPS api_base"):
+        litellm.search(query="query", search_provider="keirolabs", api_key="key", api_base=api_base)
+    assert not route.called
+
+
 def test_missing_key_is_reported() -> None:
     with pytest.raises(ValueError, match="KEIROLABS_API_KEY"):
         KeirolabsSearchConfig().validate_environment(headers={})
