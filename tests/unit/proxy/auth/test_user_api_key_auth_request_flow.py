@@ -7340,6 +7340,54 @@ async def test_centralized_common_checks_skips_public_routes():
             setattr(_proxy_server_mod, k, v)
 
 
+class _CustomerTablesOffLimits:
+    """Prisma stand-in whose customer tables fail the test the moment anything reads them."""
+
+    class _Db:
+        def __getattr__(self, name: str) -> MagicMock:
+            assert not name.startswith("litellm_customer"), f"public route read {name}"
+            return MagicMock()
+
+    db = _Db()
+
+
+@pytest.mark.asyncio
+async def test_authorizing_a_public_route_ignores_the_customer_headers():
+    """A credential-free GET / carrying both customer headers must not look up, register or charge a customer:
+    the builder served it without a key, so nothing on it is trusted."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+
+    token = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "query_string": b"",
+            "headers": [(b"x-litellm-customer-org-alias", b"acme"), (b"x-litellm-customer-member-id", b"user-7")],
+        }
+    )
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": _CustomerTablesOffLimits(),
+        "llm_model_list": None,
+        "user_model": None,
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        recovered = await _authorize_authenticated_request(
+            user_api_key_auth_obj=token, request=request, request_data={}, route="/", api_key=""
+        )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert (recovered, token.customer_hierarchy) == (None, None)
+
+
 @pytest.mark.asyncio
 async def test_centralized_common_checks_skips_passthrough_endpoint_with_auth_false():
     """Regression: user-configured pass-through endpoints with

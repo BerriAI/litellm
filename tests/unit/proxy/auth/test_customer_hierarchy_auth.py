@@ -253,6 +253,7 @@ def _resolve(
     identity: CustomerRequestIdentity,
     route: str = "/chat/completions",
     register: _Registrar | None = None,
+    key_metadata: Mapping[str, object] | None = None,
 ):
     return resolve_customer_hierarchy(
         identity=identity,
@@ -261,6 +262,7 @@ def _resolve(
         llm_router=None,
         request_model="gpt-4o",
         route=route,
+        key_metadata=key_metadata,
         register=register if register is not None else _Registrar(_MemberTable({}), Failure(ErrorCode.NOT_FOUND)),
     )
 
@@ -468,3 +470,39 @@ async def test_an_unknown_member_runs_untracked_without_an_alias_and_on_the_orga
     assert (organization_only.customer_org_id, organization_only.customer_member_id) == ("org-1", None)
     assert tuple(scope.key for scope in organization_only.scopes) == ("customer_org",)
     assert "user-7" not in members.rows
+
+
+@pytest.mark.asyncio
+async def test_a_key_pinned_to_another_organization_is_refused_before_any_member_is_registered() -> None:
+    members: Final = _MemberTable({})
+    registrar: Final = _Registrar(members)
+    prisma: Final = _Prisma(members, _OrganizationTable((_organization("acme"),)))
+
+    with pytest.raises(ProxyException) as denied:
+        await _resolve(
+            prisma,
+            CustomerRequestIdentity(customer_member_id="user-7", customer_org_alias="acme"),
+            register=registrar,
+            key_metadata={"customer_org_id": "some-other-org"},
+        )
+
+    assert (denied.value.code, registrar.calls, members.rows) == ("403", (), {})
+
+
+@pytest.mark.asyncio
+async def test_a_member_id_past_the_identifier_bound_is_not_registered_and_only_the_organization_is_charged() -> None:
+    members: Final = _MemberTable({})
+    registrar: Final = _Registrar(members)
+    prisma: Final = _Prisma(members, _OrganizationTable((_organization("acme"),)))
+
+    oversized: Final = await _resolve(
+        prisma, CustomerRequestIdentity(customer_member_id="u" * 257, customer_org_alias="acme"), register=registrar
+    )
+    assert oversized is not None
+    assert (oversized.customer_org_id, oversized.customer_member_id, registrar.calls) == ("org-1", None, ())
+
+    longest: Final = await _resolve(
+        prisma, CustomerRequestIdentity(customer_member_id="u" * 256, customer_org_alias="acme"), register=registrar
+    )
+    assert longest is not None
+    assert (longest.customer_member_id, registrar.calls) == ("u" * 256, (("org-1", "u" * 256),))

@@ -10,10 +10,11 @@ header it must agree with the member's organization.
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 
 from fastapi import status
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -24,6 +25,7 @@ from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.customer_usage import CustomerIdentifier
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.proxy.management_helpers.customer_hierarchy import (
     Failure,
@@ -317,6 +319,17 @@ async def _organization_named_by_alias(
 
 
 MemberRegistrar: TypeAlias = Callable[[str, str, "PrismaClient"], Awaitable[CustomerMember | Failure]]
+_MEMBER_ID: Final[TypeAdapter[str]] = TypeAdapter(CustomerIdentifier)
+
+
+def _registrable(customer_member_id: str) -> bool:
+    """A header value becomes a member row only within the identifier bound the customer tables share, so the spend
+    ledger can index every row the proxy creates."""
+    try:
+        _MEMBER_ID.validate_python(customer_member_id)
+    except ValidationError:
+        return False
+    return True
 
 
 async def _register_member(
@@ -329,6 +342,12 @@ async def _register_member(
     """A member the request named for the first time joins the aliased organization's default team. Without an
     alias there is no organization to place it in, and the member stays unknown."""
     if organization is None:
+        return None
+    if not _registrable(customer_member_id):
+        verbose_proxy_logger.warning(
+            "Could not register customer member in organization %s: id is not a valid customer identifier",
+            organization.customer_org_id,
+        )
         return None
     registered: Final = await register(organization.customer_org_id, customer_member_id, prisma_client)
     if isinstance(registered, Failure):
@@ -370,16 +389,19 @@ async def load_customer_hierarchy(
     prisma_client: "PrismaClient | None",
     user_api_key_cache: UserApiKeyCache,
     register: MemberRegistrar = ensure_customer_member,
+    key_metadata: Mapping[str, object] = MappingProxyType({}),
 ) -> CustomerHierarchyAuth | None:
     """The hierarchy the headers name, or None when the proxy knows none of the ids, in which case the request runs
     untracked. A member header next to an alias header must name a member of that organization; a member the
     organization has never seen is registered in its default team first, and when that fails the organization
-    alone is charged."""
+    alone is charged. A key pinned to another organization is refused before any row is created."""
     organization: Final = (
         await _organization_named_by_alias(identity.customer_org_alias, prisma_client, user_api_key_cache)
         if identity.customer_org_alias is not None
         else None
     )
+    if organization is not None:
+        check_customer_hierarchy_key_scope(organization, key_metadata)
     if identity.customer_member_id is None:
         return organization
     hierarchy: Final = await _hierarchy_named_by_member(
@@ -412,10 +434,11 @@ async def resolve_customer_hierarchy(
 ) -> CustomerHierarchyAuth | None:
     """Load the hierarchy the headers name and admit the request against it, or None when no id is known.
     ``request_model`` is the model the route will actually serve, which may differ from the body."""
-    hierarchy: Final = await load_customer_hierarchy(identity, prisma_client, user_api_key_cache, register)
+    metadata: Final = key_metadata or {}
+    hierarchy: Final = await load_customer_hierarchy(identity, prisma_client, user_api_key_cache, register, metadata)
     if hierarchy is None:
         return None
-    check_customer_hierarchy_key_scope(hierarchy, key_metadata or {})
+    check_customer_hierarchy_key_scope(hierarchy, metadata)
     if not RouteChecks.is_info_route(route):
         check_customer_hierarchy_budget(hierarchy)
     requested: Final = (request_model,) if isinstance(request_model, str) else tuple(request_model or ())
