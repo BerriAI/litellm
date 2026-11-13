@@ -1001,6 +1001,7 @@ from litellm.proxy.spend_tracking.background_interaction_settlement import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     get_budget_window_start,
+    release_budget_reservation_on_cancel,  # pyright: ignore[reportUnknownVariableType]  # takes the untyped reservation dict
     release_unbound_budget_reservation,
     stamp_budget_reservation_actual_cost,
 )
@@ -10876,6 +10877,7 @@ async def async_data_generator(
     )
     stream_source: AsyncIterator[object] | None = None  # rebind-ok: bound once the keepalive policy resolves
     stream_started: bool = False  # rebind-ok: set once a ping or a hook-cleared chunk is sent, then errors go in-band
+    provider_output_sent: bool = False  # rebind-ok: set once a provider chunk, not just a keepalive ping, goes out
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -10949,6 +10951,7 @@ async def async_data_generator(
                     str_so_far=_str_so_far,
                 )
             stream_started = True
+            provider_output_sent = True
 
             # Mid-stream fallbacks surface metadata on individual chunks rather than
             # the response wrapper. Keep scanning chunks until a fallback model is
@@ -11122,7 +11125,7 @@ async def async_data_generator(
         if ends_with_openai_done:
             yield _OPENAI_STREAM_DONE_FRAME
     finally:
-        await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+        disconnect_billed: Final = await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
             request=request,
             request_data=request_data,
             response=_UNTYPED_VALUE.validate_python(response),
@@ -11131,6 +11134,9 @@ async def async_data_generator(
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
         )
+        if client_disconnected and not provider_output_sent and not disconnect_billed:
+            with anyio.CancelScope(shield=True):
+                await release_budget_reservation_on_cancel(getattr(user_api_key_dict, "budget_reservation", None))
 
 
 def select_data_generator(

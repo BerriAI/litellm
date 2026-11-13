@@ -5237,7 +5237,8 @@ class ProxyBaseLLMRequestProcessing:
         client_disconnected: bool = False,
         user_api_key_dict: UserAPIKeyAuth | None = None,
         proxy_logging_obj: ProxyLogging | None = None,
-    ) -> None:
+    ) -> bool:
+        disconnect_billed = False  # rebind-ok: set once a disconnect-time success event owns the stream's settlement
         with anyio.CancelScope(shield=True):
             if stream_completed and proxy_logging_obj is not None and user_api_key_dict is not None:
                 await proxy_logging_obj.arelease_max_parallel_requests(user_api_key_dict)
@@ -5262,6 +5263,7 @@ class ProxyBaseLLMRequestProcessing:
                     success_event_owns_slot_release = await _bill_partial_streamed_spend_on_disconnect(
                         request_data, response
                     )
+                disconnect_billed = success_event_owns_slot_release  # rebind-ok: settled only on a recorded disconnect
                 if (
                     not success_event_owns_slot_release
                     and proxy_logging_obj is not None
@@ -5285,6 +5287,7 @@ class ProxyBaseLLMRequestProcessing:
                 and logging_obj.model_call_details.get("prompt_cache_response_complete") is not True
             ):
                 await logging_obj.invalidate_baseline_cache_estimate("incomplete_response", completed=True)
+        return disconnect_billed
 
     _finalize_streaming_generator_cleanup = finalize_streaming_generator_cleanup
 
