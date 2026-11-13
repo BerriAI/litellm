@@ -2377,6 +2377,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self,
         model_response: ModelResponse,
         completion_response: GenerateContentResponseBody,
+        block_reason: str,
     ) -> ModelResponse:
         # If set, the prompt was blocked and no candidates are returned. Rephrase your prompt
         model_response.choices[0].finish_reason = "content_filter"
@@ -2392,6 +2393,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             message=chat_completion_message,
             logprobs=None,
             enhancements=None,
+            provider_specific_fields={"block_reason": block_reason},
         )
 
         model_response.choices = [choice]
@@ -2411,6 +2413,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self,
         model_response: ModelResponse,
         completion_response: GenerateContentResponseBody,
+        native_finish_reason: str,
     ) -> ModelResponse:
         ## CONTENT POLICY VIOLATION ERROR
         model_response.choices[0].finish_reason = "content_filter"
@@ -2426,6 +2429,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             message=_chat_completion_message,
             logprobs=None,
             enhancements=None,
+            provider_specific_fields={"native_finish_reason": native_finish_reason},
         )
 
         model_response.choices = [choice]
@@ -3259,6 +3263,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return self._handle_blocked_response(
                 model_response=model_response,
                 completion_response=completion_response,
+                block_reason=completion_response["promptFeedback"]["blockReason"],
             )
 
         _candidates: Final = completion_response.get("candidates")
@@ -3268,6 +3273,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 return self._handle_content_policy_violation(
                     model_response=model_response,
                     completion_response=completion_response,
+                    native_finish_reason=_candidates[0]["finishReason"],
                 )
 
         model_response.choices = []
