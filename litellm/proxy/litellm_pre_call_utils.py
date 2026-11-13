@@ -51,6 +51,10 @@ from litellm.constants import (
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import merged_guardrail_entries, without_server_streaming_classification
+from litellm.integrations.custom_logger_v2.dispatcher import RequestScope
+from litellm.integrations.custom_logger_v2.host import enter_request_scope
+from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
+from litellm.integrations.custom_logger_v2.selection import RequestSelection
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
@@ -1424,6 +1428,25 @@ def _dynamically_disabled_backends(
     if not isinstance(disabled, list):
         return frozenset()
     return frozenset(name.lower() for name in disabled if isinstance(name, str))
+
+
+def bind_v2_request_scope(
+    data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, request_headers: Mapping[str, str]
+) -> RequestScope | None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    if not CustomLoggerV2.declared_hooks:
+        return None
+    scope: Final = enter_request_scope(
+        RequestSelection(
+            caller_opt_outs=_dynamically_disabled_backends(user_api_key_dict, request_headers),
+            no_log=data.get("no-log") is True and not litellm.global_disable_no_log_param,
+        )
+    )
+    logging_obj: Final = data.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging):
+        logging_obj.v2_scope = scope
+    return scope
 
 
 def resolve_tenant_otel_destinations(

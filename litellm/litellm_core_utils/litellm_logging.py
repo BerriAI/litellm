@@ -76,6 +76,8 @@ from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheCont
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2.call import CallFacts, CallIds, CallKind, CallTarget, CallTiming
+from litellm.integrations.custom_logger_v2.dispatcher import RequestScope
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
 from litellm.integrations.custom_logger_v2.legacy import (
     Admit,
@@ -768,11 +770,20 @@ def _holds_v2(callbacks: Iterable[object]) -> bool:
 # delivered once at the end), so a V2 callback isn't sent the same event twice or once per chunk. Legacy callbacks
 # keep their old behaviour there.
 def _run_callbacks_sync(
-    hook: Hook, callbacks: Sequence[object], kwargs: object, binding: SyncLegacyBinding, include_v2: bool = True
+    hook: Hook,
+    callbacks: Sequence[object],
+    kwargs: object,
+    binding: SyncLegacyBinding,
+    include_v2: bool = True,
+    owner: "Logging | None" = None,
 ) -> None:
     if include_v2 and _holds_v2(callbacks):
         _ = run_subscribers_sync(
-            hook_subscribers(hook, callbacks, admit=Admit.every_entry), KwargsFields(kwargs, LOGGING_KEYS), binding
+            hook_subscribers(hook, callbacks, admit=Admit.every_entry),
+            KwargsFields(kwargs, LOGGING_KEYS),
+            binding,
+            call=None if owner is None else owner.v2_call_facts(),
+            scope=None if owner is None else owner.v2_scope,
         )
         return
     for callback in callbacks:
@@ -781,12 +792,21 @@ def _run_callbacks_sync(
 
 
 async def _run_callbacks(
-    hook: Hook, callbacks: Sequence[object], kwargs: object, binding: LegacyBinding, include_v2: bool = True
+    hook: Hook,
+    callbacks: Sequence[object],
+    kwargs: object,
+    binding: LegacyBinding,
+    include_v2: bool = True,
+    owner: "Logging | None" = None,
 ) -> None:
     if include_v2 and _holds_v2(callbacks):
         _ = kwargs_after(
             await run_subscribers(
-                hook_subscribers(hook, callbacks, admit=Admit.every_entry), KwargsFields(kwargs, LOGGING_KEYS), binding
+                hook_subscribers(hook, callbacks, admit=Admit.every_entry),
+                KwargsFields(kwargs, LOGGING_KEYS),
+                binding,
+                call=None if owner is None else owner.v2_call_facts(),
+                scope=None if owner is None else owner.v2_scope,
             )
         )
         return
@@ -840,6 +860,19 @@ class _FailureRun:
 
 
 class Logging(LiteLLMLoggingBaseClass):
+    v2_scope: RequestScope | None = None
+
+    def v2_call_facts(self) -> CallFacts | None:
+        if self.v2_scope is None:
+            return None
+        started: Final[object] = self.start_time
+        return CallFacts(
+            ids=CallIds(call_id=str(self.litellm_call_id), trace_id=self.litellm_trace_id),
+            kind=CallKind(call_type=str(self.call_type), stream=self.stream is True),
+            target=CallTarget(model=str(self.model)),
+            timing=CallTiming(start=started.timestamp() if isinstance(started, datetime.datetime) else 0.0),
+        )
+
     global \
         supabaseClient, \
         promptLayerLogger, \
@@ -4021,6 +4054,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 call_details,
                 functools.partial(self._sync_logging_hook, prepared, for_async_request),
                 include_v2=include_v2,
+                owner=self,
             )
 
             self.mark_logging_complete(event_type="sync_success")
@@ -4042,6 +4076,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 prepared.details,
                 functools.partial(self._deliver_sync_success, run),
                 include_v2=include_v2,
+                owner=self,
             )
         except Exception as e:
             verbose_logger.exception(
@@ -4660,6 +4695,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details,
             functools.partial(self._async_logging_hook_start, prepared),
             include_v2=include_v2,
+            owner=self,
         )
         result = prepared.result  # rebind-ok: logging hooks may replace the result
 
@@ -4671,6 +4707,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details,
             functools.partial(self._deliver_async_success, result, start_time, end_time),
             include_v2=include_v2,
+            owner=self,
         )
         if not self.stream:
             try:
@@ -5112,6 +5149,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.model_call_details,
                 functools.partial(self._deliver_sync_failure, run),
                 include_v2=not for_async_request,
+                owner=self,
             )
         except Exception as e:
             verbose_logger.exception(

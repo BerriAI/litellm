@@ -324,6 +324,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     SCHEDULER_PRIORITY_HEADER,
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
+    bind_v2_request_scope,
     get_metadata_variable_name,
     global_then_key_alias_target,
     pre_call_served_model,
@@ -2858,6 +2859,7 @@ class ProxyBaseLLMRequestProcessing:
         # to run below.
         await _arm_auto_router_compression(data=self.data, llm_router=llm_router)
 
+        _ = bind_v2_request_scope(self.data, user_api_key_dict, request.headers)
         if self._tags_before_guardrails is None:
             self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
         prefetch_model = self.data.get("model")

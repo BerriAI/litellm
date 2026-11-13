@@ -230,8 +230,7 @@ class RequestScope:
         if chain.terminal is not None:
             return HookResult(fields=chain.fields, patches=patches, outcome=chain.terminal)
         await self._run_awaited(hook, plan.awaited, chain.fields, call)
-        if plan.off_path:
-            self._dispatcher.sink.submit(self._deliver_off_path(hook, plan.off_path, chain.fields, call))
+        self._submit_off_path(hook, plan.off_path, chain.fields, call)
         if chain.reroute is not None:
             self.reroute = chain.reroute
         return HookResult(fields=chain.fields, patches=patches, outcome=chain.reroute)
@@ -260,8 +259,7 @@ class RequestScope:
         for entry in plan.inline:
             _ = await _run_legacy(entry, binding, done.fields)
         await self._run_awaited(hook, plan.awaited, done.fields, call)
-        if plan.off_path:
-            self._dispatcher.sink.submit(self._deliver_off_path(hook, plan.off_path, done.fields, call))
+        self._submit_off_path(hook, plan.off_path, done.fields, call)
         if done.reroute is not None:
             self.reroute = done.reroute
         return HookResult(fields=done.fields, patches=done.ordered_patches, outcome=done.reroute)
@@ -280,8 +278,7 @@ class RequestScope:
                 f"{hook.value} runs synchronously here, so only off-path V2 callbacks may subscribe"
             )
         result: Final = run_legacy_plan_sync(plan, fields, binding)
-        if plan.off_path:
-            self._dispatcher.sink.submit(self._deliver_off_path(hook, plan.off_path, result, call))
+        self._submit_off_path(hook, plan.off_path, result, call)
         return result
 
     def _state(self, entry: Entry) -> object:
@@ -292,6 +289,9 @@ class RequestScope:
         if key not in self._states:
             self._states[key] = factory()
         return self._states[key]
+
+    def _states_of(self, entries: Sequence[Entry]) -> tuple[object, ...]:
+        return tuple(self._state(entry) for entry in entries)
 
     async def _invoke(
         self, hook: Hook, entry: Entry, fields: Mapping[Field, object], call: CallFacts | None, state: object
@@ -314,12 +314,12 @@ class RequestScope:
         entry: Entry,
         fields: Mapping[Field, object],
         call: CallFacts | None,
-        live: bool,
+        state: object,
         binding: LegacyBinding | None,
     ) -> Awaitable[object] | None:
         if entry.subscription.legacy:
             return _legacy_start(entry, binding, fields)
-        return self._invoke(hook, entry, fields, call, self._state(entry) if live else None)
+        return self._invoke(hook, entry, fields, call, state)
 
     async def _gather(
         self,
@@ -327,12 +327,14 @@ class RequestScope:
         entries: Sequence[Entry],
         fields: Mapping[Field, object],
         call: CallFacts | None,
-        live: bool,
+        states: tuple[object, ...],
         binding: LegacyBinding | None = None,
     ) -> tuple[object, ...]:
         if len(entries) == 1 and entries[0].subscription.legacy:
             return (await _run_legacy(entries[0], binding, fields),)
-        started: Final = tuple(self._start(hook, entry, fields, call, live, binding) for entry in entries)
+        started: Final = tuple(
+            self._start(hook, entry, fields, call, state, binding) for entry, state in zip(entries, states, strict=True)
+        )
         return await _gather_started(started, _fail_fast(hook, tuple(entries)))
 
     async def _run_stages(
@@ -346,7 +348,7 @@ class RequestScope:
         if not stages:
             return chain
         stage: Final = stages[0]
-        results: Final = await self._gather(hook, stage, chain.fields, call, live=True, binding=binding)
+        results: Final = await self._gather(hook, stage, chain.fields, call, self._states_of(stage), binding)
         folded: Final = self._fold(hook, stage, results, chain)
         if folded.terminal is not None:
             return folded
@@ -392,9 +394,20 @@ class RequestScope:
         self, hook: Hook, entries: tuple[Entry, ...], fields: Mapping[Field, object], call: CallFacts | None
     ) -> None:
         if entries:
-            self._swallow(hook, entries, await self._gather(hook, entries, fields, call, live=True))
+            self._swallow(hook, entries, await self._gather(hook, entries, fields, call, self._states_of(entries)))
 
-    async def _deliver_off_path(
+    def _submit_off_path(
         self, hook: Hook, entries: tuple[Entry, ...], fields: Mapping[Field, object], call: CallFacts | None
     ) -> None:
-        self._swallow(hook, entries, await self._gather(hook, entries, fields, call, live=False))
+        if entries:
+            self._dispatcher.sink.submit(self._deliver_off_path(hook, entries, fields, call, self._states_of(entries)))
+
+    async def _deliver_off_path(
+        self,
+        hook: Hook,
+        entries: tuple[Entry, ...],
+        fields: Mapping[Field, object],
+        call: CallFacts | None,
+        states: tuple[object, ...],
+    ) -> None:
+        self._swallow(hook, entries, await self._gather(hook, entries, fields, call, states))

@@ -160,6 +160,8 @@ from litellm.integrations.custom_guardrail import (
     merged_guardrail_entries,
 )
 from litellm.integrations.custom_logger import CustomLogger, subclass_overrides_hook
+from litellm.integrations.custom_logger_v2.call import CallFacts, CallIds, CallKind, CallTarget, CallTiming
+from litellm.integrations.custom_logger_v2.dispatcher import HookResult
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
 from litellm.integrations.custom_logger_v2.legacy import (
     PROXY_REQUEST_KEYS,
@@ -175,6 +177,7 @@ from litellm.integrations.custom_logger_v2.legacy import (
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.integrations.custom_logger_v2.outcomes import (
     MERGEABLE_FIELDS,
+    Abort,
     InvalidPatchError,
     MergeField,
     Patch,
@@ -2115,6 +2118,27 @@ def hook_fields(kwargs: object, run: HookRun[_T], slot: Field) -> HookRunFields[
     return HookRunFields(KwargsFields(kwargs, PROXY_REQUEST_KEYS), run, slot)
 
 
+def raise_v2_abort(result: HookResult) -> HookResult:
+    if isinstance(result.outcome, Abort):
+        raise result.outcome.exception or HTTPException(
+            status_code=result.outcome.status,
+            detail={"error": result.outcome.message},
+            headers=dict(result.outcome.headers or {}),
+        )
+    return result
+
+
+def _proxy_call_facts(data: Mapping[str, object] | None, call_type: str) -> CallFacts:
+    request: Final = data or {}
+    model: Final = request.get("model")
+    return CallFacts(
+        ids=CallIds(call_id=str(request.get("litellm_call_id") or "")),
+        kind=CallKind(call_type=call_type, stream=request.get("stream") is True),
+        target=CallTarget(model=model if isinstance(model, str) else ""),
+        timing=CallTiming(start=time.time()),
+    )
+
+
 async def run_hook_subscribers(
     subscribers: HookSubscribers,
     fields: Mapping[Field, object],
@@ -3518,10 +3542,11 @@ class ProxyLogging:
                     KwargsFields(run.latest, PROXY_REQUEST_KEYS),
                     partial(self._pre_call_start, run),
                     between=partial(self._pre_call_deferred_reroute, run),
+                    call=_proxy_call_facts(run.latest, run.call_type) if subscribers.has_v2 else None,
                 )
             finally:
                 run.settle_parallel()
-            run.latest = _request_dict(kwargs_after(result))
+            run.latest = _request_dict(kwargs_after(raise_v2_abort(result)))
             run.raise_parallel_flow_change()
 
             if run.latest is not None:

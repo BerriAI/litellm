@@ -1,0 +1,241 @@
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import asdict
+from types import MappingProxyType
+from typing import Annotated, ClassVar, Final, Literal, Protocol
+
+from pydantic import BaseModel, ConfigDict, Discriminator, TypeAdapter
+
+from litellm.integrations.custom_logger_v2.call import CallContext
+from litellm.integrations.custom_logger_v2.enums import Activation, Field, FieldTier, Hook, OptOutBy
+from litellm.integrations.custom_logger_v2.hooks import HOOK_SPECS
+from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2, on
+from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
+from litellm.integrations.custom_logger_v2.selection import Selection
+
+
+class NativeHandle(Protocol):
+    def manifest(self) -> str: ...
+
+    def request_state(self) -> object: ...
+
+    def handle(
+        self, hook: str, fields: Mapping[str, object], call: Mapping[str, object] | None, state: object, /
+    ) -> Awaitable[object]: ...
+
+
+class _Wire(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class WireSubscription(_Wire):
+    hook: Hook
+    reads: frozenset[Field]
+    writes: frozenset[Field]
+    may_abort: bool
+    parallel: bool
+    awaited: bool
+    activation: Activation | None
+
+
+class WireSelection(_Wire):
+    name: str
+    aliases: frozenset[str]
+    activation: Activation
+    opt_out_by: frozenset[OptOutBy]
+    honors_no_log: bool
+
+
+class WireManifest(_Wire):
+    selection: WireSelection
+    subscriptions: tuple[WireSubscription, ...]
+    has_request_state: bool
+
+
+class _SetOp(_Wire):
+    op: Literal["set"]
+    field: Field
+    value: object
+
+
+class _MergeOp(_Wire):
+    op: Literal["merge"]
+    field: Field
+    keys: Mapping[str, object]
+
+
+class _WirePatch(_Wire):
+    ops: tuple[Annotated[_SetOp | _MergeOp, Discriminator("op")], ...]
+
+
+class WireAbortError(_Wire):
+    kind: str
+    fields: Mapping[str, object]
+
+
+class WireAbort(_Wire):
+    status: int
+    message: str
+    code: str | None
+    headers: Mapping[str, str]
+    error: WireAbortError | None = None
+
+
+class _WireVerdict(_Wire):
+    patch: _WirePatch | None = None
+    abort: WireAbort | None = None
+
+
+_VERDICT: Final = TypeAdapter(_WireVerdict | None)
+
+AbortErrorFactory = Callable[[WireAbort], Exception]
+
+ABORT_ERRORS: Final[dict[str, AbortErrorFactory]] = {}  # mutable-ok: each port registers its error kind at import
+
+
+def register_abort_error(kind: str, factory: AbortErrorFactory) -> None:
+    ABORT_ERRORS[kind] = factory
+
+
+def _patch(wire: _WirePatch) -> Patch:
+    patch: Patch = Patch()  # rebind-ok: built one op at a time
+    for op in wire.ops:
+        patch = patch.set(op.field, op.value) if isinstance(op, _SetOp) else patch.merge(op.field, op.keys)
+    return patch
+
+
+def _exception(wire: WireAbort) -> Exception | None:
+    if wire.error is None:
+        return None
+    factory: Final = ABORT_ERRORS.get(wire.error.kind)
+    return None if factory is None else factory(wire)
+
+
+def verdict(returned: object) -> Patch | Abort | None:
+    wire: Final = _VERDICT.validate_python(returned)
+    if wire is None:
+        return None
+    if wire.abort is not None:
+        return Abort(
+            status=wire.abort.status,
+            message=wire.abort.message,
+            code=wire.abort.code,
+            headers=wire.abort.headers,
+            exception=_exception(wire.abort),
+        )
+    return None if wire.patch is None else _patch(wire.patch)
+
+
+def _plain(value: object) -> object:
+    return value.model_dump(mode="json") if isinstance(value, BaseModel) else value
+
+
+_ABSENT: Final = object()
+
+
+class NativeState:
+    __slots__ = ("handle",)
+    native: ClassVar[NativeHandle]
+
+    def __init__(self) -> None:
+        self.handle: Final = type(self).native.request_state()
+
+
+class NativeLogger(CustomLoggerV2):
+    def __init__(self, native: NativeHandle) -> None:
+        self.native: Final = native
+
+    async def run_native(
+        self, hook: Hook, reads: frozenset[Field], view: object, ctx: CallContext[object]
+    ) -> Patch | Abort | None:
+        fields: Final = {
+            field.value: _plain(value)
+            for field in reads
+            if (value := getattr(view, field.value, _ABSENT)) is not _ABSENT
+        }
+        call: Final = None if ctx.call is None else asdict(ctx.call)
+        state: Final = ctx.state.handle if isinstance(ctx.state, NativeState) else None
+        return verdict(await self.native.handle(hook.value, fields, call, state))
+
+
+def _handler(
+    hook: Hook, reads: frozenset[Field]
+) -> Callable[[NativeLogger, object, CallContext[object]], Awaitable[Patch | Abort | None]]:
+    async def handle(self: NativeLogger, view: object, ctx: CallContext[object]) -> Patch | Abort | None:
+        return await self.run_native(hook, reads, view, ctx)
+
+    return handle
+
+
+def _namespace(native: NativeHandle, manifest: WireManifest) -> dict[str, object]:  # mutable-ok: class namespace
+    subscriptions: Final = manifest.subscriptions
+    handlers: Final[dict[str, object]] = {  # mutable-ok: class namespace
+        f"on_{subscription.hook.value}": on(
+            subscription.hook,
+            reads=subscription.reads,
+            writes=subscription.writes,
+            may_abort=subscription.may_abort,
+            parallel=subscription.parallel,
+            awaited=subscription.awaited,
+        )(_handler(subscription.hook, subscription.reads))
+        for subscription in subscriptions
+    }
+    selection: Final = manifest.selection
+    return {
+        **handlers,
+        "selection": Selection(
+            name=selection.name,
+            aliases=selection.aliases,
+            activation=selection.activation,
+            opt_out_by=selection.opt_out_by,
+            honors_no_log=selection.honors_no_log,
+        ),
+        "activation_overrides": MappingProxyType(
+            {s.hook: s.activation for s in subscriptions if s.activation is not None}
+        ),
+        "request_state": (
+            type(f"{selection.name}_state", (NativeState,), {"native": native, "__slots__": ()})
+            if manifest.has_request_state
+            else None
+        ),
+    }
+
+
+def native_logger(native: NativeHandle) -> NativeLogger:
+    manifest: Final = WireManifest.model_validate_json(native.manifest())
+    cls: Final = type(manifest.selection.name, (NativeLogger,), _namespace(native, manifest))
+    if not issubclass(cls, NativeLogger):
+        raise TypeError(f"{manifest.selection.name} did not build as a NativeLogger")
+    return cls(native)
+
+
+def contract_table() -> Mapping[str, object]:
+    return {
+        "hooks": [
+            {
+                "name": hook.value,
+                "bit": bit,
+                "request_path": HOOK_SPECS[hook].request_path,
+                "subscribable": HOOK_SPECS[hook].subscribable,
+                "writes": sorted(field.value for field in HOOK_SPECS[hook].writes),
+                "outcomes": sorted(outcome.__name__.lower() for outcome in HOOK_SPECS[hook].outcomes),
+            }
+            for bit, hook in enumerate(Hook)
+        ],
+        "fields": [{"name": field.value, "bit": field.bit, "tier": field.tier.name} for field in Field],
+        "tiers": [{"name": tier.name, "rank": tier.value} for tier in FieldTier],
+        "activations": [activation.value for activation in Activation],
+        "opt_out_by": [scope.value for scope in OptOutBy],
+    }
+
+
+__all__ = [
+    "ABORT_ERRORS",
+    "NativeHandle",
+    "NativeLogger",
+    "NativeState",
+    "WireAbort",
+    "contract_table",
+    "native_logger",
+    "register_abort_error",
+    "verdict",
+]

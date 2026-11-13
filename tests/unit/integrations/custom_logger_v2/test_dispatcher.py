@@ -382,7 +382,7 @@ async def test_a_subscription_activation_override_beats_the_instance_activation(
     assert len(scope.plan(Hook.log_prepare).stages) == 1
 
 
-async def test_off_path_v2_callbacks_are_delivered_once_per_hook_when_it_finishes_without_state() -> None:
+async def test_off_path_v2_callbacks_are_delivered_once_per_hook_with_their_request_state() -> None:
     @dataclass
     class Spans:
         open: list[str] = field(default_factory=list)
@@ -405,7 +405,8 @@ async def test_off_path_v2_callbacks_are_delivered_once_per_hook_when_it_finishe
     assert len(states) == 1
     assert isinstance(states[0], Spans)
     await sink.run_all()
-    assert states[1] is None
+    assert isinstance(states[1], Spans)
+    assert states[1] is not states[0]
 
 
 def test_sync_off_path_handler_runs_on_a_worker_thread() -> None:
