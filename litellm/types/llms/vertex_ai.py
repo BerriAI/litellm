@@ -303,7 +303,7 @@ class TTL(TypedDict, total=False):
 
 
 class PromptTokensDetails(TypedDict):
-    modality: Literal["TEXT", "AUDIO", "IMAGE", "VIDEO"]
+    modality: str
     tokenCount: int
 
 
