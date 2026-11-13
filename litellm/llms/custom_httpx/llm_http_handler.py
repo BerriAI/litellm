@@ -1031,7 +1031,9 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
                 api_key=api_key,
                 messages=messages,
-                optional_params=optional_params,
+                optional_params={**optional_params, "extra_body": extra_body}
+                if extra_body is not None
+                else optional_params,
                 litellm_params=litellm_params,
                 encoding=encoding,
                 client=async_client,
