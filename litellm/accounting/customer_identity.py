@@ -10,9 +10,12 @@ _FIELDS: Final = TypeAdapter(Mapping[str, object])
 _MEMBER: Final = """SELECT m.customer_member_id, t.customer_team_id, o.customer_org_id,
     o.alias AS customer_org_alias
 FROM "LiteLLM_CustomerMemberTable" m
-JOIN "LiteLLM_CustomerTeamTable" t ON t.customer_team_id = m.parent_team_id
-JOIN "LiteLLM_CustomerOrganizationTable" o ON o.customer_org_id = t.parent_org_id
-WHERE m.customer_member_id = $1::text"""
+JOIN "LiteLLM_CustomerOrganizationTable" o ON o.customer_org_id = m.parent_org_id
+LEFT JOIN "LiteLLM_CustomerTeamTable" t
+    ON t.customer_team_id = COALESCE($2::text, m.parent_team_ids[1])
+    AND t.customer_team_id = ANY(m.parent_team_ids)
+    AND t.parent_org_id = m.parent_org_id
+WHERE m.customer_member_id = $1::text AND ($2::text IS NULL OR t.customer_team_id IS NOT NULL)"""
 _ORG_BY_ID: Final = """SELECT customer_org_id, alias AS customer_org_alias
 FROM "LiteLLM_CustomerOrganizationTable" WHERE customer_org_id = $1::text LIMIT 2"""
 _ORG_BY_ALIAS: Final = """SELECT customer_org_id, alias AS customer_org_alias
@@ -43,7 +46,7 @@ def _mapping(value: object) -> Mapping[str, object]:
 
 async def _customer(transaction: LedgerTransaction, assertion: CustomerIdentityAssertion) -> _Customer | None:
     if assertion.customer_member_id is not None:
-        members: Final = await transaction.query_raw(_MEMBER, assertion.customer_member_id)
+        members: Final = await transaction.query_raw(_MEMBER, assertion.customer_member_id, assertion.customer_team_id)
         if members:
             member: Final = _Customer.model_validate(members[0])
             if assertion.key_customer_org_id is not None:

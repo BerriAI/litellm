@@ -126,7 +126,11 @@ async def test_restricted_key_model_list_denial_names_the_denied_model(
     request: Final = StarletteRequest({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     with pytest.raises(ProxyException) as denied:
         await _authorize_authenticated_request(
-            identity, request, {"model": ["model-a", "model-b"]}, "/chat/completions", "synthetic",
+            identity,
+            request,
+            {"model": ["model-a", "model-b"]},
+            "/chat/completions",
+            "synthetic",
             force_virtual_key_checks=True,
         )
     assert denied.value.code == "403"
@@ -690,8 +694,6 @@ def test_get_api_key_from_custom_header_different_casing():
         custom_header_name="X-Custom-API-Key",
         expected_api_key=token,
     )
-
-
 
 
 @pytest.mark.parametrize(
@@ -2732,7 +2734,11 @@ async def test_customer_hierarchy_database_outage_respects_fail_open_setting(
             "type": "http",
             "method": "POST",
             "path": "/chat/completions",
-            "headers": [(b"x-litellm-customer-member-id", b"m1"), (b"x-litellm-customer-org-alias", b"customer-a")],
+            "headers": [
+                (b"x-litellm-customer-member-id", b"m1"),
+                (b"x-litellm-customer-org-alias", b"customer-a"),
+                (b"x-litellm-customer-team-id", b"second-team"),
+            ],
         },
         receive=AsyncMock(
             return_value={
@@ -2750,6 +2756,7 @@ async def test_customer_hierarchy_database_outage_respects_fail_open_setting(
             "customer_org_alias": "customer-a",
             "customer_member_id": "m1",
             "key_customer_org_id": None,
+            "customer_team_id": "second-team",
         }
         assert identity.token == stored.token
         assert "customer org alias=customer-a, customer member id=m1" in caplog.text
@@ -2791,9 +2798,7 @@ async def test_unverified_virtual_key_is_not_admitted_by_customer_outage_recover
             "path": "/v1/responses",
             "headers": [(b"x-litellm-customer-org-alias", b"customer-a")],
         },
-        receive=AsyncMock(
-            return_value={"type": "http.request", "body": b'{"model":"gpt-4o-mini","input":"Hello"}'}
-        ),
+        receive=AsyncMock(return_value={"type": "http.request", "body": b'{"model":"gpt-4o-mini","input":"Hello"}'}),
     )
     with pytest.raises(ProxyException) as denied:
         await user_api_key_auth(request=request, api_key="Bearer sk-never-issued-customer-outage")

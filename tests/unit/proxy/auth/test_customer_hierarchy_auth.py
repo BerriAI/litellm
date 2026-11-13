@@ -1,18 +1,26 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
+import litellm.proxy.proxy_server as ps
+from litellm.caching.dual_cache import DualCache
+from litellm.models.budget import BudgetLimit
 from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CUSTOMER_MEMBER_ID_HEADER,
     CUSTOMER_ORG_ALIAS_HEADER,
+    CUSTOMER_TEAM_ID_HEADER,
     AmbiguousOrganizationAlias,
     check_customer_hierarchy_budget,
     check_customer_hierarchy_key_scope,
     check_customer_hierarchy_model_access,
+    check_customer_hierarchy_windows,
     customer_hierarchy_from_member_row,
     customer_identity_from_headers,
     customer_member_id_from_headers,
@@ -20,17 +28,129 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     get_customer_hierarchy,
     get_customer_organization_hierarchy,
     resolve_customer_hierarchy,
+    select_customer_team,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure
+from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerRequestIdentity,
     CustomerScopeAuth,
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def customer_spend_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "spend_counter_store", SpendCounterStore(connect(None).spend_counters()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias_only", (False, True))
+async def test_a_missing_shared_counter_reseeds_spend_without_reloading_a_stale_cached_snapshot(
+    alias_only: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    cache: Final = UserApiKeyCache()
+    old: Final = _Prisma(
+        _MemberTable({"member-1": _row(org_budget={"max_budget": 1})}),
+        _OrganizationTable((_organization("tenant", max_budget=1),)),
+    )
+    persisted: Final = _Prisma(
+        _MemberTable({"member-1": _row(org_budget={"max_budget": 1}, spend=(2, 0, 0))}),
+        _OrganizationTable((_organization("tenant", max_budget=1, spend=2),)),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", persisted)
+    if alias_only:
+        _ = await get_customer_organization_hierarchy(
+            "tenant",
+            old,  # pyright: ignore[reportArgumentType]  # database boundary fixture
+            cache,
+        )
+    else:
+        _ = await get_customer_hierarchy(
+            "member-1",
+            old,  # pyright: ignore[reportArgumentType]  # database boundary fixture
+            cache,
+        )
+    identity: Final = CustomerRequestIdentity(
+        customer_org_alias="tenant" if alias_only else None,
+        customer_member_id=None if alias_only else "member-1",
+    )
+    with pytest.raises(litellm.BudgetExceededError) as rejected:
+        await resolve_customer_hierarchy(
+            identity,
+            persisted,  # pyright: ignore[reportArgumentType]  # database boundary fixture
+            cache,
+            None,
+            "model",
+            "/responses",
+        )
+    assert rejected.value.current_cost == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("level", ("org", "team", "member"))
+@pytest.mark.parametrize("alias_only", (False, True))
+async def test_settled_spend_reaches_another_workers_cached_hierarchy(
+    monkeypatch: pytest.MonkeyPatch, level: str, alias_only: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    shared: Final[dict[str, object]] = {}
+    settling: Final = FakeSpendCounters(redis=shared).store()
+    reading: Final = FakeSpendCounters(redis=shared).store()
+    monkeypatch.setattr(proxy_server, "spend_counter_store", reading)
+    cache: Final = UserApiKeyCache()
+    row: Final = _row(template={"max_budget": 1.0}, team_budget={"max_budget": 1.0}, org_budget={"max_budget": 1.0})
+    prisma: Final = _Prisma(
+        _MemberTable({"member-1": row}), _OrganizationTable((_organization("tenant", max_budget=1),))
+    )
+    identity: Final = CustomerRequestIdentity(
+        customer_org_alias="tenant" if alias_only else None,
+        customer_member_id=None if alias_only else "member-1",
+    )
+    await resolve_customer_hierarchy(
+        identity,
+        prisma,  # pyright: ignore[reportArgumentType]  # database boundary fixture
+        cache,
+        None,
+        "model",
+        "/responses",
+    )
+    counter: Final = f"spend:customer_{level}:{level}-1:lifetime"
+    await settling.increment(counter, 1.25)
+    if alias_only and level != "org":
+        allowed: Final = await resolve_customer_hierarchy(
+            identity,
+            prisma,  # pyright: ignore[reportArgumentType]  # database boundary fixture
+            cache,
+            None,
+            "model",
+            "/responses",
+        )
+        assert allowed.customer_member_id is None
+        return
+    with pytest.raises(litellm.BudgetExceededError) as rejected:
+        await resolve_customer_hierarchy(
+            identity,
+            prisma,  # pyright: ignore[reportArgumentType]  # database boundary fixture
+            cache,
+            None,
+            "model",
+            "/responses",
+        )
+    assert (rejected.value.entity_type, rejected.value.current_cost) == (f"customer_{level}", 1.25)
 
 
 def _row(
@@ -45,18 +165,16 @@ def _row(
     org_spend, team_spend, member_spend = spend
     return {
         "customer_member_id": "member-1",
-        "parent_team_id": "team-1",
+        "parent_org_id": "org-1",
+        "parent_team_ids": ("team-1",),
         "spend": member_spend,
         "budget": template,
         "budget_override": override,
         "budget_override_expires_at": override_expires_at,
-        "parent_team": {
-            "customer_team_id": "team-1",
-            "parent_org_id": "org-1",
-            "spend": team_spend,
-            "budget": team_budget,
-            "parent_org": {"customer_org_id": "org-1", "spend": org_spend, "budget": org_budget},
-        },
+        "parent_org": {"customer_org_id": "org-1", "spend": org_spend, "budget": org_budget},
+        "teams": (
+            {"customer_team_id": "team-1", "parent_org_id": "org-1", "spend": team_spend, "budget": team_budget},
+        ),
     }
 
 
@@ -95,6 +213,74 @@ def test_member_row_yields_org_team_and_member_scopes_with_the_effective_member_
         3.0,
     )
     assert member.model_tpm_limit == {"gpt-4o": 400}
+
+
+def test_a_team_override_caps_the_team_scope_until_it_expires() -> None:
+    base: Final = _row(template={"max_budget": 10.0}, team_budget={"max_budget": 50.0, "rpm_limit": 5})
+    team: Final = {**_team_of(base), "budget_override": {"max_budget": 500.0}}
+
+    active: Final = _scopes(
+        customer_hierarchy_from_member_row(
+            {**base, "teams": ({**team, "budget_override_expires_at": NOW + timedelta(days=1)},)}, NOW
+        )
+    )["customer_team"]
+    expired: Final = _scopes(
+        customer_hierarchy_from_member_row(
+            {**base, "teams": ({**team, "budget_override_expires_at": NOW - timedelta(seconds=1)},)}, NOW
+        )
+    )["customer_team"]
+
+    assert (active.max_budget, active.rpm_limit) == (500.0, 5)
+    assert (expired.max_budget, expired.rpm_limit) == (50.0, 5)
+
+
+def _team_of(row: Mapping[str, object]) -> Mapping[str, object]:
+    return TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(row["teams"])[0]
+
+
+def test_a_member_in_two_teams_is_charged_to_the_first_unless_the_request_names_another() -> None:
+    base: Final = _row(template={"max_budget": 10.0}, team_budget={"max_budget": 50.0})
+    second: Final = {
+        "customer_team_id": "team-2",
+        "parent_org_id": "org-1",
+        "spend": 7.0,
+        "budget": {"max_budget": 5.0},
+    }
+    hierarchy: Final = customer_hierarchy_from_member_row(
+        {**base, "parent_team_ids": ("team-1", "team-2"), "teams": (*_teams_of(base), second)}, NOW
+    )
+
+    assert hierarchy.customer_team_id == "team-1"
+    assert tuple(scope.entity_id for scope in hierarchy.scopes) == ("org-1", "team-1", "member-1")
+    assert tuple(scope.entity_id for scope in hierarchy.team_scopes) == ("team-1", "team-2")
+    selected: Final = select_customer_team(hierarchy, "team-2")
+    assert selected is not None
+    assert selected.customer_team_id == "team-2"
+    assert tuple((scope.entity_id, scope.max_budget) for scope in selected.scopes) == (
+        ("org-1", None),
+        ("team-2", 5.0),
+        ("member-1", 10.0),
+    )
+    with pytest.raises(litellm.BudgetExceededError):
+        check_customer_hierarchy_budget(selected)
+    assert select_customer_team(hierarchy, "team-9") is None
+
+
+@pytest.mark.asyncio
+async def test_a_team_header_must_name_one_of_the_members_teams() -> None:
+    prisma: Final = _Prisma(_MemberTable({"member-1": _row(template={"max_budget": 10.0})}))
+
+    selected: Final = await _resolve(
+        prisma, CustomerRequestIdentity(customer_member_id="member-1", customer_team_id="team-1")
+    )
+    assert selected.customer_team_id == "team-1"
+    with pytest.raises(ProxyException) as exc:
+        await _resolve(prisma, CustomerRequestIdentity(customer_member_id="member-1", customer_team_id="team-9"))
+    assert (exc.value.code, exc.value.param) == ("403", CUSTOMER_TEAM_ID_HEADER)
+
+
+def _teams_of(row: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(row["teams"])
 
 
 def test_an_expired_override_leaves_the_member_on_its_template() -> None:
@@ -187,6 +373,10 @@ class _Record:
     def model_dump(self) -> Mapping[str, object]:
         return self.values
 
+    @property
+    def spend(self):
+        return self.values.get("spend", 0.0)
+
 
 class _OrganizationTable:
     def __init__(self, rows: Sequence[Mapping[str, object]] = ()) -> None:
@@ -200,10 +390,35 @@ class _OrganizationTable:
         matching: Final = [_Record(row) for row in self.rows if row.get("alias") == where["alias"]]
         return matching[:take] if take is not None else matching
 
+    async def find_unique(self, where: Mapping[str, object], include: Mapping[str, object] | None = None):
+        return next((_Record(row) for row in self.rows if row.get("customer_org_id") == where["customer_org_id"]), None)
+
+
+class _TeamTable:
+    """Serves the team rows the member fixtures embed under ``teams``, as the proxy's second lookup would."""
+
+    def __init__(self, members: _MemberTable) -> None:
+        self.members = members
+
+    async def find_many(self, where: Mapping[str, object], include: Mapping[str, object] | None = None):
+        wanted: Final = TypeAdapter(Mapping[str, Sequence[str]]).validate_python(where["customer_team_id"])["in"]
+        teams: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+        return [
+            _Record(team)
+            for row in self.members.rows.values()
+            for team in teams.validate_python(row.get("teams") or ())
+            if team["customer_team_id"] in wanted
+        ]  # comprehension-ok: flattening the fixture rows' embedded teams
+
+    async def find_unique(self, where: Mapping[str, object], include: Mapping[str, object] | None = None):
+        rows: Final = await self.find_many({"customer_team_id": {"in": (where["customer_team_id"],)}}, include)
+        return rows[0] if rows else None
+
 
 class _Db:
     def __init__(self, table: _MemberTable, organizations: _OrganizationTable) -> None:
         self.litellm_customermembertable = table
+        self.litellm_customerteamtable = _TeamTable(table)
         self.litellm_customerorganizationtable = organizations
 
 
@@ -238,7 +453,8 @@ class _Registrar:
         return CustomerMember.model_validate(
             {
                 "customer_member_id": member_id,
-                "parent_team_id": "team-1",
+                "parent_org_id": "org-1",
+                "parent_team_ids": ("team-1",),
                 "effective_budget": {"max_budget": 10.0},
                 "created_at": NOW,
                 "created_by": "x",
@@ -463,3 +679,168 @@ async def test_an_unknown_member_stays_refused_without_an_alias_or_when_registra
         )
     assert (failed.value.code, failing.calls) == ("401", (("org-1", "user-7"),))
     assert "user-7" not in members.rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exhausted_duration", ("1mo", "12mo"))
+async def test_either_customer_cap_blocks_while_the_other_has_capacity(exhausted_duration: str, monkeypatch) -> None:
+    hierarchy = customer_hierarchy_from_member_row(
+        _row(
+            template={
+                "budget_limits": [
+                    {"budget_duration": "1mo", "max_budget": 10},
+                    {"budget_duration": "12mo", "max_budget": 100},
+                ]
+            }
+        ),
+        NOW,
+    )
+    backend = FakeSpendCounters()
+    store = backend.store()
+    monkeypatch.setattr(ps, "spend_counter_store", store)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    member = hierarchy.scopes[-1]
+    counters = customer_window_counters(member.key, member.entity_id, member.budget_limits, now=NOW)
+    for counter in counters:
+        await store.set(counter.counter_key, 1.0)
+    await check_customer_hierarchy_windows(hierarchy, NOW)
+    exhausted = next(counter for counter in counters if counter.window_duration == exhausted_duration)
+    await store.set(exhausted.counter_key, exhausted.max_budget)
+    with pytest.raises(litellm.BudgetExceededError) as error:
+        await check_customer_hierarchy_windows(hierarchy, NOW)
+    assert error.value.entity_id == member.entity_id
+    assert error.value.current_cost == exhausted.max_budget
+    assert exhausted_duration in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_missing_customer_window_balance_rejects_request(monkeypatch) -> None:
+    hierarchy = customer_hierarchy_from_member_row(
+        _row(template={"budget_limits": [{"budget_duration": "1mo", "max_budget": 10}]}), NOW
+    )
+    monkeypatch.setattr(ps, "spend_counter_store", FakeSpendCounters().store())
+    monkeypatch.setattr(ps, "prisma_client", None)
+    with pytest.raises(ProxyException) as error:
+        await check_customer_hierarchy_windows(hierarchy, NOW)
+    assert error.value.code == "503"
+    assert error.value.param == "budget_limits"
+
+
+@pytest.mark.asyncio
+async def test_customer_windows_are_independent_for_members_sharing_a_budget(monkeypatch) -> None:
+    first = customer_hierarchy_from_member_row(
+        _row(template={"budget_limits": [{"budget_duration": "1mo", "max_budget": 10}]}), NOW
+    )
+    first_scope = first.scopes[-1]
+    second_scope = first_scope.model_copy(update={"entity_id": "member-2"})
+    second = first.model_copy(update={"customer_member_id": "member-2", "scopes": (second_scope,)})
+    backend = FakeSpendCounters()
+    store = backend.store()
+    monkeypatch.setattr(ps, "spend_counter_store", store)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    first_counter = customer_window_counters(
+        first_scope.key, first_scope.entity_id, first_scope.budget_limits, now=NOW
+    )[0]
+    second_counter = customer_window_counters(
+        second_scope.key, second_scope.entity_id, second_scope.budget_limits, now=NOW
+    )[0]
+    await store.set(first_counter.counter_key, 10)
+    await store.set(second_counter.counter_key, 0)
+    with pytest.raises(litellm.BudgetExceededError):
+        await check_customer_hierarchy_windows(first, NOW)
+    await check_customer_hierarchy_windows(second, NOW)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope_key", ("customer_org", "customer_team", "customer_member"))
+@pytest.mark.parametrize("duration", ("1mo", "12mo"))
+async def test_customer_window_repairs_stale_redis_and_rejects_from_durable_spend(monkeypatch, scope_key, duration):
+    scope: Final = CustomerScopeAuth(
+        key=scope_key,
+        entity_id="subject",
+        budget_limits=(BudgetLimit(budget_duration=duration, max_budget=10),),
+    )
+    hierarchy: Final = CustomerHierarchyAuth(customer_org_id="org", scopes=(scope,))
+    counter: Final = customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=NOW)[0]
+    backend: Final = FakeSpendCounters()
+    store: Final = backend.store()
+    await store.set(counter.counter_key, 2.0)
+    prisma: Final = MagicMock()
+    prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(
+        return_value=SimpleNamespace(window_start=counter.window_start, spend=12.0)
+    )
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+    monkeypatch.setattr(ps, "spend_counter_store", store)
+    monkeypatch.setattr(ps, "spend_counter_cache", DualCache())
+    monkeypatch.setattr(ps, "general_settings", {"fail_closed_budget_enforcement": False})
+
+    with pytest.raises(litellm.BudgetExceededError) as error:
+        await check_customer_hierarchy_windows(hierarchy, NOW)
+
+    assert error.value.current_cost == 12.0
+    assert error.value.entity_id == scope.entity_id
+    assert backend.redis[counter.counter_key] == 12.0
+    prisma.db.litellm_budgetwindowspend.find_unique.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outage", ("redis_read", "redis_seed", "database"))
+async def test_customer_window_unavailable_stays_closed_without_legacy_flag(monkeypatch, outage):
+    scope: Final = CustomerScopeAuth(
+        key="customer_member",
+        entity_id="outage-member",
+        budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=10),),
+    )
+    hierarchy: Final = CustomerHierarchyAuth(customer_org_id="org", scopes=(scope,))
+    counter: Final = customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=NOW)[0]
+    backend: Final = FakeSpendCounters(fail=outage == "redis_read", memory={counter.counter_key: 2.0})
+    prisma: Final = MagicMock()
+
+    async def find_window(**_):
+        if outage == "database":
+            raise ConnectionError("database unavailable")
+        if outage == "redis_seed":
+            backend.fail = True
+        return SimpleNamespace(window_start=counter.window_start, spend=0.0)
+
+    prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(side_effect=find_window)
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+    monkeypatch.setattr(ps, "spend_counter_store", backend.store())
+    monkeypatch.setattr(ps, "spend_counter_cache", DualCache())
+    monkeypatch.setattr(ps, "general_settings", {"fail_closed_budget_enforcement": False})
+
+    with pytest.raises(ProxyException) as error:
+        await check_customer_hierarchy_windows(hierarchy, NOW)
+
+    assert error.value.code == "503"
+    assert error.value.param == "budget_limits"
+
+
+@pytest.mark.asyncio
+async def test_customer_window_floor_checks_reuse_main_cache_and_one_mget_per_request(monkeypatch):
+    scope: Final = CustomerScopeAuth(
+        key="customer_member",
+        entity_id="cached-floor-member",
+        budget_limits=tuple(BudgetLimit(budget_duration=duration, max_budget=10) for duration in ("1mo", "12mo")),
+    )
+    hierarchy: Final = CustomerHierarchyAuth(customer_org_id="org", scopes=(scope,))
+    counters: Final = customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=NOW)
+    backend: Final = FakeSpendCounters(redis={counter.counter_key: 4.0 for counter in counters})
+    starts: Final = {counter.window_duration: counter.window_start for counter in counters}
+    prisma: Final = MagicMock()
+    prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(
+        side_effect=lambda where: SimpleNamespace(
+            window_start=starts[where["entity_type_entity_id_window_duration"]["window_duration"]], spend=2.0
+        )
+    )
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+    monkeypatch.setattr(ps, "spend_counter_store", backend.store())
+    monkeypatch.setattr(ps, "spend_counter_cache", DualCache())
+
+    await check_customer_hierarchy_windows(hierarchy, NOW)
+    await check_customer_hierarchy_windows(hierarchy, NOW)
+
+    assert prisma.db.litellm_budgetwindowspend.find_unique.await_count == 2
+    assert backend.redis == {counter.counter_key: 4.0 for counter in counters}
+    assert len(backend.commands) == 2
+    assert all(command.startswith("MGET ") for command in backend.commands)

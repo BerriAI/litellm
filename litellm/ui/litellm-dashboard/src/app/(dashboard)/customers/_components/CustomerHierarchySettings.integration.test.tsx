@@ -16,7 +16,7 @@ const organization: Organization = {
   ...audit,
   customer_org_id: "org-1",
   alias: "Example organization",
-  default_budget_id: "template-1",
+  default_budget_template_id: "template-1",
   default_budgets: [
     { budget_id: "template-1", name: "Standard", is_default: true, max_budget: 10 },
     { budget_id: "template-2", name: "Pro", is_default: false, max_budget: 50 },
@@ -33,7 +33,7 @@ const organization: Organization = {
 const member: Member = {
   ...audit,
   customer_member_id: "member-1",
-  parent_team_id: "team-1",
+  parent_team_ids: ["team-1"],
   alias: "Member One",
   budget_id: "template-1",
   budget_override: { max_budget: 20 },

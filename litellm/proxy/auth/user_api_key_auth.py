@@ -4585,6 +4585,7 @@ async def _authorize_authenticated_request(
                             {
                                 "customer_org_alias": customer_identity.customer_org_alias,
                                 "customer_member_id": customer_identity.customer_member_id,
+                                "customer_team_id": customer_identity.customer_team_id,
                                 "key_customer_org_id": _KEY_METADATA_ADAPTER.validate_python(
                                     user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # key metadata is untyped, validated here
                                 ).get("customer_org_id"),

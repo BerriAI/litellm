@@ -22,11 +22,11 @@ class _Directory:
                 {
                     "customer_org_id": f"org-{name}",
                     "customer_org_alias": f"alias-{name}",
-                    "customer_team_id": f"team-{name}",
+                    "customer_team_id": args[1] or f"team-{name}",
                     "customer_member_id": f"member-{name}",
                 }
                 for name in ("a", "b")
-                if args == (f"member-{name}",)
+                if args[0] == f"member-{name}" and args[1] in (None, f"team-{name}", f"second-team-{name}")
             )
         return tuple(
             {"customer_org_id": f"org-{name}", "customer_org_alias": f"alias-{name}"}
@@ -85,6 +85,32 @@ async def test_a_request_without_an_assertion_needs_no_customer_directory_read()
     delivery: Final = DeliveryProjection({"spend": 0.75, "metadata": {}})
     assert await resolve_customer_delivery(transaction, delivery) is delivery
     transaction.query_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team", (None, "second-team-a", "foreign-team"))
+async def test_recovery_keeps_the_selected_customer_team_within_the_members_customer_org(team: str | None) -> None:
+    transaction: Final = MagicMock(spec=LedgerTransaction)
+    transaction.query_raw = AsyncMock(side_effect=_Directory().query)
+    delivery: Final = DeliveryProjection(
+        {
+            "spend": 0.75,
+            "metadata": {
+                "user_api_key_asserted_customer": {
+                    "customer_member_id": "member-a",
+                    "customer_team_id": team,
+                    "key_customer_org_id": "org-a",
+                }
+            },
+        }
+    )
+    resolved: Final = await resolve_customer_delivery(transaction, delivery)
+    transactions: Final = entity_transactions(project_deliveries((resolved,)))
+    assert transactions["customer_org_list_transactions"] == {"org-a": 0.75}
+    assert transactions["customer_team_list_transactions"] == (
+        {} if team == "foreign-team" else {team or "team-a": 0.75}
+    )
+    assert transactions["customer_member_list_transactions"] == ({} if team == "foreign-team" else {"member-a": 0.75})
 
 
 @pytest.mark.asyncio

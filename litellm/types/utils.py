@@ -3149,6 +3149,8 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_customer_team_id: ReadOnly[str | None]
     user_api_key_customer_org_id: ReadOnly[str | None]
     user_api_key_asserted_customer: ReadOnly[NotRequired[Mapping[str, str | None] | None]]
+    user_api_key_customer_budget_scopes: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_hierarchy: NotRequired[ReadOnly[Mapping[str, object] | None]]
     user_api_key_request_route: str | None
     user_api_key_auth_metadata: dict[str, str] | None
 
