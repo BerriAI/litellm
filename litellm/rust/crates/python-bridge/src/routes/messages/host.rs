@@ -49,6 +49,15 @@ use crate::{
 
 type MergedHeaders = (Option<Map<String, Value>>, Option<Vec<u8>>);
 
+const ANTHROPIC_BETA_HEADER: &str = "anthropic-beta";
+
+/// Python filters `anthropic-beta` before its client encodes it, so the wire check decides it.
+fn is_filtered_beta_header(name: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> bool {
+    name.extract::<String>()
+        .is_ok_and(|name| name.eq_ignore_ascii_case(ANTHROPIC_BETA_HEADER))
+        && value.call_method1("encode", ("utf-8",)).is_ok()
+}
+
 fn ascii_headers<'py>(
     headers: &Bound<'py, PyAny>,
     unencodable: &mut Option<Vec<u8>>,
@@ -60,6 +69,7 @@ fn ascii_headers<'py>(
     let kept = PyDict::new(py);
     for (name, value) in headers.iter() {
         if value.is_instance_of::<PyString>()
+            && !is_filtered_beta_header(&name, &value)
             && let Err(error) = value.call_method1("encode", ("ascii",))
         {
             if !error.is_instance_of::<PyUnicodeEncodeError>(py) {
@@ -1025,6 +1035,41 @@ mod tests {
             merge_headers(forwarded.map(map), extra_headers.map(map)),
             expected.map(map)
         );
+    }
+
+    #[rstest]
+    #[case::a_beta_is_left_to_the_provider_filter(
+        c"{'anthropic-beta': 'ZWJ\\u200djoined'}",
+        json!({"anthropic-beta": "ZWJ\u{200d}joined"}),
+        None
+    )]
+    #[case::in_any_spelling(
+        c"{'Anthropic-Beta': 'ZWJ\\u200djoined'}",
+        json!({"Anthropic-Beta": "ZWJ\u{200d}joined"}),
+        None
+    )]
+    #[case::a_beta_python_cannot_hand_over_as_text(
+        c"{'anthropic-beta': 'a\\ud800', 'x-kept': 'b'}",
+        json!({"x-kept": "b"}),
+        Some(b"a\xed\xa0\x80".to_vec())
+    )]
+    #[case::any_other_header(
+        c"{'x-note': 'ZWJ\\u200d', 'x-kept': 'b'}",
+        json!({"x-kept": "b"}),
+        Some("ZWJ\u{200d}".as_bytes().to_vec())
+    )]
+    fn a_header_python_cannot_encode_is_held_back_unless_the_provider_filters_it(
+        #[case] headers: &std::ffi::CStr,
+        #[case] kept: Value,
+        #[case] unencodable: Option<Vec<u8>>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let headers = py.eval(headers, None, None).unwrap();
+            let mut held_back = None;
+            let sent: Value = from_py(&ascii_headers(&headers, &mut held_back).unwrap()).unwrap();
+            assert_eq!((sent, held_back), (kept, unencodable));
+        });
     }
 
     #[rstest]

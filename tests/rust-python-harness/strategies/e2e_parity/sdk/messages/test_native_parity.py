@@ -3742,6 +3742,22 @@ AZURE_SHAPING_CASES: Final = tuple(
             model=AZURE_CLAUDE,
         ),
         Case(
+            "azure_ai_beta_not_ascii_dropped",
+            _kw(extra_headers=_beta("ZWJ\u200djoined,context-1m-2025-08-07")),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_beta_not_ascii_dropped_under_drop_params",
+            _kw(drop_params=True, extra_headers={"Anthropic-Beta": "ZWJ\u200djoined"}),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_beta_not_ascii_dropped_stream",
+            _kw(stream=True, extra_headers=_beta("ZWJ\u200djoined")),
+            model=AZURE_CLAUDE,
+            upstream=(_stream(TEXT_STREAM),),
+        ),
+        Case(
             "azure_ai_advisor_tool_stream",
             _kw(stream=True, tools=[dict(ADVISOR_TOOL)]),
             model=AZURE_CLAUDE,
