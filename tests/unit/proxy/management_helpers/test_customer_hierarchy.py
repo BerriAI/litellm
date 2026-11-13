@@ -112,6 +112,8 @@ class Table:
         return await self.include(row, include)
 
     async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> Record | None:
+        from prisma import Json
+
         row_id: Final = str(where[self.id_field])
         if row_id not in self.rows:
             return None
@@ -119,6 +121,24 @@ class Table:
         row: Final = self.rows[row_id].model_copy(update=values)
         self.rows = {**self.rows, row_id: row}
         return row
+
+    def matches(self, row: Record, where: Mapping[str, object]) -> bool:
+        values: Final = row.model_dump()
+        for key, value in where.items():
+            if key == "AND":
+                clauses: Final = TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(value)
+                if not all(self.matches(row, clause) for clause in clauses):
+                    return False
+            elif isinstance(value, Mapping) and "none" in value:
+                if self.database.has_budget_reference(str(values[self.id_field]), key):
+                    return False
+            elif isinstance(value, Mapping) and "is" in value:
+                related: Final = self.database.litellm_customerteamtable.rows.get(str(values.get("parent_team_id")))
+                if related is None or not self.database.litellm_customerteamtable.matches(related, value["is"]):
+                    return False
+            elif not matches_where(values, {key: value}):
+                return False
+        return True
 
     async def find_many(
         self,
@@ -128,7 +148,7 @@ class Table:
         skip: int = 0,
         take: int | None = None,
     ) -> tuple[Record, ...]:
-        matches: Final = tuple(row for row in self.rows.values() if matches_where(row.model_dump(), where or {}))
+        matches: Final = tuple(row for row in self.rows.values() if self.matches(row, where or {}))
         ordered: Final = reduce(
             lambda rows, key: tuple(
                 sorted(
@@ -164,14 +184,64 @@ class Table:
         return len(matched)
 
 
+class BoundedChildrenTable(Table):
+    def __init__(self, id_field: str, database: "Database") -> None:
+        super().__init__(id_field, database)
+        self.batch_sizes: tuple[int, ...] = ()
+
+    async def find_many(
+        self,
+        where: Mapping[str, object] | None = None,
+        order: Sequence[Mapping[str, object]] | None = None,
+        include: Mapping[str, object] | None = None,
+        skip: int = 0,
+        take: int | None = None,
+    ) -> tuple[Record, ...]:
+        rows: Final = await super().find_many(where=where, order=order, include=include, skip=skip, take=take)
+        if where is not None and any(name in where for name in ("parent_org_id", "parent_team_id", "parent_team_ids")):
+            assert take == 100
+            self.batch_sizes = (*self.batch_sizes, len(rows))
+        return rows
+
+
+class DeleteConflictTable(Table):
+    def __init__(self, id_field: str, database: "Database") -> None:
+        super().__init__(id_field, database)
+        self.members_at_delete: int | None = None
+
+    async def delete(self, where: Mapping[str, object]) -> Record | None:
+        from prisma.errors import ForeignKeyViolationError
+
+        self.members_at_delete = len(self.database.litellm_customermembertable.rows)
+        raise ForeignKeyViolationError({})
+
+
 class Database:
     def __init__(self) -> None:
         self.litellm_customerorganizationtable = Table("customer_org_id", self)
         self.litellm_customerteamtable = Table("customer_team_id", self)
         self.litellm_customermembertable = Table("customer_member_id", self)
         self.litellm_budgettable = Table("budget_id", self)
+        self.litellm_verificationtoken = Table("token", self)
+        self.litellm_projecttable = Table("project_id", self)
         self.litellm_customerbudgetincreaserequest = Table("request_id", self)
         self.locked_organization_ids: tuple[str, ...] = ()
+
+    def has_budget_reference(self, budget_id: str, relation: str) -> bool:
+        references: Final = {
+            "customer_organization_defaults": (self.litellm_customerorganizationtable, "default_budget_id"),
+            "customer_organizations": (self.litellm_customerorganizationtable, "budget_id"),
+            "customer_teams": (self.litellm_customerteamtable, "budget_id"),
+            "customer_members": (self.litellm_customermembertable, "budget_id"),
+            "customer_member_overrides": (self.litellm_customermembertable, "budget_override_id"),
+            "keys": (self.litellm_verificationtoken, "budget_id"),
+            "projects": (self.litellm_projecttable, "budget_id"),
+        }
+        reference: Final = references.get(relation)
+        if reference is None:
+            return False
+        table, field = reference
+        return any(row.model_dump().get(field) == budget_id for row in table.rows.values())
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
         if "SELECT EXISTS" in query:
@@ -214,6 +284,8 @@ class Database:
             self.litellm_customerteamtable,
             self.litellm_customermembertable,
             self.litellm_budgettable,
+            self.litellm_verificationtoken,
+            self.litellm_projecttable,
         )
         snapshots: Final = tuple(table.rows for table in tables)
         try:

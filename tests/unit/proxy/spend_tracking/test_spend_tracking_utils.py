@@ -70,6 +70,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     spend_log_row_with_retained_metadata,
 )
 from litellm.proxy.utils import hash_token
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
     BackgroundResponseSettlement,
@@ -86,6 +87,78 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
     StandardLoggingVectorStoreRequest,
 )
+
+
+@pytest.mark.parametrize("bucket", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("call_type", ("acompletion", "aresponses", "anthropic_messages"))
+@pytest.mark.parametrize("failed", (False, True))
+def test_spend_log_retains_resolved_customer_identity(bucket: str, call_type: str, failed: bool) -> None:
+    hierarchy: Final = CustomerHierarchyAuth(
+        customer_org_id="customer-org-1",
+        customer_org_alias="Customer org display",
+        customer_team_id="customer-team-1",
+        customer_team_alias="Customer team display",
+        customer_member_id="customer-member-1",
+        customer_member_alias="Customer member display",
+        scopes=(),
+    )
+    auth: Final = UserAPIKeyAuth(customer_hierarchy=hierarchy)
+    stamped: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(auth)
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "test-model",
+            "call_type": call_type,
+            "litellm_params": {bucket: {**stamped, "status": "failure" if failed else "success"}},
+        },
+        response_obj=ValueError("request denied") if failed else {},
+        start_time=now,
+        end_time=now,
+    )
+    stored: Final = TypeAdapter(Mapping[str, object]).validate_json(payload["metadata"])
+    expected: Final = {
+        "user_api_key_customer_org_id": "customer-org-1",
+        "user_api_key_customer_org_alias": "Customer org display",
+        "user_api_key_customer_team_id": "customer-team-1",
+        "user_api_key_customer_team_alias": "Customer team display",
+        "user_api_key_customer_member_id": "customer-member-1",
+        "user_api_key_customer_member_alias": "Customer member display",
+    }
+    assert {key: stored.get(key) for key in expected} == expected
+    assert stored["status"] == ("failure" if failed else "success")
+
+
+@pytest.mark.parametrize("hierarchy", (None, CustomerHierarchyAuth(customer_org_id="customer-org-only", scopes=())))
+def test_spend_log_customer_identity_without_a_customer_member(hierarchy: CustomerHierarchyAuth | None) -> None:
+    metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        UserAPIKeyAuth(customer_hierarchy=hierarchy)
+    )
+    stored: Final = _get_spend_logs_metadata({**metadata})
+    assert stored.get("user_api_key_customer_org_id") == (hierarchy.customer_org_id if hierarchy else None)
+    assert stored.get("user_api_key_customer_member_id") is None
+    assert stored.get("user_api_key_customer_team_id") is None
+    assert stored.get("user_api_key_customer_org_alias") is None
+
+
+@pytest.mark.parametrize("value", (None, 42, {"invalid": True}, " "))
+def test_spend_log_omits_invalid_customer_identity(value: object) -> None:
+    stored: Final = _get_spend_logs_metadata({"user_api_key_customer_org_id": value})
+    assert stored.get("user_api_key_customer_org_id") is None
+
+
+@pytest.mark.parametrize("metadata", (None, {}, {"user_api_key_user_id": "user"}))
+def test_spend_log_without_customer_identity_preserves_legacy_metadata(metadata: dict[str, str] | None) -> None:
+    fields: Final = frozenset(
+        (
+            "user_api_key_customer_org_id",
+            "user_api_key_customer_org_alias",
+            "user_api_key_customer_team_id",
+            "user_api_key_customer_team_alias",
+            "user_api_key_customer_member_id",
+            "user_api_key_customer_member_alias",
+        )
+    )
+    assert fields.isdisjoint(_get_spend_logs_metadata(metadata))
 
 
 def _get_additional_usage_values_for_usage(usage: litellm.Usage) -> dict:
@@ -7585,6 +7658,12 @@ def test_spend_logs_payload(model_id: str | None):
         "is_silent_experiment",
         "upstream_provider",
         "user_api_key_asserted_customer",
+        "user_api_key_customer_org_id",
+        "user_api_key_customer_org_alias",
+        "user_api_key_customer_team_id",
+        "user_api_key_customer_team_alias",
+        "user_api_key_customer_member_id",
+        "user_api_key_customer_member_alias",
     }
 
     assert "metadata" in payload

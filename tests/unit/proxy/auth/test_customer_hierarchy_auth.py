@@ -178,6 +178,24 @@ def _row(
     }
 
 
+def test_customer_display_names_come_from_the_resolved_rows() -> None:
+    hierarchy: Final = customer_hierarchy_from_member_row(
+        {
+            "customer_member_id": "customer-member-1",
+            "alias": "Customer member display",
+            "parent_team_ids": ["customer-team-1"],
+            "teams": [{"customer_team_id": "customer-team-1", "alias": "Customer team display"}],
+            "parent_org": {"customer_org_id": "customer-org-1", "alias": "Customer org display"},
+        },
+        NOW,
+    )
+    assert (hierarchy.customer_org_alias, hierarchy.customer_team_alias, hierarchy.customer_member_alias) == (
+        "Customer org display",
+        "Customer team display",
+        "Customer member display",
+    )
+
+
 def _scopes(hierarchy: CustomerHierarchyAuth) -> Mapping[str, CustomerScopeAuth]:
     return {scope.key: scope for scope in hierarchy.scopes}
 

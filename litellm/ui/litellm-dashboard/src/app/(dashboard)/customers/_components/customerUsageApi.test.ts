@@ -278,10 +278,10 @@ describe("customerHierarchyUsageCall", () => {
     const result = await customerHierarchyUsageCall(request);
     expect(dailyUrls().every((url) => url.searchParams.get("customer_org_ids") === "org-1")).toBe(true);
     expect(result.teams).toEqual([
-      { id: "", label: "Unassigned or removed team", spend: 4, tokens: 600, requests: 10 },
+      { id: "", label: "Unassigned or removed customer team", spend: 4, tokens: 600, requests: 10 },
     ]);
     expect(result.members).toEqual([
-      { id: "", label: "Unassigned or removed member", spend: 4, tokens: 600, requests: 10 },
+      { id: "", label: "Unassigned or removed customer member", spend: 4, tokens: 600, requests: 10 },
     ]);
   });
 
