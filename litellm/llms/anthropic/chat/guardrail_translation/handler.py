@@ -396,21 +396,66 @@ def _anthropic_tools_by_name(request: Mapping[str, object]) -> Mapping[str, Mapp
     }
 
 
-def _with_anthropic_only_fields(
-    tool: AllAnthropicToolsValues, request_tools: Mapping[str, Mapping[str, object]]
-) -> AllAnthropicToolsValues:
-    """Carry fields the OpenAI tool shape can't hold over from the request's own tool of the same name."""
-    name: Final = anthropic_tool_name(tool)
-    original: Final = None if name is None else request_tools.get(name)
-    if original is None:
-        return tool
-    carried: Final = {
-        key: value
-        for key, value in original.items()
-        if key not in _OPENAI_REPRESENTABLE_TOOL_FIELDS and key not in tool
+def _mapping_field(value: object, key: str) -> Mapping[str, object] | None:
+    fields: Final = as_str_mapping(value)
+    return None if fields is None else as_str_mapping(fields.get(key))
+
+
+def _openai_tools_by_function_name(tools: Sequence[object]) -> Mapping[str, Mapping[str, object]]:
+    return {
+        name: function
+        for tool in reversed(tools)
+        if (function := _mapping_field(tool, "function")) is not None and isinstance(name := function.get("name"), str)
     }
+
+
+def _anthropic_field_in_openai_function(function: Mapping[str, object] | None, key: str) -> tuple[bool, object]:
+    """Where the Anthropic-to-OpenAI tool adapter put an Anthropic-only field: ``strict`` stays on the function,
+    anything else it has no slot for is merged into ``parameters``. Returns (present, value)."""
+    holder: Final = function if key == "strict" else _mapping_field(function, "parameters")
+    return (False, None) if holder is None or key not in holder else (True, holder[key])
+
+
+def _anthropic_only_fields(
+    request_tool: Mapping[str, object],
+    sent_to_guardrail: Mapping[str, object] | None,
+    returned_by_guardrail: Mapping[str, object] | None,
+    already_set: Mapping[str, object],
+) -> Iterable[tuple[str, object]]:
+    """Yield the Anthropic-only fields the converted tool should carry.
+
+    A field the guardrail was shown takes the guardrail's value, so a redaction sticks and a removal stays removed.
+    A field the guardrail never saw comes back from the request unchanged.
+    """
+    for key, original_value in request_tool.items():
+        if key in _OPENAI_REPRESENTABLE_TOOL_FIELDS or key in already_set:
+            continue
+        shown, _ = _anthropic_field_in_openai_function(sent_to_guardrail, key)
+        if not shown:
+            yield key, original_value
+            continue
+        returned, value = _anthropic_field_in_openai_function(returned_by_guardrail, key)
+        if returned:
+            yield key, value
+
+
+def _with_anthropic_only_fields(
+    tool: AllAnthropicToolsValues,
+    returned_by_guardrail: object,
+    request_tools: Mapping[str, Mapping[str, object]],
+    functions_sent_to_guardrail: Mapping[str, Mapping[str, object]],
+) -> AllAnthropicToolsValues:
+    """Put back the fields the OpenAI tool shape can't hold, which the conversion back to Anthropic drops."""
+    name: Final = anthropic_tool_name(tool)
+    request_tool: Final = None if name is None else request_tools.get(name)
+    if request_tool is None:
+        return tool
+    returned_function: Final = _mapping_field(returned_by_guardrail, "function")
+    function_name: Final = None if returned_function is None else returned_function.get("name")
+    sent_function: Final = functions_sent_to_guardrail.get(function_name) if isinstance(function_name, str) else None
+    carried: Final = dict(_anthropic_only_fields(request_tool, sent_function, returned_function, tool))
     return (
-        cast(AllAnthropicToolsValues, {**tool, **carried})  # cast-ok: same tool, plus fields copied from the request
+        cast(AllAnthropicToolsValues, {**tool, **carried})  # cast-ok: same tool, plus its Anthropic-only fields
         if carried
         else tool
     )
@@ -985,13 +1030,18 @@ class AnthropicMessagesHandler(BaseTranslation):
                 request_tools_by_name: Final = _anthropic_tools_by_name(
                     cast(Mapping[str, object], data)  # cast-ok: Anthropic request body
                 )
+                functions_sent_to_guardrail: Final = _openai_tools_by_function_name(tools_to_check)
                 anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
                 for tool in guardrailed_tools:
                     converted_tool, mcp_server = anthropic_config.map_tool_helper(
                         _with_original_name(tool, original_tool_names.declared)
                     )
                     if converted_tool is not None:
-                        anthropic_tools.append(_with_anthropic_only_fields(converted_tool, request_tools_by_name))
+                        anthropic_tools.append(
+                            _with_anthropic_only_fields(
+                                converted_tool, tool, request_tools_by_name, functions_sent_to_guardrail
+                            )
+                        )
                     # Note: MCP servers are handled separately in the main transformation
                 data["tools"] = (
                     merge_returned_tools_into_request_tools(

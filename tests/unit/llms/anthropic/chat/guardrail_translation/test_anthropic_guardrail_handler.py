@@ -3550,6 +3550,36 @@ class FirstToolDroppingGuardrail(CustomGuardrail):
         return inputs
 
 
+class ToolFieldEditingGuardrail(CustomGuardrail):
+    """Redacts the tool's input examples and removes defer_loading, the way a guardrail sees them in the OpenAI tool."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        inputs["tools"] = [
+            {
+                **tool,
+                "function": {
+                    **tool["function"],
+                    "parameters": {
+                        **{
+                            key: value
+                            for key, value in tool["function"].get("parameters", {}).items()
+                            if key != "defer_loading"
+                        },
+                        "input_examples": [{"city": "[REDACTED]"}],
+                    },
+                },
+            }
+            for tool in inputs.get("tools") or []
+        ]
+        return inputs
+
+
 async def _tools_sent_after_guardrail(
     guardrail: CustomGuardrail, *tools: Mapping[str, object]
 ) -> Sequence[Mapping[str, object]]:
@@ -3598,3 +3628,13 @@ class TestAnthropicMessagesHandlerKeepsAnthropicOnlyToolFields:
 
         assert [tool["name"] for tool in sent_tools] == ["get_weather"]
         assert sent_tools[0]["defer_loading"] is True
+
+    async def test_a_field_the_guardrail_redacts_or_removes_keeps_the_guardrail_edit(self) -> None:
+        (sent_tool,) = await _tools_sent_after_guardrail(
+            ToolFieldEditingGuardrail(guardrail_name="edit"), _DEFERRED_WEATHER_TOOL
+        )
+
+        assert sent_tool["input_examples"] == [{"city": "[REDACTED]"}]
+        assert "defer_loading" not in sent_tool
+        assert sent_tool["strict"] is True
+        assert sent_tool["allowed_callers"] == ["code_execution_20250825"]
