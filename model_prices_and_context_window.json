@@ -44324,7 +44324,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.1e-06,
         "reasoning_effort_levels": [
-            "none",
+            "low",
+            "medium",
             "high"
         ],
         "source": "https://docs.mistral.ai/models/mistral-large-4-0",
@@ -44345,7 +44346,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.1e-06,
         "reasoning_effort_levels": [
-            "none",
+            "low",
+            "medium",
             "high"
         ],
         "source": "https://docs.mistral.ai/models/mistral-large-4-0",
