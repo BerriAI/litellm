@@ -572,11 +572,19 @@ class CallTypeRateLimiter(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class BorrowingTeamModelHold:
-    """A router fallback target's team share with the tokens held on it, settled to actual usage or given back."""
+    """A router fallback target's team share with the tokens held on it, settled to actual usage or given back.
 
-    descriptor: RateLimitDescriptor
+    An idle target holds no descriptor: its usage is not charged to the share, and settlement still finds the hold so
+    the admitting model's reservation is given back instead of taking the target's tokens.
+    """
+
+    descriptor: RateLimitDescriptor | None
     reserved_tokens: int = 0
     window: ReservationWindowIdentity | None = None
+    cap: RateLimitDescriptor | None = None
+    cap_reserved_tokens: int = 0
+    cap_window: ReservationWindowIdentity | None = None
+    share: RateLimitDescriptor | None = None
 
 
 @dataclass(slots=True)
@@ -627,10 +635,15 @@ class RequestRateLimiterStash:
     borrowing_team_model_limit: RateLimitDescriptor | None = None
     borrowing_team_model_reserved_tokens: int = 0
     borrowing_team_model_reserved_window: ReservationWindowIdentity | None = None
+    borrowing_team_model_share: RateLimitDescriptor | None = None
+    borrowing_team_model_cap: RateLimitDescriptor | None = None
+    borrowing_team_model_cap_reserved_tokens: int = 0
+    borrowing_team_model_cap_reserved_window: ReservationWindowIdentity | None = None
     borrowing_team_model_fallback_limits: Mapping[str, BorrowingTeamModelHold] = field(
         default_factory=lambda: MappingProxyType({})
     )
     priority_class_share: RateLimitDescriptor | None = None
+    dynamic_limiter_priority: str | None = None
     reservation_released: bool = False
     io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
