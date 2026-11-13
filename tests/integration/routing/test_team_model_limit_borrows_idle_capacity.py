@@ -47,7 +47,7 @@ def _proxy(tmp_path_factory: pytest.TempPathFactory, saturation_threshold: float
         "priority_reservation_settings": {
             "default_priority": 1.0,
             "saturation_threshold": saturation_threshold,
-            "team_model_limit_borrows_idle_capacity_from_other_teams": True,
+            "model_limit_borrowing_config": {"borrow_idle_capacity": ["team"]},
         },
     }
     path: Final = directory / "team_model_limit_borrowing.yaml"
@@ -81,9 +81,7 @@ def _team_calls(
             tpm=MODEL_TPM,
             rpm=MODEL_RPM,
         )
-        cap: Final = (
-            {} if max_borrow_multiple is None else {"team_model_limit_max_borrow_multiple": max_borrow_multiple}
-        )
+        cap: Final = {} if max_borrow_multiple is None else {"model_limit_max_borrow_multiple": max_borrow_multiple}
         key: Final = scenario.key(
             team_id=scenario.team(
                 metadata={limit: {model: TEAM_TPM if limit == "model_tpm_limit" else TEAM_RPM}, **cap}

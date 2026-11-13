@@ -1,6 +1,6 @@
-"""Splits a priority class's share of a model among the teams active on it.
+"""Splits a priority class's share of a model among the callers active on it.
 
-Enabled by ``priority_reservation_settings.priority_class_share_splits_equally_among_active_teams``.
+Enabled by ``priority_reservation_settings.priority_class_share_config``.
 """
 
 import time
@@ -38,6 +38,16 @@ def pool_member(priority: str) -> str:
 def team_member(team_id: str) -> str:
     """The registry id of a real team. It never starts with the separator, so it cannot spell a pool marker."""
     return f"team{MEMBER_SEPARATOR}{team_id}"
+
+
+def key_member(key_hash: str) -> str:
+    """The registry id and counter owner of a key that takes its own slice of its class, apart from every team id."""
+    return f"key{MEMBER_SEPARATOR}{key_hash}"
+
+
+def customer_member(kind: str, entity_id: str) -> str:
+    """The registry id and counter owner of a customer organization or customer member taking its own slice."""
+    return f"{kind}{MEMBER_SEPARATOR}{entity_id}"
 
 
 def is_pool_member(member: str) -> bool:

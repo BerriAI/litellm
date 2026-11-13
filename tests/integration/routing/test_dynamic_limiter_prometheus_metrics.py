@@ -50,7 +50,7 @@ def saturated_model(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[
             "default_priority": 1.0,
             "saturation_threshold": 0.6,
             "saturation_check_cache_ttl": 0,
-            "team_model_limit_borrows_idle_capacity_from_other_teams": True,
+            "model_limit_borrowing_config": {"borrow_idle_capacity": ["team"]},
         },
     }
     path: Final = directory / "dynamic_limiter_metrics.yaml"

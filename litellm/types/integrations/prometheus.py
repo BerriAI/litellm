@@ -229,6 +229,8 @@ class UserAPIKeyLabelNames(Enum):
     STREAM = "stream"
     ORG_ID = "org_id"
     ORG_ALIAS = "org_alias"
+    CUSTOMER_ORG_ID = "customer_org_id"
+    CUSTOMER_ORG_ALIAS = "customer_org_alias"
     MCP_TOOL_NAME = "mcp_tool_name"
     MCP_SERVER_NAME = "mcp_server_name"
     SERVICE_TIER = "service_tier"
@@ -725,6 +727,10 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.CUSTOMER_ORG_ID.value,
+        UserAPIKeyLabelNames.CUSTOMER_ORG_ALIAS.value,
         UserAPIKeyLabelNames.PRIORITY.value,
     )
 
@@ -1125,6 +1131,8 @@ class UserAPIKeyLabelValues:
     stream: str | None = None
     org_id: str | None = None
     org_alias: str | None = None
+    customer_org_id: str | None = None
+    customer_org_alias: str | None = None
     mcp_tool_name: str | None = None
     mcp_server_name: str | None = None
     service_tier: str | None = None

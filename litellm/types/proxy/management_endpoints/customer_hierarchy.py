@@ -24,6 +24,13 @@ class Budget(BaseModel):
     budget_limits: BudgetLimits | None = None
     model_tpm_limit: Mapping[str, NonNegativeInt] | None = None
     model_rpm_limit: Mapping[str, NonNegativeInt] | None = None
+    model_limit_max_borrow_multiple: float | None = Field(
+        default=None,
+        ge=1,
+        le=1_000_000,
+        allow_inf_nan=False,
+        description="When customer organizations borrow idle capacity (model_limit_borrowing_config), the most an organization may use of a model while borrowing idle capacity, as a multiple of its model_tpm_limit and model_rpm_limit",
+    )
     cap_policy: CapPolicy | None = Field(
         default=None,
         description="What a paused member can do at the cap: wait for the reset (default) or request a temporary increase",

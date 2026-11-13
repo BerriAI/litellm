@@ -39,6 +39,7 @@ class CustomerScopeAuth(BaseModel):
     allowed_models: tuple[str, ...] | None = None
     model_tpm_limit: Mapping[str, int] | None = None
     model_rpm_limit: Mapping[str, int] | None = None
+    model_limit_max_borrow_multiple: float | None = None
     cap_policy: CapPolicy | None = None
 
 

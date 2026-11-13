@@ -108,7 +108,7 @@ PROXY_CONTROLLED_TEAM_METADATA_KEYS: Final[frozenset[str]] = frozenset(
         "phoenix_project_name_override",
         "phoenix_project_name",
         "opik",
-        "team_model_limit_max_borrow_multiple",
+        "model_limit_max_borrow_multiple",
     )
 )
 _NOT_COLUMNS: Final[frozenset[str]] = frozenset({"team_id", "metadata"})

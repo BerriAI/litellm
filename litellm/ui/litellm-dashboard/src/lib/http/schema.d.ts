@@ -29584,6 +29584,11 @@ export interface components {
             cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
             /** Max Budget */
             max_budget?: number | null;
+            /**
+             * Model Limit Max Borrow Multiple
+             * @description When customer organizations borrow idle capacity (model_limit_borrowing_config), the most an organization may use of a model while borrowing idle capacity, as a multiple of its model_tpm_limit and model_rpm_limit
+             */
+            model_limit_max_borrow_multiple?: number | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
                 [key: string]: number;
@@ -29748,6 +29753,11 @@ export interface components {
             cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
             /** Max Budget */
             max_budget?: number | null;
+            /**
+             * Model Limit Max Borrow Multiple
+             * @description When customer organizations borrow idle capacity (model_limit_borrowing_config), the most an organization may use of a model while borrowing idle capacity, as a multiple of its model_tpm_limit and model_rpm_limit
+             */
+            model_limit_max_borrow_multiple?: number | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
                 [key: string]: number;
@@ -33480,6 +33490,8 @@ export interface components {
             key: "customer_org" | "customer_team" | "customer_member";
             /** Max Budget */
             max_budget?: number | null;
+            /** Model Limit Max Borrow Multiple */
+            model_limit_max_borrow_multiple?: number | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
                 [key: string]: number;
@@ -42731,6 +42743,11 @@ export interface components {
             cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
             /** Max Budget */
             max_budget?: number | null;
+            /**
+             * Model Limit Max Borrow Multiple
+             * @description When customer organizations borrow idle capacity (model_limit_borrowing_config), the most an organization may use of a model while borrowing idle capacity, as a multiple of its model_tpm_limit and model_rpm_limit
+             */
+            model_limit_max_borrow_multiple?: number | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
                 [key: string]: number;
@@ -50466,6 +50483,11 @@ export interface components {
             cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
             /** Max Budget */
             max_budget?: number | null;
+            /**
+             * Model Limit Max Borrow Multiple
+             * @description When customer organizations borrow idle capacity (model_limit_borrowing_config), the most an organization may use of a model while borrowing idle capacity, as a multiple of its model_tpm_limit and model_rpm_limit
+             */
+            model_limit_max_borrow_multiple?: number | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
                 [key: string]: number;

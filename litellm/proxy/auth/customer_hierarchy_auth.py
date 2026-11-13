@@ -181,6 +181,7 @@ def _scope(
         allowed_models=budget.allowed_models or None,
         model_tpm_limit=budget.model_tpm_limit,
         model_rpm_limit=budget.model_rpm_limit,
+        model_limit_max_borrow_multiple=budget.model_limit_max_borrow_multiple,
         cap_policy=budget.cap_policy,
     )
 
