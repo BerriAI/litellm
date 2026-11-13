@@ -5,7 +5,7 @@ carries its team and that team's organization, so one lookup yields every level 
 limits apply to the request.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
@@ -203,7 +203,7 @@ async def resolve_customer_hierarchy(
     prisma_client: "PrismaClient | None",
     user_api_key_cache: UserApiKeyCache,
     llm_router: "RegistryReader | None",
-    request_model: str | list[str] | None,
+    request_model: str | Sequence[str] | None,
     route: str,
     key_metadata: Mapping[str, object] | None = None,
 ) -> CustomerHierarchyAuth:
