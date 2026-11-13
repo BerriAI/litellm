@@ -439,11 +439,7 @@ def check_if_default_team_set() -> list[str] | list[NewUserRequestTeam] | None:
             return teams
         elif all(isinstance(team, dict) for team in teams):
             return [
-                NewUserRequestTeam(
-                    team_id=team.get("team_id"),
-                    max_budget_in_team=team.get("max_budget_in_team"),
-                    user_role=team.get("user_role", "user"),
-                )
+                NewUserRequestTeam(team_id=team.get("team_id"), user_role=team.get("user_role", "user"))
                 for team in teams
             ]
         else:
@@ -469,6 +465,7 @@ async def add_new_user_to_default_team(
                 team_id=membership.team_id,
                 user_email=user_email,
                 user_api_key_dict=user_api_key_dict,
+                max_budget_in_team=membership.max_budget_in_team,
                 user_role=membership.user_role,
             )
 

@@ -1707,6 +1707,10 @@ async def test_new_user_default_teams_flow(mocker):
         assert team_call_kwargs["team_id"] == "96fed65b-0182-4ff4-8429-2721cd7d42af"
         assert team_call_kwargs["user_email"] == "test@example.com"
         assert team_call_kwargs["user_role"] == "user"
+        assert team_call_kwargs["max_budget_in_team"] is None, (
+            "a default team's max_budget_in_team is the team's member budget, a per-user copy of it "
+            "has no budget_duration and never resets"
+        )
 
         # Verify response structure
         assert response.user_id == "test-user-123"
@@ -4385,10 +4389,9 @@ async def test_resolve_user_email_metadata_skips_db_when_no_user_ids(mocker):
 
 
 @pytest.mark.asyncio
-async def test_add_new_user_to_default_team_joins_on_the_team_member_budget(mocker):
-    """A default team's max_budget_in_team is written to the team's member budget when the
-    setting is saved. Passing it again per user would give each new member a private budget
-    with no budget_duration, so their spend in the team would never reset."""
+async def test_add_new_user_to_default_team_propagates_max_budget_in_team(mocker):
+    """A per-member budget the caller asked for, as in /user/new with explicit teams, must reach
+    the membership write; dropping it means the member is unlimited within the team budget."""
     from litellm.proxy._types import NewUserRequestTeam
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         add_new_user_to_default_team,
@@ -4411,9 +4414,9 @@ async def test_add_new_user_to_default_team_joins_on_the_team_member_budget(mock
     )
 
     calls = {c.kwargs["team_id"]: c.kwargs for c in mock_add.call_args_list}
-    assert calls["budgeted-team"].get("max_budget_in_team") is None
+    assert calls["budgeted-team"]["max_budget_in_team"] == 25.0
     assert calls["budgeted-team"]["user_role"] == "admin"
-    assert calls["uncapped-team"].get("max_budget_in_team") is None
+    assert calls["uncapped-team"]["max_budget_in_team"] is None
 
 
 @pytest.mark.asyncio
@@ -4436,7 +4439,7 @@ async def test_add_new_user_to_default_team_string_teams_have_no_member_budget(m
         prisma_client=mocker.MagicMock(),
     )
 
-    assert mock_add.call_args.kwargs.get("max_budget_in_team") is None
+    assert mock_add.call_args.kwargs["max_budget_in_team"] is None
     assert mock_add.call_args.kwargs["team_id"] == "string-team"
 
 
