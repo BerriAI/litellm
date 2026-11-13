@@ -957,8 +957,28 @@ def test_prometheus_parity_values_cross_as_python_holds_them() -> None:
             ),
         ),
         ("abc", (GuardrailEntry(mapping=False),)),
+        (
+            {"guardrail_mode": ("pre_call",)},
+            (
+                GuardrailEntry(
+                    mapping=True,
+                    modes=(Stringified(text="('pre_call',)", truthy=True, hashable=True, integer=False),),
+                ),
+            ),
+        ),
+        ({"guardrail_mode": 7}, (GuardrailEntry(mapping=True, modes=(7,)),)),
+        ({"duration": 0.5}, (GuardrailEntry(mapping=True, modes=(None,), duration=0.5),)),
     ],
-    ids=("none", "empty", "single-mapping", "list", "truthy-not-a-list"),
+    ids=(
+        "none",
+        "empty",
+        "single-mapping",
+        "list",
+        "truthy-not-a-list",
+        "tuple-mode-is-one-mode",
+        "int-mode-is-one-mode",
+        "missing-mode-is-one-none-mode",
+    ),
 )
 def test_guardrail_info_keeps_what_prometheus_iterates(
     raw: object, expected: tuple[GuardrailEntry, ...] | None
@@ -966,6 +986,24 @@ def test_guardrail_info_keeps_what_prometheus_iterates(
     payload: Final = {"guardrail_information": raw}
 
     assert derivations.guardrail_info(HookArgs(request={"standard_logging_object": payload})) == expected
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [("pre_call",), ["pre_call"], ["pre_call", "during_call"], "post_call", 7, None, ["pre_call", 7]],
+    ids=repr,
+)
+def test_guardrail_modes_select_the_str_modes_prometheus_counts_as_additive(mode: object) -> None:
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    payload: Final = {"guardrail_information": {"guardrail_mode": mode}}
+    entries: Final = derivations.guardrail_info(HookArgs(request={"standard_logging_object": payload}))
+    assert entries is not None
+    modes: Final = frozenset(item for item in entries[0].modes or () if isinstance(item, str))
+
+    assert (bool(modes) and modes <= PrometheusLogger._ADDITIVE_GUARDRAIL_MODES) is (
+        PrometheusLogger._guardrail_is_additive({"guardrail_mode": mode})  # pyright: ignore[reportArgumentType]  # the shapes guardrails write
+    )
 
 
 @pytest.mark.parametrize(

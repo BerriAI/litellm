@@ -456,7 +456,7 @@ def _guardrail_entry(entry: object) -> GuardrailEntry:
         GuardrailEntry,
         {
             "mapping": True,
-            "modes": (mode,) if isinstance(mode, str) else mode,
+            "modes": mode if isinstance(mode, list) else (mode,),
             "duration": entry_mapping.get("duration"),
         },
     )
