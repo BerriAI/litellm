@@ -2,6 +2,14 @@
 
 Manages a project in LiteLLM. Projects sit between teams and keys in the hierarchy, allowing fine-grained budget and model access control within a team
 
+## Update behavior
+
+Updates send the project ID and changed attributes only. Unchanged budgets, rate limits, durations, tags, and blocked status are not replayed on unrelated edits.
+
+`metadata` remains a string-valued map. When metadata, tags, or per-model rate limits change, the provider fetches current server metadata and merges only the changed entries. Undeclared nested maps, arrays, booleans, and JSON numbers are preserved. A failed metadata read stops the update. This GET followed by POST is not atomic; concurrent edits between the two requests can still be overwritten.
+
+Refresh clears cached budgets and rate limits when the API returns null or the linked budget table is absent.
+
 ## Example Usage
 
 ```hcl

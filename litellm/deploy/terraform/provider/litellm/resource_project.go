@@ -174,7 +174,7 @@ func resourceLiteLLMProject() *schema.Resource {
 	}
 }
 
-func buildProjectData(d *schema.ResourceData) map[string]interface{} {
+func buildProjectCreateData(d *schema.ResourceData) map[string]interface{} {
 	projectData := map[string]interface{}{
 		"team_id": d.Get("team_id").(string),
 	}
@@ -190,10 +190,36 @@ func buildProjectData(d *schema.ResourceData) map[string]interface{} {
 	return projectData
 }
 
+func buildProjectUpdateData(d *schema.ResourceData, client *Client) (map[string]interface{}, error) {
+	projectData := map[string]interface{}{"project_id": d.Id()}
+	for _, key := range []string{"team_id", "project_alias", "description", "models", "tags",
+		"max_budget", "soft_budget", "budget_duration", "budget_id", "tpm_limit", "rpm_limit",
+		"max_parallel_requests", "model_max_budget", "model_rpm_limit", "model_tpm_limit", "blocked"} {
+		if d.HasChange(key) {
+			projectData[key] = d.Get(key)
+		}
+	}
+
+	if d.HasChange("metadata") || d.HasChange("tags") || d.HasChange("model_rpm_limit") || d.HasChange("model_tpm_limit") {
+		metadata, err := currentResourceMetadata(client, endpointProjectInfo, "project_id", d.Id(), "")
+		if err != nil {
+			return nil, fmt.Errorf("error reading current project metadata: %w", err)
+		}
+		mergeChangedMetadata(d, metadata)
+		for _, key := range []string{"tags", "model_rpm_limit", "model_tpm_limit"} {
+			if value, changed := projectData[key]; changed {
+				metadata[key] = value
+			}
+		}
+		projectData["metadata"] = metadata
+	}
+	return projectData, nil
+}
+
 func resourceLiteLLMProjectCreate(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
 
-	projectData := buildProjectData(d)
+	projectData := buildProjectCreateData(d)
 	log.Printf("[DEBUG] Create project request payload: %+v", projectData)
 
 	resp, err := MakeRequest(client, "POST", endpointProjectNew, projectData)
@@ -253,7 +279,7 @@ func resourceLiteLLMProjectRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("team_id", GetStringValue(projResp.TeamID, d.Get("team_id").(string)))
 	d.Set("project_alias", GetStringValue(projResp.ProjectAlias, d.Get("project_alias").(string)))
 	d.Set("description", GetStringValue(projResp.Description, d.Get("description").(string)))
-	d.Set("budget_id", GetStringValue(projResp.BudgetID, d.Get("budget_id").(string)))
+	d.Set("budget_id", projResp.BudgetID)
 	if projResp.Models != nil {
 		d.Set("models", projResp.Models)
 	}
@@ -266,24 +292,36 @@ func resourceLiteLLMProjectRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("created_by", projResp.CreatedBy)
 	d.Set("updated_by", projResp.UpdatedBy)
 
-	if bt := projResp.LitellmBudgetTable; bt != nil {
-		if bt.MaxBudget != nil {
-			d.Set("max_budget", *bt.MaxBudget)
-		}
-		if bt.SoftBudget != nil {
-			d.Set("soft_budget", *bt.SoftBudget)
-		}
-		if bt.MaxParallelRequests != nil {
-			d.Set("max_parallel_requests", *bt.MaxParallelRequests)
-		}
-		if bt.TPMLimit != nil {
-			d.Set("tpm_limit", *bt.TPMLimit)
-		}
-		if bt.RPMLimit != nil {
-			d.Set("rpm_limit", *bt.RPMLimit)
-		}
-		d.Set("budget_duration", GetStringValue(bt.BudgetDuration, d.Get("budget_duration").(string)))
+	bt := projResp.LitellmBudgetTable
+	if bt == nil {
+		bt = &projectBudgetTable{}
 	}
+	if bt.MaxBudget != nil {
+		d.Set("max_budget", *bt.MaxBudget)
+	} else {
+		d.Set("max_budget", nil)
+	}
+	if bt.SoftBudget != nil {
+		d.Set("soft_budget", *bt.SoftBudget)
+	} else {
+		d.Set("soft_budget", nil)
+	}
+	if bt.MaxParallelRequests != nil {
+		d.Set("max_parallel_requests", *bt.MaxParallelRequests)
+	} else {
+		d.Set("max_parallel_requests", nil)
+	}
+	if bt.TPMLimit != nil {
+		d.Set("tpm_limit", *bt.TPMLimit)
+	} else {
+		d.Set("tpm_limit", nil)
+	}
+	if bt.RPMLimit != nil {
+		d.Set("rpm_limit", *bt.RPMLimit)
+	} else {
+		d.Set("rpm_limit", nil)
+	}
+	d.Set("budget_duration", bt.BudgetDuration)
 
 	log.Printf("[INFO] Successfully read project with ID: %s", d.Id())
 	return nil
@@ -311,8 +349,10 @@ func setProjectMetadataAndTags(d *schema.ResourceData, metadata map[string]inter
 func resourceLiteLLMProjectUpdate(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
 
-	projectData := buildProjectData(d)
-	projectData["project_id"] = d.Id()
+	projectData, err := buildProjectUpdateData(d, client)
+	if err != nil {
+		return err
+	}
 	log.Printf("[DEBUG] Update project request payload: %+v", projectData)
 
 	resp, err := MakeRequest(client, "POST", endpointProjectUpdate, projectData)

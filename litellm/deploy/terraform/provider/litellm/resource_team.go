@@ -178,7 +178,7 @@ func resourceLiteLLMTeamCreate(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
 
 	teamID := resolveTeamID(d)
-	teamData := buildTeamData(d, teamID)
+	teamData := buildTeamCreateData(d, teamID)
 
 	// Throughput limit types are only accepted by /team/new, not /team/update.
 	for _, key := range []string{"rpm_limit_type", "tpm_limit_type"} {
@@ -238,17 +238,11 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("tags", tags)
 	d.Set("soft_budget_alerting_emails", alertEmails)
 
-	if teamResp.TPMLimit != nil {
-		d.Set("tpm_limit", *teamResp.TPMLimit)
-	}
-	if teamResp.RPMLimit != nil {
-		d.Set("rpm_limit", *teamResp.RPMLimit)
-	}
-	if teamResp.MaxBudget != nil {
-		d.Set("max_budget", *teamResp.MaxBudget)
-	}
+	d.Set("tpm_limit", teamResp.TPMLimit)
+	d.Set("rpm_limit", teamResp.RPMLimit)
+	d.Set("max_budget", teamResp.MaxBudget)
 	d.Set("soft_budget", teamResp.SoftBudget)
-	d.Set("budget_duration", GetStringValue(teamResp.BudgetDuration, d.Get("budget_duration").(string)))
+	d.Set("budget_duration", teamResp.BudgetDuration)
 
 	// Handle models separately as it's a list
 	if teamResp.Models != nil {
@@ -268,17 +262,21 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 	if teamResp.Prompts != nil {
 		d.Set("prompts", teamResp.Prompts)
 	}
-	if teamResp.TeamMemberBudget != nil {
-		d.Set("team_member_budget", *teamResp.TeamMemberBudget)
+	memberBudget := teamResp.TeamMemberBudget
+	memberRPM := teamResp.TeamMemberRPMLimit
+	memberTPM := teamResp.TeamMemberTPMLimit
+	memberDuration := teamResp.TeamMemberBudgetDuration
+	if member := teamResp.TeamMemberBudgetTable; member != nil {
+		memberBudget = member.MaxBudget
+		memberRPM = member.RPMLimit
+		memberTPM = member.TPMLimit
+		memberDuration = member.BudgetDuration
 	}
-	d.Set("team_member_budget_duration", GetStringValue(teamResp.TeamMemberBudgetDuration, d.Get("team_member_budget_duration").(string)))
-	if teamResp.TeamMemberRPMLimit != nil {
-		d.Set("team_member_rpm_limit", *teamResp.TeamMemberRPMLimit)
-	}
-	if teamResp.TeamMemberTPMLimit != nil {
-		d.Set("team_member_tpm_limit", *teamResp.TeamMemberTPMLimit)
-	}
-	d.Set("team_member_key_duration", GetStringValue(teamResp.TeamMemberKeyDuration, d.Get("team_member_key_duration").(string)))
+	d.Set("team_member_budget", memberBudget)
+	d.Set("team_member_rpm_limit", memberRPM)
+	d.Set("team_member_tpm_limit", memberTPM)
+	d.Set("team_member_budget_duration", memberDuration)
+	d.Set("team_member_key_duration", teamResp.TeamMemberKeyDuration)
 	if v := teamModelLimit(teamResp.ModelRPMLimit, teamResp.Metadata, "model_rpm_limit"); v != nil {
 		d.Set("model_rpm_limit", v)
 	}
@@ -317,7 +315,10 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 func resourceLiteLLMTeamUpdate(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
 
-	teamData := buildTeamData(d, d.Id())
+	teamData, err := buildTeamUpdateData(d, client)
+	if err != nil {
+		return fmt.Errorf("error updating team: %w", err)
+	}
 	log.Printf("[DEBUG] Update team request payload: %+v", teamData)
 
 	resp, err := MakeRequest(client, "POST", endpointTeamUpdate, teamData)
@@ -332,18 +333,13 @@ func resourceLiteLLMTeamUpdate(d *schema.ResourceData, m interface{}) error {
 
 	// Check if team_member_permissions have changed and explicitly update them
 	if d.HasChange("team_member_permissions") {
-		_, newPerms := d.GetChange("team_member_permissions")
-		if newPerms != nil {
-			// Convert interface{} to []string
-			var permissions []string
-			for _, perm := range newPerms.([]interface{}) {
-				permissions = append(permissions, perm.(string))
-			}
-
-			log.Printf("[DEBUG] Explicitly updating team permissions: %+v", permissions)
-			if err := updateTeamPermissions(client, d.Id(), permissions); err != nil {
-				return fmt.Errorf("error updating team permissions: %w", err)
-			}
+		newPerms := d.Get("team_member_permissions").([]interface{})
+		permissions := make([]string, 0, len(newPerms))
+		for _, perm := range newPerms {
+			permissions = append(permissions, perm.(string))
+		}
+		if err := updateTeamPermissions(client, d.Id(), permissions); err != nil {
+			return fmt.Errorf("error updating team permissions: %w", err)
 		}
 	}
 
@@ -451,7 +447,7 @@ func resolveTeamID(d *schema.ResourceData) string {
 	return uuid.New().String()
 }
 
-func buildTeamData(d *schema.ResourceData, teamID string) map[string]interface{} {
+func buildTeamCreateData(d *schema.ResourceData, teamID string) map[string]interface{} {
 	teamData := map[string]interface{}{
 		"team_id":    teamID,
 		"team_alias": d.Get("team_alias").(string),
@@ -492,15 +488,14 @@ func buildTeamData(d *schema.ResourceData, teamID string) map[string]interface{}
 		teamData["team_member_model_max_budget"] = memberModelMaxBudget
 	}
 
-	if metadata := buildTeamMetadata(d); metadata != nil {
+	if metadata := buildTeamCreateMetadata(d); metadata != nil {
 		teamData["metadata"] = metadata
 	}
 
 	return teamData
 }
 
-// /team/update replaces metadata wholesale, so the full map must go out whenever either half changed.
-func buildTeamMetadata(d *schema.ResourceData) map[string]interface{} {
+func buildTeamCreateMetadata(d *schema.ResourceData) map[string]interface{} {
 	metadata := map[string]interface{}{}
 	for k, v := range d.Get("metadata").(map[string]interface{}) {
 		metadata[k] = v
@@ -512,6 +507,56 @@ func buildTeamMetadata(d *schema.ResourceData) map[string]interface{} {
 		return nil
 	}
 	return metadata
+}
+
+// Update payloads are deltas: replaying controls can overwrite live changes or restart budget windows.
+func buildTeamUpdateData(d *schema.ResourceData, client *Client) (map[string]interface{}, error) {
+	teamData := map[string]interface{}{"team_id": d.Id()}
+	for _, key := range []string{
+		"team_alias", "organization_id", "tpm_limit", "rpm_limit", "max_budget", "models",
+		"blocked", "model_aliases", "guardrails", "prompts", "team_member_budget",
+		"team_member_rpm_limit", "team_member_tpm_limit", "allowed_passthrough_routes",
+		"tags", "model_rpm_limit", "model_tpm_limit",
+	} {
+		if d.HasChange(key) {
+			teamData[key] = d.Get(key)
+		}
+	}
+	for _, key := range []string{"budget_duration", "team_member_budget_duration", "team_member_key_duration", "soft_budget"} {
+		if d.HasChange(key) {
+			if value, ok := d.GetOk(key); ok {
+				teamData[key] = value
+			} else {
+				teamData[key] = nil
+			}
+		}
+	}
+	if d.HasChange("team_member_model_max_budget") {
+		teamData["team_member_model_max_budget"] = parseKeyModelMaxBudget(d.Get("team_member_model_max_budget").(string))
+	}
+
+	if d.HasChange("metadata") || d.HasChange("soft_budget_alerting_emails") || d.HasChange("tags") || d.HasChange("model_rpm_limit") || d.HasChange("model_tpm_limit") {
+		metadata, err := currentResourceMetadata(client, endpointTeamInfo, "team_id", d.Id(), "team_info")
+		if err != nil {
+			return nil, err
+		}
+		mergeChangedMetadata(d, metadata)
+		if d.HasChange("soft_budget_alerting_emails") {
+			if emails, ok := d.GetOk("soft_budget_alerting_emails"); ok {
+				metadata["soft_budget_alerting_emails"] = emails
+			} else {
+				delete(metadata, "soft_budget_alerting_emails")
+			}
+		}
+		// These top-level fields are promoted into metadata by the proxy.
+		for _, key := range []string{"tags", "model_rpm_limit", "model_tpm_limit"} {
+			if d.HasChange(key) {
+				metadata[key] = teamData[key]
+			}
+		}
+		teamData["metadata"] = metadata
+	}
+	return teamData, nil
 }
 
 func teamModelLimit(topLevel, metadata map[string]interface{}, key string) map[string]interface{} {

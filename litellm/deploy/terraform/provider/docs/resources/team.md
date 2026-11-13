@@ -2,6 +2,14 @@
 
 Manages a team configuration in LiteLLM. Teams allow you to group users and manage their access to models and usage limits.
 
+## Update behavior
+
+Updates send the team ID and changed attributes only. Unchanged budgets, rate limits, durations, and permissions are not replayed on unrelated edits. Explicit permission changes use the dedicated permissions endpoint, including an empty list to clear permissions.
+
+`metadata` remains a string-valued map. When metadata, tags, alerting emails, or per-model rate limits change, the provider fetches current server metadata and merges only the changed entries. Undeclared nested maps, arrays, booleans, and JSON numbers are preserved. A failed metadata read stops the update. This GET followed by POST is not atomic; concurrent edits between the two requests can still be overwritten.
+
+Refresh clears cached null budgets and rate limits. Member budgets, limits, and duration are read from `team_member_budget_table` when present.
+
 ## Example Usage
 
 ### Basic Team Configuration

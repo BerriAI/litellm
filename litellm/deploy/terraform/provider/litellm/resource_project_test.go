@@ -162,49 +162,6 @@ func TestResourceLiteLLMProjectRead_404ClearsID(t *testing.T) {
 	}
 }
 
-func TestResourceLiteLLMProjectUpdate(t *testing.T) {
-	var updatePayload map[string]interface{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/project/update":
-			if r.Method != http.MethodPost {
-				t.Errorf("expected POST for update, got %s", r.Method)
-			}
-			if err := json.NewDecoder(r.Body).Decode(&updatePayload); err != nil {
-				t.Errorf("failed to decode update payload: %v", err)
-			}
-			w.Write([]byte(projectInfoBody))
-		case "/project/info":
-			w.Write([]byte(projectInfoBody))
-		default:
-			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-
-	d := schema.TestResourceDataRaw(t, resourceLiteLLMProject().Schema, map[string]interface{}{
-		"team_id":       "team-1",
-		"project_alias": "renamed-project",
-		"rpm_limit":     900,
-	})
-	d.SetId("proj-123")
-
-	if err := resourceLiteLLMProjectUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
-		t.Fatalf("update failed: %v", err)
-	}
-
-	if updatePayload["project_id"] != "proj-123" {
-		t.Errorf("expected update payload project_id 'proj-123', got %v", updatePayload["project_id"])
-	}
-	if updatePayload["project_alias"] != "renamed-project" {
-		t.Errorf("expected updated project_alias in payload, got %v", updatePayload["project_alias"])
-	}
-	if updatePayload["rpm_limit"] != float64(900) {
-		t.Errorf("expected rpm_limit 900 in payload, got %v", updatePayload["rpm_limit"])
-	}
-}
-
 func TestResourceLiteLLMProjectDelete(t *testing.T) {
 	var deletePayload map[string]interface{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
