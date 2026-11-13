@@ -259,6 +259,7 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_successes_for_current_minute,
 )
 from litellm.router_utils.routing_read_batch import RoutingReadBatch
+from litellm.router_utils.service_tier_fallback import FlexTierFallback
 from litellm.types.router import (
     AllowedFailsPolicy,
     Deployment,
@@ -361,6 +362,7 @@ _SERVED_ARGUMENTS: Final = frozenset(
         # Read host-side by the endpoint plans (litellm/router_rust/invoke/endpoints.py).
         "stream_timeout",
         "cache_responses",
+        "service_tier_fallbacks",
         "assistants_config",
         "search_tools",
         "guardrail_list",
@@ -4435,6 +4437,8 @@ class _Driver:
         self._cut_deployment: Final = cut_deployment if isinstance(cut_deployment, str) else None
         self._last_response: object = None
         self._last_error: BaseException | None = None
+        self._invoke_stage = "idle"
+        self._active_stream: StreamAttempt | None = None
         # The level the call raises from: a fallback walk re-entered from a failed stream starts at
         # the level that stream served, on the failure ``async_function_with_fallbacks_common_utils``
         # was handed, which is what it raises when no fallback answers.
@@ -5247,6 +5251,7 @@ class _Driver:
         return tuple(release for release in releases if release is not None)
 
     async def _routed_attempt(self, step: Mapping[str, object], attempt: RoutedAttempt) -> Mapping[str, object]:
+        self._invoke_stage = "idle"
         step = await self._resolve_pods(step)  # rebind-ok: the picked deployment, resolved to a pod
         deployment: Mapping[str, object] = as_str_mapping(step.get("deployment")) or {}  # rebind-ok: the picked one
         call: AttemptCall | None = None  # rebind-ok: built inside the try
@@ -5260,11 +5265,11 @@ class _Driver:
             return {**self._failed(step, self._default_copy(step), None, refused_call), "recorded": True}
         try:
             deployment, call = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
+            flex: Final = self._prepare_flex(call)
             enforce_total_timeout_scope(call.kwargs)
             if call.refused is not None:
                 await log_refused_call(call, call.refused)
                 raise call.refused
-            host: Final = self._core._host  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             try:
                 compacted: Final = await compacted_attempt(self._core._port, self._plan, deployment, call)  # pyright: ignore[reportPrivateUsage]  # see above
             except Exception as refused:  # noqa: BLE001  # raised before the provider call, so no cooldown reads it
@@ -5288,31 +5293,18 @@ class _Driver:
                 first_to_log: Final = not failure_already_logged(call.kwargs, "async_failure")
                 logs_failure = first_to_log  # rebind-ok: whether a failure here is this attempt's to log
                 in_call = True  # rebind-ok: see above
-                pending: Final[object] = (
-                    self._core._endpoints.create_file_everywhere(  # pyright: ignore[reportPrivateUsage]  # see above
-                        _with_target_order(call.kwargs, step.get("target_order")),
-                        call.model_name,
-                        self._request.get("specific_deployment"),
-                    )
-                    if self._plan.kind == "create_file"
-                    else host.invoke(call.host_op)(**compacted)
-                )
-                # The generic helper awaits whatever the handler returns, as the Python router does.
-                awaited: Final = self._plan.kind == "generic" or inspect.isawaitable(pending)
-                answered: Final[object] = await pending if awaited else pending  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # see above
-                logs_failure = False  # rebind-ok: see above
-                in_call = False  # rebind-ok: see above
-                self._core._endpoints.check_response(self._plan, answered, call)  # pyright: ignore[reportPrivateUsage, reportUnknownArgumentType]  # see above
-                stream: Final = self._stream_attempt(step, call.kwargs, slot)
+                initial_stream: Final = self._stream_attempt(step, call.kwargs, slot)
                 logs_failure = first_to_log  # rebind-ok: the stream's own failure logging, for its first chunk
                 in_call = True  # rebind-ok: see above
-                reading_stream = stream  # rebind-ok: None until the attempt opens a stream
-                response: Final = await open_attempt_stream(stream, answered)  # pyright: ignore[reportUnknownArgumentType]  # see above
+                reading_stream = initial_stream  # rebind-ok: None until the attempt opens a stream
+                completed_call, response, stream = await self._invoke_with_flex(
+                    step, deployment, call, compacted, initial_stream, flex
+                )
                 logs_failure = False  # rebind-ok: see above
                 in_call = False  # rebind-ok: see above
                 # `self.success_calls[model_name] += 1`, inside the try: a counter replaced with a
                 # plain dict fails the attempt.
-                self._core._endpoints.counters.succeeded(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # see above
+                self._core._endpoints.counters.succeeded(self._plan, completed_call)  # pyright: ignore[reportPrivateUsage]  # see above
         except asyncio.CancelledError:
             if call is not None:
                 await released(
@@ -5323,27 +5315,165 @@ class _Driver:
         except TotalTimeoutNotApplicable:
             raise
         except Exception as error:  # noqa: BLE001  # every attempt failure is classified and handed to the Rust call loop
-            if call is not None:
-                await released(self._release(call, attempt, refund_io_tokens=True))
-            failed: Final = self._failed(step, deployment, call, error)
-            if reading_stream is None or not logs_failure:
+            failed_call, failed_stream, failure_logs, failure_in_call = self._invocation_failure(
+                call, reading_stream, logs_failure, in_call
+            )
+            if failed_call is not None:
+                await released(self._release(failed_call, attempt, refund_io_tokens=True))
+            failed: Final = self._failed(step, deployment, failed_call, error)
+            if failed_stream is None or not failure_logs:
                 return {
                     **failed,
-                    "recorded": not logs_failure and not self._records_blocked(failed, call, error, in_call),
+                    "recorded": not failure_logs
+                    and not self._records_blocked(failed, failed_call, error, failure_in_call),
                 }
             # `_dispatch_stream_failure`: the stream logs its failure in a task of its own.
-            reading_stream.report_first_chunk_failure(error)
+            failed_stream.report_first_chunk_failure(error)
             return {**failed, "recorded": True}
-        served: Final = self._succeeded(call, response, call.host_op, stream)
+        served: Final = self._succeeded(completed_call, response, completed_call.host_op, stream)
         # The session re-pin the Python core's success callback runs; a wrapped stream runs it when it ends.
-        if not served.get("deferred") and self._core.outcome_callbacks(call.kwargs, sync=False).get("success", True):
+        if not served.get("deferred") and self._core.outcome_callbacks(completed_call.kwargs, sync=False).get(
+            "success", True
+        ):
             await self._core.repin_after_success(stream.logged(), response)
-        session_deployment: Final = clean_realtime_session_deployment(call)
+        session_deployment: Final = clean_realtime_session_deployment(completed_call)
         if session_deployment is not None:
             await self._core.count_realtime_session_success(session_deployment)
         return served
 
+    def _prepare_flex(self, call: AttemptCall) -> bool:
+        return self._plan.endpoint in (
+            "acompletion",
+            "aresponses",
+            "completion",
+        ) and FlexTierFallback.applies(
+            call.kwargs,
+            self._core._plain.get("service_tier_fallbacks") is True,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        )
+
+    def _invocation_failure(
+        self, call: AttemptCall | None, stream: StreamAttempt | None, logs: bool, in_call: bool
+    ) -> tuple[AttemptCall | None, StreamAttempt | None, bool, bool]:
+        latest: Final = self._latest_call[1] if self._latest_call is not None and self._invoke_stage != "idle" else call
+        reading: Final = self._active_stream if self._invoke_stage == "stream" else stream
+        return (
+            latest,
+            None if self._invoke_stage == "call" else reading,
+            logs and self._invoke_stage != "check",
+            in_call and self._invoke_stage != "check",
+        )
+
+    def _downgrade_call(self, step: Mapping[str, object], deployment: Mapping[str, object]) -> AttemptCall:
+        params: Final = as_str_mapping(step.get("params")) or {}
+        request: Final = FlexTierFallback.downgraded({**self._request, **params}, self._plan.metadata_field)
+        data: Final = as_str_mapping(deployment.get("litellm_params")) or {}
+        default_deployment: Final = {
+            **deployment,
+            "litellm_params": {key: value for key, value in data.items() if key != "service_tier"},
+        }
+        group: Final = str(step.get("model", self._request.get("model")))
+        level: Final = step.get("fallback_level")
+        rebuilt: Final = attempt_call(
+            self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+            self._plan,
+            request,
+            default_deployment,
+            group=group,
+            requested=group,
+            fallback_level=level if isinstance(level, int) else 0,
+        )
+        rebuilt.kwargs = FlexTierFallback.downgraded(rebuilt.kwargs, self._plan.metadata_field)
+        self._latest_call = (deployment, rebuilt)
+        self._served = (group, rebuilt.served)
+        return rebuilt
+
+    async def _invoke_with_flex(
+        self,
+        step: Mapping[str, object],
+        deployment: Mapping[str, object],
+        call: AttemptCall,
+        kwargs: Mapping[str, object],
+        stream: StreamAttempt,
+        flex: bool,
+    ) -> tuple[AttemptCall, object, StreamAttempt]:
+        sent: Final = FlexTierFallback.pending(kwargs, self._plan.metadata_field) if flex else kwargs
+        prepared: Final = dataclasses.replace(call, kwargs=sent) if flex else call
+        active_stream: Final = self._stream_attempt(step, sent, stream.slot) if flex else stream
+        self._latest_call = (deployment, prepared)
+        try:
+            response: Final = await self._invoke_attempt(step, prepared, sent, active_stream)
+        except Exception as error:
+            if not (flex and FlexTierFallback.is_trigger(error)):
+                raise
+        else:
+            if flex:
+                FlexTierFallback.finish(sent, self._plan.metadata_field)
+            return prepared, response, active_stream
+        default_call: Final = self._downgrade_call(step, deployment)
+        default_stream: Final = self._stream_attempt(step, default_call.kwargs, stream.slot)
+        default_response: Final = await self._invoke_attempt(step, default_call, default_call.kwargs, default_stream)
+        return default_call, FlexTierFallback.add_header(default_response), default_stream
+
+    def _invoke_with_flex_sync(
+        self,
+        step: Mapping[str, object],
+        deployment: Mapping[str, object],
+        call: AttemptCall,
+        stream: StreamAttempt,
+        flex: bool,
+    ) -> tuple[AttemptCall, object, StreamAttempt]:
+        sent: Final = FlexTierFallback.pending(call.kwargs, self._plan.metadata_field) if flex else call.kwargs
+        prepared: Final = dataclasses.replace(call, kwargs=sent) if flex else call
+        active_stream: Final = self._stream_attempt(step, sent) if flex else stream
+        self._latest_call = (deployment, prepared)
+        try:
+            response: Final = self._invoke_attempt_sync(prepared, active_stream)
+        except Exception as error:
+            if not (flex and FlexTierFallback.is_trigger(error)):
+                raise
+        else:
+            if flex:
+                FlexTierFallback.finish(sent, self._plan.metadata_field)
+            return prepared, response, active_stream
+        default_call: Final = self._downgrade_call(step, deployment)
+        default_stream: Final = self._stream_attempt(step, default_call.kwargs)
+        default_response: Final = self._invoke_attempt_sync(default_call, default_stream)
+        return default_call, FlexTierFallback.add_header(default_response), default_stream
+
+    async def _invoke_attempt(
+        self, step: Mapping[str, object], call: AttemptCall, kwargs: Mapping[str, object], stream: StreamAttempt
+    ) -> object:
+        self._invoke_stage = "call"
+        pending: Final[object] = (
+            self._core._endpoints.create_file_everywhere(  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+                _with_target_order(call.kwargs, step.get("target_order")),
+                call.model_name,
+                self._request.get("specific_deployment"),
+            )
+            if self._plan.kind == "create_file"
+            else self._core._host.invoke(call.host_op)(**kwargs)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        )
+        awaited: Final = self._plan.kind == "generic" or inspect.isawaitable(pending)
+        answered: Final[object] = await pending if awaited else pending  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # generic handlers are awaited as in the existing invocation contract
+        self._invoke_stage = "check"
+        self._core._endpoints.check_response(self._plan, answered, call)  # pyright: ignore[reportPrivateUsage, reportUnknownArgumentType]  # untyped provider response on the driver's own core
+        self._invoke_stage = "stream"
+        self._active_stream = stream
+        return await open_attempt_stream(stream, answered)  # pyright: ignore[reportUnknownArgumentType]  # provider responses are untyped
+
+    def _invoke_attempt_sync(self, call: AttemptCall, stream: StreamAttempt) -> object:
+        self._invoke_stage = "call"
+        answered: Final = self._core._host.invoke(call.host_op)(**call.kwargs)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        self._invoke_stage = "check"
+        if inspect.isawaitable(answered):
+            raise _NotSynchronous(f"the host's {call.host_op} endpoint is not synchronous")
+        self._core._endpoints.check_response(self._plan, answered, call)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        self._invoke_stage = "stream"
+        self._reading_first_chunk = True
+        return open_attempt_stream_sync(stream, answered)
+
     def attempt_sync(self, step: Mapping[str, object]) -> Mapping[str, object]:
+        self._invoke_stage = "idle"
         step = self._resolve_pods_sync(step)  # rebind-ok: see attempt
         deployment: Mapping[str, object] = as_str_mapping(step.get("deployment")) or {}  # rebind-ok: see attempt
         call: AttemptCall | None = None  # rebind-ok: see attempt
@@ -5355,6 +5485,7 @@ class _Driver:
             return {**self._failed(step, self._default_copy(step), None, refused_call), "recorded": True}
         try:
             deployment, call = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
+            flex: Final = self._prepare_flex(call)
             if call.refused is not None:
                 log_refused_call_sync(call, call.refused)
                 raise call.refused
@@ -5366,27 +5497,24 @@ class _Driver:
             first_to_log: Final = not failure_already_logged(call.kwargs, "sync_failure")
             logs_failure = first_to_log  # rebind-ok: see attempt
             in_call = True  # rebind-ok: see attempt
-            answered: Final = self._core._host.invoke(call.host_op)(**call.kwargs)  # pyright: ignore[reportPrivateUsage]  # a sync endpoint
-            logs_failure = False  # rebind-ok: see attempt
-            in_call = False  # rebind-ok: see attempt
-            if inspect.isawaitable(answered):
-                raise _NotSynchronous(f"the host's {call.host_op} endpoint is not synchronous")
-            self._core._endpoints.check_response(self._plan, answered, call)  # pyright: ignore[reportPrivateUsage]  # see above
-            stream: Final = self._stream_attempt(step, call.kwargs)
+            initial_stream: Final = self._stream_attempt(step, call.kwargs)
             logs_failure = first_to_log  # rebind-ok: see attempt
             in_call = True  # rebind-ok: see attempt
-            self._reading_first_chunk = True
-            response: Final = open_attempt_stream_sync(stream, answered)
+            completed_call, response, stream = self._invoke_with_flex_sync(step, deployment, call, initial_stream, flex)
             self._reading_first_chunk = False
             logs_failure = False  # rebind-ok: see attempt
             in_call = False  # rebind-ok: see attempt
-            self._core._endpoints.counters.succeeded(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # see attempt
+            self._core._endpoints.counters.succeeded(self._plan, completed_call)  # pyright: ignore[reportPrivateUsage]  # see attempt
         except _NotSynchronous:
             raise
         except Exception as error:  # noqa: BLE001  # see attempt
-            failed: Final = self._failed(step, deployment, call, error)
-            return {**failed, "recorded": not logs_failure and not self._records_blocked(failed, call, error, in_call)}
-        return self._succeeded(call, response, "", stream)
+            failed_call, _, failure_logs, failure_in_call = self._invocation_failure(call, None, logs_failure, in_call)
+            failed: Final = self._failed(step, deployment, failed_call, error)
+            return {
+                **failed,
+                "recorded": not failure_logs and not self._records_blocked(failed, failed_call, error, failure_in_call),
+            }
+        return self._succeeded(completed_call, response, "", stream)
 
     async def select(self, step: Mapping[str, object]) -> object:
         request: Final = self._request

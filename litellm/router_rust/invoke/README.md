@@ -1,6 +1,6 @@
 # invoke
 
-The host side of `Host::invoke`: running one attempt against the one deployment router-core picked. Nothing here selects, retries, falls back or records cooldowns.
+The host side of `Host::invoke`, running one attempt against the deployment router-core picked. Routing retries and fallbacks belong to router-core. The driver can retry an eligible flex failure once on the same deployment at the default tier when `service_tier_fallbacks` is enabled.
 
 - `shaping`: the kwargs an attempt sends to its deployment
 - `endpoints`: what each public router method does before, around and after the routed call
