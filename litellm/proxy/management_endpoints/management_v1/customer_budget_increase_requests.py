@@ -95,10 +95,10 @@ async def list_budget_increase_requests(
     request: Request,
     actor: Admin,
     hierarchy: Hierarchy,
-    status: IncreaseRequestStatus | None = Query(default=None),
-    customer_member_id: str | None = Query(default=None, max_length=256),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=200),
+    status: Annotated[IncreaseRequestStatus | None, Query()] = None,
+    customer_member_id: Annotated[str | None, Query(max_length=256)] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> ListResponse[BudgetIncreaseRequest]:
     """The admin review queue. Proxy admins only."""
     where: Final = {
