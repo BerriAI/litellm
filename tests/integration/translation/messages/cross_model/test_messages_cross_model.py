@@ -64,8 +64,7 @@ def test_messages_preserves_multiple_responses_messages_before_tools(
 def test_messages_forwards_the_configured_provider_affinity_header_on_native_and_bridged_routes(
     case: TranslationTestCase, gateway: Gateway, provider: SharedProvider
 ) -> None:
-    if case is CLAUDE_SONNET_5_5_TEST_CASE:
-        pytest.skip("BUG: LIT-8405 native Messages drops the configured provider affinity header")
+    # native Anthropic case: regression (LIT-8405, native Messages dropped the header); Responses case: guard
     alias: Final = (
         "contract-affinity-anthropic" if case is CLAUDE_SONNET_5_5_TEST_CASE else "contract-affinity-responses"
     )
