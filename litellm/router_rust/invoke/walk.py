@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     from litellm.router_api import RoutingContext
     from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
+    from litellm.rust_bridge._native import AttemptShape
 
 # `RETRY_BREADCRUMB_LIMIT`: how many failures `previous_models` keeps.
 RETRY_BREADCRUMB_LIMIT: Final = 4
@@ -313,10 +314,9 @@ class WalkMetadata:
         return self._scope(step.get("scope")).metadata.get("request_retry_count")
 
     def stamp(
-        self, step: Mapping[str, object], kwargs: Mapping[str, object], deployment: Mapping[str, object] | None = None
+        self, step: Mapping[str, object], kwargs: Mapping[str, object], shape: "AttemptShape"
     ) -> Mapping[str, object]:
-        """The attempt's kwargs with its level's walk metadata and hop kwargs laid over them.
-        ``deployment``: the deployment the attempt calls, whose own ``mock_timeout`` a hop keeps."""
+        """The attempt's kwargs with its level's walk metadata and hop kwargs laid over them."""
         scope: Final = self._scope(step.get("scope"))
         metadata: Final = scope.metadata
         metadata["attempted_retries"] = step.get("retry")
@@ -329,24 +329,20 @@ class WalkMetadata:
         hop: Final = {
             key: scope.kwargs[key] for key in _HOP_KWARGS if key in scope.kwargs and key != "include_fallback_errors"
         }
-        depth: Final = hop.get("fallback_depth")
         given: Final = kwargs.get(self._field)
         # The requested group's attempts stamp the caller's own dict in place, as
         # `_update_kwargs_with_deployment` stamps it: the proxy's post-call write-backs land in the dict
         # its spend row reads. A fallback hop stamps its own copy (`run_async_fallback`'s kwargs).
         served: Final = (
             given  # pyright: ignore[reportUnknownVariableType]  # the caller's metadata dict
-            if isinstance(given, dict) and not (isinstance(depth, int) and depth > 0)
+            if isinstance(given, dict) and not shape.is_fallback
             else dict(as_str_mapping(given) or {})
         )
         served.update({key: metadata[key] for key in _WALK_KEYS if key in metadata})
         metadata.update({key: served.get(key) for key in _SERVED_KEYS})
-        # `async_function_with_fallbacks` pops the request's `mock_timeout` for the requested group's own
-        # retries: no hop sees it. A deployment's own `mock_timeout` is merged in per call, so it stays.
-        own: Final = as_str_mapping((deployment or {}).get("litellm_params")) or {}
         sent: Final = (
             {key: value for key, value in kwargs.items() if key != "mock_timeout"}
-            if isinstance(depth, int) and depth > 0 and "mock_timeout" not in own
+            if shape.drops_mock_timeout
             else kwargs
         )
         return {**sent, **hop, self._field: served}

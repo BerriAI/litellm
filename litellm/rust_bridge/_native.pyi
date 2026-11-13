@@ -745,6 +745,7 @@ def reserve_process_for_forking() -> None: ...
 __all__ = [
     "AtomicApplied",
     "AtomicOverLimit",
+    "AttemptShape",
     "ForkedAfterNativeRuntimeStarted",
     "GaugeOverLimit",
     "GaugesAcquired",
@@ -899,6 +900,16 @@ class _Event(TypedDict):
 class _Step(TypedDict):
     events: list[_Event]
 
+# router-core's decisions for the fallback-hop parts of an attempt's kwargs.
+@final
+class AttemptShape:
+    @property
+    def fallback_model_group(self) -> str | None: ...
+    @property
+    def is_fallback(self) -> bool: ...
+    @property
+    def drops_mock_timeout(self) -> bool: ...
+
 class _AttemptStep(_Step):
     kind: Literal["attempt"]
     deployment_id: str
@@ -919,6 +930,7 @@ class _AttemptStep(_Step):
     scope: int
     max_retries: int
     model_group_size: int
+    shape: AttemptShape
 
 class _SleepStep(_Step):
     kind: Literal["sleep"]

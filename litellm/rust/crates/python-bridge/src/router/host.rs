@@ -27,7 +27,7 @@ use litellm_router_core::{
     RouterCache, RouterEvent, RouterRequest, RouterResponse, RoutingContext, SecretRef,
     SelectStage, ThreadRandomness, UsageCounts, UsageWindow, build::BuiltDeployment,
     health::CooldownValue, host::ModelInfoLookup, model_info::MergedModelInfo,
-    precall::PreCallFacts,
+    precall::PreCallFacts, shape::AttemptShape,
 };
 use pyo3::{PyResult, Python, types::PyAnyMethods};
 use serde_json::{Map, Value};
@@ -259,6 +259,7 @@ pub(crate) enum HostCall {
         scope: u32,
         max_retries: u32,
         model_group_size: usize,
+        shape: AttemptShape,
     },
     Sleep {
         seconds: f64,
@@ -854,6 +855,7 @@ impl Host for StepHost {
             scope: attempt.scope,
             max_retries: attempt.max_retries,
             model_group_size: attempt.model_group_size,
+            shape: AttemptShape::of(attempt),
         };
         let (result, blocked, deferred, tracks_usage) = match call_host(call).await {
             HostCallResponse::Attempt(result) => (result, None, false, None),
@@ -1545,6 +1547,15 @@ mod tests {
             matches!(&step, Step::HostCall(HostCall::Attempt { deployment_id, fallback_depth: 1, .. }) if deployment_id == "b1"),
             "expected the fallback attempt, got {step:?}"
         );
+        let Step::HostCall(HostCall::Attempt { shape, .. }) = &step else {
+            unreachable!()
+        };
+        assert_eq!(
+            shape.fallback_model_group.as_deref(),
+            Some("backup"),
+            "the hop routes its target in the metadata"
+        );
+        assert!(shape.is_fallback && shape.drops_mock_timeout);
         let Step::Done(Finish::Call(response)) =
             store.resume(&mut driver, Some(HostCallResponse::Attempt(Ok(3))))
         else {
