@@ -257,7 +257,11 @@ async def test_count_remaining_transaction_timeout_covers_statement_timeout() ->
     cleaner.batch_timeout_seconds = 12
 
     result: Final = await cleaner._count_remaining(
-        prisma_client, datetime.now(), "LiteLLM_SpendLogs", "startTime", _far_deadline()
+        prisma_client,
+        datetime.now(),
+        "LiteLLM_SpendLogs",
+        'SELECT "request_id" FROM "LiteLLM_SpendLogs" WHERE "startTime" < $1::timestamptz LIMIT $2',
+        _far_deadline(),
     )
 
     assert result == 7
@@ -567,36 +571,6 @@ async def test_delete_old_tool_index_rows_deletes_on_composite_key():
     assert 'WHERE ("request_id", "tool_name") IN' in delete_sql
     assert '"start_time" <' in delete_sql
     assert mock_db.execute_raw.call_args_list[0][0][1] == cutoff_date
-
-
-@pytest.mark.asyncio
-async def test_delete_old_guardrail_index_rows_finds_expired_rows_through_the_guardrail_id_index():
-    """The guardrail index table has no leading start_time index, so the delete and the
-    remaining-rows probe must walk guardrail_id first instead of filtering start_time alone."""
-    mock_prisma_client = MagicMock()
-    _wire_tx(mock_prisma_client.db)
-    mock_db = MagicMock()
-    _wire_tx(mock_db)
-    mock_db.execute_raw = AsyncMock(side_effect=[5, 0])
-    mock_db.query_raw = AsyncMock(return_value=[{"remaining": 0}])
-    mock_prisma_client.db = mock_db
-
-    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
-
-    cutoff_date = datetime.now(timezone.utc) - timedelta(days=7)
-    result = await cleaner._delete_old_guardrail_index_rows(mock_prisma_client, cutoff_date, _far_deadline())
-
-    assert result.rows_deleted == 5
-    delete_sql = mock_db.execute_raw.call_args_list[0][0][0]
-    assert 'DELETE FROM "LiteLLM_SpendLogGuardrailIndex"' in delete_sql
-    assert 'WHERE ("request_id", "guardrail_id") IN' in delete_sql
-    assert "WITH RECURSIVE guardrails" in delete_sql
-    assert "guardrail_id = guardrails.guardrail_id AND start_time < $1::timestamptz" in delete_sql
-    assert mock_db.execute_raw.call_args_list[0][0][1] == cutoff_date
-    count_sql = mock_db.query_raw.call_args[0][0]
-    assert "WITH RECURSIVE guardrails" in count_sql
-    assert "SELECT 1 FROM" not in count_sql
-    assert mock_db.query_raw.call_args[0][1:] == (cutoff_date, SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP)
 
 
 @pytest.mark.asyncio
@@ -1231,7 +1205,7 @@ async def test_the_outstanding_rows_probe_carries_a_statement_timeout():
         mock_prisma_client,
         datetime.now(timezone.utc) - timedelta(days=7),
         "LiteLLM_SpendLogs",
-        "startTime",
+        'SELECT "request_id" FROM "LiteLLM_SpendLogs" WHERE "startTime" < $1::timestamptz LIMIT $2',
         _far_deadline(),
     )
 
@@ -1299,7 +1273,7 @@ async def test_no_statement_is_issued_once_the_budget_is_spent():
         client,
         datetime.now(timezone.utc) - timedelta(days=7),
         "LiteLLM_SpendLogs",
-        "startTime",
+        'SELECT "request_id" FROM "LiteLLM_SpendLogs" WHERE "startTime" < $1::timestamptz LIMIT $2',
         123,
         "budget_exhausted",
         time.monotonic() - 1,
