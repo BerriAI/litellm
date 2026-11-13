@@ -129,11 +129,9 @@ def test_bineric_model_cost_and_capabilities(model: str):
     )
     model_info: Final = litellm.get_model_info(model)
 
-    if "input_cost_per_token" in entry:
-        assert prompt_cost == pytest.approx(entry["input_cost_per_token"] * 1_000_000)
-        assert completion_cost == pytest.approx(entry["output_cost_per_token"] * 1_000_000)
-    else:
-        assert "per request" in entry["metadata"]["notes"]
+    assert entry["input_cost_per_token"] > 0
+    assert prompt_cost == pytest.approx(entry["input_cost_per_token"] * 1_000_000)
+    assert completion_cost == pytest.approx(entry["output_cost_per_token"] * 1_000_000)
     assert model_info["max_tokens"] == entry.get("max_output_tokens")
     assert model_info["max_input_tokens"] == entry.get("max_input_tokens")
     assert model_info["litellm_provider"] == "bineric"
@@ -221,3 +219,34 @@ def test_bineric_chat_completion_request():
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert body["max_completion_tokens"] == 64
     assert response.choices[0].message.content == "Hello from Bineric"
+
+
+@pytest.mark.parametrize(
+    ("usage_extra", "expected_cost"),
+    (({"cost": 0.18}, 0.18), ({}, None)),
+    ids=("reported_cost_is_billed", "no_reported_cost"),
+)
+def test_bineric_per_request_model_without_a_cost_row_still_routes(
+    usage_extra: dict[str, float],
+    expected_cost: float | None,
+):
+    assert "bineric/speech-to-text" not in litellm.model_cost
+    completion: Final = {
+        **_CHAT_COMPLETION,
+        "model": "speech-to-text",
+        "usage": {**_CHAT_COMPLETION["usage"], **usage_extra},
+    }
+    with respx.mock() as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=completion)
+        response: Final = litellm.completion(
+            model="bineric/speech-to-text",
+            messages=[{"role": "user", "content": "Transcribe this"}],
+            api_key="bineric-test-key",
+        )
+
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.content)["model"] == "speech-to-text"
+    if expected_cost is None:
+        assert response._hidden_params["response_cost"] is None
+    else:
+        assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
