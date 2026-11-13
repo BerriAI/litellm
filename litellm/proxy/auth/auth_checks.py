@@ -2183,9 +2183,10 @@ async def _cached_registry(
     cache_key: str,
     overflow_sentinel: str,
     user_api_key_cache: UserApiKeyCache,
+    local_only: bool = False,
 ) -> frozenset[str] | None | _RegistryNotCached:
     """The cached registry answer, or ``_REGISTRY_NOT_CACHED`` when the caller has to query."""
-    cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
+    cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key, local_only=local_only)
     if cached == overflow_sentinel:
         return None
     # Memory hands back the tuple that was written; Redis round-trips it through JSON as a list.
@@ -2264,18 +2265,21 @@ async def _load_bounded_registry(
     A bounded id set under one cache key, so an id outside it costs no DB read.
 
     ``None`` = unusable (overflow or recent DB error): fall back to per-id lookups. An empty
-    frozenset is a real, cacheable answer. Loads are single-flighted to stop TTL-expiry stampedes.
+    frozenset is a real, cacheable answer. Loads are single-flighted to stop TTL-expiry stampedes: memory
+    is read again under the lock, because a cache read can suspend and its miss may be stale by the time
+    the reader holds the lock. The lock is per worker and a load writes this worker's memory, so the
+    re-read sends nothing to Redis.
     """
     cached: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
     if not isinstance(cached, _RegistryNotCached):
         return cached
 
-    waited_for_another_load: Final = load_lock.locked()
     async with load_lock:
-        if waited_for_another_load:
-            cached_after_wait: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
-            if not isinstance(cached_after_wait, _RegistryNotCached):
-                return cached_after_wait
+        cached_under_lock: Final = await _cached_registry(
+            cache_key, overflow_sentinel, user_api_key_cache, local_only=True
+        )
+        if not isinstance(cached_under_lock, _RegistryNotCached):
+            return cached_under_lock
 
         return await _fetch_and_cache_registry(
             cache_key=cache_key,
