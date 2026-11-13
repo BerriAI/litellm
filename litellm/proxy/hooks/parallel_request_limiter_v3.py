@@ -582,7 +582,9 @@ class BorrowingTeamModelHold:
     reserved_tokens: int = 0
     window: ReservationWindowIdentity | None = None
     cap: RateLimitDescriptor | None = None
+    cap_reserved_tokens: int = 0
     cap_window: ReservationWindowIdentity | None = None
+    share: RateLimitDescriptor | None = None
 
 
 @dataclass(slots=True)
@@ -635,6 +637,7 @@ class RequestRateLimiterStash:
     borrowing_team_model_reserved_window: ReservationWindowIdentity | None = None
     borrowing_team_model_share: RateLimitDescriptor | None = None
     borrowing_team_model_cap: RateLimitDescriptor | None = None
+    borrowing_team_model_cap_reserved_tokens: int = 0
     borrowing_team_model_cap_reserved_window: ReservationWindowIdentity | None = None
     borrowing_team_model_fallback_limits: Mapping[str, BorrowingTeamModelHold] = field(
         default_factory=lambda: MappingProxyType({})

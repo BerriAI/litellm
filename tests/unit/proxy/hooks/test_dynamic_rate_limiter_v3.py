@@ -3305,6 +3305,26 @@ async def test_a_websocket_turn_is_refused_at_the_teams_max_borrow_multiple_whil
 
 
 @pytest.mark.asyncio
+async def test_a_capped_websocket_admitted_while_idle_settles_its_first_saturated_turn_on_a_fresh_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The idle admission held tokens on the cap only, so the share the turn settles to once the model saturates
+    starts from zero rather than being refunded a hold it never carried."""
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.1)
+    await _check(handler, _capped_team_key(2), saturation=0.0, data=_prompt(20))
+    await asyncio.create_task(_saturate_model_from_another_request(handler, 200))
+    await handler.enforce_token_limits_for_frame(user_api_key_dict=_capped_team_key(2), requested_model="shared-model")
+    await _settle_tokens(
+        handler,
+        90,
+        response=[],
+        combined_usage_object=litellm.Usage(prompt_tokens=60, completion_tokens=30, total_tokens=90),
+    )
+    assert await _team_tokens_remaining(handler, _capped_team_key(2)) == 10
+    assert await _cap_tokens_remaining(handler, _capped_team_key(2)) == 110
+
+
+@pytest.mark.asyncio
 async def test_a_websocket_turn_under_the_teams_max_borrow_multiple_still_borrows(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.5)
     await _admit_then_settle(handler, _capped_team_key(2), 190)
@@ -3498,6 +3518,15 @@ def _prometheus_sink(monkeypatch: pytest.MonkeyPatch, sink_class: type | None = 
 async def _admit_at_the_hook(handler: _PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, tokens: int) -> None:
     assert await handler.async_pre_call_hook(auth, DualCache(), {"model": "shared-model"}, "completion") is None
     await _settle_tokens(handler, tokens)
+
+
+async def _saturate_model_from_another_request(handler: _PROXY_DynamicRateLimitHandlerV3, tokens: int) -> None:
+    """``_saturate_model`` on a request stash of its own, as a second request in the proxy would have, so the
+    stash of the request under test keeps its holds."""
+    from litellm.proxy.hooks import parallel_request_limiter_v3
+
+    parallel_request_limiter_v3._request_stash.set(None)  # pyright: ignore[reportPrivateUsage]  # fresh request context
+    await _saturate_model(handler, tokens)
 
 
 async def _saturate_model(handler: _PROXY_DynamicRateLimitHandlerV3, tokens: int) -> None:
@@ -3697,6 +3726,24 @@ async def test_a_fallback_served_request_publishes_the_teams_share_on_the_fallba
     assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **shared) == 100
     assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **shared) == 50
     assert _sample(registry, "litellm_dynamic_limiter_share_tokens", model_group="other-model") is None
+
+
+@pytest.mark.asyncio
+async def test_an_idle_fallback_served_for_a_capped_team_still_publishes_its_borrowing(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    registry = _prometheus_sink(monkeypatch)
+    team: Final = _team_key(
+        team_limits={
+            "model_tpm_limit": {"other-model": 40, "shared-model": 100},
+            "team_model_limit_max_borrow_multiple": 2,
+        }
+    )
+    assert await handler.async_pre_call_hook(team, DualCache(), {"model": "other-model"}, "completion") is None
+    assert await handler.async_fallback_target_allowed(team, "shared-model", {}) is True
+    await _settle_tokens(handler, 150, model_group="shared-model")
+    shared: Final = {"model_group": "shared-model", "team": "team-a", "priority": "default"}
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **shared) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **shared) == 50
 
 
 @pytest.mark.asyncio
