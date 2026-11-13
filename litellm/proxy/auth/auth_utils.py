@@ -1922,9 +1922,9 @@ def enforce_batch_limits_are_admin_only(
     data: BatchLimitRequest,
     existing_metadata: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
-    entity: Literal["key", "team"],
+    entity: Literal["key", "team", "project"],
 ) -> None:
-    """Only a proxy admin may change a key or team's batch limits.
+    """Only a proxy admin may change a key, team, or project's batch limits.
 
     Every key in ``ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS`` caps what the holder
     may do with batches, so a holder-writable copy would let a caller lift their

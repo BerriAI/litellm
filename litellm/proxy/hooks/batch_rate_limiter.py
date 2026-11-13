@@ -56,7 +56,9 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     BatchEnqueuedTokenOverLimit,
     BatchEnqueuedTokenReservation,
     BatchEnqueuedTokenScope,
+    project_has_model_batch_enqueued_token_limits,
     resolve_batch_enqueued_token_scopes,
+    resolve_project_model_batch_enqueued_token_scopes,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_ITPM_DESCRIPTOR_KEY,
@@ -623,7 +625,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         """Reserve the batch's estimated tokens against the caller's enqueued-token allowance.
 
         Runs instead of the per-minute counter charge when the key or team
-        opted in via ``batch_enqueued_token_limit`` metadata. The reservation
+        opted in via ``batch_enqueued_token_limit`` metadata, or the project via
+        ``model_batch_enqueued_token_limit`` for a model the batch runs. The reservation
         is stashed on the request so the v3 limiter's post-call hooks can
         persist it (keyed by the provider batch id) and refund it when the
         batch reaches a terminal state.
@@ -639,6 +642,21 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             case BatchEnqueuedTokenReservation():
                 get_or_create_request_stash().batch_enqueued_reservation = outcome
 
+    @staticmethod
+    def _batch_tokens_by_model(batch_usage: BatchFileUsage, routing_model: str | None) -> Mapping[str, int]:
+        """Each row model's tokens, with rows that name no model charged to the model the batch routes to."""
+        by_model: Final = MappingProxyType(
+            {model: usage.get("total_tokens", 0) for model, usage in batch_usage.per_model_usage.items()}
+        )
+        unattributed: Final = batch_usage.total_tokens - sum(by_model.values())
+        if unattributed <= 0 or routing_model is None:
+            return MappingProxyType(by_model)
+        return MappingProxyType({**by_model, routing_model: by_model.get(routing_model, 0) + unattributed})
+
+    def _model_group_of(self, model: str) -> str:
+        rate_limited: Final = self.parallel_request_limiter.rate_limited_model(model)
+        return rate_limited.group if rate_limited is not None else model
+
     def _raise_enqueued_limit_error(
         self,
         over_limit: BatchEnqueuedTokenOverLimit,
@@ -649,7 +667,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         remaining: Final = max(0, scope.limit - over_limit.enqueued)
         detail: Final = (
             f"Batch enqueued token limit exceeded for {scope.key}: {scope.value}. "
-            f"Batch requires {batch_usage.total_tokens} tokens but only {remaining} enqueued tokens remaining "
+            f"Batch requires {scope.charge(batch_usage.total_tokens)} tokens "
+            f"but only {remaining} enqueued tokens remaining "
             f"out of {scope.limit} enqueued token limit. "
             f"Tokens free up as running batches complete or are cancelled."
         )
@@ -1286,9 +1305,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 verbose_proxy_logger.debug("No input_file_id in batch request, skipping rate limiting")
                 return data
 
-            enqueued_scopes: Final = resolve_batch_enqueued_token_scopes(user_api_key_dict)
+            key_and_team_scopes: Final = resolve_batch_enqueued_token_scopes(user_api_key_dict)
             should_skip, batch_rate_limit_descriptors = self._should_skip_batch_input_file_processing(
-                data=data, user_api_key_dict=user_api_key_dict, has_enqueued_scopes=bool(enqueued_scopes)
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                has_enqueued_scopes=bool(key_and_team_scopes)
+                or project_has_model_batch_enqueued_token_limits(user_api_key_dict),
             )
             if should_skip:
                 return data
@@ -1314,6 +1336,17 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             data["_batch_token_count"] = batch_usage.total_tokens
             data["_batch_request_count"] = batch_usage.request_count
 
+            enqueued_scopes: Final = (
+                *key_and_team_scopes,
+                *resolve_project_model_batch_enqueued_token_scopes(
+                    user_api_key_dict,
+                    self._batch_tokens_by_model(
+                        batch_usage,
+                        self._get_batch_routing_model(data),  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
+                    ),
+                    self._model_group_of,
+                ),
+            )
             if enqueued_scopes:
                 await self._reserve_batch_enqueued_tokens(
                     user_api_key_dict=user_api_key_dict,

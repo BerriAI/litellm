@@ -25,6 +25,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
+from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamAccess, is_team_admin, is_team_member
@@ -605,6 +606,12 @@ async def new_project(
                     "error": f"Only admins or team admins can create projects. Your role is {user_api_key_dict.user_role}"
                 },
             )
+        enforce_batch_limits_are_admin_only(
+            data=data,
+            existing_metadata=None,
+            user_api_key_dict=user_api_key_dict,
+            entity="project",
+        )
         await validate_guardrail_names(
             None,
             data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
@@ -843,6 +850,12 @@ async def update_project(
                     status_code=403,
                     detail={"error": "Cannot reassign project to a team you are not an admin of"},
                 )
+        enforce_batch_limits_are_admin_only(
+            data=data,
+            existing_metadata=existing_project.metadata if isinstance(existing_project.metadata, dict) else None,
+            user_api_key_dict=user_api_key_dict,
+            entity="project",
+        )
         await validate_guardrail_names(
             None,
             data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
