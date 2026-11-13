@@ -52,6 +52,8 @@ class ErrorCode(str, Enum):
     INVALID_TEMPLATE_NAMES = "invalid_template_names"
     TEMPLATE_IN_USE = "template_in_use"
     BUDGET_REQUIRED = "budget_required"
+    ALIAS_ALREADY_EXISTS = "alias_already_exists"
+    CUSTOMER_ORG_MISMATCH = "customer_org_mismatch"
     INCREASE_NOT_ALLOWED = "increase_not_allowed"
     REQUEST_NOT_PENDING = "request_not_pending"
     REQUEST_ALREADY_PENDING = "request_already_pending"
@@ -66,6 +68,10 @@ class Failure:
 
 _LOCK_ORGANIZATION_SQL: Final = (
     'SELECT 1 AS locked FROM "LiteLLM_CustomerOrganizationTable" WHERE customer_org_id = $1 FOR UPDATE'
+)
+
+_LOCK_CUSTOMER_IDENTITIES_SQL: Final = (
+    "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended('litellm:customer-identities', 0))"
 )
 
 
@@ -557,7 +563,25 @@ class CustomerHierarchyStore:
     async def lock_organization(self, organization_id: str) -> None:
         await self.db.query_raw(_LOCK_ORGANIZATION_SQL, organization_id)
 
+    async def lock_customer_identities(self) -> None:
+        await self.db.query_raw(_LOCK_CUSTOMER_IDENTITIES_SQL)
+
+    async def claim_organization_alias(self, alias: str | None, organization_id: str | None) -> Failure | None:
+        await self.lock_customer_identities()
+        if alias is None:
+            return None
+        duplicates: Final = await self.organizations.find_many(
+            where={"alias": alias, "customer_org_id": {"not": organization_id}}
+            if organization_id
+            else {"alias": alias},
+            take=1,
+        )
+        return Failure(ErrorCode.ALIAS_ALREADY_EXISTS) if duplicates else None
+
     async def create_organization(self, payload: OrganizationCreate, actor: str) -> Organization | Failure:
+        alias_failure: Final = await self.claim_organization_alias(payload.alias, None)
+        if alias_failure is not None:
+            return alias_failure
         default_index: Final = default_template_index(payload.default_budgets, payload.default_budget_template)
         if isinstance(default_index, Failure):
             return default_index
@@ -607,6 +631,9 @@ class CustomerHierarchyStore:
     async def update_organization(
         self, organization_id: str, payload: OrganizationPatch, actor: str
     ) -> Organization | Failure:
+        alias_failure: Final = await self.claim_organization_alias(payload.alias, organization_id)
+        if alias_failure is not None:
+            return alias_failure
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return organization
@@ -740,14 +767,16 @@ class CustomerHierarchyStore:
             return Failure(ErrorCode.PARENT_NOT_FOUND)
         return organization_id
 
-    async def create_member(self, payload: MemberCreate, actor: str) -> CustomerMember | Failure:
+    async def create_member(
+        self, payload: MemberCreate, actor: str, *, budget_required: bool = True
+    ) -> CustomerMember | Failure:
         organization_id: Final = await self.member_organization(payload)
         if isinstance(organization_id, Failure):
             return organization_id
         template_id: Final = await self.resolve_member_template(organization_id, payload.budget_id)
         if isinstance(template_id, Failure):
             return template_id
-        if template_id is None and payload.budget_override is None:
+        if budget_required and template_id is None and payload.budget_override is None:
             return Failure(ErrorCode.BUDGET_REQUIRED)
         override_id: Final = (
             await self.create_budget(payload.budget_override, actor) if payload.budget_override is not None else None
@@ -792,16 +821,23 @@ class CustomerHierarchyStore:
         override: Final = (
             payload.budget_override if "budget_override" in payload.model_fields_set else member.budget_override
         )
-        if selected is None and override is None:
+        had_budget: Final = member.budget_id is not None or member.budget_override is not None
+        if had_budget and selected is None and override is None:
             return Failure(ErrorCode.BUDGET_REQUIRED)
         override_id: Final = await self.override_patch(member.budget_override_id, payload, actor)
         await self.members.update(
             where={"customer_member_id": member_id},
             data={
                 **alias_patch(payload),
-                "budget_id": selected,
-                "budget_override_id": override_id,
-                "budget_override_expires_at": override_expiry(member, payload, override_id),
+                **({"budget_id": selected} if "budget_id" in payload.model_fields_set else {}),
+                **(
+                    {
+                        "budget_override_id": override_id,
+                        "budget_override_expires_at": override_expiry(member, payload, override_id),
+                    }
+                    if payload.model_fields_set & {"budget_override", "budget_override_expires_at"}
+                    else {}
+                ),
                 "updated_by": actor,
             },
         )
@@ -1015,8 +1051,12 @@ class CustomerHierarchy:
             lambda store: store.delete_team(entity_id, cascade=cascade), operation_type=TransactionOperation.DELETE
         )
 
-    async def create_member(self, payload: MemberCreate, actor: str) -> CustomerMember | Failure:
-        return await self.transaction(lambda store: store.create_member(payload, actor))
+    async def create_member(
+        self, payload: MemberCreate, actor: str, *, budget_required: bool = True
+    ) -> CustomerMember | Failure:
+        return await self.transaction(
+            lambda store: store.create_member(payload, actor, budget_required=budget_required)
+        )
 
     async def get_member(self, entity_id: str) -> CustomerMember | Failure:
         return await self.transaction(lambda store: store.get_member(entity_id))

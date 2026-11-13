@@ -308,6 +308,7 @@ async def test_handle_budget_for_entity_updates_with_existing_budget_id_in_reque
     db: Final = SimpleNamespace(
         litellm_budgettable=SimpleNamespace(update=budget_update, find_unique=AsyncMock(return_value=None)),
         litellm_customermembertable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        litellm_customerteamtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_customerorganizationtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
     )
     prisma_client: Final = cast(PrismaClient, SimpleNamespace(db=db, writer_db=db))
@@ -357,6 +358,7 @@ async def test_handle_budget_for_entity_updates_only_cleared_or_supplied_fields(
     db: Final = SimpleNamespace(
         litellm_budgettable=SimpleNamespace(update=budget_update, find_unique=AsyncMock(return_value=None)),
         litellm_customermembertable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        litellm_customerteamtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_customerorganizationtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
     )
     prisma_client: Final = cast(PrismaClient, SimpleNamespace(db=db, writer_db=db))
@@ -983,6 +985,7 @@ class _FakeDb:
         self.litellm_teammembership: Final = _FakeMembershipTable(self.litellm_budgettable)
         self.litellm_usertable: Final = _FakeUserTable()
         self.litellm_customermembertable: Final = SimpleNamespace(find_many=AsyncMock(return_value=[]))
+        self.litellm_customerteamtable: Final = SimpleNamespace(find_many=AsyncMock(return_value=[]))
         self.litellm_customerorganizationtable: Final = SimpleNamespace(find_many=AsyncMock(return_value=[]))
 
 
