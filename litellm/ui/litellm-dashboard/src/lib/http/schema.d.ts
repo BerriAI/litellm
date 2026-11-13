@@ -44495,11 +44495,8 @@ export interface components {
         };
         /** PromptTokensDetails */
         PromptTokensDetails: {
-            /**
-             * Modality
-             * @enum {string}
-             */
-            modality: "TEXT" | "AUDIO" | "IMAGE" | "VIDEO";
+            /** Modality */
+            modality: string;
             /** Tokencount */
             tokenCount: number;
         };
