@@ -4467,7 +4467,7 @@ async def _authorize_authenticated_request(
         customer_member_id: Final = customer_member_id_from_headers(
             safe_get_request_headers(request)  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
         )
-        user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: the hierarchy is request state, never inherited from a cached key
+        user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
         if customer_member_id is not None:
             with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
                 user_api_key_auth_obj.customer_hierarchy = await resolve_customer_hierarchy(  # rebind-ok: the gate updates the request-owned auth object in place
