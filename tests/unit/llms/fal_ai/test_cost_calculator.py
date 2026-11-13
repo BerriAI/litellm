@@ -3,9 +3,11 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.cost_calculator import default_video_cost_calculator
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
 from litellm.llms.fal_ai.cost_calculator import FAL_BILLABLE_UNITS_HEADER, cost_calculator, fal_ai_passthrough_cost
+from litellm.llms.openai.cost_calculation import video_generation_cost
 from litellm.types.utils import ImageObject, ImageResponse
 
 
@@ -32,6 +34,20 @@ def _image_response_with_dimensions(dimensions: tuple[tuple[int, int], ...]) -> 
             for index, (width, height) in enumerate(dimensions)
         ]
     )
+
+
+@pytest.mark.parametrize("duration", [0.0, 8.0])
+def test_catalog_flat_video_price_reaches_both_video_calculators(
+    monkeypatch: pytest.MonkeyPatch, duration: float
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fal_ai/fal-ai/test-flat-video",
+        {"litellm_provider": "fal_ai", "mode": "video_generation", "output_cost_per_video": 0.37},
+    )
+    assert video_generation_cost("fal-ai/test-flat-video", duration, "fal_ai") == pytest.approx(0.37)
+    assert default_video_cost_calculator("fal-ai/test-flat-video", duration, "fal_ai") == pytest.approx(0.37)
+    assert fal_ai_passthrough_cost("fal-ai/test-flat-video", {}) == pytest.approx(0.37)
 
 
 GPT_IMAGE_25_MODELS = (

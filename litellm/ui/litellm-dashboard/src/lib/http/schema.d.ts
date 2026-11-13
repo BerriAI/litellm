@@ -9608,6 +9608,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/customer_members/daily/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Customer Member Daily Activity
+         * @description Get paginated daily customer member activity with model, provider, key and member breakdowns. Filters accept comma-separated member IDs. Proxy admins only.
+         */
+        get: operations["customer_member_daily_activity_management_v1_customer_members_daily_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/customer_members/{customer_member_id}": {
         parameters: {
             query?: never;
@@ -9654,6 +9674,26 @@ export interface paths {
          * @description Create a customer organization with resolved budgets. Proxy admins only.
          */
         post: operations["create_customer_organization_management_v1_customer_organizations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_organizations/daily/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Customer Organization Daily Activity
+         * @description Get paginated daily customer organization activity with model, provider, key and organization breakdowns. Filters accept comma-separated organization IDs. Proxy admins only.
+         */
+        get: operations["customer_organization_daily_activity_management_v1_customer_organizations_daily_activity_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9750,6 +9790,26 @@ export interface paths {
          * @description Create a customer team with resolved budgets. Proxy admins only.
          */
         post: operations["create_customer_team_management_v1_customer_teams_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_teams/daily/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Customer Team Daily Activity
+         * @description Get paginated daily customer team activity with model, provider, key and team breakdowns. Filters accept comma-separated team IDs. Proxy admins only.
+         */
+        get: operations["customer_team_daily_activity_management_v1_customer_teams_daily_activity_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -37621,6 +37681,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Token Ultrafast */
             output_cost_per_token_ultrafast?: number | null;
+            /** Output Cost Per Video */
+            output_cost_per_video?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
@@ -54107,6 +54169,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Token Ultrafast */
             output_cost_per_token_ultrafast?: number | null;
+            /** Output Cost Per Video */
+            output_cost_per_video?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
@@ -68068,6 +68132,44 @@ export interface operations {
             };
         };
     };
+    customer_member_daily_activity_management_v1_customer_members_daily_activity_get: {
+        parameters: {
+            query?: {
+                customer_member_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                page?: number;
+                page_size?: number;
+                exclude_customer_member_ids?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_customer_member_management_v1_customer_members__customer_member_id__get: {
         parameters: {
             query?: never;
@@ -68215,6 +68317,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    customer_organization_daily_activity_management_v1_customer_organizations_daily_activity_get: {
+        parameters: {
+            query?: {
+                customer_org_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                page?: number;
+                page_size?: number;
+                exclude_customer_org_ids?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
                 };
             };
             /** @description Validation Error */
@@ -68477,6 +68617,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Team"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    customer_team_daily_activity_management_v1_customer_teams_daily_activity_get: {
+        parameters: {
+            query?: {
+                customer_team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                page?: number;
+                page_size?: number;
+                exclude_customer_team_ids?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
                 };
             };
             /** @description Validation Error */

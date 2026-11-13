@@ -10663,6 +10663,20 @@ class TestFalAIPassthroughRoute:
             assert sent.headers["authorization"] == "Key fal-test-key"
             assert json.loads(sent.content or b"{}") == body
 
+    def test_flat_video_submit_is_accepted(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/fal-ai/test-flat-video",
+            {"litellm_provider": "fal_ai", "mode": "video_generation", "output_cost_per_video": 0.37},
+        )
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post("https://queue.fal.run/fal-ai/test-flat-video").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-flat", "status": "IN_QUEUE"})
+            )
+            response: Final = client.post("/fal_ai/fal-ai/test-flat-video", json={"prompt": "A lake"})
+            assert response.status_code == 200, response.text
+            assert response.json() == {"request_id": "req-flat", "status": "IN_QUEUE"}
+
     def test_status_get_forwards_to_queue_fal_run(self, client: TestClient) -> None:
         with respx.mock(assert_all_called=True) as upstream:
             route = upstream.get("https://queue.fal.run/fal-ai/trellis-2/requests/req-1/status").mock(
