@@ -121,11 +121,13 @@ class ExternalAgentManagement:
                 'COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentPolicy" p '
                 "WHERE p.source_id=a.source_id AND p.team_id=a.team_id))::int AS covered_by_team_policy, "
                 "COUNT(*) FILTER (WHERE owner_user_id IS NULL OR owner_inferred)::int AS needs_owner, "
-                'COUNT(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentActor" m '
+                '(SELECT COUNT(DISTINCT d.actor_id)::int FROM "LiteLLM_ExternalAgentDecision" d '
+                'WHERE d.source_id=$1 AND NOT EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentActor" m '
                 'JOIN "LiteLLM_UserTable" u ON u.user_id=m.user_id '
-                "WHERE m.source_id=a.source_id AND m.external_actor_id=a.last_actor_id))::int AS unmapped_actors, "
+                "WHERE m.source_id=d.source_id AND m.external_actor_id=d.actor_id)) AS unmapped_actors, "
                 '(SELECT COUNT(*)::int FROM "LiteLLM_ExternalAgentDecision" d WHERE d.source_id=$1 '
-                "AND d.would_verdict='deny' AND d.created_at >= NOW()-INTERVAL '24 hours') AS denied_24h, "
+                "AND d.enforced AND d.verdict='deny' "
+                "AND d.created_at >= NOW()-INTERVAL '24 hours') AS denied_24h, "
                 'MAX(a.last_seen_at) AS last_event_at FROM "LiteLLM_ExternalAgent" a WHERE a.source_id=$1',
                 source_id,
             )

@@ -242,9 +242,36 @@ def test_blocked_mcp_toolset_is_logged_and_shadow_mode_allows(
     )
     assert decisions == [{"verdict": action, "would_verdict": "deny", "enforced": mode == "enforce"}]
     summary: Final = hook.gateway.get("/v1/external_agents/summary", {"source_id": hook.source_id})
-    assert (summary["discovered"], summary["denied_24h"], summary["unmapped_actors"]) == (1, 1, 1)
+    assert (summary["discovered"], summary["denied_24h"], summary["unmapped_actors"]) == (
+        1,
+        1 if mode == "enforce" else 0,
+        1,
+    )
     assert len(hook.agents(exceptions_only=True)) == 1
     assert hook.agents()[0]["issues"] == ["no team", "no owner", "unmapped member", "denied recently"]
+
+
+def test_summary_counts_distinct_unmapped_members_even_after_bot_invokers_change(hook: Hook) -> None:
+    empty: Final = hook.gateway.get("/v1/external_agents/summary", {"source_id": hook.source_id})
+    assert (empty["unmapped_actors"], empty["denied_24h"]) == (0, 0)
+    assert hook.send("bot-one", actor="first-member").status_code == 200
+    assert hook.send("bot-two", actor="first-member").status_code == 200
+    shared: Final = hook.gateway.get("/v1/external_agents/summary", {"source_id": hook.source_id})
+    assert (shared["discovered"], shared["unmapped_actors"]) == (2, 1)
+    assert all("unmapped member" in agent["issues"] for agent in hook.agents(exceptions_only=True))
+    assert hook.send("bot-one", actor="second-member").status_code == 200
+    assert hook.send("bot-two", actor="second-member").status_code == 200
+    distinct: Final = hook.gateway.get("/v1/external_agents/summary", {"source_id": hook.source_id})
+    assert distinct["unmapped_actors"] == 2
+    with hook.gateway.scenario() as scenario:
+        user: Final = scenario.user()
+        hook.gateway.post(
+            "/v1/external_agents/actors/bulk",
+            {"source_id": hook.source_id, "mappings": [{"external_actor_id": "second-member", "user_id": user}]},
+        )
+        mapped: Final = hook.gateway.get("/v1/external_agents/summary", {"source_id": hook.source_id})
+        assert mapped["unmapped_actors"] == 1
+        assert all("unmapped member" not in agent["issues"] for agent in hook.agents())
 
 
 def test_secret_rotation_retains_previous_signatures_without_returning_secrets(hook: Hook) -> None:

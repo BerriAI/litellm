@@ -1,3 +1,4 @@
+import sqlite3
 from collections.abc import Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -69,3 +70,55 @@ async def test_actor_write_invalidates_cached_unmapped_actor() -> None:
         == 1
     )
     assert await ExternalAgentStore(db, cache).actor("source", "actor") == user
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("populated", (False, True))
+async def test_summary_counts_enforced_denials_and_distinct_unmapped_members(populated: bool) -> None:
+    with sqlite3.connect(":memory:") as connection:
+        connection.row_factory = sqlite3.Row
+        connection.executescript("""
+            CREATE TABLE "LiteLLM_ExternalAgent" (
+                source_id TEXT, team_id TEXT, owner_user_id TEXT, owner_inferred BOOLEAN,
+                last_actor_id TEXT, last_seen_at TEXT
+            );
+            CREATE TABLE "LiteLLM_ExternalAgentPolicy" (source_id TEXT, team_id TEXT);
+            CREATE TABLE "LiteLLM_ExternalAgentActor" (source_id TEXT, external_actor_id TEXT, user_id TEXT);
+            CREATE TABLE "LiteLLM_UserTable" (user_id TEXT);
+            CREATE TABLE "LiteLLM_ExternalAgentDecision" (
+                source_id TEXT, actor_id TEXT, verdict TEXT, would_verdict TEXT, enforced BOOLEAN, created_at TEXT
+            );
+        """)
+        if populated:
+            connection.executescript("""
+                INSERT INTO "LiteLLM_ExternalAgent" VALUES
+                    ('source', NULL, NULL, false, 'same-member', NULL),
+                    ('source', NULL, NULL, false, 'same-member', NULL);
+                INSERT INTO "LiteLLM_UserTable" VALUES ('user');
+                INSERT INTO "LiteLLM_ExternalAgentActor" VALUES
+                    ('source', 'mapped', 'user'), ('source', 'deleted-user', 'missing-user');
+                INSERT INTO "LiteLLM_ExternalAgentDecision" VALUES
+                    ('source', 'same-member', 'allow', 'deny', false, '2026-01-02'),
+                    ('source', 'same-member', 'deny', 'deny', true, '2026-01-02'),
+                    ('source', 'older-member', 'deny', 'deny', true, '2025-12-31'),
+                    ('source', 'mapped', 'allow', 'allow', true, '2026-01-02'),
+                    ('source', 'deleted-user', 'allow', 'allow', false, '2026-01-02'),
+                    ('source', NULL, 'allow', 'allow', false, '2026-01-02'),
+                    ('other-source', 'other-member', 'deny', 'deny', true, '2026-01-02');
+            """)
+
+        async def query_rows(query: str, source_id: str) -> tuple[dict[str, object], ...]:
+            statement: Final = query.replace("::int", "").replace("NOW()-INTERVAL '24 hours'", "'2026-01-01'")
+            return tuple(dict(row) for row in connection.execute(statement, {"1": source_id}))
+
+        db: Final = database_with_rows(())
+        db.query_raw = AsyncMock(side_effect=query_rows)
+        summary: Final = await ExternalAgentManagement(db, GovernanceMetadata()).summary("source")
+        assert summary.model_dump() == {
+            "discovered": 2 if populated else 0,
+            "covered_by_team_policy": 0,
+            "needs_owner": 2 if populated else 0,
+            "unmapped_actors": 3 if populated else 0,
+            "denied_24h": 1 if populated else 0,
+            "last_event_at": None,
+        }
