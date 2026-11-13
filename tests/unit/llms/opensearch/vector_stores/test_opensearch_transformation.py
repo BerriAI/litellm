@@ -764,6 +764,7 @@ async def test_filters_compare_the_exact_field_the_index_maps(
 
 
 TEXT_ONLY: Final = {"litellm-qa-docs": {"properties": {"tenant": {"type": "text"}}}}
+NESTED_TEAM: Final = {"team": {"type": "keyword"}}
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -903,6 +904,37 @@ TEXT_ONLY: Final = {"litellm-qa-docs": {"properties": {"tenant": {"type": "text"
             {"type": "ne", "key": "org", "value": "acme"},
             "the index maps tenant as text with no keyword subfield",
             id="alias-to-text-only",
+        ),
+        pytest.param(
+            {"litellm-qa-docs": {"properties": {"owner": {"type": "nested", "properties": NESTED_TEAM}}}},
+            {"type": "eq", "key": "owner.team", "value": "people-ops"},
+            "the index maps owner as nested, which needs a nested query. Map owner as object",
+            id="field-inside-a-nested-object",
+        ),
+        pytest.param(
+            {
+                "litellm-qa-docs": {
+                    "properties": {
+                        "owner": {"type": "nested", "properties": NESTED_TEAM},
+                        "team": {"type": "alias", "path": "owner.team"},
+                    }
+                }
+            },
+            {"type": "in", "key": "team", "value": ["people-ops"]},
+            "the index maps owner as nested, which needs a nested query",
+            id="alias-into-a-nested-object",
+        ),
+        pytest.param(
+            {"litellm-qa-docs": {"properties": {"owner": {"type": "nested", "properties": NESTED_TEAM}}}},
+            {"type": "ne", "key": "owner", "value": "people-ops"},
+            "the index maps owner as nested, which needs a nested query",
+            id="the-nested-object-itself",
+        ),
+        pytest.param(
+            {"litellm-qa-docs": {"properties": {"owner": {"properties": NESTED_TEAM}}}},
+            {"type": "eq", "key": "owner", "value": "people-ops"},
+            "the index maps owner as object, which holds fields rather than values. Filter on a field inside owner",
+            id="an-object",
         ),
     ],
 )

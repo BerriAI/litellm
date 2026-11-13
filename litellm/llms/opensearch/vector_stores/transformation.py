@@ -243,6 +243,17 @@ def _resolved_field(mapping: _FieldMapping, key: str) -> tuple[str, _FieldMappin
     return None if target is None else (field.path, target)
 
 
+def _is_nested(mapping: _FieldMapping, path: str) -> bool:
+    field: Final = _mapped_field(mapping, path)
+    return field is not None and field.type == "nested"
+
+
+def _nested_path(mapping: _FieldMapping, path: str) -> str | None:
+    parts: Final = path.split(".")
+    prefixes: Final = (".".join(parts[:end]) for end in range(1, len(parts) + 1))
+    return next((prefix for prefix in prefixes if _is_nested(mapping, prefix)), None)
+
+
 def _exact_field(
     key: str, field: _FieldMapping, comparison: _Equality | _Range | _Membership
 ) -> _ExactField | _InexactKey:
@@ -279,6 +290,19 @@ def _queried_field(
     if resolved is None:
         return None
     path, field = resolved
+    nested: Final = _nested_path(mapping, path)
+    if nested is not None:
+        return _InexactKey(
+            key=key,
+            reason=f"the index maps {nested} as nested, which needs a nested query",
+            remedy=f"Map {nested} as object",
+        )
+    if field.type == "object":
+        return _InexactKey(
+            key=key,
+            reason=f"the index maps {path} as object, which holds fields rather than values",
+            remedy=f"Filter on a field inside {path}",
+        )
     exact: Final = _exact_field(path, field, comparison)
     if isinstance(exact, _ExactField) and exact.name == path:
         return _ExactField(name=key, ignore_above=exact.ignore_above)
