@@ -2325,6 +2325,59 @@ def test_bedrock_nova_embedding_argument_beats_the_same_extra_body_param(respx_m
     assert body["singleEmbeddingParams"]["embeddingDimension"] == 1024
 
 
+def test_bedrock_async_nova_embedding_uses_extra_body_params_under_model_input(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke").mock(
+        return_value=httpx.Response(200, json={"invocationArn": "arn:aws:bedrock:us-east-1:1:async-invoke/abc"})
+    )
+
+    litellm.embedding(
+        model=f"bedrock/async_invoke/{_NOVA_MODEL_ID}",
+        input=[test_input],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        output_s3_uri="s3://test-bucket/out/",
+        extra_body={
+            "modelInput": {
+                "segmentedEmbeddingParams": {
+                    "embeddingDimension": 256,
+                    "text": {"value": "text the guardrails never saw"},
+                    "extraOption": {"enabled": True},
+                }
+            }
+        },
+    )
+
+    body: Final = json.loads(route.calls.last.request.read())
+    params: Final = body["modelInput"]["segmentedEmbeddingParams"]
+    assert params["embeddingDimension"] == 256
+    assert params["extraOption"] == {"enabled": True}
+    assert params["text"]["value"] == test_input
+    assert body["outputDataConfig"] == {"s3OutputDataConfig": {"s3Uri": "s3://test-bucket/out/"}}
+
+
+def test_bedrock_cohere_image_embedding_keeps_its_input_type_over_extra_body(respx_mock: respx.MockRouter) -> None:
+    model_id: Final = "cohere.embed-english-v3"
+    route: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/invoke").mock(
+        return_value=httpx.Response(200, json=cohere_embedding_response)
+    )
+    def sent_body(**params: object) -> dict[str, object]:
+        litellm.embedding(
+            model=f"bedrock/{model_id}",
+            input=[img_base_64],
+            api_key="test-bearer-token",
+            aws_region_name="us-east-1",
+            **params,
+        )
+        return json.loads(route.calls.last.request.read())
+
+    default_body: Final = sent_body()
+
+    assert "images" in default_body
+    assert sent_body(extra_body={"input_type": "search_query"}) == default_body
+
+
 def test_bedrock_embedding_signs_the_body_it_sends(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
