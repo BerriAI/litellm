@@ -90,18 +90,32 @@ def _get_user_agent(request: Request) -> str | None:
     return request.headers.get("user-agent")
 
 
+def _get_spend_logs_metadata(request: Request) -> Mapping[str, object] | None:
+    if "headers" not in request.scope:
+        return None
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    return as_str_mapping(LiteLLMProxyRequestSetup.get_spend_logs_metadata_from_request_headers(dict(request.headers)))
+
+
 def _with_client_context(
-    request_data: dict[str, object], requester_ip: str | None, user_agent: str | None
+    request_data: dict[str, object],
+    requester_ip: str | None,
+    user_agent: str | None,
+    spend_logs_metadata: Mapping[str, object] | None,
 ) -> dict[str, object]:
     """Auth gate rejections are raised before `add_litellm_data_to_request` records the
-    caller IP and User-Agent, so their failure logs would otherwise carry neither."""
+    caller IP, User-Agent and spend logs metadata header, so their failure logs would otherwise carry none."""
     key: Final = "litellm_metadata" if "litellm_metadata" in request_data else "metadata"
     metadata: Final = request_data.get(key)
     base: Final[Mapping[str, object]] = metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
     stamped: Final = {
-        name: value
-        for name, value in (("requester_ip_address", requester_ip), ("user_agent", user_agent))
-        if value and not base.get(name)
+        **{
+            name: value
+            for name, value in (("requester_ip_address", requester_ip), ("user_agent", user_agent))
+            if value and not base.get(name)
+        },
+        **({"spend_logs_metadata": spend_logs_metadata} if spend_logs_metadata is not None else {}),
     }
     if not stamped:
         return request_data
@@ -254,7 +268,9 @@ class UserAPIKeyAuthExceptionHandler:
 
             # Allow callbacks to transform the error response
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
-                request_data=_with_client_context(request_context, requester_ip, user_agent),
+                request_data=_with_client_context(
+                    request_context, requester_ip, user_agent, _get_spend_logs_metadata(request)
+                ),
                 original_exception=e,
                 user_api_key_dict=user_api_key_dict,
                 error_type=ProxyErrorTypes.auth_error,

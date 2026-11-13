@@ -39,6 +39,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler, _as_proxy_exception
+from litellm.proxy.auth.auth_utils import is_invalid_virtual_key_error
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 
 
@@ -1138,6 +1139,116 @@ def _marked_malformed_key_error() -> HTTPException:
     error = HTTPException(status_code=401, detail="LiteLLM Virtual Key expected. Received=test")
     setattr(error, INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
     return error
+
+
+async def _reject_and_record(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    headers: dict[str, str],
+    request_data: dict[str, object],
+) -> tuple[ProxyException, _AuthFailureRecorder]:
+    from litellm.proxy import proxy_server
+
+    recorder: Final = _AuthFailureRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(proxy_server, "general_settings", {"allow_requests_on_db_unavailable": False})
+    with pytest.raises(ProxyException) as exc_info:
+        await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
+            error, _http_request(headers=headers), request_data, "/v1/chat/completions", None, "sk-test"
+        )
+    return exc_info.value, recorder
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_kind, expect_invalid_key",
+    [("budget", False), ("unauthorized", False), ("malformed_key", True)],
+)
+async def test_auth_failure_logs_spend_logs_metadata_header(
+    monkeypatch: pytest.MonkeyPatch, error_kind: str, expect_invalid_key: bool
+) -> None:
+    monkeypatch.setattr(litellm, "budget_exceeded_status_code", 429)
+    errors: Final = {
+        "budget": BudgetExceededError(current_cost=2, max_budget=1),
+        "unauthorized": HTTPException(status_code=401, detail="Invalid API key"),
+        "malformed_key": _marked_malformed_key_error(),
+    }
+    error: Final = errors[error_kind]
+    expected: Final = _as_proxy_exception(error)
+
+    raised, recorder = await _reject_and_record(
+        monkeypatch,
+        error,
+        {"x-litellm-spend-logs-metadata": '{"marker": "rejected-call", "attempt": 2}'},
+        {"model": "gpt-4o"},
+    )
+
+    assert (raised.code, raised.type, raised.message) == (expected.code, expected.type, expected.message)
+    assert is_invalid_virtual_key_error(raised) is expect_invalid_key
+    assert recorder.error is error
+    assert recorder.data is not None
+    metadata: Final = recorder.data["metadata"]
+    assert isinstance(metadata, Mapping)
+    assert metadata["spend_logs_metadata"] == {"marker": "rejected-call", "attempt": 2}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "header, body_metadata, expected",
+    [
+        pytest.param(
+            '{"marker": "header"}',
+            {"spend_logs_metadata": {"marker": "body"}},
+            {"marker": "header"},
+            id="header_overrides_body_like_successful_requests",
+        ),
+        pytest.param("{}", {"spend_logs_metadata": {"marker": "body"}}, {}, id="empty_object_header"),
+        pytest.param("{not json", {"spend_logs_metadata": {"marker": "body"}}, {"marker": "body"}, id="malformed"),
+        pytest.param('["marker"]', {"spend_logs_metadata": {"marker": "body"}}, {"marker": "body"}, id="non_object"),
+        pytest.param(None, {"spend_logs_metadata": {"marker": "body"}}, {"marker": "body"}, id="missing"),
+        pytest.param("{not json", {}, None, id="malformed_without_body_value"),
+        pytest.param(None, {}, None, id="missing_without_body_value"),
+    ],
+)
+async def test_auth_failure_spend_logs_metadata_header_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    header: str | None,
+    body_metadata: dict[str, object],
+    expected: dict[str, object] | None,
+) -> None:
+    _, recorder = await _reject_and_record(
+        monkeypatch,
+        HTTPException(status_code=401, detail="Invalid API key"),
+        {"x-litellm-spend-logs-metadata": header} if header is not None else {},
+        {"model": "gpt-4o", "metadata": {**body_metadata, "user_supplied": "keep-me"}},
+    )
+
+    assert recorder.data is not None
+    metadata: Final = recorder.data["metadata"]
+    assert isinstance(metadata, Mapping)
+    assert metadata.get("spend_logs_metadata") == expected
+    assert metadata["user_supplied"] == "keep-me"
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_spend_logs_metadata_uses_litellm_metadata_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, recorder = await _reject_and_record(
+        monkeypatch,
+        HTTPException(status_code=401, detail="Invalid API key"),
+        {"x-litellm-spend-logs-metadata": '{"marker": "responses"}'},
+        {"litellm_metadata": {"user_supplied": "keep-me"}, "metadata": {}},
+    )
+
+    assert recorder.data is not None
+    litellm_metadata: Final = recorder.data["litellm_metadata"]
+    metadata: Final = recorder.data["metadata"]
+    assert isinstance(litellm_metadata, Mapping)
+    assert isinstance(metadata, Mapping)
+    assert litellm_metadata["spend_logs_metadata"] == {"marker": "responses"}
+    assert litellm_metadata["user_supplied"] == "keep-me"
+    assert "spend_logs_metadata" not in metadata
 
 
 @pytest.mark.asyncio
