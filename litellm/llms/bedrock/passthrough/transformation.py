@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, Optional, TypeVar, cast
 
 import httpx
 from httpx import Response
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.constants import AWS_ERROR_TYPE_HEADER
@@ -23,7 +23,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     bedrock_invoke_guardrail_headers,
 )
 from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
-from litellm.types.utils import ModelResponseStream
+from litellm.types.utils import Embedding, EmbeddingResponse, ModelResponseStream, Usage
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
@@ -376,6 +376,32 @@ def _invoke_guardrail_trace(httpx_response: Response) -> Mapping[str, object]:
     return {BEDROCK_INVOKE_TRACE_FIELD: reply.get(BEDROCK_INVOKE_TRACE_FIELD)}
 
 
+class _TitanEmbeddingReply(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    embedding: tuple[float, ...]
+    input_text_token_count: int = Field(alias="inputTextTokenCount")
+
+
+def _invoke_embedding_response(model: str, httpx_response: Response) -> EmbeddingResponse | None:
+    reply: Final = relayed_json_object(httpx_response)
+    if reply is None or "embedding" not in reply:
+        return None
+    try:
+        parsed: Final = _TitanEmbeddingReply.model_validate(reply)
+    except ValidationError:
+        return None
+    return EmbeddingResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=parsed.input_text_token_count,
+            completion_tokens=0,
+            total_tokens=parsed.input_text_token_count,
+        ),
+        data=[Embedding(embedding=list(parsed.embedding), index=0, object="embedding")],
+    )
+
+
 def _served_service_tier(response_headers: Mapping[str, str]) -> str | None:
     headers: Final = httpx.Headers(response_headers)
     if _BEDROCK_SERVICE_TIER_HEADER not in headers:
@@ -573,6 +599,10 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         from litellm import encoding
         from litellm.types.utils import LlmProviders, ModelResponse
         from litellm.utils import ProviderConfigManager
+
+        embedding_response: Final = _invoke_embedding_response(model, httpx_response) if "invoke" in endpoint else None
+        if embedding_response is not None:
+            return embedding_response
 
         if "invoke" in endpoint:
             chat_config_model = "invoke/" + model
