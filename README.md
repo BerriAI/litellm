@@ -351,6 +351,8 @@ print(result.text, result.cost, [f.path for f in result.files])
 
 Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call the agent makes goes through your AI Gateway, tagged `harness,claude_code`. Drop the `litellm_proxy/` prefix to call a provider directly. Install `starlette uvicorn` plus the agent's CLI (`claude`, `codex`, `opencode` or `pi`), or `deepagents langchain-litellm` for Deep Agents.
 
+To keep the agent's commands and file edits off your machine, pass `sandbox=sandbox.docker(image)`, or `sandbox=sandbox.prized()` for a remote [Prized](https://prized.dev/docs/sandboxes?via=litellm) microVM (set `PRIZED_API_KEY`, works with Deep Agents).
+
 [**Docs: Agent Harnesses**](https://docs.litellm.ai/docs/harness)
 
 </details>
