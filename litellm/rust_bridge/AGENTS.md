@@ -64,4 +64,8 @@
 
 - Check cross-language behavior against a freshly installed extension, covering unstarted-call release, setup ordering, exception identity, sync and async streams, cancellation and GC
 - Keep `_native.pyi` accurate about which APIs return a Future and which return a coroutine
+- `_native.pyi` is hand-written, so declare what PyO3 builds at runtime, not what reads nicer ([classes](https://pyo3.rs/v0.29.2/class.html), [typing](https://pyo3.rs/v0.29.2/python-typing-hints.html))
+  - A fieldless `#[pyclass]` enum is a plain class, never an `enum.Enum`. Stub each variant as `Variant: ClassVar[Cls]`, and match it with value patterns, which pyright cannot check for exhaustiveness
+  - An enum with fields exposes each variant as a nested subclass of the enum class, with getters for its fields, `__match_args__`, and a `__new__` that takes the fields in order
+  - `eq` without `hash` makes instances unhashable, so stub `__hash__: ClassVar[None]  # type: ignore[assignment]`, the way typeshed does. `make test-rust-extension` runs mypy stubtest over the stub, and it stops at the first mypy error
 - Unit tests of this package live in `tests/unit/rust_bridge/`, end-to-end Rust path tests in `tests/test_litellm_rust/`

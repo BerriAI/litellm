@@ -5881,7 +5881,7 @@ def _bind_general_settings_store(settings: SettingsStore) -> None:
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
 
 
-def _current_general_settings() -> Mapping[str, object]:
+def current_general_settings() -> Mapping[str, object]:
     """The live ``general_settings``, whichever object a config reload has bound since the caller was created."""
     return general_settings
 
@@ -11927,14 +11927,14 @@ class ProxyStartupEvent:
             scheduler=scheduler,
             proxy_logging_obj=proxy_logging_obj,
             prisma_client=prisma_client,
-            read_general_settings=_current_general_settings,
+            read_general_settings=current_general_settings,
         )
 
         from litellm.proxy.spend_tracking.performance_alerts import RUN_INTERVAL, run_performance_alerts
         from litellm.repositories.performance_alert_repository import PerformanceAlertRepository
 
         async def run_performance_alerts_job() -> None:
-            if _current_general_settings().get("performance_alerts_enabled", True) is True:
+            if current_general_settings().get("performance_alerts_enabled", True) is True:
                 await run_performance_alerts(PerformanceAlertRepository(prisma_client, enterprise=premium_user is True))
 
         scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler does not provide typed job methods
@@ -11956,7 +11956,7 @@ class ProxyStartupEvent:
             email_connected: Final = bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_SENDER_EMAIL"))
             if not email_connected and not slack.performance_alert_webhooks():
                 return
-            if _current_general_settings().get("performance_alerts_enabled", True) is not True:
+            if current_general_settings().get("performance_alerts_enabled", True) is not True:
                 return
             if not (
                 await PerformanceAlertRepository(prisma_client, enterprise=premium_user is True).monitoring()
@@ -12020,7 +12020,7 @@ class ProxyStartupEvent:
             )
 
         ### SPEND LOG CLEANUP ###
-        cleanup_settings: Final = _current_general_settings()
+        cleanup_settings: Final = current_general_settings()
         _register_spend_log_cleanup_jobs(scheduler, prisma_client, cleanup_settings)  # pyright: ignore[reportUnknownArgumentType, reportArgumentType]  # apscheduler is untyped
         if _wants_cleanup_jobs(cleanup_settings):
             proxy_config.record_cleanup_schedule_attempt(cleanup_settings)

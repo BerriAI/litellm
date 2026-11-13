@@ -14,6 +14,12 @@ pub enum RouteGroup {
     AgentInference,
 }
 
+pub(crate) const METRICS: &str = "/metrics";
+
+pub(crate) fn is_lens_route(route: &str) -> bool {
+    route == "/lens" || route.starts_with("/lens/")
+}
+
 pub(crate) const MANAGED_DISCOVERY_ROUTES: &[&str] = &["/agents", "/v1/agents"];
 pub(crate) const MANAGED_REALTIME_ROUTES: &[&str] = &[
     "/realtime",

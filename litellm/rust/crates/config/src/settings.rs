@@ -4,7 +4,8 @@ use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 
 use crate::{
-    AdditionalFields, CacheSettings, Object, RedisSettings, Spelled, Value, value::one_or_many,
+    AdditionalFields, CacheSettings, JwtAuthSettings, Object, RedisSettings, Spelled, Value,
+    value::one_or_many,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -81,6 +82,11 @@ pub struct GeneralSettings {
     pub coordination_redis: Option<RedisSettings>,
     pub mcp_allowed_hosts: Option<Box<[String]>>,
     pub mcp_allowed_origins: Box<[String]>,
+    pub enable_jwt_auth: Option<bool>,
+    pub enable_oauth2_auth: Option<bool>,
+    pub enable_oauth2_proxy_auth: Option<bool>,
+    pub public_routes: Option<Box<[String]>>,
+    pub litellm_jwtauth: Option<JwtAuthSettings>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }
@@ -118,6 +124,11 @@ impl Default for GeneralSettings {
             coordination_redis: None,
             mcp_allowed_hosts: None,
             mcp_allowed_origins: Box::default(),
+            enable_jwt_auth: None,
+            enable_oauth2_auth: None,
+            enable_oauth2_proxy_auth: None,
+            public_routes: None,
+            litellm_jwtauth: None,
             additional_fields: AdditionalFields::new(),
         }
     }
@@ -266,5 +277,22 @@ impl fmt::Debug for LiteLlmSettings {
             .field("set_verbose", &self.set_verbose)
             .field("additional_fields", &self.additional_fields.keys())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::JwtAuthSettings;
+
+    #[test]
+    fn jwt_auth_settings_hide_unknown_fields() {
+        let settings: JwtAuthSettings =
+            serde_json::from_value(serde_json::json!({"future_secret": "credential-value"}))
+                .unwrap();
+
+        let debug = format!("{settings:?}");
+
+        assert!(!debug.contains("credential-value"), "{debug}");
+        assert!(debug.contains("[REDACTED]"), "{debug}");
     }
 }
