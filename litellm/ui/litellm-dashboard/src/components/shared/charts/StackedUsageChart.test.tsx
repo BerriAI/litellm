@@ -1,7 +1,28 @@
 import { render, screen } from "@testing-library/react";
 import React from "react";
-import { describe, expect, it } from "vitest";
-import { STACKED_USAGE_PALETTE, StackedUsageChart, StackedUsageTooltipRow } from "./StackedUsageChart";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { STACKED_USAGE_PALETTE, StackedUsageChart, StackedUsageTooltipRow, totalsFitPlot } from "./StackedUsageChart";
+
+const chartContainerOfWidth = (width: number) =>
+  class {
+    private readonly callback: ResizeObserverCallback;
+    constructor(callback: ResizeObserverCallback) {
+      this.callback = callback;
+    }
+    observe(target: Element) {
+      const box = { inlineSize: width, blockSize: 400 };
+      const entry = {
+        target,
+        contentRect: new DOMRect(0, 0, width, 400),
+        borderBoxSize: [box],
+        contentBoxSize: [box],
+        devicePixelContentBoxSize: [box],
+      } satisfies ResizeObserverEntry;
+      this.callback([entry], this as unknown as ResizeObserver);
+    }
+    unobserve() {}
+    disconnect() {}
+  };
 
 const usd = (value: number) => `$${value.toFixed(2)}`;
 
@@ -43,6 +64,8 @@ describe("StackedUsageChart", () => {
 });
 
 describe("StackedUsageChart bar totals", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   const data = [
     { day: "2026-10", a: 1, b: 2 },
     { day: "2026-11", a: 4, b: 0 },
@@ -67,6 +90,31 @@ describe("StackedUsageChart bar totals", () => {
     expect(screen.getByText("$17.00")).toBeInTheDocument();
   });
 
+  it("drops totals that would collide in a narrow chart even when the window is wide", () => {
+    vi.stubGlobal("innerWidth", 1440);
+    vi.stubGlobal("ResizeObserver", chartContainerOfWidth(140));
+    render(
+      <StackedUsageChart
+        data={data}
+        series={["a", "b"]}
+        xKey="day"
+        format={usd}
+        totalFor={(day) => totals.get(day)}
+        showTotals
+      />,
+    );
+    expect(screen.queryByText("$13.00")).not.toBeInTheDocument();
+    expect(screen.queryByText("$17.00")).not.toBeInTheDocument();
+  });
+
+  it("drops totals when a roomy chart holds more buckets than their labels fit", () => {
+    const month = Array.from({ length: 31 }, (_, index) => ({ day: `2026-10-${index + 1}`, a: 1, b: 2 }));
+    render(
+      <StackedUsageChart data={month} series={["a", "b"]} xKey="day" format={usd} totalFor={() => 13} showTotals />,
+    );
+    expect(screen.queryByText("$13.00")).not.toBeInTheDocument();
+  });
+
   it("prints no totals on a log scale, where a stack top is not the sum", () => {
     render(
       <StackedUsageChart
@@ -80,6 +128,14 @@ describe("StackedUsageChart bar totals", () => {
       />,
     );
     expect(screen.queryByText("$13.00")).not.toBeInTheDocument();
+  });
+});
+
+describe("totalsFitPlot", () => {
+  it("fits labels only when the widest one has room in every bucket's slot", () => {
+    expect(totalsFitPlot(600, ["$1.2K", "$624.1M", "$3"])).toBe(true);
+    expect(totalsFitPlot(150, ["$1.2K", "$624.1M", "$3"])).toBe(false);
+    expect(totalsFitPlot(600, [])).toBe(false);
   });
 });
 

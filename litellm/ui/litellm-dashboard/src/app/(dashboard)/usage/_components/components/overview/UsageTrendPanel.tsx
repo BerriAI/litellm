@@ -40,7 +40,6 @@ const CHART_TITLE: Record<TrendMetric, ParseKeys> = {
   requests: "usage.trend.requestsTitle",
 };
 
-const MAX_LABELLED_BARS = 16;
 const Y_AXIS_WIDTH = 64;
 
 function Legend({ labels, colors }: { labels: readonly string[]; colors: readonly string[] }) {
@@ -98,7 +97,6 @@ function TrendCharts({ trend, granularity, metrics, chartHeight }: TrendChartsPr
     const bucket = bucketByKey.get(key);
     return bucket ? bucketTooltipLabel(bucket, granularity) : key;
   };
-  const showTotals = trend.buckets.length <= MAX_LABELLED_BARS;
   return (
     <>
       {metrics.map((metric) => {
@@ -118,7 +116,7 @@ function TrendCharts({ trend, granularity, metrics, chartHeight }: TrendChartsPr
               format={COMPACT_FORMAT[metric]}
               tooltipFormat={EXACT_FORMAT[metric]}
               totalFor={(key) => totals.get(key)}
-              showTotals={showTotals}
+              showTotals
               syncId={syncId}
               yAxisWidth={Y_AXIS_WIDTH}
               ariaLabel={t("usage.trend.chartLabel", { metric: t(CHART_TITLE[metric]) })}

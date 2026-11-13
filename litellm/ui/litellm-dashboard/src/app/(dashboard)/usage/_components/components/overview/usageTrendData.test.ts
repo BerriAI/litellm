@@ -3,6 +3,7 @@ import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import { modelColorMap, OTHER_COLOR } from "./overviewData";
 import {
   bucketTickLabel,
+  bucketTooltipLabel,
   defaultGranularity,
   formatDayRange,
   observedRate,
@@ -108,6 +109,19 @@ describe("bucket labels", () => {
   it("adds years to a range label only when it spans two years", () => {
     expect(formatDayRange({ start: "2026-10-01", end: "2026-10-12" })).toBe("Oct 1 – Oct 12");
     expect(formatDayRange({ start: "2025-12-30", end: "2026-01-02" })).toBe("Dec 30, 2025 – Jan 2, 2026");
+  });
+});
+
+describe("bucketTooltipLabel", () => {
+  it("names the day, the week with its length, the month, and a clipped month's days", () => {
+    const [oneDay] = trendBuckets({ start: "2026-10-03", end: "2026-10-03" }, "day");
+    const [week] = trendBuckets({ start: "2026-10-01", end: "2026-10-10" }, "week");
+    const [fullMonth, clippedMonth] = trendBuckets({ start: "2026-10-01", end: "2026-11-12" }, "month");
+
+    expect(bucketTooltipLabel(oneDay, "day")).toBe("Sat, Oct 3, 2026");
+    expect(bucketTooltipLabel(week, "week")).toBe("Week of Oct 1 – Oct 7 (7 days)");
+    expect(bucketTooltipLabel(fullMonth, "month")).toBe("October 2026");
+    expect(bucketTooltipLabel(clippedMonth, "month")).toBe("November 2026, Nov 1 – Nov 12 only");
   });
 });
 

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Bar, BarChart, CartesianGrid, ReferenceDot, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, ReferenceDot, XAxis, YAxis, usePlotArea } from "recharts";
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
@@ -86,6 +86,42 @@ const bucketTotals = (
     const total = totalFor(x);
     return total === undefined ? [] : [{ x, total }];
   });
+
+const TOTAL_LABEL_CHAR_PX = 7;
+const TOTAL_LABEL_GAP_PX = 8;
+
+/** Bar totals are only printed when the widest one fits inside each bucket's share of the measured plot width. */
+export const totalsFitPlot = (plotWidth: number, labels: readonly string[]): boolean => {
+  if (labels.length === 0) return false;
+  const widest = Math.max(...labels.map((label) => label.length)) * TOTAL_LABEL_CHAR_PX + TOTAL_LABEL_GAP_PX;
+  return plotWidth / labels.length >= widest;
+};
+
+function BarTotals({
+  totals,
+  format,
+}: {
+  totals: readonly { x: string; total: number }[];
+  format: (value: number) => string;
+}) {
+  const plot = usePlotArea();
+  const labels = totals.map(({ total }) => format(total));
+  if (plot === undefined || !totalsFitPlot(plot.width, labels)) return null;
+  return (
+    <>
+      {totals.map(({ x, total }, index) => (
+        <ReferenceDot
+          key={x}
+          x={x}
+          y={total}
+          r={0}
+          ifOverflow="extendDomain"
+          label={{ value: labels[index], position: "top", className: "fill-muted-foreground text-[11px] tabular-nums" }}
+        />
+      ))}
+    </>
+  );
+}
 
 /** Daily usage stacked by series, with a tooltip listing each series and the bucket total. */
 export function StackedUsageChart({
@@ -179,20 +215,7 @@ export function StackedUsageChart({
             isAnimationActive={false}
           />
         ))}
-        {barTotals.map(({ x, total }) => (
-          <ReferenceDot
-            key={x}
-            x={x}
-            y={total}
-            r={0}
-            ifOverflow="extendDomain"
-            label={{
-              value: format(total),
-              position: "top",
-              className: "fill-muted-foreground text-[11px] tabular-nums",
-            }}
-          />
-        ))}
+        {totalsVisible && <BarTotals totals={barTotals} format={format} />}
       </BarChart>
     </ChartContainer>
   );

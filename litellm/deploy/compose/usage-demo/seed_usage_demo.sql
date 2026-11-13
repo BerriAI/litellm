@@ -4,7 +4,7 @@
 --
 -- Twelve calendar months of daily aggregates ending today (UTC), so the current
 -- month is partial. Deterministic: rerunning on the same day writes identical rows.
---   * eleven model groups whose mix shifts over the year, so the top 8 + Other matters
+--   * twelve model groups whose mix shifts over the year, so the top 8 + Other matters
 --   * cached prompt tokens as a subset of prompt tokens, never added on top
 --   * demo-image-gen: per-request spend with zero tokens
 --   * demo-subscription-chat: tokens with zero metered spend
