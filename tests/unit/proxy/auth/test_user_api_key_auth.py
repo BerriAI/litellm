@@ -42,7 +42,7 @@ from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
     (
         ("scope", "403"),
         ("mismatch", "403"),
-        ("unknown", "401"),
+        ("unknown", "403"),
         ("model", "403"),
         ("model_budget", "403"),
         ("budget", "422"),
