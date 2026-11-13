@@ -381,6 +381,7 @@ async fn provider_call(
         ),
         auth: validated.auth,
     };
+    let body = config.finalize_request(body, &environment.headers, &transform_context);
 
     let request_context = RequestContext {
         model: body.model.clone(),

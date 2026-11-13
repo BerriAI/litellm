@@ -3,11 +3,15 @@ use litellm_llms_types::{
         CacheControl, ContentBlock, Message, MessageContent, MessagesOptionalParams,
         MessagesRequest, SystemPrompt,
     },
+    providers::anthropic::{BetaProvider, BetaSet},
     recognized::{Recognized, map_known_runs},
 };
 
 use crate::{
-    anthropic::common_utils::filter_billing_headers_from_system,
+    anthropic::{
+        beta_gated_fields::strip_beta_gated_system_messages,
+        common_utils::filter_billing_headers_from_system,
+    },
     base_llm::messages::mid_conversation_system::{
         as_system_content_blocks, convert_mid_conversation_system_turns, is_system_role_message,
         message_content_blocks,
@@ -16,11 +20,13 @@ use crate::{
 
 /// Python's `_normalize_system_role_messages`: a leading run of `role: "system"` entries is
 /// hoisted into the top-level `system`, a later one stays in place when the model accepts it
-/// and otherwise becomes a user turn where it was, and billing blocks are stripped from the
-/// top-level `system` either way.
+/// and otherwise loses its beta-gated fields under drop_params and becomes a user turn where it
+/// was, and billing blocks are stripped from the top-level `system` either way.
 pub fn normalize_system_role_messages(
     request: MessagesRequest,
     supports_mid_conversation_system: bool,
+    drops_unsupported_params: bool,
+    provider: BetaProvider,
 ) -> MessagesRequest {
     let leading_count = request
         .messages
@@ -40,7 +46,16 @@ pub fn normalize_system_role_messages(
     let remaining = if supports_mid_conversation_system {
         remaining
     } else {
-        map_known_runs(remaining, convert_mid_conversation_system_turns)
+        map_known_runs(
+            strip_beta_gated_system_messages(
+                remaining,
+                &BetaSet::default(),
+                drops_unsupported_params,
+                &request.model,
+                provider,
+            ),
+            convert_mid_conversation_system_turns,
+        )
     };
     let system = if hoisted.is_empty() {
         request.params.system
@@ -116,8 +131,13 @@ pub fn strip_cache_control_scope(request: MessagesRequest) -> MessagesRequest {
 
 #[cfg(test)]
 mod tests {
-    use crate::base_llm::messages::normalization::normalize_system_role_messages;
-    use litellm_llms_types::formats::messages::MessagesRequest;
+    use crate::base_llm::messages::{
+        mid_conversation_system::CONVERTED_SYSTEM_NOTE,
+        normalization::normalize_system_role_messages,
+    };
+    use litellm_llms_types::{
+        formats::messages::MessagesRequest, providers::anthropic::BetaProvider,
+    };
     use rstest::rstest;
     use serde_json::{Value, json};
 
@@ -147,7 +167,8 @@ mod tests {
             "future_request": {"nested": true}
         }))
         .unwrap();
-        let normalized = normalize_system_role_messages(request, true);
+        let normalized =
+            normalize_system_role_messages(request, true, false, BetaProvider::AzureAi);
         let expected_blocks: Vec<Value> = initial_blocks
             .as_array()
             .unwrap()
@@ -166,8 +187,90 @@ mod tests {
             })
         );
         assert_eq!(
-            normalize_system_role_messages(normalized.clone(), true),
+            normalize_system_role_messages(normalized.clone(), true, false, BetaProvider::AzureAi),
             normalized
+        );
+    }
+
+    fn request(fields: Value) -> MessagesRequest {
+        let Value::Object(fields) = fields else {
+            panic!("case fields are an object")
+        };
+        let mut body = json!({"model": "test-model", "max_tokens": 64, "messages": [{"role": "user", "content": "hi"}]});
+        body.as_object_mut().unwrap().extend(fields);
+        serde_json::from_value(body).unwrap()
+    }
+
+    fn reminder_with(content: Value) -> Value {
+        json!({"messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "system", "content": content},
+            {"role": "user", "content": "go on"}
+        ]})
+    }
+
+    fn tool_reference_addition() -> Value {
+        json!({"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "t"}})
+    }
+
+    #[rstest]
+    #[case::stripped_under_drop_params(
+        true,
+        json!([{"type": "text", "text": CONVERTED_SYSTEM_NOTE}, {"type": "text", "text": "note"}])
+    )]
+    #[case::kept_without_drop_params(
+        false,
+        json!([{"type": "text", "text": CONVERTED_SYSTEM_NOTE}, {"type": "text", "text": "note"}, tool_reference_addition()])
+    )]
+    fn a_converted_turn_loses_its_tool_changes_under_drop_params(
+        #[case] drops_unsupported_params: bool,
+        #[case] converted: Value,
+    ) {
+        let normalized = normalize_system_role_messages(
+            request(reminder_with(
+                json!([{"type": "text", "text": "note"}, tool_reference_addition()]),
+            )),
+            false,
+            drops_unsupported_params,
+            BetaProvider::AzureAi,
+        );
+        assert_eq!(
+            serde_json::to_value(normalized).unwrap()["messages"][2]["content"],
+            converted
+        );
+    }
+
+    #[rstest]
+    fn a_turn_kept_in_place_keeps_its_tool_changes_under_drop_params() {
+        let sent = reminder_with(json!([tool_reference_addition()]));
+        let normalized = normalize_system_role_messages(
+            request(sent.clone()),
+            true,
+            true,
+            BetaProvider::AzureAi,
+        );
+        assert_eq!(
+            serde_json::to_value(normalized).unwrap()["messages"],
+            sent["messages"]
+        );
+    }
+
+    #[rstest]
+    fn a_converted_turn_emptied_by_the_strip_is_dropped() {
+        let normalized = normalize_system_role_messages(
+            request(reminder_with(json!([tool_reference_addition()]))),
+            false,
+            true,
+            BetaProvider::AzureAi,
+        );
+        assert_eq!(
+            serde_json::to_value(normalized).unwrap()["messages"],
+            json!([
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "user", "content": "go on"}
+            ])
         );
     }
 }

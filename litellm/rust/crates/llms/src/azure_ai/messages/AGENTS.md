@@ -6,6 +6,7 @@
 - The base is Python's `api_base or get_secret_str("AZURE_API_BASE")`: `AZURE_API_BASE` is a deferred secret read only when the call's base is empty, and the URL is cut at `/anthropic` in the path only, untrimmed, as `azure_anthropic_messages_url` does
 - Deliberate differences from Python, approved by the owner: a caller `x-api-key`, `api-key` in any casing (sent as `x-api-key`) or `Authorization` other than a blank bearer is the only credential sent. No deployment key and no Entra ID token goes beside or over it, and the Entra ID path is never run
 - `anthropic-beta` goes through the `azure_ai` row of `anthropic_beta_headers_config.json` as Python's handler filters it: unknown and unsupported betas are dropped, the caller's and the ones the request needs alike
+- The beta-gated system field strip, system-role normalization and the `cache_control.scope` strip run in `finalize_request`, after the betas are picked from the request as sent, in the order Python's transform runs them
 
 # references
 

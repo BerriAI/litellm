@@ -549,6 +549,7 @@ KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
                 "azure_ai_oidc_reference_is_minted_by_python",
                 "azure_ai_token_refresh_outranks_a_static_token",
                 "azure_ai_username_and_password_are_minted_by_python",
+                "azure_ai_speed_refused",
             )
         },
     }
@@ -3559,12 +3560,22 @@ AZURE_URL_CASES: Final = tuple(
 # the native parser read from the path (`d`).
 ANTHROPIC_URL_CASES: Final = (Case("anthropic_base_empty_host", _kw(api_base="http:///d"), upstream=()),)
 
+AZURE_OPUS_4_8: Final = "azure_ai/claude-opus-4-8"
 JSON_SCHEMA_FORMAT: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {
         "type": "json_schema",
         "schema": {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
     }
 )
+
+
+def _mid_conversation_system(**fields: object) -> list[Mapping[str, object]]:
+    return [
+        dict(USER),
+        {"role": "assistant", "content": "Paris."},
+        {"role": "system", **fields},
+        {"role": "user", "content": "And of Spain?"},
+    ]
 
 
 def _beta(value: str) -> Mapping[str, object]:
@@ -3677,6 +3688,130 @@ AZURE_SHAPING_CASES: Final = tuple(
             "azure_ai_advisor_tool_stream",
             _kw(stream=True, tools=[dict(ADVISOR_TOOL)]),
             model=AZURE_CLAUDE,
+        ),
+        Case("azure_ai_speed_refused", _kw(speed="fast"), model=AZURE_CLAUDE, upstream=()),
+        Case("azure_ai_speed_dropped", _kw(speed="fast", drop_params=True), model=AZURE_CLAUDE, warned=True),
+        Case(
+            "azure_ai_clear_at_stripped_under_drop_params",
+            _kw(
+                drop_params=True,
+                messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
+            ),
+            model=AZURE_OPUS_4_8,
+            warned=True,
+        ),
+        Case(
+            "azure_ai_clear_at_kept_with_its_beta",
+            _kw(
+                drop_params=True,
+                messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
+                extra_headers=_beta("mid-conversation-system-clear-at-2026-08-21"),
+            ),
+            model=AZURE_OPUS_4_8,
+            warned=True,
+        ),
+        Case(
+            "azure_ai_clear_at_kept_without_drop_params",
+            _kw(messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2})),
+            model=AZURE_OPUS_4_8,
+        ),
+        Case(
+            "azure_ai_clear_at_stripped_before_conversion",
+            _kw(
+                drop_params=True,
+                messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
+            ),
+            model=AZURE_CLAUDE,
+            warned=True,
+        ),
+        Case(
+            "azure_ai_tool_addition_stripped_under_drop_params",
+            _kw(
+                drop_params=True,
+                messages=_mid_conversation_system(
+                    content=[
+                        {"type": "text", "text": "A new tool."},
+                        {"type": "tool_addition", "tool": dict(WEATHER_TOOL)},
+                    ]
+                ),
+            ),
+            model=AZURE_OPUS_4_8,
+            warned=True,
+        ),
+        Case(
+            "azure_ai_tool_reference_addition_kept_under_drop_params",
+            _kw(
+                drop_params=True,
+                tools=[{**WEATHER_TOOL, "defer_loading": True}],
+                messages=_mid_conversation_system(
+                    content=[{"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}}]
+                ),
+            ),
+            model=AZURE_OPUS_4_8,
+            warned=True,
+        ),
+        Case(
+            "azure_ai_tool_reference_addition_stripped_before_conversion",
+            _kw(
+                drop_params=True,
+                tools=[{**WEATHER_TOOL, "defer_loading": True}],
+                messages=_mid_conversation_system(
+                    content=[
+                        {"type": "text", "text": "A new tool."},
+                        {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}},
+                    ]
+                ),
+            ),
+            model=AZURE_CLAUDE,
+            warned=True,
+        ),
+        Case(
+            "azure_ai_tool_addition_only_turn_dropped_before_conversion",
+            _kw(
+                drop_params=True,
+                messages=_mid_conversation_system(content=[{"type": "tool_addition", "tool": dict(WEATHER_TOOL)}]),
+            ),
+            model=AZURE_CLAUDE,
+            warned=True,
+        ),
+        Case(
+            "azure_ai_system_output_config_converted",
+            _kw(messages=_mid_conversation_system(content="Be brief.", output_config={"effort": "low"})),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_leading_system_tool_addition_under_drop_params",
+            _kw(
+                drop_params=True,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": [
+                            {"type": "text", "text": "Be terse."},
+                            {"type": "tool_addition", "tool": dict(WEATHER_TOOL)},
+                        ],
+                    },
+                    dict(USER),
+                ],
+            ),
+            model=AZURE_OPUS_4_8,
+            warned=True,
+        ),
+        Case(
+            "azure_ai_thinking_gated_fields_kept_under_drop_params",
+            _kw(
+                drop_params=True,
+                max_tokens=2048,
+                thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates", "block_binding": "strict"},
+            ),
+            model=AZURE_CLAUDE,
+            warned=True,
+        ),
+        Case(
+            "azure_ai_non_object_output_format_under_drop_params",
+            _kw(drop_params=True, output_format="json"),
+            model=AZURE_CLAUDE,
+            warned=True,
         ),
         Case("azure_ai_extra_body", _kw(extra_body={"parity_extra": 1}), model=AZURE_CLAUDE),
         Case("azure_ai_unknown_top_level_param", _kw(parity_unknown_param="x"), model=AZURE_CLAUDE),

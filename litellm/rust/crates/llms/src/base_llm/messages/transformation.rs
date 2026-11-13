@@ -141,6 +141,17 @@ pub trait BaseMessagesConfig: Sync {
         Ok(request)
     }
 
+    /// The request steps Python runs once the final `anthropic-beta` header is known, which
+    /// read that header or must not change which betas the request asks for.
+    fn finalize_request(
+        &self,
+        request: MessagesRequest,
+        _headers: &Headers,
+        _context: &MessagesTransformContext,
+    ) -> MessagesRequest {
+        request
+    }
+
     /// The JSON that goes on the wire, for a host whose body differs from the typed request:
     /// Python's configs `pop("model")` when the model is addressed by the URL.
     fn wire_body(&self, body: Value) -> Value {

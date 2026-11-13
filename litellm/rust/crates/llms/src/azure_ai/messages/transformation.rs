@@ -14,8 +14,9 @@ use serde_json::Value;
 use crate::{
     Error,
     anthropic::{
+        beta_gated_fields::strip_beta_gated_system_messages,
         beta_headers::BetaPolicy,
-        common_utils::{API_KEY_PLACEMENT, strip_trailing_slashes},
+        common_utils::{API_KEY_PLACEMENT, existing_betas, strip_trailing_slashes},
         messages::{
             handler::shape_anthropic_messages_request,
             transformation::{transform_messages_request, update_headers_with_safeguards_beta},
@@ -92,16 +93,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        transform_messages_request(
-            strip_cache_control_scope(normalize_system_role_messages(
-                request,
-                context
-                    .thinking
-                    .capabilities
-                    .supports_mid_conversation_system,
-            )),
-            &context.keeping_display_updates(),
-        )
+        transform_messages_request(request, &context.keeping_display_updates())
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
@@ -183,6 +175,36 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         BetaPolicy::Filter(BetaProvider::AzureAi).apply(update_headers_with_safeguards_beta(
             headers,
             request,
+            BetaProvider::AzureAi,
+        ))
+    }
+
+    /// Python's transform strips the system fields the final header does not unlock, then
+    /// normalizes system roles and drops `cache_control.scope`, all after the betas were chosen
+    /// from the request as sent.
+    fn finalize_request(
+        &self,
+        request: MessagesRequest,
+        headers: &Headers,
+        context: &MessagesTransformContext,
+    ) -> MessagesRequest {
+        let stripped = MessagesRequest {
+            messages: strip_beta_gated_system_messages(
+                request.messages,
+                &existing_betas(headers),
+                context.drops_unsupported_params,
+                &request.model,
+                BetaProvider::AzureAi,
+            ),
+            ..request
+        };
+        strip_cache_control_scope(normalize_system_role_messages(
+            stripped,
+            context
+                .thinking
+                .capabilities
+                .supports_mid_conversation_system,
+            context.drops_unsupported_params,
             BetaProvider::AzureAi,
         ))
     }
@@ -366,6 +388,18 @@ mod tests {
 
     fn to_value(request: MessagesRequest) -> serde_json::Value {
         serde_json::to_value(request).expect("serializable request")
+    }
+
+    fn finalized(
+        request: MessagesRequest,
+        headers: &[(&str, &str)],
+        context: &MessagesTransformContext,
+    ) -> serde_json::Value {
+        let headers: Headers = headers
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        to_value(AZURE_ANTHROPIC_MESSAGES_CONFIG.finalize_request(request, &headers, context))
     }
 
     #[rstest]
@@ -823,7 +857,7 @@ mod tests {
     }
 
     #[test]
-    fn transform_request_strips_scope_from_system_and_messages() {
+    fn finalize_request_strips_scope_from_system_and_messages() {
         let request = request_from(json!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 1024,
@@ -849,11 +883,7 @@ mod tests {
             ]
         }));
 
-        let transformed = to_value(
-            AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .transform_anthropic_messages_request(request, &MessagesTransformContext::default())
-                .expect("request transforms"),
-        );
+        let transformed = finalized(request, &[], &MessagesTransformContext::default());
 
         assert_eq!(
             transformed["system"][0]["cache_control"],
@@ -870,24 +900,23 @@ mod tests {
     }
 
     #[test]
-    fn transform_request_is_idempotent_and_preserves_string_system() {
+    fn finalize_request_is_idempotent_and_preserves_string_system() {
         let request = request_from(json!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 16,
             "system": "plain string system",
             "messages": [{"role": "user", "content": "hi"}]
         }));
-        let once = AZURE_ANTHROPIC_MESSAGES_CONFIG
-            .transform_anthropic_messages_request(request, &MessagesTransformContext::default())
-            .expect("request transforms");
-        let twice = AZURE_ANTHROPIC_MESSAGES_CONFIG
-            .transform_anthropic_messages_request(
-                once.clone(),
-                &MessagesTransformContext::default(),
-            )
-            .expect("request transforms");
-        assert_eq!(once, twice);
-        assert_eq!(to_value(once)["system"], json!("plain string system"));
+        let once = finalized(request, &[], &MessagesTransformContext::default());
+        assert_eq!(
+            finalized(
+                request_from(once.clone()),
+                &[],
+                &MessagesTransformContext::default()
+            ),
+            once
+        );
+        assert_eq!(once["system"], json!("plain string system"));
     }
 
     #[test]
@@ -944,6 +973,13 @@ mod tests {
             },
             false,
         )
+    }
+
+    fn dropping_context_with(supports_mid_conversation_system: bool) -> MessagesTransformContext {
+        MessagesTransformContext {
+            drops_unsupported_params: true,
+            ..context_with(supports_mid_conversation_system)
+        }
     }
 
     #[rstest]
@@ -1010,7 +1046,7 @@ mod tests {
             {"role": "system", "content": "reminder"}
         ]),
     )]
-    fn transform_request_normalizes_system_role_messages_like_python(
+    fn finalize_request_normalizes_system_role_messages_like_python(
         #[case] body: serde_json::Value,
         #[case] supports_mid_conversation_system: bool,
         #[case] system: serde_json::Value,
@@ -1020,17 +1056,113 @@ mod tests {
         body["model"] = json!("claude-sonnet-4-5");
         body["max_tokens"] = json!(256);
 
-        let transformed = to_value(
-            AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .transform_anthropic_messages_request(
-                    request_from(body),
-                    &context_with(supports_mid_conversation_system),
-                )
-                .expect("request transforms"),
+        let transformed = finalized(
+            request_from(body),
+            &[],
+            &context_with(supports_mid_conversation_system),
         );
 
         assert_eq!(transformed["system"], system);
         assert_eq!(transformed["messages"], messages);
+    }
+
+    fn reminder(system: serde_json::Value) -> serde_json::Value {
+        json!({
+            "model": "claude-opus-4-8",
+            "max_tokens": 64,
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                system,
+                {"role": "user", "content": "go on"}
+            ]
+        })
+    }
+
+    #[rstest]
+    #[case::clear_at_without_its_beta(
+        json!({"role": "system", "content": "note", "clear_at": {"type": "turns", "value": 2}}),
+        &[],
+        json!({"role": "system", "content": "note"})
+    )]
+    #[case::clear_at_with_its_beta(
+        json!({"role": "system", "content": "note", "clear_at": {"type": "turns", "value": 2}}),
+        &[("anthropic-beta", "mid-conversation-system-clear-at-2026-08-21")],
+        json!({"role": "system", "content": "note", "clear_at": {"type": "turns", "value": 2}})
+    )]
+    #[case::tool_addition_without_a_beta(
+        json!({"role": "system", "content": [{"type": "text", "text": "note"}, {"type": "tool_addition", "tool": {"name": "t"}}]}),
+        &[("anthropic-beta", "context-1m-2025-08-07")],
+        json!({"role": "system", "content": [{"type": "text", "text": "note"}]})
+    )]
+    #[case::tool_reference_with_the_tool_changes_beta(
+        json!({"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "t"}}]}),
+        &[("anthropic-beta", "mid-conversation-tool-changes-2026-07-01")],
+        json!({"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "t"}}]})
+    )]
+    fn finalize_request_strips_what_the_final_betas_do_not_unlock_under_drop_params(
+        #[case] system: serde_json::Value,
+        #[case] headers: &[(&str, &str)],
+        #[case] expected: serde_json::Value,
+    ) {
+        assert_eq!(
+            finalized(
+                request_from(reminder(system)),
+                headers,
+                &dropping_context_with(true)
+            )["messages"][2],
+            expected
+        );
+    }
+
+    #[rstest]
+    fn finalize_request_keeps_gated_fields_without_drop_params() {
+        let system =
+            json!({"role": "system", "content": "note", "clear_at": {"type": "turns", "value": 2}});
+        assert_eq!(
+            finalized(
+                request_from(reminder(system.clone())),
+                &[],
+                &context_with(true)
+            )["messages"][2],
+            system
+        );
+    }
+
+    #[rstest]
+    fn finalize_request_strips_a_leading_turn_before_hoisting_it() {
+        let request = request_from(json!({
+            "model": "claude-opus-4-8",
+            "max_tokens": 64,
+            "messages": [
+                {"role": "system", "content": [{"type": "text", "text": "be terse"}, {"type": "tool_addition", "tool": {"name": "t"}}]},
+                {"role": "user", "content": "hi"}
+            ]
+        }));
+        assert_eq!(
+            finalized(request, &[], &dropping_context_with(true))["system"],
+            json!([{"type": "text", "text": "be terse"}])
+        );
+    }
+
+    #[rstest]
+    fn finalize_request_strips_a_converted_turn_whatever_the_betas() {
+        let tool_reference =
+            json!({"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "t"}});
+        let request = request_from(reminder(
+            json!({"role": "system", "content": [{"type": "text", "text": "note"}, tool_reference]}),
+        ));
+        assert_eq!(
+            finalized(
+                request,
+                &[("anthropic-beta", "mid-conversation-tool-changes-2026-07-01")],
+                &dropping_context_with(false)
+            )["messages"][2]["content"],
+            json!([
+                {"type": "text", "text": CONVERTED_SYSTEM_NOTE},
+                {"type": "text", "text": "note"}
+            ])
+        );
     }
 
     #[test]

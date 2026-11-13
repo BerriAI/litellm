@@ -671,6 +671,35 @@ async fn azure_ai_sends_only_the_betas_its_row_accepts(
 
 #[rstest]
 #[tokio::test]
+async fn azure_ai_picks_the_betas_before_it_converts_a_system_turn(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        json!({"messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "system", "content": "be brief", "output_config": {"effort": "low"}},
+            {"role": "user", "content": "go on"}
+        ]}),
+    ))
+    .await;
+
+    let request = only_request(&upstream).await;
+    assert_eq!(
+        request.header("anthropic-beta"),
+        Some("per-turn-control-2026-07-01")
+    );
+    assert_eq!(request.json()["messages"][2]["role"], "user");
+}
+
+#[rstest]
+#[tokio::test]
 async fn an_oauth_key_sends_the_browser_access_header_and_the_oauth_beta(call: MessagesCall) {
     let upstream = upstream([message_response()]).await;
 
