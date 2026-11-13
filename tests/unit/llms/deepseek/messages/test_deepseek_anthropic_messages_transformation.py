@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.anthropic.common_utils import AnthropicError
@@ -12,7 +13,9 @@ from litellm.llms.deepseek.messages.transformation import (
     DeepSeekAnthropicMessagesConfig,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ModelInfoLookupMiss, ProviderConfigManager, lookup_catalog_model_info
+
+_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 def test_deepseek_provider_uses_anthropic_messages_config():
@@ -126,7 +129,8 @@ def test_deepseek_anthropic_messages_headers_use_deepseek_key():
     assert headers["content-type"] == "application/json"
 
 
-def test_deepseek_anthropic_messages_preserves_thinking_and_sanitizes_custom_tools():
+@pytest.mark.parametrize("model", ["deepseek-v4-pro", "deepseek-chat"])
+def test_deepseek_anthropic_messages_preserves_thinking_and_sanitizes_custom_tools(model: str) -> None:
     config = DeepSeekAnthropicMessagesConfig()
     messages = [
         {
@@ -162,7 +166,7 @@ def test_deepseek_anthropic_messages_preserves_thinking_and_sanitizes_custom_too
     ]
 
     request = config.transform_anthropic_messages_request(
-        model="deepseek-v4-pro",
+        model=model,
         messages=messages,
         anthropic_messages_optional_request_params={
             "max_tokens": 100,
@@ -309,3 +313,46 @@ def test_deepseek_anthropic_messages_drops_adaptive_thinking_for_model_without_r
 
     assert "thinking" not in request
     assert "output_config" not in request
+
+
+def test_deepseek_anthropic_messages_maps_reasoning_effort_to_thinking_for_model_without_reasoning() -> None:
+    model: Final = "deepseek-chat"
+    assert not litellm.supports_reasoning(model=model, custom_llm_provider="deepseek")
+
+    request: Final = _deepseek_messages_request({"reasoning_effort": "high"}, model=model)
+
+    assert _FIELDS.validate_python(request["thinking"])["type"] == "enabled"
+    assert "reasoning_effort" not in request
+    assert "output_config" not in request
+
+
+def test_deepseek_anthropic_messages_drops_unknown_effort_for_model_without_reasoning() -> None:
+    model: Final = "deepseek-chat"
+    assert not litellm.supports_reasoning(model=model, custom_llm_provider="deepseek")
+
+    request: Final = _deepseek_messages_request({"output_config": {"effort": "turbo"}}, model=model)
+
+    assert "output_config" not in request
+
+
+def test_deepseek_anthropic_messages_drops_temperature_under_thinking_for_model_without_reasoning() -> None:
+    model: Final = "deepseek-chat"
+    assert not litellm.supports_reasoning(model=model, custom_llm_provider="deepseek")
+
+    request: Final = _deepseek_messages_request(
+        {"temperature": 0, "thinking": {"type": "enabled", "budget_tokens": 1024}}, model=model
+    )
+
+    assert "temperature" not in request
+
+
+def test_deepseek_anthropic_messages_forwards_thinking_for_model_missing_from_cost_map() -> None:
+    model: Final = "deepseek-v99-not-in-cost-map"
+    assert isinstance(lookup_catalog_model_info(model, "deepseek"), ModelInfoLookupMiss)
+
+    request: Final = _deepseek_messages_request(
+        {"thinking": {"type": "adaptive"}, "output_config": {"effort": "none"}}, model=model
+    )
+
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"] == {"effort": "none"}

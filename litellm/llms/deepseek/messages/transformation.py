@@ -17,6 +17,7 @@ from litellm.llms.anthropic.messages.native.transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
+from litellm.utils import ModelInfoLookupMiss, lookup_catalog_model_info
 
 _TOOL_LIST: Final = TypeAdapter(list[object])
 _TOOL_FIELDS: Final = TypeAdapter(dict[object, object])
@@ -62,6 +63,20 @@ def _deepseek_effort_params(params: Mapping[str, object], drop_params: bool) -> 
     return _with_output_config_effort(_without(params, "reasoning_effort"), None, drop_params)
 
 
+def _listed_without_reasoning(model: str, custom_llm_provider: str) -> bool:
+    if AnthropicModelInfo.supports_model_capability(model, "supports_reasoning", custom_llm_provider):
+        return False
+    return not isinstance(lookup_catalog_model_info(model, custom_llm_provider), ModelInfoLookupMiss)
+
+
+def _deepseek_request_params(
+    model: str, custom_llm_provider: str, params: Mapping[str, object], drop_params: bool
+) -> Mapping[str, object] | _InvalidEffort:
+    if _listed_without_reasoning(model, custom_llm_provider):
+        return params
+    return _deepseek_effort_params(params, drop_params)
+
+
 def _custom_tool_without_type(tool: object) -> Mapping[object, object] | None:
     if not isinstance(tool, dict):
         return None
@@ -87,11 +102,12 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     custom-tool discriminator (`{"type": "custom"}`).
 
     Its reasoning models read `thinking` and `output_config.effort` natively
-    (ignoring `budget_tokens`) and accept any `temperature`, so the
-    Claude-specific effort and temperature reshaping is skipped for them,
-    while models the cost map lists without reasoning keep the base drop. The
-    `reasoning_effort` alias becomes `output_config.effort`, and a level
-    DeepSeek does not accept is a 400, or dropped under `drop_params`.
+    (ignoring `budget_tokens`) and accept any `temperature`, so for them and
+    for models the cost map does not list yet the Claude-specific effort and
+    temperature reshaping is skipped, the `reasoning_effort` alias becomes
+    `output_config.effort`, and a level DeepSeek does not accept is a 400, or
+    dropped under `drop_params`. Models the cost map lists without reasoning
+    keep the base handling unchanged.
     """
 
     @property
@@ -172,7 +188,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         max_tokens: int | None,
         custom_llm_provider: str,
     ) -> None:
-        if AnthropicModelInfo.supports_model_capability(model, "supports_reasoning", custom_llm_provider):
+        if not _listed_without_reasoning(model, custom_llm_provider):
             return None
         return AnthropicMessagesConfig._translate_adaptive_effort_for_non_adaptive_model(  # pyright: ignore[reportUnknownMemberType]  # the base hook takes a bare dict
             model=model,
@@ -183,9 +199,17 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     @staticmethod
     def _drop_incompatible_temperature_for_thinking(
-        model: str, optional_params: Mapping[str, object], custom_llm_provider: str
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: the base hook edits the request params in place
+        custom_llm_provider: str,
     ) -> None:
-        return None
+        if not _listed_without_reasoning(model, custom_llm_provider):
+            return None
+        return AnthropicMessagesConfig._drop_incompatible_temperature_for_thinking(  # pyright: ignore[reportUnknownMemberType]  # the base hook takes a bare dict
+            model=model,
+            optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+        )
 
     @staticmethod
     def _sanitize_tools_for_deepseek(tools: object) -> object:
@@ -202,7 +226,9 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
-        effort_params: Final = _deepseek_effort_params(
+        effort_params: Final = _deepseek_request_params(
+            model,
+            self._resolved_provider,
             _FIELDS.validate_python(anthropic_messages_optional_request_params),
             drops_unsupported_params(litellm_params.drop_params),
         )
