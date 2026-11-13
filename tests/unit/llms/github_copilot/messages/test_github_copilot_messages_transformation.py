@@ -15,7 +15,7 @@ from litellm.llms.github_copilot.per_user_auth import (
 )
 
 
-@pytest.mark.parametrize("api_version", (None, "2026-08-01", ""))
+@pytest.mark.parametrize("api_version", (None, "2026-08-01", "", " \t\n"))
 def test_messages_api_version_is_read_at_request_time(monkeypatch: pytest.MonkeyPatch, api_version: str | None) -> None:
     config: Final = GithubCopilotAnthropicMessagesConfig()
     session: Final = GithubCopilotUserSession(token="test-token", api_base="https://api.githubcopilot.com")
@@ -37,7 +37,7 @@ def test_messages_api_version_is_read_at_request_time(monkeypatch: pytest.Monkey
         optional_params={},
         litellm_params={GITHUB_COPILOT_USER_SESSION_KWARG_KEY: session},
     )
-    assert headers["x-github-api-version"] == (api_version if api_version is not None else "2026-06-01")
+    assert headers["x-github-api-version"] == ((api_version or "").strip() or "2026-06-01")
 
 
 def test_github_copilot_anthropic_messages_get_complete_url():

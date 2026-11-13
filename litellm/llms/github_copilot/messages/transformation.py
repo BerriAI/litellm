@@ -105,7 +105,9 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
 
         headers["openai-intent"] = "messages-proxy"
         headers["x-interaction-type"] = "messages-proxy"
-        headers["x-github-api-version"] = os.getenv("GITHUB_COPILOT_API_VERSION", _MESSAGES_PROXY_API_VERSION)
+        headers["x-github-api-version"] = (
+            os.getenv("GITHUB_COPILOT_API_VERSION", "").strip() or _MESSAGES_PROXY_API_VERSION
+        )
 
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = "2023-06-01"
