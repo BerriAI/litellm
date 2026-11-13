@@ -4,7 +4,11 @@ import pytest
 from pydantic import ValidationError
 
 from litellm.proxy.control_plane.audit.event import CONTROL_PLANE_ID
-from litellm.proxy.control_plane.settings import ControlPlaneSettings, S3SinkSettings, load_settings
+from litellm.proxy.control_plane.settings import (
+    ControlPlaneSettings,
+    S3SinkSettings,
+    load_settings,
+)
 from litellm.types.proxy.control_plane.auth import PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH
 
 MASTER_KEY: Final = "01234567890123456789012345678901"
@@ -74,9 +78,9 @@ def test_a_plain_http_s3_endpoint_is_refused_unless_explicitly_allowed() -> None
         "audit_s3_bucket": "audit",
         "audit_s3_endpoint_url": "http://minio:9000",
     }
-    with pytest.raises(ValidationError, match="not https"):
+    with pytest.raises(ValidationError, match="CONTROL_PLANE_AUDIT_S3_ENDPOINT_URL is not https"):
         ControlPlaneSettings.model_validate(base)
-    with pytest.raises(ValidationError, match="not https"):
+    with pytest.raises(ValidationError, match="CONTROL_PLANE_AUDIT_S3_ALLOW_INSECURE_HTTP"):
         ControlPlaneSettings.model_validate({**base, "audit_s3_endpoint_url": "HTTP://minio:9000"})
     allowed: Final = ControlPlaneSettings.model_validate({**base, "audit_s3_allow_insecure_http": True}).audit_s3
     assert allowed is not None and allowed.endpoint_url == "http://minio:9000"
@@ -153,3 +157,133 @@ def test_audit_queue_size_allows_two_slots() -> None:
 def test_strict_audit_requires_at_least_one_sink() -> None:
     with pytest.raises(ValidationError, match="requires at least one audit sink"):
         ControlPlaneSettings.model_validate({"LITELLM_MASTER_KEY": MASTER_KEY, "audit_strict": True, "audit_sinks": ()})
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "opt_out"),
+    [
+        ("audit_splunk_url", "http://hec.internal:8088", "audit_splunk_allow_insecure_http"),
+        ("audit_sentinel_endpoint", "HTTP://dce.test", None),
+        ("audit_sentinel_authority_host", "http://login.test", None),
+    ],
+)
+def test_sink_urls_that_carry_a_credential_must_be_https(field: str, value: str, opt_out: str | None) -> None:
+    with pytest.raises(ValidationError, match=f"CONTROL_PLANE_{field.upper()} is not https"):
+        ControlPlaneSettings.model_validate({"LITELLM_MASTER_KEY": MASTER_KEY, field: value})
+    if opt_out is not None:
+        allowed: Final = ControlPlaneSettings.model_validate(
+            {"LITELLM_MASTER_KEY": MASTER_KEY, field: value, opt_out: True}
+        )
+        assert getattr(allowed, field) == value
+
+
+def test_the_splunk_and_sentinel_sinks_refuse_to_start_without_their_settings_and_read_them_when_set() -> None:
+    with pytest.raises(ValidationError, match="CONTROL_PLANE_AUDIT_SPLUNK_URL, CONTROL_PLANE_AUDIT_SPLUNK_TOKEN"):
+        ControlPlaneSettings.model_validate({"LITELLM_MASTER_KEY": MASTER_KEY, "audit_sinks": ["splunk_hec"]})
+    with pytest.raises(ValidationError, match="CONTROL_PLANE_AUDIT_SENTINEL_CLIENT_SECRET"):
+        ControlPlaneSettings.model_validate(
+            {
+                "LITELLM_MASTER_KEY": MASTER_KEY,
+                "audit_sinks": ["sentinel"],
+                "audit_sentinel_endpoint": "https://dce.test",
+                "audit_sentinel_dcr_immutable_id": "dcr",
+                "audit_sentinel_tenant_id": "t",
+                "audit_sentinel_client_id": "c",
+            }
+        )
+    settings: Final = ControlPlaneSettings.model_validate(
+        {
+            "LITELLM_MASTER_KEY": MASTER_KEY,
+            "audit_sinks": ["splunk_hec", "sentinel"],
+            "audit_splunk_url": "https://hec.test:8088",
+            "audit_splunk_token": "tok",
+            "audit_sentinel_endpoint": "https://dce.test",
+            "audit_sentinel_dcr_immutable_id": "dcr",
+            "audit_sentinel_tenant_id": "t",
+            "audit_sentinel_client_id": "c",
+            "audit_sentinel_client_secret": "s",
+            "audit_sentinel_authority_host": "https://login.microsoftonline.us/",
+        }
+    )
+    splunk: Final = settings.audit_splunk
+    sentinel: Final = settings.audit_sentinel
+    assert splunk is not None and (splunk.url, splunk.token.get_secret_value(), splunk.index) == (
+        "https://hec.test:8088",
+        "tok",
+        None,
+    )
+    assert sentinel is not None and sentinel.authority_host == "https://login.microsoftonline.us"
+    assert (
+        sentinel.stream_name == "Custom-LiteLLMControlPlaneAudit_CL"
+        and sentinel.client_secret.get_secret_value() == "s"
+        and sentinel.token_scope == "https://monitor.azure.us/.default"
+    )
+    china: Final = settings.model_copy(
+        update={"audit_sentinel_authority_host": "https://login.chinacloudapi.cn/"}
+    ).audit_sentinel
+    public: Final = settings.model_copy(
+        update={"audit_sentinel_authority_host": "https://login.microsoftonline.com/"}
+    ).audit_sentinel
+    override: Final = settings.model_copy(
+        update={"audit_sentinel_token_scope": "https://monitor.override.test/.default"}
+    ).audit_sentinel
+    assert china is not None and china.token_scope == "https://monitor.azure.cn/.default"
+    assert public is not None and public.token_scope == "https://monitor.azure.com/.default"
+    assert override is not None and override.token_scope == "https://monitor.override.test/.default"
+
+
+@pytest.mark.parametrize(
+    ("field", "blank"),
+    [
+        ("audit_splunk_url", ""),
+        ("audit_splunk_url", " \t "),
+        ("audit_splunk_token", ""),
+        ("audit_splunk_token", " \t "),
+        ("audit_splunk_index", ""),
+        ("audit_splunk_index", " \t "),
+        ("audit_splunk_source", ""),
+        ("audit_splunk_source", " \t "),
+        ("audit_sentinel_endpoint", ""),
+        ("audit_sentinel_endpoint", " \t "),
+        ("audit_sentinel_dcr_immutable_id", ""),
+        ("audit_sentinel_dcr_immutable_id", " \t "),
+        ("audit_sentinel_stream_name", ""),
+        ("audit_sentinel_stream_name", "  "),
+        ("audit_sentinel_tenant_id", ""),
+        ("audit_sentinel_tenant_id", " \t "),
+        ("audit_sentinel_client_id", ""),
+        ("audit_sentinel_client_id", " \t "),
+        ("audit_sentinel_client_secret", ""),
+        ("audit_sentinel_client_secret", " \t "),
+        ("audit_sentinel_token_scope", ""),
+        ("audit_sentinel_token_scope", " \t "),
+    ],
+)
+def test_sink_strings_reject_empty_or_whitespace(field: str, blank: str) -> None:
+    settings: Final = {
+        "LITELLM_MASTER_KEY": MASTER_KEY,
+        "audit_sinks": ["splunk_hec", "sentinel"],
+        "audit_splunk_url": "https://hec.test:8088",
+        "audit_splunk_token": "token",
+        "audit_sentinel_endpoint": "https://dce.test",
+        "audit_sentinel_dcr_immutable_id": "dcr",
+        "audit_sentinel_tenant_id": "tenant",
+        "audit_sentinel_client_id": "client",
+        "audit_sentinel_client_secret": "secret",
+    }
+    with pytest.raises(ValidationError, match="must not be empty or whitespace"):
+        ControlPlaneSettings.model_validate({**settings, field: blank})
+
+
+@pytest.mark.parametrize("index", [None, "audit"])
+def test_splunk_index_is_optional_but_not_blank_when_set(index: str | None) -> None:
+    settings: Final = ControlPlaneSettings.model_validate(
+        {
+            "LITELLM_MASTER_KEY": MASTER_KEY,
+            "audit_splunk_url": "https://hec.test:8088",
+            "audit_splunk_token": "token",
+            "audit_splunk_index": index,
+        }
+    )
+    splunk: Final = settings.audit_splunk
+    assert splunk is not None and splunk.index == index
