@@ -4,7 +4,7 @@ use litellm_llms_types::{
         MessagesRequest, SystemPrompt,
     },
     providers::anthropic::{BetaProvider, BetaSet},
-    recognized::{Recognized, map_known_runs},
+    recognized::Recognized,
 };
 use serde_json::Value;
 
@@ -15,7 +15,7 @@ use crate::{
     },
     base_llm::messages::mid_conversation_system::{
         as_system_content_blocks, convert_mid_conversation_system_turns, is_system_turn,
-        message_content_blocks, system_turn,
+        message_content_blocks, system_prompt,
     },
 };
 
@@ -36,47 +36,32 @@ pub fn normalize_system_role_messages(
         .take_while(|message| is_system_turn(message))
         .count();
     let mut messages = request.messages.into_iter();
-    let hoisted: Vec<Message> = messages
-        .by_ref()
-        .take(leading_count)
-        .map(system_turn)
-        .filter_map(|message| match message {
-            Recognized::Known(message) => Some(message),
-            Recognized::Unrecognized(_) => None,
-        })
-        .collect();
+    let hoisted: Vec<Recognized<Message>> = messages.by_ref().take(leading_count).collect();
     let remaining: Vec<Recognized<Message>> = messages.collect();
     let remaining = if supports_mid_conversation_system {
         remaining
     } else {
-        map_known_runs(
-            strip_beta_gated_system_messages(
-                remaining.into_iter().map(system_turn).collect(),
-                &BetaSet::default(),
-                drops_unsupported_params,
-                &request.model,
-                provider,
-            ),
-            convert_mid_conversation_system_turns,
-        )
+        convert_mid_conversation_system_turns(strip_beta_gated_system_messages(
+            remaining,
+            &BetaSet::default(),
+            drops_unsupported_params,
+            &request.model,
+            provider,
+        ))
     };
-    let system_blocks: Vec<ContentBlock> = as_system_content_blocks(
+    let system_blocks: Vec<Recognized<ContentBlock>> = as_system_content_blocks(
         request
             .params
             .system
             .and_then(strip_billing_metadata_from_system),
     )
     .into_iter()
-    .chain(
-        hoisted
-            .into_iter()
-            .flat_map(|message| message_content_blocks(message.content)),
-    )
+    .chain(hoisted.into_iter().flat_map(message_content_blocks))
     .collect();
     MessagesRequest {
         messages: remaining,
         params: MessagesOptionalParams {
-            system: strip_billing_metadata_from_system(SystemPrompt::Blocks(system_blocks)),
+            system: strip_billing_metadata_from_system(system_prompt(system_blocks)),
             ..request.params
         },
         ..request
@@ -93,12 +78,15 @@ fn strip_scope_from_block(block: ContentBlock) -> ContentBlock {
     }
 }
 
-fn strip_scope_from_system(system: SystemPrompt) -> SystemPrompt {
+fn strip_scope_from_system(system: Recognized<SystemPrompt>) -> Recognized<SystemPrompt> {
     match system {
-        SystemPrompt::Blocks(blocks) => {
-            SystemPrompt::Blocks(blocks.into_iter().map(strip_scope_from_block).collect())
-        }
-        text => text,
+        Recognized::Known(SystemPrompt::Blocks(blocks)) => Recognized::Known(SystemPrompt::Blocks(
+            blocks.into_iter().map(strip_scope_from_block).collect(),
+        )),
+        Recognized::Unrecognized(Value::Array(blocks)) => Recognized::Unrecognized(Value::Array(
+            blocks.into_iter().map(strip_scope_from_raw_block).collect(),
+        )),
+        system => system,
     }
 }
 
@@ -461,6 +449,83 @@ mod tests {
             )))
             .unwrap()["messages"],
             json!([expected])
+        );
+    }
+
+    fn uncacheable_block() -> Value {
+        json!({"type": "text", "text": "Be terse.", "cache_control": "ephemeral"})
+    }
+
+    #[rstest]
+    #[case::unparsed_block(
+        json!([{"role": "system", "content": [uncacheable_block()]}, {"role": "user", "content": "hi"}]),
+        json!([{"type": "text", "text": "first"}, uncacheable_block()])
+    )]
+    #[case::non_list_content(
+        json!([{"role": "system", "content": 5}, {"role": "user", "content": "hi"}]),
+        json!([{"type": "text", "text": "first"}, 5])
+    )]
+    #[case::object_content(
+        json!([{"role": "system", "content": {"type": "text", "text": "Be terse."}}, {"role": "user", "content": "hi"}]),
+        json!([{"type": "text", "text": "first"}, {"type": "text", "text": "Be terse."}])
+    )]
+    fn a_leading_system_turn_that_did_not_parse_is_hoisted_as_sent(
+        #[case] messages: Value,
+        #[case] system: Value,
+    ) {
+        let sent = serde_json::to_value(normalize_system_role_messages(
+            request(json!({"system": "first", "messages": messages})),
+            true,
+            false,
+            BetaProvider::AzureAi,
+        ))
+        .unwrap();
+        assert_eq!(sent["system"], system);
+        assert_eq!(sent["messages"], json!([{"role": "user", "content": "hi"}]));
+    }
+
+    #[rstest]
+    fn a_later_system_turn_that_did_not_parse_becomes_a_user_turn_as_sent() {
+        assert_eq!(
+            sent_messages(
+                json!([
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "n", "input": {}}]},
+                    {"role": "system", "content": [uncacheable_block()]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}, {"type": "text", "text": "x", "id": 5}]}
+                ]),
+                false,
+                false,
+            )["messages"],
+            json!([
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "n", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}, {"type": "text", "text": "x", "id": 5}]},
+                {"role": "user", "content": [{"type": "text", "text": CONVERTED_SYSTEM_NOTE}, uncacheable_block()]}
+            ])
+        );
+    }
+
+    #[rstest]
+    fn a_system_list_that_did_not_parse_loses_its_billing_and_scope() {
+        let system = json!([
+            {"type": "text", "text": "x-anthropic-billing-header: cc_version=1"},
+            {"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral", "scope": "global"}},
+            {"type": "text", "text": "x", "id": 5}
+        ]);
+        let sent = serde_json::to_value(strip_cache_control_scope(normalize_system_role_messages(
+            request(json!({"system": system})),
+            true,
+            false,
+            BetaProvider::AzureAi,
+        )))
+        .unwrap();
+        assert_eq!(
+            sent["system"],
+            json!([
+                {"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "x", "id": 5}
+            ])
         );
     }
 }

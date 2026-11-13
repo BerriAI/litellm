@@ -7,7 +7,7 @@ use litellm_llms_types::{
         MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
     providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS},
-    recognized::{Recognized, map_known_runs},
+    recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value, json};
@@ -30,9 +30,10 @@ use crate::{
         anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
         existing_betas, get_auth_header, has_advisor_tool, has_anthropic_credential,
         is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
-        is_claude_strict_tools_rejection, is_tool_search_used, merge_beta_headers,
+        is_claude_strict_tools_rejection, is_tool_search_used, map_messages, merge_beta_headers,
         minted_oauth_environment, optionally_handle_anthropic_oauth,
         requires_native_compaction_beta, strip_advisor_blocks, strip_encrypted_reasoning_blocks,
+        strip_raw_advisor_blocks, strip_raw_encrypted_reasoning_blocks,
         strip_thinking_blocks_from_anthropic_messages_request, tools_without_strict,
     },
     base_llm::{
@@ -304,7 +305,11 @@ pub(crate) fn transform_messages_request(
     {
         request.messages
     } else {
-        map_known_runs(request.messages, strip_advisor_blocks)
+        map_messages(
+            request.messages,
+            strip_advisor_blocks,
+            strip_raw_advisor_blocks,
+        )
     };
     let messages = if context.drops_unsupported_params {
         drop_non_string_tool_result_texts(messages)
@@ -312,7 +317,11 @@ pub(crate) fn transform_messages_request(
         messages
     };
     Ok(MessagesRequest {
-        messages: map_known_runs(messages, strip_encrypted_reasoning_blocks),
+        messages: map_messages(
+            messages,
+            strip_encrypted_reasoning_blocks,
+            strip_raw_encrypted_reasoning_blocks,
+        ),
         params: MessagesOptionalParams {
             context_management,
             extra: without_null_safeguards(request.params.extra),

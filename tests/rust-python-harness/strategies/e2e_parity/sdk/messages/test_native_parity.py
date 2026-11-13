@@ -3637,6 +3637,27 @@ def _mid_conversation_system(**fields: object) -> list[Mapping[str, object]]:
     ]
 
 
+# A block Python keeps as sent but Rust cannot type, so the message carrying it stays unparsed.
+UNPARSED_BLOCK: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "text", "text": "Note.", "id": 5})
+UNCACHEABLE_SYSTEM_BLOCK: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "text", "text": "Be terse.", "cache_control": "ephemeral"}
+)
+TOOL_USE_TURN: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "functions.get_weather:0", "name": "get_weather", "input": {}}],
+    }
+)
+
+
+def _unparsed_turn(role: str, *blocks: Mapping[str, JsonValue]) -> list[Mapping[str, object]]:
+    return [
+        dict(USER),
+        {"role": role, "content": [dict(UNPARSED_BLOCK), *blocks]},
+        {"role": "user", "content": "Go on."},
+    ]
+
+
 def _beta(value: str) -> Mapping[str, object]:
     return {"anthropic-beta": value}
 
@@ -3919,6 +3940,178 @@ AZURE_SHAPING_CASES: Final = tuple(
                     },
                     {"role": "user", "content": "Go on."},
                 ]
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_unparsed_message_non_string_text_block_dropped",
+            _kw(messages=[{"role": "user", "content": [{"type": "text", "text": 5}, {"type": "text", "text": "Hi."}]}]),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_unparsed_message_emptied_by_the_sanitizer_dropped",
+            _kw(
+                messages=[
+                    dict(USER),
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": 5}, {"type": "thinking", "thinking": ""}],
+                    },
+                    {"role": "user", "content": "Go on."},
+                ]
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_unparsed_message_tool_use_ids_sanitized",
+            _kw(
+                tools=[dict(WEATHER_TOOL)],
+                messages=[
+                    dict(USER),
+                    {
+                        "role": "assistant",
+                        "content": [
+                            dict(UNPARSED_BLOCK),
+                            {"type": "tool_use", "id": "functions.get_weather:0", "name": "get_weather", "input": {}},
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "tool_result", "tool_use_id": "functions.get_weather:0", "content": "Sunny."},
+                            dict(UNPARSED_BLOCK),
+                        ],
+                    },
+                ],
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_unparsed_message_web_search_result_flattened",
+            _kw(
+                messages=_unparsed_turn(
+                    "assistant",
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_01Parity",
+                        "name": "web_search",
+                        "input": {"query": "paris"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_01Parity",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://example.com",
+                                "title": "Paris",
+                                "snippet": "Capital.",
+                            }
+                        ],
+                    },
+                )
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_unparsed_message_provider_specific_fields_dropped",
+            _kw(
+                messages=_unparsed_turn(
+                    "assistant", {"type": "text", "text": "Paris.", "provider_specific_fields": {"citations": None}}
+                )
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_unparsed_assistant_advisor_blocks_stripped",
+            _kw(
+                messages=_unparsed_turn(
+                    "assistant",
+                    {"type": "server_tool_use", "id": "srvtoolu_01Parity", "name": "advisor", "input": {}},
+                    {
+                        "type": "advisor_tool_result",
+                        "tool_use_id": "srvtoolu_01Parity",
+                        "content": {"type": "advisor_result", "text": "Use channels."},
+                    },
+                )
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_unparsed_assistant_encrypted_reasoning_stripped",
+            _kw(
+                messages=_unparsed_turn(
+                    "assistant",
+                    {"type": "thinking", "thinking": "Hmm.", "signature": "litellm_encrypted_reasoning:abc"},
+                    {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:def"},
+                )
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_redacted_thinking_converse_wrapper_unwrapped",
+            _kw(
+                messages=[
+                    dict(USER),
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "redacted_thinking", "data": "UVVKRA=="},
+                            {"type": "text", "text": "Paris."},
+                        ],
+                    },
+                    {"role": "user", "content": "Go on."},
+                ]
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_unparsed_redacted_thinking_converse_wrapper_unwrapped",
+            _kw(messages=_unparsed_turn("assistant", {"type": "redacted_thinking", "data": "UVVKRA=="})),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_leading_system_unparsed_block_hoisted",
+            _kw(messages=[{"role": "system", "content": [dict(UNCACHEABLE_SYSTEM_BLOCK)]}, dict(USER)]),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_leading_system_non_list_content_hoisted",
+            _kw(system="Answer in one word.", messages=[{"role": "system", "content": 5}, dict(USER)]),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_system_list_with_an_unparsed_block_loses_its_billing_block",
+            _kw(
+                system=[
+                    {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.0"},
+                    {"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral", "scope": "global"}},
+                    dict(UNPARSED_BLOCK),
+                ]
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_mid_system_unparsed_block_converted",
+            _kw(messages=_mid_conversation_system(content=[dict(UNCACHEABLE_SYSTEM_BLOCK)])),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_mid_system_moved_after_an_unparsed_tool_result",
+            _kw(
+                tools=[dict(WEATHER_TOOL)],
+                messages=[
+                    dict(USER),
+                    dict(TOOL_USE_TURN),
+                    {"role": "system", "content": [dict(UNCACHEABLE_SYSTEM_BLOCK)]},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "tool_result", "tool_use_id": "functions.get_weather:0", "content": "Sunny."},
+                            dict(UNPARSED_BLOCK),
+                        ],
+                    },
+                ],
             ),
             model=AZURE_CLAUDE,
         ),

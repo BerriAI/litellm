@@ -18,10 +18,10 @@ use litellm_llms_types::{
         API_BASE, API_KEY_HEADER, AnthropicBeta, BETA_HEADER, BetaSet,
         DIRECT_BROWSER_ACCESS_HEADER, MESSAGES_PATH,
     },
-    recognized::Recognized,
+    recognized::{Recognized, map_known_runs, python_truthy},
 };
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{
     anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX,
@@ -495,32 +495,108 @@ fn is_billing_header_block(block: &ContentBlock) -> bool {
             .is_some_and(|text| text.starts_with(BILLING_HEADER_PREFIX))
 }
 
+fn is_raw_billing_header_block(block: &Value) -> bool {
+    raw_block_type(block) == Some("text")
+        && block
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.starts_with(BILLING_HEADER_PREFIX))
+}
+
 /// Python's `AnthropicMessagesConfig._filter_billing_headers_from_system`: the Claude Code
 /// attribution blocks the first-party API reads, dropped for hosts that reject them. `None`
-/// when nothing else was in the system prompt.
-pub fn filter_billing_headers_from_system(system: SystemPrompt) -> Option<SystemPrompt> {
+/// when nothing else was in the system prompt. A list holding blocks Rust could not parse is
+/// filtered the same way, and any other value is left as sent.
+pub fn filter_billing_headers_from_system(
+    system: Recognized<SystemPrompt>,
+) -> Option<Recognized<SystemPrompt>> {
     match system {
-        SystemPrompt::Text(text) if text.starts_with(BILLING_HEADER_PREFIX) => None,
-        SystemPrompt::Text(text) => Some(SystemPrompt::Text(text)),
-        SystemPrompt::Blocks(blocks) => {
+        Recognized::Known(SystemPrompt::Text(text)) if text.starts_with(BILLING_HEADER_PREFIX) => {
+            None
+        }
+        Recognized::Known(SystemPrompt::Blocks(blocks)) => {
             let kept: Vec<ContentBlock> = blocks
                 .into_iter()
                 .filter(|block| !is_billing_header_block(block))
                 .collect();
-            (!kept.is_empty()).then_some(SystemPrompt::Blocks(kept))
+            (!kept.is_empty()).then_some(Recognized::Known(SystemPrompt::Blocks(kept)))
         }
+        Recognized::Unrecognized(Value::Array(blocks)) => {
+            let kept: Vec<Value> = blocks
+                .into_iter()
+                .filter(|block| !is_raw_billing_header_block(block))
+                .collect();
+            (!kept.is_empty()).then_some(Recognized::Unrecognized(Value::Array(kept)))
+        }
+        system => Some(system),
     }
 }
 
 /// The billing strip of Python's `AnthropicMessagesConfig.transform_anthropic_messages_request`,
 /// which pops a system prompt the filter leaves empty, an empty string included.
-pub fn strip_billing_metadata_from_system(system: SystemPrompt) -> Option<SystemPrompt> {
-    filter_billing_headers_from_system(system)
-        .filter(|kept| !matches!(kept, SystemPrompt::Text(text) if text.is_empty()))
+pub fn strip_billing_metadata_from_system(
+    system: Recognized<SystemPrompt>,
+) -> Option<Recognized<SystemPrompt>> {
+    filter_billing_headers_from_system(system).filter(|kept| match kept {
+        Recognized::Known(SystemPrompt::Text(text)) => !text.is_empty(),
+        Recognized::Unrecognized(Value::Object(fields)) => !fields.is_empty(),
+        _ => true,
+    })
 }
 
+/// Python's `strip_encrypted_reasoning_blocks_from_anthropic_messages`: blocks carrying another
+/// provider's encrypted reasoning go, a message left with no blocks goes with them, and a kept
+/// `redacted_thinking` block gets Claude's own `data` back from a Bedrock Converse wrapper.
 pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> {
-    retain_blocks(messages, |block| !is_encrypted_reasoning_block(block))
+    messages
+        .into_iter()
+        .filter_map(|message| {
+            let MessageContent::Blocks(blocks) = &message.content else {
+                return Some(message);
+            };
+            let kept: Vec<ContentBlock> = blocks
+                .iter()
+                .filter(|block| !is_encrypted_reasoning_block(block))
+                .cloned()
+                .map(with_native_redacted_data)
+                .collect();
+            if &kept == blocks {
+                return Some(message);
+            }
+            (!kept.is_empty()).then(|| message.with_blocks(kept))
+        })
+        .collect()
+}
+
+fn with_native_redacted_data(block: ContentBlock) -> ContentBlock {
+    match block.data.as_deref().and_then(converse_wrapped_payload) {
+        Some(data) if block.is_type(ContentBlockType::RedactedThinking) => ContentBlock {
+            data: Some(data),
+            ..block
+        },
+        _ => block,
+    }
+}
+
+/// Python's `base64.b64decode(data, validate=True)`: the standard alphabet with its padding,
+/// whatever the unused bits of the last character hold.
+const PYTHON_BASE64: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    base64::engine::GeneralPurposeConfig::new()
+        .with_decode_allow_trailing_bits(true)
+        .with_decode_padding_mode(base64::engine::DecodePaddingMode::RequireCanonical),
+);
+
+/// Python's `_converse_wrapped_payload`, kept only when non-empty as `native_redacted_thinking_data`
+/// keeps it: Bedrock Converse wraps Claude's `data` in one more layer of base64, and Claude's own
+/// value never decodes twice.
+fn converse_wrapped_payload(data: &str) -> Option<String> {
+    use base64::Engine;
+    let payload = String::from_utf8(PYTHON_BASE64.decode(data).ok()?)
+        .ok()
+        .filter(|payload| payload.is_ascii() && !payload.is_empty())?;
+    PYTHON_BASE64.decode(&payload).ok()?;
+    Some(payload)
 }
 
 fn is_advisor_use(block: &ContentBlock) -> bool {
@@ -598,7 +674,16 @@ fn flattenable_web_search_results(block: &ContentBlock) -> Option<(&str, WebSear
         return None;
     }
     let tool_use_id = block.tool_use_id.as_deref()?;
-    let results = match block.content.as_ref()? {
+    Some((
+        tool_use_id,
+        replayed_web_search_results(block.content.as_ref()?)?,
+    ))
+}
+
+/// The results a replayed `web_search_tool_result` block carries, `None` when Anthropic minted
+/// them, since only its search backend reads `encrypted_content`.
+fn replayed_web_search_results(content: &Value) -> Option<WebSearchResults> {
+    let results = match content {
         Value::Array(items) => {
             let results = items
                 .iter()
@@ -621,7 +706,7 @@ fn flattenable_web_search_results(block: &ContentBlock) -> Option<(&str, WebSear
         },
         _ => return None,
     };
-    Some((tool_use_id, results))
+    Some(results)
 }
 
 fn render_web_search_results(query: &str, results: &WebSearchResults) -> String {
@@ -723,6 +808,270 @@ pub fn flatten_unencrypted_web_search_results(messages: Vec<Message>) -> Vec<Mes
             MessageContent::Text(_) => message,
         })
         .collect()
+}
+
+const CONTENT: &str = "content";
+
+/// Python's message rewrites read any mapping, so a message Rust could not parse gets the same
+/// rewrite on its raw JSON: `known` rewrites each run of parsed messages and `raw` each unparsed
+/// one, returning `None` where Python drops the message. A raw message the rewrite left
+/// parseable is parsed again, so every later step reads it as Python does.
+pub fn map_messages(
+    messages: Vec<Recognized<Message>>,
+    known: impl FnMut(Vec<Message>) -> Vec<Message>,
+    raw: impl Fn(Value) -> Option<Value>,
+) -> Vec<Recognized<Message>> {
+    map_known_runs(messages, known)
+        .into_iter()
+        .filter_map(|message| match message {
+            Recognized::Unrecognized(message) => raw(message).map(reparsed),
+            known => Some(known),
+        })
+        .collect()
+}
+
+fn reparsed(message: Value) -> Recognized<Message> {
+    match Message::deserialize(&message) {
+        Ok(parsed) => Recognized::Known(parsed),
+        Err(_) => Recognized::Unrecognized(message),
+    }
+}
+
+/// Rewrites the content of a raw message whose content is a list, the only shape Python's
+/// block rewrites touch. `None` from `rewrite` drops the message.
+fn with_raw_blocks(
+    message: Value,
+    rewrite: impl FnOnce(Vec<Value>) -> Option<Vec<Value>>,
+) -> Option<Value> {
+    let Value::Object(mut fields) = message else {
+        return Some(message);
+    };
+    let Some(Value::Array(blocks)) = fields.get_mut(CONTENT) else {
+        return Some(Value::Object(fields));
+    };
+    let blocks = std::mem::take(blocks);
+    fields.insert(CONTENT.into(), Value::Array(rewrite(blocks)?));
+    Some(Value::Object(fields))
+}
+
+fn raw_block_type(block: &Value) -> Option<&str> {
+    block.get("type").and_then(Value::as_str)
+}
+
+fn is_raw_blank(text: Option<&Value>) -> bool {
+    is_blank(text.and_then(Value::as_str))
+}
+
+fn is_empty_raw_text_block(block: &Value) -> bool {
+    raw_block_type(block) == Some("text") && is_raw_blank(block.get("text"))
+}
+
+fn is_empty_unsigned_raw_thinking_block(block: &Value) -> bool {
+    raw_block_type(block) == Some("thinking")
+        && is_raw_blank(block.get("thinking"))
+        && !block.get("signature").is_some_and(python_truthy)
+}
+
+/// [`strip_empty_content_blocks`] on a raw message: a text block whose `text` is not a
+/// non-blank string goes, so does an empty thinking block with no signature, and a message
+/// left with no blocks is dropped.
+pub fn strip_empty_raw_content_blocks(message: Value) -> Option<Value> {
+    with_raw_blocks(message, |blocks| {
+        let sent = blocks.len();
+        let kept: Vec<Value> = blocks
+            .into_iter()
+            .filter(|block| {
+                !is_empty_raw_text_block(block) && !is_empty_unsigned_raw_thinking_block(block)
+            })
+            .collect();
+        (kept.len() == sent || !kept.is_empty()).then_some(kept)
+    })
+}
+
+fn sanitize_raw_tool_use_id_block(block: Value) -> Value {
+    let key = match raw_block_type(&block) {
+        Some("tool_use" | "server_tool_use") => "id",
+        Some("tool_result") => "tool_use_id",
+        _ => return block,
+    };
+    let Value::Object(mut fields) = block else {
+        return block;
+    };
+    if let Some(normalized) = normalized_if_changed(fields.get(key).and_then(Value::as_str)) {
+        fields.insert(key.into(), Value::String(normalized));
+    }
+    Value::Object(fields)
+}
+
+/// [`sanitize_tool_use_ids`] on a raw message.
+pub fn sanitize_raw_tool_use_ids(message: Value) -> Option<Value> {
+    with_raw_blocks(message, |blocks| {
+        Some(
+            blocks
+                .into_iter()
+                .map(sanitize_raw_tool_use_id_block)
+                .collect(),
+        )
+    })
+}
+
+fn raw_flattenable_web_search_results(block: &Value) -> Option<(&str, WebSearchResults)> {
+    if raw_block_type(block) != Some("web_search_tool_result") {
+        return None;
+    }
+    let tool_use_id = block.get("tool_use_id")?.as_str()?;
+    Some((
+        tool_use_id,
+        replayed_web_search_results(block.get(CONTENT)?)?,
+    ))
+}
+
+fn raw_server_tool_use_query(block: &Value) -> Option<(&str, &str)> {
+    if raw_block_type(block) != Some("server_tool_use") {
+        return None;
+    }
+    let id = block.get("id")?.as_str()?;
+    let query = match block.get("input") {
+        None => "",
+        Some(Value::Object(input)) => match input.get("query") {
+            None => "",
+            Some(query) => query.as_str()?,
+        },
+        Some(_) => return None,
+    };
+    Some((id, query))
+}
+
+/// [`flatten_unencrypted_web_search_results`] on a raw message.
+pub fn flatten_unencrypted_raw_web_search_results(message: Value) -> Option<Value> {
+    with_raw_blocks(message, |blocks| {
+        let flattenable_ids: Vec<&str> = blocks
+            .iter()
+            .filter_map(raw_flattenable_web_search_results)
+            .map(|(tool_use_id, _)| tool_use_id)
+            .collect();
+        if flattenable_ids.is_empty() {
+            return Some(blocks);
+        }
+        let queries: Vec<(&str, &str)> = blocks
+            .iter()
+            .filter_map(raw_server_tool_use_query)
+            .collect();
+        let flattened = blocks
+            .iter()
+            .filter_map(|block| {
+                if let Some((tool_use_id, results)) = raw_flattenable_web_search_results(block) {
+                    let query = queries
+                        .iter()
+                        .rfind(|(id, _)| *id == tool_use_id)
+                        .map_or("", |(_, query)| query);
+                    return Some(
+                        json!({"type": "text", "text": render_web_search_results(query, &results)}),
+                    );
+                }
+                if let Some((id, _)) = raw_server_tool_use_query(block)
+                    && flattenable_ids.contains(&id)
+                {
+                    return None;
+                }
+                Some(block.clone())
+            })
+            .collect();
+        Some(flattened)
+    })
+}
+
+/// [`strip_provider_specific_fields`] on a raw message.
+pub fn strip_raw_provider_specific_fields(message: Value) -> Option<Value> {
+    with_raw_blocks(message, |blocks| {
+        Some(
+            blocks
+                .into_iter()
+                .map(|block| match block {
+                    Value::Object(mut fields) => {
+                        fields.shift_remove("provider_specific_fields");
+                        Value::Object(fields)
+                    }
+                    block => block,
+                })
+                .collect(),
+        )
+    })
+}
+
+fn is_raw_advisor_use(block: &Value) -> bool {
+    raw_block_type(block) == Some("server_tool_use")
+        && block.get("name").and_then(Value::as_str) == Some("advisor")
+}
+
+/// Python's `strip_advisor_blocks_from_messages` on a raw assistant message: every advisor
+/// `server_tool_use` with a truthy id goes, with the `advisor_tool_result` answering it.
+pub fn strip_raw_advisor_blocks(message: Value) -> Option<Value> {
+    if message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return Some(message);
+    }
+    with_raw_blocks(message, |blocks| {
+        let advisor_ids: Vec<Value> = blocks
+            .iter()
+            .filter(|block| is_raw_advisor_use(block))
+            .filter_map(|block| block.get("id"))
+            .filter(|id| python_truthy(id))
+            .cloned()
+            .collect();
+        let answers_advisor = |id: Option<&Value>| id.is_some_and(|id| advisor_ids.contains(id));
+        let kept = blocks
+            .iter()
+            .filter(|block| {
+                let advisor_use = is_raw_advisor_use(block) && answers_advisor(block.get("id"));
+                let advisor_result = raw_block_type(block) == Some("advisor_tool_result")
+                    && answers_advisor(block.get("tool_use_id"));
+                !advisor_use && !advisor_result
+            })
+            .cloned()
+            .collect();
+        Some(kept)
+    })
+}
+
+fn is_raw_encrypted_reasoning_block(block: &Value) -> bool {
+    let field = match raw_block_type(block) {
+        Some("thinking") => block.get("signature"),
+        Some("redacted_thinking") => block.get("data"),
+        _ => None,
+    };
+    field
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.starts_with(ENCRYPTED_REASONING_SIGNATURE_PREFIX))
+}
+
+fn with_native_raw_redacted_data(block: Value) -> Value {
+    if raw_block_type(&block) != Some("redacted_thinking") {
+        return block;
+    }
+    let Value::Object(mut fields) = block else {
+        return block;
+    };
+    if let Some(data) = fields
+        .get("data")
+        .and_then(Value::as_str)
+        .and_then(converse_wrapped_payload)
+    {
+        fields.insert("data".into(), Value::String(data));
+    }
+    Value::Object(fields)
+}
+
+/// [`strip_encrypted_reasoning_blocks`] on a raw message.
+pub fn strip_raw_encrypted_reasoning_blocks(message: Value) -> Option<Value> {
+    with_raw_blocks(message, |blocks| {
+        let kept: Vec<Value> = blocks
+            .iter()
+            .filter(|block| !is_raw_encrypted_reasoning_block(block))
+            .cloned()
+            .map(with_native_raw_redacted_data)
+            .collect();
+        (kept == blocks || !kept.is_empty()).then_some(kept)
+    })
 }
 
 pub fn is_anthropic_invalid_thinking_block_error(error_text: &str) -> bool {
@@ -1283,6 +1632,262 @@ mod tests {
         assert_eq!(
             apply(strip_encrypted_reasoning_blocks, input.clone()),
             input
+        );
+    }
+
+    #[rstest]
+    #[case::bedrock_converse_wrapper("UVVKRA==", "QUJD")]
+    #[case::claude_own_data("QUJD", "QUJD")]
+    #[case::not_base64("EmwKAhgBEgy_anthropic_minted", "EmwKAhgBEgy_anthropic_minted")]
+    #[case::wrapping_nothing("", "")]
+    fn redacted_thinking_gets_claude_own_data_back(#[case] data: &str, #[case] expected: &str) {
+        let turn = |data: &str| {
+            json!([{"role": "assistant", "content": [
+                {"type": "redacted_thinking", "data": data},
+                {"type": "text", "text": "The answer."}
+            ]}])
+        };
+        assert_eq!(
+            apply(strip_encrypted_reasoning_blocks, turn(data)),
+            turn(expected)
+        );
+    }
+
+    fn unparsed_block() -> Value {
+        json!({"type": "text", "text": "Note.", "id": 5})
+    }
+
+    fn turn(blocks: Value) -> Value {
+        json!({"role": "assistant", "content": blocks})
+    }
+
+    #[rstest]
+    #[case::non_string_text(
+        json!([{"type": "text", "text": 5}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::blank_text(
+        json!([{"type": "text", "text": " \n"}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::empty_unsigned_thinking(
+        json!([{"type": "thinking", "thinking": "", "signature": null}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::empty_signed_thinking(
+        json!([{"type": "thinking", "thinking": "", "signature": "sig"}, unparsed_block()]),
+        Some(json!([{"type": "thinking", "thinking": "", "signature": "sig"}, unparsed_block()]))
+    )]
+    #[case::every_block_empty(json!([{"type": "text", "text": 5}, {"type": "text"}]), None)]
+    #[case::no_blocks(json!([]), Some(json!([])))]
+    fn strip_empty_raw_content_blocks_drops_what_python_drops(
+        #[case] blocks: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        assert_eq!(
+            strip_empty_raw_content_blocks(turn(blocks)),
+            expected.map(turn)
+        );
+    }
+
+    #[rstest]
+    #[case::string_content(json!({"role": "user", "content": 5}))]
+    #[case::not_an_object(json!("hi"))]
+    fn raw_rewrites_leave_a_message_without_a_block_list(#[case] message: Value) {
+        assert_eq!(
+            strip_empty_raw_content_blocks(message.clone()),
+            Some(message.clone())
+        );
+        assert_eq!(
+            strip_raw_encrypted_reasoning_blocks(message.clone()),
+            Some(message)
+        );
+    }
+
+    #[rstest]
+    fn sanitize_raw_tool_use_ids_rewrites_ids_python_rejects() {
+        assert_eq!(
+            sanitize_raw_tool_use_ids(turn(json!([
+                unparsed_block(),
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}},
+                {"type": "server_tool_use", "id": "srvtoolu_ok", "name": "web_search"},
+                {"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"},
+                {"type": "tool_result", "tool_use_id": 7}
+            ]))),
+            Some(turn(json!([
+                unparsed_block(),
+                {"type": "tool_use", "id": "functions_Bash_0", "name": "Bash", "input": {}},
+                {"type": "server_tool_use", "id": "srvtoolu_ok", "name": "web_search"},
+                {"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "ok"},
+                {"type": "tool_result", "tool_use_id": 7}
+            ])))
+        );
+    }
+
+    #[rstest]
+    #[case::replayed_results(
+        json!([
+            unparsed_block(),
+            {"type": "server_tool_use", "id": "s1", "name": "web_search", "input": {"query": "paris"}},
+            {"type": "web_search_tool_result", "tool_use_id": "s1", "content": [
+                {"type": "web_search_result", "url": "https://example.com", "title": "Paris", "snippet": "Capital."}
+            ]}
+        ]),
+        json!([
+            unparsed_block(),
+            {"type": "text", "text": "Web search results for 'paris':\n\nTitle: Paris\nURL: https://example.com\nSnippet: Capital."}
+        ])
+    )]
+    #[case::replayed_error(
+        json!([
+            unparsed_block(),
+            {"type": "web_search_tool_result", "tool_use_id": "s1", "content": {"type": "web_search_tool_result_error"}}
+        ]),
+        json!([
+            unparsed_block(),
+            {"type": "text", "text": "Web search results:\n\nSearch failed: unavailable"}
+        ])
+    )]
+    #[case::anthropic_issued(
+        json!([
+            unparsed_block(),
+            {"type": "web_search_tool_result", "tool_use_id": "s1", "content": [
+                {"type": "web_search_result", "url": "u", "encrypted_content": "blob"}
+            ]}
+        ]),
+        json!([
+            unparsed_block(),
+            {"type": "web_search_tool_result", "tool_use_id": "s1", "content": [
+                {"type": "web_search_result", "url": "u", "encrypted_content": "blob"}
+            ]}
+        ])
+    )]
+    fn flatten_unencrypted_raw_web_search_results_follows_python(
+        #[case] blocks: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(
+            flatten_unencrypted_raw_web_search_results(turn(blocks)),
+            Some(turn(expected))
+        );
+    }
+
+    #[rstest]
+    fn strip_raw_provider_specific_fields_drops_the_field_from_each_block() {
+        assert_eq!(
+            strip_raw_provider_specific_fields(turn(json!([
+                unparsed_block(),
+                {"type": "text", "text": "hi", "provider_specific_fields": {"x": 1}, "citations": null},
+                "raw"
+            ]))),
+            Some(turn(json!([
+                unparsed_block(),
+                {"type": "text", "text": "hi", "citations": null},
+                "raw"
+            ])))
+        );
+    }
+
+    fn advisor_exchange(id: Value) -> Value {
+        json!([
+            unparsed_block(),
+            {"type": "server_tool_use", "id": id, "name": "advisor", "input": {}},
+            {"type": "advisor_tool_result", "tool_use_id": id, "content": {"type": "advisor_result", "text": "Use channels."}},
+            {"type": "text", "text": "Done."}
+        ])
+    }
+
+    #[rstest]
+    #[case::string_id(json!("srvtoolu_1"))]
+    #[case::numeric_id(json!(7))]
+    fn strip_raw_advisor_blocks_drops_the_exchange_from_an_assistant_turn(#[case] id: Value) {
+        assert_eq!(
+            strip_raw_advisor_blocks(turn(advisor_exchange(id))),
+            Some(turn(
+                json!([unparsed_block(), {"type": "text", "text": "Done."}])
+            ))
+        );
+    }
+
+    #[rstest]
+    #[case::user_turn(json!({"role": "user", "content": advisor_exchange(json!("srvtoolu_1"))}))]
+    #[case::empty_id(turn(advisor_exchange(json!(""))))]
+    fn strip_raw_advisor_blocks_leaves_other_turns(#[case] message: Value) {
+        assert_eq!(strip_raw_advisor_blocks(message.clone()), Some(message));
+    }
+
+    #[rstest]
+    #[case::bridge_tagged_blocks(
+        json!([
+            {"type": "thinking", "thinking": "plan", "signature": tagged("gAAAA_1")},
+            {"type": "redacted_thinking", "data": tagged("gAAAA_2")},
+            unparsed_block()
+        ]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::converse_wrapped_redacted_data(
+        json!([{"type": "redacted_thinking", "data": "UVVKRA=="}, unparsed_block()]),
+        Some(json!([{"type": "redacted_thinking", "data": "QUJD"}, unparsed_block()]))
+    )]
+    #[case::only_bridge_tagged_blocks(
+        json!([{"type": "thinking", "thinking": "plan", "signature": tagged("gAAAA_1")}]),
+        None
+    )]
+    #[case::no_blocks(json!([]), Some(json!([])))]
+    fn strip_raw_encrypted_reasoning_blocks_follows_python(
+        #[case] blocks: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        assert_eq!(
+            strip_raw_encrypted_reasoning_blocks(turn(blocks)),
+            expected.map(turn)
+        );
+    }
+
+    #[rstest]
+    fn a_raw_message_the_rewrite_left_parseable_is_parsed_again() {
+        let rewritten = map_messages(
+            history(json!([
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": [{"type": "text", "text": 5}, {"type": "text", "text": "ok"}]},
+                {"role": "user", "content": [{"type": "text", "text": 5}]}
+            ])),
+            strip_empty_content_blocks,
+            strip_empty_raw_content_blocks,
+        );
+        assert_eq!(
+            rewritten,
+            history(json!([
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}
+            ]))
+        );
+    }
+
+    fn system(value: Value) -> Recognized<SystemPrompt> {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[rstest]
+    #[case::unparsed_list(
+        json!([{"type": "text", "text": "x-anthropic-billing-header: cc_version=1"}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::unparsed_list_of_billing_blocks(
+        json!([{"type": "text", "text": "x-anthropic-billing-header: cc_version=1"}, 5, {"type": "text", "text": 5}]),
+        Some(json!([5, {"type": "text", "text": 5}]))
+    )]
+    #[case::only_billing(json!([{"type": "text", "text": "x-anthropic-billing-header: cc_version=1", "id": 5}]), None)]
+    #[case::object(json!({"type": "text", "text": "hi"}), Some(json!({"type": "text", "text": "hi"})))]
+    #[case::empty_object(json!({}), None)]
+    #[case::empty_text(json!(""), None)]
+    fn strip_billing_metadata_from_a_system_prompt_as_sent(
+        #[case] sent: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        assert_eq!(
+            strip_billing_metadata_from_system(system(sent)),
+            expected.map(system)
         );
     }
 

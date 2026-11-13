@@ -325,13 +325,38 @@ pub struct MessagesRequest {
     pub params: MessagesOptionalParams,
 }
 
+/// `deserialize_with` for `system`: a string or a list of blocks, kept as sent when one of its
+/// blocks does not parse, or an object. A number or boolean is refused.
+fn system_prompt_or_list<'de, D>(
+    deserializer: D,
+) -> Result<Option<Recognized<SystemPrompt>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match <Value as serde::Deserialize>::deserialize(deserializer)? {
+        Value::Null => Ok(None),
+        value @ (Value::String(_) | Value::Array(_) | Value::Object(_)) => {
+            serde_json::from_value(value)
+                .map(Some)
+                .map_err(serde::de::Error::custom)
+        }
+        other => Err(serde::de::Error::custom(format!(
+            "system must be a string or a list of content blocks, got {other}"
+        ))),
+    }
+}
+
 #[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct MessagesOptionalParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<Recognized<u64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system: Option<SystemPrompt>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "system_prompt_or_list"
+    )]
+    pub system: Option<Recognized<SystemPrompt>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -893,5 +918,36 @@ mod tests {
         assert_eq!(block.content.as_ref(), wire.get("content"));
         assert_eq!(block.extra.get("source"), wire.get("source"));
         assert_eq!(serde_json::to_value(block).unwrap(), wire);
+    }
+
+    fn sent_system(system: Value) -> Result<Option<Recognized<SystemPrompt>>, serde_json::Error> {
+        serde_json::from_value::<MessagesOptionalParams>(json!({"system": system}))
+            .map(|params| params.system)
+    }
+
+    #[rstest]
+    #[case::text(json!("be terse"), Some(Recognized::Known(SystemPrompt::Text("be terse".into()))))]
+    #[case::blocks(
+        json!([{"type": "text", "text": "be terse"}]),
+        Some(Recognized::Known(SystemPrompt::Blocks(vec![ContentBlock::text("be terse")])))
+    )]
+    #[case::list_with_an_unparsed_block(
+        json!([{"type": "text", "text": "be terse"}, 5]),
+        Some(Recognized::Unrecognized(json!([{"type": "text", "text": "be terse"}, 5])))
+    )]
+    #[case::object(json!({"type": "text"}), Some(Recognized::Unrecognized(json!({"type": "text"}))))]
+    #[case::null(Value::Null, None)]
+    fn system_keeps_what_does_not_parse_as_sent(
+        #[case] system: Value,
+        #[case] expected: Option<Recognized<SystemPrompt>>,
+    ) {
+        assert_eq!(sent_system(system).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::number(json!(5))]
+    #[case::boolean(json!(true))]
+    fn system_refuses_a_scalar(#[case] system: Value) {
+        assert!(sent_system(system).is_err());
     }
 }
