@@ -8,14 +8,18 @@ from litellm.caching import DualCache
 from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Field, Hook, Patch, on
 from litellm.integrations.custom_logger_v2.call import CallFacts
 from litellm.integrations.custom_logger_v2.host import reset_host_for_tests
+from litellm.integrations.custom_logger_v2.slots import HookArgs
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.v2_fields import output_cap
 from litellm.types.integrations.custom_logger_v2 import (
     BudgetPlan,
     BudgetReservation,
     KeyIdentity,
+    OutputCap,
     RateLimitStatus,
     RateLimitStatuses,
+    Stringified,
 )
 from litellm.types.utils import ModelResponse
 
@@ -187,3 +191,24 @@ async def test_post_call_hooks_get_call_facts_and_the_identity_of_the_auth_objec
     assert [
         (call.ids.call_id, call.kind.route, call.target.model) for _, _, call in recorder.seen if call is not None
     ] == [("call-1", "/chat/completions", "m")] * 2
+
+
+@pytest.mark.parametrize(
+    ("request_data", "explicit"),
+    [
+        pytest.param({"max_tokens": 64}, 64, id="small"),
+        pytest.param({"max_tokens": 2**70}, 2**70, id="past_i64"),
+        pytest.param(
+            {"max_tokens": "1e300"},
+            Stringified(
+                text=str(int(1e300)), truthy=True, hashable=True, integer=True, type_name="int", hash_error=None
+            ),
+            id="past_i128",
+        ),
+        pytest.param({"max_tokens": "inf"}, None, id="overflow_is_no_cap"),
+    ],
+)
+def test_the_output_cap_carries_the_int_the_limiter_parses_however_wide(
+    request_data: dict[str, object], explicit: object
+) -> None:
+    assert output_cap(HookArgs(request=request_data, call_type="acompletion")) == OutputCap(explicit=explicit)

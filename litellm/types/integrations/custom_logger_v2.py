@@ -285,7 +285,7 @@ class RateLimitStatuses(Record):
 
 
 class OutputCap(Record):
-    explicit: I64 | None = None
+    explicit: Scalar | None = None
 
 
 class AttemptTiming(Record):

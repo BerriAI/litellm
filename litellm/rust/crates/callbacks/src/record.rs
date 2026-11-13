@@ -186,11 +186,11 @@ pub struct RateLimitStatuses {
     pub statuses: Option<Vec<RateLimitStatus>>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OutputCap {
     pub rejected: Option<Vec<String>>,
-    pub explicit: Option<i64>,
+    pub explicit: Option<Scalar>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -491,6 +491,14 @@ mod tests {
             })
         );
         assert_ne!(identity.team_id, identity.team_alias);
+    }
+
+    #[rstest]
+    #[case::i64(json!({"explicit": 64}), Scalar::Int(64))]
+    #[case::past_i64(json!({"explicit": litellm_host::raw_json::encode("1180591620717411303424")}), Scalar::Int(1 << 70))]
+    fn an_output_cap_carries_an_int_past_i64(#[case] sent: Value, #[case] explicit: Scalar) {
+        let cap: OutputCap = serde_json::from_value(sent).unwrap();
+        assert_eq!(cap.explicit, Some(explicit));
     }
 
     #[rstest]
