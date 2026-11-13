@@ -17,7 +17,9 @@ from litellm.integrations.custom_logger_v2.derivations import RECORD_TYPES
 from litellm.integrations.custom_logger_v2.slots import HookArgs
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
+from litellm.proxy.common_utils.callback_utils import (
+    get_model_group_from_litellm_kwargs,  # pyright: ignore[reportUnknownVariableType]  # the helper takes an untyped dict
+)
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import alternates_for
 from litellm.types.integrations.custom_logger_v2 import (
     AgentPolicy,
@@ -411,12 +413,19 @@ def test_a_stringified_value_carries_the_error_text_python_raises_when_it_hashes
     assert identity.team_priority == carried
     assert carried.hash_error == _raised(lambda: raw in {"gold": 0.5})
     assert carried.hash_error == _raised(lambda: dict.fromkeys((("team", raw),)))
-    assert _raised(lambda: re.match("prod.*", raw)) == _match_error_from_type_name(carried.type_name)  # pyright: ignore[reportCallIssue, reportArgumentType]  # what prometheus does with a non-str tag
+    assert _raised(lambda: re.match("prod.*", raw)) == _match_error_from_type_name(carried.type_name)  # pyright: ignore[reportCallIssue, reportArgumentType, reportUnknownLambdaType]  # what prometheus does with a non-str tag
 
 
 @pytest.mark.parametrize(
     ("raw", "type_name"),
-    [([], "list"), ({}, "dict"), (set(), "set"), ((), "tuple"), (frozenset(), "frozenset"), (_Falsy(), "_Falsy")],
+    [
+        (list[object](), "list"),
+        (dict[str, object](), "dict"),
+        (set[object](), "set"),
+        (tuple[object, ...](), "tuple"),
+        (frozenset[object](), "frozenset"),
+        (_Falsy(), "_Falsy"),
+    ],
     ids=("list", "dict", "set", "tuple", "frozenset", "object"),
 )
 def test_a_stringified_value_carries_the_type_name_float_names_when_it_refuses_it(raw: object, type_name: str) -> None:
@@ -1404,7 +1413,7 @@ def test_rate_limit_state_leaves_the_key_limits_absent_when_the_helper_raises() 
 
 def _capacity_reservation_check_raises(reservation: object) -> str | None:
     try:
-        _ = reservation.get("entries")  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # what _reservation_covers does
+        _ = reservation.get("entries")  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]  # what _reservation_covers does
     except AttributeError as error:
         return str(error)
     return None
@@ -1430,7 +1439,9 @@ def _capacity_reservation_check_raises(reservation: object) -> str | None:
         ),
     ],
 )
-def test_a_budget_reservation_that_is_not_a_mapping_is_told_apart_from_none(raw: object, carried: object) -> None:
+def test_a_budget_reservation_that_is_not_a_mapping_is_told_apart_from_none(
+    raw: object, carried: str | int | Stringified
+) -> None:
     read: Final = derivations.budget_reservation(HookArgs(auth=SimpleNamespace(budget_reservation=raw)))
 
     assert read == BudgetReservation(not_a_mapping=carried)
@@ -1440,15 +1451,20 @@ def test_a_budget_reservation_that_is_not_a_mapping_is_told_apart_from_none(raw:
     assert derivations.budget_reservation(HookArgs(auth=SimpleNamespace(budget_reservation=None))) is None
 
 
+class _ReservationHolder:
+    def __init__(self, reservation: object) -> None:
+        self.budget_reservation: object = reservation
+
+
 def test_a_reservation_write_never_stores_that_the_read_was_not_a_mapping() -> None:
-    auth: Final = SimpleNamespace(budget_reservation="reserved")
-    args: Final = HookArgs(auth=auth)
+    holder: Final = _ReservationHolder("reserved")
+    args: Final = HookArgs(auth=holder)
     read: Final = derivations.budget_reservation(args)
     assert read is not None
 
     derivations.write_budget_reservation(args, read.model_copy(update={"finalized": True}))
 
-    assert auth.budget_reservation == {"finalized": True}
+    assert holder.budget_reservation == {"finalized": True}
 
 
 @pytest.mark.parametrize(

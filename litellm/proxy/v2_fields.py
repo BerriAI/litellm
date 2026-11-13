@@ -79,8 +79,8 @@ def limiter_request(args: HookArgs) -> LimiterRequest | None:
     if request is None:
         return None
     limiter: Final = _PROXY_MaxParallelRequestsHandler_v3
-    session_id, session_error = _attempt(lambda: limiter._get_session_id_from_data(None, request))  # pyright: ignore[reportPrivateUsage, reportArgumentType]  # the reader never touches the instance
-    agent_id, agent_error = _attempt(lambda: limiter._get_resolved_agent_id(None, args.auth, request))  # pyright: ignore[reportPrivateUsage, reportArgumentType]  # the reader never touches the instance
+    session_id, session_error = _attempt(lambda: limiter._get_session_id_from_data(None, request))  # pyright: ignore[reportPrivateUsage, reportArgumentType, reportUnknownMemberType]  # the reader never touches the instance
+    agent_id, agent_error = _attempt(lambda: limiter._get_resolved_agent_id(None, args.auth, request))  # pyright: ignore[reportPrivateUsage, reportArgumentType, reportUnknownMemberType]  # the reader never touches the instance
     return coerce_record(
         LimiterRequest,
         {

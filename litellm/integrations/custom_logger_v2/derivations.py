@@ -568,7 +568,9 @@ def model_group(args: HookArgs) -> object:
 def _handler_model_group(request: Mapping[str, object] | None) -> tuple[object, Exception | None]:
     if request is None:
         return None, None
-    from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
+    from litellm.proxy.common_utils.callback_utils import (
+        get_model_group_from_litellm_kwargs,  # pyright: ignore[reportUnknownVariableType]  # the helper takes an untyped dict
+    )
 
     try:
         return get_model_group_from_litellm_kwargs(request), None  # pyright: ignore[reportArgumentType]  # the logging handlers pass model_call_details
@@ -656,8 +658,8 @@ def logged_payload_not_a_mapping(args: HookArgs) -> str | int | float | bool | S
 
 def metadata_labels(args: HookArgs) -> tuple[MetadataLabel, ...]:
     from litellm.integrations.prometheus import (
-        _get_combined_custom_metadata_from_standard_logging_payload,  # pyright: ignore[reportPrivateUsage]  # the metadata prometheus labels from
-        get_custom_labels_from_metadata,
+        _get_combined_custom_metadata_from_standard_logging_payload,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # the metadata prometheus labels from
+        get_custom_labels_from_metadata,  # pyright: ignore[reportUnknownVariableType]  # the helper takes an untyped dict
     )
 
     payload: Final = member(args.request, "standard_logging_object")

@@ -210,7 +210,7 @@ async def test_post_call_hooks_get_call_facts_and_the_identity_of_the_auth_objec
     ],
 )
 def test_the_output_cap_carries_the_int_the_limiter_parses_however_wide(
-    request_data: dict[str, object], explicit: object
+    request_data: dict[str, object], explicit: int | Stringified | None
 ) -> None:
     assert output_cap(HookArgs(request=request_data, call_type="acompletion")) == OutputCap(explicit=explicit)
 
