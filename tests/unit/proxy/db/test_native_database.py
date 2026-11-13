@@ -1,5 +1,6 @@
 import asyncio
 import datetime as dt
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Final
@@ -12,7 +13,9 @@ from cryptography.hazmat.primitives.serialization import BestAvailableEncryption
 from cryptography.x509.oid import NameOID
 from pydantic import TypeAdapter
 
+from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.proxy.db.native_database import (
+    ServiceLoggingEvents,
     TokenRotation,
     keep_token_fresh,
     native_endpoint,
@@ -23,6 +26,7 @@ from litellm.proxy.db.native_database import (
 )
 from litellm.proxy.db.pgbouncer import PGBOUNCER_POOLED_ENV_VAR
 from litellm.proxy.db.token_auth import IAMEndpoint, RdsIamTokenAuth
+from litellm.rust_bridge._native import NativeDatabase
 from litellm.rust_bridge.database import NativeDatabaseEndpoint, NativePoolLimits
 
 NOW: Final = datetime(2026, 11, 3, 12, 0, 0)
@@ -390,3 +394,86 @@ async def test_keep_token_fresh_retries_a_failed_mint() -> None:
 
     assert sink.passwords == ("recovered",)
     assert schedule.delays[:2] == (600.0, 30.0)
+
+
+class _RecordingServiceLogging(ServiceLogging):
+    def __init__(self) -> None:
+        super().__init__(mock_testing=True)
+        self.events: tuple[tuple[str, str, float, Mapping[str, str] | None, str | None], ...] = ()
+        self.arrived: Final = asyncio.Event()
+
+    async def async_service_success_hook(
+        self,
+        service: ServiceTypes,
+        call_type: str,
+        duration: float,
+        parent_otel_span: object = None,
+        start_time: datetime | float | None = None,
+        end_time: datetime | float | None = None,
+        event_metadata: dict[str, str] | None = None,
+        caller: str | None = None,
+    ) -> None:
+        self.events = (*self.events, (service.value, call_type, duration, event_metadata, None))
+        self.arrived.set()
+
+    async def async_service_failure_hook(
+        self,
+        service: ServiceTypes,
+        duration: float,
+        error: str | Exception,
+        call_type: str,
+        parent_otel_span: object = None,
+        start_time: datetime | float | None = None,
+        end_time: datetime | float | None = None,
+        event_metadata: dict[str, str] | None = None,
+        caller: str | None = None,
+    ) -> None:
+        self.events = (*self.events, (service.value, call_type, duration, event_metadata, str(error)))
+        self.arrived.set()
+
+
+@pytest.mark.asyncio
+async def test_service_logging_events_reach_the_loop_from_another_thread() -> None:
+    logging: Final = _RecordingServiceLogging()
+    events: Final = ServiceLoggingEvents(loop=asyncio.get_running_loop(), service_logging=lambda: logging)
+
+    await asyncio.to_thread(
+        events.record, "add_key_spend", "LiteLLM_VerificationToken", "update", NOW.timestamp(), 0.25, None
+    )
+    await asyncio.wait_for(logging.arrived.wait(), timeout=5)
+    logging.arrived.clear()
+    await asyncio.to_thread(events.record, "health_check", None, None, NOW.timestamp(), 1.5, "pool timed out")
+    await asyncio.wait_for(logging.arrived.wait(), timeout=5)
+
+    assert logging.events == (
+        (
+            "postgres",
+            "add_key_spend",
+            0.25,
+            {"table_name": "LiteLLM_VerificationToken", "db_operation": "update"},
+            None,
+        ),
+        ("postgres", "health_check", 1.5, {}, "pool timed out"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_native_health_check_failure_reports_a_db_event() -> None:
+    logging: Final = _RecordingServiceLogging()
+    native: Final = await NativeDatabase.connect(
+        ServiceLoggingEvents(loop=asyncio.get_running_loop(), service_logging=lambda: logging),
+        native_endpoint(
+            "postgresql://litellm:secret@127.0.0.1:1/proxy?pool_timeout=1", tls_offered=True, max_connections=2
+        ).endpoint,
+    )
+
+    with pytest.raises(ValueError, match="database query failed"):
+        await native.health_check()
+    await asyncio.wait_for(logging.arrived.wait(), timeout=5)
+    await native.close()
+
+    assert len(logging.events) == 1
+    service, call_type, duration, metadata, failure = logging.events[0]
+    assert (service, call_type, metadata) == ("postgres", "health_check", {})
+    assert duration >= 0.9
+    assert failure is not None and "database query failed" in failure
