@@ -175,7 +175,11 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.deployment_pricing import pricing_models
-from litellm.litellm_core_utils.duration_parser import get_budget_window_start
+from litellm.litellm_core_utils.duration_parser import (
+    get_annual_budget_window_start,
+    get_budget_window_start,
+    is_annual_budget_duration,
+)
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsDispatch,
@@ -208,6 +212,7 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolv
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_change
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_settings
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db import tool_registry_writer
 from litellm.proxy.db.create_views import (
@@ -9535,7 +9540,11 @@ def _as_aware(moment: datetime) -> datetime:
 
 def _reset_window(budget_duration: str, budget_reset_at: datetime) -> tuple[datetime, datetime] | None:
     window_end: Final = _as_aware(budget_reset_at)
-    window_start: Final = get_budget_window_start(budget_duration, window_end)
+    window_start: Final = (
+        get_annual_budget_window_start(window_end, get_budget_reset_settings().timezone)
+        if is_annual_budget_duration(budget_duration)
+        else get_budget_window_start(budget_duration, window_end)
+    )
     return (window_start, window_end) if window_start < window_end else None
 
 
