@@ -108,6 +108,21 @@ class OpenCodeGoChatConfig(_GoReportedCostMixin, OpenAILikeChatConfig):
 
 
 class OpenCodeGoMessagesChatConfig(_GoReportedCostMixin, AnthropicConfig):
+    def get_model_response_iterator_for_request(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None,
+        optional_params: Mapping[str, object],
+        logging_obj: "Logging | None" = None,
+    ) -> object:
+        from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+        iterator: Final = ModelResponseIterator(
+            streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode
+        )
+        return iter(iterator) if sync_stream else iterator
+
     @property
     def custom_llm_provider(self) -> str:
         return "opencode_go"
