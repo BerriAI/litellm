@@ -3602,23 +3602,26 @@ AZURE_URL_CASES: Final = tuple(
         Case("azure_ai_scheme_relative_base", _kw(api_base="//fuzz.invalid/d/dep-e04/anthropic"), upstream=()),
         Case("azure_ai_ftp_base", _kw(api_base="ftp://fuzz.invalid/d/dep-e04/anthropic"), upstream=()),
         Case("azure_ai_base_not_a_url", _kw(api_base="not a url"), upstream=()),
-        Case(
-            "azure_ai_base_non_numeric_port",
-            _kw(api_base="http://fuzz.invalid:notaport/d/dep-e04/anthropic"),
-            upstream=(),
-        ),
-        Case(
-            "azure_ai_base_out_of_range_port",
-            _kw(api_base="http://fuzz.invalid:99999/d/dep-e04/anthropic"),
-            upstream=(),
-        ),
-        Case("azure_ai_base_empty_host", _kw(api_base="http:///d/dep-e04/anthropic"), upstream=()),
     )
 )
 
-# An anthropic base with no host goes through Python's client, so the key is never sent to the host
-# the native parser read from the path (`d`).
-ANTHROPIC_URL_CASES: Final = (Case("anthropic_base_empty_host", _kw(api_base="http:///d"), upstream=()),)
+# An api_base the native URL parser reads otherwise than httpx and aiohttp goes through Python's client, which
+# refuses it before sending anything. Natively the three leaking shapes sent the operator key to a host the
+# configuration did not name or mean: `d` read from the path of an empty-host base, or the host after
+# credentials in the URL, including userinfo that reads like a trusted host. The port shapes fail locally on
+# both sides.
+_MALFORMED_BASES: Final = (
+    ("base_empty_host", _kw(api_base="http:///d/anthropic")),
+    ("base_credentials_in_url", _kw(api_base_userinfo="user:pass", api_base_suffix="/anthropic")),
+    ("base_userinfo_like_a_host", _kw(api_base_userinfo="api.anthropic.com", api_base_suffix="/anthropic")),
+    ("base_non_numeric_port", _kw(api_base="http://fuzz.invalid:abc/anthropic")),
+    ("base_out_of_range_port", _kw(api_base="http://fuzz.invalid:99999/anthropic")),
+)
+MALFORMED_BASE_CASES: Final = tuple(
+    Case(f"{provider}_{shape}", kwargs, model=model, upstream=(), rust_providers=AZURE_AI)
+    for provider, model in (("anthropic", SONNET), ("azure_ai", AZURE_CLAUDE))
+    for shape, kwargs in _MALFORMED_BASES
+)
 
 AZURE_OPUS_4_8: Final = "azure_ai/claude-opus-4-8"
 JSON_SCHEMA_FORMAT: Final[Mapping[str, JsonValue]] = MappingProxyType(
@@ -4304,7 +4307,7 @@ CASES: Final = (
     *HOOKED_STREAM_AND_CACHE_CASES,
     *AZURE_AUTH_CASES,
     *AZURE_URL_CASES,
-    *ANTHROPIC_URL_CASES,
+    *MALFORMED_BASE_CASES,
     *AZURE_SHAPING_CASES,
     *AZURE_ERROR_CASES,
     *ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES,
@@ -5813,3 +5816,15 @@ async def test_an_anthropic_beta_python_cannot_encode_is_held_back_as_on_main(
 
     assert native.requests == ()
     assert "can't encode character '\\u200d' in position 3" in str(native.outcome.get("message")), native.outcome
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in MALFORMED_BASE_CASES])
+async def test_a_malformed_api_base_sends_nothing_and_raises_python_s_exception(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python, native = await _legs(case, parity_server, native_messages)
+
+    assert native.requests == python.requests == ()
+    assert python.outcome.get("kind") == "error"
+    assert native.outcome == _anthropic_reference(case, python.outcome, _kwargs(case, parity_server))
