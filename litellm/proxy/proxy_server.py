@@ -1165,6 +1165,12 @@ from litellm.types.utils import (
     StandardLoggingPayload,
 )
 from litellm.utils import add_custom_logger_callback_to_specific_event
+from litellm.vector_stores.deployments import (
+    config_model_list,
+    is_vector_store_deployment,
+    is_vector_store_router_deployment,
+    vector_store_deployment_problems,
+)
 
 try:
     from litellm._version import version
@@ -7724,7 +7730,7 @@ class ProxyConfig:
         if _bg_hc_model_groups is not None:
             router_params["background_health_check_model_groups"] = sorted(_bg_hc_model_groups)
         ## MODEL LIST
-        model_list: Final = config.get("model_list", None)
+        model_list: Final = config_model_list(config)
         if model_list:
             router_params["model_list"] = model_list
             validate_auto_router_capability_limits(model_list, limit=_license_check.auto_router_capability_limit())
@@ -7916,6 +7922,9 @@ class ProxyConfig:
 
         ## VECTOR STORES
         vector_store_registry_config: Final = config.get("vector_store_registry", None)
+        vector_store_problems: Final = vector_store_deployment_problems(config)
+        if vector_store_problems:
+            raise ValueError("; ".join(vector_store_problems))
         if vector_store_registry_config:
             from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
@@ -8153,7 +8162,7 @@ class ProxyConfig:
                 str(e),
             )
             return None
-        model_list: Final = config.get("model_list", None)
+        model_list: Final = config_model_list(config) if config.get("model_list") is not None else None
         if model_list:
             for model in model_list:
                 ### LOAD FROM os.environ/ ###
@@ -13289,7 +13298,7 @@ async def model_info(
 
     registry: Final = llm_router.registry()
     deployment: Final = registry.deployments(registry.resolve(resolved_model_id), source="first_in_group")
-    if deployment is None:
+    if deployment is None or is_vector_store_deployment(deployment.model_info):
         raise HTTPException(
             status_code=404,
             detail=f"Model '{model_id}' not found in router configuration",
@@ -17573,6 +17582,8 @@ def _matches_model_info_filters(
     wildcard_only: bool | None,
     blocked: bool | None = None,
 ) -> bool:
+    if is_vector_store_router_deployment(model):
+        return False
     if exclude_auto_routers is True and _is_auto_router_model(model):
         return False
     if isinstance(access_group, str) and not _model_in_access_group(model, access_group):

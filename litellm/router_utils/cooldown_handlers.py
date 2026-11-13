@@ -135,6 +135,17 @@ def is_response_lookup_not_found(exception: object, failure_kwargs: Mapping[str,
     return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in RESPONSE_ID_CALL_TYPES
 
 
+VECTOR_STORE_SEARCH_CALL_TYPES: Final = frozenset({"avector_store_search", "vector_store_search"})
+
+
+def is_vector_store_index_not_found(exception: object, failure_kwargs: Mapping[str, object]) -> bool:
+    """Whether a vector store search failed with a provider 404: the index is missing there, the service is healthy."""
+    return (
+        getattr(exception, "status_code", None) == 404
+        and failure_kwargs.get("call_type") in VECTOR_STORE_SEARCH_CALL_TYPES
+    )
+
+
 _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
     # ContentPolicyViolationError subclasses BadRequestError, so it must be checked first.
     (litellm.ContentPolicyViolationError, "ContentPolicyViolationErrorAllowedFails"),

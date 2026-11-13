@@ -35,6 +35,11 @@ from litellm.types.vector_stores import (
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
+from litellm.vector_stores.deployments import (
+    VECTOR_STORE_DEPLOYMENT_PARAM,
+    vector_store_group_selected,
+    with_deployment_group,
+)
 from litellm.vector_stores.search_query import store_search_params
 
 if TYPE_CHECKING:
@@ -321,16 +326,18 @@ class VectorStorePreCallHook(CustomLogger):
         vector_store_id: Final = vector_store.get("vector_store_id", "")
         custom_llm_provider: Final = vector_store.get("custom_llm_provider")
         litellm_params_for_vector_store: Final = vector_store.get("litellm_params", {}) or {}
+        group: Final = litellm_params_for_vector_store.get(VECTOR_STORE_DEPLOYMENT_PARAM)
         try:
-            search_response: Final = await search_function(
-                **{
-                    "vector_store_id": vector_store_id,
-                    "query": query,
-                    "custom_llm_provider": custom_llm_provider,
-                    "metadata": request_metadata,
-                    **store_search_params(litellm_params_for_vector_store),
-                },
-            )
+            with vector_store_group_selected(group if isinstance(group, str) else None):
+                search_response: Final = await search_function(
+                    **{
+                        "vector_store_id": vector_store_id,
+                        "query": query,
+                        "custom_llm_provider": custom_llm_provider,
+                        "metadata": request_metadata,
+                        **with_deployment_group(store_search_params(litellm_params_for_vector_store)),
+                    },
+                )
         except Exception as search_error:
             verbose_logger.warning(
                 "Vector store search failed for vector_store_id=%s, continuing without its context: %s",

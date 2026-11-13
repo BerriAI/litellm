@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 from abc import abstractmethod
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, runtime_checkable
 
@@ -60,6 +61,40 @@ class LiteLLMVectorStoreEmbeddingExecutor:
             input=[query],
             **dict(configuration),  # pyright: ignore[reportArgumentType]  # provider-specific embedding config is validated downstream
         )
+
+
+@dataclass(slots=True)
+class OncePerRequestEmbeddingExecutor:
+    """Embeds a request's query once per embedding setup, so search retries reuse the vector or its failure."""
+
+    inner: VectorStoreEmbeddingExecutor
+    outcomes: dict[tuple[str, str, str], EmbeddingResponse | Exception] = field(  # mutable-ok: one request's memo
+        default_factory=dict
+    )
+
+    def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        key: Final = (model, query, json.dumps(configuration, sort_keys=True, default=str))
+        if key not in self.outcomes:
+            try:
+                self.outcomes[key] = self.inner.embed(model, query, configuration)
+            except Exception as error:  # noqa: BLE001  # any embedding failure is the request's outcome, reused by every search attempt
+                self.outcomes[key] = error
+        return _embedding_or_raise(self.outcomes[key])
+
+    async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        key: Final = (model, query, json.dumps(configuration, sort_keys=True, default=str))
+        if key not in self.outcomes:
+            try:
+                self.outcomes[key] = await self.inner.aembed(model, query, configuration)
+            except Exception as error:  # noqa: BLE001  # any embedding failure is the request's outcome, reused by every search attempt
+                self.outcomes[key] = error
+        return _embedding_or_raise(self.outcomes[key])
+
+
+def _embedding_or_raise(outcome: EmbeddingResponse | Exception) -> EmbeddingResponse:
+    if isinstance(outcome, Exception):
+        raise outcome
+    return outcome
 
 
 _REQUEST_METADATA: Final = TypeAdapter(dict[str, object])

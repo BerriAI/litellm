@@ -31,11 +31,17 @@ from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
+    reject_caller_connection_overrides,
     with_managed_search_file_ids,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
+from litellm.vector_stores.deployments import (
+    VECTOR_STORE_DEPLOYMENT_PARAM,
+    vector_store_group_selected,
+    with_deployment_group,
+)
 from litellm.vector_stores.search_query import store_search_params, with_caller_query_params
 from litellm.vector_stores.utils import VectorStoreWriteBody, callers_metadata_snapshot
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
@@ -118,6 +124,27 @@ def build_request_data_from_managed_vector_store(
     return MappingProxyType({**top_level, **store_search_params(litellm_params)})
 
 
+async def _managed_vector_store_request(
+    data: Mapping[str, object],
+    vector_store_id: str,
+    user_api_key_dict: UserAPIKeyAuth | None,
+) -> tuple[Mapping[str, object], str | None]:
+    """The request merged with the registered store, and the store's vector_store_deployment group if it has one."""
+    vector_store_to_run: Final[LiteLLM_ManagedVectorStore | None] = await get_litellm_managed_vector_store(
+        vector_store_id=vector_store_id
+    )
+    if vector_store_to_run is None:
+        return data, None
+    if user_api_key_dict is not None:
+        await assert_user_can_access_vector_store(
+            vector_store=vector_store_to_run,
+            user_api_key_dict=user_api_key_dict,
+        )
+    store_params: Final = build_request_data_from_managed_vector_store(vector_store_to_run)
+    group: Final = store_params.get(VECTOR_STORE_DEPLOYMENT_PARAM)
+    return MappingProxyType({**data, **with_deployment_group(store_params)}), group if isinstance(group, str) else None
+
+
 async def _update_request_data_with_litellm_managed_vector_store_registry(
     data: dict,
     vector_store_id: str,
@@ -134,17 +161,8 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
     Raises:
         HTTPException: If user doesn't have access to the vector store
     """
-    vector_store_to_run: Final[LiteLLM_ManagedVectorStore | None] = await get_litellm_managed_vector_store(
-        vector_store_id=vector_store_id
-    )
-    if vector_store_to_run is None:
-        return data
-    if user_api_key_dict is not None:
-        await assert_user_can_access_vector_store(
-            vector_store=vector_store_to_run,
-            user_api_key_dict=user_api_key_dict,
-        )
-    return {**data, **build_request_data_from_managed_vector_store(vector_store_to_run)}
+    merged, _ = await _managed_vector_store_request(data, vector_store_id, user_api_key_dict)
+    return dict(merged)
 
 
 @router.post(
@@ -188,13 +206,11 @@ async def vector_store_search(
     caller_body: Final = JSON_OBJECT_ADAPTER.validate_python(data)
 
     # Check for legacy vector store registry (non-managed vector stores)
+    store_request, deployment_group = await _managed_vector_store_request(data, vector_store_id, user_api_key_dict)
+    if deployment_group is not None:
+        reject_caller_connection_overrides(caller_body, deployment_group)
     data = dict(  # rebind-ok: pre-existing rebinding of the request body
-        with_caller_query_params(
-            await _update_request_data_with_litellm_managed_vector_store_registry(
-                data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
-            ),
-            caller_body.get("extra_body"),
-        )
+        with_caller_query_params(store_request, caller_body.get("extra_body"))
     )
     reject_caller_opensearch_index_name(
         caller_body=caller_body,
@@ -210,24 +226,25 @@ async def vector_store_search(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        search_response: Final = await processor.base_process_llm_request(
-            request=request,
-            fastapi_response=fastapi_response,
-            user_api_key_dict=user_api_key_dict,
-            route_type="avector_store_search",
-            proxy_logging_obj=proxy_logging_obj,
-            llm_router=llm_router,
-            general_settings=general_settings,
-            proxy_config=proxy_config,
-            select_data_generator=select_data_generator,
-            model=None,
-            user_model=user_model,
-            user_temperature=user_temperature,
-            user_request_timeout=user_request_timeout,
-            user_max_tokens=user_max_tokens,
-            user_api_base=user_api_base,
-            version=version,
-        )
+        with vector_store_group_selected(deployment_group):
+            search_response: Final = await processor.base_process_llm_request(
+                request=request,
+                fastapi_response=fastapi_response,
+                user_api_key_dict=user_api_key_dict,
+                route_type="avector_store_search",
+                proxy_logging_obj=proxy_logging_obj,
+                llm_router=llm_router,
+                general_settings=general_settings,
+                proxy_config=proxy_config,
+                select_data_generator=select_data_generator,
+                model=None,
+                user_model=user_model,
+                user_temperature=user_temperature,
+                user_request_timeout=user_request_timeout,
+                user_max_tokens=user_max_tokens,
+                user_api_base=user_api_base,
+                version=version,
+            )
         search_page: Final = as_str_mapping(search_response)
         if search_page is None:
             return search_response

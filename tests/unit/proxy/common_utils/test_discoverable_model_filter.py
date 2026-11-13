@@ -10,6 +10,7 @@ from litellm import Router
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.discoverable_model_filter import (
     discoverable_rows,
+    undiscoverable_model_groups,
     undiscoverable_model_names,
 )
 
@@ -154,3 +155,25 @@ def test_hidden_alias_of_a_flagged_model_is_undiscoverable():
     )
 
     assert undiscoverable_model_names(["eval"], router, _non_admin(), None) == {"eval"}
+
+
+def _vector_store_deployment(model_name: str = "kb-search"):
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": f"azure_ai/{model_name}",
+            "custom_llm_provider": "azure_ai",
+            "api_base": "https://eastus.search.windows.net",
+            "api_key": "search-key",
+        },
+        "model_info": {"id": f"{model_name}-id", "mode": "vector_store"},
+    }
+
+
+@pytest.mark.parametrize("user", [_non_admin(), _admin()])
+def test_vector_store_deployments_are_hidden_from_every_caller(user):
+    router = _router(_deployment("gpt-4"), _vector_store_deployment())
+
+    assert undiscoverable_model_names(["gpt-4", "kb-search"], router, user, None) == {"kb-search"}
+    assert undiscoverable_model_groups(router, user, None) == {"kb-search"}
+    assert [row["model_name"] for row in discoverable_rows(router.registry().all(), user)] == ["gpt-4"]

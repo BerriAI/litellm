@@ -8,6 +8,7 @@ from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
+from litellm.vector_stores.deployments import is_vector_store_router_deployment
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -21,6 +22,14 @@ def is_undiscoverable_deployment(deployment: Mapping[str, object]) -> bool:
     if not isinstance(model_info, Mapping):
         return False
     return "discoverable" in model_info and model_info["discoverable"] is False
+
+
+def vector_store_deployment_groups(llm_router: Router | None) -> frozenset[str]:
+    if llm_router is None:
+        return frozenset()
+    return frozenset(
+        row["model_name"] for row in llm_router.registry().deployments() or () if is_vector_store_router_deployment(row)
+    )
 
 
 def is_undiscoverable_model_name(model_name: str, llm_router: Router | None, team_id: str | None) -> bool:
@@ -91,17 +100,19 @@ def undiscoverable_model_names(
     user_api_key_dict: UserAPIKeyAuth,
     team_id: str | None,
 ) -> frozenset[str]:
+    names: Final = tuple(model_names)
+    vector_store_groups: Final = vector_store_deployment_groups(llm_router) & frozenset(names)
     if llm_router is None or user_api_key_has_admin_view(user_api_key_dict):
-        return frozenset()
+        return vector_store_groups
     registry: Final = llm_router.registry()
     undiscoverable_rows: Final = tuple(row for row in registry.deployments() or () if is_undiscoverable_deployment(row))
     if not undiscoverable_rows:
-        return frozenset()
+        return vector_store_groups
     served_names: Final = _undiscoverable_served_names(undiscoverable_rows, registry.aliases())  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # registry().aliases() is the untyped model_group_alias dict
     patterns: Final = _undiscoverable_patterns(llm_router, team_id)
-    return frozenset(
+    return vector_store_groups | frozenset(
         name
-        for name in model_names
+        for name in names
         if (name in served_names or _matches_undiscoverable_pattern(name, patterns))
         and is_undiscoverable_model_name(name, llm_router, team_id)
     )
@@ -112,9 +123,10 @@ def undiscoverable_model_groups(
     user_api_key_dict: UserAPIKeyAuth,
     team_id: str | None,
 ) -> frozenset[str]:
+    vector_store_groups: Final = vector_store_deployment_groups(llm_router)
     if llm_router is None or user_api_key_has_admin_view(user_api_key_dict):
-        return frozenset()
-    return frozenset(
+        return vector_store_groups
+    return vector_store_groups | frozenset(
         row["model_name"]
         for row in llm_router.registry().deployments() or ()
         if is_undiscoverable_deployment(row) and is_undiscoverable_model_name(row["model_name"], llm_router, team_id)
@@ -125,6 +137,7 @@ def discoverable_rows(
     rows: Iterable[Mapping[str, object]],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> tuple[Mapping[str, object], ...]:
+    model_rows: Final = tuple(row for row in rows if not is_vector_store_router_deployment(row))
     if user_api_key_has_admin_view(user_api_key_dict):
-        return tuple(rows)
-    return tuple(row for row in rows if not is_undiscoverable_deployment(row))
+        return model_rows
+    return tuple(row for row in model_rows if not is_undiscoverable_deployment(row))

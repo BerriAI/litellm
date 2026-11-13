@@ -35,6 +35,7 @@ from litellm.router_strategy.auto_router.auto_router_model_naming import (
     strategy_router_dependencies,
 )
 from litellm.types.utils import secret_bearing_wif_litellm_params, server_owned_wif_litellm_params
+from litellm.vector_stores.deployments import is_vector_store_router_deployment
 
 # Provider routing and server-owned federation or OAuth token-exchange fields. Allowed for proxy
 # admins so they can see which region/version a deployment is checking and which identity it uses;
@@ -322,7 +323,11 @@ def _health_check_eligible(
     dependencies are drawn from alike, so an opted-out deployment cannot re-enter through a
     router that depends on it.
     """
-    return tuple(x for x in model_list if not (skip_disabled and _skips_health_checks(x)))
+    return tuple(
+        x
+        for x in model_list
+        if not (skip_disabled and _skips_health_checks(x)) and not is_vector_store_router_deployment(x)
+    )
 
 
 def _deployment_model(deployment: Mapping[str, object]) -> str | None:

@@ -26,6 +26,11 @@ from litellm.proxy.openai_files_endpoints.common_utils import managed_file_ids_f
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
+from litellm.vector_stores.deployments import (
+    VECTOR_STORE_DEPLOYMENT_PARAM,
+    connection_override_keys,
+    with_primary_deployment,
+)
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
@@ -54,6 +59,35 @@ def normalize_litellm_params(
             normalized["litellm_params"] = {}
         return normalized
     return vector_store
+
+
+def with_group_primary(params: Mapping[str, object]) -> Mapping[str, object]:
+    """A store's params on its vector_store_deployment group's primary, for paths that do not fail over yet."""
+    from litellm.proxy.proxy_server import llm_router
+
+    group: Final = params.get(VECTOR_STORE_DEPLOYMENT_PARAM)
+    deployments: Final = (
+        llm_router.registry().deployments(group, source="all")
+        if isinstance(group, str) and llm_router is not None
+        else ()
+    )
+    return with_primary_deployment(params, deployments)
+
+
+def reject_caller_connection_overrides(caller_body: Mapping[str, object], group: str) -> None:
+    """A grouped store's deployments own their connection, so a search body may not redirect or re-key it."""
+    from litellm.proxy.proxy_server import llm_router
+
+    deployments: Final = llm_router.registry().deployments(group, source="all") if llm_router is not None else ()
+    sent: Final = sorted(connection_override_keys(deployments) & caller_body.keys())
+    if sent:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"'{sent[0]}' cannot be set in the search request body. "
+                f"Vector store deployment group '{group}' owns its connection settings."
+            },
+        )
 
 
 def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:

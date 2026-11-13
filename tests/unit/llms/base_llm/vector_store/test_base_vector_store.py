@@ -5,6 +5,7 @@ cycle with the upstream scripted at the provider's own URL.
 """
 
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -12,6 +13,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.types.utils import EmbeddingResponse
 
 OPENAI_VECTOR_STORES_URL: Final = "https://api.openai.com/v1/vector_stores"
 OPENAI_VECTOR_STORE_SEARCH_URL: Final = "https://api.openai.com/v1/vector_stores/vs_abc123/search"
@@ -96,3 +98,63 @@ async def test_basic_search_vector_store(respx_mock: respx.MockRouter, monkeypat
     assert first_result["score"] == 0.87
     assert first_result["content"][0]["type"] == "text"
     assert first_result["content"][0]["text"] == "machine learning answer chunk"
+
+
+class _CountingEmbeddingExecutor:
+    def __init__(self, outcome: EmbeddingResponse | Exception) -> None:
+        self.outcome = outcome
+        self.calls = 0
+
+    def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        self.calls += 1
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+    async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        return self.embed(model, query, configuration)
+
+
+@pytest.mark.asyncio
+async def test_once_per_request_embedding_executor_reuses_one_embedding_across_search_attempts():
+    from litellm.llms.base_llm.vector_store.transformation import OncePerRequestEmbeddingExecutor
+
+    vector = EmbeddingResponse(data=[{"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}])
+    inner = _CountingEmbeddingExecutor(vector)
+    executor = OncePerRequestEmbeddingExecutor(inner=inner)
+
+    first = await executor.aembed("query-embeddings", "claims", {})
+    second = await executor.aembed("query-embeddings", "claims", {})
+
+    assert first is vector and second is vector
+    assert inner.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_once_per_request_embedding_executor_does_not_retry_a_failed_embedding():
+    from litellm.llms.base_llm.vector_store.transformation import OncePerRequestEmbeddingExecutor
+
+    failure = RuntimeError("embedding service down")
+    inner = _CountingEmbeddingExecutor(failure)
+    executor = OncePerRequestEmbeddingExecutor(inner=inner)
+
+    for _ in range(3):
+        with pytest.raises(RuntimeError, match="embedding service down"):
+            await executor.aembed("query-embeddings", "claims", {})
+
+    assert inner.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_once_per_request_embedding_executor_embeds_again_for_different_embedding_settings():
+    from litellm.llms.base_llm.vector_store.transformation import OncePerRequestEmbeddingExecutor
+
+    inner = _CountingEmbeddingExecutor(
+        EmbeddingResponse(data=[{"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}])
+    )
+    executor = OncePerRequestEmbeddingExecutor(inner=inner)
+
+    await executor.aembed("query-embeddings", "claims", {"dimensions": 256})
+    await executor.aembed("query-embeddings", "claims", {"dimensions": 1536})
+
+    assert inner.calls == 2

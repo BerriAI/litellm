@@ -53,6 +53,11 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     surface_for_call,
 )
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, endpoint_selection
+from litellm.vector_stores.deployments import (
+    is_vector_store_router_deployment,
+    selected_vector_store_group,
+    vector_store_deployment_connection,
+)
 from litellm.vector_stores.search_query import store_search_params
 
 if TYPE_CHECKING:
@@ -1047,6 +1052,7 @@ def _generic_attempt(
         **without_retrieve_stream_defaults(data, kwargs),
         "caching": core.shaping.cache_responses,
         **kwargs,
+        **vector_store_deployment_connection(deployment, data),
         "model": model_name,
         **_session_with_model(kwargs.get("session"), model_name),
         **(
@@ -1198,6 +1204,20 @@ def _resolved_credentials(core: EndpointCore, deployment: Mapping[str, object], 
     model_id: Final = as_dict(deployment.get("model_info")).get("id")
     resolved: Final = registry.credentials(str(model_id or requested), form="with_provider")
     return as_dict(resolved)  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
+
+
+def vector_store_deployment_refusal(plan: Plan, deployment: Mapping[str, object], group: str) -> Exception | None:
+    """A vector store deployment serves only the vector store searches the server itself routed to its group."""
+    served_by_the_server: Final = plan.host_op in _VECTOR_STORE_SEARCH_OPS and selected_vector_store_group() == group
+    if served_by_the_server or not is_vector_store_router_deployment(deployment):
+        return None
+    from litellm.exceptions import UnsupportedEndpointError
+
+    return UnsupportedEndpointError(
+        message=f"'{group}' is a vector store deployment and only serves vector store search",
+        model=group,
+        llm_provider="",
+    )
 
 
 def embedding_batch_refusal(
@@ -1735,13 +1755,16 @@ class RustEndpoints:
 
     def _embedding_executor(self, kwargs: Mapping[str, object]) -> object:
         from litellm.llms.base_llm.vector_store.transformation import (
+            OncePerRequestEmbeddingExecutor,
             RouterVectorStoreEmbeddingExecutor,
             vector_store_request_metadata,
         )
 
-        return RouterVectorStoreEmbeddingExecutor(
-            router=self._core.router,  # pyright: ignore[reportArgumentType]  # the router serves aembedding
-            metadata=vector_store_request_metadata(kwargs),
+        return OncePerRequestEmbeddingExecutor(
+            inner=RouterVectorStoreEmbeddingExecutor(
+                router=self._core.router,  # pyright: ignore[reportArgumentType]  # the router serves aembedding
+                metadata=vector_store_request_metadata(kwargs),
+            )
         )
 
     async def _containers(

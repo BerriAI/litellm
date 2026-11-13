@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_retry_headers_to_response,
     apply_quality_router_decision_headers,
     apply_remaining_usage_headers,
+    apply_response_api_base,
     apply_response_model_id,
     complexity_router_decision_headers,
     ensure_response_additional_headers,
@@ -116,6 +117,7 @@ from litellm.router_rust.invoke.endpoints import (
     selection_endpoint,
     stamp_error,
     unrouted_fields,
+    vector_store_deployment_refusal,
 )
 from litellm.router_rust.invoke.shaping import Shaping, non_stream_timeout
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
@@ -269,6 +271,7 @@ from litellm.types.router import (
     RoutingStrategy,
 )
 from litellm.types.utils import CooldownDeploymentInfo, LlmProviders
+from litellm.vector_stores.deployments import is_vector_store_deployment
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -4930,14 +4933,21 @@ class _Driver:
         level: Final = step.get("fallback_level")
         # The request params the walk's dict targets merged in (`kwargs.update(target)`).
         params: Final = as_str_mapping(step.get("params"))
-        call: Final = attempt_call(
-            self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-            self._plan,
-            self._request if params is None else {**self._request, **params},
-            deployment,
-            group=requested,
-            requested=requested,
-            fallback_level=level if isinstance(level, int) else 0,
+        refusal: Final = vector_store_deployment_refusal(self._plan, deployment, requested)
+        call: Final = (
+            attempt_call(
+                self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+                self._plan,
+                self._request if params is None else {**self._request, **params},
+                deployment,
+                group=requested,
+                requested=requested,
+                fallback_level=level if isinstance(level, int) else 0,
+            )
+            if refusal is None
+            else AttemptCall(
+                self._plan.host_op, dict(self._request), dict(self._request), requested, requested, refusal
+            )
         )
         self._strip_undecryptable_reasoning(step, deployment, call.kwargs)
         shaped: Final = shape_attempt_kwargs(call.kwargs, deployment)
@@ -5476,7 +5486,10 @@ class _Driver:
             return None
         name, kwargs = self._served
         additional: Final = ensure_response_additional_headers(response)
-        apply_response_model_id(response, find_deployment_metadata(kwargs))
+        deployment_metadata: Final = find_deployment_metadata(kwargs)
+        apply_response_model_id(response, deployment_metadata)
+        if is_vector_store_deployment((deployment_metadata or {}).get("model_info")):
+            apply_response_api_base(response, (deployment_metadata or {}).get("api_base"))
         additional["x-litellm-model-group"] = name
         apply_quality_router_decision_headers(additional, kwargs)
         additional.update(complexity_router_decision_headers(kwargs))
