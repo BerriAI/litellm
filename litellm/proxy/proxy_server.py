@@ -533,7 +533,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.codex_catalog_source import codex_catalog_source
 from litellm.proxy.common_utils.codex_model_catalog import CodexCatalogRow, codex_catalog_rows, codex_model_list_body
-from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
+from litellm.proxy.common_utils.config_includes import resolve_file_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.credential_hydration import decrypted_or_stored
 from litellm.proxy.common_utils.custom_openapi_spec import JsonObject
@@ -6181,9 +6181,6 @@ class ProxyConfig:
 
         included_config_adapter: Final = TypeAdapter(dict[str, object])
 
-        def resolve(include_file: str, declared_in: str) -> str:
-            return resolve_include_file_path(include_file, declared_in, config_file_path)
-
         async def read_included(file_path: str) -> Mapping[str, object]:
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"Included file not found: {file_path}")
@@ -6192,7 +6189,7 @@ class ProxyConfig:
             except ValidationError as e:
                 raise ValueError(f"Included config file is not a YAML mapping: {file_path}") from e
 
-        return await resolve_includes(config=config, location=config_file_path, resolve=resolve, read=read_included)
+        return await resolve_file_includes(config=config, config_file_path=config_file_path, read=read_included)
 
     async def save_config(self, new_config: Mapping[str, object], include_env_vars: bool = False) -> None:
         global prisma_client, general_settings, user_config_file_path, store_model_in_db

@@ -20,6 +20,7 @@ futures-util.workspace = true
 litellm-gateway-auth.workspace = true
 litellm-gateway-ui.workspace = true
 litellm-config.workspace = true
+litellm-config-load.workspace = true
 litellm-core-utils.workspace = true
 litellm-error.workspace = true
 litellm-circuit-breaker.workspace = true
@@ -34,6 +35,7 @@ litellm-secrets.workspace = true
 litellm-tracing.workspace = true
 serde_json.workspace = true
 serde.workspace = true
+serde_yaml_ng.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 uuid.workspace = true

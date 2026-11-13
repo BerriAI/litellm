@@ -1,6 +1,5 @@
 import asyncio
 import os
-import posixpath
 from collections.abc import Awaitable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, Protocol
@@ -11,7 +10,7 @@ from pydantic import TypeAdapter, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.web_identity_session_policy import S3_OBJECT_READ_SESSION_POLICY, WebIdentitySessionPolicy
-from litellm.proxy.common_utils.config_includes import resolve_includes
+from litellm.proxy.common_utils.config_includes import resolve_object_includes
 
 if TYPE_CHECKING:
     from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
@@ -124,18 +123,6 @@ async def get_config_file_contents_from_gcs(
     return _parsed_config(object_key, decoded)
 
 
-def resolve_include_object_key(config_object_key: str, include_entry: str) -> str:
-    """
-    Resolve one `include` entry to the object key it names, relative to the config object's prefix.
-
-    A leading "/" means the bucket root, mirroring how an absolute path on disk ignores the
-    directory the including config sits in.
-    """
-    if include_entry.startswith("/"):
-        return posixpath.normpath(include_entry).lstrip("/")
-    return posixpath.normpath(posixpath.join(posixpath.dirname(config_object_key), include_entry))
-
-
 async def resolve_bucket_includes(
     *,
     config: Mapping[str, object],
@@ -151,10 +138,7 @@ async def resolve_bucket_includes(
             )
         return included
 
-    def resolve(include_entry: str, declared_in: str) -> str:
-        return resolve_include_object_key(declared_in, include_entry)
-
-    return await resolve_includes(config=config, location=object_key, resolve=resolve, read=read)
+    return await resolve_object_includes(config=config, object_key=object_key, read=read)
 
 
 async def bucket_object_reader(bucket_type: str | None, bucket_name: str) -> BucketObjectReader:

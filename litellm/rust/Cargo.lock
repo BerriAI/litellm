@@ -3709,7 +3709,6 @@ dependencies = [
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
- "litellm-error",
  "litellm-router-types",
  "litellm-secret-value",
  "rstest",
@@ -3717,9 +3716,18 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "strum",
- "tempfile",
  "thiserror 2.0.19",
  "veil",
+]
+
+[[package]]
+name = "litellm-config-load"
+version = "0.1.0"
+dependencies = [
+ "litellm-coroutine",
+ "rstest",
+ "serde_yaml_ng",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -3822,6 +3830,7 @@ dependencies = [
  "http-body-util",
  "litellm-circuit-breaker",
  "litellm-config",
+ "litellm-config-load",
  "litellm-core-utils",
  "litellm-error",
  "litellm-gateway-auth",
@@ -3844,6 +3853,7 @@ dependencies = [
  "rustls 0.23.42",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -4404,6 +4414,7 @@ dependencies = [
  "litellm-cache-response",
  "litellm-callbacks-legacy-python",
  "litellm-circuit-breaker",
+ "litellm-config-load",
  "litellm-core-utils",
  "litellm-error",
  "litellm-host",
@@ -4435,6 +4446,7 @@ dependencies = [
  "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-tracing",
+ "parking_lot",
  "prost",
  "pyo3",
  "pyo3-async-runtimes",
@@ -4444,6 +4456,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "serde_yaml_ng",
  "sqlx",
  "strum",
  "tempfile",

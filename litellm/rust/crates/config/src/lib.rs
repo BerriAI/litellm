@@ -1,12 +1,11 @@
 mod error;
-mod includes;
 mod mcp;
 mod model;
 mod redis;
 mod settings;
 mod value;
 
-use std::{fmt, path::Path};
+use std::fmt;
 
 use serde::Deserialize;
 
@@ -90,7 +89,7 @@ impl Config {
         Ok(serde_yaml_ng::from_str(yaml)?)
     }
 
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
-        Ok(serde_yaml_ng::from_value(includes::load(path.as_ref())?)?)
+    pub fn from_value(document: Value) -> Result<Self, Error> {
+        Ok(serde_yaml_ng::from_value(document)?)
     }
 }

@@ -9,13 +9,11 @@ repository.workspace = true
 litellm-router-types.workspace = true
 litellm-secret-value.workspace = true
 serde.workspace = true
-serde_yaml_ng = "0.10.0"
+serde_yaml_ng.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
-litellm-error.workspace = true
 rstest.workspace = true
 serde_json.workspace = true
-tempfile.workspace = true
