@@ -1245,6 +1245,24 @@ def _with_anthropic_user_id(
     return body_without_metadata if user_id is None else {**body_without_metadata, "metadata": {"user_id": user_id}}
 
 
+def _client_litellm_fields(
+    client_body: Mapping[str, object], builtin_provider_route: bool
+) -> Mapping[str, object] | None:
+    if builtin_provider_route:
+        return None
+    return MappingProxyType(
+        {k: copy.deepcopy(v) for k, v in client_body.items() if k in types_utils.all_litellm_params}
+    )
+
+
+def _with_client_litellm_fields(
+    body: Mapping[str, object] | None, client_fields: Mapping[str, object] | None
+) -> Mapping[str, object] | None:
+    if body is None or client_fields is None:
+        return body
+    return {**{k: v for k, v in body.items() if k not in types_utils.all_litellm_params}, **client_fields}
+
+
 def _eu_jev_client_body(custom_llm_provider: str | None, body: Mapping[str, object]) -> Mapping[str, object] | None:
     return MappingProxyType(dict(body)) if custom_llm_provider == "eu_jev" else None
 
@@ -1374,6 +1392,7 @@ async def pass_through_request(
         strip_client_guardrail_information(client_body)
         if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
             _strip_client_pricing_overrides(client_body)
+        client_litellm_fields: Final = _client_litellm_fields(client_body, builtin_provider_route)
         eu_jev_client_body: Final = _eu_jev_client_body(custom_llm_provider, client_body)
         scoped_client_body: Final = {
             **client_body,
@@ -1653,7 +1672,9 @@ async def pass_through_request(
                 logging_url = str(url) + "?" + requested_query_params_str
 
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
-        upstream_body: Final = _with_anthropic_user_id(outgoing_body, client_user_id, str(url))
+        upstream_body: Final = _with_anthropic_user_id(
+            _with_client_litellm_fields(outgoing_body, client_litellm_fields), client_user_id, str(url)
+        )
         logging_obj.pre_call(
             input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             api_key="",
@@ -1944,7 +1965,7 @@ async def pass_through_request(
 
         if response.status_code < 400 and response_body is not None and guardrails_to_run:
             hook_data: Final = {
-                **{k: v for k, v in _json_object(_parsed_body).items() if k not in ("metadata", "litellm_metadata")},
+                **{k: v for k, v in _json_object(_parsed_body).items() if k not in types_utils.all_litellm_params},
                 "metadata": {"guardrails": guardrails_to_run},
             }
             post_call_guardrail_data = hook_data
