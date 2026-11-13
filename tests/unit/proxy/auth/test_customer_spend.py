@@ -1,13 +1,57 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Final
 
 import pytest
 
 import litellm
 from litellm.proxy.auth.customer_hierarchy_auth import check_customer_hierarchy_budget
-from litellm.proxy.auth.customer_spend import current_customer_spend, settle_customer_spend
+from litellm.proxy.auth.customer_spend import current_customer_spend as read_customer_spend
+from litellm.proxy.auth.customer_spend import customer_spend_counter, settle_customer_spend
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+
+async def current_customer_spend(hierarchy, store, prisma=None):
+    from litellm.proxy import proxy_server
+
+    with pytest.MonkeyPatch.context() as context:
+        context.setattr(proxy_server, "spend_counter_store", store)
+        context.setattr(proxy_server, "prisma_client", prisma)
+        return await read_customer_spend(hierarchy, proxy_server.get_current_spend)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("customer_org", "customer_team", "customer_member"))
+async def test_a_lost_counter_reseeds_committed_spend_without_refreshing_the_customer_snapshot(scope: str) -> None:
+    from tests.unit.proxy.db.test_spend_counter_reseed import _FakeFindUniqueTable
+
+    row: Final = SimpleNamespace(spend=2.5, budget_reset_at=None)
+    table: Final = _FakeFindUniqueTable(row)
+    table_name: Final = {
+        "customer_org": "litellm_customerorganizationtable",
+        "customer_team": "litellm_customerteamtable",
+        "customer_member": "litellm_customermembertable",
+    }[scope]
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(**{table_name: table}))
+    snapshot: Final = CustomerHierarchyAuth(
+        customer_org_id="tenant", scopes=(CustomerScopeAuth(key=scope, entity_id="id:with:colons", max_budget=2),)
+    )
+    shared: Final[dict[str, object]] = {}
+    first: Final = FakeSpendCounters(redis=shared).store()
+    second: Final = FakeSpendCounters(redis=shared).store()
+    for store in (first, second):
+        loaded: Final = await current_customer_spend(snapshot, store, prisma)
+        with pytest.raises(litellm.BudgetExceededError):
+            check_customer_hierarchy_budget(loaded)
+    assert snapshot.scopes[0].spend == 0
+    assert len(table.where_clauses) == 1
+    await first.delete((customer_spend_counter(snapshot.scopes[0]),))
+    reseeded: Final = await current_customer_spend(snapshot, second, prisma)
+    with pytest.raises(litellm.BudgetExceededError):
+        check_customer_hierarchy_budget(reseeded)
+    assert reseeded.scopes[0].spend == row.spend
+    assert len(table.where_clauses) == 2
 
 
 @pytest.mark.asyncio

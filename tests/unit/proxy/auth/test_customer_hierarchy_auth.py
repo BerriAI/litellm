@@ -45,9 +45,12 @@ def customer_spend_store(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("alias_only", (False, True))
-async def test_a_missing_shared_counter_reloads_spend_instead_of_seeding_a_stale_cached_snapshot(
+async def test_a_missing_shared_counter_reseeds_spend_without_reloading_a_stale_cached_snapshot(
     alias_only: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from litellm.proxy import proxy_server
+
     cache: Final = UserApiKeyCache()
     old: Final = _Prisma(
         _MemberTable({"member-1": _row(org_budget={"max_budget": 1})}),
@@ -57,6 +60,7 @@ async def test_a_missing_shared_counter_reloads_spend_instead_of_seeding_a_stale
         _MemberTable({"member-1": _row(org_budget={"max_budget": 1}, spend=(2, 0, 0))}),
         _OrganizationTable((_organization("tenant", max_budget=1, spend=2),)),
     )
+    monkeypatch.setattr(proxy_server, "prisma_client", persisted)
     if alias_only:
         _ = await get_customer_organization_hierarchy(
             "tenant",
@@ -293,6 +297,10 @@ class _Record:
     def model_dump(self) -> Mapping[str, object]:
         return self.values
 
+    @property
+    def spend(self):
+        return self.values.get("spend", 0.0)
+
 
 class _OrganizationTable:
     def __init__(self, rows: Sequence[Mapping[str, object]] = ()) -> None:
@@ -305,6 +313,9 @@ class _OrganizationTable:
         self.lookups += 1
         matching: Final = [_Record(row) for row in self.rows if row.get("alias") == where["alias"]]
         return matching[:take] if take is not None else matching
+
+    async def find_unique(self, where: Mapping[str, object]):
+        return next((_Record(row) for row in self.rows if row.get("customer_org_id") == where["customer_org_id"]), None)
 
 
 class _Db:

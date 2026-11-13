@@ -26,14 +26,14 @@ async def _current_scope(
 
 async def current_customer_spend(
     hierarchy: CustomerHierarchyAuth,
-    store: SpendCounterStore,
-    load_fresh: Callable[[], Awaitable[CustomerHierarchyAuth]] | None = None,
+    read_spend: Callable[[str, float, float | None], Awaitable[float]],
 ) -> CustomerHierarchyAuth:
-    readings: Final = await asyncio.gather(*(store.read(customer_spend_counter(scope)) for scope in hierarchy.scopes))
-    if load_fresh is not None and any(spend is None for spend, _ in readings):
-        return await current_customer_spend(await load_fresh(), store)
-    scopes: Final = await asyncio.gather(
-        *(_current_scope(scope, reading[0], store) for scope, reading in zip(hierarchy.scopes, readings, strict=True))
+    readings: Final = await asyncio.gather(
+        *(read_spend(customer_spend_counter(scope), scope.spend, scope.max_budget) for scope in hierarchy.scopes)
+    )
+    scopes: Final = tuple(
+        scope.model_copy(update={"spend": max(scope.spend, spend)})
+        for scope, spend in zip(hierarchy.scopes, readings, strict=True)
     )
     return hierarchy.model_copy(update={"scopes": tuple(scopes)})
 
@@ -46,5 +46,8 @@ async def settle_customer_spend(metadata: Mapping[str, object], cost: float, sto
         hierarchy: Final = CustomerHierarchyAuth.model_validate(snapshot)
     except ValidationError:
         return
-    _ = await current_customer_spend(hierarchy, store)
+    readings: Final = await asyncio.gather(*(store.read(customer_spend_counter(scope)) for scope in hierarchy.scopes))
+    _ = await asyncio.gather(
+        *(_current_scope(scope, reading[0], store) for scope, reading in zip(hierarchy.scopes, readings, strict=True))
+    )
     _ = await store.increment_many(tuple((customer_spend_counter(scope), cost) for scope in hierarchy.scopes))
