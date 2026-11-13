@@ -2137,7 +2137,7 @@ def completion_cost(
                                 model_info=_video_model_info,
                                 video_resolution=video_resolution,
                             )
-                            * video_count
+                            * _video_count(_video_usage_obj)
                         )
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
