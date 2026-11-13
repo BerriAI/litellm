@@ -101703,16 +101703,6 @@
     "fal_ai/fal-ai/decart/lucy-5b/image-to-video": {
         "alias_of": "fal_ai/decart/lucy-5b/image-to-video"
     },
-    "bineric/speech-to-text": {
-        "litellm_provider": "bineric",
-        "max_input_tokens": 4096,
-        "max_output_tokens": 4096,
-        "metadata": {
-            "notes": "Priced per request at $0.18 USD; token rates do not apply"
-        },
-        "mode": "chat",
-        "source": "https://api.bineric.com/v1/models"
-    },
     "bineric/qwen-3-coder-480b": {
         "input_cost_per_token": 4.5e-07,
         "litellm_provider": "bineric",
@@ -102051,14 +102041,6 @@
         "output_cost_per_token": 6e-05,
         "source": "https://api.bineric.com/v1/models"
     },
-    "bineric/stability-ai": {
-        "litellm_provider": "bineric",
-        "metadata": {
-            "notes": "Priced per request at $0.08 USD; token rates do not apply"
-        },
-        "mode": "chat",
-        "source": "https://api.bineric.com/v1/models"
-    },
     "bineric/gpt-5": {
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "bineric",
@@ -102109,16 +102091,6 @@
         "source": "https://api.bineric.com/v1/models",
         "supports_function_calling": true,
         "supports_vision": true
-    },
-    "bineric/deep-research": {
-        "litellm_provider": "bineric",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "metadata": {
-            "notes": "Priced per request at $0.25 USD; token rates do not apply"
-        },
-        "mode": "chat",
-        "source": "https://api.bineric.com/v1/models"
     },
     "bineric/sonar-web-search": {
         "input_cost_per_token": 1e-06,
