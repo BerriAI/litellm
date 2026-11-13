@@ -52,7 +52,6 @@ import {
   Terminal,
   User,
   Users,
-  Receipt,
   Wallet,
   Wrench,
   Workflow,
@@ -73,6 +72,7 @@ import {
   formatUserRole,
   internalUserRoles,
   isAdminRole,
+  isProxyAdminRole,
   isUserTeamAdminForAnyTeam,
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
@@ -204,15 +204,8 @@ const customerPortalGroups: MenuGroup[] = [
         key: "customers",
         page: "customers",
         label: "shell.nav.items.customers",
-        icon: <Users {...ICON} />,
-        roles: all_admin_roles,
-      },
-      {
-        key: "chargebacks",
-        page: "chargebacks",
-        label: "shell.nav.items.chargebacks",
-        icon: <Receipt {...ICON} />,
-        roles: all_admin_roles,
+        icon: <Building2 {...ICON} />,
+        roles: all_admin_roles.filter(isProxyAdminRole),
       },
     ],
   },
@@ -526,7 +519,7 @@ const findParentKey = (route: string): string | null => {
 };
 
 const findMenuItemKey = (route: string): string => {
-  for (const group of menuGroups) {
+  for (const group of [...menuGroups, ...customerPortalGroups]) {
     for (const item of group.items) {
       if (routeOf(item) === route) return item.key;
       const child = item.children?.find((c) => routeOf(c) === route);

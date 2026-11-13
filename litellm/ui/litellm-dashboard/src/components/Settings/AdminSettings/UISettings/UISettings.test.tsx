@@ -53,6 +53,33 @@ const buildSettingsResponse = (overrides?: Partial<Record<string, unknown>>) => 
 });
 
 describe("UISettings", () => {
+  it.each([
+    ["No access", "none"],
+    ["Own and team usage", "own_and_team_usage"],
+  ])("saves internal Aria access %s", async (label, value) => {
+    const mutate = vi.fn();
+    mockUseUISettings.mockReturnValue(buildSettingsResponse());
+    mockUseUpdateUISettings.mockReturnValue({ mutate, isPending: false, error: null });
+    render(<UISettings />);
+    const select = screen.getByRole("combobox", { name: "Aria access for internal users" });
+    expect(select).toHaveTextContent("Own usage only");
+    await chooseSelectOption(userEvent.setup(), select, label);
+    expect(mutate).toHaveBeenCalledWith({ aria_internal_user_access: value }, expect.any(Object));
+  });
+
+  it("keeps configuration-owned internal Aria access read-only", () => {
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          values: { aria_internal_user_access: "none" },
+          source: { aria_internal_user_access: "config" },
+        },
+      }),
+    );
+    render(<UISettings />);
+    expect(screen.getByRole("combobox", { name: "Aria access for internal users" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Aria access for internal users" })).toHaveTextContent("No access");
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
@@ -99,6 +126,31 @@ describe("UISettings", () => {
     expect(screen.getByRole("switch", { name: "Disable model add for internal users" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Disable team admin delete team user" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Require authentication for public AI Hub" })).toBeInTheDocument();
+  });
+
+  it.each([false, true])("saves the deployment Aria visibility toggle from %s", (disabled) => {
+    const mutate = vi.fn();
+    mockUseUISettings.mockReturnValue(buildSettingsResponse({ data: { values: { disable_aria: disabled } } }));
+    mockUseUpdateUISettings.mockReturnValue({ mutate, isPending: false, error: null });
+    render(<UISettings />);
+    const toggle = screen.getByRole("switch", { name: "Hide Aria Agent for everyone" });
+    if (disabled) expect(toggle).toBeChecked();
+    else expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(mutate).toHaveBeenCalledWith({ disable_aria: !disabled }, expect.any(Object));
+  });
+
+  it("keeps configuration-owned Aria visibility read-only", () => {
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({ data: { values: { disable_aria: true }, source: { disable_aria: "config" } } }),
+    );
+    render(<UISettings />);
+    expect(screen.getByRole("switch", { name: "Hide Aria Agent for everyone" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Hide Aria Agent for everyone" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByText("Managed by the deployment configuration.")).toBeInTheDocument();
   });
 
   it("should toggle setting and call update", () => {

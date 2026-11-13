@@ -43,6 +43,7 @@ from litellm.proxy.management_helpers.model_quota_policy import (
 )
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
+    validate_scalar_budget_attachment,
 )
 from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
 from litellm.repositories.base_repository import record_to_dict
@@ -637,6 +638,7 @@ async def new_project(
                 )
 
         # Create budget if not provided
+        await validate_scalar_budget_attachment(prisma_client, data.budget_id)
         if data.budget_id is None:
             data.budget_id = await _create_budget_for_project(
                 data=data,
@@ -869,6 +871,7 @@ async def update_project(
             )
 
         # Prepare update data
+        await validate_scalar_budget_attachment(prisma_client, data.budget_id)
         update_data = _jsonified(prisma_client, data.model_dump(exclude_none=True, exclude={"project_id"}))
         update_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
 
