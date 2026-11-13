@@ -62,7 +62,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     USER_NO_MCP_PERMISSION_SENTINEL,
     get_management_object_ttl,
-    user_object_permission_id_cache_key,
 )
 from litellm.proxy.mcp_server.catalog import global_manager
 from litellm.proxy.mcp_server.oauth_utils import (
@@ -90,6 +89,7 @@ from litellm.proxy.mcp_server.utils import (
     asgi_scope_fields,
     strip_known_server_prefix,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.table_repositories import (
     AgentsRepository,
     MCPServerRepository,
@@ -4144,7 +4144,7 @@ class MCPRequestHandler:
         from litellm.proxy.auth.auth_checks import get_user_object
         from litellm.proxy.proxy_server import user_api_key_cache
 
-        cache_key: Final = user_object_permission_id_cache_key(user_id)
+        cache_key: Final = AuthObject.user_object_permission(user_id)
         try:
             cached: Final[object] = None if check_db_only else await user_api_key_cache.async_get_cache(key=cache_key)
             if cached == USER_NO_MCP_PERMISSION_SENTINEL:
@@ -4456,7 +4456,7 @@ class MCPRequestHandler:
         a link we DID resolve can make the caller deny."""
         from litellm.proxy.proxy_server import user_api_key_cache
 
-        cache_key: Final = f"agent_object_permission_id:{agent_id}"
+        cache_key: Final = AuthObject.agent_object_permission(agent_id)
         try:
             cached: Final = _CACHED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
             if cached == MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL:

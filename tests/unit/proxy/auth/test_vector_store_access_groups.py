@@ -16,6 +16,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import vector_store_access_check
 from litellm.proxy.auth.user_api_key_auth import _team_obj_from_token
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from tests.unit.proxy.vector_store_access_group_state import (
@@ -320,7 +321,7 @@ async def test_deleted_group_grants_nothing_and_does_not_fail_the_request(proxy:
 @pytest.mark.asyncio
 async def test_group_cached_before_the_upgrade_keeps_the_callers_own_list(proxy: ProxyState) -> None:
     await proxy.cache.async_set_cache(
-        key="access_group_id:old",
+        key=AuthObject.access_group("old"),
         value={"access_group_id": "old", "access_group_name": "old", "assigned_team_ids": [TEAM_ID]},
     )
 

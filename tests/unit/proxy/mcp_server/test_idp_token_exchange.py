@@ -9,7 +9,6 @@ from fastapi import HTTPException, Request
 from prisma.engine.errors import BinaryNotFoundError
 from prisma.errors import DataError
 
-from litellm.caching.caching import DualCache
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     JWTIssuerConfig,
@@ -32,6 +31,7 @@ from litellm.proxy.mcp_server.idp_token_exchange import (
     identity_from_subject_token,
     token_exchange_available,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 
 IDP_JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1MSJ9.idp-signature"
 REQUEST_HEADERS = {"x-litellm-team-id": "team-b", "user-agent": "lite/0.1"}
@@ -147,7 +147,9 @@ MAPPED_ISSUER = JWTIssuerConfig(
 def _running_jwt_handler(litellm_jwtauth):
     handler = JWTHandler()
     if litellm_jwtauth is not None:
-        handler.update_environment(prisma_client=None, user_api_key_cache=DualCache(), litellm_jwtauth=litellm_jwtauth)
+        handler.update_environment(
+            prisma_client=None, user_api_key_cache=UserApiKeyCache(), litellm_jwtauth=litellm_jwtauth
+        )
     return handler
 
 
@@ -298,18 +300,18 @@ async def test_subject_exchange_applies_team_admission_before_returning_an_ident
         [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key()))],
     )
     cache.set_cache(
-        "exchange-user",
+        AuthObject.user("exchange-user"),
         LiteLLM_UserTable(user_id="exchange-user", user_role="internal_user", teams=[team_id] if team_id else []),
         model_type=LiteLLM_UserTable,
     )
     if team_id is not None:
         cache.set_cache(
-            f"team_id:{team_id}",
+            AuthObject.team(team_id),
             LiteLLM_TeamTable(team_id=team_id, members_with_roles=[Member(user_id="exchange-user", role="user")]),
             model_type=LiteLLM_TeamTable,
         )
         cache.set_cache(
-            f"team_membership:exchange-user:{team_id}",
+            AuthObject.team_membership_reservation(user_id="exchange-user", team_id=team_id),
             LiteLLM_TeamMembership(user_id="exchange-user", team_id=team_id),
             model_type=LiteLLM_TeamMembership,
         )

@@ -8,7 +8,8 @@ from fastapi import FastAPI, Request
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.caching.caching import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -86,11 +87,11 @@ async def test_child_preserves_credentials_and_isolates_context(protocol: Litera
 async def test_real_proxy_child_auth_privacy_and_body_policy(
     monkeypatch: pytest.MonkeyPatch, protocol: Literal["chat", "messages"], policy: str,
 ) -> None:
-    cache: Final = DualCache()
+    cache: Final = UserApiKeyCache()
     token: Final = proxy_server.hash_token("sk-compaction-fixture")
     models: Final = {"denied": ("answer",), "router_alias": ("auto",), "unrelated_alias": ("other-auto",)}.get(policy, ("compactor",))
     auth: Final = UserAPIKeyAuth.model_validate(MappingProxyType({"token": token, "models": models}))
-    await cache.async_set_cache(key=token, value=auth)
+    await cache.async_set_cache(key=AuthObject.virtual_key(token), value=auth)
     dispatched: Final = asyncio.Event()
     allowed: Final = policy in ("allowed", "router_alias")
 

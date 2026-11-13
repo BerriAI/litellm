@@ -128,17 +128,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
-    end_user_cache_key,
-    end_user_restricted_registry_cache_key,
     get_management_object_ttl,
-    model_access_group_cache_key,
-    model_access_group_registry_cache_key,
-    object_permission_cache_key,
-    project_cache_key,
-    tag_cache_key,
-    tag_registry_cache_key,
-    team_membership_auth_cache_key,
-    team_membership_reservation_cache_key,
 )
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup, db_lookup_gate
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -150,6 +140,7 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     end_user_counter,
@@ -418,7 +409,7 @@ def _member_allowed_models(membership: _TeamMembershipModelScope) -> Sequence[st
 
 
 class _RawCacheRead(Protocol):
-    async def async_get_cache(self, *, key: str, local_only: bool = ...) -> object: ...
+    async def async_get_cache(self, *, key: AuthObject, local_only: bool = ...) -> object: ...
 
 
 def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
@@ -1788,7 +1779,7 @@ async def get_default_end_user_budget(
     if prisma_client is None or default_budget_id is None:
         return None
 
-    cache_key: Final = f"default_end_user_budget:{default_budget_id}"
+    cache_key: Final = AuthObject.default_end_user_budget(default_budget_id)
 
     # Check cache first
     cached_budget: Final = await user_api_key_cache.async_get_cache(
@@ -1853,7 +1844,7 @@ async def get_team_member_default_budget(
     if prisma_client is None:
         return None
 
-    cache_key: Final = f"team_member_default_budget:{budget_id}"
+    cache_key: Final = AuthObject.team_member_default_budget(budget_id)
 
     cached_budget: Final = await user_api_key_cache.async_get_cache(
         key=cache_key,
@@ -2058,7 +2049,7 @@ _MODEL_ACCESS_GROUP_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
 
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _cached_registry(
-    cache_key: str,
+    cache_key: AuthObject,
     overflow_sentinel: str,
     user_api_key_cache: UserApiKeyCache,
 ) -> frozenset[str] | None | _RegistryNotCached:
@@ -2074,7 +2065,7 @@ async def _cached_registry(
 
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _cache_registry_answer(
-    cache_key: str,
+    cache_key: AuthObject,
     value: tuple[str, ...] | str,
     ttl: float,
     user_api_key_cache: UserApiKeyCache,
@@ -2083,11 +2074,11 @@ async def _cache_registry_answer(
     try:
         await user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl)
     except Exception as e:  # noqa: BLE001  # best-effort cache write: auth must survive a cache backend error
-        verbose_proxy_logger.warning("Failed to cache registry %s: %s", cache_key, e)
+        verbose_proxy_logger.warning("Failed to cache registry %s: %s", cache_key.key, e)
 
 
 async def _fetch_and_cache_registry(
-    cache_key: str,
+    cache_key: AuthObject,
     overflow_sentinel: str,
     max_size: int,
     fetch_ids: Callable[[], Awaitable[tuple[str, ...]]],
@@ -2100,7 +2091,7 @@ async def _fetch_and_cache_registry(
         verbose_proxy_logger.warning(
             "Registry %s could not be loaded from the database, so per-id lookups will run and the "
             "registry query is suppressed for %ss: %s",
-            cache_key,
+            cache_key.key,
             REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
             e,
         )
@@ -2131,7 +2122,7 @@ async def _fetch_and_cache_registry(
 
 
 async def _load_bounded_registry(
-    cache_key: str,
+    cache_key: AuthObject,
     overflow_sentinel: str,
     max_size: int,
     load_lock: asyncio.Lock,
@@ -2178,7 +2169,7 @@ async def _load_end_user_restricted_registry(
         return tuple(row.user_id for row in restricted_rows)
 
     return await _load_bounded_registry(
-        cache_key=end_user_restricted_registry_cache_key(),
+        cache_key=AuthObject.end_user_restricted_registry(),
         overflow_sentinel=END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
         max_size=END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
         load_lock=_END_USER_REGISTRY_LOAD_LOCK,
@@ -2259,7 +2250,7 @@ async def get_end_user_object(
     if end_user_id is None:
         return None
 
-    _key: Final = end_user_cache_key(end_user_id)
+    _key: Final = AuthObject.end_user(end_user_id)
 
     # Check cache first
     cached_user_obj: Final = await user_api_key_cache.async_get_cache(
@@ -2366,7 +2357,7 @@ async def resolve_and_validate_end_user_id(
         return raw_end_user_id
 
     has_default_budget: Final = bool(litellm.max_end_user_budget_id) or key_end_user_budget_id is not None
-    cache_key: Final = f"end_user_validation:{raw_end_user_id}"
+    cache_key: Final = AuthObject.end_user_validation(raw_end_user_id)
     cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
     if cached == "valid":
         return raw_end_user_id
@@ -2446,7 +2437,7 @@ async def _load_tag_registry(
         return tuple(row.tag_name for row in registry_rows)
 
     return await _load_bounded_registry(
-        cache_key=tag_registry_cache_key(),
+        cache_key=AuthObject.tag_registry(),
         overflow_sentinel=TAG_REGISTRY_OVERFLOW_SENTINEL,
         max_size=TAG_REGISTRY_MAX_SIZE,
         load_lock=_TAG_REGISTRY_LOAD_LOCK,
@@ -2468,7 +2459,7 @@ async def _load_model_access_group_registry(
         return tuple(row.access_group_name for row in registry_rows)
 
     return await _load_bounded_registry(
-        cache_key=model_access_group_registry_cache_key(),
+        cache_key=AuthObject.model_access_group_registry(),
         overflow_sentinel=MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
         max_size=MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE,
         load_lock=_MODEL_ACCESS_GROUP_REGISTRY_LOAD_LOCK,
@@ -2502,7 +2493,7 @@ async def _fetch_uncached_model_access_group_budgets(
         fetched: Final = tuple((row.access_group_name, _model_access_group_budget(row)) for row in db_rows)
         for fetched_name, fetched_obj in fetched:
             await user_api_key_cache.async_set_cache(
-                key=model_access_group_cache_key(fetched_name),
+                key=AuthObject.model_access_group(fetched_name),
                 value=fetched_obj,
                 model_type=ModelAccessGroupBudget,
                 ttl=get_management_object_ttl(user_api_key_cache),
@@ -2543,7 +2534,7 @@ async def get_model_access_group_budgets_batch(
         (
             group,
             await user_api_key_cache.async_get_cache(
-                key=model_access_group_cache_key(group), model_type=ModelAccessGroupBudget
+                key=AuthObject.model_access_group(group), model_type=ModelAccessGroupBudget
             ),
         )
         for group in access_group_names
@@ -2584,7 +2575,7 @@ async def _fetch_uncached_tags(
         fetched: Final = tuple((db_tag.tag_name, LiteLLM_TagTable.model_validate(db_tag.dict())) for db_tag in db_tags)
         for fetched_name, fetched_obj in fetched:
             await user_api_key_cache.async_set_cache(
-                key=tag_cache_key(fetched_name),
+                key=AuthObject.tag(fetched_name),
                 value=fetched_obj,
                 model_type=LiteLLM_TagTable,
                 ttl=get_management_object_ttl(user_api_key_cache),
@@ -2603,7 +2594,7 @@ async def _probe_and_fetch_tags(
     probed: Final = [
         (
             tag_name,
-            await user_api_key_cache.async_get_cache(key=tag_cache_key(tag_name), model_type=LiteLLM_TagTable),
+            await user_api_key_cache.async_get_cache(key=AuthObject.tag(tag_name), model_type=LiteLLM_TagTable),
         )
         for tag_name in tag_names
     ]
@@ -2738,7 +2729,7 @@ async def _fetch_team_membership_from_db(
         include={"litellm_budget_table": True},
     )
     membership: Final = None if response is None else LiteLLM_TeamMembership.model_validate(response.dict())
-    _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
+    _key: Final = AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id)
     if membership is None:
         await user_api_key_cache.async_set_cache(
             key=_key,
@@ -2758,7 +2749,7 @@ async def _fetch_team_membership_from_db(
 async def _load_team_membership_on_cache_miss(
     user_id: str,
     team_id: str,
-    cache_key: str,
+    cache_key: AuthObject,
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
@@ -2798,7 +2789,7 @@ async def get_team_membership(
     if user_id is None or team_id is None:
         return None
 
-    _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
+    _key: Final = AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id)
 
     if check_db_only:
         if prisma_client is None:
@@ -3017,7 +3008,7 @@ async def _backfill_null_user_email(
     email_update: Final = {"user_email": db_row.user_email}
     updated_row: Final = user_row.model_copy(update=email_update)
     await user_api_key_cache.async_set_cache(
-        key=user_row.user_id,
+        key=AuthObject.user(user_row.user_id),
         value=updated_row,
         model_type=LiteLLM_UserTable,
         ttl=get_management_object_ttl(user_api_key_cache),
@@ -3050,7 +3041,7 @@ async def get_user_object(
     # check if in cache
     if not check_db_only:
         cached_user_obj: Final = await user_api_key_cache.async_get_cache(
-            key=user_id,
+            key=AuthObject.user(user_id),
             model_type=LiteLLM_UserTable,
         )
         if cached_user_obj is not None:
@@ -3153,7 +3144,7 @@ async def get_user_object(
 
         # save the user object to cache
         await user_api_key_cache.async_set_cache(
-            key=user_id,
+            key=AuthObject.user(user_id),
             value=_response,
             model_type=LiteLLM_UserTable,
             ttl=get_management_object_ttl(user_api_key_cache),
@@ -3184,7 +3175,7 @@ def _user_read_failure(user_id: str, error: Exception) -> Exception:
 
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _cache_management_object(
-    key: str,
+    key: AuthObject,
     value: BaseModel | Mapping[str, object],
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
@@ -3214,13 +3205,13 @@ async def cache_team_object(
     ## CACHE REFRESH TIME!
     team_table.last_refreshed_at = time.time()
 
-    key: Final = f"team_id:{team_id}"
+    key: Final = AuthObject.team(team_id)
     usage_cache: Final = None if proxy_logging_obj is None else proxy_logging_obj.internal_usage_cache.dual_cache
     # On a shared Redis the write below replaces the team entry and the alias DEL below removes the alias entry
     # for both caches, so the usage cache only has its own memory to clear.
     redis_shared: Final = usage_cache is not None and usage_cache.redis_cache is user_api_key_cache.redis_connection
 
-    await _invalidate_usage_cache_entry(usage_cache, key, redis_shared=redis_shared, stale="team object")
+    await _invalidate_usage_cache_entry(usage_cache, key.key, redis_shared=redis_shared, stale="team object")
 
     # team_id is the table primary key — guaranteed unique, safe to write.
     await _cache_management_object(
@@ -3245,7 +3236,7 @@ async def cache_team_object(
     # uniqueness (len(teams) > 1 raises HTTPException) before populating
     # the cache from a verified single row.
     if team_table.team_alias:
-        alias_key: Final = f"team_alias:{team_table.team_alias}"
+        alias_key: Final = AuthObject.team_alias(team_table.team_alias).key
         try:
             pipelined_delete: Final = user_api_key_cache.declare_delete(alias_key)
             if pipelined_delete is None:
@@ -3293,7 +3284,7 @@ async def await_inflight_team_membership_load(user_id: str, team_id: str) -> Non
     """Wait for a membership load already reading the DB, so a load that read the row before a
     write committed cannot re-cache the old row after the write's eviction."""
     inflight: Final[object] = _team_membership_inflight.pop(
-        team_membership_reservation_cache_key(user_id=user_id, team_id=team_id), None
+        AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id), None
     )
     if isinstance(inflight, asyncio.Task) and inflight is not asyncio.current_task():
         await asyncio.wait((inflight,))
@@ -3408,8 +3399,8 @@ async def invalidate_team_member_spend_state(
 
     await evict_and_broadcast(
         cache_keys=(
-            team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
-            team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+            AuthObject.team_membership(team_id=team_id, user_id=user_id).key,
+            AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id).key,
         ),
         user_api_key_cache=user_api_key_cache,
     )
@@ -3435,7 +3426,7 @@ async def delete_cache_team_object(
     rows are already gone, so letting an unreachable cache backend raise here would fail a request
     whose delete has committed.
     """
-    keys: Final = (f"team_id:{team_id}", *((f"team_alias:{team_alias}",) if team_alias else ()))
+    keys: Final = (AuthObject.team(team_id).key, *((AuthObject.team_alias(team_alias).key,) if team_alias else ()))
 
     for key in keys:
         try:
@@ -3460,7 +3451,7 @@ async def cache_key_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
-    key: Final = hashed_token
+    key: Final = AuthObject.virtual_key(hashed_token)
 
     ## CACHE REFRESH TIME
     user_api_key_obj.last_refreshed_at = time.time()
@@ -3703,13 +3694,12 @@ async def _get_team_object_from_user_api_key_cache(
 
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def get_team_object_from_cache(
-    key: str,
+    key: AuthObject,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
 ) -> LiteLLM_TeamTableCachedObj | None:
     decoded: Final = await user_api_key_cache.async_get_cache(
         key=key,
-        parent_otel_span=parent_otel_span,
         model_type=LiteLLM_TeamTableCachedObj,
     )
     return decoded
@@ -3740,7 +3730,7 @@ async def get_team_object(
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
     # check if in cache
-    key: Final = f"team_id:{team_id}"
+    key: Final = AuthObject.team(team_id)
 
     if not check_db_only:
         cached_team_obj: Final = await get_team_object_from_cache(
@@ -3767,7 +3757,7 @@ async def get_team_object(
             proxy_logging_obj=proxy_logging_obj,
             last_db_access_time=last_db_access_time,
             db_cache_expiry=db_cache_expiry,
-            key=key,
+            key=key.key,
             team_id_upsert=team_id_upsert,
             use_writer=bool(check_db_only),
         )
@@ -3787,7 +3777,7 @@ async def cache_access_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> None:
-    key: Final = f"access_group_id:{access_group_id}"
+    key: Final = AuthObject.access_group(access_group_id)
     await user_api_key_cache.async_set_cache(
         key=key,
         value=access_group_table,
@@ -3805,7 +3795,7 @@ async def delete_cache_access_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> None:
-    key: Final = f"access_group_id:{access_group_id}"
+    key: Final = AuthObject.access_group(access_group_id).key
 
     user_api_key_cache.delete_cache(key=key)
 
@@ -3839,7 +3829,7 @@ async def get_access_object(
     if prisma_client is None:
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
-    key: Final = f"access_group_id:{access_group_id}"
+    key: Final = AuthObject.access_group(access_group_id)
 
     cached_access_obj: Final = (
         None
@@ -3915,7 +3905,7 @@ async def get_team_object_by_alias(
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
     # Check cache first (keyed by alias)
-    cache_key: Final = f"team_alias:{team_alias}"
+    cache_key: Final = AuthObject.team_alias(team_alias)
 
     cached_team_obj: Final = await get_team_object_from_cache(
         key=cache_key,
@@ -3977,7 +3967,7 @@ async def get_team_object_by_alias(
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
         # Also cache by team_id for consistency
-        team_id_cache_key: Final = f"team_id:{team_obj.team_id}"
+        team_id_cache_key: Final = AuthObject.team(team_obj.team_id)
         await user_api_key_cache.async_set_cache(
             key=team_id_cache_key,
             value=team_obj,
@@ -4026,7 +4016,7 @@ async def get_org_object_by_alias(
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
     # Check cache first (keyed by alias)
-    cache_key: Final = f"org_alias:{org_alias}"
+    cache_key: Final = AuthObject.org_alias(org_alias)
     cached_org_obj: Final = await user_api_key_cache.async_get_cache(
         key=cache_key,
         model_type=LiteLLM_OrganizationTable,
@@ -4067,12 +4057,13 @@ async def get_org_object_by_alias(
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
         # Also cache by org_id for consistency
-        await user_api_key_cache.async_set_cache(
-            key=f"org_id:{org_obj.organization_id}",
-            value=org_obj,
-            model_type=LiteLLM_OrganizationTable,
-            ttl=DEFAULT_IN_MEMORY_TTL,
-        )
+        if org_obj.organization_id is not None:
+            await user_api_key_cache.async_set_cache(
+                key=AuthObject.org(org_obj.organization_id),
+                value=org_obj,
+                model_type=LiteLLM_OrganizationTable,
+                ttl=DEFAULT_IN_MEMORY_TTL,
+            )
 
         return org_obj
 
@@ -4289,20 +4280,6 @@ async def _fetch_key_object_from_db_unbounded(
             raise
 
 
-def jwt_key_mapping_cache_key(jwt_claim_name: str, jwt_claim_value: str, jwt_issuer: str | None = None) -> str:
-    """Cache key under which a JWT-claim-to-key mapping is stored, scoped to one
-    issuer (or the issuer-agnostic/global scope when ``jwt_issuer`` is falsy).
-
-    Scoped by issuer (when one is configured) so a cached hit or ``__NO_MAPPING__`` miss
-    for one issuer's claim value can never be served to a different issuer whose claim
-    value happens to collide. Unchanged for the global scope, keeping the single-issuer
-    (no ``litellm_jwtauth.issuers`` configured) cache key format stable across this fix.
-    """
-    if not jwt_issuer:
-        return f"jwt_key_mapping:{jwt_claim_name}:{jwt_claim_value}"
-    return f"jwt_key_mapping:{jwt_issuer}:{jwt_claim_name}:{jwt_claim_value}"
-
-
 @log_db_metrics
 async def get_jwt_key_mapping_cache_keys_for_token(
     hashed_token: str,
@@ -4312,7 +4289,7 @@ async def get_jwt_key_mapping_cache_keys_for_token(
     mappings: Final = await _jwt_key_mapping_table(JWTKeyMappingRepository(prisma_client)).find_many(
         where={"token": hashed_token}
     )
-    return tuple(jwt_key_mapping_cache_key(m.jwt_claim_name, m.jwt_claim_value, m.jwt_issuer) for m in mappings)
+    return tuple(AuthObject.jwt_key_mapping(m.jwt_claim_name, m.jwt_claim_value, m.jwt_issuer).key for m in mappings)
 
 
 class _TokenInFilter(TypedDict):
@@ -4328,7 +4305,7 @@ async def get_jwt_key_mapping_cache_keys_for_tokens(
         return ()
     token_filter: Final[_TokenInFilter] = {"token": {"in": tuple(hashed_tokens)}}
     mappings: Final = await _jwt_key_mapping_table(JWTKeyMappingRepository(prisma_client)).find_many(where=token_filter)
-    return tuple(jwt_key_mapping_cache_key(m.jwt_claim_name, m.jwt_claim_value, m.jwt_issuer) for m in mappings)
+    return tuple(AuthObject.jwt_key_mapping(m.jwt_claim_name, m.jwt_claim_value, m.jwt_issuer).key for m in mappings)
 
 
 @log_db_metrics
@@ -4381,7 +4358,7 @@ async def get_key_object(
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
     # check if in cache
-    key: Final = hashed_token
+    key: Final = AuthObject.virtual_key(hashed_token)
 
     # Same flow as before: use cache only when we have a hit we can turn into UserAPIKeyAuth
     # (dict from Redis / model_dump, or UserAPIKeyAuth from in-memory). Otherwise fall through to DB.
@@ -4392,7 +4369,7 @@ async def get_key_object(
         return copy_user_api_key_auth_for_cache(user_api_key_obj=user_api_key_auth)
 
     if check_cache_only:
-        raise Exception(f"Key doesn't exist in cache + check_cache_only=True. key={key}.")
+        raise Exception(f"Key doesn't exist in cache + check_cache_only=True. key={hashed_token}.")
 
     # else, check db
     _valid_token: Final[BaseModel | None] = await fetch_key_object_from_db_with_reconnect(
@@ -4480,7 +4457,7 @@ async def get_object_permission(
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
     # check if in cache
-    key: Final = object_permission_cache_key(object_permission_id)
+    key: Final = AuthObject.object_permission(object_permission_id)
     deserialized_perm: Final = (
         None
         if check_db_only
@@ -4542,9 +4519,8 @@ async def get_managed_vector_store_rows_by_uuids(
     cache_misses: Final[list[str]] = []
 
     for uuid in uuids:
-        key = f"managed_vector_store_id:{uuid}"
         deserialized_vs = await user_api_key_cache.async_get_cache(
-            key=key,
+            key=AuthObject.managed_vector_store(uuid),
             model_type=LiteLLM_ManagedVectorStoresTable,
         )
         if deserialized_vs is not None:
@@ -4567,9 +4543,8 @@ async def get_managed_vector_store_rows_by_uuids(
         if not row_dict:
             continue
         cached_obj = LiteLLM_ManagedVectorStoresTable.model_validate(row_dict)
-        key = f"managed_vector_store_id:{cached_obj.vector_store_id}"
         await user_api_key_cache.async_set_cache(
-            key=key,
+            key=AuthObject.managed_vector_store(cached_obj.vector_store_id),
             value=cached_obj,
             model_type=LiteLLM_ManagedVectorStoresTable,
             ttl=get_management_object_ttl(user_api_key_cache),
@@ -4617,9 +4592,7 @@ async def get_org_object(
         return None
 
     # Use different cache key if budget table is included
-    cache_key = f"org_id:{org_id}"
-    if include_budget_table:
-        cache_key = f"org_id:{org_id}:with_budget"
+    cache_key: Final = AuthObject.org_with_budget(org_id) if include_budget_table else AuthObject.org(org_id)
 
     # check if in cache
     deserialized_org: Final = await user_api_key_cache.async_get_cache(
@@ -4662,15 +4635,11 @@ async def get_org_object(
     return _org_obj
 
 
-def _last_known_org_cache_key(org_id: str) -> str:
-    return f"org_id:{org_id}:with_budget:last_known"
-
-
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _keep_last_known_org(
     org: LiteLLM_OrganizationTable, org_id: str, user_api_key_cache: UserApiKeyCache
 ) -> None:
-    cache_key: Final = _last_known_org_cache_key(org_id)
+    cache_key: Final = AuthObject.org_with_budget_last_known(org_id)
     held_locally: Final = await user_api_key_cache.async_get_cache(
         key=cache_key, local_only=True, model_type=LiteLLM_OrganizationTable
     )
@@ -4708,7 +4677,7 @@ async def get_org_object_for_request(
             verbose_proxy_logger.debug("org lookup failed, continuing without org limits", exc_info=True)
             return None
         last_known_org: Final = await user_api_key_cache.async_get_cache(
-            key=_last_known_org_cache_key(org_id),
+            key=AuthObject.org_with_budget_last_known(org_id),
             model_type=LiteLLM_OrganizationTable,
         )
         if last_known_org is not None:
@@ -7560,7 +7529,7 @@ async def get_project_object(
         return None
 
     # Check cache first
-    cache_key: Final = project_cache_key(project_id)
+    cache_key: Final = AuthObject.project(project_id)
     deserialized_project: Final = await user_api_key_cache.async_get_cache(
         key=cache_key,
         model_type=LiteLLM_ProjectTableCachedObj,
@@ -7602,7 +7571,7 @@ async def delete_cached_project_object(
     from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 
     await evict_and_broadcast(
-        cache_keys=(project_cache_key(project_id),),
+        cache_keys=(AuthObject.project(project_id).key,),
         user_api_key_cache=user_api_key_cache,
     )
 

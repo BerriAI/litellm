@@ -105,6 +105,7 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 
@@ -2546,7 +2547,7 @@ async def test_refresh_cached_team_flushes_redis_set_before_broadcast(monkeypatc
         )
 
     assert natives.built[0].events == [
-        "declare set team_id:team-order ttl=60.0",
+        "declare set team_id:team-order ttl=60",
         "flush_pre",
         "PUBLISH team_id:team-order",
     ]
@@ -2556,7 +2557,6 @@ async def test_refresh_cached_team_flushes_redis_set_before_broadcast(monkeypatc
 async def test_get_team_object_cache_miss_does_not_broadcast_invalidation(monkeypatch) -> None:
     from unittest.mock import AsyncMock
 
-    from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.proxy.auth import auth_checks
     from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -2566,7 +2566,7 @@ async def test_get_team_object_cache_miss_does_not_broadcast_invalidation(monkey
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
         return_value=LiteLLM_TeamTable(team_id=team_id, models=["model-a"])
     )
-    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    cache: Final = UserApiKeyCache()
     publish: Final = AsyncMock()
     monkeypatch.setattr(auth_checks, "publish_auth_cache_invalidation", publish)
 
@@ -2577,7 +2577,7 @@ async def test_get_team_object_cache_miss_does_not_broadcast_invalidation(monkey
     )
 
     assert team.team_id == team_id
-    assert await cache.async_get_cache(key=f"team_id:{team_id}", model_type=LiteLLM_TeamTableCachedObj) is not None
+    assert await cache.async_get_cache(key=AuthObject.team(team_id), model_type=LiteLLM_TeamTableCachedObj) is not None
     publish.assert_not_awaited()
 
 
@@ -2621,7 +2621,7 @@ async def test_team_model_add_delete_keep_model_aliases_in_team_cache(endpoint_n
             user_api_key_dict=admin,
         )
 
-    cached_team = await cache.async_get_cache(key="team_id:team-1234", model_type=LiteLLM_TeamTableCachedObj)
+    cached_team = await cache.async_get_cache(key=AuthObject.team("team-1234"), model_type=LiteLLM_TeamTableCachedObj)
     assert team_model_aliases(cached_team) == {"fast": "gpt-4o"}
 
 
@@ -4605,7 +4605,7 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
     org_admin = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="org_admin_user")
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="org_admin_user",
+        key=AuthObject.user("org_admin_user"),
         value=LiteLLM_UserTable(
             user_id="org_admin_user",
             teams=["team_in_org_A"],
@@ -4617,7 +4617,7 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
         model_type=LiteLLM_UserTable,
     )
     await cache.async_set_cache(
-        key="other_user",
+        key=AuthObject.user("other_user"),
         value=LiteLLM_UserTable(
             user_id="other_user",
             teams=["other_team_in_org_A", "team_in_org_B", "unrelated_team_in_org_B"],
@@ -4715,7 +4715,7 @@ async def test_list_team_v1_org_admin_own_query_keeps_memberships_in_other_orgs(
     org_admin = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="org_admin_user")
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="org_admin_user",
+        key=AuthObject.user("org_admin_user"),
         value=LiteLLM_UserTable(
             user_id="org_admin_user",
             teams=["team_in_org_A", "team_in_org_B"],
@@ -9648,7 +9648,7 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(
 
     async def record_cache_state_then_delete(*args, **kwargs):
         cache_state_when_rows_deleted["doomed_still_cached"] = (
-            fresh_cache.get_cache(key="team_id:team-doomed") is not None
+            fresh_cache.get_cache(key=AuthObject.team("team-doomed")) is not None
         )
         return 1
 
@@ -9685,8 +9685,8 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(
         cached_obj = LiteLLM_TeamTableCachedObj(
             team_id=cached_team_id, team_alias=cached_alias
         )
-        fresh_cache.set_cache(key=f"team_id:{cached_team_id}", value=cached_obj)
-        fresh_cache.set_cache(key=f"team_alias:{cached_alias}", value=cached_obj)
+        fresh_cache.set_cache(key=AuthObject.team(cached_team_id), value=cached_obj)
+        fresh_cache.set_cache(key=AuthObject.team_alias(cached_alias), value=cached_obj)
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", fresh_cache)
@@ -9722,10 +9722,10 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(
     )
     assert mock_lock_tx.execute_raw.await_args_list == [call(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, ["team-doomed"])]
 
-    assert fresh_cache.get_cache(key="team_id:team-doomed") is None
-    assert fresh_cache.get_cache(key="team_alias:doomed-team") is None
-    assert fresh_cache.get_cache(key="team_id:team-kept") is not None
-    assert fresh_cache.get_cache(key="team_alias:kept-team") is not None
+    assert fresh_cache.get_cache(key=AuthObject.team("team-doomed")) is None
+    assert fresh_cache.get_cache(key=AuthObject.team_alias("doomed-team")) is None
+    assert fresh_cache.get_cache(key=AuthObject.team("team-kept")) is not None
+    assert fresh_cache.get_cache(key=AuthObject.team_alias("kept-team")) is not None
 
     # Eviction must run AFTER the rows are gone: both writers of these keys hydrate from the db,
     # so evicting first lets a concurrent auth lookup re-cache the still-present team.
@@ -9799,10 +9799,12 @@ async def test_delete_team_evicts_member_caches_with_one_transaction(
 
     fresh_cache = UserApiKeyCache()
     for user_id in member_user_ids:
-        fresh_cache.set_cache(key=user_id, value=UserAPIKeyAuth(user_id=user_id))
-    fresh_cache.set_cache(key="invited-user", value=UserAPIKeyAuth(user_id="invited-user"))
-    fresh_cache.set_cache(key="second-invited-user", value=UserAPIKeyAuth(user_id="second-invited-user"))
-    fresh_cache.set_cache(key="bystander-user", value=UserAPIKeyAuth(user_id="bystander-user"))
+        fresh_cache.set_cache(key=AuthObject.user(user_id), value=UserAPIKeyAuth(user_id=user_id))
+    fresh_cache.set_cache(key=AuthObject.user("invited-user"), value=UserAPIKeyAuth(user_id="invited-user"))
+    fresh_cache.set_cache(
+        key=AuthObject.user("second-invited-user"), value=UserAPIKeyAuth(user_id="second-invited-user")
+    )
+    fresh_cache.set_cache(key=AuthObject.user("bystander-user"), value=UserAPIKeyAuth(user_id="bystander-user"))
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", fresh_cache)
@@ -9826,14 +9828,14 @@ async def test_delete_team_evicts_member_caches_with_one_transaction(
         f"{len(member_user_ids)} members"
     )
     for user_id in member_user_ids:
-        assert fresh_cache.get_cache(key=user_id) is None, (
+        assert fresh_cache.get_cache(key=AuthObject.user(user_id)) is None, (
             f"member {user_id}'s cached user object survived the team delete"
         )
     for user_id in ("invited-user", "second-invited-user"):
-        assert fresh_cache.get_cache(key=user_id) is None, (
+        assert fresh_cache.get_cache(key=AuthObject.user(user_id)) is None, (
             f"the email-only roster entry resolving to {user_id} must have its cached user object evicted too"
         )
-    assert fresh_cache.get_cache(key="bystander-user") is not None
+    assert fresh_cache.get_cache(key=AuthObject.user("bystander-user")) is not None
     assert mock_prisma_client.db.litellm_usertable.find_many.await_count == 1, (
         "email-only roster entries must resolve in one lookup, not one query per email"
     )
@@ -9897,7 +9899,7 @@ async def test_delete_validated_team_rows_records_the_roster_the_lock_read_and_w
 
     fresh_cache = UserApiKeyCache()
     for user_id in ("member-1", "late-member", "stray-user", "bystander-user"):
-        fresh_cache.set_cache(key=user_id, value=UserAPIKeyAuth(user_id=user_id))
+        fresh_cache.set_cache(key=AuthObject.user(user_id), value=UserAPIKeyAuth(user_id=user_id))
 
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", fresh_cache)
     monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
@@ -9926,8 +9928,8 @@ async def test_delete_validated_team_rows_records_the_roster_the_lock_read_and_w
     (record,) = written.kwargs["data"]
     assert [member["user_id"] for member in json.loads(record["members_with_roles"])] == ["member-1", "late-member"]
     for user_id in ("member-1", "late-member", "stray-user"):
-        assert fresh_cache.get_cache(key=user_id) is None, user_id
-    assert fresh_cache.get_cache(key="bystander-user") is not None
+        assert fresh_cache.get_cache(key=AuthObject.user(user_id)) is None, user_id
+    assert fresh_cache.get_cache(key=AuthObject.user("bystander-user")) is not None
 
 
 @pytest.mark.asyncio
@@ -10140,8 +10142,13 @@ async def test_delete_team_evicts_the_auth_cache_of_the_keys_it_deletes(
     _wire_team_delete_tx(mock_prisma_client)
 
     fresh_cache = UserApiKeyCache()
-    fresh_cache.set_cache(key="hashed-doomed-key", value=UserAPIKeyAuth(token="hashed-doomed-key", team_id="team-doomed"))
-    fresh_cache.set_cache(key="hashed-unrelated-key", value=UserAPIKeyAuth(token="hashed-unrelated-key"))
+    fresh_cache.set_cache(
+        key=AuthObject.virtual_key("hashed-doomed-key"),
+        value=UserAPIKeyAuth(token="hashed-doomed-key", team_id="team-doomed"),
+    )
+    fresh_cache.set_cache(
+        key=AuthObject.virtual_key("hashed-unrelated-key"), value=UserAPIKeyAuth(token="hashed-unrelated-key")
+    )
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", fresh_cache)
@@ -10159,9 +10166,9 @@ async def test_delete_team_evicts_the_auth_cache_of_the_keys_it_deletes(
         litellm_changed_by="admin-user",
     )
 
-    assert fresh_cache.get_cache(key="hashed-doomed-key") is None
+    assert fresh_cache.get_cache(key=AuthObject.virtual_key("hashed-doomed-key")) is None
     # a key that had nothing to do with the deleted team must survive
-    assert fresh_cache.get_cache(key="hashed-unrelated-key") is not None
+    assert fresh_cache.get_cache(key=AuthObject.virtual_key("hashed-unrelated-key")) is not None
 
 
 @pytest.mark.asyncio
@@ -10211,8 +10218,8 @@ async def test_delete_team_failing_locked_sweep_rolls_back_the_delete_and_leaves
 
     fresh_cache = UserApiKeyCache()
     cached_obj = LiteLLM_TeamTableCachedObj(team_id="team-doomed", team_alias="doomed-team")
-    fresh_cache.set_cache(key="team_id:team-doomed", value=cached_obj)
-    fresh_cache.set_cache(key="team_alias:doomed-team", value=cached_obj)
+    fresh_cache.set_cache(key=AuthObject.team("team-doomed"), value=cached_obj)
+    fresh_cache.set_cache(key=AuthObject.team_alias("doomed-team"), value=cached_obj)
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", fresh_cache)
@@ -10233,8 +10240,8 @@ async def test_delete_team_failing_locked_sweep_rolls_back_the_delete_and_leaves
 
     # the transaction that deletes the row and runs the locked sweep never committed, so
     # cache eviction (which only runs after that commit) must never have been reached
-    assert fresh_cache.get_cache(key="team_id:team-doomed") is not None
-    assert fresh_cache.get_cache(key="team_alias:doomed-team") is not None
+    assert fresh_cache.get_cache(key=AuthObject.team("team-doomed")) is not None
+    assert fresh_cache.get_cache(key=AuthObject.team_alias("doomed-team")) is not None
 
 
 class _BroadcastPipeline:
@@ -10349,11 +10356,7 @@ async def test_deleting_a_500_member_team_reaches_every_member_cache_on_other_wo
     from itertools import chain
 
     import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
-    from litellm.proxy.common_utils.user_api_key_cache import (
-        UserApiKeyCache,
-        team_membership_auth_cache_key,
-        team_membership_reservation_cache_key,
-    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_endpoints.team_endpoints import _evict_deleted_team_member_cache
 
     redis: Final = _BroadcastRecordingRedis(round_trip_seconds=0.001)
@@ -10370,9 +10373,9 @@ async def test_deleting_a_500_member_team_reaches_every_member_cache_on_other_wo
     expected: Final = frozenset(
         chain.from_iterable(
             (
-                member,
-                team_membership_auth_cache_key(team_id="team-large", user_id=member),
-                team_membership_reservation_cache_key(user_id=member, team_id="team-large"),
+                AuthObject.user(member).key,
+                AuthObject.team_membership(team_id="team-large", user_id=member).key,
+                AuthObject.team_membership_reservation(user_id=member, team_id="team-large").key,
             )
             for member in members
         )
@@ -10454,11 +10457,7 @@ async def test_delete_team_survives_a_failing_cache_backend(
 @pytest.mark.asyncio
 async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     from litellm.proxy._types import TeamMemberDeleteRequest
-    from litellm.proxy.common_utils.user_api_key_cache import (
-        UserApiKeyCache,
-        team_membership_auth_cache_key,
-        team_membership_reservation_cache_key,
-    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         LiteLLM_VerificationToken,
     )
@@ -10554,11 +10553,15 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
 
     cache: Final = UserApiKeyCache()
     revoked_cache_keys: Final = (
-        "team_id:team-1", "team_alias:test-team", "user-123", "hashed-token-1", "hashed-token-2",
-        team_membership_auth_cache_key(user_id="user-123", team_id="team-1"),
-        team_membership_reservation_cache_key(user_id="user-123", team_id="team-1"),
+        AuthObject.team("team-1"),
+        AuthObject.team_alias("test-team"),
+        AuthObject.user("user-123"),
+        AuthObject.virtual_key("hashed-token-1"),
+        AuthObject.virtual_key("hashed-token-2"),
+        AuthObject.team_membership(user_id="user-123", team_id="team-1"),
+        AuthObject.team_membership_reservation(user_id="user-123", team_id="team-1"),
     )
-    for cache_key in (*revoked_cache_keys, "unrelated-key"):
+    for cache_key in (*revoked_cache_keys, AuthObject.virtual_key("unrelated-key")):
         cache.set_cache(key=cache_key, value={"retained": True})
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
 
@@ -10580,14 +10583,12 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     mock_delete_keys.assert_called_once()
     assert result.members_with_roles == []
     assert all(cache.get_cache(key=cache_key) is None for cache_key in revoked_cache_keys)
-    assert cache.get_cache(key="unrelated-key") == {"retained": True}
+    assert cache.get_cache(key=AuthObject.virtual_key("unrelated-key")) == {"retained": True}
 
 
 def _seed_jwt_mapping_cache(cache, mapping_rows):
-    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
-
     cache_keys = tuple(
-        jwt_key_mapping_cache_key(row.jwt_claim_name, row.jwt_claim_value, row.jwt_issuer) for row in mapping_rows
+        AuthObject.jwt_key_mapping(row.jwt_claim_name, row.jwt_claim_value, row.jwt_issuer) for row in mapping_rows
     )
     for cache_key, row in zip(cache_keys, mapping_rows):
         cache.set_cache(key=cache_key, value=row.token)
@@ -15154,8 +15155,8 @@ async def test_team_member_add_evicts_the_cached_team_roster(monkeypatch):
     team_id = "team-roster-evict"
     team_row = LiteLLM_TeamTable(team_id=team_id, team_alias="roster-evict", members_with_roles=[])
     cache = UserApiKeyCache()
-    cache.set_cache(key=f"team_id:{team_id}", value=team_row)
-    cache.set_cache(key="team_alias:roster-evict", value=team_row)
+    cache.set_cache(key=AuthObject.team(team_id), value=team_row)
+    cache.set_cache(key=AuthObject.team_alias("roster-evict"), value=team_row)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
@@ -15197,8 +15198,8 @@ async def test_team_member_add_evicts_the_cached_team_roster(monkeypatch):
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"),
         )
 
-    assert cache.get_cache(key=f"team_id:{team_id}") is None
-    assert cache.get_cache(key="team_alias:roster-evict") is None
+    assert cache.get_cache(key=AuthObject.team(team_id)) is None
+    assert cache.get_cache(key=AuthObject.team_alias("roster-evict")) is None
 
 
 class _RecordingAuditLogger(CustomLogger):
@@ -15805,7 +15806,9 @@ async def test_team_member_add_evicts_the_new_members_cached_user_row_on_every_w
     user_id = "dev-1"
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key=user_id, value=LiteLLM_UserTable(user_id=user_id, teams=["team-a"]), model_type=LiteLLM_UserTable
+        key=AuthObject.user(user_id),
+        value=LiteLLM_UserTable(user_id=user_id, teams=["team-a"]),
+        model_type=LiteLLM_UserTable,
     )
     broadcast = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
@@ -15857,7 +15860,7 @@ async def test_team_member_add_evicts_the_new_members_cached_user_row_on_every_w
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"),
         )
 
-    assert await cache.async_get_cache(key=user_id, model_type=LiteLLM_UserTable) is None
+    assert await cache.async_get_cache(key=AuthObject.user(user_id), model_type=LiteLLM_UserTable) is None
     broadcast.assert_awaited_once_with(cache_key=user_id)
 
 
@@ -16709,8 +16712,12 @@ async def test_reset_team_member_spend_fn_success(monkeypatch):
     mock_prisma_client = MagicMock()
     mock_proxy_logging_obj = MagicMock()
     real_cache = UserApiKeyCache()
-    await real_cache.async_set_cache(key="team-1_member-1", value="stale-membership")
-    await real_cache.async_set_cache(key="team_membership:member-1:team-1", value="stale-membership")
+    await real_cache.async_set_cache(
+        key=AuthObject.team_membership(team_id="team-1", user_id="member-1"), value="stale-membership"
+    )
+    await real_cache.async_set_cache(
+        key=AuthObject.team_membership_reservation(user_id="member-1", team_id="team-1"), value="stale-membership"
+    )
     real_spend_counter_cache = DualCache()
     real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     real_spend_counter_store.set_local("spend:team_member:member-1:team-1", 999.0)
@@ -16750,8 +16757,15 @@ async def test_reset_team_member_spend_fn_success(monkeypatch):
     assert (reset_user_id, reset_team_id, reset_to) == ("member-1", "team-1", 0.0)
     assert "total_spend = GREATEST(total_spend, spend)" in statement
     assert "spend >= $3" in statement
-    assert await real_cache.async_get_cache(key="team-1_member-1") is None
-    assert await real_cache.async_get_cache(key="team_membership:member-1:team-1") is None
+    assert (
+        await real_cache.async_get_cache(key=AuthObject.team_membership(team_id="team-1", user_id="member-1")) is None
+    )
+    assert (
+        await real_cache.async_get_cache(
+            key=AuthObject.team_membership_reservation(user_id="member-1", team_id="team-1")
+        )
+        is None
+    )
     assert real_spend_counter_store.get_local("spend:team_member:member-1:team-1") == 0.0
 
 
@@ -16765,7 +16779,9 @@ async def test_reset_team_member_spend_fn_stale_spend_returns_409_and_keeps_cach
 
     mock_prisma_client = MagicMock()
     real_cache = UserApiKeyCache()
-    await real_cache.async_set_cache(key="team_membership:member-1:team-1", value="cached-membership")
+    await real_cache.async_set_cache(
+        key=AuthObject.team_membership_reservation(user_id="member-1", team_id="team-1"), value="cached-membership"
+    )
     real_spend_counter_cache = DualCache()
     real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     real_spend_counter_store.set_local("spend:team_member:member-1:team-1", 999.0)
@@ -16794,7 +16810,12 @@ async def test_reset_team_member_spend_fn_stale_spend_returns_409_and_keeps_cach
         )
 
     assert exc_info.value.status_code == 409
-    assert await real_cache.async_get_cache(key="team_membership:member-1:team-1") == "cached-membership"
+    assert (
+        await real_cache.async_get_cache(
+            key=AuthObject.team_membership_reservation(user_id="member-1", team_id="team-1")
+        )
+        == "cached-membership"
+    )
     assert real_spend_counter_store.get_local("spend:team_member:member-1:team-1") == 999.0
 
 
@@ -16964,8 +16985,12 @@ async def test_reset_team_member_budget_fn_relinks_custom_member_to_team_default
 
     mock_prisma_client = MagicMock()
     real_cache = UserApiKeyCache()
-    await real_cache.async_set_cache(key="team-1_member-1", value="stale-membership")
-    await real_cache.async_set_cache(key="team_membership:member-1:team-1", value="stale-membership")
+    await real_cache.async_set_cache(
+        key=AuthObject.team_membership(team_id="team-1", user_id="member-1"), value="stale-membership"
+    )
+    await real_cache.async_set_cache(
+        key=AuthObject.team_membership_reservation(user_id="member-1", team_id="team-1"), value="stale-membership"
+    )
 
     membership_row = LiteLLM_TeamMembership(user_id="member-1", team_id="team-1", spend=10.0, budget_id="custom-b1")
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
@@ -16995,8 +17020,15 @@ async def test_reset_team_member_budget_fn_relinks_custom_member_to_team_default
         data={"litellm_budget_table": {"connect": {"budget_id": "team-default-b"}}},
     )
     mock_prisma_client.db.litellm_budgettable.update.assert_not_awaited()
-    assert await real_cache.async_get_cache(key="team-1_member-1") is None
-    assert await real_cache.async_get_cache(key="team_membership:member-1:team-1") is None
+    assert (
+        await real_cache.async_get_cache(key=AuthObject.team_membership(team_id="team-1", user_id="member-1")) is None
+    )
+    assert (
+        await real_cache.async_get_cache(
+            key=AuthObject.team_membership_reservation(user_id="member-1", team_id="team-1")
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -17180,8 +17212,12 @@ async def test_team_member_update_invalidates_team_member_spend_state_when_budge
 
     mock_prisma_client = MagicMock()
     real_cache = UserApiKeyCache()
-    await real_cache.async_set_cache(key="team-1_member-1", value="stale-membership")
-    await real_cache.async_set_cache(key="team_membership:member-1:team-1", value="stale-membership")
+    await real_cache.async_set_cache(
+        key=AuthObject.team_membership(team_id="team-1", user_id="member-1"), value="stale-membership"
+    )
+    await real_cache.async_set_cache(
+        key=AuthObject.team_membership_reservation(user_id="member-1", team_id="team-1"), value="stale-membership"
+    )
     real_spend_counter_cache = DualCache()
     real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     real_spend_counter_store.set_local("spend:team_member:member-1:team-1", 999.0)
@@ -17222,8 +17258,15 @@ async def test_team_member_update_invalidates_team_member_spend_state_when_budge
             ),
         )
 
-    assert await real_cache.async_get_cache(key="team-1_member-1") is None
-    assert await real_cache.async_get_cache(key="team_membership:member-1:team-1") is None
+    assert (
+        await real_cache.async_get_cache(key=AuthObject.team_membership(team_id="team-1", user_id="member-1")) is None
+    )
+    assert (
+        await real_cache.async_get_cache(
+            key=AuthObject.team_membership_reservation(user_id="member-1", team_id="team-1")
+        )
+        is None
+    )
     assert real_spend_counter_store.get_local("spend:team_member:member-1:team-1") == 999.0
 
 
@@ -17236,7 +17279,9 @@ async def test_team_member_update_skips_invalidation_when_no_budget_fields_sent(
 
     mock_prisma_client = MagicMock()
     real_cache = UserApiKeyCache()
-    await real_cache.async_set_cache(key="team-1_member-1", value="still-fresh-membership")
+    await real_cache.async_set_cache(
+        key=AuthObject.team_membership(team_id="team-1", user_id="member-1"), value="still-fresh-membership"
+    )
     real_spend_counter_cache = DualCache()
     real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     real_spend_counter_store.set_local("spend:team_member:member-1:team-1", 1.5)
@@ -17277,7 +17322,10 @@ async def test_team_member_update_skips_invalidation_when_no_budget_fields_sent(
             ),
         )
 
-    assert await real_cache.async_get_cache(key="team-1_member-1") == "still-fresh-membership"
+    assert (
+        await real_cache.async_get_cache(key=AuthObject.team_membership(team_id="team-1", user_id="member-1"))
+        == "still-fresh-membership"
+    )
     assert real_spend_counter_store.get_local("spend:team_member:member-1:team-1") == 1.5
 
 
@@ -17289,16 +17337,12 @@ async def test_evict_created_membership_caches_drops_the_negative_sentinel():
     attached at create time is enforced on the next request instead of after the membership cache TTL.
     Uses a real cache so the assertion is that the sentinel is actually gone, not that a mock was called.
     """
-    from litellm.proxy.common_utils.user_api_key_cache import (
-        NO_TEAM_MEMBERSHIP_SENTINEL,
-        UserApiKeyCache,
-        team_membership_reservation_cache_key,
-    )
+    from litellm.proxy.common_utils.user_api_key_cache import NO_TEAM_MEMBERSHIP_SENTINEL, UserApiKeyCache
     from litellm.proxy.management_endpoints.team_endpoints import _evict_created_membership_caches
 
     cache = UserApiKeyCache()
-    kept_key = team_membership_reservation_cache_key(user_id="carol", team_id="team-eviction")
-    evicted_key = team_membership_reservation_cache_key(user_id="bob", team_id="team-eviction")
+    kept_key = AuthObject.team_membership_reservation(user_id="carol", team_id="team-eviction")
+    evicted_key = AuthObject.team_membership_reservation(user_id="bob", team_id="team-eviction")
     await cache.async_set_cache(key=kept_key, value=NO_TEAM_MEMBERSHIP_SENTINEL)
     await cache.async_set_cache(key=evicted_key, value=NO_TEAM_MEMBERSHIP_SENTINEL)
 
@@ -18130,7 +18174,7 @@ async def test_new_team_persists_model_max_budget(mock_db_client, mock_admin_aut
         for model, budget in stored_member_budget_model_caps.items()
     } == expected_member_model_caps
     member_budget_cache.async_delete_cache.assert_awaited_once_with(
-        key=f"team_member_default_budget:{member_budget_id}"
+        key=AuthObject.team_member_default_budget(member_budget_id).key
     )
 
 

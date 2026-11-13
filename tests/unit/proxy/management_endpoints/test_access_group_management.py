@@ -911,14 +911,11 @@ def _serve_model_groups(router, model_groups):
 
 def _eviction_journal(access_group):
     """Both auth cache keys, in the order a write path has to evict them."""
-    from litellm.proxy.common_utils.user_api_key_cache import (
-        model_access_group_cache_key,
-        model_access_group_registry_cache_key,
-    )
+    from litellm.redis.stores.auth_cache import AuthObject
 
     return [
-        f"auth_cache.delete:{model_access_group_cache_key(access_group)}",
-        f"auth_cache.delete:{model_access_group_registry_cache_key()}",
+        f"auth_cache.delete:{AuthObject.model_access_group(access_group).key}",
+        f"auth_cache.delete:{AuthObject.model_access_group_registry().key}",
     ]
 
 

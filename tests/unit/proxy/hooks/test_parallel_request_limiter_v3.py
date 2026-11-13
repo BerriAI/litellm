@@ -5128,7 +5128,7 @@ async def test_completed_mcp_replay_stream_frees_slot_its_logged_first_round_kep
         internal_usage_cache=InternalUsageCache(local_cache),
         time_provider=lambda: reused_at,
     )
-    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = handler
     user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
     parallel_key: Final = RateLimitScope("api_key", api_key).gauge
@@ -5863,7 +5863,7 @@ async def test_async_streaming_data_generator_releases_counter_on_disconnect_v3(
     limiter, cache, counter_key, user_api_key_dict = await _build_seeded_limiter()
     assert limiter._gauge_in_flight_from_cache_value(_local(limiter, counter_key)) == 1
 
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
 
     async def upstream():

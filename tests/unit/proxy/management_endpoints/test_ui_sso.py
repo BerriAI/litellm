@@ -43,6 +43,7 @@ from litellm.proxy.management_endpoints.ui_sso import (
     read_return_to_cookie,
     sso_lookup_user_ids,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     MicrosoftGraphAPIUserGroupDirectoryObject,
@@ -8490,7 +8491,7 @@ class TestSyncUserRoleFromJwtRoleMap:
 
     @staticmethod
     def _make_jwt_handler():
-        from litellm.caching.caching import DualCache
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
         from litellm.proxy._types import (
             JWTLiteLLMRoleMap,
             LiteLLM_JWTAuth,
@@ -8500,7 +8501,7 @@ class TestSyncUserRoleFromJwtRoleMap:
         handler = JWTHandler()
         handler.update_environment(
             prisma_client=None,
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             litellm_jwtauth=LiteLLM_JWTAuth(
                 roles_jwt_field="custom_roles",
                 user_id_upsert=True,
@@ -8536,7 +8537,7 @@ class TestSyncUserRoleFromJwtRoleMap:
     @pytest.mark.asyncio
     async def test_stripped_response_has_no_roles(self):
         """Bug repro: stripped received_response lacks role claims."""
-        from litellm.caching.caching import DualCache
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
         handler = self._make_jwt_handler()
         sso_values = self._make_sso_values()
@@ -8546,7 +8547,7 @@ class TestSyncUserRoleFromJwtRoleMap:
             received_response={"token_type": "Bearer", "expires_in": 3600},
             user_info=None,
             prisma_client=AsyncMock(),
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             user_defined_values=sso_values,
         )
 
@@ -8555,7 +8556,7 @@ class TestSyncUserRoleFromJwtRoleMap:
     @pytest.mark.asyncio
     async def test_decoded_access_token_maps_role(self):
         """Decoded JWT payload with role claims maps correctly."""
-        from litellm.caching.caching import DualCache
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
         from litellm.proxy._types import LitellmUserRoles
 
         handler = self._make_jwt_handler()
@@ -8569,7 +8570,7 @@ class TestSyncUserRoleFromJwtRoleMap:
             },
             user_info=None,
             prisma_client=AsyncMock(),
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             user_defined_values=sso_values,
         )
 
@@ -8578,11 +8579,11 @@ class TestSyncUserRoleFromJwtRoleMap:
     @pytest.mark.asyncio
     async def test_existing_user_role_updated_in_db_and_cache(self):
         """Existing user with stale role gets updated in DB and cache."""
-        from litellm.caching.caching import DualCache
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
         from litellm.proxy._types import LitellmUserRoles
 
         handler = self._make_jwt_handler()
-        cache = DualCache()
+        cache = UserApiKeyCache()
         prisma = AsyncMock()
         prisma.db.litellm_usertable.update = AsyncMock()
         user_id = "testuser@example.com"
@@ -8591,9 +8592,7 @@ class TestSyncUserRoleFromJwtRoleMap:
             user_id=user_id,
             user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
         )
-        await cache.async_set_cache(
-            key=user_id, value=existing_user.model_dump(), ttl=60
-        )
+        await cache.async_set_cache(key=AuthObject.user(user_id), value=existing_user.model_dump(), ttl=60)
 
         sso_values = self._make_sso_values(
             user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
@@ -8614,11 +8613,13 @@ class TestSyncUserRoleFromJwtRoleMap:
         )
         assert existing_user.user_role == LitellmUserRoles.PROXY_ADMIN.value
         assert sso_values["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
+        cached: Final = await cache.async_get_cache(AuthObject.user(user_id), model_type=LiteLLM_UserTable)
+        assert cached is not None and cached.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
     @pytest.mark.asyncio
     async def test_same_role_no_db_write(self):
         """No DB update when the mapped role matches the existing role."""
-        from litellm.caching.caching import DualCache
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
         from litellm.proxy._types import LitellmUserRoles
 
         handler = self._make_jwt_handler()
@@ -8642,7 +8643,7 @@ class TestSyncUserRoleFromJwtRoleMap:
             },
             user_info=existing_user,
             prisma_client=prisma,
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             user_defined_values=sso_values,
         )
 
@@ -11282,12 +11283,12 @@ async def test_cli_sso_login_never_serves_the_admin_login_form_on_a_ui_disabled_
 
 
 def _upsert_jwt_handler(**jwtauth: object) -> JWTHandler:
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy._types import LiteLLM_JWTAuth
 
     handler: Final = JWTHandler()
     handler.update_environment(
-        prisma_client=None, user_api_key_cache=DualCache(), litellm_jwtauth=LiteLLM_JWTAuth(**jwtauth)
+        prisma_client=None, user_api_key_cache=UserApiKeyCache(), litellm_jwtauth=LiteLLM_JWTAuth(**jwtauth)
     )
     return handler
 

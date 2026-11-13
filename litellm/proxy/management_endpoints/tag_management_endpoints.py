@@ -22,16 +22,13 @@ from pydantic import TypeAdapter
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.user_api_key_cache import (
-    tag_cache_key,
-    tag_registry_cache_key,
-)
 from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     get_daily_activity,
 )
 from litellm.proxy.management_endpoints.common_utils import validate_finite_spend
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     tag_counter,
 )
@@ -322,7 +319,7 @@ async def new_tag(
             }
         )
 
-        await _evict_tag_cache_keys((tag_cache_key(tag.name), tag_registry_cache_key()))
+        await _evict_tag_cache_keys((AuthObject.tag(tag.name).key, AuthObject.tag_registry().key))
         await invalidate_spend_counter(counter_key=tag_counter(tag.name))
 
         # Update models with new tag
@@ -473,7 +470,7 @@ async def update_tag(
             data=update_data,
         )
 
-        await _evict_tag_cache_keys((tag_cache_key(tag.name),))
+        await _evict_tag_cache_keys((AuthObject.tag(tag.name).key,))
 
         if tag.spend is not None:
             await set_spend_counter_with_floor_and_broadcast(counter_key=f"spend:tag:{tag.name}", value=tag.spend)
@@ -727,7 +724,7 @@ async def delete_tag(
         # Delete tag from database
         await _table(TagRepository(prisma_client)).delete(where={"tag_name": data.name})
 
-        await _evict_tag_cache_keys((tag_cache_key(data.name), tag_registry_cache_key()))
+        await _evict_tag_cache_keys((AuthObject.tag(data.name).key, AuthObject.tag_registry().key))
 
         return {"message": f"Tag {data.name} deleted successfully"}
     except Exception as e:

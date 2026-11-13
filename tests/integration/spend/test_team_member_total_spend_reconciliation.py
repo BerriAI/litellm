@@ -12,8 +12,8 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm.caching.dual_cache import DualCache
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from tests.integration._support.client import Gateway, Scenario, eventually, list_value, object_value, string_value
 from tests.integration._support.database import read_rows, write_rows
@@ -221,12 +221,12 @@ def _expire_member_budget(user_id: str, team_id: str, *, budget_duration: str) -
 
 async def _run_scheduled_reset() -> None:
     client: Final = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache())
+        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache())
     )
     await client.connect()
     try:
         await ResetBudgetJob(
-            ProxyLogging(user_api_key_cache=DualCache()), client
+            ProxyLogging(user_api_key_cache=UserApiKeyCache()), client
         ).reset_budget_for_litellm_budget_table()
     finally:
         await client.db.disconnect()

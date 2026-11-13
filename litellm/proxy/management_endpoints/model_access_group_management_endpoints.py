@@ -31,11 +31,7 @@ from litellm.litellm_core_utils.core_helpers import json_contains, require_attri
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.config_sync_pubsub import publish_model_rows_written
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    model_access_group_cache_key,
-    model_access_group_registry_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient, writer_wrapper
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 
@@ -48,6 +44,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
 from litellm.proxy.utils import PrismaClient
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import ModelAccessGroupBudgetRepository
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -273,7 +270,7 @@ async def _evict_model_access_group_cache_keys(access_group: str, auth_cache: Us
     )
 
     await evict_and_broadcast(
-        cache_keys=(model_access_group_cache_key(access_group), model_access_group_registry_cache_key()),
+        cache_keys=(AuthObject.model_access_group(access_group).key, AuthObject.model_access_group_registry().key),
         user_api_key_cache=auth_cache,
     )
 

@@ -22,6 +22,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.proxy_server import budget_windows_absent_cache_key
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.redis.stores.auth_cache_double import shared_cache
@@ -204,8 +205,8 @@ async def test_subscriber_deletes_local_cache_entry_on_message() -> None:
     instead of serving the stale object until the TTL expires.
     """
     cache = UserApiKeyCache()
-    cache.in_memory_cache.set_cache("project_id:p-1", {"models": []})
-    assert cache.in_memory_cache.get_cache("project_id:p-1") is not None
+    cache.set_local(AuthObject.project("p-1"), {"models": []}, None)
+    assert cache.get_local(AuthObject.project("p-1")) is not None
 
     pubsub = _QueuePubSub(initial_messages=[_invalidation_message("project_id:p-1")])
     subscriber = AuthCacheInvalidationSubscriber(
@@ -218,7 +219,7 @@ async def test_subscriber_deletes_local_cache_entry_on_message() -> None:
     finally:
         await subscriber.stop()
 
-    assert cache.in_memory_cache.get_cache("project_id:p-1") is None
+    assert cache.get_local(AuthObject.project("p-1")) is None
     assert pubsub.subscribed_channels == [AUTH_CACHE_INVALIDATION_CHANNEL]
 
 
@@ -231,8 +232,8 @@ async def test_subscriber_deletes_key_object_partition_entry_on_message() -> Non
     """
     hashed_token = hashlib.sha256(b"sk-lit7563-hot-key").hexdigest()
     cache = UserApiKeyCache()
-    cache.set_cache(hashed_token, UserAPIKeyAuth(token=hashed_token), model_type=UserAPIKeyAuth)
-    assert cache.get_cache(hashed_token, model_type=UserAPIKeyAuth) is not None
+    cache.set_cache(AuthObject.virtual_key(hashed_token), UserAPIKeyAuth(token=hashed_token), model_type=UserAPIKeyAuth)
+    assert cache.get_cache(AuthObject.virtual_key(hashed_token), model_type=UserAPIKeyAuth) is not None
 
     pubsub = _QueuePubSub(initial_messages=[_invalidation_message(hashed_token)])
     subscriber = AuthCacheInvalidationSubscriber(
@@ -245,14 +246,14 @@ async def test_subscriber_deletes_key_object_partition_entry_on_message() -> Non
     finally:
         await subscriber.stop()
 
-    assert cache.get_cache(hashed_token, model_type=UserAPIKeyAuth) is None
+    assert cache.get_cache(AuthObject.virtual_key(hashed_token), model_type=UserAPIKeyAuth) is None
 
 
 @pytest.mark.asyncio
 async def test_subscriber_evicts_a_user_whose_id_looks_like_a_no_window_marker_along_with_the_marker() -> None:
     user_id: Final = budget_windows_absent_cache_key("key", "alice")
     cache: Final = UserApiKeyCache()
-    cache.set_cache(user_id, {"user_id": user_id, "models": ["gpt-4o"]})
+    cache.set_cache(AuthObject.user(user_id), {"user_id": user_id, "models": ["gpt-4o"]})
     no_window_markers: Final = InMemoryCache()
     no_window_markers.set_cache(user_id, True)
 
@@ -268,7 +269,7 @@ async def test_subscriber_evicts_a_user_whose_id_looks_like_a_no_window_marker_a
     finally:
         await subscriber.stop()
 
-    assert cache.get_cache(user_id) is None
+    assert cache.get_cache(AuthObject.user(user_id)) is None
     assert no_window_markers.get_cache(user_id) is None
 
 
@@ -302,7 +303,7 @@ async def test_subscriber_drops_the_shared_auth_cache_copy_so_the_next_read_refi
     """With enable_redis_auth_cache the keyspace's memory tier is native; the Python subscriber forwards each
     eviction broadcast to it, and the next read takes the other worker's write from Redis."""
     cache, store = shared_cache()
-    await cache.async_set_cache("team_id:t-1", {"team_id": "t-1", "models": ["old"]})
+    await cache.async_set_cache(AuthObject.team("t-1"), {"team_id": "t-1", "models": ["old"]})
     store.redis["team_id:t-1"] = {"team_id": "t-1", "models": ["new"]}
 
     pubsub = _QueuePubSub(initial_messages=[_invalidation_message("team_id:t-1")])
@@ -316,8 +317,8 @@ async def test_subscriber_drops_the_shared_auth_cache_copy_so_the_next_read_refi
     finally:
         await subscriber.stop()
 
-    assert cache.get_local("team_id:t-1") is None
-    assert await cache.async_get_cache("team_id:t-1") == {"team_id": "t-1", "models": ["new"]}
+    assert cache.get_local(AuthObject.team("t-1")) is None
+    assert await cache.async_get_cache(AuthObject.team("t-1")) == {"team_id": "t-1", "models": ["new"]}
 
 
 @pytest.mark.asyncio
@@ -381,7 +382,7 @@ async def test_subscriber_writes_and_drops_the_native_spend_counter_copies_a_bro
 @pytest.mark.asyncio
 async def test_subscriber_ignores_malformed_messages() -> None:
     cache = UserApiKeyCache()
-    cache.in_memory_cache.set_cache("project_id:p-1", {"models": []})
+    cache.set_local(AuthObject.project("p-1"), {"models": []}, None)
 
     subscriber = AuthCacheInvalidationSubscriber(
         redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[_QueuePubSub()])),
@@ -392,13 +393,13 @@ async def test_subscriber_ignores_malformed_messages() -> None:
     subscriber._apply_message("raw string")
     subscriber._apply_message(None)
 
-    assert cache.in_memory_cache.get_cache("project_id:p-1") is not None
+    assert cache.get_local(AuthObject.project("p-1")) is not None
 
 
 @pytest.mark.asyncio
 async def test_evict_and_broadcast_evicts_locally_and_returns_while_redis_publish_never_answers() -> None:
     cache = UserApiKeyCache()
-    cache.set_cache("user-wedged", UserAPIKeyAuth(user_id="user-wedged"), model_type=UserAPIKeyAuth)
+    cache.set_cache(AuthObject.user("user-wedged"), UserAPIKeyAuth(user_id="user-wedged"), model_type=UserAPIKeyAuth)
     client = _WedgedPublishRedisClient()
 
     with patch(
@@ -410,7 +411,7 @@ async def test_evict_and_broadcast_evicts_locally_and_returns_while_redis_publis
         elapsed = time.monotonic() - started
 
     assert elapsed < 0.1, f"handler waited {elapsed:.3f}s on a publish that never answers"
-    assert cache.get_cache("user-wedged", model_type=UserAPIKeyAuth) is None
+    assert cache.get_cache(AuthObject.user("user-wedged"), model_type=UserAPIKeyAuth) is None
     assert client.attempted == [json.dumps({"cache_key": "user-wedged"})], "publish was not handed to redis"
     client.release.set()
     await asyncio.sleep(0)

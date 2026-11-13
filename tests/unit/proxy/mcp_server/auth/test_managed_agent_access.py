@@ -9,6 +9,7 @@ from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTabl
 from litellm.proxy.auth import auth_checks
 from litellm.proxy.mcp_server import mcp_server_manager
 from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 
@@ -154,7 +155,7 @@ async def test_managed_agent_tool_ceiling_reads_the_admitted_policy_not_the_regi
 async def test_delegated_mcp_revokes_warm_human_policy_before_tool_execution(
     monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     permission: Final = LiteLLM_ObjectPermissionTable(
         object_permission_id="user-grant", mcp_servers=["slack"], mcp_tool_permissions={"slack": ["read", "write"]}
@@ -163,8 +164,8 @@ async def test_delegated_mcp_revokes_warm_human_policy_before_tool_execution(
         user_id="human", teams=[], organization_memberships=[], object_permission_id="user-grant"
     )
     cache: Final = UserApiKeyCache()
-    cache.set_cache("human", user)
-    cache.set_cache(object_permission_cache_key("user-grant"), permission)
+    cache.set_cache(AuthObject.user("human"), user)
+    cache.set_cache(AuthObject.object_permission("user-grant"), permission)
     client: Final = MagicMock()
     client.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=user)
     client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
@@ -219,6 +220,7 @@ async def test_autonomous_agent_toolset_and_access_group_revocations_bind_on_the
     writer revokes a tool or drops the server from the group, the next managed request must be denied
     even though the legacy cache still holds the warm grant and the replica still shows the old rows"""
     from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.mcp_server import toolset_db
 
     warm_toolset: Final = _toolset_row("slack", "read")
@@ -228,7 +230,7 @@ async def test_autonomous_agent_toolset_and_access_group_revocations_bind_on_the
     client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[_server_row("linear", ("grp",))])
     client.writer_db.litellm_mcpservertable.find_many = AsyncMock(return_value=[_server_row("linear", ("grp",))])
     monkeypatch.setattr(proxy_server, "prisma_client", client)
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr(proxy_server, "mcp_state_cache", DualCache())
     permission: Final = LiteLLM_ObjectPermissionTable(
         object_permission_id="agent-permissions", mcp_toolsets=["ts"], mcp_access_groups=["grp"]
@@ -540,7 +542,7 @@ async def test_caller_mcp_revocation_uses_fresh_policy(
     caller_kind: str,
 ) -> None:
     from litellm.proxy._types import LiteLLM_TeamTable
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.types.agents import AgentCaller
 
     cached_permission: Final = LiteLLM_ObjectPermissionTable(
@@ -569,9 +571,9 @@ async def test_caller_mcp_revocation_uses_fresh_policy(
     database.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=user)
     database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=current_permission)
     cache: Final = UserApiKeyCache()
-    cache.set_cache("team_id:caller", team.model_copy(update={"object_permission": cached_permission}))
-    cache.set_cache("caller", user.model_copy(update={"object_permission": cached_permission}))
-    cache.set_cache(object_permission_cache_key("caller-permission"), cached_permission)
+    cache.set_cache(AuthObject.team("caller"), team.model_copy(update={"object_permission": cached_permission}))
+    cache.set_cache(AuthObject.user("caller"), user.model_copy(update={"object_permission": cached_permission}))
+    cache.set_cache(AuthObject.object_permission("caller-permission"), cached_permission)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     auth: Final = actor(("read", "write"))

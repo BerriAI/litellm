@@ -55,6 +55,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.agents import AgentResponse
 
 
@@ -98,14 +99,14 @@ async def _jwt_team_selection_identity(
         [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))],
     )
     cache.set_cache(
-        "selection-user",
+        AuthObject.user("selection-user"),
         LiteLLM_UserTable(user_id="selection-user", user_role="internal_user", teams=list(membership_teams)),
         model_type=LiteLLM_UserTable,
     )
     for team in teams:
-        cache.set_cache(f"team_id:{team.team_id}", team, model_type=LiteLLM_TeamTable)
+        cache.set_cache(AuthObject.team(team.team_id), team, model_type=LiteLLM_TeamTable)
         cache.set_cache(
-            f"team_membership:selection-user:{team.team_id}",
+            AuthObject.team_membership_reservation(user_id="selection-user", team_id=team.team_id),
             LiteLLM_TeamMembership(user_id="selection-user", team_id=team.team_id),
             model_type=LiteLLM_TeamMembership,
         )
@@ -147,8 +148,8 @@ async def _jwt_team_selection_identity(
         access_group_name="selection-group",
         access_model_names=["selection-model"],
     )
-    cache.set_cache("access_group_rule_name:selection-group", group, model_type=LiteLLM_AccessGroupTable)
-    cache.set_cache("access_group_id:selection-group-id", group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache(AuthObject.access_group_rule_name("selection-group"), group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache(AuthObject.access_group("selection-group-id"), group, model_type=LiteLLM_AccessGroupTable)
     token: Final = jwt.encode(
         {"sub": "selection-user", "groups": list(claimed_teams), "scope": "inference"}, private_key, algorithm="RS256"
     )
@@ -739,7 +740,7 @@ async def test_auth_builder_header_team_allows_auth_passthrough_for_team_allowed
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     jwt_handler.update_environment(
         prisma_client=None,
         user_api_key_cache=user_api_key_cache,
@@ -1174,7 +1175,7 @@ async def test_sync_user_role_and_teams_cache_invalidation_on_role_change():
 
     mock_cache.async_set_cache.assert_called_once()
     call_kwargs = mock_cache.async_set_cache.call_args
-    assert call_kwargs.kwargs["key"] == "u1"
+    assert call_kwargs.kwargs["key"] == AuthObject.user("u1")
     assert isinstance(call_kwargs.kwargs["value"], LiteLLM_UserTable)
     assert call_kwargs.kwargs["value"].user_role == LitellmUserRoles.PROXY_ADMIN.value
     assert call_kwargs.kwargs["model_type"] == LiteLLM_UserTable
@@ -1221,7 +1222,7 @@ async def test_sync_user_role_and_teams_cache_invalidation_on_team_change():
 
     mock_cache.async_set_cache.assert_called_once()
     call_kwargs = mock_cache.async_set_cache.call_args
-    assert call_kwargs.kwargs["key"] == "u1"
+    assert call_kwargs.kwargs["key"] == AuthObject.user("u1")
     assert isinstance(call_kwargs.kwargs["value"], LiteLLM_UserTable)
     assert set(call_kwargs.kwargs["value"].teams) == {"team1", "team2"}
     assert call_kwargs.kwargs["model_type"] == LiteLLM_UserTable
@@ -1737,7 +1738,6 @@ async def test_metadata_prefix_handling_in_nested_fields():
 
 @pytest.mark.asyncio
 async def test_find_team_with_model_access_model_group(monkeypatch):
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
 
@@ -1769,7 +1769,7 @@ async def test_find_team_with_model_access_model_group(monkeypatch):
     jwt_handler = JWTHandler()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 
     team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
@@ -1799,7 +1799,6 @@ async def test_find_team_with_model_access_resolves_team_model_alias(monkeypatch
     import sys
     import types
 
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
 
@@ -1821,7 +1820,7 @@ async def test_find_team_with_model_access_resolves_team_model_alias(monkeypatch
 
     jwt_handler = JWTHandler()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
 
     team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
         team_ids={"team-aliases"},
@@ -1847,7 +1846,6 @@ async def test_find_team_with_model_access_v1_messages_default_routes(monkeypatc
     it just like /chat/completions and /v1/responses; otherwise the internal route
     check fails and surfaces a misleading "No team has access to the requested
     model" 403."""
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
 
@@ -1879,7 +1877,7 @@ async def test_find_team_with_model_access_v1_messages_default_routes(monkeypatc
     jwt_handler = JWTHandler()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 
     team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
@@ -1929,8 +1927,8 @@ async def test_find_team_with_model_access_reports_team_route_allowlist_denial()
     jwt_handler: Final = JWTHandler()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_allowed_routes=["/chat/completions"])
     team: Final = LiteLLM_TeamTable(team_id="team-route-denied", models=["gpt-4o-mini"])
-    user_api_key_cache: Final = DualCache()
-    user_api_key_cache.set_cache(key="team_id:team-route-denied", value=team)
+    user_api_key_cache: Final = UserApiKeyCache()
+    user_api_key_cache.set_cache(AuthObject.team("team-route-denied"), team, model_type=LiteLLM_TeamTable)
     prisma_client: Final = MagicMock()
     prisma_team_table: Final = prisma_client.db.litellm_teamtable
     prisma_team_table.find_unique = AsyncMock()
@@ -2099,7 +2097,6 @@ async def test_auth_builder_returns_team_membership_object():
 async def test_auth_builder_with_oidc_userinfo_enabled():
     """Test that auth_builder uses OIDC UserInfo endpoint when enabled"""
 
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     # Setup test data
@@ -2112,7 +2109,7 @@ async def test_auth_builder_with_oidc_userinfo_enabled():
 
     # Create JWT handler with OIDC UserInfo enabled
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 
     jwt_handler.update_environment(
@@ -2207,7 +2204,6 @@ async def test_auth_builder_with_oidc_userinfo_enabled():
 async def test_auth_builder_with_oidc_userinfo_disabled():
     """Test that auth_builder uses JWT validation when OIDC UserInfo is disabled"""
 
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     # Setup test data
@@ -2220,7 +2216,7 @@ async def test_auth_builder_with_oidc_userinfo_disabled():
 
     # Create JWT handler with OIDC UserInfo disabled
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 
     jwt_handler.update_environment(
@@ -2318,7 +2314,6 @@ async def test_auth_builder_oidc_enabled_falls_back_to_jwt_auth_for_jwt_tokens()
     get_oidc_userinfo.  Sending a standard JWT to the OIDC UserInfo endpoint
     is incorrect — the endpoint expects an opaque access token.
     """
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     # Three-part token: recognised as a JWT by is_jwt()
@@ -2332,7 +2327,7 @@ async def test_auth_builder_oidc_enabled_falls_back_to_jwt_auth_for_jwt_tokens()
     )
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 
     jwt_handler.update_environment(
@@ -2460,11 +2455,10 @@ async def test_resolve_team_from_header_returns_allowed_id_none_without_header_a
 @pytest.mark.asyncio
 async def test_auth_builder_uses_team_from_header_e2e():
     """Test auth_builder e2e flow: selects team from x-litellm-team-id header."""
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     jwt_handler.update_environment(
         prisma_client=None,
         user_api_key_cache=user_api_key_cache,
@@ -2529,11 +2523,10 @@ async def test_auth_builder_uses_team_from_header_e2e():
 @pytest.mark.asyncio
 async def test_auth_builder_header_team_denies_auth_passthrough_without_allowlist():
     """Header-selected JWT teams must enforce team allowed_passthrough_routes."""
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     jwt_handler.update_environment(
         prisma_client=None,
         user_api_key_cache=user_api_key_cache,
@@ -2604,11 +2597,10 @@ async def test_auth_builder_header_team_denies_auth_passthrough_without_allowlis
 @pytest.mark.asyncio
 async def test_auth_builder_specific_team_denies_auth_passthrough_without_allowlist():
     """JWT-field-selected teams must enforce team allowed_passthrough_routes."""
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     jwt_handler.update_environment(
         prisma_client=None,
         user_api_key_cache=user_api_key_cache,
@@ -2678,11 +2670,10 @@ async def test_auth_builder_specific_team_denies_auth_passthrough_without_allowl
 @pytest.mark.asyncio
 async def test_auth_builder_rbac_team_loads_team_for_passthrough_allowlist():
     """RBAC role-claim teams (team_object unset) must load team metadata before gating."""
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     jwt_handler.update_environment(
         prisma_client=None,
         user_api_key_cache=user_api_key_cache,
@@ -2756,11 +2747,10 @@ async def test_auth_builder_rbac_team_loads_team_for_passthrough_allowlist():
 @pytest.mark.asyncio
 async def test_auth_builder_rbac_team_denies_passthrough_without_allowlist():
     """RBAC role-claim teams without an allowlist are still denied for passthrough."""
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     jwt_handler.update_environment(
         prisma_client=None,
         user_api_key_cache=user_api_key_cache,
@@ -2819,11 +2809,10 @@ async def test_auth_builder_rbac_team_denies_passthrough_without_allowlist():
 async def test_auth_builder_admin_on_llm_route_honors_team_header():
     """JWT proxy_admin + x-litellm-team-id on an LLM API route -> team context is
     attached to the admin result so team TPM/RPM limits and attribution apply."""
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     jwt_handler.update_environment(
         prisma_client=None,
         user_api_key_cache=user_api_key_cache,
@@ -2879,11 +2868,10 @@ async def test_auth_builder_admin_on_mgmt_route_ignores_team_header():
     """JWT proxy_admin + x-litellm-team-id on an admin management route -> header
     is ignored; no team fetch. Preserves pre-existing bypass behavior and avoids
     phantom team creation when team_id_upsert is enabled."""
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     jwt_handler.update_environment(
         prisma_client=None,
         user_api_key_cache=user_api_key_cache,
@@ -2931,11 +2919,10 @@ async def test_auth_builder_admin_on_mgmt_route_ignores_team_header():
 async def test_auth_builder_admin_on_llm_route_without_header_unchanged():
     """JWT proxy_admin on an LLM API route without x-litellm-team-id -> no team
     context (team limits not applied, admin keeps unrestricted access)."""
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     jwt_handler.update_environment(
         prisma_client=None,
         user_api_key_cache=user_api_key_cache,
@@ -3055,13 +3042,12 @@ async def test_find_and_validate_specific_team_id_with_team_alias():
     Test that find_and_validate_specific_team_id resolves team by name when team_id is not found
     """
 
-    from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
     from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 
     jwt_handler.update_environment(
@@ -3106,13 +3092,12 @@ async def test_find_and_validate_team_id_takes_precedence_over_name():
     Test that team_id_jwt_field takes precedence over team_alias_jwt_field
     """
 
-    from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
     from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 
     jwt_handler.update_environment(
@@ -3157,13 +3142,12 @@ async def test_find_and_validate_raises_when_required_team_not_found():
     """
     Test that an exception is raised when team is required but neither team_id nor team_name is found
     """
-    from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 
     jwt_handler.update_environment(
@@ -3233,13 +3217,12 @@ async def test_get_objects_resolves_org_by_name():
     """
     Test that get_objects resolves organization by name when org_id is not provided
     """
-    from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_OrganizationTable
     from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 
     jwt_handler.update_environment(
@@ -3306,12 +3289,11 @@ async def test_get_objects_resolves_org_by_name():
 async def test_resolve_jwks_url_passthrough_for_direct_jwks_url():
     """Non-discovery URLs are returned unchanged."""
 
-    from litellm.caching.dual_cache import DualCache
 
     handler = JWTHandler()
     handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=DualCache(),
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(),
     )
     url = "https://login.microsoftonline.com/common/discovery/keys"
@@ -3327,13 +3309,11 @@ async def test_resolve_jwks_url_resolves_oidc_discovery_document():
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    from litellm.caching.dual_cache import DualCache
 
     handler = JWTHandler()
-    cache = DualCache()
     handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(),
     )
 
@@ -3360,13 +3340,11 @@ async def test_resolve_jwks_url_caches_resolved_jwks_uri():
     """Resolved jwks_uri is cached — second call does not hit the network."""
     from unittest.mock import AsyncMock, MagicMock
 
-    from litellm.caching.dual_cache import DualCache
 
     handler = JWTHandler()
-    cache = DualCache()
     handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(),
     )
 
@@ -3396,12 +3374,11 @@ async def test_resolve_jwks_url_raises_if_no_jwks_uri_in_discovery_doc():
     """Raise a helpful error if the discovery document has no jwks_uri."""
     from unittest.mock import AsyncMock, MagicMock
 
-    from litellm.caching.dual_cache import DualCache
 
     handler = JWTHandler()
     handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=DualCache(),
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(),
     )
 
@@ -3422,12 +3399,11 @@ async def test_resolve_jwks_url_raises_if_no_jwks_uri_in_discovery_doc():
 
 
 def _make_jwt_handler(team_id_jwt_field: str) -> JWTHandler:
-    from litellm.caching.dual_cache import DualCache
 
     handler = JWTHandler()
     handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=DualCache(),
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(team_id_jwt_field=team_id_jwt_field),
     )
     return handler
@@ -3497,7 +3473,6 @@ async def test_find_and_validate_specific_team_id_hints_bracket_notation():
     """
     from unittest.mock import MagicMock
 
-    from litellm.caching.dual_cache import DualCache
 
     handler = _make_jwt_handler("roles.0")
     # token has roles as a list — dot-notation won't find anything
@@ -3508,7 +3483,7 @@ async def test_find_and_validate_specific_team_id_hints_bracket_notation():
             jwt_handler=handler,
             jwt_valid_token=token,
             prisma_client=None,
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             parent_otel_span=None,
             proxy_logging_obj=MagicMock(),
         )
@@ -3529,7 +3504,6 @@ async def test_find_and_validate_specific_team_id_hints_bracket_index_notation()
     """
     from unittest.mock import MagicMock
 
-    from litellm.caching.dual_cache import DualCache
 
     handler = _make_jwt_handler("roles[0]")
     token = {"roles": ["team1"]}
@@ -3539,7 +3513,7 @@ async def test_find_and_validate_specific_team_id_hints_bracket_index_notation()
             jwt_handler=handler,
             jwt_valid_token=token,
             prisma_client=None,
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             parent_otel_span=None,
             proxy_logging_obj=MagicMock(),
         )
@@ -3559,7 +3533,6 @@ async def test_find_and_validate_specific_team_id_no_hint_for_valid_field():
     """
     from unittest.mock import MagicMock
 
-    from litellm.caching.dual_cache import DualCache
 
     handler = _make_jwt_handler("appid")
     token = {}  # no appid — triggers the "no team found" path
@@ -3569,7 +3542,7 @@ async def test_find_and_validate_specific_team_id_no_hint_for_valid_field():
             jwt_handler=handler,
             jwt_valid_token=token,
             prisma_client=None,
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             parent_otel_span=None,
             proxy_logging_obj=MagicMock(),
         )
@@ -4464,7 +4437,7 @@ def _get_jwt_handler_with_issuer_keys(issuers: list, keys_by_url: dict) -> JWTHa
     jwt_handler = JWTHandler()
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(issuers=issuers),
         jwks_cache=cache,
     )
@@ -4481,7 +4454,7 @@ async def test_get_public_key_fetches_and_caches_jwks_response():
     cache = DualCache()
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(public_key_ttl=123),
         jwks_cache=cache,
     )
@@ -4549,7 +4522,7 @@ def _get_jwt_handler_with_scripted_endpoint(
     jwt_handler = JWTHandler()
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(
             public_key_ttl=public_key_ttl,
             public_key_stale_ttl=public_key_stale_ttl,
@@ -5075,7 +5048,7 @@ async def test_get_public_key_tries_next_jwks_url_when_kid_missing(monkeypatch):
     jwt_handler = JWTHandler()
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(),
         jwks_cache=cache,
     )
@@ -5106,7 +5079,6 @@ def test_get_jwks_url_for_issuer_falls_back_to_discovery_document():
 @pytest.mark.asyncio
 async def test_get_objects_team_membership_uses_rebound_user_id():
     """team_membership lookup uses resolved DB user_id, not JWT email claim."""
-    from litellm.caching.caching import DualCache
 
     legacy_uuid = "bb8ab11f-09aa-47ae-b063-6e80506ac3bc"
     jwt_email = "matt@example.com"
@@ -5150,7 +5122,7 @@ async def test_get_objects_team_membership_uses_rebound_user_id():
             valid_user_email=None,
             jwt_handler=jwt_handler,
             prisma_client=MagicMock(),
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             parent_otel_span=None,
             proxy_logging_obj=MagicMock(),
             route="/chat/completions",
@@ -5539,7 +5511,7 @@ async def test_global_jwt_ignores_user_supplied_internal_claims(monkeypatch):
     jwt_handler = JWTHandler()
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=UserApiKeyCache(),
         jwks_cache=cache,
         litellm_jwtauth=LiteLLM_JWTAuth(
             user_id_jwt_field="email",
@@ -6722,11 +6694,10 @@ async def test_find_and_validate_specific_team_id_alias_wins_over_team_id_defaul
     silently substitutes team_id_default for a missing claim, which would
     otherwise mask the alias-resolved team and mis-attribute spend/access
     to the configured default team."""
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
     jwt_handler.update_environment(
         prisma_client=None,
@@ -6773,11 +6744,10 @@ async def test_find_and_validate_specific_team_id_team_id_default_used_without_a
     """When the token carries neither a team_id nor an alias claim and
     team_id_default is configured, the default still resolves the team. The
     alias-precedence fix must not regress this baseline fallback behavior."""
-    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
     jwt_handler.update_environment(
         prisma_client=None,
@@ -7777,7 +7747,7 @@ async def test_jwt_identity_and_authorization_keep_provisioning_in_admission(
     user_id: Final = f"identity-mode-{operation}-{existing_user}-{model_allowed}"
     user: Final = LiteLLM_UserTable(user_id=user_id, organization_memberships=[])
     if existing_user:
-        cache.set_cache(user_id, user)
+        cache.set_cache(AuthObject.user(user_id), user)
     database: Final = MagicMock()
     users: Final = database.db.litellm_usertable
     users.find_unique = AsyncMock(return_value=None)
@@ -7860,7 +7830,7 @@ def _entra_agent_jwt_handler(agent_id_jwt_field: str | None) -> JWTHandler:
     jwt_handler = JWTHandler()
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=DualCache(),
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(user_id_jwt_field="sub", agent_id_jwt_field=agent_id_jwt_field),
     )
     return jwt_handler
@@ -8181,7 +8151,7 @@ async def test_scope_admin_admission_resolves_existing_user_without_provisioning
     user_id: Final = f"admin-status-{existing_user}-{warm_cache}-{email}"
     user: Final = LiteLLM_UserTable(user_id=user_id, user_email="admin@allowed.example", metadata={"scim_active": False}, organization_memberships=[])
     if existing_user and warm_cache:
-        cache.set_cache(user_id, user)
+        cache.set_cache(AuthObject.user(user_id), user)
     database: Final = MagicMock()
     users: Final = database.db.litellm_usertable
     users.find_unique = AsyncMock(return_value=user if existing_user else None)
@@ -8243,10 +8213,11 @@ async def test_managed_application_uses_persisted_identity_without_provisioning_
     monkeypatch.setenv("JWT_ISSUER", issuer)
     monkeypatch.setenv("JWT_AUDIENCE", "api://gateway")
     private_key, jwk = _get_rsa_key_and_jwk(kid="managed-key")
-    cache: Final = DualCache()
-    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
+    cache: Final = UserApiKeyCache()
+    jwks_cache: Final = DualCache()
+    jwks_cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
     handler: Final = JWTHandler()
-    handler.update_environment(None, cache, LiteLLM_JWTAuth(user_id_upsert=True), jwks_cache=cache)
+    handler.update_environment(None, cache, LiteLLM_JWTAuth(user_id_upsert=True), jwks_cache=jwks_cache)
     binding: Final = AgentIdentityBinding(
         agent_id="stable-id",
         provider="microsoft_entra",
@@ -8353,8 +8324,9 @@ async def test_database_free_jwt_admission_with_entra_shaped_claims(monkeypatch:
     monkeypatch.setenv("JWT_ISSUER", issuer)
     monkeypatch.setenv("JWT_AUDIENCE", "api://gateway")
     private_key, jwk = _get_rsa_key_and_jwk(kid="config-key")
-    cache: Final = DualCache()
-    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
+    cache: Final = UserApiKeyCache()
+    jwks_cache: Final = DualCache()
+    jwks_cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
     registry: Final = AgentRegistry()
     registry.register_agent(
         AgentResponse(
@@ -8369,7 +8341,7 @@ async def test_database_free_jwt_admission_with_entra_shaped_claims(monkeypatch:
         None,
         cache,
         LiteLLM_JWTAuth(agent_id_jwt_field="agent", admin_allowed_routes=["llm_api_routes"]),
-        jwks_cache=cache,
+        jwks_cache=jwks_cache,
     )
     handler.bind_agent_lookup(registry)
     token: Final = _encode_rsa_jwt(
@@ -8426,7 +8398,7 @@ def test_managed_issuer_requires_configured_audience_validation(
     handler: Final = JWTHandler()
     handler.update_environment(
         None,
-        DualCache(),
+        UserApiKeyCache(),
         LiteLLM_JWTAuth(
             issuers=[
                 JWTIssuerConfig(issuer="trusted", audience=audience, disable_audience_validation=disabled),
@@ -8727,7 +8699,7 @@ def _assertion_handler(jwk, litellm_jwtauth, jwks_url=ASSERTION_JWKS_URL):
     cache: Final = DualCache()
     cache.set_cache(f"litellm_jwt_auth_keys_{jwks_url}", [jwk])
     handler.update_environment(
-        prisma_client=None, user_api_key_cache=cache, litellm_jwtauth=litellm_jwtauth, jwks_cache=cache
+        prisma_client=None, user_api_key_cache=UserApiKeyCache(), litellm_jwtauth=litellm_jwtauth, jwks_cache=cache
     )
     return handler
 

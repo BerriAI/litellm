@@ -22,6 +22,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
 from litellm.proxy.search_endpoints.endpoints import router, search
+from litellm.redis.stores.auth_cache import AuthObject
 
 TAVILY_SEARCH_URL: Final = "https://api.tavily.com/search"
 TAVILY_RESULT: Final = {"title": "LiteLLM", "url": "https://docs.litellm.ai", "content": "LLM gateway"}
@@ -86,7 +87,7 @@ def _cache_team(cache: UserApiKeyCache, search_tools: list[str]) -> None:
         object_permission_id="op-team",
         object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-team", search_tools=search_tools),
     )
-    cache.set_cache(key="team_id:team-1", value=team)
+    cache.set_cache(AuthObject.team("team-1"), team)
 
 
 @pytest.mark.parametrize(

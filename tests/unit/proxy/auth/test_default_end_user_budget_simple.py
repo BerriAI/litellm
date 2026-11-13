@@ -6,7 +6,7 @@ a default budget to end users without explicit budgets.
 """
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -14,7 +14,7 @@ import pytest
 import litellm
 from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_EndUserTable
 from litellm.proxy.auth.auth_checks import get_end_user_object
-from litellm.caching import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
 
 @pytest.mark.asyncio
@@ -53,9 +53,7 @@ async def test_default_budget_applied_to_end_user_without_budget():
         return_value=MagicMock(dict=lambda: default_budget.dict())
     )
 
-    mock_cache = AsyncMock(spec=DualCache)
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
+    mock_cache = UserApiKeyCache()
 
     result = await get_end_user_object(
         end_user_id=end_user_id,
@@ -108,9 +106,7 @@ async def test_explicit_budget_not_overridden_by_default():
         return_value=MagicMock(dict=lambda: mock_end_user_data)
     )
 
-    mock_cache = AsyncMock(spec=DualCache)
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
+    mock_cache = UserApiKeyCache()
 
     result = await get_end_user_object(
         end_user_id=end_user_id,
@@ -168,9 +164,7 @@ async def test_budget_enforcement_blocks_over_budget_users():
         return_value=MagicMock(dict=lambda: default_budget.dict())
     )
 
-    mock_cache = AsyncMock(spec=DualCache)
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
+    mock_cache = UserApiKeyCache()
 
     # First, get the end user object (this just fetches data, doesn't enforce budget)
     result = await get_end_user_object(
@@ -223,9 +217,7 @@ async def test_system_works_without_default_budget_configured():
         return_value=MagicMock(dict=lambda: mock_end_user_data)
     )
 
-    mock_cache = AsyncMock(spec=DualCache)
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
+    mock_cache = UserApiKeyCache()
 
     result = await get_end_user_object(
         end_user_id=end_user_id,

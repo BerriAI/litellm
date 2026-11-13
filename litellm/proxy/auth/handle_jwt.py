@@ -75,6 +75,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     get_management_object_ttl,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure
@@ -2225,7 +2226,7 @@ class JWTAuthManager:
             user_object.user_role = new_role.value
             if user_api_key_cache is not None:
                 await user_api_key_cache.async_set_cache(
-                    key=user_object.user_id,
+                    key=AuthObject.user(user_object.user_id),
                     value=user_object,
                     model_type=LiteLLM_UserTable,
                     ttl=get_management_object_ttl(user_api_key_cache),
@@ -2265,7 +2266,7 @@ class JWTAuthManager:
             ]
             if user_api_key_cache is not None:
                 await user_api_key_cache.async_set_cache(
-                    key=user_object.user_id,
+                    key=AuthObject.user(user_object.user_id),
                     value=user_object,
                     model_type=LiteLLM_UserTable,
                     ttl=get_management_object_ttl(user_api_key_cache),

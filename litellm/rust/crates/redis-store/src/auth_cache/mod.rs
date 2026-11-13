@@ -9,7 +9,7 @@ use std::{
 use litellm_python_compat::{Value, json};
 use litellm_redis_client::{Declared, RedisBatch, commands};
 
-pub use self::keys::is_key_object;
+pub use self::keys::AuthObject;
 pub use self::types::Settings;
 use crate::{
     Error, Number, Pending, RequestRedis, Send,
@@ -24,8 +24,9 @@ const INCREMENT_IF_PRESENT: &str = "if redis.call('EXISTS', KEYS[1]) == 0 then r
 
 /// The proxy's auth object cache with `enable_redis_auth_cache` on: `UserApiKeyCache`'s two
 /// `DualCache` partitions, so churn in management objects cannot evict user-key objects, in front of
-/// one Redis shared by every pod. Keys are the logical cache keys `UserApiKeyCache` callers already
-/// use; values are what `json.loads` returns, written as `json.dumps`, like `RedisCache.async_set_cache`.
+/// one Redis shared by every pod. Writes and reads name an [`AuthObject`], which picks the partition;
+/// an eviction carries a wire key and drops it from both. Values are what `json.loads` returns,
+/// written as `json.dumps`, like `RedisCache.async_set_cache`.
 pub struct AuthCache {
     key_objects: DualCache<Value>,
     objects: DualCache<Value>,
@@ -49,6 +50,11 @@ impl AuthCache {
         }
     }
 
+    /// `DualCache.attach_redis_cache`: memory stays, and `false` means a Redis was already attached.
+    pub fn attach(&self, remote: Remote) -> bool {
+        self.redis.attach(remote)
+    }
+
     pub fn has_redis(&self) -> bool {
         self.redis.get().is_some()
     }
@@ -65,20 +71,29 @@ impl AuthCache {
         self.objects.reconfigure(settings.memory());
     }
 
-    pub fn get_local(&self, key: &str) -> Result<Option<Value>, Error> {
-        Ok(self.partition(key).memory().get(key)?)
+    pub fn get_local(&self, object: &AuthObject) -> Result<Option<Value>, Error> {
+        Ok(self.partition(object).memory().get(&object.key())?)
     }
 
     /// A memory write with `ttl`, or `default_in_memory_ttl` when it names none.
-    pub fn set_local(&self, key: &str, value: Value, ttl: Option<Duration>) -> Result<(), Error> {
-        let partition = self.partition(key);
-        Ok(partition
-            .memory()
-            .set(key, value, ttl.or(partition.default_in_memory_ttl()))?)
+    pub fn set_local(
+        &self,
+        object: &AuthObject,
+        value: Value,
+        ttl: Option<Duration>,
+    ) -> Result<(), Error> {
+        let partition = self.partition(object);
+        Ok(partition.memory().set(
+            &object.key(),
+            value,
+            ttl.or(partition.default_in_memory_ttl()),
+        )?)
     }
 
+    /// Drops this pod's copy of a wire key from both partitions, as an eviction broadcast does.
     pub fn delete_local(&self, key: &str) -> Result<(), Error> {
-        Ok(self.partition(key).memory().delete(key)?)
+        self.key_objects.memory().delete(key)?;
+        Ok(self.objects.memory().delete(key)?)
     }
 
     pub fn flush_local(&self) -> Result<(), Error> {
@@ -99,9 +114,11 @@ impl AuthCache {
     pub async fn get(
         &self,
         request: Option<&RequestRedis>,
-        key: &str,
+        object: &AuthObject,
     ) -> Result<Option<Value>, Error> {
-        self.partition(key).get(request, key, None).await
+        self.partition(object)
+            .get(request, &object.key(), None)
+            .await
     }
 
     /// `DualCache.async_set_cache`, writing `json.dumps(value)`. `request` reads the key again
@@ -109,12 +126,12 @@ impl AuthCache {
     pub async fn set(
         &self,
         request: Option<&RequestRedis>,
-        key: &str,
+        object: &AuthObject,
         value: Value,
         ttl: Option<Duration>,
     ) -> Result<(), Error> {
-        self.forget_misses(request, [key]);
-        self.partition(key).set(key, value, ttl).await
+        self.forget_misses(request, [object]);
+        self.partition(object).set(&object.key(), value, ttl).await
     }
 
     /// `DualCache.set_cache`, whose `RedisCache.set_cache` writes `str(value)`. `request` reads the
@@ -122,28 +139,33 @@ impl AuthCache {
     pub async fn set_str(
         &self,
         request: Option<&RequestRedis>,
-        key: &str,
+        object: &AuthObject,
         value: Value,
         ttl: Option<Duration>,
     ) -> Result<(), Error> {
-        self.forget_misses(request, [key]);
-        self.partition(key).set_str(key, value, ttl).await
+        self.forget_misses(request, [object]);
+        self.partition(object)
+            .set_str(&object.key(), value, ttl)
+            .await
     }
 
     /// `DualCache.async_set_cache_pre_call`: memory now, the `SET` on the batch `send` picks.
     pub fn declare_set(
         &self,
         send: Send<'_>,
-        key: &str,
+        object: &AuthObject,
         value: Value,
         ttl: Option<Duration>,
     ) -> Result<Pending<()>, Error> {
-        self.partition(key).declare_set(send, key, value, ttl)
+        self.partition(object)
+            .declare_set(send, &object.key(), value, ttl)
     }
 
-    /// `DualCache.async_delete_cache_pre_call`, memory now and the `DEL` on the batch `send` picks.
+    /// `DualCache.async_delete_cache_pre_call` of a wire key: both partitions now and the `DEL` on
+    /// the batch `send` picks.
     pub fn declare_delete(&self, send: Send<'_>, key: &str) -> Result<Pending<()>, Error> {
-        self.partition(key).declare_delete(send, key)
+        self.key_objects.memory().delete(key)?;
+        self.objects.declare_delete(send, key)
     }
 
     /// `UserApiKeyCache.async_set_cache_pipeline`: the key-object entries in one pipeline, then
@@ -151,14 +173,23 @@ impl AuthCache {
     pub async fn set_many(
         &self,
         request: Option<&RequestRedis>,
-        entries: Vec<(String, Value)>,
+        entries: Vec<(AuthObject, Value)>,
         ttl: Option<Duration>,
     ) -> Result<(), Error> {
-        self.forget_misses(request, entries.iter().map(|(key, _)| key.as_str()));
-        let (key_objects, others): (Vec<_>, Vec<_>) =
-            entries.into_iter().partition(|(key, _)| is_key_object(key));
-        self.key_objects.set_pipeline(key_objects, ttl).await?;
-        self.objects.set_pipeline(others, ttl).await
+        self.forget_misses(request, entries.iter().map(|(object, _)| object));
+        let (key_objects, others): (Vec<_>, Vec<_>) = entries
+            .into_iter()
+            .partition(|(object, _)| object.is_key_object());
+        let keyed = |entries: Vec<(AuthObject, Value)>| -> Vec<(String, Value)> {
+            entries
+                .into_iter()
+                .map(|(object, value)| (object.key(), value))
+                .collect()
+        };
+        self.key_objects
+            .set_pipeline(keyed(key_objects), ttl)
+            .await?;
+        self.objects.set_pipeline(keyed(others), ttl).await
     }
 
     /// The auth prefetch write-back: memory first, an entry without a TTL taking
@@ -169,12 +200,9 @@ impl AuthCache {
     pub fn write_back(
         &self,
         send: Send<'_>,
-        entries: Vec<(String, Value, Option<Duration>)>,
+        entries: Vec<(AuthObject, Value, Option<Duration>)>,
     ) -> Result<Pending<()>, Error> {
-        self.forget_misses(
-            send.request(),
-            entries.iter().map(|(key, _, _)| key.as_str()),
-        );
+        self.forget_misses(send.request(), entries.iter().map(|(object, _, _)| object));
         let encoded = self
             .redis
             .get()
@@ -187,9 +215,9 @@ impl AuthCache {
             .transpose();
         let writes = entries
             .into_iter()
-            .map(|(key, value, ttl)| {
-                self.set_local(&key, value, ttl)?;
-                Ok((key, ttl))
+            .map(|(object, value, ttl)| {
+                self.set_local(&object, value, ttl)?;
+                Ok((object.key(), ttl))
             })
             .collect::<Result<Vec<_>, Error>>()?;
         let (Some(remote), Some(encoded)) = (self.redis.get(), encoded?) else {
@@ -213,11 +241,15 @@ impl AuthCache {
         }))
     }
 
-    /// `UserApiKeyCache.async_delete_cache_keys`: the key-object partition and the rest as two
-    /// concurrent `DualCache.async_delete_cache_keys`. Both run even when one fails.
+    /// `UserApiKeyCache.async_delete_cache_keys` of wire keys: both partitions drop every key,
+    /// and the `DEL`s go out as `main`'s two concurrent `DualCache.async_delete_cache_keys`, split
+    /// by its `is_user_key_cache_key` rule. Both run even when one fails.
     pub async fn delete(&self, keys: &[String]) -> Result<(), Error> {
-        let (key_objects, others): (Vec<String>, Vec<String>) =
-            keys.iter().cloned().partition(|key| is_key_object(key));
+        keys.iter().try_for_each(|key| self.delete_local(key))?;
+        let (key_objects, others): (Vec<String>, Vec<String>) = keys
+            .iter()
+            .cloned()
+            .partition(|key| is_user_key_cache_key(key));
         let (key_objects, others) = tokio::join!(
             self.key_objects.delete_keys(&key_objects),
             self.objects.delete_keys(&others)
@@ -228,13 +260,17 @@ impl AuthCache {
     /// `RedisCache.async_batch_get_cache` for keys the caller found missing in memory, one `MGET` on
     /// the batch `send` picks, noting the keys Redis lacks as the request's misses. `None` without
     /// Redis. Any failed read or undecodable value fails the whole read, as a failed `MGET` does.
-    pub fn get_many(&self, send: Send<'_>, keys: &[String]) -> Option<Pending<Vec<Option<Value>>>> {
+    pub fn get_many(
+        &self,
+        send: Send<'_>,
+        objects: &[AuthObject],
+    ) -> Option<Pending<Vec<Option<Value>>>> {
         let client = self.redis.client()?;
+        let keys: Vec<String> = objects.iter().map(AuthObject::key).collect();
         let misses = send.misses(client);
         let read = send.batch(client).add(commands::mget::<Vec<u8>>(
             &keys.iter().map(String::as_str).collect::<Vec<_>>(),
         ));
-        let keys = keys.to_vec();
         Some(Box::pin(async move {
             let raw = read.resolve().await?;
             if let Some(misses) = misses {
@@ -253,7 +289,7 @@ impl AuthCache {
     /// `None` without Redis or for an absent entry.
     pub async fn increment_if_present(
         &self,
-        key: &str,
+        object: &AuthObject,
         amount: Number,
     ) -> Result<Option<f64>, Error> {
         let Some(client) = self.redis.client() else {
@@ -261,27 +297,41 @@ impl AuthCache {
         };
         let amount = litellm_redis_client::Amount::from(amount);
         Ok(client
-            .send(commands::eval_source(INCREMENT_IF_PRESENT, &[key], amount))
+            .send(commands::eval_source(
+                INCREMENT_IF_PRESENT,
+                &[object.key().as_str()],
+                amount,
+            ))
             .await?)
     }
 
     fn forget_misses<'a>(
         &self,
         request: Option<&RequestRedis>,
-        keys: impl IntoIterator<Item = &'a str>,
+        objects: impl IntoIterator<Item = &'a AuthObject>,
     ) {
         let (Some(request), Some(client)) = (request, self.redis.client()) else {
             return;
         };
         let misses = request.misses(client);
-        keys.into_iter().for_each(|key| misses.forget(key));
+        objects
+            .into_iter()
+            .for_each(|object| misses.forget(&object.key()));
     }
 
-    fn partition(&self, key: &str) -> &DualCache<Value> {
-        if is_key_object(key) {
+    fn partition(&self, object: &AuthObject) -> &DualCache<Value> {
+        if object.is_key_object() {
             &self.key_objects
         } else {
             &self.objects
         }
     }
+}
+
+/// `is_user_key_cache_key`, which `main` split a raw eviction's `DEL`s by.
+fn is_user_key_cache_key(key: &str) -> bool {
+    key.len() == 64
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }

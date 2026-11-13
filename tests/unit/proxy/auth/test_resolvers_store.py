@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Final
 
 import pytest
 
@@ -14,21 +14,14 @@ from litellm.proxy.auth.resolvers.exceptions import (
 from litellm.proxy.auth.auth_method import AuthMethod
 from litellm.proxy.auth.resolvers.models import Principal, PrincipalType
 from litellm.proxy.auth.resolvers.store import IdentityStore
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 
 
-class _FakeCache:
-    """Stands in for the DualCache get_key_object reads. It returns a cache hit
-    before the DB is touched, so seeding it exercises resolve without a database
-    (a non-None prisma client is still required; it is never reached on a hit)."""
-
-    def __init__(self, entries: Optional[Dict[str, object]] = None) -> None:
-        self._entries = entries or {}
-
-    async def async_get_cache(self, key, *args, **kwargs):
-        return self._entries.get(key)
-
-    async def async_set_cache(self, *args, **kwargs):
-        return None
+def _cache_holding(key: UserAPIKeyAuth) -> UserApiKeyCache:
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(AuthObject.virtual_key(key.token or ""), key, model_type=UserAPIKeyAuth)
+    return cache
 
 
 class _FakeEmptyKeyTable:
@@ -42,7 +35,7 @@ class _FakeEmptyKeyTable:
 async def test_resolve_returns_a_principal_projected_from_the_looked_up_key():
     raw = "sk-live-abc"
     key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-1", team_id="t-1")
-    store = IdentityStore(object(), _FakeCache({hash_token(raw): key}))
+    store = IdentityStore(object(), _cache_holding(key))
 
     principal = await store.resolve(hashed_token=hash_token(raw))
 
@@ -55,7 +48,7 @@ async def test_resolve_returns_a_principal_projected_from_the_looked_up_key():
 async def test_resolve_carries_the_key_for_key_from_principal():
     raw = "sk-live-abc"
     key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-1", team_id="t-1")
-    store = IdentityStore(object(), _FakeCache({hash_token(raw): key}))
+    store = IdentityStore(object(), _cache_holding(key))
 
     principal = await store.resolve(hashed_token=hash_token(raw))
     recovered = IdentityStore.key_from_principal(principal)
@@ -75,7 +68,7 @@ def test_key_from_principal_raises_when_no_source_key_is_carried():
 
 
 async def test_resolve_raises_without_a_db_connection():
-    store = IdentityStore(None, _FakeCache())
+    store = IdentityStore(None, UserApiKeyCache())
     with pytest.raises(NoDatabaseConnectionError):
         await store.resolve(hashed_token="missing")
 
@@ -84,7 +77,7 @@ async def test_resolve_raises_a_generic_key_not_found_carrying_the_hash_when_no_
     """The 401 message stays generic for the caller, while the hash rides on the
     exception so the auth failure log line can still name it for the operator."""
     missing = hash_token("sk-live-not-a-key")
-    store = IdentityStore(_FakeEmptyKeyTable(), _FakeCache())
+    store = IdentityStore(_FakeEmptyKeyTable(), UserApiKeyCache())
 
     with pytest.raises(KeyNotFoundError) as exc_info:
         await store.resolve(hashed_token=missing)

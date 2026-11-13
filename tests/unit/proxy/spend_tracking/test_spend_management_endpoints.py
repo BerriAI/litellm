@@ -794,10 +794,7 @@ def reset_proxy_auth_globals(monkeypatch):
     monkeypatch.setattr(ps, "master_key", None)
     monkeypatch.setattr(ps, "user_custom_auth", None)
     monkeypatch.setattr(ps, "general_settings", {})
-    try:
-        ps.user_api_key_cache.in_memory_cache.cache_dict.clear()
-    except AttributeError:
-        pass
+    ps.user_api_key_cache.flush_cache()
 
 
 @pytest.mark.asyncio
@@ -8640,6 +8637,7 @@ async def test_log_team_dependency_preserves_checks_before_permission_lookup(
 ):
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache import AuthObject
 
     team_reads = []
 
@@ -8650,7 +8648,9 @@ async def test_log_team_dependency_preserves_checks_before_permission_lookup(
 
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="caller", value=LiteLLM_UserTable(user_id="caller", teams=["team"]), model_type=LiteLLM_UserTable
+        key=AuthObject.user("caller"),
+        value=LiteLLM_UserTable(user_id="caller", teams=["team"]),
+        model_type=LiteLLM_UserTable,
     )
     prisma = MagicMock(
         db=MagicMock(
@@ -8677,10 +8677,11 @@ async def test_management_team_lookup_without_memberships_keeps_own_user_scope()
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.auth.authorization import resolve_owned_read_scope
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache import AuthObject
 
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="caller", value=LiteLLM_UserTable(user_id="caller", teams=[]), model_type=LiteLLM_UserTable
+        key=AuthObject.user("caller"), value=LiteLLM_UserTable(user_id="caller", teams=[]), model_type=LiteLLM_UserTable
     )
     auth = UserAPIKeyAuth(user_id="caller", user_role=LitellmUserRoles.INTERNAL_USER)
     team_reads = []

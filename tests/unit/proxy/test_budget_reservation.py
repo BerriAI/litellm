@@ -12,7 +12,6 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.caching.dual_cache import DualCache
-from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
 from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
     AgenticAnthropicStreamingIterator,
@@ -34,10 +33,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.reset_budget_job import _model_access_group_counter_key
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    model_access_group_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_model_access_group_budget_counters,
     estimate_request_max_cost,
@@ -52,9 +48,11 @@ from litellm.proxy.spend_tracking.input_tokens import (
     _approximate_input_size,
 )
 from litellm.proxy.utils import ProxyLogging
-from litellm.router import Router
-from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import model_access_group_counter
+from litellm.router import Router
+from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters, unavailable
 
 
@@ -382,7 +380,7 @@ async def test_should_shrink_second_tag_reservation_to_remaining_budget(
         "tags": ["tag-budget-race", "tag-without-budget", "tag-budget-race"]
     }
     await key_cache.async_set_cache(
-        key="tag:tag-budget-race",
+        key=AuthObject.tag("tag-budget-race"),
         value=LiteLLM_TagTable(
             tag_name="tag-budget-race",
             spend=0.0,
@@ -391,7 +389,7 @@ async def test_should_shrink_second_tag_reservation_to_remaining_budget(
         ).model_dump(),
     )
     await key_cache.async_set_cache(
-        key="tag:tag-without-budget",
+        key=AuthObject.tag("tag-without-budget"),
         value=LiteLLM_TagTable(
             tag_name="tag-without-budget",
             spend=0.0,
@@ -481,7 +479,7 @@ async def test_should_seed_and_update_end_user_and_tag_counters_without_reservat
 ):
     counter_cache, key_cache = spend_counter_state
     await key_cache.async_set_cache(
-        key="end_user_id:customer-1",
+        key=AuthObject.end_user("customer-1"),
         value=LiteLLM_EndUserTable(
             user_id="customer-1",
             blocked=False,
@@ -490,14 +488,14 @@ async def test_should_seed_and_update_end_user_and_tag_counters_without_reservat
         ).model_dump(),
     )
     await key_cache.async_set_cache(
-        key="tag:paid-tag",
+        key=AuthObject.tag("paid-tag"),
         value=LiteLLM_TagTable(
             tag_name="paid-tag",
             spend=7.0,
         ).model_dump(),
     )
     await key_cache.async_set_cache(
-        key="tag:other-tag",
+        key=AuthObject.tag("other-tag"),
         value=LiteLLM_TagTable(
             tag_name="other-tag",
             spend=2.0,
@@ -542,7 +540,7 @@ async def test_should_reserve_team_member_and_org_budget_counters(spend_counter_
         spend=0.0,
     )
     await key_cache.async_set_cache(
-        key="team_membership:user-budget-shared:team-budget-shared",
+        key=AuthObject.team_membership_reservation(user_id="user-budget-shared", team_id="team-budget-shared"),
         value=LiteLLM_TeamMembership(
             user_id="user-budget-shared",
             team_id="team-budget-shared",
@@ -551,7 +549,7 @@ async def test_should_reserve_team_member_and_org_budget_counters(spend_counter_
         ).model_dump(),
     )
     await key_cache.async_set_cache(
-        key="org_id:org-budget-shared:with_budget",
+        key=AuthObject.org_with_budget("org-budget-shared"),
         value=LiteLLM_OrganizationTable(
             organization_id="org-budget-shared",
             organization_alias="shared-org",
@@ -604,7 +602,7 @@ async def _seed_project_scoped_budgets(
     project_max_budget: float,
 ) -> None:
     await key_cache.async_set_cache(
-        key="team_membership:user-proj:team-proj",
+        key=AuthObject.team_membership_reservation(user_id="user-proj", team_id="team-proj"),
         value=LiteLLM_TeamMembership(
             user_id="user-proj",
             team_id="team-proj",
@@ -613,7 +611,7 @@ async def _seed_project_scoped_budgets(
         ).model_dump(),
     )
     await key_cache.async_set_cache(
-        key="project_id:proj-1",
+        key=AuthObject.project("proj-1"),
         value=LiteLLM_ProjectTableCachedObj(
             project_id="proj-1",
             team_id="team-proj",
@@ -817,7 +815,7 @@ async def test_should_reserve_user_budget_counter_for_team_key_when_flag_enabled
 async def test_should_seed_org_counter_from_with_budget_cache(spend_counter_state):
     counter_cache, key_cache = spend_counter_state
     await key_cache.async_set_cache(
-        key="org_id:org-counter-with-budget:with_budget",
+        key=AuthObject.org_with_budget("org-counter-with-budget"),
         value=LiteLLM_OrganizationTable(
             organization_id="org-counter-with-budget",
             organization_alias="shared-org",
@@ -847,7 +845,7 @@ async def test_should_seed_org_counter_from_with_budget_cache(spend_counter_stat
 async def test_should_seed_org_counter_from_plain_org_cache(spend_counter_state):
     counter_cache, key_cache = spend_counter_state
     await key_cache.async_set_cache(
-        key="org_id:org-counter-plain",
+        key=AuthObject.org("org-counter-plain"),
         value=LiteLLM_OrganizationTable(
             organization_id="org-counter-plain",
             organization_alias="shared-org",
@@ -1008,7 +1006,7 @@ async def test_should_clamp_reservation_to_default_when_output_cap_missing(
         max_budget=10000.0,
     )
     await key_cache.async_set_cache(
-        key="key-budget-uncapped",
+        key=AuthObject.virtual_key("key-budget-uncapped"),
         value=valid_token,
     )
     request_body = _request_body()
@@ -1310,7 +1308,7 @@ async def test_should_clamp_reservation_to_model_ceiling_when_caller_overrequest
         max_budget=10000.0,
     )
     await key_cache.async_set_cache(
-        key="key-budget-overrequest",
+        key=AuthObject.virtual_key("key-budget-overrequest"),
         value=valid_token,
     )
 
@@ -1362,7 +1360,7 @@ async def test_should_reserve_image_generation_cost_per_image(
         spend=0.0,
         max_budget=10.0,
     )
-    await key_cache.async_set_cache(key="key-image-gen", value=valid_token)
+    await key_cache.async_set_cache(key=AuthObject.virtual_key("key-image-gen"), value=valid_token)
 
     request_body = {"model": "dall-e-3", "prompt": "a cat", "n": 3}
 
@@ -1411,7 +1409,7 @@ async def test_should_reject_concurrent_image_request_against_depleted_budget(
         spend=0.0,
     )
     await key_cache.async_set_cache(
-        key=f"team_id:{team_object.team_id}",
+        key=AuthObject.team(team_object.team_id),
         value=team_object,
     )
 
@@ -1467,7 +1465,7 @@ async def test_should_skip_reservation_for_per_pixel_image_model(
         spend=0.0,
         max_budget=1.0,
     )
-    await key_cache.async_set_cache(key="key-image-per-pixel", value=valid_token)
+    await key_cache.async_set_cache(key=AuthObject.virtual_key("key-image-per-pixel"), value=valid_token)
 
     request_body = {"model": "dall-e-2", "prompt": "a cat", "size": "256x256"}
 
@@ -1512,7 +1510,7 @@ async def test_should_use_token_pricing_for_chat_model_with_image_cost_field(
         spend=0.0,
         max_budget=10.0,
     )
-    await key_cache.async_set_cache(key="key-multimodal-chat", value=valid_token)
+    await key_cache.async_set_cache(key=AuthObject.virtual_key("key-multimodal-chat"), value=valid_token)
 
     # Roughly the gemini-3.1-pro-preview shape: chat-mode model that
     # carries an output_cost_per_image alongside token pricing.
@@ -1570,7 +1568,7 @@ async def test_should_reserve_image_edit_cost_per_image(
         spend=0.0,
         max_budget=10.0,
     )
-    await key_cache.async_set_cache(key="key-image-edit", value=valid_token)
+    await key_cache.async_set_cache(key=AuthObject.virtual_key("key-image-edit"), value=valid_token)
 
     request_body = {"model": "stability/inpaint", "prompt": "a cat", "n": 2}
 
@@ -2058,7 +2056,7 @@ async def test_should_preserve_budget_error_and_continue_partial_cleanup(
         max_budget=0.3,
     )
     await key_cache.async_set_cache(
-        key="team_id:team-budget-cleanup-failure",
+        key=AuthObject.team("team-budget-cleanup-failure"),
         value=team_object,
     )
 
@@ -2552,7 +2550,7 @@ async def test_should_not_block_concurrent_team_request_when_first_request_lacks
         spend=0.144,
     )
     await key_cache.async_set_cache(
-        key=f"team_id:{team_object.team_id}",
+        key=AuthObject.team(team_object.team_id),
         value=team_object,
     )
 
@@ -3334,7 +3332,7 @@ async def test_model_access_group_with_a_budget_reserves_against_the_reset_jobs_
     assert len(counters) == 1
     counter = counters[0]
     assert counter.counter_key == _model_access_group_counter_key(SimpleNamespace(access_group_name="premium"))
-    assert counter.source_cache_key == model_access_group_cache_key("premium")
+    assert counter.source_cache_key == AuthObject.model_access_group("premium")
     assert counter.max_budget == 25.0
     assert counter.fallback_spend == 7.0
     assert counter.entity_type == "Model access group"
@@ -3395,7 +3393,7 @@ async def test_model_access_group_counter_blocks_a_request_over_the_group_budget
 
 async def _cache_model_access_group_budget(key_cache, group, spend, max_budget=None):
     await key_cache.async_set_cache(
-        key=model_access_group_cache_key(group),
+        key=AuthObject.model_access_group(group),
         value=ModelAccessGroupBudget(access_group_name=group, spend=spend, max_budget=max_budget),
         model_type=ModelAccessGroupBudget,
     )

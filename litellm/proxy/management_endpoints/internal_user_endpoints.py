@@ -52,11 +52,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.openai_error_payload import openai_shaped_proxy_exception, proxy_exception_for
 from litellm.proxy.common_utils.timezone_utils import keeps_due_budget_reset
-from litellm.proxy.common_utils.user_api_key_cache import (
-    AUTH_OBJECTS_TARGET,
-    object_permission_cache_key,
-    user_object_permission_id_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
@@ -94,6 +90,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
 from litellm.proxy.management_helpers.team_roster_sync import user_tx_db
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_raw_rows, run_off_loop_if_fips
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     user_counter,
 )
@@ -1539,8 +1536,8 @@ async def _invalidate_cached_user_entitlement(user_id: str | None, object_permis
     from litellm.proxy.proxy_server import user_api_key_cache
 
     keys: Final = (
-        *(object_permission_cache_key(permission_id) for permission_id in dict.fromkeys(object_permission_ids)),
-        *((user_object_permission_id_cache_key(user_id), user_id) if user_id is not None else ()),
+        *(AuthObject.object_permission(permission_id).key for permission_id in dict.fromkeys(object_permission_ids)),
+        *((AuthObject.user_object_permission(user_id).key, user_id) if user_id is not None else ()),
     )
     await evict_and_broadcast(cache_keys=keys, user_api_key_cache=user_api_key_cache)
 

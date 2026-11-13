@@ -17,6 +17,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth import auth_checks
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, common_checks
 from litellm.proxy.utils import get_available_models_for_user
+from litellm.redis.stores.auth_cache import AuthObject
 
 _TEAMS: Final[Mapping[str, LiteLLM_TeamTableCachedObj]] = {
     "team-a": LiteLLM_TeamTableCachedObj(team_id="team-a", models=["gpt-a", "shared"]),
@@ -251,7 +252,10 @@ async def test_resolved_model_check_denies_when_personal_key_owner_lookup_fails(
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     token: Final = UserAPIKeyAuth(token="k1", user_id="u-no-db")
     await proxy_server.user_api_key_cache.async_delete_cache("u-no-db")
-    assert await proxy_server.user_api_key_cache.async_get_cache(key="u-no-db", model_type=LiteLLM_UserTable) is None
+    assert (
+        await proxy_server.user_api_key_cache.async_get_cache(key=AuthObject.user("u-no-db"), model_type=LiteLLM_UserTable)
+        is None
+    )
 
     with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
         await can_key_call_resolved_model(model="gpt-a", llm_model_list=None, valid_token=token, llm_router=_ROUTER)

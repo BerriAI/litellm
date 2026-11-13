@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import (
     LiteLLM_OrganizationTable,
     LiteLLM_TeamMembership,
@@ -22,11 +21,9 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
 )
 from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_auth_objects, prefetch_identity_keys
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    end_user_cache_key,
-    end_user_restricted_registry_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.rust_bridge._native import NativeRedisStoreError
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
 USER_ID = "prefetch-user"
@@ -88,7 +85,7 @@ def _non_prefetch_db_calls(prisma: MagicMock) -> list[str]:
 def _cache(redis: FakeAuthCache | None) -> UserApiKeyCache:
     """A worker of its own (empty memory) on ``redis``'s Redis, or a worker without Redis."""
     if redis is None:
-        return UserApiKeyCache(in_memory_cache=InMemoryCache())
+        return UserApiKeyCache()
     return shared_cache(FakeAuthCache(redis=redis.redis, commands=redis.commands, fail=redis.fail))[0]
 
 
@@ -259,7 +256,7 @@ async def test_row_missing_a_required_column_is_not_cached_so_the_getter_still_f
         await get_team_object(team_id=TEAM_ID, prisma_client=prisma, user_api_key_cache=cache)
     assert exc.value.status_code == 404
     assert prisma.db.litellm_teamtable.find_unique.await_count == 1
-    assert cache.get_local(USER_ID) is not None
+    assert cache.get_local(AuthObject.user(USER_ID)) is not None
 
 
 @pytest.mark.asyncio
@@ -271,18 +268,18 @@ async def test_absent_rows_are_not_cached_as_present():
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
 
     assert _writes(redis) == []
-    assert cache.get_local(f"team_id:{TEAM_ID}") is None
+    assert cache.get_local(AuthObject.team(TEAM_ID)) is None
 
 
 @pytest.mark.asyncio
 async def test_a_failed_redis_read_reads_as_a_miss_and_the_database_fill_takes_over():
     prisma = _prisma()
-    cache = _cache(FakeAuthCache(fail=ConnectionError("redis down")))
+    cache = _cache(FakeAuthCache(fail=NativeRedisStoreError("transport", "redis down")))
 
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
 
     assert prisma.db.query_first.await_count == 1
-    assert cache.get_local(USER_ID)["user_id"] == USER_ID
+    assert cache.get_local(AuthObject.user(USER_ID))["user_id"] == USER_ID
 
 
 @pytest.mark.asyncio
@@ -295,7 +292,7 @@ async def test_no_prisma_still_uses_redis_but_never_queries():
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=None)
 
     assert _round_trips(redis) == 1
-    assert cache.get_local(f"org_id:{ORG_ID}") is not None
+    assert cache.get_local(AuthObject.org(ORG_ID)) is not None
 
 
 @pytest.mark.asyncio
@@ -306,21 +303,22 @@ async def test_no_redis_goes_straight_to_one_query():
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
 
     assert prisma.db.query_first.await_count == 1
-    assert cache.get_local(f"team_membership:{USER_ID}:{TEAM_ID}") is not None
+    assert cache.get_local(AuthObject.team_membership_reservation(user_id=USER_ID, team_id=TEAM_ID)) is not None
 
 
 @pytest.mark.asyncio
 async def test_identity_prefetch_warms_the_end_user_so_its_getter_needs_neither_redis_nor_the_database():
-    end_user_key = end_user_cache_key("eu-1")
-    redis = FakeAuthCache(redis={end_user_key: {"user_id": "eu-1", "blocked": False, "spend": 0.0}})
+    end_user_key = AuthObject.end_user("eu-1")
+    registry_key = AuthObject.end_user_restricted_registry()
+    redis = FakeAuthCache(redis={end_user_key.key: {"user_id": "eu-1", "blocked": False, "spend": 0.0}})
     cache = _cache(redis)
     prisma = _prisma()
 
-    await prefetch_identity_keys([end_user_key, end_user_restricted_registry_cache_key()], cache)
+    await prefetch_identity_keys([end_user_key, registry_key], cache)
     end_user = await get_end_user_object(end_user_id="eu-1", prisma_client=prisma, user_api_key_cache=cache)
 
     assert end_user is not None and end_user.user_id == "eu-1"
-    assert redis.commands == [("MGET", (end_user_key, end_user_restricted_registry_cache_key()))]
+    assert redis.commands == [("MGET", (end_user_key.key, registry_key.key))]
     assert prisma.db.mock_calls == []
 
 
@@ -329,7 +327,7 @@ async def test_identity_prefetch_does_not_cache_an_absent_entry_as_present():
     redis = FakeAuthCache()
     cache = _cache(redis)
 
-    await prefetch_identity_keys([end_user_cache_key("eu-absent")], cache)
+    await prefetch_identity_keys([AuthObject.end_user("eu-absent")], cache)
 
     assert _round_trips(redis) == 1
-    assert cache.get_local(end_user_cache_key("eu-absent")) is None
+    assert cache.get_local(AuthObject.end_user("eu-absent")) is None

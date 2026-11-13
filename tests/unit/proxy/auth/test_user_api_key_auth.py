@@ -25,6 +25,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from tests._master_key import MASTER_KEY
 
 
@@ -81,7 +82,7 @@ async def test_scim_deactivation_precedes_central_key_model_denial(monkeypatch: 
     cache: Final = UserApiKeyCache()
     stored: Final = UserAPIKeyAuth(token=server.hash_token(key), models=["model-a"], user_id="inactive-owner")
     cache.set_cache(
-        "inactive-owner",
+        AuthObject.user("inactive-owner"),
         LiteLLM_UserTable(user_id="inactive-owner", metadata={"scim_active": False}),
         model_type=LiteLLM_UserTable,
     )
@@ -110,8 +111,8 @@ async def test_restricted_key_model_list_denial_names_the_denied_model(
     group: Final = LiteLLM_AccessGroupTable(
         access_group_id="science-id", access_group_name="science", access_model_names=["model-a"]
     )
-    cache.set_cache("access_group_rule_name:science", group, model_type=LiteLLM_AccessGroupTable)
-    cache.set_cache("access_group_id:science-id", group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache(AuthObject.access_group_rule_name("science"), group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache(AuthObject.access_group("science-id"), group, model_type=LiteLLM_AccessGroupTable)
     monkeypatch.setattr(server, "user_api_key_cache", cache)
     monkeypatch.setattr(server, "prisma_client", MagicMock())
     monkeypatch.setattr(
@@ -144,9 +145,9 @@ async def test_user_access_group_rules_are_enforced_at_central_authorization(
     group: Final = LiteLLM_AccessGroupTable(
         access_group_id="science-id", access_group_name="science", access_model_names=["group-model"]
     )
-    cache.set_cache("access_group_rule_name:science", group, model_type=LiteLLM_AccessGroupTable)
-    cache.set_cache("access_group_id:science-id", group, model_type=LiteLLM_AccessGroupTable)
-    cache.set_cache("science", LiteLLM_UserTable(user_id="science"), model_type=LiteLLM_UserTable)
+    cache.set_cache(AuthObject.access_group_rule_name("science"), group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache(AuthObject.access_group("science-id"), group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache(AuthObject.user("science"), LiteLLM_UserTable(user_id="science"), model_type=LiteLLM_UserTable)
     monkeypatch.setattr(
         server,
         "general_settings",
@@ -262,8 +263,8 @@ async def test_check_blocked_team():
     team_obj = LiteLLM_TeamTableCachedObj(team_id=_team_id, blocked=False, last_refreshed_at=time.time())
     hashed_token = hash_token(user_key)
     print(f"STORING TOKEN UNDER KEY={hashed_token}")
-    user_api_key_cache.set_cache(key=hashed_token, value=valid_token)
-    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+    user_api_key_cache.set_cache(key=AuthObject.virtual_key(hashed_token), value=valid_token)
+    user_api_key_cache.set_cache(key=AuthObject.team(_team_id), value=team_obj)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
@@ -301,7 +302,7 @@ async def test_team_object_has_object_permission_id():
         team_object_permission_id=permission_id,
         team_models=["gpt-4o"],
     )
-    user_api_key_cache.set_cache(key=hashed_key, value=valid_token)
+    user_api_key_cache.set_cache(key=AuthObject.virtual_key(hashed_key), value=valid_token)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
@@ -401,8 +402,8 @@ async def test_aaauser_personal_budgets(key_ownership):
         )
 
     user_obj = LiteLLM_UserTable(user_id=_user_id, spend=11, max_budget=10, user_email="")
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
-    user_api_key_cache.set_cache(key="{}".format(_user_id), value=user_obj)
+    user_api_key_cache.set_cache(key=AuthObject.virtual_key(hash_token(user_key)), value=valid_token)
+    user_api_key_cache.set_cache(key=AuthObject.user(_user_id), value=user_obj)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
@@ -413,7 +414,10 @@ async def test_aaauser_personal_budgets(key_ownership):
 
     test_user_cache = getattr(litellm.proxy.proxy_server, "user_api_key_cache")
 
-    assert test_user_cache.get_cache(key=hash_token(user_key), model_type=UserAPIKeyAuth) == valid_token
+    assert (
+        test_user_cache.get_cache(key=AuthObject.virtual_key(hash_token(user_key)), model_type=UserAPIKeyAuth)
+        == valid_token
+    )
 
     if key_ownership == "user_key":
         with pytest.raises(ProxyException) as exc_info:
@@ -755,7 +759,7 @@ async def test_auth_with_form_data_and_model():
     )
 
     # Store the virtual key in cache
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+    user_api_key_cache.set_cache(key=AuthObject.virtual_key(hash_token(user_key)), value=valid_token)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
@@ -813,7 +817,7 @@ async def test_soft_budget_alert():
     )
 
     # Store in cache
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+    user_api_key_cache.set_cache(key=AuthObject.virtual_key(hash_token(user_key)), value=valid_token)
 
     # Mock proxy server settings
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
@@ -1186,7 +1190,7 @@ async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypa
     jwt_handler = JWTHandler()
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=local_cache,
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=litellm_jwtauth,
         jwks_cache=local_cache,
         leeway=10000000000000,
@@ -1384,11 +1388,10 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
     # virtual_key_claim_field check in user_api_key_auth doesn't fail with
     # "JWTHandler has no attribute 'litellm_jwtauth'"
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.caching.dual_cache import DualCache
 
     litellm.proxy.proxy_server.jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=DualCache(),
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(),
     )
 
@@ -1576,7 +1579,9 @@ async def test_user_api_key_from_query_param():
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     user_key = "sk-query-1234"
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key)))
+    user_api_key_cache.set_cache(
+        key=AuthObject.virtual_key(hash_token(user_key)), value=UserAPIKeyAuth(token=hash_token(user_key))
+    )
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
@@ -1714,7 +1719,7 @@ async def test_user_model_budget_is_enforced_through_user_api_key_auth(over_budg
     setattr(litellm.proxy.proxy_server, "prisma_client", "present")
 
     await user_api_key_cache.async_set_cache(
-        key=hashed,
+        key=AuthObject.virtual_key(hashed),
         value=UserAPIKeyAuth(token=hashed, user_id=user_id, models=[], model_max_budget={}),
         model_type=UserAPIKeyAuth,
     )
@@ -1916,7 +1921,6 @@ async def test_user_budget_lookup_tolerates_an_unreadable_user():
     the established contract, not a shortcut. There is also nothing to enforce:
     the budget being looked up lives on the row that could not be read.
     """
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.auth.user_api_key_auth import _read_user_model_max_budget
 
     prisma_client = MagicMock()
@@ -1928,7 +1932,7 @@ async def test_user_budget_lookup_tolerates_an_unreadable_user():
         budget = await _read_user_model_max_budget(
             user_id="user-with-no-row",
             prisma_client=prisma_client,
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             parent_otel_span=None,
             proxy_logging_obj=MagicMock(),
         )
@@ -1953,7 +1957,6 @@ async def test_user_budget_lookup_is_also_unenforced_when_the_database_is_down()
     `_read_user_model_max_budget` to let an outage through the way the JWT
     path does.
     """
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.auth.user_api_key_auth import _read_user_model_max_budget
 
     db_down = ValueError("User doesn't exist in db. 'user_id'=u-1. Got error - Connection refused")
@@ -1965,7 +1968,7 @@ async def test_user_budget_lookup_is_also_unenforced_when_the_database_is_down()
         budget = await _read_user_model_max_budget(
             user_id="u-1",
             prisma_client=MagicMock(),
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             parent_otel_span=None,
             proxy_logging_obj=MagicMock(),
         )
@@ -1976,7 +1979,6 @@ async def test_user_budget_lookup_is_also_unenforced_when_the_database_is_down()
 @pytest.mark.asyncio
 async def test_user_budget_lookup_returns_the_budget_when_the_row_reads():
     """Positive control: the tolerance above must not be swallowing every result."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.auth.user_api_key_auth import _read_user_model_max_budget
 
     stored = {"claude-opus-4-8": {"budget_limit": 1.0, "time_period": "18h"}}
@@ -1990,7 +1992,7 @@ async def test_user_budget_lookup_returns_the_budget_when_the_row_reads():
         budget = await _read_user_model_max_budget(
             user_id="user-1",
             prisma_client=MagicMock(),
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             parent_otel_span=None,
             proxy_logging_obj=MagicMock(),
         )
@@ -2227,7 +2229,7 @@ def _rejected_websocket(sent: list[Message], bearer: str) -> WebSocket:
 def _serve_virtual_key(monkeypatch: pytest.MonkeyPatch, user_key: str, token: UserAPIKeyAuth) -> None:
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=token)
+    user_api_key_cache.set_cache(key=AuthObject.virtual_key(hash_token(user_key)), value=token)
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", "connected")
@@ -2307,7 +2309,6 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
     request_data: dict[str, object],
     expect_user_model_budget_check: bool,
 ) -> None:
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
@@ -2337,7 +2338,7 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
     monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True})
     litellm.proxy.proxy_server.jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=DualCache(),
+        user_api_key_cache=UserApiKeyCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(),
     )
     user_model_budget_check: Final = AsyncMock()

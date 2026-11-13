@@ -28,6 +28,7 @@ from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.caching.caching import DualCache
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_BudgetTable,
@@ -39,7 +40,6 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.utils import PrismaClient
 import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
     delete_cache_key_objects,
@@ -482,9 +482,8 @@ async def test_get_end_user_object(customer_spend, customer_budget):
     # UserApiKeyCache applies model_type on get/set; plain DualCache returns raw dicts
     # and breaks get_end_user_object's typed async_get_cache path.
     _cache = UserApiKeyCache()
-    _key = "end_user_id:{}".format(end_user_id)
     await _cache.async_set_cache(
-        key=_key,
+        key=AuthObject.end_user(end_user_id),
         value=end_user_obj,
         model_type=LiteLLM_EndUserTable,
     )
@@ -1438,7 +1437,7 @@ async def test_cache_access_object():
     from litellm.proxy.auth.auth_checks import cache_access_object
     from litellm.proxy._types import LiteLLM_AccessGroupTable
 
-    cache = DualCache()
+    cache = UserApiKeyCache()
     ag_id = "ag-test-123"
     ag_table = LiteLLM_AccessGroupTable(
         access_group_id=ag_id,
@@ -1450,7 +1449,7 @@ async def test_cache_access_object():
         access_group_table=ag_table,
         user_api_key_cache=cache,
     )
-    cached = await cache.async_get_cache(key=f"access_group_id:{ag_id}")
+    cached = await cache.async_get_cache(key=AuthObject.access_group(ag_id))
     assert cached is not None
     if isinstance(cached, dict):
         assert cached.get("access_group_id") == ag_id
@@ -1466,15 +1465,15 @@ async def test_delete_cache_access_object():
     from litellm.proxy.auth.auth_checks import delete_cache_access_object
     from litellm.proxy._types import LiteLLM_AccessGroupTable
 
-    cache = DualCache()
+    cache = UserApiKeyCache()
     ag_id = "ag-delete-test"
     ag_table = LiteLLM_AccessGroupTable(
         access_group_id=ag_id,
         access_group_name="to-delete",
     )
-    await cache.async_set_cache(key=f"access_group_id:{ag_id}", value=ag_table, ttl=60)
+    await cache.async_set_cache(key=AuthObject.access_group(ag_id), value=ag_table, ttl=60)
     await delete_cache_access_object(access_group_id=ag_id, user_api_key_cache=cache)
-    cached = await cache.async_get_cache(key=f"access_group_id:{ag_id}")
+    cached = await cache.async_get_cache(key=AuthObject.access_group(ag_id))
     assert cached is None
 
 
@@ -1532,13 +1531,13 @@ async def test_get_resources_from_access_groups(
             result = await get_models_from_access_groups(
                 access_group_ids=[access_group_data["access_group_id"]],
                 prisma_client=MagicMock(),
-                user_api_key_cache=DualCache(),
+                user_api_key_cache=UserApiKeyCache(),
             )
         else:
             result = await get_agent_ids_from_access_groups(
                 access_group_ids=[access_group_data["access_group_id"]],
                 prisma_client=MagicMock(),
-                user_api_key_cache=DualCache(),
+                user_api_key_cache=UserApiKeyCache(),
             )
         assert sorted(result) == sorted(expected)
 
@@ -2007,7 +2006,9 @@ def _prisma_client_serving(user_id: str) -> SimpleNamespace:
 async def test_get_user_object_cache_hit_emits_no_postgres_service_event(db_success_hook: AsyncMock) -> None:
     user_id: Final = f"cached-user-{uuid.uuid4()}"
     cache: Final = UserApiKeyCache()
-    await cache.async_set_cache(key=user_id, value=LiteLLM_UserTable(user_id=user_id, user_role="internal_user"))
+    await cache.async_set_cache(
+        key=AuthObject.user(user_id), value=LiteLLM_UserTable(user_id=user_id, user_role="internal_user")
+    )
 
     result: Final = await get_user_object(
         user_id=user_id,
@@ -2026,7 +2027,7 @@ async def test_get_org_object_cache_hit_emits_no_postgres_service_event(db_succe
     org_id: Final = f"cached-org-{uuid.uuid4()}"
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key=f"org_id:{org_id}",
+        key=AuthObject.org(org_id),
         value=LiteLLM_OrganizationTable(
             organization_id=org_id, budget_id="b", models=[], created_by="t", updated_by="t"
         ),
@@ -2338,14 +2339,16 @@ async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_redis
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
     monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
     client = _WedgedPublishRedisClient()
-    cache: Final = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000))
+    cache: Final = UserApiKeyCache(max_size_in_memory=2_000)
     hashed_tokens: Final = tuple(
         hashlib.sha256(f"token-{index}".encode()).hexdigest()
         for index in range(600)
     )
     for hashed_token in hashed_tokens:
-        cache.set_local(hashed_token, {"token": hashed_token}, None)
-    seeded: Final = tuple(token for token in hashed_tokens if cache.get_local(token) is not None)
+        cache.set_local(AuthObject.virtual_key(hashed_token), {"token": hashed_token}, None)
+    seeded: Final = tuple(
+        token for token in hashed_tokens if cache.get_local(AuthObject.virtual_key(token)) is not None
+    )
 
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
@@ -2355,7 +2358,9 @@ async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_redis
             delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
         )
         await asyncio.sleep(0.05)
-        still_cached: Final = tuple(token for token in seeded if cache.get_local(token) is not None)
+        still_cached: Final = tuple(
+            token for token in seeded if cache.get_local(AuthObject.virtual_key(token)) is not None
+        )
         client.release.set()
         await eviction
         await _drain_publishes()
@@ -2404,7 +2409,7 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
     )
     cache, redis = shared_cache(FakeAuthCache(redis={token: {"token": token} for token in hashed_tokens}))
     for hashed_token in hashed_tokens:
-        cache.set_local(hashed_token, {"token": hashed_token}, None)
+        cache.set_local(AuthObject.virtual_key(hashed_token), {"token": hashed_token}, None)
 
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
@@ -2414,7 +2419,11 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
             delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
         )
         await asyncio.sleep(0.05)
-        refilled: Final = [token for token in hashed_tokens if await cache.async_get_cache(key=token) is not None]
+        refilled: Final = [
+            token
+            for token in hashed_tokens
+            if await cache.async_get_cache(key=AuthObject.virtual_key(token)) is not None
+        ]
         client.release.set()
         await eviction
         await _drain_publishes()

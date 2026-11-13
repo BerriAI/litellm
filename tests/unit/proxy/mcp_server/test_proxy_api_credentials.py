@@ -18,6 +18,7 @@ from litellm.proxy.mcp_server.proxy_api_credentials import (
     lookup_consent_teams_from_database,
     mint_proxy_credential,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 
 _LOAD_USER = "litellm.proxy.mcp_server.proxy_api_credentials.load_active_user_by_id"
 _FETCH_TEAMS = "litellm.proxy.mcp_server.proxy_api_credentials.fetch_cli_sso_team_details"
@@ -142,7 +143,7 @@ async def test_mint_reads_the_users_teams_from_the_database_not_a_stale_cached_r
 
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="stale-cache-user", value=_user(user_id="stale-cache-user", teams=[]), model_type=LiteLLM_UserTable
+        AuthObject.user("stale-cache-user"), _user(user_id="stale-cache-user", teams=[]), model_type=LiteLLM_UserTable
     )
     prisma = MagicMock()
     prisma.writer_db.litellm_usertable.find_unique = AsyncMock(
@@ -167,7 +168,9 @@ async def test_mint_refuses_a_user_scim_deactivated_after_the_cache_last_saw_the
 
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="deactivated-user", value=_user(user_id="deactivated-user", teams=["team-a"]), model_type=LiteLLM_UserTable
+        AuthObject.user("deactivated-user"),
+        _user(user_id="deactivated-user", teams=["team-a"]),
+        model_type=LiteLLM_UserTable,
     )
     prisma = MagicMock()
     prisma.writer_db.litellm_usertable.find_unique = AsyncMock(

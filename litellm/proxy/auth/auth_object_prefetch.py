@@ -5,7 +5,7 @@ the readers and the fallback, so enforcement never depends on this running."""
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
@@ -25,12 +25,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     UserApiKeyCache,
     get_management_object_ttl,
-    team_membership_auth_cache_key,
-    team_membership_reservation_cache_key,
 )
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.utils import PrismaClient
-from litellm.redis.stores.auth_cache import AuthCacheStore
+from litellm.redis.stores.auth_cache import AuthObject
 
 _RowKind: TypeAlias = Literal["user_row", "team_row", "membership_row", "organization_row", "project_row"]
 
@@ -163,7 +161,7 @@ class AuthObjectRefs:
 
 @dataclass(frozen=True, slots=True)
 class _CacheEntry:
-    cache_key: str
+    cache_key: AuthObject
     row: _RowKind
     model_type: type[BaseModel]
     ttl: float | None
@@ -171,34 +169,36 @@ class _CacheEntry:
 
 def _iter_entries(refs: AuthObjectRefs, management_ttl: float) -> Iterator[_CacheEntry]:
     if refs.user_id is not None:
-        yield _CacheEntry(refs.user_id, "user_row", LiteLLM_UserTable, management_ttl)
+        yield _CacheEntry(AuthObject.user(refs.user_id), "user_row", LiteLLM_UserTable, management_ttl)
     if refs.team_id is not None:
-        yield _CacheEntry(f"team_id:{refs.team_id}", "team_row", LiteLLM_TeamTableCachedObj, management_ttl)
+        yield _CacheEntry(AuthObject.team(refs.team_id), "team_row", LiteLLM_TeamTableCachedObj, management_ttl)
     if refs.team_id is not None and refs.membership_user_id is not None:
         yield _CacheEntry(
-            team_membership_auth_cache_key(team_id=refs.team_id, user_id=refs.membership_user_id),
+            AuthObject.team_membership(team_id=refs.team_id, user_id=refs.membership_user_id),
             "membership_row",
             LiteLLM_TeamMembership,
             _TEAM_MEMBERSHIP_AUTH_TTL,
         )
         yield _CacheEntry(
-            team_membership_reservation_cache_key(user_id=refs.membership_user_id, team_id=refs.team_id),
+            AuthObject.team_membership_reservation(user_id=refs.membership_user_id, team_id=refs.team_id),
             "membership_row",
             LiteLLM_TeamMembership,
             None,
         )
     if refs.organization_id is not None:
         yield _CacheEntry(
-            f"org_id:{refs.organization_id}", "organization_row", LiteLLM_OrganizationTable, DEFAULT_IN_MEMORY_TTL
+            AuthObject.org(refs.organization_id), "organization_row", LiteLLM_OrganizationTable, DEFAULT_IN_MEMORY_TTL
         )
         yield _CacheEntry(
-            f"org_id:{refs.organization_id}:with_budget",
+            AuthObject.org_with_budget(refs.organization_id),
             "organization_row",
             LiteLLM_OrganizationTable,
             DEFAULT_IN_MEMORY_TTL,
         )
     if refs.project_id is not None:
-        yield _CacheEntry(f"project_id:{refs.project_id}", "project_row", LiteLLM_ProjectTableCachedObj, management_ttl)
+        yield _CacheEntry(
+            AuthObject.project(refs.project_id), "project_row", LiteLLM_ProjectTableCachedObj, management_ttl
+        )
 
 
 def _entries(refs: AuthObjectRefs, cache: UserApiKeyCache) -> tuple[_CacheEntry, ...]:
@@ -213,23 +213,27 @@ def _nothing_to_arm() -> None:
     return None
 
 
+def _sorted_by_wire_key(keys: Iterable[AuthObject]) -> tuple[AuthObject, ...]:
+    return tuple(sorted(keys, key=lambda auth_object: auth_object.key))
+
+
 async def _fill_from_redis(
-    entries: Sequence[_CacheEntry], shared: AuthCacheStore, cache: UserApiKeyCache, before_read: Callable[[], None]
+    entries: Sequence[_CacheEntry], cache: UserApiKeyCache, before_read: Callable[[], None]
 ) -> None:
-    """On the request's native pipeline when one is open; a failed read is a miss, like ``async_batch_get_cache``."""
+    """On the request's native pipeline when one is open; a failed read is a miss, as a failed MGET was."""
     if not entries:
         return
     before_read()
     try:
         with service_target(AUTH_OBJECTS_TARGET):
-            found: Final = await shared.read_missing(sorted(entry.cache_key for entry in entries))
+            found: Final = await cache.store.read_missing(_sorted_by_wire_key(entry.cache_key for entry in entries))
     except Exception as e:  # noqa: BLE001  # the DB fill below takes over, as it does after a failed MGET
         verbose_proxy_logger.debug("auth prefetch Redis read failed, filling from the database: %s", e)
         return
     for entry, value in ((entry, found.get(entry.cache_key)) for entry in entries):
         if value is not None:
-            shared.set_local(
-                entry.cache_key, value, cache.in_memory_cache.default_ttl if entry.ttl is None else entry.ttl
+            cache.store.set_local(
+                entry.cache_key, value, cache.default_in_memory_ttl if entry.ttl is None else entry.ttl
             )
 
 
@@ -269,13 +273,8 @@ async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: U
         (entry.cache_key, CacheCodec.serialize(value, model_type=entry.model_type), entry.ttl)
         for entry, value in entries
     )
-    shared: Final = cache.shared
-    if shared is not None:
-        with service_target(AUTH_OBJECTS_TARGET):
-            await shared.write_back(payloads)
-        return
-    for cache_key, payload, ttl in payloads:
-        cache.set_local(cache_key, payload, ttl)
+    with service_target(AUTH_OBJECTS_TARGET):
+        await cache.store.write_back(payloads)
 
 
 async def _fill_from_db(
@@ -306,9 +305,8 @@ async def prefetch_auth_objects(
     a Redis read goes out, so a caller can declare other reads into the same round trip."""
     try:
         missing: Final = _missing_in_memory(_entries(refs, user_api_key_cache), user_api_key_cache)
-        shared: Final = user_api_key_cache.shared
-        if shared is not None:
-            await _fill_from_redis(missing, shared, user_api_key_cache, before_read)
+        if user_api_key_cache.has_redis:
+            await _fill_from_redis(missing, user_api_key_cache, before_read)
         if prisma_client is None:
             return
         await _fill_from_db(refs, _missing_in_memory(missing, user_api_key_cache), user_api_key_cache, prisma_client)
@@ -322,7 +320,7 @@ def _identity_memory_ttl(value: object, management_ttl: float) -> float:
 
 
 async def prefetch_identity_keys(
-    cache_keys: Sequence[str],
+    cache_keys: Sequence[AuthObject],
     user_api_key_cache: UserApiKeyCache,
     before_read: Callable[[], None] = _nothing_to_arm,
 ) -> None:
@@ -331,15 +329,15 @@ async def prefetch_identity_keys(
     per-key getters that follow go to the database without a GET of their own. Best effort, like the
     owner prefetch: the getters read and enforce on their own."""
     try:
-        shared: Final = user_api_key_cache.shared
-        if shared is None:
+        if not user_api_key_cache.has_redis:
             return
+        shared: Final = user_api_key_cache.store
         missing: Final = tuple(key for key in dict.fromkeys(cache_keys) if shared.get_local(key) is None)
         if not missing:
             return
         before_read()
         with service_target(AUTH_OBJECTS_TARGET):
-            found: Final = await shared.read_missing(sorted(missing))
+            found: Final = await shared.read_missing(_sorted_by_wire_key(missing))
         management_ttl: Final = get_management_object_ttl(user_api_key_cache)
     except Exception as e:  # noqa: BLE001  # warm-up only; the getters read Redis and the database on their own
         verbose_proxy_logger.warning("auth identity prefetch skipped, falling back to per-key lookups: %s", e)

@@ -7,14 +7,15 @@ import pytest
 from fastapi import Request
 from pydantic import ValidationError
 
-from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.constants import BAGGAGE_MAPPED_TAGS_METADATA_KEY
+from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.tag import LiteLLM_TagTable
 from litellm.proxy._types import ConfigGeneralSettings, ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 from litellm.proxy.common_utils.request_tag_mappings import is_baggage_mapped_route, resolve_baggage_tag_mappings
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, tag_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 
 
@@ -224,7 +225,7 @@ async def test_budgeted_mapper_serves_through_a_db_outage_when_requests_are_allo
 
 async def _cache_with_tag(tag: LiteLLM_TagTable) -> UserApiKeyCache:
     cache = UserApiKeyCache()
-    await cache.async_set_cache(key=tag_cache_key(tag.tag_name), value=tag, model_type=LiteLLM_TagTable)
+    await cache.async_set_cache(key=AuthObject.tag(tag.tag_name), value=tag, model_type=LiteLLM_TagTable)
     return cache
 
 

@@ -21,16 +21,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    team_membership_auth_cache_key,
-    team_membership_reservation_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 from litellm.proxy.list_api.common import ManagementProblem, problem_response, request_validation_problem
 from litellm.proxy.management_endpoints.management_v1 import router
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_helpers.bulk_team_member_budgets import bulk_update_team_member_budgets
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES,
     BulkTeamMemberBudgetUpdateRequest,
@@ -292,17 +289,17 @@ def _budget_of(prisma: _FakePrisma, user_id: str, team_id: str = TEAM_ID) -> _Bu
 def _seeded_cache(*user_ids: str, team_id: str = TEAM_ID) -> UserApiKeyCache:
     cache: Final = UserApiKeyCache()
     for user_id in user_ids:
-        cache.set_cache(key=team_membership_auth_cache_key(team_id=team_id, user_id=user_id), value={"cap": "old"})
+        cache.set_cache(key=AuthObject.team_membership(team_id=team_id, user_id=user_id), value={"cap": "old"})
         cache.set_cache(
-            key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id), value={"cap": "old"}
+            key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id), value={"cap": "old"}
         )
     return cache
 
 
 def _cached_keys(cache: UserApiKeyCache, user_id: str, team_id: str = TEAM_ID) -> tuple[object, object]:
     return (
-        cache.get_cache(key=team_membership_auth_cache_key(team_id=team_id, user_id=user_id)),
-        cache.get_cache(key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)),
+        cache.get_cache(key=AuthObject.team_membership(team_id=team_id, user_id=user_id)),
+        cache.get_cache(key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id)),
     )
 
 
