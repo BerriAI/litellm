@@ -5365,6 +5365,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 start_time,  # pyright: ignore[reportUnknownArgumentType]  # untyped failure helper
                 end_time,  # pyright: ignore[reportUnknownArgumentType]  # untyped failure helper
             ),
+            owner=self,
         )
         await flush_post_call_redis_batches()
 
