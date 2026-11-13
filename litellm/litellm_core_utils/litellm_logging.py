@@ -5098,6 +5098,7 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime | None = None,
         *,
         for_async_request: bool = False,
+        async_handler_follows: bool = False,
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own failure
         logging (including any nested calls its callbacks trigger) is fully done.
@@ -5112,6 +5113,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     start_time=start_time,
                     end_time=end_time,
                     for_async_request=for_async_request,
+                    async_handler_follows=async_handler_follows,
                 )
         finally:
             self._restore_correlation_context()
@@ -5123,6 +5125,7 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         for_async_request: bool = False,
+        async_handler_follows: bool = False,
     ) -> None:
         verbose_logger.debug("Logging Details LiteLLM-Failure Call: %s", litellm.failure_callback)
         if not self.should_run_logging(event_type="sync_failure"):  # prevent double logging
@@ -5167,7 +5170,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 callbacks,
                 self.model_call_details,
                 functools.partial(self._deliver_sync_failure, run),
-                include_v2=self.claim_v2_failure(not for_async_request),
+                include_v2=self.claim_v2_failure(not (for_async_request or async_handler_follows)),
                 owner=self,
             )
         except Exception as e:

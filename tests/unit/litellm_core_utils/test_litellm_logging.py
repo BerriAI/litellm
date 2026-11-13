@@ -7,10 +7,11 @@ import json
 import logging
 import os
 import sys
+import types
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
 from types import MappingProxyType, ModuleType
@@ -42,6 +43,7 @@ from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_logger_v2 import Abort, CallContext, CustomLoggerV2, Field, Hook, Patch, on
 from litellm.integrations.custom_logger_v2.host import V2Outcome, get_dispatcher
+from litellm.integrations.custom_logger_v2.offpath import InProcessSink
 from litellm.integrations.custom_logger_v2.selection import RequestSelection, Selection
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
@@ -60,6 +62,7 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
+from litellm.proxy.mcp_server.operations import fire_mcp_tool_call_failure_logging
 from litellm.proxy.hooks.max_iterations_limiter import PROXY_MaxIterationsHandler
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
@@ -15695,9 +15698,17 @@ async def test_a_sync_success_on_a_running_loop_still_delivers_legacy_loggers_an
     _plane_lists(monkeypatch, success_callback=[_Entry("first", journal), stamp, recorder, _Entry("last", journal)])
 
     _sync_success(logging_obj)
+    ran_inline: Final = list(stamp.seen)
+    sink: Final = get_dispatcher().sink
+    assert isinstance(sink, InProcessSink)
+    await sink.drain()
 
     assert [entry[0] for entry in _ran(journal, "success")] == ["first", "last"]
-    assert await asyncio.to_thread(recorder.done.wait, 30)
+    assert recorder.done.is_set()
+    assert (ran_inline, stamp.seen) == ([], [None])
+    payload: Final[object] = logging_obj.model_call_details["standard_logging_object"]
+    assert isinstance(payload, dict)
+    assert "stamped_by" not in payload
 
 
 class _AwaitedSent(CustomLoggerV2):
@@ -15785,3 +15796,59 @@ async def test_a_v2_attempt_ended_subscriber_gets_one_failure_when_both_failure_
     await logging_obj.async_failure_handler(error, "trace")
 
     assert journal == [("sync", "failure", None), "v2", ("async", "failure", None)]
+
+
+def _record_off_path(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    submitted: Final[list[str]] = []
+
+    def submit(self: InProcessSink, delivery: Coroutine[object, object, None]) -> None:
+        submitted.append(delivery.__qualname__)
+        delivery.close()
+
+    monkeypatch.setattr(InProcessSink, "submit", submit)
+    return submitted
+
+
+async def test_mcp_failure_logging_on_the_loop_delivers_an_awaited_v2_attempt_ended_once_and_inline(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal: Final[list[object]] = []
+    recorder: Final = _EndedRecorder(journal)
+    _plane_lists(
+        monkeypatch,
+        failure_callback=[_Entry("sync", journal), recorder],
+        _async_failure_callback=[_Entry("async", journal), recorder],
+    )
+    submitted: Final = _record_off_path(monkeypatch)
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", types.SimpleNamespace(proxy_logging_obj=None))
+    logging_obj.stream = False
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+
+    await fire_mcp_tool_call_failure_logging(
+        logging_obj, ValueError("tool failed"), datetime.datetime.now(), None, {}  # noqa: DTZ005  # the MCP path's naive start time
+    )
+
+    assert journal == [("sync", "failure", None), ("async", "failure", None), "v2"]
+    assert submitted == []
+
+
+async def test_a_sync_failure_on_the_loop_alone_still_delivers_v2_attempt_ended_off_path_once(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal: Final[list[object]] = []
+    recorder: Final = _EndedRecorder(journal)
+    _plane_lists(
+        monkeypatch,
+        failure_callback=[_Entry("sync", journal), recorder],
+        _async_failure_callback=[_Entry("async", journal), recorder],
+    )
+    submitted: Final = _record_off_path(monkeypatch)
+    logging_obj.stream = False
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    error: Final = ValueError("tool failed")
+
+    logging_obj.failure_handler(error, "trace")
+    await logging_obj.async_failure_handler(error, "trace")
+
+    assert journal == [("sync", "failure", None), ("async", "failure", None)]
+    assert submitted == ["RequestScope._deliver_off_path"]
