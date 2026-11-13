@@ -12,16 +12,17 @@ const root = "/v1/external_cloud_agents";
 const prefix = ["external-cloud-agents"] as const;
 
 export function useCloudSources(accessToken: string) {
-  return useQuery({
+  const options = {
     queryKey: [...prefix, accessToken, "sources"],
     queryFn: () => apiClient.get<Source[]>(root + "/sources", { accessToken }),
     refetchInterval: 3000,
     retry: false,
-  });
+  };
+  return useQuery(options);
 }
 
 export function useCloudBots(accessToken: string, sourceId: string, search: string, page: number) {
-  return useQuery({
+  const options = {
     queryKey: [...prefix, accessToken, sourceId, "bots", search, page],
     queryFn: () =>
       apiClient.get<AgentPage>(root + "/agents", {
@@ -30,11 +31,12 @@ export function useCloudBots(accessToken: string, sourceId: string, search: stri
       }),
     refetchInterval: 10000,
     retry: false,
-  });
+  };
+  return useQuery(options);
 }
 
 export function useCloudSpend(accessToken: string, source: Source, days: number) {
-  return useQuery({
+  const options = {
     queryKey: [...prefix, accessToken, source.source_id, "spend", days, source.last_spend_sync_at],
     queryFn: () =>
       apiClient.get<SpendReport>(root + "/spend", {
@@ -43,7 +45,8 @@ export function useCloudSpend(accessToken: string, source: Source, days: number)
       }),
     enabled: source.has_admin_api_key,
     retry: false,
-  });
+  };
+  return useQuery(options);
 }
 
 export function useCloudMutation<T>(accessToken: string, method: "POST" | "PUT" | "DELETE" | "GET", path: string) {

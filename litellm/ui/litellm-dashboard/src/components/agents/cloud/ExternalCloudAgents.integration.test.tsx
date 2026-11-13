@@ -82,8 +82,8 @@ class Server {
     }
     if (path === root + "/sources/source-1/connection") return Response.json(connection);
     if (path === root + "/spend") return Response.json(report);
-    if (path === root + "/agents")
-      return Response.json({
+    if (path === root + "/agents") {
+      const agents = {
         data: [
           {
             source_id: "source-1",
@@ -99,7 +99,9 @@ class Server {
         page: 1,
         page_size: 20,
         total: 1,
-      });
+      };
+      return Response.json(agents);
+    }
     throw new Error(`Unexpected request ${method} ${path}`);
   };
 }

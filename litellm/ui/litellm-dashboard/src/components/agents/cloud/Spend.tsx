@@ -83,14 +83,14 @@ export default function Spend({ accessToken, source }: { accessToken: string; so
     { key: "team", heading: t("agents.external.team"), cell: (row: Team) => row.team_name },
     ...numbers<Team>(),
   ];
-  const error = save.error || sync.error || remove.error || data.error;
-  const totals = data.data?.totals;
+  const error = [save.error, sync.error, remove.error, data.error].find(Boolean);
+  const totals = data.data?.totals ?? { grok_cost_usd: "0", litellm_gateway_spend_usd: "0" };
   const tiles = [
-    { name: t("agents.external.grokCost"), value: totals?.grok_cost_usd ?? "0" },
-    { name: t("agents.external.gatewayCost"), value: totals?.litellm_gateway_spend_usd ?? "0" },
+    { name: t("agents.external.grokCost"), value: totals.grok_cost_usd },
+    { name: t("agents.external.gatewayCost"), value: totals.litellm_gateway_spend_usd },
     {
       name: t("agents.external.total"),
-      value: Number(totals?.grok_cost_usd ?? 0) + Number(totals?.litellm_gateway_spend_usd ?? 0),
+      value: Number(totals.grok_cost_usd) + Number(totals.litellm_gateway_spend_usd),
     },
   ];
   return (

@@ -20,14 +20,15 @@ export default function ExternalCloudAgents({ accessToken }: { accessToken: stri
   const { t } = useTranslation();
   const sources = useCloudSources(accessToken);
   const source = sources.data?.[0];
+  const sourceId = source?.source_id;
   const [connection, setConnection] = useState<Connection | null>(null);
   const [showSetup, setShowSetup] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [tab, setTab] = useUrlTab(["bots", "spend"], "bots", "cloud_tab");
   const create = useCloudMutation<Connection>(accessToken, "POST", "/sources");
-  const reveal = useCloudMutation<Connection>(accessToken, "GET", `/sources/${source?.source_id}/connection`);
-  const remove = useCloudMutation(accessToken, "DELETE", `/sources/${source?.source_id}`);
-  const error = sources.error || create.error || reveal.error || remove.error;
+  const reveal = useCloudMutation<Connection>(accessToken, "GET", `/sources/${sourceId}/connection`);
+  const remove = useCloudMutation(accessToken, "DELETE", `/sources/${sourceId}`);
+  const error = [sources.error, create.error, reveal.error, remove.error].find(Boolean);
   if (sources.isLoading)
     return (
       <p role="status" className="p-8">
