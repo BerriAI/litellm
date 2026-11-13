@@ -41,6 +41,7 @@ from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import (
     DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
     NO_MAX_TOKENS_TPM_RESERVATION_FRACTION,
     RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY,
 )
@@ -201,7 +202,7 @@ def inherited_team_model_limit(
     return team_limit
 
 
-MODEL_LIMIT_MAX_BORROW_MULTIPLE: Final = "model_limit_max_borrow_multiple"
+MODEL_LIMIT_MAX_BORROW_MULTIPLE: Final = MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY
 MAX_BORROW_MULTIPLE_CEILING: Final = 1_000_000
 _MAX_BORROW_MULTIPLE: Final[TypeAdapter[float]] = TypeAdapter(
     Annotated[float, Field(ge=1, le=MAX_BORROW_MULTIPLE_CEILING, allow_inf_nan=False)]

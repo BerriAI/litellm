@@ -250,6 +250,15 @@ def _tpm_share(descriptor: RateLimitDescriptor) -> int | None:
     return (descriptor["rate_limit"] or {}).get("tokens_per_unit")
 
 
+def _holding_shares(
+    borrowing: Mapping[BorrowerKind, _BorrowingTeamShare], saturated: bool
+) -> Mapping[BorrowerKind, _BorrowingTeamShare]:
+    """The borrowers that hold tokens before the call: all of them once saturated, only the capped ones before."""
+    return MappingProxyType(
+        {kind: share for kind, share in borrowing.items() if saturated or share.ceiling is not None}
+    )
+
+
 def _class_share_kind(holder: str | None) -> BorrowerKind | None:
     """The metric labels a class share slice is published under. A customer member's slice has no label of its own."""
     if holder is None:
@@ -663,7 +672,12 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 "customer_organization" in entities and hierarchy is not None,
                 lambda: customer_member("customer_org", hierarchy.customer_org_id if hierarchy else ""),
             ),
-            ("team" in entities and user_api_key_dict.team_id is not None, lambda: str(user_api_key_dict.team_id)),
+            (
+                "team" in entities
+                and user_api_key_dict.team_id is not None
+                and _is_team_class_share_holder(user_api_key_dict.team_id),
+                lambda: str(user_api_key_dict.team_id),
+            ),
             (
                 "key" in entities and user_api_key_dict.api_key is not None,
                 lambda: key_member(str(user_api_key_dict.api_key)),
@@ -1053,6 +1067,18 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 requested_model,
                 user_api_key_dict,
             )
+        resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(requested_model)
+        raise ProxyRateLimitError(
+            detail={
+                "error": "Rate limit exceeded",
+                "descriptor_key": over_limit["descriptor_key"],
+                "rate_limit_type": str(over_limit["rate_limit_type"]),
+            },
+            rate_limit_type=map_v3_rate_limit_type(over_limit["rate_limit_type"]),
+            headers={"retry-after": str(self.v3_limiter.window_size), "x-litellm-priority": priority or "default"},
+            model=resolved_model,
+            llm_provider=llm_provider,
+        )
 
     def _track_frame_shares(
         self,
@@ -1084,21 +1110,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             state.limit = None if borrower_share is None else borrower_share.enforced(saturated)
             state.share = None if borrower_share is None else borrower_share.share
             state.cap = None if borrower_share is None else borrower_share.ceiling
+        holding: Final = _holding_shares(borrowing, saturated)
+        reservation: Final = await self._tightest_token_reservation(holding, data, model, call_type, user_api_key_dict)
         return tuple(
-            [
-                _FallbackTargetShare(
-                    kind=kind,
-                    share=borrower_share.share,
-                    enforced=borrower_share.enforced(saturated),
-                    cap=borrower_share.ceiling,
-                    reservation=await self._team_token_reservation(
-                        borrower_share.share, data, model, call_type, user_api_key_dict
-                    )
-                    if saturated or borrower_share.ceiling is not None
-                    else 0,
-                )
-                for kind, borrower_share in borrowing.items()
-            ]
+            _FallbackTargetShare(
+                kind=kind,
+                share=borrower_share.share,
+                enforced=borrower_share.enforced(saturated),
+                cap=borrower_share.ceiling,
+                reservation=reservation if kind in holding and _tpm_share(borrower_share.share) is not None else 0,
+            )
+            for kind, borrower_share in borrowing.items()
         )
 
     def _create_model_tracking_descriptor(
@@ -1387,6 +1409,25 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if team_reservation and tpm_share is not None and self.v3_limiter.get_rate_limit_type() != "input":
             self.v3_limiter.bound_output_for_limit(data, tpm_share, call_type)
 
+    async def _tightest_token_reservation(
+        self,
+        holding: Mapping[BorrowerKind, _BorrowingTeamShare],
+        data: Mapping[str, object],
+        model: str,
+        call_type: str | None,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> int:
+        """One estimate for every borrower that holds tokens, sized with the output cap of the tightest TPM share,
+        since that is the cap the admitted request is sent with."""
+        tightest: Final = min(
+            (borrower_share.share for borrower_share in holding.values() if _tpm_share(borrower_share.share)),
+            key=lambda descriptor: _tpm_share(descriptor) or 0,
+            default=None,
+        )
+        if tightest is None:
+            return 0
+        return await self._team_token_reservation(tightest, data, model, call_type, user_api_key_dict)
+
     async def _team_token_reservation(
         self,
         descriptor: RateLimitDescriptor,
@@ -1433,26 +1474,20 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return True
         saturation: Final = await self._check_model_saturation(model, model_group_info)
         saturated: Final = saturation >= _get_priority_settings().saturation_threshold
-        targets: Final[list[_FallbackTargetShare]] = []  # mutable-ok: one awaited token estimate per borrower
-        for kind, borrower_share in borrowing.items():
-            enforced = borrower_share.enforced(saturated)
-            cap = borrower_share.ceiling
-            reservation = (
-                await self._team_token_reservation(
-                    borrower_share.share,
-                    {**request_data, "model": model},
-                    model,
-                    get_or_create_request_stash().call_type,
-                    user_api_key_dict,
-                )
-                if enforced is not None or cap is not None
-                else 0
+        holding: Final = _holding_shares(borrowing, saturated)
+        reservation: Final = await self._tightest_token_reservation(
+            holding, {**request_data, "model": model}, model, get_or_create_request_stash().call_type, user_api_key_dict
+        )
+        targets: Final = tuple(
+            _FallbackTargetShare(
+                kind=kind,
+                share=borrower_share.share,
+                enforced=borrower_share.enforced(saturated),
+                cap=borrower_share.ceiling,
+                reservation=reservation if kind in holding and _tpm_share(borrower_share.share) is not None else 0,
             )
-            targets.append(
-                _FallbackTargetShare(
-                    kind=kind, share=borrower_share.share, enforced=enforced, cap=cap, reservation=reservation
-                )
-            )
+            for kind, borrower_share in borrowing.items()
+        )
         if not commit:
             for target in targets:
                 for descriptor in target.descriptors:

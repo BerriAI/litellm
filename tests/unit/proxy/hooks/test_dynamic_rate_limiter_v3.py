@@ -4099,8 +4099,8 @@ async def test_a_request_is_sized_with_the_tightest_shares_output_cap_on_every_s
     monkeypatch: pytest.MonkeyPatch,
 ):
     handler: Final = _key_and_org_handler(monkeypatch, "key", "customer_organization")
-    key_share: Final = {"model_tpm_limit": {"shared-model": 400}}
-    await _use(handler, _org_caller(org_id="org-busy", share=1000, metadata=key_share), 300, saturation=0.5)
+    key_share: Final = {"model_tpm_limit": {"shared-model": 200}}
+    await _use(handler, _org_caller(org_id="org-busy", share=1000, metadata=key_share), 150, saturation=0.5)
     uncapped_prompt: Final[dict[str, object]] = {
         "model": "shared-model",
         "messages": [{"role": "user", "content": "word " * 10}],
@@ -4118,6 +4118,9 @@ async def test_a_team_id_shaped_like_a_customer_org_holder_does_not_draw_on_that
     handler: Final = _split_handler(monkeypatch, "team", "customer_organization")
     victim: Final = _class_customer("sk-service-a", "org-victim")
     await _use(handler, victim, 20, saturation=1.0, priority="interactive")
-    await _burn(handler, _class_team(customer_member("customer_org", "org-victim")), "interactive", 500)
+    await _use(handler, _class_customer("sk-service-a", "org-other"), 20, saturation=1.0, priority="interactive")
+    lookalike: Final = _class_team(customer_member("customer_org", "org-victim"))
+    await _use(handler, lookalike, 300, saturation=1.0, priority="interactive")
+    await _use(handler, lookalike, 200, saturation=1.0, priority="interactive")
 
     await _check(handler, victim, saturation=0.52, priority="interactive")
