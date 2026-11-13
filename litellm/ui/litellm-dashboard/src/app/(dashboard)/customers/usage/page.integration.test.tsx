@@ -136,7 +136,9 @@ const serve = (input: Parameters<typeof fetch>[0]): Response => {
   if (url.pathname === "/management/v1/customer_organizations/org-1") return json(organization);
   if (url.pathname === "/management/v1/customer_teams") return json(list(teams));
   if (url.pathname === "/management/v1/customer_members")
-    return json(list(members.filter((member) => member.parent_team_ids.includes(url.searchParams.get("parent_team_id") ?? ""))));
+    return json(
+      list(members.filter((member) => member.parent_team_ids.includes(url.searchParams.get("parent_team_id") ?? ""))),
+    );
   const team = teams.find((team) => url.pathname.endsWith(`/customer_teams/${team.customer_team_id}`));
   if (team) return json(team);
   const member = members.find((member) => url.pathname.endsWith(`/customer_members/${member.customer_member_id}`));
