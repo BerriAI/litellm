@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Final, TypeAlias
+from typing import Final, Literal, TypeAlias
+from urllib.parse import quote
 
 from litellm.rust_bridge._native import NativeRedisStoreError
 
@@ -28,6 +29,12 @@ def team_counter(team_id: str) -> str:
 
 def team_window_counter(team_id: str, budget_duration: str) -> str:
     return f"spend:team:{team_id}:window:{budget_duration}"
+
+
+def person_window_counter(
+    subject_type: Literal["user", "customer_member"], subject_id: str, window_duration: str
+) -> str:
+    return f"spend:person:{subject_type}:{quote(subject_id, safe='')}:window:{window_duration}"
 
 
 def team_member_counter(user_id: str, team_id: str) -> str:

@@ -24,6 +24,7 @@ import EditBudgetModal from "./EditBudgetModal";
 import { CREATE_END_USER_CURL_COMMAND, CHAT_COMPLETIONS_CURL_COMMAND, OPENAI_SDK_PYTHON_CODE } from "./constants";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { isProxyAdminRole } from "@/utils/roles";
+import BudgetAssignmentModal from "./BudgetAssignmentModal";
 
 interface BudgetSettingsPageProps {
   accessToken: string | null;
@@ -36,6 +37,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [selectedBudget, setSelectedBudget] = useState<budgetItem | null>(null);
   const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
+  const [isAssignmentOpen, setIsAssignmentOpen] = useState(false);
 
   const { userRole } = useAuthorized();
   // Admin Viewer follows the read-parity rule: see budgets, no writes.
@@ -98,6 +100,9 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                     <Plus className="size-4" />
                     {t("budgets.panel.createButton")}
                   </Button>
+                  <Button variant="outline" onClick={() => setIsAssignmentOpen(true)}>
+                    {t("budgetProfiles.manage")}
+                  </Button>
                   <ToolbarSeparator className="mx-0 h-6" />
                 </>
               )}
@@ -109,6 +114,9 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
         <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col" keepMounted>
           <div className="flex min-h-0 flex-1 flex-col">
             <BudgetModal isModalVisible={isCreateModelVisible} setIsModalVisible={setIsCreateModelVisible} />
+            {canModify && isAssignmentOpen && (
+              <BudgetAssignmentModal open={isAssignmentOpen} onOpenChange={setIsAssignmentOpen} />
+            )}
             {selectedBudget && (
               <EditBudgetModal
                 isModalVisible={isEditModalVisible}

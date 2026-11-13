@@ -809,6 +809,9 @@ class DBSpendUpdateWriter:
         use_ledger: Final = proxy_settings.get("use_spend_logs_ledger", True) is not False
         request_fields: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs or {})
         customer_hierarchy: Final = customer_hierarchy_ids_from_request(request_fields)
+        from litellm.proxy.spend_tracking.carried_budget_state import person_budget_windows_from_kwargs
+
+        person_windows: Final = person_budget_windows_from_kwargs(request_fields)
         if kwargs is not None:
             kwargs[ACCOUNTING_LEDGER_KWARG] = use_ledger  # rebind-ok: spend counters leave ledger windows to the worker
         try:
@@ -876,7 +879,12 @@ class DBSpendUpdateWriter:
                     model_access_groups=debitable_model_access_groups(
                         get_request_model_access_groups(request_fields), payload["model_id"], llm_router
                     ),
-                    windows=await accounting_window_keys(hashed_token, team_id) if billable_cost else (),
+                    windows=(
+                        *await accounting_window_keys(hashed_token, team_id),
+                        *(window.accounting_window() for window in person_windows),
+                    )
+                    if billable_cost
+                    else (),
                     router=get_llm_router,
                 )
             keep_spend_logs: Final = disable_spend_logs is False and not (

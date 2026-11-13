@@ -31,6 +31,12 @@ model LiteLLM_BudgetTable {
   allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
   temp_budget_increase Float?
   temp_budget_expiry DateTime?
+  temp_budget_duration String?
+  budget_limits Json?
+  is_profile Boolean @default(false)
+  cap_policy String?
+  user_templates LiteLLM_UserTable[] @relation("UserBudgetTemplate")
+  user_budgets LiteLLM_UserTable[] @relation("UserBudgetOverride")
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -359,6 +365,13 @@ model LiteLLM_DeletedTeamTable {
 
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
+    budget_template_id String?
+    budget_id String?
+    budget_override_expires_at DateTime?
+    budget_template LiteLLM_BudgetTable? @relation("UserBudgetTemplate", fields: [budget_template_id], references: [budget_id])
+    budget LiteLLM_BudgetTable? @relation("UserBudgetOverride", fields: [budget_id], references: [budget_id])
+    @@index([budget_template_id])
+    @@index([budget_id])
     verified_subjects LiteLLM_VerifiedSubject[]
 		user_id    String @id
     user_alias String? 

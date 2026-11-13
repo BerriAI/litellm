@@ -9,7 +9,7 @@ reads them back with ``from_metadata``. ``None`` means this request never carrie
 from collections.abc import Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import ConfigDict, Field, ValidationError
 from typing_extensions import Self
@@ -18,6 +18,7 @@ from litellm.redis.stores.spend_counters.types import (
     end_user_counter,
     key_counter,
     org_counter,
+    person_window_counter,
     team_counter,
     user_counter,
 )
@@ -36,6 +37,38 @@ class _BudgetSnapshot(LiteLLMBaseModel):
             return cls.model_validate(metadata, by_name=False)
         except ValidationError:
             return None
+
+
+class PersonBudgetWindow(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    entity_type: Literal["user", "customer_member"]
+    entity_id: str
+    budget_duration: Literal["1mo", "12mo"]
+    window_start: datetime
+    reset_at: datetime
+    max_budget: float
+    cap_policy: Literal["pause_allow_increase", "pause_until_reset"] = "pause_until_reset"
+
+    @property
+    def window_duration(self) -> str:
+        return f"{self.budget_duration}@{self.window_start.date().isoformat()}"
+
+    @property
+    def counter_key(self) -> str:
+        return person_window_counter(self.entity_type, self.entity_id, self.window_duration)
+
+    @property
+    def counter_entity_type(self) -> str:
+        return "User" if self.entity_type == "user" else "CustomerMember"
+
+    def accounting_window(self) -> Mapping[str, object]:
+        return {
+            "entity_type": self.entity_type,
+            "entity_id": self.entity_id,
+            "window_duration": self.window_duration,
+            "window_start": self.window_start.isoformat(),
+        }
 
 
 class KeyBudgetSnapshot(_BudgetSnapshot):

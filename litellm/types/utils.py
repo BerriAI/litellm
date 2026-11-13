@@ -3146,6 +3146,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_team_alias: str | None
     user_api_key_end_user_id: str | None
     user_api_key_customer_member_id: ReadOnly[str | None]
+    user_api_key_person_budget_windows: ReadOnly[NotRequired[tuple[Mapping[str, object], ...]]]
     user_api_key_customer_team_id: ReadOnly[str | None]
     user_api_key_customer_org_id: ReadOnly[str | None]
     user_api_key_request_route: str | None

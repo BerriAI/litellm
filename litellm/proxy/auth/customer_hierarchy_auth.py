@@ -207,7 +207,7 @@ async def resolve_customer_hierarchy(
             param=CUSTOMER_MEMBER_ID_HEADER,
             code=status.HTTP_401_UNAUTHORIZED,
         )
-    if not RouteChecks.is_info_route(route):
+    if RouteChecks.is_llm_api_route(route) and not RouteChecks.is_unbilled_route(route):
         check_customer_hierarchy_budget(hierarchy)
     if isinstance(request_model, str) and request_model:
         check_customer_hierarchy_model_access(hierarchy, request_model, llm_router)

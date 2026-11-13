@@ -4,6 +4,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.types.integrations.slack_alerting import Litellm_EntityType
 
 CustomerScopeKey: TypeAlias = Literal["customer_org", "customer_team", "customer_member"]
@@ -39,21 +40,29 @@ class CustomerHierarchyIds:
     """The three rows a request's spend is charged to, as the request metadata recorded them."""
 
     customer_member_id: str
-    customer_team_id: str
-    customer_org_id: str
+    customer_team_id: str | None
+    customer_org_id: str | None
 
     def entities(self) -> Mapping[str, str]:
         return {
-            "customer_member_id": self.customer_member_id,
-            "customer_team_id": self.customer_team_id,
-            "customer_org_id": self.customer_org_id,
+            key: value
+            for key, value in (
+                ("customer_member_id", self.customer_member_id),
+                ("customer_team_id", self.customer_team_id),
+                ("customer_org_id", self.customer_org_id),
+            )
+            if value is not None
         }
 
     def spend_entities(self) -> tuple[tuple[Litellm_EntityType, str], ...]:
-        return (
-            (Litellm_EntityType.CUSTOMER_ORG, self.customer_org_id),
-            (Litellm_EntityType.CUSTOMER_TEAM, self.customer_team_id),
-            (Litellm_EntityType.CUSTOMER_MEMBER, self.customer_member_id),
+        return tuple(
+            (entity_type, entity_id)
+            for entity_type, entity_id in (
+                (Litellm_EntityType.CUSTOMER_ORG, self.customer_org_id),
+                (Litellm_EntityType.CUSTOMER_TEAM, self.customer_team_id),
+                (Litellm_EntityType.CUSTOMER_MEMBER, self.customer_member_id),
+            )
+            if entity_id is not None
         )
 
 
@@ -69,9 +78,15 @@ def _mapping(value: object) -> Mapping[str, object]:
 
 def customer_hierarchy_ids_from_request(kwargs: Mapping[str, object]) -> CustomerHierarchyIds | None:
     """The ids auth stamped into ``litellm_params.metadata``, or None when the request named no customer member."""
-    metadata: Final = _mapping(_mapping(kwargs.get("litellm_params")).get("metadata"))
+    metadata: Final = _mapping(get_litellm_metadata_from_kwargs(dict(kwargs))) or _mapping(
+        _mapping(kwargs.get("standard_logging_object")).get("metadata")
+    )
     ids: Final = tuple(metadata.get(f"user_api_key_customer_{level}_id") for level in ("member", "team", "org"))
-    if not all(isinstance(value, str) and value for value in ids):
-        return None
     member_id, team_id, org_id = ids
-    return CustomerHierarchyIds(str(member_id), str(team_id), str(org_id))
+    if not isinstance(member_id, str) or not member_id:
+        return None
+    return CustomerHierarchyIds(
+        member_id,
+        team_id if isinstance(team_id, str) and team_id else None,
+        org_id if isinstance(org_id, str) and org_id else None,
+    )

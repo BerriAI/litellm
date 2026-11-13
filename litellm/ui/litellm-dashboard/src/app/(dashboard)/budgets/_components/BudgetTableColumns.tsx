@@ -18,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
+import { Badge } from "@/components/ui/badge";
 
 /**
  * Filtering happens on the server, so this never runs as a predicate. It exists to override
@@ -102,7 +103,16 @@ export const getBudgetTableColumns = (
     meta: { title: t("budgets.table.columns.budgetId") },
     header: ({ column }) => <DataTableSortHeader column={column} title={t("budgets.table.columns.budgetId")} />,
     cell: ({ row }) => (
-      <IdCell value={row.original.budget_id} variant="plain" truncate={false} copyable className="whitespace-nowrap" />
+      <div className="flex items-center gap-2">
+        <IdCell
+          value={row.original.budget_id}
+          variant="plain"
+          truncate={false}
+          copyable
+          className="whitespace-nowrap"
+        />
+        {row.original.is_profile && <Badge variant="secondary">{t("budgetProfiles.badge")}</Badge>}
+      </div>
     ),
   },
   {
@@ -112,9 +122,45 @@ export const getBudgetTableColumns = (
     meta: { title: t("budgets.table.columns.maxBudget"), numeric: true },
     header: ({ column }) => <DataTableSortHeader column={column} title={t("budgets.table.columns.maxBudget")} />,
     size: 120,
-    cell: ({ row }) => (
-      <MoneyCell value={row.original.max_budget} decimals={2} showZero emptyText={t("budgets.table.cells.unlimited")} />
-    ),
+    cell: ({ row }) =>
+      row.original.is_profile ? (
+        <div className="space-y-1 whitespace-nowrap text-right tabular-nums">
+          {(row.original.budget_limits ?? []).map((limit) => (
+            <div key={limit.budget_duration}>
+              ${limit.max_budget.toFixed(2)} /{" "}
+              {limit.budget_duration === "1mo" ? t("budgetProfiles.month") : t("budgetProfiles.year")}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <MoneyCell
+          value={row.original.max_budget}
+          decimals={2}
+          showZero
+          emptyText={t("budgets.table.cells.unlimited")}
+        />
+      ),
+  },
+  {
+    id: "member_count",
+    accessorKey: "member_count",
+    header: t("budgetProfiles.people"),
+    meta: { title: t("budgetProfiles.people"), numeric: true },
+    enableSorting: false,
+    cell: ({ row }) => (row.original.is_profile ? row.original.member_count : "—"),
+  },
+  {
+    id: "cap_policy",
+    accessorKey: "cap_policy",
+    header: t("budgetProfiles.cap"),
+    meta: { title: t("budgetProfiles.cap") },
+    enableSorting: false,
+    cell: ({ row }) => {
+      if (!row.original.is_profile) return "—";
+      return row.original.cap_policy === "pause_allow_increase"
+        ? t("budgetProfiles.contactAdminShort")
+        : t("budgetProfiles.wait");
+    },
   },
   {
     id: "tpm_limit",

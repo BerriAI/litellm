@@ -1806,7 +1806,7 @@ async def test_auth_prefetches_referenced_objects_before_central_model_authoriza
     import litellm.proxy.proxy_server as _proxy_server_mod
 
     _attrs_to_set = {
-        "prisma_client": MagicMock(),
+        "prisma_client": MagicMock(**{"db.litellm_usertable.find_unique": AsyncMock(return_value=None)}),
         "user_api_key_cache": mock_cache,
         "proxy_logging_obj": mock_proxy_logging_obj,
         "master_key": "sk-master-key",
@@ -2687,7 +2687,7 @@ async def test_auto_register_map_existing_key_first_request_runs_key_checks(
 ) -> None:
     jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
     user_api_key_cache: Final = _validated_jwt_admission_cache()
-    prisma_client = MagicMock()
+    prisma_client = MagicMock(**{"db.litellm_usertable.find_unique": AsyncMock(return_value=None)})
     jwt_handler = MagicMock()
     jwt_handler.is_jwt.return_value = True
     jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "user1"})
@@ -11909,7 +11909,8 @@ async def test_cached_key_team_member_budget_emails_configured_thresholds(
             "litellm.proxy.proxy_server.general_settings", {"disable_budget_reservation": True}
         ),
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),  # test-quality-ok: module-global proxy state
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: module-global proxy state
+        patch("litellm.proxy.proxy_server.prisma_client",
+            MagicMock(**{"db.litellm_usertable.find_unique": AsyncMock(return_value=None)})),  # test-quality-ok: module-global proxy state
         patch(  # test-quality-ok: seed the cached key, team and membership without a DB
             "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
         ),
@@ -12844,7 +12845,7 @@ def _viewer_inference_key(monkeypatch: pytest.MonkeyPatch, team_id: str | None, 
         )
     for name, value in {
         **_proxy_attrs_for_centralized_checks(),
-        "prisma_client": MagicMock(),
+        "prisma_client": MagicMock(**{"db.litellm_usertable.find_unique": AsyncMock(return_value=None)}),
         "user_api_key_cache": cache,
         "spend_counter_cache": DualCache(),
         "proxy_logging_obj": ProxyLogging(user_api_key_cache=cache),
@@ -14370,10 +14371,24 @@ def _customer_member_auth_request(
     async def custom_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
         return key
 
+    def member_values() -> dict[str, object]:
+        return {
+            "customer_member_id": "member-a",
+            "parent_team": {
+                "customer_team_id": "team-a",
+                "parent_org_id": "org-a",
+                "parent_org": {"customer_org_id": "org-a"},
+            },
+        }
+
     client: Final = MagicMock()
     client.db.litellm_customermembertable.find_unique = AsyncMock(
         return_value=(
-            SimpleNamespace(customer_member_id="member-a", parent_team=SimpleNamespace(parent_org_id="org-a"))
+            SimpleNamespace(
+                customer_member_id="member-a",
+                parent_team=SimpleNamespace(parent_org_id="org-a"),
+                model_dump=member_values,
+            )
             if member_exists
             else None
         ),

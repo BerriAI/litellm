@@ -16,6 +16,10 @@ pub enum SpendCounter {
         user_id: String,
         team_id: String,
     },
+    PersonWindow {
+        person_id: String,
+        window: String,
+    },
     User(String),
     EndUser(String),
     Org(String),
@@ -43,6 +47,9 @@ impl SpendCounter {
             Self::Team { team_id, window } => windowed("team", team_id, window),
             Self::TeamMember { user_id, team_id } => {
                 format!("spend:team_member:{user_id}:{team_id}")
+            }
+            Self::PersonWindow { person_id, window } => {
+                format!("spend:person:{person_id}:window:{window}")
             }
             Self::User(id) => format!("spend:user:{id}"),
             Self::EndUser(id) => format!("spend:end_user:{id}"),
@@ -88,6 +95,13 @@ impl SpendCounter {
                     team_id: team_id.to_owned(),
                 }
             }
+            "person" => {
+                let (person_id, window) = windowed();
+                Self::PersonWindow {
+                    person_id,
+                    window: window.ok_or_else(invalid)?,
+                }
+            }
             "user" => Self::User(id.to_owned()),
             "end_user" => Self::EndUser(id.to_owned()),
             "org" => Self::Org(id.to_owned()),
@@ -97,5 +111,21 @@ impl SpendCounter {
             "shadow_eval" => Self::ShadowEval(id.to_owned()),
             _ => return Err(invalid()),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SpendCounter;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::monthly_user("spend:person:user:person%3Aone:window:1mo@2026-11-01")]
+    #[case::annual_customer("spend:person:customer_member:person%2Ftwo:window:12mo@2026-01-01")]
+    fn personal_windows_round_trip_without_becoming_lifetime_counters(#[case] key: &str) {
+        let counter = SpendCounter::parse(key).expect("valid personal window");
+        assert!(matches!(counter, SpendCounter::PersonWindow { .. }));
+        assert_eq!(counter.key(), key);
+        assert!(SpendCounter::parse(&key.replacen("spend:", "spend:committed:", 1)).is_err());
     }
 }

@@ -12,6 +12,7 @@ All /budget management endpoints
 """
 
 #### BUDGET TABLE MANAGEMENT ####
+import json
 import math
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -21,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.models.budget import validate_person_budget_limits
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
@@ -34,6 +36,49 @@ from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.table_repositories import CustomerOrganizationRepository
 
 router: Final = APIRouter()
+
+
+def validate_budget_profile(budget: BudgetNewRequest) -> None:
+    try:
+        validate_person_budget_limits(budget.budget_limits)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if (budget.temp_budget_increase is None) != (budget.temp_budget_expiry is None):
+        raise HTTPException(status_code=400, detail="A temporary increase requires both an amount and an expiry")
+    if budget.is_profile and not budget.budget_limits:
+        raise HTTPException(status_code=400, detail="A profile requires a monthly or annual budget limit")
+    if budget.is_profile and budget.temp_budget_increase is not None:
+        raise HTTPException(status_code=400, detail="Apply temporary increases to a person's budget override")
+    if budget.is_profile and any(
+        value is not None
+        for value in (
+            budget.max_budget,
+            budget.soft_budget,
+            budget.max_parallel_requests,
+            budget.budget_reset_at,
+            budget.budget_duration,
+            budget.tpm_limit,
+            budget.rpm_limit,
+            budget.tpd_limit,
+            budget.model_max_budget,
+            budget.model_tpm_limit,
+            budget.model_rpm_limit,
+        )
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Profiles configure monthly and annual limits; keep other limits on the person, key or team",
+        )
+
+
+def serialized_budget_limits(budget: BudgetNewRequest) -> Mapping[str, object]:
+    if "budget_limits" not in budget.model_fields_set:
+        return {}
+    return {
+        "budget_limits": json.dumps(tuple(limit.model_dump(mode="json") for limit in budget.budget_limits))
+        if budget.budget_limits is not None
+        else None
+    }
 
 
 @router.post(
@@ -85,6 +130,7 @@ async def new_budget(
         )
 
     validate_budget_duration(budget_obj.budget_duration)
+    validate_budget_profile(budget_obj)
 
     # Validate model_max_budget if present
     if budget_obj.model_max_budget is not None and len(budget_obj.model_max_budget) > 0:
@@ -101,7 +147,7 @@ async def new_budget(
     if budget_obj.budget_reset_at is None and budget_obj.budget_duration is not None:
         budget_obj.budget_reset_at = get_budget_reset_time(budget_duration=budget_obj.budget_duration)
 
-    budget_obj_json: Final = budget_obj.model_dump(exclude_none=True)
+    budget_obj_json: Final = {**budget_obj.model_dump(exclude_none=True), **serialized_budget_limits(budget_obj)}
     budget_obj_jsonified: Final[dict[str, object]] = jsonify_object(budget_obj_json)  # mutable-ok: prisma create input
     try:
         response: Final = await BudgetRepository(prisma_client).table.create(
@@ -171,6 +217,22 @@ async def update_budget(
         )
 
     validate_budget_duration(budget_obj.budget_duration)
+    stored_budget: Final = await BudgetRepository(prisma_client).table.find_unique(
+        where={"budget_id": budget_obj.budget_id}
+    )
+    if stored_budget is None:
+        raise HTTPException(status_code=404, detail="Budget not found")
+    stored_values: Final = stored_budget.model_dump()
+    if "is_profile" in budget_obj.model_fields_set and budget_obj.is_profile != stored_values.get("is_profile", False):
+        raise HTTPException(status_code=400, detail="A budget's profile type cannot be changed after creation")
+    validate_budget_profile(
+        BudgetNewRequest.model_validate(
+            {
+                **stored_values,
+                **budget_obj.model_dump(exclude_unset=True),
+            }
+        )
+    )
 
     # Validate model_max_budget if present in update
     if budget_obj.model_max_budget is not None and len(budget_obj.model_max_budget) > 0:
@@ -197,6 +259,7 @@ async def update_budget(
     budget_obj_jsonified: Final[Mapping[str, object]] = jsonify_object(
         {
             **budget_obj.model_dump(exclude_unset=True),
+            **serialized_budget_limits(budget_obj),
             **recomputed_reset_at,
             "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
         }
@@ -371,6 +434,16 @@ async def delete_budget(
             status_code=400,
             detail={"error": f"{CommonProxyErrors.not_allowed_access.value}, your role={user_api_key_dict.user_role}"},
         )
+
+    async with prisma_client.tx() as tx:
+        await tx.query_raw('SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = $1 FOR UPDATE', data.id)
+        profile_row: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": data.id})
+        if profile_row is not None and profile_row.model_dump().get("is_profile") is True:
+            attached_users: Final = await tx.litellm_usertable.count(where={"budget_template_id": data.id})
+            attached_members: Final = await tx.litellm_customermembertable.count(where={"budget_template_id": data.id})
+            if attached_users or attached_members:
+                raise HTTPException(status_code=409, detail="Unassign this profile before deleting it")
+            return await tx.litellm_budgettable.delete(where={"budget_id": data.id})
 
     customer_org_count: Final = await CustomerOrganizationRepository(prisma_client).table.count(
         where={"budget_ids": {"has": data.id}}

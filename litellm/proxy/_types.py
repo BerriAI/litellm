@@ -732,6 +732,7 @@ class LiteLLMRoutes(enum.Enum):
             "/management/v1/customer_teams/{customer_team_id}",
             "/management/v1/customer_members",
             "/management/v1/customer_members/{customer_member_id}",
+            "/management/v1/budget_assignments/{subject_type}/{subject_id}",
         ]
         + key_management_routes
         + mcp_management_routes
@@ -1811,6 +1812,22 @@ class DeleteUserRequest(LiteLLMPydanticObjectBase):
 
 
 class BudgetNewRequest(LiteLLMPydanticObjectBase):
+    is_profile: bool | None = Field(
+        default=None, description="A reusable per-person budget profile for users and customer members."
+    )
+    budget_limits: tuple[BudgetLimitEntry, ...] | None = Field(
+        default=None, description="Independent calendar-month (1mo) and calendar-year (12mo) dollar limits per person."
+    )
+    cap_policy: Literal["pause_allow_increase", "pause_until_reset"] | None = Field(
+        default=None, description="Pause at the cap and allow asking an admin for more, or pause until the next reset."
+    )
+    temp_budget_increase: float | None = Field(
+        default=None, ge=0, allow_inf_nan=False, description="Temporary additional dollars for this personal budget."
+    )
+    temp_budget_expiry: datetime | None = Field(default=None, description="When the temporary increase stops applying.")
+    temp_budget_duration: Literal["1mo", "12mo"] | None = Field(
+        default=None, description="The monthly or annual limit receiving the temporary increase."
+    )
     budget_id: str | None = Field(default=None, description="The unique budget id.")
     max_budget: float | None = Field(
         default=None,

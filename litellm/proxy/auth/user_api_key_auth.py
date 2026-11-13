@@ -135,8 +135,6 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.customer_hierarchy_auth import (
-    check_customer_hierarchy_key_scope,
-    customer_member_id_from_headers,
     resolve_customer_hierarchy,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
@@ -226,7 +224,6 @@ from litellm.router_api import (
     request_fallback_chain,
 )
 from litellm.secret_managers.main import get_secret_bool
-from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 from litellm.types.services import ServiceTypes
 
 try:
@@ -2934,20 +2931,6 @@ async def user_api_key_auth_builder(
                     raise e
                 verbose_proxy_logger.debug("Unable to find user in db. Error - %s", e)
 
-        customer_member_id: Final = customer_member_id_from_headers(
-            safe_get_request_headers(request)  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
-        )
-        if customer_member_id is not None:
-            with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
-                end_user_params["customer_hierarchy"] = await resolve_customer_hierarchy(
-                    customer_member_id=customer_member_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    llm_router=llm_router,
-                    request_model=request_data.get("model"),
-                    route=route,
-                )
-
         ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         ### CHECK IF ADMIN ###
@@ -3586,15 +3569,6 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
 
         if _end_user_object is not None or litellm.max_end_user_budget_id is not None:
             valid_token_dict.update(end_user_params)
-        customer_hierarchy: Final = end_user_params.get("customer_hierarchy")
-        if isinstance(customer_hierarchy, CustomerHierarchyAuth):
-            check_customer_hierarchy_key_scope(
-                customer_hierarchy,
-                _KEY_METADATA_ADAPTER.validate_python(
-                    valid_token_dict.get("metadata") or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key dump, validated here
-                ),
-            )
-            valid_token_dict["customer_hierarchy"] = customer_hierarchy
         if _end_user_object is not None:
             valid_token_dict["end_user_object_permission"] = _end_user_object.object_permission
 
@@ -4397,6 +4371,7 @@ async def _reserve_budget_after_common_checks(
             fail_closed_budget_enforcement=(
                 general_settings.get("fail_closed_budget_enforcement") is True
                 or user_api_key_auth_obj.billing_agent_policy is not None
+                or bool(user_api_key_auth_obj.person_budget_windows)
             ),
             raw_body=await read_raw_json_body(request=request),
             path_params=reservation_path_params,
@@ -4514,6 +4489,30 @@ async def _authorize_authenticated_request(
             prisma_client,
             _GENERAL_SETTINGS_ADAPTER.validate_python(user_api_key_auth_obj.metadata or {}),  # pyright: ignore[reportUnknownMemberType]  # legacy key metadata is validated as a JSON mapping here
             reject_unknown_customer_member=member_settings.get("reject_unknown_customer_member", True) is not False,
+        )
+        if user_api_key_auth_obj.customer_member_id is not None:
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            user_api_key_auth_obj.customer_hierarchy = (
+                await resolve_customer_hierarchy(  # rebind-ok: admission fills request-owned authentication state
+                    customer_member_id=user_api_key_auth_obj.customer_member_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    llm_router=llm_router,
+                    request_model=request_data.get("model"),
+                    route=route,
+                )
+            )
+        from litellm.proxy.auth.person_budget import prepare_person_budget_windows
+
+        user_api_key_auth_obj.person_budget_windows = (
+            await prepare_person_budget_windows(  # rebind-ok: admission fills request-owned authentication state
+                prisma_client,
+                user_api_key_auth_obj.user_id,
+                user_api_key_auth_obj.customer_member_id,
+                route,
+                datetime.now(timezone.utc),
+            )
         )
 
         grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
@@ -4765,7 +4764,9 @@ async def user_api_key_auth(
             if body_parse_exception is not None:
                 raise body_parse_exception
             raise
-        user_api_key_auth_obj: Final = authenticated.model_copy(update={"customer_member_id": None})
+        user_api_key_auth_obj: Final = authenticated.model_copy(
+            update={"customer_member_id": None, "customer_hierarchy": None, "person_budget_windows": ()}
+        )
         user_api_key_auth_obj.budget_reservation = None
         user_api_key_auth_obj.agent_caller = agent_caller_from_headers(
             safe_get_request_headers(request), user_api_key_auth_obj

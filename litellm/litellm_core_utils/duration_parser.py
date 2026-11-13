@@ -396,6 +396,14 @@ def _handle_month_reset(
     Returns:
         datetime: First day of the next reset month at `reset_time_of_day`
     """
+    if value == 12:
+        first_of_this_year: Final = base_midnight.replace(month=1, day=1)
+        annual_candidate: Final = _apply_time_of_day(first_of_this_year, reset_time_of_day)
+        return (
+            annual_candidate.replace(year=annual_candidate.year + 1)
+            if annual_candidate <= current_time
+            else annual_candidate
+        )
     if value != 1:
         raise ValueError("Monthly resets currently only support 1 month intervals")
 

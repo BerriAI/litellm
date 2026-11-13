@@ -2129,6 +2129,9 @@ class LiteLLMProxyRequestSetup:
             user_api_key_customer_member_id=customer.customer_member_id if customer else None,
             user_api_key_customer_team_id=customer.customer_team_id if customer else None,
             user_api_key_customer_org_id=customer.customer_org_id if customer else None,
+            user_api_key_person_budget_windows=tuple(
+                window.model_dump(mode="json") for window in user_api_key_dict.person_budget_windows
+            ),
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
             user_api_key_budget_reset_at=(

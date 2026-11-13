@@ -18,6 +18,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -74,6 +75,7 @@ if TYPE_CHECKING:
 _AUDIT_LOG_CONCURRENCY: Final = 10
 _BATCH_TX_TIMEOUT: Final = timedelta(seconds=60)
 _USER_DELETE_ATTEMPTS: Final = 3
+_USER_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 _UserKeys = Literal["delete", "keep"]
 
@@ -503,8 +505,9 @@ async def _delete_users_tx(
         team_rows: Final = await _team_tx_db(tx).find_many(where=_in_filter("team_id", existing_team_ids))
         team_ids: Final = tuple(sorted(t.team_id for t in team_rows))
         alias_of: Final = MappingProxyType({t.team_id: t.team_alias for t in team_rows})
+        current_users: Final = await _user_tx_db(tx).find_many(where=_in_filter("user_id", user_ids))
         current_teams_of: Final = _teams_of(
-            await _user_tx_db(tx).find_many(where=_in_filter("user_id", user_ids)),
+            current_users,
             await _membership_tx_db(tx).find_many(where=_in_filter("user_id", user_ids)),
         )
         if not _all_teams(current_teams_of) <= _all_teams(teams_of):
@@ -530,6 +533,12 @@ async def _delete_users_tx(
         deleted_rows: Final = await _delete_user_rows(
             prisma_client, tx, user_ids, user_keys, user_api_key_dict, litellm_changed_by
         )
+        budget_values: Final = tuple(
+            _USER_FIELDS.validate_python(user.model_dump()).get("budget_id") for user in current_users
+        )
+        budget_ids: Final = tuple(value for value in budget_values if isinstance(value, str))
+        if budget_ids:
+            await tx.litellm_budgettable.delete_many(where={"budget_id": {"in": budget_ids}})
     return _UserBatchDeletion(
         removals=removals,
         deleted_keys=deleted_rows.keys.keys + tuple(k for r in removals.values() for k in r.deleted_keys),

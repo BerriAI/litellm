@@ -1138,10 +1138,13 @@ async def test_update_customer_hierarchy_db_enqueues_one_increment_per_level():
         }
     )
     assert ids is not None
-    assert (
-        customer_hierarchy_ids_from_request({"litellm_params": {"metadata": {"user_api_key_customer_member_id": "m"}}})
-        is None
+    member_only: Final = customer_hierarchy_ids_from_request(
+        {"litellm_params": {"metadata": {"user_api_key_customer_member_id": "m"}}}
     )
+    assert member_only is not None
+    assert member_only.customer_member_id == "m"
+    assert member_only.customer_team_id is None
+    assert member_only.customer_org_id is None
 
     await db_writer._update_customer_hierarchy_db(response_cost=0.25, customer_hierarchy=ids, prisma_client=MagicMock())
     queued = await db_writer.spend_update_queue.flush_all_updates_from_in_memory_queue()

@@ -113,7 +113,7 @@ async def test_restricted_key_model_list_denial_names_the_denied_model(
     cache.set_cache("access_group_rule_name:science", group, model_type=LiteLLM_AccessGroupTable)
     cache.set_cache("access_group_id:science-id", group, model_type=LiteLLM_AccessGroupTable)
     monkeypatch.setattr(server, "user_api_key_cache", cache)
-    monkeypatch.setattr(server, "prisma_client", MagicMock())
+    monkeypatch.setattr(server, "prisma_client", MagicMock(**{"db.litellm_usertable.find_unique": AsyncMock(return_value=None)}))
     monkeypatch.setattr(
         server,
         "general_settings",
@@ -155,7 +155,7 @@ async def test_user_access_group_rules_are_enforced_at_central_authorization(
         else {},
     )
     monkeypatch.setattr(server, "user_api_key_cache", cache)
-    monkeypatch.setattr(server, "prisma_client", MagicMock())
+    monkeypatch.setattr(server, "prisma_client", MagicMock(**{"db.litellm_usertable.find_unique": AsyncMock(return_value=None)}))
     monkeypatch.setattr(server, "llm_router", None)
     monkeypatch.setattr(server, "user_custom_auth", None)
     principal: Final = UserAPIKeyAuth(models=["explicit"], user_id="science")
@@ -348,6 +348,11 @@ async def test_returned_user_api_key_auth(user_role, expected_role):
 
 class _NoMembershipRowPrisma:
     class db:
+        class litellm_usertable:
+            @staticmethod
+            async def find_unique(where: dict[str, str], include: dict[str, bool]) -> None:
+                return None
+
         class litellm_teammembership:
             @staticmethod
             async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
@@ -1435,7 +1440,7 @@ async def test_x_litellm_api_key():
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
-    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+    setattr(litellm.proxy.proxy_server, "prisma_client", _NoMembershipRowPrisma())
 
     ignored_key = "aj12445"
 
@@ -1710,7 +1715,7 @@ async def test_user_model_budget_is_enforced_through_user_api_key_auth(over_budg
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-    setattr(litellm.proxy.proxy_server, "prisma_client", "present")
+    setattr(litellm.proxy.proxy_server, "prisma_client", _NoMembershipRowPrisma())
 
     await user_api_key_cache.async_set_cache(
         key=hashed,
@@ -2666,11 +2671,16 @@ async def test_customer_hierarchy_survives_virtual_key_auth_without_legacy_end_u
         scopes=(CustomerScopeAuth(key="customer_member", entity_id="m1", rpm_limit=1),),
     )
     resolve: Final = AsyncMock(return_value=hierarchy)
+    database: Final = MagicMock(get_data=AsyncMock(return_value=stored))
+    database.db.litellm_customermembertable.find_unique = AsyncMock(
+        return_value=MagicMock(customer_member_id="m1", parent_team=MagicMock(parent_org_id="o1"),
+                               model_dump=MagicMock(return_value={})),
+    )
     monkeypatch.setattr(auth_module, "resolve_customer_hierarchy", resolve)
     monkeypatch.setattr(server, "master_key", MASTER_KEY)
     monkeypatch.setattr(server, "general_settings", {})
     monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
-    monkeypatch.setattr(server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=stored)))
+    monkeypatch.setattr(server, "prisma_client", database)
     monkeypatch.setattr(server, "llm_router", None)
     monkeypatch.setattr(server, "user_custom_auth", None)
     request: Final = StarletteRequest(
@@ -2716,7 +2726,12 @@ async def test_a_key_pinned_to_a_customer_org_only_serves_that_orgs_members(
     monkeypatch.setattr(server, "master_key", MASTER_KEY)
     monkeypatch.setattr(server, "general_settings", {})
     monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
-    monkeypatch.setattr(server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=stored)))
+    database: Final = MagicMock(get_data=AsyncMock(return_value=stored))
+    database.db.litellm_customermembertable.find_unique = AsyncMock(
+        return_value=MagicMock(customer_member_id="m1", parent_team=MagicMock(parent_org_id="o1"),
+                               model_dump=MagicMock(return_value={})),
+    )
+    monkeypatch.setattr(server, "prisma_client", database)
     monkeypatch.setattr(server, "llm_router", None)
     monkeypatch.setattr(server, "user_custom_auth", None)
     request: Final = StarletteRequest(

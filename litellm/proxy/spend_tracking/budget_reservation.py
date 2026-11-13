@@ -83,6 +83,7 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
     "Team": Litellm_EntityType.TEAM.value,
     "TeamMember": Litellm_EntityType.TEAM_MEMBER.value,
     "User": Litellm_EntityType.USER.value,
+    "CustomerMember": Litellm_EntityType.CUSTOMER_MEMBER.value,
     "EndUser": Litellm_EntityType.END_USER.value,
     "Tag": Litellm_EntityType.TAG.value,
     "Model access group": Litellm_EntityType.MODEL_ACCESS_GROUP.value,
@@ -497,7 +498,19 @@ async def _get_budget_counters(
     end_user_object: object = None,
     apply_user_budget_to_team_keys: bool = False,
 ) -> list[_BudgetCounter]:
-    counters: Final[list[_BudgetCounter]] = []
+    counters: Final[list[_BudgetCounter]] = list(
+        _BudgetCounter(
+            counter_key=window.counter_key,
+            max_budget=window.max_budget,
+            fallback_spend=0.0,
+            entity_type=window.counter_entity_type,
+            entity_id=f"{window.entity_id}:{window.window_duration}",
+            spend_log_entity_id=window.entity_id,
+            window_duration=window.window_duration,
+            window_start=window.window_start,
+        )
+        for window in valid_token.person_budget_windows
+    )
 
     if valid_token.token is not None:
         if valid_token.max_budget is not None and valid_token.max_budget > 0:

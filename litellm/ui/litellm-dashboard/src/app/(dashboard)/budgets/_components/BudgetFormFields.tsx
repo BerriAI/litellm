@@ -28,11 +28,41 @@ const budgetShape = {
   tpd_limit: z.number().nullish(),
   max_budget: z.number().nullish(),
   budget_duration: z.string().nullish(),
+  is_profile: z.boolean().optional(),
+  monthly_budget: z.number().nonnegative().nullish(),
+  annual_budget: z.number().nonnegative().nullish(),
+  cap_policy: z.enum(["pause_allow_increase", "pause_until_reset"]).nullish(),
 };
 
-const budgetSchema = z.object(budgetShape);
+const budgetSchema = z
+  .object(budgetShape)
+  .refine((value) => !value.is_profile || value.monthly_budget != null || value.annual_budget != null, {
+    message: i18n.t("budgetProfiles.limitRequired"),
+    path: ["monthly_budget"],
+  });
 
 export type BudgetFormValues = z.output<typeof budgetSchema>;
+
+export function budgetFormPayload(values: BudgetFormValues, changed: Partial<BudgetFormValues> = values) {
+  const { monthly_budget: _monthly, annual_budget: _annual, ...rest } = changed;
+  if (!values.is_profile) return rest;
+  return {
+    ...rest,
+    ...("monthly_budget" in changed || "annual_budget" in changed
+      ? {
+          budget_limits: [
+            ...(values.monthly_budget == null ? [] : [{ budget_duration: "1mo", max_budget: values.monthly_budget }]),
+            ...(values.annual_budget == null ? [] : [{ budget_duration: "12mo", max_budget: values.annual_budget }]),
+          ],
+        }
+      : {}),
+    max_budget: null,
+    budget_duration: null,
+    tpm_limit: null,
+    rpm_limit: null,
+    tpd_limit: null,
+  };
+}
 
 export const useBudgetForm = (defaultValues: z.input<typeof budgetSchema>) =>
   useZodForm(budgetSchema, { defaultValues });
@@ -133,8 +163,30 @@ function RateLimitField({ form, name, label }: { form: BudgetForm; name: NumberF
 
 export function BudgetFormFields({ form, isEditing }: { form: BudgetForm; isEditing: boolean }) {
   const { t } = useTranslation();
+  const isProfile = form.watch("is_profile");
   return (
     <FieldGroup className="gap-4">
+      <FormField control={form.control} name="is_profile" label={t("budgetProfiles.budgetType")}>
+        {(field) => (
+          <Select
+            value={field.value ? "profile" : "budget"}
+            onValueChange={(value) => field.onChange(value === "profile")}
+            disabled={isEditing}
+            items={[
+              { value: "budget", label: t("budgetProfiles.budget") },
+              { value: "profile", label: t("budgetProfiles.profile") },
+            ]}
+          >
+            <SelectTrigger id={field.id}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="budget">{t("budgetProfiles.budget")}</SelectItem>
+              <SelectItem value="profile">{t("budgetProfiles.profile")}</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
+      </FormField>
       <FormField
         control={form.control}
         name="budget_id"
@@ -144,18 +196,55 @@ export function BudgetFormFields({ form, isEditing }: { form: BudgetForm; isEdit
       >
         {({ ref, ...field }) => <Input {...field} ref={ref} value={field.value ?? ""} disabled={isEditing} />}
       </FormField>
-      <SpendLimitField form={form} />
-      <FieldSeparator />
-      <FieldSet className="gap-3">
-        <FieldLegend className="mb-4 flex items-center gap-2 text-[15px] leading-[22px] font-semibold">
-          {t("budgets.form.rateLimits")}
-          <OptionalBadge />
-        </FieldLegend>
-        <RateLimitField form={form} name="tpm_limit" label={t("budgets.form.tpmLimit")} />
-        <RateLimitField form={form} name="rpm_limit" label={t("budgets.form.rpmLimit")} />
-        <RateLimitField form={form} name="tpd_limit" label={t("budgets.form.tpdLimit")} />
-        <FieldDescription>{t("budgets.form.batchNote")}</FieldDescription>
-      </FieldSet>
+      {isProfile ? (
+        <>
+          <FieldDescription>{t("budgetProfiles.profileHelp")}</FieldDescription>
+          <FormField control={form.control} name="monthly_budget" label={t("budgetProfiles.profileMonthly")}>
+            {(field) => <Input {...numberProps(field)} min={0} step={0.01} />}
+          </FormField>
+          <FormField control={form.control} name="annual_budget" label={t("budgetProfiles.profileAnnual")}>
+            {(field) => <Input {...numberProps(field)} min={0} step={0.01} />}
+          </FormField>
+          <FormField control={form.control} name="cap_policy" label={t("budgetProfiles.cap")}>
+            {(field) => (
+              <Select
+                value={field.value ?? "pause_until_reset"}
+                onValueChange={field.onChange}
+                items={[
+                  { value: "pause_allow_increase", label: t("budgetProfiles.contactAdmin") },
+                  { value: "pause_until_reset", label: t("budgetProfiles.wait") },
+                ]}
+              >
+                <SelectTrigger id={field.id}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pause_allow_increase">{t("budgetProfiles.contactAdmin")}</SelectItem>
+                  <SelectItem value="pause_until_reset">{t("budgetProfiles.wait")}</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          </FormField>
+          <FieldDescription>{t("budgetProfiles.resetHelp")}</FieldDescription>
+        </>
+      ) : (
+        <SpendLimitField form={form} />
+      )}
+      {!isProfile && (
+        <>
+          <FieldSeparator />
+          <FieldSet className="gap-3">
+            <FieldLegend className="mb-4 flex items-center gap-2 text-[15px] leading-[22px] font-semibold">
+              {t("budgets.form.rateLimits")}
+              <OptionalBadge />
+            </FieldLegend>
+            <RateLimitField form={form} name="tpm_limit" label={t("budgets.form.tpmLimit")} />
+            <RateLimitField form={form} name="rpm_limit" label={t("budgets.form.rpmLimit")} />
+            <RateLimitField form={form} name="tpd_limit" label={t("budgets.form.tpdLimit")} />
+            <FieldDescription>{t("budgets.form.batchNote")}</FieldDescription>
+          </FieldSet>
+        </>
+      )}
     </FieldGroup>
   );
 }

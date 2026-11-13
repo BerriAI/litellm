@@ -4,6 +4,9 @@ from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTable
@@ -13,9 +16,22 @@ from litellm.types.proxy.carried_budget_state import (
     CommittedBudgetSpend,
     EntitySpendCounterKeys,
     OrgBudgetSnapshot,
+    PersonBudgetWindow,
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
 )
+
+_PERSON_WINDOWS: Final = TypeAdapter(tuple[PersonBudgetWindow, ...])
+_METADATA: Final = TypeAdapter(Mapping[str, object])
+
+
+def person_budget_windows_from_kwargs(kwargs: Mapping[str, object]) -> tuple[PersonBudgetWindow, ...]:
+    metadata: Final = _METADATA.validate_python(get_litellm_metadata_from_kwargs(dict(kwargs)) or {})
+    standard: Final = _METADATA.validate_python(kwargs.get("standard_logging_object") or {})
+    fallback: Final = _METADATA.validate_python(standard.get("metadata") or {})
+    return _PERSON_WINDOWS.validate_python(
+        metadata.get("user_api_key_person_budget_windows", fallback.get("user_api_key_person_budget_windows")) or ()
+    )
 
 
 def carry_team_and_user_budget_state(
