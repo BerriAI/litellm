@@ -966,6 +966,9 @@ class Logging(LiteLLMLoggingBaseClass):
             "litellm_params": litellm_params,
             "applied_guardrails": applied_guardrails,
             "model": model,
+            "standard_callback_dynamic_params": {
+                "turn_off_message_logging": self.standard_callback_dynamic_params.get("turn_off_message_logging")
+            },
         }
 
         # Set by proxy request handlers to defer spend-log fire until after
@@ -1818,12 +1821,17 @@ class Logging(LiteLLMLoggingBaseClass):
                         try:
                             details_to_log = copy.deepcopy(self.model_call_details)
                         except Exception:
-                            details_to_log = self.model_call_details
-                        if litellm.turn_off_message_logging:
-                            # make a copy of the _model_Call_details and log it
+                            details_to_log = self.model_call_details.copy()
+                        if should_redact_message_logging(self.model_call_details):
+                            redact_message_input_output_from_logging(
+                                model_call_details=details_to_log,
+                                result=None,
+                            )
+                            details_to_log.pop("additional_args", None)
                             details_to_log.pop("messages", None)
                             details_to_log.pop("input", None)
                             details_to_log.pop("prompt", None)
+                            details_to_log.pop("raw_request_typed_dict", None)
 
                         add_breadcrumb(
                             category="litellm.llm_call",
@@ -1983,12 +1991,14 @@ class Logging(LiteLLMLoggingBaseClass):
                         try:
                             details_to_log = copy.deepcopy(self.model_call_details)
                         except Exception:
-                            details_to_log = self.model_call_details
-                        if litellm.turn_off_message_logging:
+                            details_to_log = self.model_call_details.copy()
+                        if should_redact_message_logging(self.model_call_details):
                             # make a copy of the _model_Call_details and log it
                             details_to_log.pop("messages", None)
                             details_to_log.pop("input", None)
                             details_to_log.pop("prompt", None)
+                            details_to_log.pop("original_response", None)
+                            details_to_log.pop("additional_args", None)
 
                         add_breadcrumb(
                             category="litellm.llm_call",

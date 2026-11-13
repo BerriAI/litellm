@@ -780,9 +780,21 @@ def _key_or_team_allows_client_mock_response(
 def _key_or_team_allows_client_message_redaction_opt_out(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> bool:
+    team_metadata: Final = user_api_key_dict.team_metadata
+    if isinstance(team_metadata, dict) and team_metadata.get("turn_off_message_logging") is True:
+        return team_metadata.get(_ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY) is True
     return _key_or_team_metadata_flag_is_true(
         user_api_key_dict=user_api_key_dict,
         metadata_key=_ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY,
+    )
+
+
+def _key_or_team_enforces_message_redaction(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    return _key_or_team_metadata_flag_is_true(
+        user_api_key_dict=user_api_key_dict,
+        metadata_key="turn_off_message_logging",
     )
 
 
@@ -797,6 +809,15 @@ def _key_or_team_allows_client_pricing_override(
 
 def _opts_out_of_message_redaction(fields: Mapping[str, object]) -> bool:
     return "turn_off_message_logging" in fields and _is_false_like(fields["turn_off_message_logging"])
+
+
+def _client_opted_out_of_message_redaction(data: Mapping[str, object]) -> bool:
+    if _opts_out_of_message_redaction(data):
+        return True
+    return any(
+        _opts_out_of_message_redaction(metadata)
+        for _slot, metadata in iter_client_callback_metadata_dicts(data)
+    )
 
 
 def _strip_client_message_redaction_opt_out(data: dict[str, object]) -> None:
@@ -2955,7 +2976,10 @@ async def add_litellm_data_to_request(
     # so JSON-string metadata cannot smuggle callback credentials past the dict guard.
     _strip_client_callback_credentials(data)
 
-    if not _allow_client_message_redaction_opt_out and litellm.turn_off_message_logging is True:
+    if not _allow_client_message_redaction_opt_out and (
+        litellm.turn_off_message_logging is True
+        or _key_or_team_enforces_message_redaction(user_api_key_dict)
+    ):
         _strip_client_message_redaction_opt_out(data)
 
     # Fill in the proxy_server_request body snapshot now that metadata has
@@ -3198,6 +3222,11 @@ async def add_litellm_data_to_request(
     )
 
     data.update(key_and_team_logging_fields(user_api_key_dict=user_api_key_dict, proxy_config=proxy_config))
+
+    if _key_or_team_enforces_message_redaction(user_api_key_dict) and not (
+        _allow_client_message_redaction_opt_out and _client_opted_out_of_message_redaction(data)
+    ):
+        data["turn_off_message_logging"] = True  # rebind-ok: add authenticated flag to the request out-param
 
     # Guardrails from key/team metadata and policy engine
     await move_guardrails_to_metadata(

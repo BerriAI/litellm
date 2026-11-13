@@ -8906,6 +8906,90 @@ def test_pre_call_raw_request_honors_per_request_turn_off_message_logging(loggin
     _assert_raw_request_redacted_for_callbacks_only(logging_obj, metadata)
 
 
+def test_pre_call_sentry_breadcrumb_honors_per_request_turn_off_message_logging(monkeypatch: pytest.MonkeyPatch):
+    breadcrumbs: Final[list[dict[str, str]]] = []
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(litellm, "input_callback", ["sentry"])
+    monkeypatch.setattr(
+        litellm_logging,
+        "add_breadcrumb",
+        lambda **kwargs: breadcrumbs.append(kwargs),
+    )
+    logging_obj = LitellmLogging(
+        model="bedrock/claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="sentry-redaction-pre-call",
+        function_id="sentry-redaction-pre-call",
+        kwargs={"turn_off_message_logging": True, "langfuse_secret_key": "SECRET-CALLBACK"},
+    )
+    logging_obj.model_call_details["messages"] = [{"role": "user", "content": "SECRET-MESSAGE"}]
+    logging_obj.model_call_details["prompt"] = "SECRET-PROMPT"
+    logging_obj.model_call_details["litellm_params"] = {
+        "proxy_server_request": {
+            "body": {"messages": [{"role": "user", "content": "SECRET-PROXY-BODY"}]},
+        },
+    }
+    logging_obj.model_call_details["standard_callback_dynamic_params"] = {"turn_off_message_logging": True}
+
+    logging_obj.pre_call(
+        input="SECRET-INPUT",
+        api_key="",
+        additional_args={
+            "complete_input_dict": {
+                "messages": [{"role": "user", "content": "SECRET-COMPLETE-INPUT"}],
+                "instructions": "SECRET-INSTRUCTIONS",
+            }
+        },
+    )
+
+    assert len(breadcrumbs) == 1
+    assert "SECRET-MESSAGE" not in breadcrumbs[0]["message"]
+    assert "SECRET-PROMPT" not in breadcrumbs[0]["message"]
+    assert "SECRET-INPUT" not in breadcrumbs[0]["message"]
+    assert "SECRET-PROXY-BODY" not in breadcrumbs[0]["message"]
+    assert "SECRET-COMPLETE-INPUT" not in breadcrumbs[0]["message"]
+    assert "SECRET-INSTRUCTIONS" not in breadcrumbs[0]["message"]
+    assert "SECRET-CALLBACK" not in breadcrumbs[0]["message"]
+
+
+def test_post_call_sentry_breadcrumb_omits_original_response_when_redaction_is_enabled(
+    logging_obj, monkeypatch
+):
+    breadcrumbs: Final[list[dict[str, str]]] = []
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(litellm, "input_callback", ["sentry"])
+    monkeypatch.setattr(
+        litellm_logging,
+        "add_breadcrumb",
+        lambda **kwargs: breadcrumbs.append(kwargs),
+    )
+    logging_obj.model_call_details["standard_callback_dynamic_params"] = {"turn_off_message_logging": True}
+
+    logging_obj.post_call(
+        original_response={
+            "id": "completion-1",
+            "choices": [{"message": {"role": "assistant", "content": "SECRET-RESPONSE"}}],
+        },
+        input="SECRET-INPUT",
+        api_key="",
+        additional_args={
+            "complete_input_dict": {
+                "messages": [{"role": "user", "content": "SECRET-POST-COMPLETE-INPUT"}],
+                "instructions": "SECRET-POST-INSTRUCTIONS",
+            }
+        },
+    )
+
+    assert len(breadcrumbs) == 1
+    assert "SECRET-RESPONSE" not in breadcrumbs[0]["message"]
+    assert "SECRET-INPUT" not in breadcrumbs[0]["message"]
+    assert "SECRET-POST-COMPLETE-INPUT" not in breadcrumbs[0]["message"]
+    assert "SECRET-POST-INSTRUCTIONS" not in breadcrumbs[0]["message"]
+
+
 def test_debugging_log_honors_json_logs_set_after_import(logging_obj, monkeypatch):
     monkeypatch.setattr(litellm, "json_logs", True)
     logging_obj.litellm_request_debug = True

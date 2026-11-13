@@ -2202,6 +2202,124 @@ async def test_add_litellm_data_to_request_allows_redaction_opt_out_with_admin_o
     assert "litellm_metadata" not in updated
 
 
+@pytest.mark.parametrize(
+    "auth_kwargs",
+    [
+        {"metadata": {"turn_off_message_logging": True}},
+        {"team_metadata": {"turn_off_message_logging": True}},
+        {
+            "metadata": {"allow_client_message_redaction_opt_out": True},
+            "team_metadata": {"turn_off_message_logging": True},
+        },
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_client_cannot_opt_out_of_key_or_team_enforced_redaction(
+    auth_kwargs: dict[str, dict[str, bool]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+    from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "litellm-disable-message-redaction": "true",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "hello"}],
+            "turn_off_message_logging": False,
+            "metadata": {
+                "turn_off_message_logging": False,
+                "headers": {"litellm-disable-message-redaction": "true"},
+            },
+        },
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", **auth_kwargs),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated.get("turn_off_message_logging") is True
+    dynamic_params = initialize_standard_callback_dynamic_params(updated)
+    assert should_redact_message_logging(
+        {"standard_callback_dynamic_params": dynamic_params, "litellm_params": updated}
+    ) is True
+
+
+@pytest.mark.parametrize(
+    "auth_kwargs",
+    [
+        {
+            "metadata": {
+                "turn_off_message_logging": True,
+                "allow_client_message_redaction_opt_out": True,
+            },
+        },
+        {
+            "team_metadata": {
+                "turn_off_message_logging": True,
+                "allow_client_message_redaction_opt_out": True,
+            },
+        },
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_opt_out_survives_when_enforcing_admin_allows_it(
+    auth_kwargs: dict[str, dict[str, bool]],
+):
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+    from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "hello"}],
+            "turn_off_message_logging": False,
+            "metadata": {"turn_off_message_logging": False},
+        },
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", **auth_kwargs),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["turn_off_message_logging"] is False
+    assert updated["metadata"]["turn_off_message_logging"] is False
+    dynamic_params = initialize_standard_callback_dynamic_params(updated)
+    assert should_redact_message_logging(
+        {"standard_callback_dynamic_params": dynamic_params, "litellm_params": updated}
+    ) is False
+
+
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_honors_header_tags():
     """Header-supplied tags flow through to request metadata."""
