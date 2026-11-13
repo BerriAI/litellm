@@ -2,6 +2,8 @@ import pytest
 from pydantic import ValidationError
 
 from litellm.llms.sap.chat.models import (
+    FunctionObj,
+    MessageToolCall,
     SAPAssistantMessage,
     SAPMessage,
     SAPToolChatMessage,
@@ -166,6 +168,58 @@ class TestSAPAssistantMessage:
         assert isinstance(msg.content, TextContent)
         assert msg.content.cache_control is not None
         assert msg.content.cache_control.type == "ephemeral"
+
+
+class TestFunctionObj:
+    def test_name_and_arguments_accepted(self):
+        obj = FunctionObj.model_validate({"name": "get_weather", "arguments": '{"city":"Berlin"}'})
+        assert obj.name == "get_weather"
+        assert obj.arguments == '{"city":"Berlin"}'
+
+    def test_missing_arguments_defaults_to_empty_string(self):
+        # Streaming intermediate tool-call chunks often omit arguments (name only).
+        obj = FunctionObj.model_validate({"name": "get_weather"})
+        assert obj.name == "get_weather"
+        assert obj.arguments == ""
+
+    def test_explicit_empty_arguments_accepted(self):
+        obj = FunctionObj.model_validate({"name": "get_weather", "arguments": ""})
+        assert obj.arguments == ""
+
+    def test_missing_name_rejected(self):
+        with pytest.raises(ValidationError):
+            FunctionObj.model_validate({"arguments": "{}"})
+
+
+class TestMessageToolCall:
+    def test_tool_call_with_arguments(self):
+        tc = MessageToolCall.model_validate({
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": "{}"},
+        })
+        assert tc.function.name == "get_weather"
+        assert tc.function.arguments == "{}"
+
+    def test_tool_call_without_arguments_for_streaming_delta(self):
+        tc = MessageToolCall.model_validate({
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather"},
+        })
+        assert tc.function.arguments == ""
+
+    def test_assistant_message_streaming_tool_call_without_arguments(self):
+        msg = SAPAssistantMessage.model_validate({
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather"},
+            }]
+        })
+        assert len(msg.tool_calls) == 1
+        assert msg.tool_calls[0].function.name == "get_weather"
+        assert msg.tool_calls[0].function.arguments == ""
 
 
 class TestSAPToolChatMessage:
