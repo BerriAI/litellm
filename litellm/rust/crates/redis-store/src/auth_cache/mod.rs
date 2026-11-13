@@ -288,38 +288,45 @@ impl AuthCache {
         }))
     }
 
-    /// `UserApiKeyCache.async_delete_cache_keys`: the key-object partition and the rest as two
-    /// concurrent `DualCache.async_delete_cache_keys`. Both run even when one fails. Memory is
-    /// dropped before the first wait on Redis.
+    /// `UserApiKeyCache.async_delete_cache_keys`. Memory is dropped before the first wait on
+    /// Redis. A key deletes in one script with the write that voids its leases, all of them in one
+    /// pipeline. Keys no generation can share a slot with go as `DualCache.async_delete_cache_keys`
+    /// per partition. Every part runs even when another fails.
     pub async fn delete(&self, keys: &[String]) -> Result<(), Error> {
         keys.iter().try_for_each(|key| self.delete_local(key))?;
-        let voided = self.void_leases(keys).await;
-        let (key_objects, others): (Vec<String>, Vec<String>) =
-            keys.iter().cloned().partition(|key| is_key_object(key));
-        let (key_objects, others) = tokio::join!(
-            self.key_objects.delete_keys(&key_objects),
-            self.objects.delete_keys(&others)
-        );
-        voided.and(key_objects).and(others)
-    }
-
-    /// Before the `DEL`s, so a leased `SET` either lands ahead of its `DEL` or is refused.
-    async fn void_leases(&self, keys: &[String]) -> Result<(), Error> {
         let Some(client) = self.redis.client() else {
             return Ok(());
         };
         let pipeline = RedisBatch::pipelined(client.clone());
-        let written: Vec<_> = keys
+        let (leased, plain): (Vec<_>, Vec<_>) = keys
             .iter()
-            .filter_map(|key| client.sibling_key(key, GENERATION_LABEL))
-            .map(|generation| {
-                pipeline.add(commands::set(&generation, new_generation(), GENERATION_TTL))
+            .map(|key| (key, client.sibling_key(key, GENERATION_LABEL)))
+            .partition(|(_, generation)| generation.is_some());
+        let deleted: Vec<_> = leased
+            .into_iter()
+            .filter_map(|(key, generation)| Some((key, generation?)))
+            .map(|(key, generation)| {
+                pipeline.add(commands::eval_source::<usize>(
+                    DELETE_VOIDING_LEASES,
+                    &[key, &generation],
+                    (new_generation(), GENERATION_TTL.as_secs()),
+                ))
             })
             .collect();
-        Declared::all(written)
-            .await
+        let (key_objects, others): (Vec<String>, Vec<String>) = plain
             .into_iter()
-            .try_for_each(|reply| Ok(reply?))
+            .map(|(key, _)| key.clone())
+            .partition(|key| is_key_object(key));
+        let (deleted, key_objects, others) = tokio::join!(
+            Declared::all(deleted),
+            self.key_objects.delete_keys(&key_objects),
+            self.objects.delete_keys(&others)
+        );
+        deleted
+            .into_iter()
+            .try_for_each(|reply| Ok(reply.map(drop)?))
+            .and(key_objects)
+            .and(others)
     }
 
     /// `RedisCache.async_batch_get_cache` for keys the caller found missing in memory, one `MGET` on

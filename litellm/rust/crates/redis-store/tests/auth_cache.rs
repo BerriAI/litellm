@@ -864,15 +864,7 @@ async fn the_auth_cache_sends_the_commands_user_api_key_cache_sends(
         .unwrap();
 
     assert_eq!(written, vec![Operation::Pipeline { ops: 1 }; 2]);
-    let deleted = &trips.seen()[written.len()..];
-    assert_eq!(
-        deleted
-            .iter()
-            .filter(|trip| **trip == Operation::Command("DEL"))
-            .count(),
-        2
-    );
-    assert!(matches!(deleted[0], Operation::Pipeline { .. }));
-    assert_eq!(support::calls(&deployment, "eval").await, 1);
+    assert_eq!(trips.seen()[written.len()], Operation::Pipeline { ops: 2 });
+    assert_eq!(support::calls(&deployment, "eval").await, 3);
     assert_eq!(support::calls(&deployment, "evalsha").await, 0);
 }
