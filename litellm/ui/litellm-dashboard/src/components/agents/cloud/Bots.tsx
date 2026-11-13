@@ -101,7 +101,7 @@ export default function Bots({ accessToken, sourceId }: { accessToken: string; s
         <CloudTable rows={bots.data?.data ?? []} columns={columns} rowKey={(row) => row.external_id} />
       )}
       <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
-        <span>{t("agents.external.page", { page, total: bots.data?.total ?? 0 })}</span>
+        <span>{t("agents.external.page", { page, count: bots.data?.total ?? 0 })}</span>
         <div className="flex gap-2">
           <Button variant="outline" disabled={page === 1 || bots.isFetching} onClick={() => setPage(page - 1)}>
             {t("agents.external.previous")}

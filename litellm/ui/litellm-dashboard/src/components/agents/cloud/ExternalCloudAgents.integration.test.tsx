@@ -56,6 +56,7 @@ const report: SpendReport = {
 class Server {
   source: Source | null = null;
   invalidKey = false;
+  agentCount = 1;
   requests: { path: string; method: string; body?: string }[] = [];
 
   fetch = async (input: string | URL | Request, init?: RequestInit) => {
@@ -84,21 +85,19 @@ class Server {
     if (path === root + "/spend") return Response.json(report);
     if (path === root + "/agents") {
       const agents = {
-        data: [
-          {
-            source_id: "source-1",
-            external_id: "bot-001",
-            first_seen_at: source.created_at,
-            last_seen_at: source.last_event_at,
-            request_count: 7,
-            last_actor_id: "actor-1",
-            last_model: "external-model",
-            tools: ["Shell", "ReadFile"],
-          },
-        ],
+        data: Array.from({ length: this.agentCount }, (_, index) => ({
+          source_id: "source-1",
+          external_id: `bot-${String(index + 1).padStart(3, "0")}`,
+          first_seen_at: source.created_at,
+          last_seen_at: source.last_event_at,
+          request_count: 7,
+          last_actor_id: "actor-1",
+          last_model: "external-model",
+          tools: ["Shell", "ReadFile"],
+        })),
         page: 1,
         page_size: 20,
-        total: 1,
+        total: this.agentCount,
       };
       return Response.json(agents);
     }
@@ -132,9 +131,18 @@ describe("External Cloud Agents", () => {
     });
     server.source = source;
     await act(() => testQueryClient.refetchQueries());
-    expect(await screen.findByText("Connected · 1 bots")).toBeVisible();
+    expect(await screen.findByText("Connected · 1 bot")).toBeVisible();
     expect(await screen.findByText("bot-001")).toBeVisible();
+    expect(screen.getByText("Page 1 · 1 bot")).toBeVisible();
     expect(screen.queryByText("Bearer test-ingest-key")).not.toBeInTheDocument();
+  });
+
+  it.each([0, 2])("uses plural bot counts for %i bots in the header and pagination", async (count) => {
+    server.source = { ...source, bot_count: count };
+    server.agentCount = count;
+    renderWithProviders(<ExternalCloudAgents accessToken="admin-token" />);
+    expect(await screen.findByText(`Connected · ${count} bots`)).toBeVisible();
+    expect(await screen.findByText(`Page 1 · ${count} bots`)).toBeVisible();
   });
 
   it("connects spend, renders member and team costs, then removes the key", async () => {
