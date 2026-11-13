@@ -24,6 +24,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
 from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
+from litellm.integrations.customer_budget_webhook import CustomerBudgetWebhook
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_spend_update_writer import (
@@ -45,7 +46,6 @@ from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
-from litellm.types.integrations.slack_alerting import AlertType
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
@@ -1130,11 +1130,10 @@ async def test_commit_spend_updates_to_db_increments_every_customer_hierarchy_ta
 async def test_committed_customer_budget_webhooks_include_scope_and_dedupe(
     scope: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("WEBHOOK_URL", "https://alerts.example/budget")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [CustomerBudgetWebhook(endpoint="https://alerts.example/budget")])
     receiver: Final = respx_mock.post("https://alerts.example/budget").respond(200)
     logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
-    logging.update_values(alerting=["webhook"], alert_types=[AlertType.budget_alerts], redis_cache=None)
     organization: Final = {"customer_org_id": "org-1", "alias": "tenant"}
     team: Final = {"customer_team_id": "team-1", "parent_org": organization}
     row: Final = {
@@ -1172,13 +1171,12 @@ async def test_committed_customer_budget_webhooks_include_scope_and_dedupe(
     assert len(payloads) == 2, payloads
     assert {payload["event"] for payload in payloads} == {"soft_budget_crossed", "budget_crossed"}
     for payload in payloads:
-        assert payload["event_group"] == f"customer_{scope}"
+        assert payload["scope"] == f"customer_{scope}"
         assert payload["entity_id"] == f"{scope}-1"
         assert payload["customer_org_id"] == "org-1"
         assert payload["customer_org_alias"] == "tenant"
         assert payload["spend"] == 0.25
-        assert payload["max_budget"] == 0.2
-        assert payload["soft_budget"] == 0.1
+        assert payload["budget"] == (0.2 if payload["event"] == "budget_crossed" else 0.1)
 
 
 @pytest.mark.asyncio

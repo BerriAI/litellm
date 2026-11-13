@@ -29,23 +29,6 @@ from typing import Optional
 from litellm.proxy._types import WebhookEvent
 
 
-@pytest.mark.parametrize(
-    "field", ("entity_id", "customer_org_id", "customer_org_alias", "customer_team_id", "customer_member_id")
-)
-@pytest.mark.parametrize("identity", ("customer-1", "", "<!channel> <http://x|y> &"))
-def test_customer_budget_identity_is_literal_slack_text(field: str, identity: str) -> None:
-    info: Final = CallInfo(
-        spend=0.0,
-        event_group=Litellm_EntityType.CUSTOMER_MEMBER,
-        entity_id="customer-member-1",
-        customer_member_id="customer-member-1",
-    ).model_copy(update={field: identity})
-    rendered: Final = SlackAlerting()._get_user_info_str(info)
-    expected: Final = identity.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    assert f"*{field}:* `{expected}`" in rendered
-    assert getattr(info, field) == identity
-
-
 class TestSlackAlerting(unittest.TestCase):
     def setUp(self):
         self.slack_alerting = SlackAlerting()

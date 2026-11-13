@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -9,11 +10,12 @@ import respx
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.management_helpers.customer_hierarchy import PrismaRecord
-from litellm.proxy.spend_tracking.customer_budget_alerts import send_customer_budget_alerts
-from litellm.proxy.utils import ProxyLogging
-from litellm.types.integrations.slack_alerting import AlertType
+from litellm.proxy.spend_tracking.customer_budget_alerts import CustomerBudgetAlerting
+from litellm.types.integrations.customer_budget import CustomerBudgetEvent
 
 _NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 _PAYLOAD: Final = TypeAdapter(Mapping[str, object])
@@ -55,19 +57,19 @@ def _database(records: Mapping[str, PrismaRecord | Exception | None]) -> _Databa
 
 
 @pytest_asyncio.fixture
-async def alerts(monkeypatch: pytest.MonkeyPatch) -> ProxyLogging:
-    monkeypatch.setenv("WEBHOOK_URL", _URL)
+async def alerts(monkeypatch: pytest.MonkeyPatch) -> DualCache:
+    monkeypatch.setenv("CUSTOMER_BUDGET_WEBHOOK_URL", _URL)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
-    logging.update_values(alerting=["webhook"], alert_types=[AlertType.budget_alerts], redis_cache=None)
-    return logging
+    monkeypatch.setattr(litellm, "callbacks", [])
+    initialize_callbacks_on_proxy(["customer_budget_webhook"], False, "config.yaml", {})
+    return DualCache()
 
 
 @pytest.mark.parametrize("expires", (None, _NOW - timedelta(seconds=1)))
 @pytest.mark.parametrize("customer_member_id", ("customer-member-1", "<!channel> <http://x|y> &"))
 @pytest.mark.asyncio
 async def test_customer_member_alert_uses_effective_override_and_customer_identity(
-    alerts: ProxyLogging, respx_mock: respx.MockRouter, expires: datetime | None, customer_member_id: str
+    alerts: DualCache, respx_mock: respx.MockRouter, expires: datetime | None, customer_member_id: str
 ) -> None:
     receiver: Final = respx_mock.post(_URL).respond(200)
     record: Final = _Record(
@@ -82,7 +84,7 @@ async def test_customer_member_alert_uses_effective_override_and_customer_identi
             },
         }
     )
-    await send_customer_budget_alerts(
+    await CustomerBudgetAlerting.detect_committed_batch(
         {"customer_member_list_transactions": {customer_member_id: 3.0}},
         _database({customer_member_id: record}),
         alerts,
@@ -94,8 +96,9 @@ async def test_customer_member_alert_uses_effective_override_and_customer_identi
         return
     assert {item["event"] for item in payloads} == {"budget_crossed", "soft_budget_crossed"}
     for payload in payloads:
-        assert payload["max_budget"] == 2.0
-        assert payload["soft_budget"] == 1.0
+        assert payload["budget"] == (2.0 if payload["event"] == "budget_crossed" else 1.0)
+        assert payload["scope"] == "customer_member"
+        assert payload["period"] == "lifetime"
         assert payload["customer_org_id"] == "customer-org-1"
         assert payload["customer_org_alias"] == "customer-test"
         assert payload["customer_team_id"] == "customer-team-1"
@@ -107,10 +110,10 @@ async def test_customer_member_alert_uses_effective_override_and_customer_identi
 @pytest.mark.parametrize("cost", (0.0, -1.0))
 @pytest.mark.asyncio
 async def test_free_or_refunded_customer_spend_does_not_send_alerts(
-    alerts: ProxyLogging, respx_mock: respx.MockRouter, cost: float
+    alerts: DualCache, respx_mock: respx.MockRouter, cost: float
 ) -> None:
     receiver: Final = respx_mock.post(_URL).respond(200)
-    await send_customer_budget_alerts(
+    await CustomerBudgetAlerting.detect_committed_batch(
         {"customer_org_list_transactions": {"customer-org-1": cost}},
         _database({"customer-org-1": RuntimeError("No lookup should be needed")}),
         alerts,
@@ -122,7 +125,7 @@ async def test_free_or_refunded_customer_spend_does_not_send_alerts(
 @pytest.mark.parametrize("bad", (None, RuntimeError("database unavailable"), _Record({"spend": "invalid"})))
 @pytest.mark.asyncio
 async def test_one_unreadable_customer_does_not_hide_another_customers_alerts(
-    alerts: ProxyLogging, respx_mock: respx.MockRouter, bad: PrismaRecord | Exception | None
+    alerts: DualCache, respx_mock: respx.MockRouter, bad: PrismaRecord | Exception | None
 ) -> None:
     receiver: Final = respx_mock.post(_URL).respond(200)
     good: Final = _Record(
@@ -133,7 +136,7 @@ async def test_one_unreadable_customer_does_not_hide_another_customers_alerts(
             "budget": {"max_budget": 1.0},
         }
     )
-    await send_customer_budget_alerts(
+    await CustomerBudgetAlerting.detect_committed_batch(
         {"customer_org_list_transactions": {"customer-org-bad": 1.0, "customer-org-good": 1.0}},
         _database({"customer-org-bad": bad, "customer-org-good": good}),
         alerts,
@@ -146,7 +149,7 @@ async def test_one_unreadable_customer_does_not_hide_another_customers_alerts(
 
 @pytest.mark.asyncio
 async def test_customer_budget_reset_allows_the_next_periods_crossing(
-    alerts: ProxyLogging, respx_mock: respx.MockRouter
+    alerts: DualCache, respx_mock: respx.MockRouter
 ) -> None:
     receiver: Final = respx_mock.post(_URL).respond(200)
     for reset in (_NOW, _NOW + timedelta(days=1)):
@@ -160,7 +163,7 @@ async def test_customer_budget_reset_allows_the_next_periods_crossing(
             }
         )
         for _ in range(2):
-            await send_customer_budget_alerts(
+            await CustomerBudgetAlerting.detect_committed_batch(
                 {"customer_org_list_transactions": {"customer-org-1": 1.0}},
                 _database({"customer-org-1": record}),
                 alerts,
@@ -168,21 +171,64 @@ async def test_customer_budget_reset_allows_the_next_periods_crossing(
             )
     payloads: Final = tuple(_PAYLOAD.validate_json(call.request.content) for call in receiver.calls)
     assert len(payloads) == 4
-    assert {item["customer_budget_reset_at"] for item in payloads} == {
-        _NOW.isoformat().replace("+00:00", "Z"),
-        (_NOW + timedelta(days=1)).isoformat().replace("+00:00", "Z"),
+    assert {item["period"] for item in payloads} == {
+        _NOW.isoformat(),
+        (_NOW + timedelta(days=1)).isoformat(),
     }
 
 
 @pytest.mark.parametrize("transactions", ({}, {"customer_org_list_transactions": {"customer-org-1": 1.0}}))
 @pytest.mark.asyncio
 async def test_no_customer_budget_does_not_send_an_alert(
-    alerts: ProxyLogging, respx_mock: respx.MockRouter, transactions: Mapping[str, object]
+    alerts: DualCache, respx_mock: respx.MockRouter, transactions: Mapping[str, object]
 ) -> None:
     receiver: Final = respx_mock.post(_URL).respond(200)
-    await send_customer_budget_alerts(
+    await CustomerBudgetAlerting.detect_committed_batch(
         transactions,
         _database({"customer-org-1": _Record({"spend": 2.0})}),
+        alerts,
+        now=_NOW,
+    )
+    assert receiver.call_count == 0
+
+
+class _BrokenCallback(CustomLogger):
+    async def async_on_customer_budget_event(self, event: CustomerBudgetEvent) -> None:
+        raise RuntimeError("callback unavailable")
+
+
+@pytest.mark.asyncio
+async def test_a_broken_callback_does_not_hide_another_callback_or_repeat_a_crossing(
+    alerts: DualCache, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receiver: Final = respx_mock.post(_URL).respond(200)
+    webhook: Final = litellm.callbacks[0]
+    monkeypatch.setattr(litellm, "callbacks", [_BrokenCallback(), webhook])
+    monkeypatch.setattr(litellm, "success_callback", [webhook])
+    event: Final = CustomerBudgetEvent(
+        event="budget_crossed",
+        scope="customer_org",
+        entity_id="org",
+        customer_org_id="org",
+        spend=2,
+        budget=1,
+        period="lifetime",
+        timestamp=_NOW,
+    )
+    await asyncio.gather(*(CustomerBudgetAlerting.emit(event, alerts) for _ in range(20)))
+    assert receiver.call_count == 1
+    assert _PAYLOAD.validate_json(receiver.calls[0].request.content) == event.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+async def test_no_interested_callback_does_not_read_customer_rows(
+    alerts: DualCache, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [CustomLogger()])
+    receiver: Final = respx_mock.post(_URL).respond(200)
+    await CustomerBudgetAlerting.detect_committed_batch(
+        {"customer_org_list_transactions": {"org": 2.0}},
+        _database({"org": RuntimeError("must not look up customers without a callback")}),
         alerts,
         now=_NOW,
     )

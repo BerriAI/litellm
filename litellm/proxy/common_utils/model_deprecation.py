@@ -349,7 +349,7 @@ def collect_model_deprecations(
     )
 
 
-def escape_slack_mrkdwn(value: str) -> str:
+def _escape_slack_mrkdwn(value: str) -> str:
     """Neutralize Slack control characters so a model name cannot forge a mention or link"""
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -360,10 +360,10 @@ def _format_entry(info: ModelDeprecationInfo) -> str:
         if info.days_until_deprecation < 0
         else f"in {info.days_until_deprecation}d"
     )
-    migration: Final = f", migrate to `{escape_slack_mrkdwn(info.successor_model)}`" if info.successor_model else ""
+    migration: Final = f", migrate to `{_escape_slack_mrkdwn(info.successor_model)}`" if info.successor_model else ""
     return (
-        f"• `{escape_slack_mrkdwn(info.model_name)}` "
-        f"(provider: {escape_slack_mrkdwn(info.litellm_provider) if info.litellm_provider else 'unknown'}, "
+        f"• `{_escape_slack_mrkdwn(info.model_name)}` "
+        f"(provider: {_escape_slack_mrkdwn(info.litellm_provider) if info.litellm_provider else 'unknown'}, "
         f"deprecates {info.deprecation_date.isoformat()}, {suffix}{migration})"
     )
 

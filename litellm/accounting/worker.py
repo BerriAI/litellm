@@ -13,7 +13,7 @@ from litellm.accounting.application import apply_deliveries
 from litellm.accounting.delivery_projection import entity_transactions
 from litellm.accounting.metrics import record_backlog, record_storage
 from litellm.accounting.projection import Contribution
-from litellm.proxy.spend_tracking.customer_budget_alerts import send_customer_budget_alerts
+from litellm.proxy.spend_tracking.customer_budget_alerts import CustomerBudgetAlerting
 from litellm.repositories.accounting_delivery_repository import (
     AccountingDeliveryRepository,
     DeliveryBatchResult,
@@ -67,8 +67,9 @@ async def flush_accounting_deliveries(
         result: Final = await repository.apply_pending(apply, batch_size=batch_size, retry_only=retry_only)
         if result.applied:
             await writer.invalidate_accounting_entities(applied, proxy_logging_obj)
-            if proxy_logging_obj.alerting:
-                await send_customer_budget_alerts(entity_transactions(applied), prisma_client.db, proxy_logging_obj)
+            await CustomerBudgetAlerting.detect_committed_batch(
+                entity_transactions(applied), prisma_client, proxy_logging_obj.internal_usage_cache.dual_cache
+            )
         if result.parked:
             verbose_proxy_logger.error(
                 "Accounting delivery parked %d requests after isolated failures", len(result.parked)

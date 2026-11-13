@@ -88,7 +88,7 @@ from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
-from litellm.proxy.spend_tracking.customer_budget_alerts import send_customer_budget_alerts
+from litellm.proxy.spend_tracking.customer_budget_alerts import CustomerBudgetAlerting
 from litellm.proxy.spend_tracking.savings import (
     compute_savings_spend,
     extract_cache_creation_tokens,
@@ -2830,10 +2830,10 @@ class DBSpendUpdateWriter:
             if on_table_committed is not None:
                 on_table_committed(level.transactions)
             if outer_transaction is None and db_spend_update_transactions.get(level.transactions):
-                await send_customer_budget_alerts(
+                await CustomerBudgetAlerting.detect_committed_batch(
                     {level.transactions: db_spend_update_transactions.get(level.transactions)},
-                    prisma_client.db,
-                    proxy_logging_obj,
+                    prisma_client,
+                    proxy_logging_obj.internal_usage_cache.dual_cache,
                 )
 
     @staticmethod

@@ -1,21 +1,18 @@
 import asyncio
 import datetime
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Final, Literal, TypedDict
+
+from typing_extensions import ReadOnly
 
 import httpx
 import pytest
 import respx
-from fakeredis import FakeRedis as FakeSyncRedis
-from fakeredis import FakeServer
-from fakeredis.aioredis import FakeRedis
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly
 
 import litellm
+import litellm.proxy.proxy_server as proxy_server
 from litellm.caching.caching import DualCache
-from litellm.caching.redis_cache import RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.langfuse.langfuse import LangFuseLogger, installed_langfuse_version
 from litellm.integrations.langfuse.langfuse_sdk import (
@@ -27,102 +24,14 @@ from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.proxy import proxy_server
 from litellm.proxy.utils import ProxyLogging
-from litellm.types.integrations.slack_alerting import AlertType, CallInfo, Litellm_EntityType
+from litellm.types.integrations.slack_alerting import AlertType
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 _WEBHOOK: Final = "https://hooks.slack.example/services/delivery"
 _LANGFUSE_HOST: Final = "https://langfuse.alerts.example"
 _AZURE_BASE: Final = "https://openai-gpt-4-test-v-1.openai.azure.com/"
 _DAILY_BASE: Final = "https://daily-report.openai.example/v1"
-
-
-@pytest.mark.asyncio
-async def test_customer_budget_claim_survives_a_missing_sent_marker_across_alert_instances(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("WEBHOOK_URL", "https://alerts.example/customer-budget")
-    receiver: Final = respx_mock.post("https://alerts.example/customer-budget").respond(200)
-    server: Final = FakeServer()
-    sync_redis: Final = FakeSyncRedis(server=server)
-    redis: Final = FakeRedis(server=server)
-    shared: Final = RedisCache(host="customer-budget-unit.example", connection_pool=sync_redis.connection_pool)
-    cache_key: Final = shared._get_async_client_cache_key()
-    litellm.in_memory_llm_clients_cache.set_cache(key=cache_key, value=redis)
-    first: Final = SlackAlerting(alerting=["webhook"], internal_usage_cache=DualCache(redis_cache=shared))
-    second: Final = SlackAlerting(alerting=["webhook"], internal_usage_cache=DualCache(redis_cache=shared))
-    info: Final = CallInfo(
-        event_group=Litellm_EntityType.CUSTOMER_MEMBER,
-        entity_id="customer-member-1",
-        customer_org_id="customer-org-1",
-        customer_team_id="customer-team-1",
-        customer_member_id="customer-member-1",
-        spend=2.0,
-        max_budget=1.0,
-    )
-    try:
-        await first.budget_alerts("token_budget", info)
-        await first.internal_usage_cache.async_delete_cache(
-            key="budget_alerts:budget_crossed:customer_member:customer-member-1:lifetime"
-        )
-        await second.budget_alerts("token_budget", info)
-        assert receiver.call_count == 1
-    finally:
-        litellm.in_memory_llm_clients_cache.delete_cache(key=cache_key)
-        await redis.aclose()
-        sync_redis.close()
-
-
-@pytest.mark.parametrize("spend, expected", ((0.5, None), (0.86, "threshold_crossed"), (1.0, "budget_crossed")))
-@pytest.mark.asyncio
-async def test_customer_budget_thresholds_follow_existing_events(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, spend: float, expected: str | None
-) -> None:
-    monkeypatch.setenv("WEBHOOK_URL", "https://alerts.example/customer-budget")
-    receiver: Final = respx_mock.post("https://alerts.example/customer-budget").respond(200)
-    alerts: Final = SlackAlerting(alerting=["webhook"])
-    await alerts.budget_alerts(
-        "token_budget",
-        CallInfo(
-            event_group=Litellm_EntityType.CUSTOMER_ORG,
-            entity_id="customer-org-1",
-            customer_org_id="customer-org-1",
-            spend=spend,
-            max_budget=1.0,
-        ),
-    )
-    payloads: Final = tuple(
-        TypeAdapter(Mapping[str, object]).validate_json(call.request.content) for call in receiver.calls
-    )
-    assert tuple(item["event"] for item in payloads) == (() if expected is None else (expected,))
-
-
-@pytest.mark.asyncio
-async def test_customer_scopes_with_the_same_id_do_not_suppress_each_others_alerts(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("WEBHOOK_URL", "https://alerts.example/customer-budget")
-    receiver: Final = respx_mock.post("https://alerts.example/customer-budget").respond(200)
-    alerts: Final = SlackAlerting(alerting=["webhook"])
-    for scope in (
-        Litellm_EntityType.CUSTOMER_ORG,
-        Litellm_EntityType.CUSTOMER_TEAM,
-        Litellm_EntityType.CUSTOMER_MEMBER,
-    ):
-        await alerts.budget_alerts(
-            "token_budget",
-            CallInfo(
-                event_group=scope,
-                entity_id="shared-id",
-                customer_org_id="shared-id",
-                spend=2.0,
-                max_budget=1.0,
-            ),
-        )
-    payloads: Final = tuple(
-        TypeAdapter(Mapping[str, object]).validate_json(call.request.content) for call in receiver.calls
-    )
-    assert {item["event_group"] for item in payloads} == {"customer_org", "customer_team", "customer_member"}
 
 
 class _SlackPayload(TypedDict):
