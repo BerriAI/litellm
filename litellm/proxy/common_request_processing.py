@@ -5,7 +5,17 @@ import json
 import logging
 import math
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterator,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -3127,6 +3137,7 @@ class ProxyBaseLLMRequestProcessing:
             PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
             ProxyRateLimitError,
             RateLimitFallback,
+            arm_saturation_fallback_walk,
             drop_client_saturation_opt_in,
             fallback_on_saturation_enabled,
             is_saturation_fallback,
@@ -3156,7 +3167,9 @@ class ProxyBaseLLMRequestProcessing:
             else None
         )
         scrubbed: Final[dict] = self.data  # mutable-ok: caller-defined request-payload shape
-        drop_client_saturation_opt_in(scrubbed)
+        payload: Final = cast(MutableMapping[str, object], scrubbed)  # cast-ok: the caller's untyped payload, same object
+        drop_client_saturation_opt_in(payload)
+        arm_saturation_fallback_walk(payload, "litellm_metadata" if "litellm_metadata" in payload else "metadata")
         self.data = scrubbed
         pristine: Final = (
             independent_snapshot(scrubbed)

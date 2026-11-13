@@ -1838,7 +1838,24 @@ def _interactive_key(api_key: str, team_id: str) -> UserAPIKeyAuth:
 
 
 def _opted_in(model: str = "shared-model", **extra: object) -> dict[str, object]:
-    return {"model": model, "router_settings_override": {"fallback_on_saturation": True}, **extra}
+    return {
+        "model": model,
+        "router_settings_override": {"fallback_on_saturation": True},
+        "metadata": {"saturation_fallback_walk": True},
+        **extra,
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_opted_in_key_on_a_route_without_the_fallback_walk_is_admitted_on_the_saturated_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _saturation_fallback_handler(monkeypatch)
+    key: Final = _interactive_key("sk-flexible", "team-a")
+    await _saturate_to_threshold(handler, key)
+    direct: Final = {"model": "shared-model", "router_settings_override": {"fallback_on_saturation": True}}
+
+    assert await handler.async_pre_call_hook(key, DualCache(), direct, "acompletion") is None
 
 
 async def _saturate_to_threshold(handler: _PROXY_DynamicRateLimitHandlerV3, key: UserAPIKeyAuth) -> None:

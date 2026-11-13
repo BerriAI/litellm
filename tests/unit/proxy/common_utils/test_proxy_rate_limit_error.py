@@ -6,6 +6,7 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
     SATURATION_FALLBACK_DESCRIPTOR_KEY,
     ProxyRateLimitError,
     RateLimitFallback,
+    arm_saturation_fallback_walk,
     fallback_on_saturation_enabled,
     fallback_on_saturation_requested,
     is_saturation_fallback,
@@ -84,14 +85,18 @@ def test_fallback_on_saturation_is_enabled_only_by_a_true_router_setting(
 
 @pytest.mark.parametrize("bucket", ("metadata", "litellm_metadata"))
 def test_a_request_asks_for_saturation_fallbacks_until_the_walk_has_run(bucket: str) -> None:
-    request: Final = {"model": "luna", "router_settings_override": {"fallback_on_saturation": True}, bucket: {"x": 1}}
+    direct: Final = {"model": "luna", "router_settings_override": {"fallback_on_saturation": True}, bucket: {"x": 1}}
+    assert not fallback_on_saturation_requested(direct)
 
+    request: Final = dict(direct)
+    arm_saturation_fallback_walk(request, bucket)
+    assert request[bucket] == {"x": 1, "saturation_fallback_walk": True}
     assert fallback_on_saturation_requested(request)
     exhausted: Final = with_saturation_fallbacks_exhausted(request, bucket)
     assert saturation_fallbacks_exhausted(exhausted)
     assert not fallback_on_saturation_requested(exhausted)
-    assert exhausted[bucket] == {"x": 1, "saturation_fallbacks_exhausted": True}
-    assert request[bucket] == {"x": 1}
+    assert exhausted[bucket] == {"x": 1, "saturation_fallback_walk": True, "saturation_fallbacks_exhausted": True}
+    assert direct[bucket] == {"x": 1}
 
 
 def test_a_request_without_the_setting_never_asks_for_saturation_fallbacks() -> None:
