@@ -37,6 +37,7 @@ def test_an_override_applies_after_a_past_expiry_was_sent_without_one(gateway: G
             else {"customer_team_id": row, "parent_org_id": org, **past_expiry},
             row,
         )
+        scenario.cleanups.callback(gateway.request, "PATCH", f"{_ROUTE}/{collection}/{row}", {"budget_override": None})
         overridden: Final = gateway.request(
             "PATCH", f"{_ROUTE}/{collection}/{row}", {"budget_override": {"max_budget": 50}}
         )
