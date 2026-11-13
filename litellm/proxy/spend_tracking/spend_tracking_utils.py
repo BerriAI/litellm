@@ -91,6 +91,7 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     with_compaction_summary,
 )
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.proxy.auth.customer_hierarchy import CustomerIdentityAssertion
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, SilentExperimentFlag
 from litellm.types.utils import (
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
@@ -216,12 +217,26 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "is_silent_experiment",
         BILLED_RETRY_ATTEMPT_METADATA_KEY,
         "user_api_key_user_email",
+        "user_api_key_asserted_customer",
     )
 )
 
 
 class _UpstreamProviderMetadata(TypedDict, total=False):
     upstream_provider: ReadOnly[str]
+
+
+class _AssertedCustomerMetadata(TypedDict, total=False):
+    user_api_key_asserted_customer: ReadOnly[Mapping[str, str | None]]
+
+
+def _asserted_customer_metadata(metadata: Mapping[str, object]) -> _AssertedCustomerMetadata:
+    value: Final = metadata.get("user_api_key_asserted_customer")
+    if value is None:
+        return _AssertedCustomerMetadata()
+    return _AssertedCustomerMetadata(
+        user_api_key_asserted_customer=CustomerIdentityAssertion.model_validate(value).metadata()
+    )
 
 
 def _stored_user_email(metadata: Mapping[str, object]) -> str | None:
@@ -328,6 +343,7 @@ def _get_spend_logs_metadata(
         **(SilentExperimentFlag(is_silent_experiment=True) if is_silent_experiment else SilentExperimentFlag()),
         billed_retry_attempt=billed_retry_attempt,
         user_api_key_user_email=_stored_user_email(metadata),
+        **_asserted_customer_metadata(metadata),
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")

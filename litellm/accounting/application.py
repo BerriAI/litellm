@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING, Final
 
+from litellm.accounting.customer_identity import resolve_customer_delivery
 from litellm.accounting.delivery_projection import entity_transactions, project_deliveries
 from litellm.accounting.projection import Contribution
 from litellm.proxy.db.budget_window_spend_writer import commit_window_spend_updates
@@ -25,7 +26,8 @@ async def apply_deliveries(
 ) -> tuple[Contribution, ...]:
     from litellm.proxy.guardrails.usage_tracking import UsageUnitIncrement, UsageUnitKey, upsert_usage_unit_row
 
-    contributions: Final = project_deliveries(deliveries)
+    resolved: Final = tuple([await resolve_customer_delivery(transaction, delivery) for delivery in deliveries])
+    contributions: Final = project_deliveries(resolved)
     await apply_rollup_lock_timeout(transaction)
     await writer.apply_accounting_entities(
         prisma_client, proxy_logging_obj, transaction, entity_transactions(contributions)

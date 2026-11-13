@@ -111,14 +111,24 @@ async def test_delivery_charges_the_creating_key_despite_an_orphaned_maintenance
 
 
 class _CustomerLedger:
-    def __init__(self, fail_acknowledgement: bool) -> None:
+    def __init__(self, fail_acknowledgement: bool, unresolved: bool = False) -> None:
         self.pending = True
         self.attempts = 0
         self.fail_acknowledgement = fail_acknowledgement
         self.daily: Mapping[str, int | float] = {}
         self.entities: Mapping[str, float] = {}
+        self.payload = _ASSERTED_CUSTOMER_PAYLOAD if unresolved else _CUSTOMER_PAYLOAD
 
     async def query(self, query: str, *args: object) -> tuple[Mapping[str, object], ...]:
+        if query.startswith("SELECT m.customer_member_id"):
+            return (
+                {
+                    "customer_org_id": "customer-org",
+                    "customer_org_alias": "customer-alias",
+                    "customer_team_id": "customer-team",
+                    "customer_member_id": "customer-member",
+                },
+            )
         if query.startswith("SELECT delivery_id, attempts"):
             if not self.pending or (self.attempts > 0) is not args[1]:
                 return ()
@@ -126,7 +136,7 @@ class _CustomerLedger:
                 {
                     "delivery_id": "customer-delivery",
                     "attempts": self.attempts,
-                    "accounting_payload": _CUSTOMER_PAYLOAD,
+                    "accounting_payload": self.payload,
                 },
             )
         if "SET attempts = attempts + 1" in query:
@@ -178,12 +188,28 @@ _CUSTOMER_PAYLOAD: Final = json.dumps(
 )
 
 
+_ASSERTED_CUSTOMER_PAYLOAD: Final = json.dumps(
+    {
+        **_FIELDS.validate_json(_CUSTOMER_PAYLOAD),
+        "metadata": {
+            "user_api_key_asserted_customer": {
+                "customer_org_alias": "customer-alias",
+                "customer_member_id": "customer-member",
+                "key_customer_org_id": "customer-org",
+            }
+        },
+    }
+)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail_acknowledgement", (False, True))
+@pytest.mark.parametrize("unresolved", (False, True))
 async def test_customer_daily_and_lifetime_totals_commit_once_after_delivery_replay(
     fail_acknowledgement: bool,
+    unresolved: bool,
 ) -> None:
-    ledger: Final = _CustomerLedger(fail_acknowledgement)
+    ledger: Final = _CustomerLedger(fail_acknowledgement, unresolved)
     transaction: Final = MagicMock()
     transaction.query_raw = AsyncMock(side_effect=ledger.query)
     transaction.execute_raw = AsyncMock(side_effect=ledger.execute)

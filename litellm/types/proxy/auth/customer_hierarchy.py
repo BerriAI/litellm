@@ -18,6 +18,21 @@ class CustomerRequestIdentity:
     customer_org_alias: str | None = None
 
 
+class CustomerIdentityAssertion(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    customer_org_alias: str | None = None
+    customer_member_id: str | None = None
+    key_customer_org_id: str | None = None
+
+    def metadata(self) -> Mapping[str, str | None]:
+        return {
+            "customer_org_alias": self.customer_org_alias,
+            "customer_member_id": self.customer_member_id,
+            "key_customer_org_id": self.key_customer_org_id,
+        }
+
+
 class CustomerScopeAuth(BaseModel):
     """One level of the customer hierarchy a request runs under, with the limits its budget row grants."""
 
@@ -103,3 +118,11 @@ def customer_hierarchy_ids_from_request(kwargs: Mapping[str, object]) -> Custome
         customer_team_id=_stamped_id(metadata, "team"),
         customer_member_id=_stamped_id(metadata, "member"),
     )
+
+
+def customer_identity_assertion_from_request(kwargs: Mapping[str, object]) -> CustomerIdentityAssertion | None:
+    params: Final = _mapping(kwargs.get("litellm_params"))
+    buckets: Final = tuple(_mapping(params.get(name)) for name in ("litellm_metadata", "metadata"))
+    metadata: Final = next((bucket for bucket in buckets if "user_api_key_asserted_customer" in bucket), _NO_FIELDS)
+    asserted: Final = metadata.get("user_api_key_asserted_customer")
+    return CustomerIdentityAssertion.model_validate(asserted) if asserted is not None else None

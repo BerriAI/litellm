@@ -3859,6 +3859,7 @@ class SpendLogsRouterMetadata(TypedDict):
 
 
 class SpendLogsMetadata(TypedDict):
+    user_api_key_asserted_customer: ReadOnly[NotRequired[Mapping[str, str | None]]]
     user_api_key_customer_usage: ReadOnly[NotRequired[str | None]]
     actor_agent_id: ReadOnly[NotRequired[str | None]]
     target_agent_id: ReadOnly[NotRequired[str | None]]

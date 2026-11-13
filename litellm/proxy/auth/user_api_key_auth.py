@@ -221,6 +221,7 @@ from litellm.router_api import (
     request_fallback_chain,
 )
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.proxy.auth.customer_hierarchy import CustomerIdentityAssertion
 from litellm.types.services import ServiceTypes
 
 try:
@@ -4548,6 +4549,7 @@ async def _authorize_authenticated_request(
             safe_get_request_headers(request)  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
+        user_api_key_auth_obj.customer_identity_assertion = None  # rebind-ok: request-owned customer assertion
         if customer_identity is not None:
             with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
                 try:
@@ -4577,6 +4579,15 @@ async def _authorize_authenticated_request(
                         "customer org alias=%s, customer member id=%s",
                         customer_identity.customer_org_alias,
                         customer_identity.customer_member_id,
+                    )
+                    user_api_key_auth_obj.customer_identity_assertion = CustomerIdentityAssertion.model_validate(  # rebind-ok: request-owned customer assertion
+                        {
+                            "customer_org_alias": customer_identity.customer_org_alias,
+                            "customer_member_id": customer_identity.customer_member_id,
+                            "key_customer_org_id": _KEY_METADATA_ADAPTER.validate_python(
+                                user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # key metadata is untyped, validated here
+                            ).get("customer_org_id"),
+                        }
                     )
 
         grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)

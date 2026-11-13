@@ -2745,6 +2745,12 @@ async def test_customer_hierarchy_database_outage_respects_fail_open_setting(
     if allow_requests and error_code in ("P1001", "P1017"):
         identity: Final = await user_api_key_auth(request=request, api_key=f"Bearer {key}")
         assert identity.customer_hierarchy is None
+        assert identity.customer_identity_assertion is not None
+        assert identity.customer_identity_assertion.metadata() == {
+            "customer_org_alias": "customer-a",
+            "customer_member_id": "m1",
+            "key_customer_org_id": None,
+        }
         assert identity.token == stored.token
         assert "customer org alias=customer-a, customer member id=m1" in caplog.text
     else:
