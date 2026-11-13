@@ -23,7 +23,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     bedrock_invoke_guardrail_headers,
 )
 from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
-from litellm.types.utils import Embedding, EmbeddingResponse, ModelResponseStream, Usage
+from litellm.types.utils import Embedding, EmbeddingResponse, ModelResponseStream, PromptTokensDetailsWrapper, Usage
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
@@ -376,20 +376,38 @@ def _invoke_guardrail_trace(httpx_response: Response) -> Mapping[str, object]:
     return {BEDROCK_INVOKE_TRACE_FIELD: reply.get(BEDROCK_INVOKE_TRACE_FIELD)}
 
 
+class _TitanEmbeddingsByType(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    binary: tuple[int, ...] | None = None
+    floats: tuple[float, ...] | None = Field(default=None, alias="float")
+
+
 class _TitanEmbeddingReply(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    embedding: tuple[float, ...]
+    embedding: tuple[float, ...] | None = None
+    embeddings_by_type: _TitanEmbeddingsByType = Field(default=_TitanEmbeddingsByType(), alias="embeddingsByType")
     input_text_token_count: int = Field(alias="inputTextTokenCount")
 
+    @property
+    def vector(self) -> tuple[float, ...] | None:
+        if self.embedding is not None:
+            return self.embedding
+        if self.embeddings_by_type.floats is not None:
+            return self.embeddings_by_type.floats
+        return self.embeddings_by_type.binary
 
-def _invoke_embedding_response(model: str, httpx_response: Response) -> EmbeddingResponse | None:
+
+def _invoke_embedding_response(model: str, httpx_response: Response, has_input_image: bool) -> EmbeddingResponse | None:
     reply: Final = relayed_json_object(httpx_response)
-    if reply is None or "embedding" not in reply:
+    if reply is None or reply.keys().isdisjoint(("embedding", "embeddingsByType")):
         return None
     try:
         parsed: Final = _TitanEmbeddingReply.model_validate(reply)
     except ValidationError:
+        return None
+    if parsed.vector is None:
         return None
     return EmbeddingResponse(
         model=model,
@@ -397,8 +415,9 @@ def _invoke_embedding_response(model: str, httpx_response: Response) -> Embeddin
             prompt_tokens=parsed.input_text_token_count,
             completion_tokens=0,
             total_tokens=parsed.input_text_token_count,
+            prompt_tokens_details=PromptTokensDetailsWrapper(image_count=1) if has_input_image else None,
         ),
-        data=[Embedding(embedding=list(parsed.embedding), index=0, object="embedding")],
+        data=[Embedding(embedding=list(parsed.vector), index=0, object="embedding")],
     )
 
 
@@ -600,7 +619,11 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         from litellm.types.utils import LlmProviders, ModelResponse
         from litellm.utils import ProviderConfigManager
 
-        embedding_response: Final = _invoke_embedding_response(model, httpx_response) if "invoke" in endpoint else None
+        embedding_response: Final = (
+            _invoke_embedding_response(model, httpx_response, has_input_image="inputImage" in request_data)
+            if "invoke" in endpoint
+            else None
+        )
         if embedding_response is not None:
             return embedding_response
 

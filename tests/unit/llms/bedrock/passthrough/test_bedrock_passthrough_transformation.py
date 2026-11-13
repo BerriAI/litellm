@@ -954,7 +954,9 @@ def _provider_stream_reply(reply_headers: Mapping[str, str], stream: bytes) -> h
         200,
         headers={"content-type": "application/vnd.amazon.eventstream", **reply_headers},
         content=stream,
-        request=httpx.Request("POST", f"https://bedrock-runtime.us-east-1.amazonaws.com{TIERED_INVOKE_STREAM_ENDPOINT}"),
+        request=httpx.Request(
+            "POST", f"https://bedrock-runtime.us-east-1.amazonaws.com{TIERED_INVOKE_STREAM_ENDPOINT}"
+        ),
     )
 
 
@@ -1810,14 +1812,18 @@ TITAN_EMBEDDING_VECTOR: Final = (0.1, 0.2, 0.3)
 TITAN_EMBEDDING_INPUT_TOKENS: Final = 20
 
 
-def _log_titan_invoke_reply(model: str, body: Mapping[str, object]) -> object:
+def _log_titan_invoke_reply(
+    model: str,
+    body: Mapping[str, object],
+    request_data: Mapping[str, object] = MappingProxyType({"inputText": "example text"}),
+) -> object:
     endpoint: Final = f"/model/{model}/invoke"
     logging_obj: Final = _stream_logging_obj(endpoint, model=model)
     return BedrockPassthroughConfig().logging_non_streaming_response(
         model=logging_obj.model,
         custom_llm_provider="bedrock",
         httpx_response=httpx.Response(200, json=body),
-        request_data={"inputText": "example text"},
+        request_data=dict(request_data),
         logging_obj=logging_obj,
         endpoint=endpoint,
     )
@@ -1844,6 +1850,40 @@ def test_invoke_titan_embedding_reply_is_logged_and_priced_as_an_embedding(model
     assert litellm.completion_cost(
         model=f"bedrock/{model}", completion_response=logged, call_type="aembedding"
     ) == pytest.approx(TITAN_EMBEDDING_INPUT_TOKENS * litellm.model_cost[model]["input_cost_per_token"])
+
+
+@pytest.mark.parametrize("encoding", ["binary", "float"])
+def test_invoke_titan_reply_carrying_only_embeddings_by_type_is_logged_as_an_embedding(encoding: str) -> None:
+    vector: Final = [1, 0, 1]
+    logged: Final = _log_titan_invoke_reply(
+        "amazon.titan-embed-text-v2:0",
+        {"embeddingsByType": {encoding: vector}, "inputTextTokenCount": TITAN_EMBEDDING_INPUT_TOKENS},
+    )
+
+    assert isinstance(logged, EmbeddingResponse)
+    assert logged.data[0]["embedding"] == vector
+    assert logged.usage is not None
+    assert logged.usage.prompt_tokens == TITAN_EMBEDDING_INPUT_TOKENS
+
+
+@pytest.mark.parametrize("text_tokens", [0, TITAN_EMBEDDING_INPUT_TOKENS])
+def test_invoke_titan_image_embedding_reply_bills_the_input_image(text_tokens: int) -> None:
+    model: Final = "amazon.titan-embed-image-v1"
+    logged: Final = _log_titan_invoke_reply(
+        model,
+        {"embedding": list(TITAN_EMBEDDING_VECTOR), "inputTextTokenCount": text_tokens},
+        request_data={"inputImage": "aGVsbG8="},
+    )
+
+    assert isinstance(logged, EmbeddingResponse)
+    assert logged.usage is not None
+    assert logged.usage.prompt_tokens == text_tokens
+    assert logged.usage.prompt_tokens_details is not None
+    assert logged.usage.prompt_tokens_details.image_count == 1
+    assert (
+        litellm.completion_cost(model=f"bedrock/{model}", completion_response=logged, call_type="aembedding")
+        >= litellm.model_cost[model]["input_cost_per_image"]
+    )
 
 
 def test_invoke_titan_text_reply_is_still_logged_as_a_chat_completion() -> None:
