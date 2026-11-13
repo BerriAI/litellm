@@ -41,7 +41,7 @@ def _row(item: Contribution) -> Mapping[str, object]:
     return {**dict(item.key), **dict(item.values), **dict(item.increments)}
 
 
-def test_long_customer_ids_roll_up_without_truncation_and_providers_keep_distinct_rows() -> None:
+def test_long_customer_ids_roll_up_without_truncation_and_aliases_and_providers_keep_distinct_rows() -> None:
     first: Final = contribution("alias-a", "provider-a", 1)
     second: Final = replace(contribution("alias-a", "provider-a", 2), key=tuple(reversed(first.key)))
     merged: Final = merge_by_conflict_key(
@@ -57,13 +57,14 @@ def test_long_customer_ids_roll_up_without_truncation_and_providers_keep_distinc
         ),
     )
     rows: Final = tuple(row for _, row in merged)
-    assert len(rows) == 2
+    assert len(rows) == 3
     assert all(
         row["customer_org_id"] == row["customer_team_id"] == row["customer_member_id"] == _IDENTIFIER for row in rows
     )
-    assert {(row["model"], row["custom_llm_provider"]): _number(row["spend"]) for row in rows} == {
-        ("shared-model", "provider-a"): 7,
-        ("shared-model", "provider-b"): 8,
+    assert {(row["model_group"], row["custom_llm_provider"]): _number(row["spend"]) for row in rows} == {
+        ("alias-a", "provider-a"): 3,
+        ("alias-b", "provider-a"): 4,
+        ("alias-a", "provider-b"): 8,
     }
     assert sum(_number(row["api_requests"]) for row in rows) == 4
     assert sum(_number(row["prompt_tokens"]) + _number(row["completion_tokens"]) for row in rows) == 60

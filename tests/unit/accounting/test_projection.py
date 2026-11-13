@@ -23,7 +23,7 @@ _NOW: Final = datetime(2026, 11, 2, tzinfo=timezone.utc)
 _FIELDS: Final = TypeAdapter(dict[str, object])
 
 
-def test_customer_providers_keep_separate_daily_totals_and_aliases_of_one_model_share_a_row() -> None:
+def test_customer_daily_totals_stay_separate_per_model_alias_and_provider() -> None:
     stamp: Final = CustomerUsageAttribution(customer_org_id="org-1", customer_member_id="member-1").model_dump_json()
     base: Final = {
         "startTime": _NOW,
@@ -40,11 +40,11 @@ def test_customer_providers_keep_separate_daily_totals_and_aliases_of_one_model_
         )
     )
     totals: Final = {
-        (dict(item.key)["model"], dict(item.key)["custom_llm_provider"]): dict(item.increments)["spend"]
+        (dict(item.key)["model_group"], dict(item.key)["custom_llm_provider"]): dict(item.increments)["spend"]
         for item in project_deliveries(deliveries)
         if item.table == "LiteLLM_DailyCustomerMemberSpend"
     }
-    assert totals == {("shared-model", "provider-a"): 3, ("shared-model", "provider-b"): 3}
+    assert totals == {("alias-a", "provider-a"): 1, ("alias-b", "provider-a"): 2, ("alias-a", "provider-b"): 3}
 
 
 @pytest.mark.parametrize("retry", [False, True])
@@ -88,8 +88,8 @@ def test_customer_usage_survives_logging_and_accounting_with_correct_request_cou
         "api_key": payload["api_key"],
         "mcp_namespaced_tool_name": "",
         "endpoint": "/chat/completions",
+        "model_group": payload["model_group"],
     }
-    assert dict(usage.values)["model_group"] == payload["model_group"]
     assert dict(usage.increments) == {
         "spend": 0.75,
         "prompt_tokens": 10,

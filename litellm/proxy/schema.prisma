@@ -1042,7 +1042,7 @@ model LiteLLM_DailyCustomerMemberSpend {
   customer_team_id    String   @default("")
   customer_member_id  String   @default("")
   model               String   @default("")
-  model_group         String?
+  model_group         String   @default("")
   custom_llm_provider String   @default("")
   mcp_namespaced_tool_name String @default("")
   endpoint            String   @default("")
@@ -1066,7 +1066,6 @@ model LiteLLM_DailyCustomerMemberSpend {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  @@unique([customer_member_id, customer_team_id, customer_org_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint], map: "LiteLLM_DailyCustomerMemberSpend_identity_key")
   @@index([date])
   @@index([customer_org_id, date])
   @@index([customer_team_id, date])

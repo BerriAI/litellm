@@ -210,6 +210,7 @@ def _daily_rows(
             (column, customer_date if column == "date" and customer_date is not None else value)
             for column, value in shared_key
         )
+        model_group = (("model_group", None if row.get("model_group") is None else _text(row.get("model_group"))),)
         for identity in daily_spend_entity_ids(row, entity):
             yield Contribution(
                 table.name,
@@ -217,10 +218,11 @@ def _daily_rows(
                     (table.entity_id_column, _text(identity)),
                     *((column, _text(row.get(column))) for column in table.parent_id_columns),
                     *daily_key,
+                    *((("model_group", _text(row.get("model_group"))),) if table.hashed_identity else ()),
                 ),
                 counters,
                 (
-                    ("model_group", None if row.get("model_group") is None else _text(row.get("model_group"))),
+                    *(() if table.hashed_identity else model_group),
                     *((("request_id", _text(row.get("request_id"))),) if table.carries_request_id else ()),
                 ),
             )

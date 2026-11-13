@@ -1679,7 +1679,7 @@ def _seed_customer_hierarchy(parity_database: str) -> None:
             "INSERT INTO \"LiteLLM_CustomerTeamTable\" (customer_team_id, parent_org_id, budget_id, created_by, updated_by) VALUES ('customer-team', 'customer-org', 'budget', 'test', 'test')"
         )
         connection.execute(
-            "INSERT INTO \"LiteLLM_CustomerMemberTable\" (customer_member_id, parent_team_id, budget_template_id, created_by, updated_by) VALUES ('member', 'customer-team', 'budget', 'test', 'test')"
+            "INSERT INTO \"LiteLLM_CustomerMemberTable\" (customer_member_id, parent_team_id, budget_id, created_by, updated_by) VALUES ('member', 'customer-team', 'budget', 'test', 'test')"
         )
 
 
@@ -1741,7 +1741,7 @@ async def test_customer_member_reset_uses_active_override_or_inherited_template(
             "INSERT INTO \"LiteLLM_BudgetTable\" (budget_id, budget_duration, created_by, updated_by) VALUES ('override', '1d', 'test', 'test')"
         )
         connection.execute(
-            'UPDATE "LiteLLM_CustomerMemberTable" SET spend=5, budget_id=%s, budget_reset_at=%s, budget_override_expires_at=%s',
+            'UPDATE "LiteLLM_CustomerMemberTable" SET spend=5, budget_override_id=%s, budget_reset_at=%s, budget_override_expires_at=%s',
             ("override", _NOW, now + timedelta(days=-1 if expired else 1)),
         )
     client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
