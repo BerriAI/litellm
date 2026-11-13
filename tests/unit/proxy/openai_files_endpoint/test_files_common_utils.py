@@ -1003,3 +1003,16 @@ def test_provider_file_id_spellings_unwraps_a_model_encoded_id_and_covers_the_st
     )
     for spelling in ("batch-out1", "files%2Fbatch-out1", "batch-out1/"):
         assert set(provider_file_id_spellings(spelling)) >= set(provider_file_id_spellings(wrapped)[1:]), spelling
+
+
+@pytest.mark.parametrize(
+    "respelling",
+    (
+        "HTTPS://generativelanguage.googleapis.com/v1beta/files/batch-out1",
+        "x://h/files/batch-out1",
+        "S3://b/files/batch-out1",
+        "x%3A%2F%2Fh%2Ffiles%2Fbatch-out1",
+    ),
+)
+def test_provider_file_id_spellings_reduce_any_scheme_the_way_gemini_does(respelling: str):
+    assert "batch-out1" in provider_file_id_spellings(respelling)
