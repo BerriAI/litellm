@@ -2,8 +2,9 @@
 
 Customers send a shared service key with ``x-litellm-customer-org-alias`` and ``x-litellm-customer-member-id``
 on every call, and their users appear for the first time on their first request. The member is created under
-the organization's ``default`` team, so it inherits the organization's default budget. An organization without
-a default budget cannot host an unregistered member, because a member must have some budget to be charged to.
+the organization's ``default`` team, so it inherits the organization's default budget. In an organization without
+a default budget the member is registered with no budget: its spend is tracked and nothing caps it until an admin
+assigns one.
 """
 
 from typing import TYPE_CHECKING, Final
@@ -55,7 +56,9 @@ async def ensure_customer_member(
     if isinstance(team, Failure):
         return team
     created: Final = await hierarchy.create_member(
-        MemberCreate(customer_member_id=customer_member_id, parent_team_ids=(team.customer_team_id,)), AUTO_CREATE_ACTOR
+        MemberCreate(customer_member_id=customer_member_id, parent_team_ids=(team.customer_team_id,)),
+        AUTO_CREATE_ACTOR,
+        budget_required=False,
     )
     if isinstance(created, Failure) and created.code is ErrorCode.ALREADY_EXISTS:
         return await hierarchy.get_member(customer_member_id)
