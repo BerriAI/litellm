@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.token_counter import (
     _get_tiktoken_count_function,
     calculate_img_tokens,
     estimate_image_tokens,
+    has_only_text_content,
     high_detail_image_token_upper_bound,
     is_openai_model,
     messages_reach_token_count,
@@ -3929,3 +3930,35 @@ def test_openai_model_check_holds_while_openai_models_are_registered_concurrentl
             registering.result()
     finally:
         litellm.open_ai_chat_completion_models.difference_update(registered)
+
+
+@pytest.mark.parametrize(
+    ("messages", "text_only"),
+    [
+        ([{"role": "user", "content": "hi"}, {"role": "assistant", "content": None}], True),
+        ([{"role": "user", "content": ["part", {"type": "text", "text": "hi"}, {"type": "thinking"}]}], True),
+        ([{"role": "user", "content": "hi"}, "a bare string message"], False),
+        ([{"role": "user", "content": "hi"}, 42], False),
+        ([None], False),
+        ([{"role": "user", "content": {"type": "text", "text": "hi"}}], False),
+        (
+            [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}]}],
+            False,
+        ),
+        ([{"role": "user", "content": [{"type": ["text"], "text": "hi"}]}], False),
+        ([{"role": "user", "content": [{"text": "hi"}]}], False),
+    ],
+    ids=[
+        "string_and_empty_content",
+        "text_blocks",
+        "string_message",
+        "number_message",
+        "none_message",
+        "mapping_content",
+        "image_block",
+        "non_string_block_type",
+        "untyped_block",
+    ],
+)
+def test_has_only_text_content_accepts_only_plain_text_chat_messages(messages: list[object], text_only: bool) -> None:
+    assert has_only_text_content(messages) is text_only

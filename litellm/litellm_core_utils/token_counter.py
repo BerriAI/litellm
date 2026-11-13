@@ -17,7 +17,7 @@ import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 from tiktoken.model import MODEL_TO_ENCODING
 from typing_extensions import ParamSpec, TypeVar
 
@@ -48,7 +48,7 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
     ChatTemplateToolSection,
     chat_template_tool_section,
@@ -929,7 +929,6 @@ def token_counter(
     if litellm.disable_token_counter is True:
         return 0
 
-    verbose_logger.debug("messages in token_counter: %s, text in token_counter: %s", messages, text)
     if text is not None and messages is not None:
         raise ValueError("text and messages cannot both be set")
     if use_default_image_token_count is None:
@@ -1870,6 +1869,29 @@ def _count_anthropic_content(
 _TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
     {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
 )
+
+
+def _is_text_block(block: object) -> bool:
+    mapping: Final = as_str_mapping(block)
+    block_type: Final = mapping.get("type") if mapping is not None else None
+    return isinstance(block, str) or (isinstance(block_type, str) and block_type in _TEXT_FIELD_BY_BLOCK_TYPE)
+
+
+def _has_only_text_content(message: object) -> bool:
+    normalized: Final[object] = message.model_dump(exclude_none=True) if isinstance(message, BaseModel) else message
+    mapping: Final = as_str_mapping(normalized)
+    if mapping is None:
+        return False
+    content: Final = mapping.get("content")
+    if content is None or isinstance(content, str):
+        return True
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(_is_text_block(block) for block in blocks)
+
+
+def has_only_text_content(messages: Sequence[object]) -> bool:
+    """Whether counting ``messages`` stays on the tokenizer, never decoding images, files or documents."""
+    return all(_has_only_text_content(message) for message in messages)
 
 
 def _count_content_list(

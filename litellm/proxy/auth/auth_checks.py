@@ -54,6 +54,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
     is_base64_encoded_unified_id,
 )
 from litellm.models.project import LiteLLM_ProjectTable
+from litellm.models.team import LiteLLM_TeamRebuiltFromToken
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
     RBAC_ROLES,
@@ -383,6 +384,9 @@ def _end_user_table(repo: _PrismaTableHolder[_PrismaEndUserRow]) -> _PrismaAuthT
 class _PrismaMaxBudgetRow(Protocol):
     @property
     def max_budget(self) -> float | None: ...
+
+    @property
+    def budget_limits(self) -> object: ...
 
 
 class _PrismaModelAccessGroupBudgetRow(Protocol):
@@ -1811,6 +1815,9 @@ async def get_default_end_user_budget(
             )
             return None
 
+        from litellm.proxy.management_helpers.utils import reject_budget_windows
+
+        reject_budget_windows(budget_record.dict())
         _budget_obj: Final = LiteLLM_BudgetTable.model_validate(budget_record.dict())
         # Cache the budget for 60 seconds
         await user_api_key_cache.async_set_cache(
@@ -1822,6 +1829,8 @@ async def get_default_end_user_budget(
 
         return _budget_obj
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error("Error fetching default end user budget: %s", e)
         return None
@@ -1876,6 +1885,9 @@ async def get_team_member_default_budget(
         verbose_proxy_logger.warning("Team-default member budget not found in database: %s", budget_id)
         return None
 
+    from litellm.proxy.management_helpers.utils import reject_budget_windows
+
+    reject_budget_windows(budget_record.dict())
     budget: Final = LiteLLM_BudgetTable.model_validate(budget_record.dict())
     await user_api_key_cache.async_set_cache(
         key=cache_key,
@@ -2507,6 +2519,8 @@ async def _fetch_uncached_model_access_group_budgets(
                 model_type=ModelAccessGroupBudget,
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001  # fail-safe: a budget fetch error must yield "no budget rows", never break auth
         verbose_proxy_logger.debug("Error batch fetching model access group budgets from database: %s", e)
         return ()
@@ -2515,7 +2529,11 @@ async def _fetch_uncached_model_access_group_budgets(
 
 
 def _model_access_group_budget(row: _PrismaModelAccessGroupBudgetRow) -> ModelAccessGroupBudget:
+    from litellm.proxy.management_helpers.utils import reject_budget_windows
+
     budget_table: Final = row.litellm_budget_table
+    if budget_table is not None:
+        reject_budget_windows({"budget_limits": budget_table.budget_limits})
     return ModelAccessGroupBudget(
         access_group_name=row.access_group_name,
         spend=row.spend or 0.0,
@@ -3247,7 +3265,7 @@ async def cache_team_object(
     if team_table.team_alias:
         alias_key: Final = f"team_alias:{team_table.team_alias}"
         try:
-            pipelined_delete: Final = await user_api_key_cache.async_delete_cache_pre_call(alias_key)
+            pipelined_delete: Final = user_api_key_cache.declare_delete(alias_key)
             if pipelined_delete is None:
                 await user_api_key_cache.async_delete_cache(key=alias_key)
             else:
@@ -5619,12 +5637,15 @@ async def can_key_call_resolved_model(
     valid_token: UserAPIKeyAuth,
     llm_router: RegistryReader | None,
 ) -> None:
+    from litellm.proxy.auth.customer_hierarchy_auth import check_customer_hierarchy_model_access
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
 
+    if valid_token.customer_hierarchy is not None:
+        check_customer_hierarchy_model_access(valid_token.customer_hierarchy, model, llm_router)
     skip_key_model_check: Final = valid_token.config or (
         isinstance(valid_token.models, list) and SpecialModelNames.all_team_models.value in valid_token.models
     )
@@ -5807,6 +5828,17 @@ async def can_team_access_model(
         raise
 
 
+def _group_grants_key(
+    group: LiteLLM_AccessGroupTable, valid_token: UserAPIKeyAuth, team_object: LiteLLM_TeamTable | None
+) -> bool:
+    key_team_id: Final = valid_token.team_id or (team_object.team_id if team_object is not None else None)
+    return (
+        bool(key_team_id and key_team_id in (group.assigned_team_ids or []))
+        or bool(valid_token.token and valid_token.token in (group.assigned_key_ids or []))
+        or group.access_group_id in valid_token.access_group_rule_grants
+    )
+
+
 async def get_authorized_resources_from_key_access_groups(
     valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
@@ -5835,9 +5867,6 @@ async def get_authorized_resources_from_key_access_groups(
     if _prisma_client is None or _user_api_key_cache is None:
         return []
 
-    key_team_id: Final = valid_token.team_id or (team_object.team_id if team_object is not None else None)
-    key_token: Final = valid_token.token
-
     authorized_resources: Final[list[str]] = []
     for ag_id in key_access_group_ids:
         try:
@@ -5856,9 +5885,7 @@ async def get_authorized_resources_from_key_access_groups(
             if check_db_only or strict_errors:
                 raise
             continue
-        team_authorized = bool(key_team_id and key_team_id in (ag.assigned_team_ids or []))
-        key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))
-        if team_authorized or key_authorized or ag_id in valid_token.access_group_rule_grants:
+        if _group_grants_key(ag, valid_token, team_object):
             authorized_resources.extend(getattr(ag, resource_field, []) or [])
 
     return list(set(authorized_resources))
@@ -8095,8 +8122,102 @@ def _legacy_requested_vector_store_ids(
     )
 
 
-def _restricts_vector_stores(grants: Sequence[tuple[GrantLayer, LiteLLM_ObjectPermissionTable | None]]) -> bool:
+def _restricts_vector_stores(grants: Sequence[tuple[GrantLayer, _VectorStorePermissionsRow | None]]) -> bool:
     return any(grant is not None and bool(grant.vector_stores) for _, grant in grants)
+
+
+async def access_group_vector_stores(
+    valid_token: UserAPIKeyAuth | None,
+    team_object: LiteLLM_TeamTable | None,
+    unreadable: Literal["skip", "raise"] = "skip",
+) -> Mapping[GrantLayer, tuple[str, ...]]:
+    """The stores the key's and its team's access groups list, per layer.
+    A deleted group lists nothing. So does a group that cannot be read, unless `unreadable` is "raise"."""
+    key_groups: Final = await get_access_group_tables(
+        (valid_token.access_group_ids or ()) if valid_token is not None else (), unreadable=unreadable
+    )
+    team_groups: Final = await get_access_group_tables(
+        (team_object.access_group_ids or ()) if team_object is not None else (), unreadable=unreadable
+    )
+    listed_key_groups: Final = (
+        tuple(group for group in key_groups if _group_grants_key(group, valid_token, team_object))
+        if valid_token is not None
+        else ()
+    )
+    return MappingProxyType(
+        {
+            "key": tuple(chain.from_iterable(group.access_vector_store_ids for group in listed_key_groups)),
+            "team": tuple(chain.from_iterable(group.access_vector_store_ids for group in team_groups)),
+        }
+    )
+
+
+async def _team_read_again(
+    valid_token: UserAPIKeyAuth | None, team_object: LiteLLM_TeamTable | None
+) -> LiteLLM_TeamTable | None:
+    """Auth's stand-in for a team it could not read has none of the team's groups, so the team is read again."""
+    team_id: Final = valid_token.team_id if valid_token is not None else None
+    if (
+        not isinstance(team_object, LiteLLM_TeamRebuiltFromToken)
+        or valid_token is None
+        or team_id is None
+        or team_id == UI_TEAM_ID
+    ):
+        return team_object
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    return await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=valid_token.parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _OwnAndGroupVectorStores:
+    vector_stores: Sequence[str]
+
+
+def _with_group_stores(
+    grant: LiteLLM_ObjectPermissionTable | None, group_stores: Sequence[str]
+) -> _VectorStorePermissionsRow | None:
+    if not group_stores:
+        return grant
+    own_stores: Final = (grant.vector_stores if grant is not None else None) or ()
+    return _OwnAndGroupVectorStores([*dict.fromkeys((*own_stores, *group_stores))])
+
+
+async def _vector_store_grants(
+    valid_token: UserAPIKeyAuth | None,
+    team_object: LiteLLM_TeamTable | None,
+    user_object: LiteLLM_UserTable | None,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    strict_layers: frozenset[GrantLayer] = frozenset(),
+) -> tuple[tuple[GrantLayer, _VectorStorePermissionsRow | None], ...]:
+    """Each identity's own grant. The stores its access groups list count as if they were on its own list.
+    A strict team layer can only lose grants without its groups, so it keeps auth's stand-in team."""
+    try:
+        team: Final = team_object if "team" in strict_layers else await _team_read_again(valid_token, team_object)
+        group_stores: Final = await access_group_vector_stores(valid_token, team, unreadable="raise")
+    except Exception as e:
+        # Skipping an unreadable team or group could empty a list and lift the restriction.
+        raise ProxyException(
+            message="Could not read the team or its access groups to check vector store access",
+            type=ProxyErrorTypes.internal_server_error,
+            param="vector_store",
+            code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from e
+    return tuple(
+        [
+            (layer, _with_group_stores(grant, group_stores.get(layer, ())))
+            for layer, grant in await _identity_grants(
+                valid_token, team_object, user_object, prisma_client, user_api_key_cache
+            )
+        ]
+    )
 
 
 def _request_drop_policies(
@@ -8161,7 +8282,7 @@ async def vector_store_access_check(
 
     Requested stores come from `vector_store_ids`, `tools[].vector_store_ids`, the tools of
     `additional_tools` input items and the RAG `retrieval_config.vector_store_id`. Grants come from each identity's
-    `object_permission.vector_stores`.
+    `object_permission.vector_stores`, plus the stores its access groups list, which count as if they were on it.
 
     Both modes read the same request fields, with or without a vector store registry, and answer 400
     when the top-level `vector_store_ids` is not a list of strings, which legacy mode does only when the
@@ -8209,7 +8330,7 @@ async def vector_store_access_check(
     )
     if isinstance(requested_ids, _UnreadableVectorStoreIds):
         if _restricts_vector_stores(
-            await _identity_grants(valid_token, team_object, None, prisma_client, user_api_key_cache)
+            await _vector_store_grants(valid_token, team_object, None, prisma_client, user_api_key_cache)
         ):
             raise _malformed_vector_store_ids()
         return True
@@ -8223,12 +8344,13 @@ async def vector_store_access_check(
     # Check if the object (key, team, org) has access to the vector store
     #########################################################
     strict_layers: Final = _strict_grant_layers(deny_by_default, valid_token, team_object)
-    grants: Final = await _identity_grants(
+    grants: Final = await _vector_store_grants(
         valid_token,
         team_object,
         user_object if "user" in strict_layers else None,
         prisma_client,
         user_api_key_cache,
+        strict_layers,
     )
     for layer, grant in grants:
         if layer in strict_layers:

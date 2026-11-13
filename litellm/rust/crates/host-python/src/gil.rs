@@ -22,6 +22,18 @@ impl PythonContext {
         )))
     }
 
+    /// A context with no request-local values, for work no Python caller is waiting on.
+    pub fn empty(py: Python<'_>) -> PyResult<Self> {
+        Ok(Self(Arc::new(
+            py.import("contextvars")?.call_method0("Context")?.unbind(),
+        )))
+    }
+
+    /// A `contextvars.Context` the Python host built for work that outlives its caller.
+    pub fn built(context: Bound<'_, PyAny>) -> Self {
+        Self(Arc::new(context.unbind()))
+    }
+
     /// Runs `f` inside a fresh copy of the captured context. The copy is what lets two blocking
     /// calls run concurrently: a `contextvars.Context` cannot be entered twice at once.
     pub fn enter<T, F>(&self, py: Python<'_>, f: F) -> PyResult<T>

@@ -2391,6 +2391,17 @@
         "description": "Tags are managed by the Tags field above. A tags array typed here is moved to that field."
       }
     },
+    "maxBudgetAlertEmails": {
+      "budgetAlertThresholds": "Budget Alert Thresholds",
+      "budgetAlertThresholdsHint": "Thresholds are a percentage of the key's max budget and replace this key's default 80% alert. Global alert thresholds configured on the proxy still apply. Thresholds outside 1 to 100 can be edited in the Metadata box. The key owner's email is always included. Add comma-separated addresses, such as a shared mailbox or distribution list, to notify others as well. Requires email alerting to be configured on the proxy.",
+      "thresholdPlaceholder": "% of budget",
+      "recipientsPlaceholder": "Additional recipients, e.g. finance@example.com",
+      "removeThreshold": "Remove budget alert threshold",
+      "addThreshold": "Add Budget Alert Threshold",
+      "thresholdRange": "Enter a whole number from 1 to 100",
+      "duplicateThreshold": "Duplicate threshold",
+      "movedThresholds": "Moved alert thresholds {{thresholds}} from metadata to the Budget Alert Thresholds rows"
+    },
     "estimatedOutputTokens": {
       "invalidPerModel": "Enter a JSON object of positive integers, e.g. {\"gpt-4\": 4096}",
       "invalidPositive": "Enter a positive integer",
@@ -3061,7 +3072,8 @@
       "hourly": "hourly",
       "daily": "daily",
       "weekly": "weekly",
-      "monthly": "monthly"
+      "monthly": "monthly",
+      "annual": "annually"
     },
     "notSet": "Not set"
   },
@@ -3369,7 +3381,8 @@
       "cells": {
         "notApplicable": "n/a",
         "notSet": "Not set",
-        "unlimited": "Unlimited"
+        "unlimited": "Unlimited",
+        "windowLimit": "${{amount}} {{period}}"
       },
       "rowActions": {
         "open": "Open budget actions",
@@ -3389,17 +3402,26 @@
     },
     "form": {
       "errors": {
-        "budgetIdRequired": "Enter a budget ID"
+        "budgetIdRequired": "Enter a budget ID",
+        "invalidBudgetLimit": "Enter a non-negative budget limit"
       },
       "resetOptions": {
         "inTotal": "in total",
         "perDay": "per day",
         "perWeek": "per week",
-        "perMonth": "per month"
+        "perMonth": "per month",
+        "perYear": "per year",
+        "perMonthAndYear": "per month and year"
       },
       "noLimit": "No limit",
       "optional": "Optional",
       "spendLimit": "Spend limit",
+      "additionalSpendLimit": "Additional spend limit",
+      "additionalResetPeriod": "Additional reset period",
+      "additionalLimitHint": "This limit also applies alongside the calendar limits.",
+      "monthlyLimit": "Monthly limit (USD)",
+      "annualLimit": "Annual limit (USD)",
+      "calendarLimitsHint": "Monthly and annual limits apply independently. Zero stops spending.",
       "resetPeriod": "Reset period",
       "budgetId": "Budget ID",
       "budgetIdLocked": "Budget ID cannot be changed after creation",
@@ -5201,6 +5223,11 @@
         "managedByConfig": "Managed by the deployment configuration."
       },
       "settings": {
+        "disableAria": {
+          "label": "Hide Aria Agent for everyone",
+          "description": "Hides Aria from navigation, Usage, and its workspace for all users, including admins. Active dashboards check for changes every 30 seconds.",
+          "managedByConfig": "Managed by the deployment configuration."
+        },
         "disableModelAdd": {
           "label": "Disable model add for internal users"
         },
@@ -8165,8 +8192,7 @@
         "costTracking": "Cost Tracking",
         "uiTheme": "UI Theme",
         "telemetry": "Telemetry",
-        "customers": "Customers",
-        "chargebacks": "Chargebacks"
+        "customers": "Customers"
       },
       "homeLink": "LiteLLM home"
     },
@@ -8797,6 +8823,7 @@
       "selectTimeRange": "Select Time Range",
       "invalidDateFormat": "Invalid date format",
       "endBeforeStart": "End date cannot be before start date",
+      "rangeTooLong": "Select a date range of {{days}} days or less.",
       "selectDateRange": "Select date range",
       "relativeTime": "Relative time",
       "startAndEndDates": "Start and end dates",
@@ -20583,9 +20610,83 @@
     "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
   },
   "customerPortal": {
+    "hierarchy": {
+      "customerNavigation": "Customer navigation",
+      "usage": "Usage",
+      "manage": "Manage",
+      "title": "Customer management",
+      "subtitle": "Manage teams, members, and settings for this customer.",
+      "organization": "Organization",
+      "team": "Team",
+      "member": "Member",
+      "teams": "Teams",
+      "members": "Members",
+      "settings": "Settings",
+      "viewUsage": "View usage",
+      "edit": "Edit",
+      "name": "Name",
+      "id": "ID",
+      "spend": "Recorded spend",
+      "budget": "Budget",
+      "noBudget": "No budget",
+      "teamsHint": "Choose a team to manage its members and settings.",
+      "membersHint": "Choose a member to manage their settings and budget.",
+      "emptyTeams": "No teams in this organization.",
+      "emptyMembers": "No members in this team.",
+      "error": "Unable to load customer",
+      "scopeMismatch": "This team or member does not belong to the selected customer.",
+      "missingOrganization": "Choose a customer organization to manage.",
+      "backToCustomers": "Back to customers",
+      "adminOnly": "Only proxy admins can manage customer organizations, teams, and members.",
+      "previous": "Previous",
+      "next": "Next",
+      "pagination": "Page {{page}} of {{pages}}",
+      "loading": "Loading customer…",
+      "teamsLoadError": "Unable to load teams",
+      "membersLoadError": "Unable to load members",
+      "settingsTitle": "Settings",
+      "profileTitle": "General",
+      "profileHint": "Update the display name without changing its identifier or parent.",
+      "alias": "Display name",
+      "identifier": "Identifier",
+      "budgetTitle": "Budget and limits",
+      "budgetHint": "Leave a limit blank for no limit. Zero is a valid limit.",
+      "budgetEnabled": "Set a budget and limits",
+      "maxBudget": "Spend limit (USD)",
+      "softBudget": "Soft budget (USD)",
+      "budgetDuration": "Reset period",
+      "budgetDurationHint": "For example, 1h, 7d, or 1mo. Leave blank for no reset.",
+      "tpm": "Tokens per minute",
+      "rpm": "Requests per minute",
+      "allowedModels": "Allowed models",
+      "allowedModelsHint": "One model per line. Leave blank to allow all models.",
+      "template": "Budget template",
+      "noTemplate": "No template",
+      "unknownTemplate": "Unavailable template ({{id}})",
+      "defaultTemplate": "{{name}} (default)",
+      "overrideEnabled": "Override the template budget",
+      "overrideHint": "An override replaces the selected template budget while it is active.",
+      "overrideExpiry": "Override expires",
+      "overrideExpiryHint": "Uses your local time. Leave blank for no expiry.",
+      "save": "Save changes",
+      "saving": "Saving…",
+      "saved": "Changes saved",
+      "reset": "Reset changes",
+      "deleteTitle": "Delete {{kind}}",
+      "deleteHint": "Delete this record and its owned budget.",
+      "deleteParentHint": "Remove child teams or members first. Deleting a parent does not delete its children.",
+      "deleteConfirmTitle": "Delete {{name}}?",
+      "deleteConfirmHint": "This permanently deletes this {{kind}}. This action cannot be undone.",
+      "deleteConfirm": "Delete {{kind}}",
+      "deleting": "Deleting…",
+      "cancel": "Cancel",
+      "invalidNumber": "Enter finite, non-negative limits. Rate limits must be whole numbers.",
+      "invalidExpiry": "Enter a valid expiry date and time.",
+      "budgetRequired": "Select a budget template or enable an override for this member."
+    },
     "switcher": {
       "label": "Customer Portal",
-      "description": "End customers, budgets and chargebacks"
+      "description": "Customer organizations and usage"
     },
     "status": {
       "active": "Active",
@@ -20613,19 +20714,30 @@
     },
     "list": {
       "title": "Customers",
-      "subtitle": "End users of your product, identified by customer id on every request.",
+      "subtitle": "Usage across each customer organization's teams and members.",
       "create": "Create Customer",
       "searchPlaceholder": "Search by customer id or alias",
       "columns": {
         "customer": "Customer",
-        "spend": "Spend this month",
+        "spend": "Spend",
+        "requests": "Requests",
+        "tokens": "Tokens",
+        "members": "Members",
         "budget": "Budget",
         "keys": "Keys",
         "status": "Status"
       },
       "loading": "Loading customers...",
-      "empty": "No customers yet. Create one to start tracking spend.",
-      "budgetUsage": "{{spend}} / {{max}}"
+      "empty": "No customer organizations yet. Create one to get started.",
+      "noMatches": "No customer organizations match your search.",
+      "error": "Could not load customer organization usage.",
+      "attribution": "Usage is attributed to the customer organization and team recorded for each member request. Dates are inclusive UTC calendar days. Tokens include input and output tokens.",
+      "budgetUsage": "{{spend}} / {{max}}",
+      "currentBudget": "Current budget {{budget}}",
+      "budgetUsed": "{{percentage}} used",
+      "noMaxBudget": "No max budget",
+      "zeroBudgetPercentage": "Percentage unavailable for a $0 budget",
+      "budgetAndMembersHelp": "Spend, requests and tokens use the selected dates. Budget percentages use the current budget period, shown under Spend when it differs. Members includes all currently registered members, even those with no usage."
     },
     "detail": {
       "spendThisMonth": "Spend this month",
@@ -20652,18 +20764,48 @@
     },
     "createDialog": {
       "title": "Create customer",
-      "description": "A customer is an end user of your product. Pass its id as `user` on every request to track spend and apply its limits.",
-      "customerId": "Customer id",
-      "customerIdPlaceholder": "e.g. acme-corp",
+      "description": "Set up a customer organization and its member budgets.",
+      "name": "Customer name",
+      "namePlaceholder": "e.g. Example customer",
+      "customerId": "Customer organization id",
+      "customerIdPlaceholder": "e.g. customer-001",
       "alias": "Alias",
       "aliasPlaceholder": "Optional display name",
-      "maxBudget": "Monthly budget (USD)",
+      "customerIdHelp": "Optional customer ID for the API. Leave blank to generate one.",
+      "maxBudget": "Customer monthly budget (USD)",
       "maxBudgetPlaceholder": "Leave empty for no budget",
       "tpm": "TPM limit",
       "rpm": "RPM limit",
       "noLimit": "No limit",
       "limitsHelp": "Budget and limits apply to this customer across every key it uses.",
-      "submit": "Create"
+      "budgetHelp": "Total monthly cap across all teams and members.",
+      "groups": "Member budget groups",
+      "groupsHelp": "Reusable budget profiles. Limits are in USD per member. Leave an amount blank for no limit.",
+      "groupName": "Group name",
+      "groupNameLabel": "Group {{index}} name",
+      "monthly": "Monthly budget",
+      "yearly": "Yearly budget",
+      "monthlyLabel": "Group {{index}} monthly budget (USD)",
+      "yearlyLabel": "Group {{index}} yearly budget (USD)",
+      "default": "Default",
+      "defaultGroup": "Default budget group for new members",
+      "useDefault": "Use {{name}} as default",
+      "removeGroup": "Remove {{name}}",
+      "addGroup": "Add budget group",
+      "defaultHelp": "The selected default group is assigned to new members automatically.",
+      "resetHelp": "Reaching either cap pauses usage until that budget resets.",
+      "advanced": "Advanced limits",
+      "creating": "Creating customer...",
+      "errors": {
+        "nameRequired": "Enter a customer name.",
+        "groupNameRequired": "Give each budget group a name.",
+        "duplicateGroups": "Use a unique name for each budget group.",
+        "groupLimitRequired": "Set at least one monthly or yearly limit for each budget group.",
+        "invalidBudget": "Enter budget amounts of zero or more.",
+        "invalidRateLimit": "Rate limits must be whole numbers of zero or more.",
+        "defaultRequired": "Choose a default budget group."
+      },
+      "submit": "Create customer"
     },
     "editDialog": {
       "title": "Edit customer",
@@ -20672,27 +20814,76 @@
       "maxBudgetPlaceholder": "Leave empty for no budget",
       "sharedBudgetWarning": "This customer is on budget {{budgetId}}. Changing the budget here changes it for every customer on that budget."
     },
-    "chargebacks": {
-      "title": "Chargebacks",
-      "subtitle": "Spend per customer for a month, from the daily spend rollup.",
-      "groupBy": {
-        "customer": "Group by customer",
-        "key": "Customer and key",
-        "model": "Customer and model"
-      },
-      "dimension": {
-        "key": "Key",
-        "model": "Model"
-      },
-      "exportCsv": "Export CSV",
-      "columns": {
-        "customer": "Customer",
-        "requests": "Requests",
-        "inputTokens": "Input tokens",
-        "outputTokens": "Output tokens",
-        "spend": "Spend"
-      },
-      "empty": "No customer traffic in {{month}}."
+    "range": {
+      "label": "Date range (UTC)",
+      "thisMonth": "This month",
+      "previousMonth": "Previous month"
+    },
+    "analytics": {
+      "title": "Customer usage",
+      "customers": "Customers",
+      "breadcrumb": "Customer hierarchy",
+      "selectOrganization": "Open a customer organization to explore its usage.",
+      "backToCustomers": "Back to customers",
+      "organizationUsage": "Organization usage",
+      "teamUsage": "Team usage",
+      "memberUsage": "Member usage",
+      "subtitle": "Understand where usage goes, from your organization to each member.",
+      "trend": "Usage over time",
+      "trendHint": "Daily activity, broken down by {{dimension}}.",
+      "metric": "Usage metric",
+      "spend": "Spend",
+      "tokens": "Tokens",
+      "requests": "Requests",
+      "bucket": "Time interval",
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "loading": "Loading customer usage",
+      "empty": "No usage in this range",
+      "error": "Could not load customer usage",
+      "breakdown": "Usage breakdown",
+      "models": "Models",
+      "keys": "API keys",
+      "useCases": "Use cases",
+      "teams": "Teams",
+      "members": "Members",
+      "sortedBy": "Ranked by {{metric}}",
+      "search": "Search breakdown",
+      "rank": "Rank",
+      "share": "Share",
+      "rankingHint": "Share of the selected metric across this customer scope. Click a team or member to explore its usage.",
+      "useCaseHint": "Use cases recorded with requests. Unattributed activity appears as Unassigned.",
+      "noMatches": "No results match your search.",
+      "noBreakdown": "No usage recorded for this breakdown.",
+      "pagination": "{{from}}–{{to}} of {{total}}",
+      "previous": "Previous",
+      "next": "Next",
+      "allOrganizationUsage": "View all organization usage",
+      "freshness": "Usage appears after accounting completes. Date ranges use UTC. Customer budgets are managed separately.",
+      "scopeMismatch": "This team or member does not belong to the selected organization.",
+      "invalidIdentifier": "Select a valid customer identifier.",
+      "incompletePages": "Could not load the complete usage range. Please choose fewer days.",
+      "unassignedTeam": "Unassigned or removed team",
+      "unassignedMember": "Unassigned or removed member",
+      "unnamedKey": "Unnamed key",
+      "currentSpend": "Budget spend",
+      "noBudget": "No budget set",
+      "breakDownBy": "Break down by",
+      "topModels": "Top models",
+      "topKeys": "Top API keys",
+      "topTeams": "Top teams",
+      "topMembers": "Top members",
+      "memberSpend": "Member spend",
+      "memberSpendHint": "Usage in the selected date range. Cap status uses each member’s recorded budget spend.",
+      "searchMembers": "Search members",
+      "member": "Member",
+      "currentBudget": "Spend / cap",
+      "status": "Status",
+      "noCap": "No cap",
+      "atBudget": "At budget",
+      "withinBudget": "Within budget",
+      "noMembers": "No members in this customer scope.",
+      "overBudget": "Over budget"
     }
   }
 }

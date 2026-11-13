@@ -4,7 +4,13 @@ import { UseFormReturn, UseFormSetValue } from "react-hook-form";
 
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { ToolPermissionsChangeOrigin } from "../mcp_server_management/MCPToolPermissions";
-import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import { extractLoggingSettings, formatMetadataForDisplay, stripFieldManagedKeysFromMetadata } from "../key_info_utils";
+import {
+  type BudgetAlertRow,
+  budgetAlertRowsFromMetadata,
+  budgetAlertRowsSchema,
+  KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
+} from "../key_team_helpers/budgetAlertEmails";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import { estimateChecks, estimateFields } from "./estimatedOutputTokens";
 import { canonicalBudgetDuration, keyOrganizationId } from "./keyEditFieldNormalizers";
@@ -26,6 +32,7 @@ export interface KeyEditFormValues {
   allowed_routes?: string;
   max_budget?: number | string | null;
   soft_budget?: number | string | null;
+  max_budget_alert_emails?: BudgetAlertRow[];
   budget_duration?: string | null;
   tpm_limit?: number | string | null;
   tpm_limit_type?: string | null;
@@ -76,6 +83,7 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
   max_budget: keyData.max_budget,
   soft_budget:
     (keyData.litellm_budget_table as { soft_budget?: number | null } | null | undefined)?.soft_budget ?? null,
+  max_budget_alert_emails: [...budgetAlertRowsFromMetadata(keyData.metadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY)],
   budget_duration: canonicalBudgetDuration(keyData.budget_duration),
   tpm_limit: keyData.tpm_limit,
   tpm_limit_type: (keyData as { tpm_limit_type?: string | null }).tpm_limit_type ?? null,
@@ -114,7 +122,7 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
   team_id: keyData.team_id,
   project_id: keyData.project_id,
   logging_settings: extractLoggingSettings(keyData.metadata),
-  metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),
+  metadata: formatMetadataForDisplay(stripFieldManagedKeysFromMetadata(keyData.metadata)),
   duration: (keyData as { duration?: string }).duration ?? "",
   token: keyData.token || keyData.token_id,
   disabled_callbacks: Array.isArray(readMetadata(keyData, "litellm_disabled_callbacks"))
@@ -130,6 +138,11 @@ export const keyEditFormSchema = z.object({
   allowed_routes: z.custom<string | undefined>().optional(),
   max_budget: z.custom<number | string | null | undefined>().optional(),
   soft_budget: z.custom<number | string | null | undefined>().optional(),
+  max_budget_alert_emails: budgetAlertRowsSchema((issue) =>
+    issue === "thresholdRange"
+      ? i18n.t("keyDetail.maxBudgetAlertEmails.thresholdRange")
+      : i18n.t("keyDetail.maxBudgetAlertEmails.duplicateThreshold"),
+  ).optional(),
   budget_duration: z.custom<string | null | undefined>().optional(),
   tpm_limit: z.custom<number | string | null | undefined>().optional(),
   tpm_limit_type: z.custom<string | null | undefined>().optional(),
@@ -187,6 +200,7 @@ export const toSubmittedValues = (
   allowed_routes: values.allowed_routes,
   max_budget: values.max_budget,
   soft_budget: values.soft_budget,
+  max_budget_alert_emails: values.max_budget_alert_emails,
   budget_duration: values.budget_duration,
   tpm_limit: values.tpm_limit,
   tpm_limit_type: values.tpm_limit_type,

@@ -14,6 +14,7 @@ from typing_extensions import NotRequired, ReadOnly
 import litellm
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.base_llm.embedding.transformation import split_extra_body
 from litellm.types.mcp import has_header
 from litellm.types.utils import EmbeddingResponse
 
@@ -45,14 +46,15 @@ def _prepare_ollama_embedding_payload(
     data: Final[dict[str, object]] = {"model": model, "input": prompts}
     special_optional_params: Final = ["truncate", "options", "keep_alive", "dimensions"]
 
-    for k, v in optional_params.items():
+    body_params, extra_body = split_extra_body(optional_params)
+    for k, v in body_params.items():
         if k in special_optional_params:
             data[k] = v
         else:
             data.setdefault("options", {})
             if isinstance(data["options"], dict):
                 data["options"].update({k: v})
-    return data
+    return {**extra_body, **data}
 
 
 def _process_ollama_embedding_response(

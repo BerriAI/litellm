@@ -27,13 +27,57 @@ from litellm.redis.stores.spend_counters import SpendCounterStore
 WINDOW_START = datetime(2026, 8, 1, tzinfo=timezone.utc)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "family,table_name,id_field",
+    (
+        ("customer_org", "litellm_customerorganizationtable", "customer_org_id"),
+        ("customer_team", "litellm_customerteamtable", "customer_team_id"),
+        ("customer_member", "litellm_customermembertable", "customer_member_id"),
+    ),
+)
+@pytest.mark.parametrize(
+    "period,reset_at,expected",
+    (
+        ("lifetime", None, 4.5),
+        (WINDOW_START.isoformat(), WINDOW_START, 4.5),
+        (WINDOW_START.isoformat(), WINDOW_START.replace(tzinfo=None), 4.5),
+        (WINDOW_START.isoformat(), WINDOW_START + timedelta(days=1), None),
+        (WINDOW_START.isoformat(), WINDOW_START - timedelta(days=1), None),
+        ("lifetime", WINDOW_START, None),
+        (WINDOW_START.isoformat(), None, None),
+        ("not-a-period", None, None),
+        ("2026-99-99T00:00:00+00:00", WINDOW_START, None),
+    ),
+)
+async def test_customer_counter_reseed_reads_only_the_matching_budget_period(
+    family, table_name, id_field, period, reset_at, expected
+):
+    table: Final = _FakeFindUniqueTable(
+        SimpleNamespace(spend=4.5, budget=SimpleNamespace(budget_duration="1mo", budget_reset_at=reset_at))
+    )
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(**{table_name: table}))
+    actual: Final = await SpendCounterReseed.from_db(prisma, f"spend:{family}:id:with:colons:{period}")
+    assert actual == expected
+    if period != "not-a-period":
+        assert table.where_clauses == [{id_field: "id:with:colons"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", (None, ConnectionError("database is unavailable")))
+async def test_missing_or_unavailable_customer_spend_does_not_seed_a_counter(error):
+    table: Final = _FakeFindUniqueTable(None, error)
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_customermembertable=table))
+    assert await SpendCounterReseed.from_db(prisma, "spend:customer_member:member:lifetime") is None
+
+
 class _FakeFindUniqueTable:
     def __init__(self, row: SimpleNamespace | None, error: Exception | None = None) -> None:
         self._row = row
         self._error = error
         self.where_clauses: list[dict] = []
 
-    async def find_unique(self, where: dict):
+    async def find_unique(self, where: dict, include: dict | None = None):
         self.where_clauses.append(where)
         if self._error is not None:
             raise self._error

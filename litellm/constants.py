@@ -450,6 +450,7 @@ MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
 MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS: Final = 5.0
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
 REALTIME_METERED_USAGE_KEY: Final = "realtime_metered_usage"
+FAILED_PROMPT_TOKEN_ESTIMATE_KEY: Final = "failed_prompt_token_estimate"
 OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS: Final = 30
 OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS: Final = 5
 OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES: Final = frozenset(
@@ -495,6 +496,7 @@ REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_team_spend_upda
 REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_org_spend_update_buffer"
 REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_end_user_spend_update_buffer"
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_agent_spend_update_buffer"
+REDIS_DAILY_CUSTOMER_MEMBER_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_customer_member_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_tag_spend_update_buffer"
 REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_window_spend_update_buffer"
 REDIS_TOOL_DISCOVERY_BUFFER_KEY: Final = "litellm_tool_discovery_buffer"
@@ -1999,7 +2001,7 @@ BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS: Final = get_env_float(
     "BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS", 60.0
 )
 BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS: Final = get_env_float(
-    "BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS", 3600.0
+    "BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS", 7800.0
 )
 _background_interaction_cost_polling_env: Final = os.getenv(
     "BACKGROUND_INTERACTION_COST_POLLING_ENABLED", "true"
