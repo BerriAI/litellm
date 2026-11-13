@@ -1,4 +1,3 @@
-import copy
 import hashlib
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
@@ -20,6 +19,8 @@ from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_
 from litellm.llms.anthropic.messages.utils import (
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
+    object_mapping,
+    openai_strict_json_schema,
     prompt_cache_key_from_user_id,
 )
 from litellm.responses.utils import auto_reasoning_summary
@@ -1017,65 +1018,22 @@ class LiteLLMAnthropicMessagesAdapter:
         Returns:
             OpenAI-compatible response_format dict, or None if invalid
         """
-        if not isinstance(output_format, dict):
+        output_format_object: Final = object_mapping(output_format)
+        if output_format_object is None or output_format_object.get("type") != "json_schema":
             return None
 
-        output_type: Final = output_format.get("type")
-        if output_type != "json_schema":
-            return None
-
-        schema = output_format.get("schema")
+        schema: Final = output_format_object.get("schema")
         if not schema:
             return None
 
-        # Deep copy to avoid mutating the original schema
-        schema = copy.deepcopy(schema)
-        # OpenAI strict mode requires additionalProperties: false on every object
-        self._add_additional_properties_false(schema)
-
-        # Convert to OpenAI response_format structure
         return {
             "type": "json_schema",
             "json_schema": {
                 "name": "structured_output",
-                "schema": schema,
+                "schema": openai_strict_json_schema(schema),
                 "strict": True,
             },
         }
-
-    @staticmethod
-    def _add_additional_properties_false(schema: dict) -> None:
-        """
-        Recursively ensure object schemas comply with OpenAI strict mode.
-
-        OpenAI's strict mode requires:
-        1. 'additionalProperties': false at every object nesting level
-        2. All property keys listed in 'required'
-        """
-        if not isinstance(schema, dict):
-            return
-
-        if schema.get("type") == "object" and "properties" in schema:
-            schema["additionalProperties"] = False
-            schema["required"] = list(schema["properties"].keys())
-            for prop in schema["properties"].values():
-                LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(prop)
-
-        # Handle array items
-        if "items" in schema:
-            LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(schema["items"])
-
-        # Handle anyOf/oneOf/allOf
-        for key in ("anyOf", "oneOf", "allOf"):
-            if key in schema:
-                for sub_schema in schema[key]:
-                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(sub_schema)
-
-        # Handle $defs / definitions
-        for key in ("$defs", "definitions"):
-            if key in schema:
-                for def_schema in schema[key].values():
-                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(def_schema)
 
     def _translate_midturn_system_message_to_openai(
         self,

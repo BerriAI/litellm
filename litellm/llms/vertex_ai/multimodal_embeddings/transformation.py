@@ -21,7 +21,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import count_characters, is_base64_encoded
 
-from ...base_llm.embedding.transformation import BaseEmbeddingConfig
+from ...base_llm.embedding.transformation import BaseEmbeddingConfig, extra_body_fields
 from ..common_utils import VertexAIError
 
 
@@ -189,8 +189,11 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
             request_data["instances"] = [vertex_request_instance]
 
+        extra_body: Final = extra_body_fields(optional_params)
         if "outputDimensionality" in optional_params:
-            request_data["parameters"] = {"dimension": optional_params["outputDimensionality"]}
+            request_data["parameters"] = {**extra_body, "dimension": optional_params["outputDimensionality"]}
+        elif extra_body:
+            request_data["parameters"] = dict(extra_body)
 
         return cast(dict, request_data)
 

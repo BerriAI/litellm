@@ -936,11 +936,19 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("request_data", "route", "endpoint_call_type"),
+        ("request_data", "route", "endpoint_call_type", "dispatched_call_type"),
         [
-            ({"model": "gemini-tts", "input": "Hello there", "voice": "Kore"}, "/v1/audio/speech", "aspeech"),
-            ({"model": "omni-moderation", "input": ["one", "two"]}, "/v1/moderations", "amoderation"),
-            ({"model": "gpt-transcribe"}, "/v1/audio/transcriptions", "atranscription"),
+            (
+                {"model": "gemini-tts", "input": "Hello there", "voice": "Kore"},
+                "/v1/audio/speech",
+                "aspeech",
+                "aspeech",
+            ),
+            ({"model": "omni-moderation", "input": ["one", "two"]}, "/v1/moderations", "amoderation", "aspeech"),
+            ({"model": "gpt-transcribe"}, "/v1/audio/transcriptions", "atranscription", "atranscription"),
+            ({"model": "test"}, "/v1/responses/compact", "acompact_responses", None),
+            ({"model": "test"}, "/v1beta/interactions", "acreate_interaction", None),
+            ({"model": "test"}, "/v1/videos", "avideo_generation", "avideo_generation"),
         ],
     )
     async def test_request_rejected_by_the_proxy_records_the_endpoint_call_type(
@@ -949,6 +957,7 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
         request_data: dict[str, object],
         route: str,
         endpoint_call_type: str,
+        dispatched_call_type: str | None,
     ):
         from types import SimpleNamespace
 
@@ -967,7 +976,8 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
                     request_data=dict(request_data),
                     original_exception=HTTPException(status_code=429, detail="Rate limit exceeded"),
                     user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route=route),
-                    dispatched_call_type=endpoint_call_type,
+                    route=route,
+                    dispatched_call_type=dispatched_call_type,
                 )
         finally:
             ProxyLogging._callback_capabilities_cache.clear()

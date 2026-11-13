@@ -14,6 +14,7 @@ import sys
 import time
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime as dt_object
 from enum import Enum
@@ -28,7 +29,13 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 from typing_extensions import TypedDict
 
 import litellm
-from litellm._internal_context import in_mirrored_call, outside_mirrored_call, post_response_phase
+from litellm._internal_context import (
+    in_mirrored_call,
+    outside_mirrored_call,
+    post_response_phase,
+    request_parent_otel_span,
+)
+from litellm._lazy_imports import get_token_counter_new
 from litellm._logging import (
     is_debugging_on,
     redact_string,
@@ -47,6 +54,7 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
     EMPTY_MAPPING,
+    FAILED_PROMPT_TOKEN_ESTIMATE_KEY,
     INTERNAL_CALLBACK_NAMES,
     KUBERNETES_POD_ROUTING_KEY,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
@@ -95,6 +103,7 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     decoded_json_object,
     finite_cost,
+    get_parent_otel_span_from_kwargs,
     get_provider_response_headers_from_hidden_params,
     has_attributes,
     is_expected_client_error,
@@ -674,6 +683,9 @@ class UsageObservation(Enum):
     ESTIMATED = "estimated"
 
 
+_CHAT_CALL_TYPES: Final = frozenset({CallTypes.completion.value, CallTypes.acompletion.value})
+
+
 class _UsageFields(TypedDict, total=False, extra_items=object):
     pass
 
@@ -748,6 +760,7 @@ class Logging(LiteLLMLoggingBaseClass):
     stream_options = None
     litellm_request_debug: bool = False
     streamed_anthropic_message_id: str | None = None
+    served_agentic_follow_up: bool = False
     bridged_model_response: ModelResponse | None = None
     classifier_input: Mapping[str, JsonValue] | None = None
     baseline_cache_context: "BaselineCacheContext | None" = None
@@ -827,7 +840,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Shallow copy of the outer list only (inner message dicts are shared).
         # Safe because the logging layer does not mutate individual message dicts.
         _copy_start: Final = time.time()
-        self.messages = copy.copy(messages) if messages is not None else None
+        self.messages: Sequence[object] | None = copy.copy(messages) if messages is not None else None
         self.message_copy_duration_ms: float = (time.time() - _copy_start) * 1000
         self.callback_duration_ms: float = 0.0
         self.stream = stream
@@ -3732,6 +3745,11 @@ class Logging(LiteLLMLoggingBaseClass):
         if trace_id_var.get() == self._own_trace_id and session_id_var.get() == self._own_session_id:
             self._restore_correlation_context()
 
+    def _parent_otel_span_anchored(self) -> AbstractContextManager[None]:
+        """Every callback runs in one of the four handlers, streamed or not, so anchoring here gives each
+        callback's datastore spans the caller's span without the callback knowing."""
+        return request_parent_otel_span(get_parent_otel_span_from_kwargs(self.model_call_details))
+
     def success_handler(
         self,
         result: object = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
@@ -3745,7 +3763,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            with post_response_phase(), outside_mirrored_call():
+            with post_response_phase(), outside_mirrored_call(), self._parent_otel_span_anchored():
                 return self._success_handler_body(
                     result=result,
                     start_time=start_time,
@@ -4261,7 +4279,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            with post_response_phase(), outside_mirrored_call():
+            with post_response_phase(), outside_mirrored_call(), self._parent_otel_span_anchored():
                 return await self._async_success_handler_body(
                     result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
                 )
@@ -4682,7 +4700,9 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:
             verbose_logger.debug("Error in _handle_callback_failure: %s", e)
 
-    def _failure_handler_helper_fn(self, exception, traceback_exception, start_time=None, end_time=None):
+    def _failure_handler_helper_fn(
+        self, exception, traceback_exception, start_time=None, end_time=None, *, estimate_prompt_tokens: bool = True
+    ):
         if start_time is None:
             start_time = self.start_time
         if end_time is None:
@@ -4713,6 +4733,8 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost"] = self.finalized_cost.amount
         elif self.model_call_details.get("combined_usage_object") is None:
             self.model_call_details["response_cost"] = 0
+        if estimate_prompt_tokens and self._should_estimate_failed_prompt():
+            self.model_call_details[FAILED_PROMPT_TOKEN_ESTIMATE_KEY] = self._prompt_token_estimate()
 
         raised_exception: Final[object] = exception
         exception_headers: Final = (
@@ -4746,6 +4768,43 @@ class Logging(LiteLLMLoggingBaseClass):
             standard_built_in_tools_params=self.standard_built_in_tools_params,
         )
         return start_time, end_time
+
+    def _should_estimate_failed_prompt(self) -> bool:
+        return (
+            self._model_call_details_view.get("call_type") in _CHAT_CALL_TYPES
+            and not isinstance(self.model_call_details.get("combined_usage_object"), Usage)
+            and self._failure_callbacks_want_prompt_token_estimate()
+        )
+
+    def _failure_callbacks_want_prompt_token_estimate(self) -> bool:
+        callbacks: Final = (
+            *(self.dynamic_failure_callbacks or ()),
+            *(self.dynamic_async_failure_callbacks or ()),
+            *litellm.callbacks,
+            *litellm.logging_callback_manager.get_failure_callbacks(),
+        )
+        return any(isinstance(cb, CustomLogger) and cb.wants_failed_prompt_token_estimate for cb in callbacks)
+
+    def _prompt_token_estimate(self) -> int | None:
+        from litellm.litellm_core_utils.token_counter import has_only_text_content
+
+        messages: Final = self.messages
+        if litellm.disable_token_counter or not messages:
+            return None
+        try:
+            if not has_only_text_content(messages):
+                return None
+            return get_token_counter_new()(model=self.model, messages=messages, use_default_image_token_count=True)
+        except (ValueError, TypeError, LookupError, AttributeError, RuntimeError, OSError):
+            return None
+
+    async def _offloaded_prompt_token_estimate(self) -> int | None:
+        from litellm.litellm_core_utils.token_counter import offload_token_count
+
+        try:
+            return await offload_token_count(self._prompt_token_estimate)()
+        except (RuntimeError, OSError):
+            return None
 
     async def special_failure_handlers(self, exception: Exception):
         """
@@ -4794,7 +4853,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ``for_async_request`` marks the sync run of a failure whose async run also logs it, so a
         CustomLogger that gets ``async_log_failure_event`` from that async run skips its sync hook."""
         try:
-            with outside_mirrored_call():
+            with outside_mirrored_call(), self._parent_otel_span_anchored():
                 return self._failure_handler_body(
                     exception=exception,
                     traceback_exception=traceback_exception,
@@ -4825,6 +4884,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 traceback_exception=traceback_exception,
                 start_time=start_time,
                 end_time=end_time,
+                estimate_prompt_tokens=not for_async_request,
             )
             callbacks: Final = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_failure_callbacks,
@@ -4994,7 +5054,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own failure
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            with outside_mirrored_call():
+            with outside_mirrored_call(), self._parent_otel_span_anchored():
                 return await self._async_failure_handler_body(
                     exception=exception,
                     traceback_exception=traceback_exception,
@@ -5024,7 +5084,10 @@ class Logging(LiteLLMLoggingBaseClass):
             traceback_exception=traceback_exception,
             start_time=start_time,
             end_time=end_time,
+            estimate_prompt_tokens=False,
         )
+        if self._should_estimate_failed_prompt():
+            self.model_call_details[FAILED_PROMPT_TOKEN_ESTIMATE_KEY] = await self._offloaded_prompt_token_estimate()
         if self._on_failure_payload_built is not None:
             self._on_failure_payload_built()
         callbacks: Final = self.get_combined_callback_list(
@@ -5400,6 +5463,10 @@ class Logging(LiteLLMLoggingBaseClass):
     def record_streamed_anthropic_message_id(self, message_id: str) -> None:
         self.streamed_anthropic_message_id = message_id
 
+    def record_served_agentic_follow_up(self) -> None:
+        """This call served an agentic follow-up's reply, so its own spend row is keyed by its upstream reply."""
+        self.served_agentic_follow_up = True
+
     def record_bridged_model_response(self, response: ModelResponse) -> None:
         """The chat completion a /v1/messages response was translated from.
 
@@ -5515,6 +5582,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 json_mode=False,
                 litellm_params={},
             )
+            if self.served_agentic_follow_up:
+                return self._first_round_row(result, httpx_response)
         elif result is None:
             verbose_logger.warning("LiteLLM: the anthropic_messages stream assembled no response, logging an empty one")
             return litellm.ModelResponse(model=self.model)
@@ -5538,6 +5607,15 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         set_response_cost_in_hidden_params(result, reported_cost)
         return result
+
+    def _first_round_row(self, reparsed: ModelResponse, upstream: Response) -> ModelResponse:
+        body: Final = _LITELLM_PARAMS.validate_python(upstream.json())
+        upstream_id: Final = _provider_response_id(body)
+        row: Final = reparsed if upstream_id is None else reparsed.model_copy(update={"id": upstream_id})
+        set_response_cost_in_hidden_params(
+            row, native_messages_reported_cost(body.get("usage"), self.model_call_details.get("custom_llm_provider"))
+        )
+        return row
 
     def _translate_responses_api_response_to_model_response(
         self, result: ResponsesAPIResponse, request: BridgedChatRequest | None = None
@@ -7196,6 +7274,9 @@ class StandardLoggingPayloadSetup:
             user_api_key_team_alias=None,
             user_api_key_user_email=None,
             user_api_key_end_user_id=None,
+            user_api_key_customer_member_id=None,
+            user_api_key_customer_team_id=None,
+            user_api_key_customer_org_id=None,
             user_api_key_request_route=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
@@ -8340,6 +8421,9 @@ def get_standard_logging_metadata(
         user_agent=None,
         requester_metadata=None,
         user_api_key_end_user_id=None,
+        user_api_key_customer_member_id=None,
+        user_api_key_customer_team_id=None,
+        user_api_key_customer_org_id=None,
         prompt_management_metadata=None,
         applied_guardrails=None,
         mcp_tool_call_metadata=None,

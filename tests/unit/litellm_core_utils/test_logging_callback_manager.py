@@ -344,3 +344,28 @@ def test_duplicate_multiple_loggers_test():
 
     assert langfuse_count == 1, "Should have exactly one LangfusePromptManagement instance"
     assert otel_count == 1, "Should have exactly one OpenTelemetry instance"
+
+
+def test_get_callbacks_by_type_treats_both_failure_lists_as_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    for callback_list in (
+        "callbacks",
+        "success_callback",
+        "_async_success_callback",
+        "failure_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, callback_list, [])
+    manager = LoggingCallbackManager()
+    manager.add_litellm_callback("general_logger")
+    manager.add_litellm_success_callback("sync_success_logger")
+    manager.add_litellm_async_success_callback("async_success_logger")
+    manager.add_litellm_failure_callback("sync_failure_logger")
+    manager.add_litellm_async_failure_callback("async_failure_logger")
+    manager.add_litellm_success_callback("sync_success_and_async_failure_logger")
+    manager.add_litellm_async_failure_callback("sync_success_and_async_failure_logger")
+
+    callbacks_by_type = manager.get_callbacks_by_type()
+
+    assert set(callbacks_by_type["success"]) == {"sync_success_logger", "async_success_logger"}
+    assert set(callbacks_by_type["failure"]) == {"sync_failure_logger", "async_failure_logger"}
+    assert set(callbacks_by_type["success_and_failure"]) == {"general_logger", "sync_success_and_async_failure_logger"}
