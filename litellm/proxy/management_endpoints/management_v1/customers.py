@@ -1,5 +1,5 @@
 from math import ceil
-from typing import Annotated, Final, NoReturn, TypeVar
+from typing import Annotated, Final, NoReturn, TypeAlias, TypeVar
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from typing_extensions import assert_never
@@ -148,7 +148,7 @@ def get_user_api_key_cache() -> UserApiKeyCache:
     return user_api_key_cache
 
 
-AuthCache = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
+AuthCache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
 
 
 @router.post(
