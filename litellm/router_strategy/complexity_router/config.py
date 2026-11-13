@@ -549,6 +549,15 @@ class ClassifierLLMConfig(LiteLLMBaseModel):
         default=3000,
         description="Timeout budget for the classification call, in milliseconds",
     )
+    max_output_tokens: int = Field(
+        default=4096,
+        ge=1,
+        description=(
+            "Output token limit sent on every classification call. Without one, providers that reserve quota "
+            "from the requested limit, such as Amazon Bedrock, reserve the model's full output limit for a "
+            "reply of a few tokens. Leave room for reasoning when reasoning_effort is set."
+        ),
+    )
     circuit_breaker_enabled: bool = Field(
         default=True,
         description=(

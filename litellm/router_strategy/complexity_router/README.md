@@ -565,6 +565,12 @@ model_list:
 keep the classifier deployment or provider default, or set a supported value such as `none` or
 `low` to override that call.
 
+Every classifier call carries an output token limit, `classifier_llm_config.max_output_tokens`
+(4096 by default). The reply is a few tokens of JSON, but providers that reserve quota from the
+requested limit, such as Amazon Bedrock, would otherwise reserve the model's whole output limit on
+every routed request. Lower it to shrink that reservation, and keep room for reasoning tokens when
+`reasoning_effort` is set.
+
 When the current ask is a Responses API `agent_message` containing `encrypted_content`, LLM
 classification preserves the encrypted task and uses native Responses. This also bypasses the
 local scoring shortcut in `heuristic_first` and `hybrid` modes. The configured classifier must use

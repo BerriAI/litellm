@@ -18085,3 +18085,62 @@ async def test_custom_classifier_failure_preserves_plan_floor_and_direct_default
     assert result.routing_decision.get("tier") == (
         ("premium" if planned_model == "premium-model" else "careful") if plan_mode else None
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured_cap", [64, None])
+async def test_llm_classifier_call_caps_the_output_tokens_bedrock_reserves(
+    configured_cap: int | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the llm classifier's call reached Bedrock with no maxTokens, so Bedrock reserved the model's
+    full output limit against the token quota for every routed request and throttled the deployment."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    classifier_llm_config: Final = {
+        "model": "classifier",
+        "timeout_ms": 2000,
+        **({"max_output_tokens": configured_cap} if configured_cap is not None else {}),
+    }
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "auto",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {"SIMPLE": "cheap", "REASONING": "capable"},
+                        "default_model": "capable",
+                        "classifier_type": "llm",
+                        "classifier_llm_config": classifier_llm_config,
+                    },
+                },
+            },
+            {
+                "model_name": "classifier",
+                "litellm_params": {
+                    "model": "bedrock/global.anthropic.claude-haiku-5-5",
+                    "aws_region_name": "us-east-1",
+                    "aws_access_key_id": "test-key",
+                    "aws_secret_access_key": "test-secret",
+                },
+            },
+            {"model_name": "cheap", "litellm_params": {"model": "openai/test-cheap", "api_key": "test-key"}},
+            {"model_name": "capable", "litellm_params": {"model": "openai/test-capable", "api_key": "test-key"}},
+        ]
+    )
+    with respx.mock(assert_all_mocked=True) as upstream:
+        converse: Final = upstream.post(host="bedrock-runtime.us-east-1.amazonaws.com").respond(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": '{"tier": "SIMPLE"}'}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 900, "outputTokens": 8, "totalTokens": 908},
+            },
+        )
+        response: Final = await router.async_pre_routing_hook(
+            model="auto", request_kwargs={}, messages=[{"role": "user", "content": "rename this variable"}]
+        )
+
+    assert response is not None and response.model == "cheap"
+    sent: Final = json.loads(converse.calls.last.request.content)
+    expected_cap: Final = ClassifierLLMConfig.model_validate(classifier_llm_config).max_output_tokens
+    assert sent["inferenceConfig"]["maxTokens"] == expected_cap

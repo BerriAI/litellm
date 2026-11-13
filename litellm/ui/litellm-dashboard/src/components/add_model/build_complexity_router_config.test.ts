@@ -882,6 +882,17 @@ describe("classifier prompt and fallback", () => {
     });
   });
 
+  it.each([{}, { system_prompt: "x" }])(
+    "normalizeClassifierLlmConfig keeps an operator's classifier output cap through %o",
+    (extra) => {
+      const base = { model: "m", timeout_ms: 1, ...extra };
+      expect(normalizeClassifierLlmConfig({ ...base, max_output_tokens: 64 })).toEqual({
+        ...base,
+        max_output_tokens: 64,
+      });
+    },
+  );
+
   it.each([{}, { system_prompt: "x" }])("normalizeClassifierLlmConfig carries vision through %o", (extra) => {
     const base = { model: "m", timeout_ms: 1, ...extra };
     const vision = { enabled: true, max_images: 2 };
