@@ -242,7 +242,7 @@ def _normalize_public_auth_route(route: str) -> str:
     return route
 
 
-def _route_requires_auth_despite_public(route: str, general_settings: dict | None) -> bool:
+def _route_requires_auth_despite_public(route: str, general_settings: Mapping[str, object] | None) -> bool:
     normalized_route: Final = _normalize_public_auth_route(route)
     if normalized_route == "/metrics":
         return litellm.require_auth_for_metrics_endpoint is not False
@@ -250,7 +250,7 @@ def _route_requires_auth_despite_public(route: str, general_settings: dict | Non
     return False
 
 
-def _is_unauthenticated_public_route(route: str, general_settings: dict[str, object] | None) -> bool:
+def _is_unauthenticated_public_route(route: str, general_settings: Mapping[str, object] | None) -> bool:
     """A route the builder serves without credentials, so nothing on the request may create or charge anything."""
     return not _route_requires_auth_despite_public(route=route, general_settings=general_settings) and (
         route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(current_route=route)
