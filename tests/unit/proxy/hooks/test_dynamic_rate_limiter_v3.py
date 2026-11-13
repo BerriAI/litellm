@@ -3688,7 +3688,10 @@ async def test_a_worker_without_redis_reads_the_models_saturation_from_its_own_m
 
 
 def _key_and_org_handler(
-    monkeypatch: pytest.MonkeyPatch, *borrowers: str, saturation_threshold: float = 0.5
+    monkeypatch: pytest.MonkeyPatch,
+    *borrowers: str,
+    saturation_threshold: float = 0.5,
+    max_borrow_multiple: float | None = None,
 ) -> _PROXY_DynamicRateLimitHandlerV3:
     from litellm.types.utils import ModelLimitBorrowingConfig, PriorityReservationSettings
 
@@ -3698,7 +3701,9 @@ def _key_and_org_handler(
         "priority_reservation_settings",
         PriorityReservationSettings(
             saturation_threshold=saturation_threshold,
-            model_limit_borrowing_config=ModelLimitBorrowingConfig(borrow_idle_capacity=borrowers),
+            model_limit_borrowing_config=ModelLimitBorrowingConfig(
+                borrow_idle_capacity=borrowers, max_borrow_multiple=max_borrow_multiple
+            ),
         ),
     )
     return handler
@@ -3709,7 +3714,6 @@ def _org_caller(
     org_id: str = "org-a",
     share: int = 100,
     limit: str = "model_tpm_limit",
-    multiple: float | None = None,
     **key_fields: object,
 ) -> UserAPIKeyAuth:
     from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
@@ -3724,7 +3728,6 @@ def _org_caller(
                     key="customer_org",
                     entity_id=org_id,
                     alias=f"{org_id}-alias",
-                    model_limit_max_borrow_multiple=multiple,
                     **{limit: {"shared-model": share}},
                 ),
             ),
@@ -3808,15 +3811,15 @@ async def test_customer_org_borrowing_is_off_by_default_so_the_dynamic_limiter_a
 async def test_a_customer_org_at_its_max_borrow_multiple_is_refused_while_the_model_is_idle(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    handler: Final = _key_and_org_handler(monkeypatch, "customer_organization")
-    await _use(handler, _org_caller(multiple=2), 190)
-    await _use(handler, _org_caller("sk-service-b", multiple=2), 10)
+    handler: Final = _key_and_org_handler(monkeypatch, "customer_organization", max_borrow_multiple=2)
+    await _use(handler, _org_caller(), 190)
+    await _use(handler, _org_caller("sk-service-b"), 10)
     with pytest.raises(ProxyRateLimitError) as exc:
-        await _check(handler, _org_caller(multiple=2), saturation=0.0)
+        await _check(handler, _org_caller(), saturation=0.0)
     assert exc.value.headers is not None
     assert exc.value.headers["rate_limited_by"] == "model_per_customer_org_max_borrow_multiple"
     assert "Customer organization model_tpm_limit: 100, Borrow cap: 200, Remaining: 0" in str(exc.value.detail)
-    await _check(handler, _org_caller(org_id="org-b", multiple=2), saturation=0.0)
+    await _check(handler, _org_caller(org_id="org-b"), saturation=0.0)
 
 
 @pytest.mark.asyncio
@@ -4163,3 +4166,28 @@ async def test_a_websocket_turn_on_a_model_without_a_team_limit_is_not_charged_t
         combined_usage_object=litellm.Usage(prompt_tokens=60, completion_tokens=30, total_tokens=90),
     )
     assert await _team_tokens_remaining(handler) == 100
+
+
+@pytest.mark.asyncio
+async def test_the_configured_max_borrow_multiple_caps_a_key_and_a_team_that_set_none_of_their_own(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(monkeypatch, "team", "key", max_borrow_multiple=2)
+    await _use(handler, _service_key(), 200)
+    with pytest.raises(ProxyRateLimitError) as key_refusal:
+        await _check(handler, _service_key(), saturation=0.0)
+    assert key_refusal.value.headers is not None
+    assert key_refusal.value.headers["rate_limited_by"] == "model_per_key_max_borrow_multiple"
+    await _use(handler, _team_key(), 200)
+    with pytest.raises(ProxyRateLimitError) as team_refusal:
+        await _check(handler, _team_key(), saturation=0.0)
+    assert team_refusal.value.headers is not None
+    assert team_refusal.value.headers["rate_limited_by"] == "model_per_team_max_borrow_multiple"
+
+
+@pytest.mark.asyncio
+async def test_a_keys_own_max_borrow_multiple_replaces_the_configured_one(monkeypatch: pytest.MonkeyPatch):
+    handler: Final = _key_and_org_handler(monkeypatch, "key", max_borrow_multiple=2)
+    raised: Final = _service_key(model_limit_max_borrow_multiple=4)
+    await _use(handler, raised, 300)
+    await _check(handler, raised, saturation=0.0)

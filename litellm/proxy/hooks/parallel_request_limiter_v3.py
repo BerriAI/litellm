@@ -255,7 +255,7 @@ def _max_borrow_multiple(raw: object, setting: str, owner: str) -> float | None:
         return _MAX_BORROW_MULTIPLE.validate_python(raw)
     except ValidationError:
         verbose_proxy_logger.warning(
-            "Ignoring %s=%r on %s: expected a number from 1 to %d, so it borrows up to the model limit",
+            "Ignoring %s=%r on %s: expected a number from 1 to %d, so the value is not used",
             setting,
             raw,
             owner,
@@ -283,7 +283,10 @@ def borrowing_team_model_limits(user_api_key_dict: UserAPIKeyAuth, model: RateLi
     if limits == NO_BORROWING or not dynamic_rate_limiter_covers(model.group):
         return NO_BORROWING
     return BorrowingTeamModelLimits(
-        tpm=limits.tpm, rpm=limits.rpm, max_borrow_multiple=team_model_limit_max_borrow_multiple(user_api_key_dict)
+        tpm=limits.tpm,
+        rpm=limits.rpm,
+        max_borrow_multiple=team_model_limit_max_borrow_multiple(user_api_key_dict)
+        or settings.model_limit_borrowing_config.max_borrow_multiple,
     )
 
 
@@ -307,7 +310,8 @@ def borrowing_key_model_limits(user_api_key_dict: UserAPIKeyAuth, model: RateLim
             ).get(MODEL_LIMIT_MAX_BORROW_MULTIPLE),
             MODEL_LIMIT_MAX_BORROW_MULTIPLE,
             "a key",
-        ),
+        )
+        or settings.model_limit_borrowing_config.max_borrow_multiple,
     )
 
 
@@ -333,7 +337,7 @@ def borrowing_customer_org_model_limits(
     if limits == NO_BORROWING or not dynamic_rate_limiter_covers(model.group):
         return NO_BORROWING
     return BorrowingTeamModelLimits(
-        tpm=limits.tpm, rpm=limits.rpm, max_borrow_multiple=scope.model_limit_max_borrow_multiple
+        tpm=limits.tpm, rpm=limits.rpm, max_borrow_multiple=settings.model_limit_borrowing_config.max_borrow_multiple
     )
 
 

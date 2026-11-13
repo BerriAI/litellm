@@ -28,7 +28,6 @@ model LiteLLM_BudgetTable {
   model_max_budget Json?
   model_tpm_limit Json?
   model_rpm_limit Json?
-  model_limit_max_borrow_multiple Float?
   budget_duration String?
   budget_limits Json?
   cap_policy String?

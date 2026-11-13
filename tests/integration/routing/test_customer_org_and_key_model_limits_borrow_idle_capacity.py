@@ -34,15 +34,20 @@ def _respond(request: Request) -> Reply:
     return Reply(body=UPSTREAM_REPLY)
 
 
-def _proxy(tmp_path_factory: pytest.TempPathFactory, saturation_threshold: float) -> Iterator[tuple[Gateway, str]]:
-    directory: Final = tmp_path_factory.mktemp(f"org-key-borrowing-{saturation_threshold}")
+def _proxy(
+    tmp_path_factory: pytest.TempPathFactory, saturation_threshold: float, max_borrow_multiple: int | None = None
+) -> Iterator[tuple[Gateway, str]]:
+    directory: Final = tmp_path_factory.mktemp(f"org-key-borrowing-{saturation_threshold}-{max_borrow_multiple}")
     configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     configuration["litellm_settings"] = {
         **configuration["litellm_settings"],
         "callbacks": ["dynamic_rate_limiter_v3"],
         "priority_reservation_settings": {
             "saturation_threshold": saturation_threshold,
-            "model_limit_borrowing_config": {"borrow_idle_capacity": ["key", "customer_organization"]},
+            "model_limit_borrowing_config": {
+                "borrow_idle_capacity": ["key", "customer_organization"],
+                "max_borrow_multiple": max_borrow_multiple,
+            },
         },
     }
     path: Final = directory / "org_key_model_limit_borrowing.yaml"
@@ -58,6 +63,11 @@ def _proxy(tmp_path_factory: pytest.TempPathFactory, saturation_threshold: float
 @pytest.fixture(scope="module")
 def idle_model(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, str]]:
     yield from _proxy(tmp_path_factory, saturation_threshold=0.9)
+
+
+@pytest.fixture(scope="module")
+def idle_model_with_a_borrow_cap(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, str]]:
+    yield from _proxy(tmp_path_factory, saturation_threshold=0.9, max_borrow_multiple=MAX_BORROW_MULTIPLE)
 
 
 @pytest.fixture(scope="module")
@@ -82,18 +92,13 @@ def _chat(owned: Gateway, model: str, key: str, org_alias: str | None = None) ->
     )
 
 
-def _org_calls(
-    owned: Gateway, upstream: str, calls: int, max_borrow_multiple: int | None = None
-) -> tuple[httpx.Response, ...]:
+def _org_calls(owned: Gateway, upstream: str, calls: int) -> tuple[httpx.Response, ...]:
     """One customer organization calling through two service keys in turn."""
     with owned.scenario() as scenario:
         model: Final = scenario.model(
             model=f"openai/{OPENAI_MODEL}", api_base=f"{upstream}/v1", api_key="synthetic-openai-key", tpm=MODEL_TPM
         )
-        cap: Final[Mapping[str, JsonValue]] = (
-            {} if max_borrow_multiple is None else {"model_limit_max_borrow_multiple": max_borrow_multiple}
-        )
-        org: Final = _customer_org(owned, {"model_tpm_limit": {model: SHARE_TPM}, **cap})
+        org: Final = _customer_org(owned, {"model_tpm_limit": {model: SHARE_TPM}})
         keys: Final = (scenario.key(), scenario.key())
         return tuple(_chat(owned, model, keys[call % 2], org) for call in range(calls))
 
@@ -134,11 +139,11 @@ def test_a_customer_org_is_held_to_its_model_tpm_limit_once_the_model_saturates(
     assert admitted * TOKENS_PER_CALL <= SHARE_TPM + TOKENS_PER_CALL, [r.status_code for r in responses]
 
 
-def test_a_customer_org_stops_borrowing_at_its_max_borrow_multiple_while_the_model_is_idle(
-    idle_model: tuple[Gateway, str],
+def test_a_customer_org_stops_borrowing_at_the_configured_max_borrow_multiple_while_the_model_is_idle(
+    idle_model_with_a_borrow_cap: tuple[Gateway, str],
 ) -> None:
-    owned, upstream = idle_model
-    responses: Final = _org_calls(owned, upstream, calls=12, max_borrow_multiple=MAX_BORROW_MULTIPLE)
+    owned, upstream = idle_model_with_a_borrow_cap
+    responses: Final = _org_calls(owned, upstream, calls=12)
     blocked: Final = tuple(response for response in responses if response.status_code == 429)
     admitted: Final = sum(1 for response in responses if response.status_code == 200)
     assert blocked, [r.text for r in responses]

@@ -433,7 +433,6 @@ def test_template_edits_propagate_and_only_live_override_fields_win() -> None:
         "budget_limits": None,
         "model_tpm_limit": None,
         "model_rpm_limit": None,
-        "model_limit_max_borrow_multiple": None,
         "cap_policy": None,
     }
     fallback: Final = http.get("/management/v1/customer_members/expired")

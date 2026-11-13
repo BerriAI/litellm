@@ -5403,7 +5403,14 @@ class ModelLimitBorrowingConfig(LiteLLMBaseModel):
 
     borrow_idle_capacity: tuple[ModelLimitBorrowingEntity, ...] = Field(
         default=(),
-        description="Entity types whose model_tpm_limit and model_rpm_limit on a model this limiter covers stop being ceilings. Each may run past them on capacity other callers are not using while the model is below saturation_threshold, up to its model_limit_max_borrow_multiple when one is set, and is held to them once the model saturates. A customer organization's usage counts across every key its requests use.",
+        description="Entity types whose model_tpm_limit and model_rpm_limit on a model this limiter covers stop being ceilings. Each may run past them on capacity other callers are not using while the model is below saturation_threshold, up to its borrow cap when one is set, and is held to them once the model saturates. A customer organization's usage counts across every key its requests use.",
+    )
+    max_borrow_multiple: float | None = Field(
+        default=None,
+        ge=1,
+        le=1_000_000,
+        allow_inf_nan=False,
+        description="Most a borrower may use on a model while it borrows idle capacity, as a multiple of its model_tpm_limit or model_rpm_limit. It applies to every listed entity type. A team or key that sets model_limit_max_borrow_multiple in its metadata uses that value instead. None lets a borrower without its own value use everything up to the model limit.",
     )
 
 
