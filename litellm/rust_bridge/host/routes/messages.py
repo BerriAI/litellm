@@ -242,7 +242,7 @@ _HANDLER: Final = cast(  # cast-ok: only the untyped handler's signature is read
     handler.anthropic_messages_handler,  # noqa: TID251  # reads the handler's signature, never calls it
 )
 _ENTRY_PARAMS: Final = frozenset(inspect.signature(_ENTRY).parameters) - {"kwargs"}
-_RUST_ONLY_PROVIDERS: Final = frozenset({"anthropic"})
+_MAIN_NATIVE_ERROR_PROVIDERS: Final = frozenset({"anthropic"})
 _HANDLER_PARAMS: Final = frozenset(inspect.signature(_HANDLER).parameters) - {"kwargs"}
 _JsonBlocks: TypeAlias = list[dict[str, JsonValue]]
 _Prepared: TypeAlias = tuple[_JsonBlocks, str | _JsonBlocks | None, Sequence[object] | None]
@@ -709,7 +709,7 @@ def _transport_failure(
     if body_cut is not None:
         return str(_body_cut(*_BODY_CUT.validate_python(body_cut)))
     native: Final = str(error)
-    if native == _UNSENDABLE_HEADER and request_provider not in _RUST_ONLY_PROVIDERS:
+    if native == _UNSENDABLE_HEADER and request_provider not in _MAIN_NATIVE_ERROR_PROVIDERS:
         # httpx names the header value in its text, which may be a credential.
         return _AIOHTTP_UNSENDABLE_HEADER if http_transport.uses_aiohttp_transport() else native
     if native == _TOO_MANY_REDIRECTS:
@@ -796,10 +796,10 @@ def _config_error(
 def _mapped_kwargs(
     request: Mapping[str, object], request_provider: str
 ) -> dict[str, object]:  # mutable-ok: the legacy mapper takes a dict
-    """What the exception mapping reads for the debug info. A provider with a Python path maps with its
-    entry's `**kwargs`, so the named `api_base` adds no API Base line. Anthropic has no Python path and
-    keeps the native route's mapping of the whole call, which names the `api_base`."""
-    if request_provider in _RUST_ONLY_PROVIDERS:
+    """What the exception mapping reads for the debug info. A provider mapped as Python's handler maps it
+    reads the entry's `**kwargs`, so the named `api_base` adds no API Base line. Anthropic, by the owner's
+    ruling, keeps main's native mapping of the whole call, which names the `api_base`."""
+    if request_provider in _MAIN_NATIVE_ERROR_PROVIDERS:
         return dict(request)
     return {name: value for name, value in request.items() if name not in _ENTRY_PARAMS}
 
@@ -858,9 +858,9 @@ def _raised(error: _RaisedT) -> _RaisedT:
 
 
 def _raised_like_python(error: _RaisedT, request_provider: str) -> _RaisedT:
-    """`error` raised through a Python frame for a provider with a Python path. Anthropic has none, and by the
-    owner's ruling keeps main's native route, which hands the exception back unraised, without a traceback."""
-    return error if request_provider in _RUST_ONLY_PROVIDERS else _raised(error)
+    """`error` raised through a Python frame, as Python's handler raises it. Anthropic, by the owner's ruling,
+    keeps main's native route, which hands the exception back unraised, without a traceback."""
+    return error if request_provider in _MAIN_NATIVE_ERROR_PROVIDERS else _raised(error)
 
 
 def map_failure(
@@ -1405,9 +1405,9 @@ def transport_handler(request: Mapping[str, object]) -> tuple[AsyncHTTPHandler |
 def decoding_failure(message: str, request: Mapping[str, object], request_provider: str) -> Exception:
     error: Final = httpx.DecodingError(message)
     if request.get("stream") is True:
-        # Python's stream iterator attaches the deployment's debug info. Anthropic has no Python path, and by
-        # the owner's ruling keeps main's native route, which raises the decoding error bare.
-        if request_provider in _RUST_ONLY_PROVIDERS:
+        # Python's stream iterator attaches the deployment's debug info. Anthropic, by the owner's ruling,
+        # keeps main's native route, which raises the decoding error bare.
+        if request_provider in _MAIN_NATIVE_ERROR_PROVIDERS:
             return error
         return _with_deployment_debug_info(error, request, request_provider)
     return map_transport_failure(error, request, request_provider)
