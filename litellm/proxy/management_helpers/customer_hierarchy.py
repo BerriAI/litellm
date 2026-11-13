@@ -68,6 +68,7 @@ class Failure:
 FREE_ORGANIZATION_LIMIT: Final = 5
 FREE_TEAMS_PER_ORGANIZATION_LIMIT: Final = 5
 FREE_MEMBERS_PER_TEAM_LIMIT: Final = 5
+FREE_CAPACITY_ADVISORY_LOCK: Final = 714023581
 
 
 class CustomerPortalLimits(BaseModel):
@@ -453,7 +454,7 @@ def _member_ids(rows: Sequence[PrismaRecord]) -> tuple[str, ...]:
 
 class CustomerHierarchyStore:
     def __init__(
-        self, db: "Prisma", now: datetime, settings: BudgetResetSettings | None = None, *, premium_user: bool = True
+        self, db: "Prisma", now: datetime, settings: BudgetResetSettings | None = None, *, premium_user: bool
     ) -> None:
         self.db = db
         self.premium_user = premium_user
@@ -465,7 +466,7 @@ class CustomerHierarchyStore:
         self.budgets: TableActions[PrismaRecord] = db.litellm_budgettable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
 
     async def lock_free_capacity(self) -> None:
-        await self.db.query_raw("SELECT 1 AS locked FROM pg_advisory_xact_lock(714023581)")
+        await self.db.query_raw("SELECT 1 AS locked FROM pg_advisory_xact_lock($1)", FREE_CAPACITY_ADVISORY_LOCK)
 
     async def member_capacity_reached(self, team_ids: Sequence[str]) -> bool:
         if self.premium_user or not team_ids:
@@ -864,20 +865,9 @@ class CustomerHierarchyStore:
         return await self.update_budget(current_id, payload.budget_override, actor)
 
     async def update_member(self, member_id: str, payload: MemberPatch, actor: str) -> CustomerMember | Failure:
-        if not self.premium_user and payload.parent_team_ids is not None:
-            await self.lock_free_capacity()
         member: Final = await self.get_member(member_id)
         if isinstance(member, Failure):
             return member
-        if payload.parent_team_ids is not None:
-            organization_id: Final = await self.member_organization(
-                MemberCreate(parent_org_id=member.parent_org_id, parent_team_ids=payload.parent_team_ids)
-            )
-            if isinstance(organization_id, Failure):
-                return organization_id
-            added: Final = tuple(team for team in payload.parent_team_ids if team not in member.parent_team_ids)
-            if await self.member_capacity_reached(added):
-                return Failure(ErrorCode.FREE_TIER_LIMIT)
         selected: Final = await self.member_template_patch(member, payload)
         if isinstance(selected, Failure):
             return selected
@@ -892,11 +882,6 @@ class CustomerHierarchyStore:
             data={
                 **alias_patch(payload),
                 "budget_id": selected,
-                **(
-                    {"parent_team_ids": tuple(dict.fromkeys(payload.parent_team_ids))}
-                    if payload.parent_team_ids is not None
-                    else {}
-                ),
                 "budget_override_id": override_id,
                 "budget_override_expires_at": override_expiry(member.budget_override_expires_at, payload, override_id),
                 "updated_by": actor,

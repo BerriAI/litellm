@@ -24,7 +24,6 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     MemberCreate,
-    MemberPatch,
     OrganizationCreate,
     TeamCreate,
 )
@@ -329,7 +328,7 @@ class Database:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("premium", (False, True))
-async def test_customer_portal_capacity_caps_every_parent_and_member_team_addition(premium: bool) -> None:
+async def test_customer_portal_capacity_caps_every_parent(premium: bool) -> None:
     database: Final = Database()
     hierarchy: Final = CustomerHierarchy(
         cast("Prisma", database), premium_user=premium, clock=lambda: NOW
@@ -372,35 +371,6 @@ async def test_customer_portal_capacity_caps_every_parent_and_member_team_additi
     assert isinstance(sixth_member, Failure) is not premium
     if not premium:
         assert sixth_member == Failure(ErrorCode.FREE_TIER_LIMIT)
-    assert not isinstance(
-        await hierarchy.create_member(
-            MemberCreate(
-                customer_member_id="moving", parent_team_ids=("team-2",), budget_override=Budget(max_budget=10)
-            ),
-            "admin",
-        ),
-        Failure,
-    )
-    updated: Final = await hierarchy.update_member("moving", MemberPatch(parent_team_ids=("team-2", "team-1")), "admin")
-    if premium:
-        assert not isinstance(updated, Failure) and updated.parent_team_ids == ("team-2", "team-1")
-    else:
-        assert updated == Failure(ErrorCode.FREE_TIER_LIMIT)
-    unchanged: Final = await hierarchy.update_member("member-0", MemberPatch(parent_team_ids=("team-1",)), "admin")
-    assert not isinstance(unchanged, Failure) and unchanged.parent_team_ids == ("team-1",)
-    invalid: Final = await hierarchy.update_member("moving", MemberPatch(parent_team_ids=("unknown",)), "admin")
-    assert invalid == Failure(ErrorCode.PARENT_NOT_FOUND)
-    under_capacity: Final = await hierarchy.update_member(
-        "moving", MemberPatch(parent_team_ids=("team-2", "team-3")), "admin"
-    )
-    assert not isinstance(under_capacity, Failure) and under_capacity.parent_team_ids == ("team-2", "team-3")
-    assert not isinstance(
-        await hierarchy.create_team(TeamCreate(customer_team_id="other-org", parent_org_id="org-1"), "admin"), Failure
-    )
-    cross_organization: Final = await hierarchy.update_member(
-        "moving", MemberPatch(parent_team_ids=("other-org",)), "admin"
-    )
-    assert cross_organization == Failure(ErrorCode.PARENT_NOT_FOUND)
 
 
 @pytest.mark.parametrize("expires_at", (None, datetime(2027, 1, 1, tzinfo=timezone.utc)))
