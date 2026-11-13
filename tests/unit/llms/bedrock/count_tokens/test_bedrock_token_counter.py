@@ -1,5 +1,5 @@
 import base64
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import httpx
@@ -245,6 +245,37 @@ async def test_runtime_400_without_an_edit_still_reports_the_mantle_failure() ->
     assert result.tokenizer_type == "bedrock_mantle_api"
     assert "does not exist" in (result.error_message or "")
     assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+
+
+def _mantle_unreachable(request: httpx.Request) -> httpx.Response:
+    if request.url.host == MANTLE_HOST:
+        raise httpx.ConnectError("[Errno 11001] getaddrinfo failed", request=request)
+    return httpx.Response(400, json=UNSUPPORTED, request=request)
+
+
+def _mantle_unavailable(request: httpx.Request) -> httpx.Response:
+    status_code: Final = 400 if request.url.host == RUNTIME_HOST else 503
+    return httpx.Response(status_code, json=UNSUPPORTED if status_code == 400 else {"message": "busy"}, request=request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("peer", (_mantle_unreachable, _mantle_unavailable))
+async def test_runtime_rejection_stands_when_the_mantle_retry_gets_no_answer(
+    peer: Callable[[httpx.Request], httpx.Response],
+) -> None:
+    counter: Final = BedrockTokenCounter(client=AsyncHTTPHandler(transport=httpx.MockTransport(peer)))
+
+    result: Final = await counter.count_tokens(
+        model_to_use="eu.anthropic.claude-sonnet-5-5",
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-sonnet-5-5",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.tokenizer_type) == (True, 400, "bedrock_api")
+    assert result.error_message == '{"message":"The provided model doesn\'t support counting tokens."}'
 
 
 @pytest.mark.asyncio
