@@ -57,6 +57,11 @@ class _Undecided:
         raise RuntimeError("no truth")
 
 
+class _HashRaises:
+    def __hash__(self) -> int:
+        raise RuntimeError("no hash")
+
+
 class _Falsy:
     def __str__(self) -> str:
         return "falsy object"
@@ -191,32 +196,76 @@ def test_nan_is_carried_as_the_float_python_reads() -> None:
     assert math.isnan(cost.response_cost)
 
 
-@pytest.mark.parametrize(
-    ("raw", "text", "truthy"),
-    [
-        pytest.param(["a1"], "['a1']", True, id="list"),
-        pytest.param([], "[]", False, id="empty_list"),
-        pytest.param({"a": 1}, "{'a': 1}", True, id="dict"),
-        pytest.param({}, "{}", False, id="empty_dict"),
-        pytest.param({"a"}, "{'a'}", True, id="set"),
-        pytest.param(set(), "set()", False, id="empty_set"),
-        pytest.param(b"7", "b'7'", True, id="bytes"),
-        pytest.param(b"", "b''", False, id="empty_bytes"),
-        pytest.param(_Falsy(), "falsy object", False, id="object"),
-        pytest.param(2**127, "170141183460469231731687303715884105728", True, id="past_i128"),
-        pytest.param(-(2**127) - 1, "-170141183460469231731687303715884105729", True, id="below_i128"),
-    ],
+_CARRIED: Final = (
+    pytest.param(["a1"], Stringified(text="['a1']", truthy=True, hashable=False, integer=False), id="list"),
+    pytest.param([], Stringified(text="[]", truthy=False, hashable=False, integer=False), id="empty_list"),
+    pytest.param({"a": 1}, Stringified(text="{'a': 1}", truthy=True, hashable=False, integer=False), id="dict"),
+    pytest.param({}, Stringified(text="{}", truthy=False, hashable=False, integer=False), id="empty_dict"),
+    pytest.param({"a"}, Stringified(text="{'a'}", truthy=True, hashable=False, integer=False), id="set"),
+    pytest.param(set(), Stringified(text="set()", truthy=False, hashable=False, integer=False), id="empty_set"),
+    pytest.param(("a",), Stringified(text="('a',)", truthy=True, hashable=True, integer=False), id="tuple"),
+    pytest.param(
+        ("a", ["b"]), Stringified(text="('a', ['b'])", truthy=True, hashable=False, integer=False), id="tuple_of_list"
+    ),
+    pytest.param(
+        frozenset(), Stringified(text="frozenset()", truthy=False, hashable=True, integer=False), id="frozenset"
+    ),
+    pytest.param(b"7", Stringified(text="b'7'", truthy=True, hashable=True, integer=False), id="bytes"),
+    pytest.param(b"", Stringified(text="b''", truthy=False, hashable=True, integer=False), id="empty_bytes"),
+    pytest.param(_Falsy(), Stringified(text="falsy object", truthy=False, hashable=True, integer=False), id="object"),
+    pytest.param(
+        2**127,
+        Stringified(text="170141183460469231731687303715884105728", truthy=True, hashable=True, integer=True),
+        id="past_i128",
+    ),
+    pytest.param(
+        -(2**127) - 1,
+        Stringified(text="-170141183460469231731687303715884105729", truthy=True, hashable=True, integer=True),
+        id="below_i128",
+    ),
 )
+
+
+@pytest.mark.parametrize(("raw", "carried"), _CARRIED)
 def test_a_scalar_member_carries_any_other_value_as_the_str_text_and_truthiness_python_reads(
-    raw: object, text: str, truthy: bool, caplog: pytest.LogCaptureFixture
+    raw: object, carried: Stringified, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level("WARNING", logger="LiteLLM"):
         record: Final = coerce_record(UsageRecord, {"prompt_tokens": raw})
 
-    assert record == UsageRecord(prompt_tokens=Stringified(text=text, truthy=truthy))
+    assert record == UsageRecord(prompt_tokens=carried)
+    text: Final = carried.text
     assert record.prompt_tokens != text
     assert not isinstance(record.prompt_tokens, str)
     assert caplog.records == []
+
+
+def _priority_lookup_raises(priority: object) -> bool:
+    try:
+        _ = priority in {"gold": 0.5}
+    except TypeError:
+        return True
+    return False
+
+
+def _descriptor_identities_raise(value: object) -> bool:
+    try:
+        _ = dict.fromkeys((("team", value),))
+    except TypeError:
+        return True
+    return False
+
+
+@pytest.mark.parametrize(("raw", "carried"), _CARRIED)
+def test_hashable_says_whether_capacity_and_the_limiter_raise_when_they_hash_the_value(
+    raw: object, carried: Stringified
+) -> None:
+    identity: Final = coerce_record(KeyIdentity, {"team_priority": raw, "org_id": raw})
+
+    assert identity.team_priority == identity.org_id == carried
+    assert carried.hashable is not _priority_lookup_raises(raw)
+    assert carried.hashable is not _descriptor_identities_raise(raw)
+    assert carried.integer is isinstance(raw, int)
 
 
 @pytest.mark.parametrize(
@@ -225,6 +274,7 @@ def test_a_scalar_member_carries_any_other_value_as_the_str_text_and_truthiness_
         pytest.param(_Unprintable(), id="str_raises"),
         pytest.param(_Undecided(), id="bool_raises"),
         pytest.param(10**5000, id="int_too_long_for_str"),
+        pytest.param(_HashRaises(), id="hash_raises_other_than_type_error"),
     ],
 )
 def test_a_value_whose_str_or_bool_raises_is_named_in_rejected(raw: object) -> None:
@@ -617,8 +667,8 @@ def test_key_identity_carries_a_list_priority_and_agent_id_as_the_text_python_fo
     assert identity is not None
     assert identity.rejected is None
     assert (identity.agent_id, identity.team_priority) == (
-        Stringified(text="['a1']", truthy=True),
-        Stringified(text="['gold']", truthy=True),
+        Stringified(text="['a1']", truthy=True, hashable=False, integer=False),
+        Stringified(text="['gold']", truthy=True, hashable=False, integer=False),
     )
 
 
@@ -870,7 +920,9 @@ def test_prometheus_parity_values_cross_as_python_holds_them() -> None:
 
     assert usage is not None
     assert usage.logged == UsageRecord(
-        prompt_tokens="ten", completion_tokens=float("inf"), total_tokens=Stringified(text="[10]", truthy=True)
+        prompt_tokens="ten",
+        completion_tokens=float("inf"),
+        total_tokens=Stringified(text="[10]", truthy=True, hashable=False, integer=False),
     )
     assert cost == Cost(response_cost=0.5, zero_cost=ZeroCost(reason_present=False))
     assert timing is not None
@@ -897,13 +949,36 @@ def test_prometheus_parity_values_cross_as_python_holds_them() -> None:
         (
             [{"guardrail_mode": ["pre_call", 7, {"x": 1}]}, "text"],
             (
-                GuardrailEntry(mapping=True, modes=("pre_call", 7, Stringified(text="{'x': 1}", truthy=True))),
+                GuardrailEntry(
+                    mapping=True,
+                    modes=("pre_call", 7, Stringified(text="{'x': 1}", truthy=True, hashable=False, integer=False)),
+                ),
                 GuardrailEntry(mapping=False),
             ),
         ),
         ("abc", (GuardrailEntry(mapping=False),)),
+        (
+            {"guardrail_mode": ("pre_call",)},
+            (
+                GuardrailEntry(
+                    mapping=True,
+                    modes=(Stringified(text="('pre_call',)", truthy=True, hashable=True, integer=False),),
+                ),
+            ),
+        ),
+        ({"guardrail_mode": 7}, (GuardrailEntry(mapping=True, modes=(7,)),)),
+        ({"duration": 0.5}, (GuardrailEntry(mapping=True, modes=(None,), duration=0.5),)),
     ],
-    ids=("none", "empty", "single-mapping", "list", "truthy-not-a-list"),
+    ids=(
+        "none",
+        "empty",
+        "single-mapping",
+        "list",
+        "truthy-not-a-list",
+        "tuple-mode-is-one-mode",
+        "int-mode-is-one-mode",
+        "missing-mode-is-one-none-mode",
+    ),
 )
 def test_guardrail_info_keeps_what_prometheus_iterates(
     raw: object, expected: tuple[GuardrailEntry, ...] | None
@@ -911,6 +986,24 @@ def test_guardrail_info_keeps_what_prometheus_iterates(
     payload: Final = {"guardrail_information": raw}
 
     assert derivations.guardrail_info(HookArgs(request={"standard_logging_object": payload})) == expected
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [("pre_call",), ["pre_call"], ["pre_call", "during_call"], "post_call", 7, None, ["pre_call", 7]],
+    ids=repr,
+)
+def test_guardrail_modes_select_the_str_modes_prometheus_counts_as_additive(mode: object) -> None:
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    payload: Final = {"guardrail_information": {"guardrail_mode": mode}}
+    entries: Final = derivations.guardrail_info(HookArgs(request={"standard_logging_object": payload}))
+    assert entries is not None
+    modes: Final = frozenset(item for item in entries[0].modes or () if isinstance(item, str))
+
+    assert (bool(modes) and modes <= PrometheusLogger._ADDITIVE_GUARDRAIL_MODES) is (
+        PrometheusLogger._guardrail_is_additive({"guardrail_mode": mode})  # pyright: ignore[reportArgumentType]  # the shapes guardrails write
+    )
 
 
 @pytest.mark.parametrize(
@@ -937,8 +1030,8 @@ def test_request_tags_keep_scalar_tags_and_carry_others_as_their_text() -> None:
     assert derivations.request_tags(HookArgs(request={"standard_logging_object": payload})) == (
         "prod",
         7,
-        Stringified(text="{'a': 1}", truthy=True),
-        Stringified(text="[]", truthy=False),
+        Stringified(text="{'a': 1}", truthy=True, hashable=False, integer=False),
+        Stringified(text="[]", truthy=False, hashable=False, integer=False),
         None,
     )
 

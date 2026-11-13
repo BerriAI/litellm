@@ -448,7 +448,7 @@ mod tests {
     #[rstest]
     fn identity_members_carry_a_stringified_value_apart_from_text() {
         let identity: LoggedKeyIdentity = serde_json::from_value(json!({
-            "team_id": {"text": "['t1']", "truthy": true},
+            "team_id": {"text": "['t1']", "truthy": true, "hashable": false, "integer": false},
             "team_alias": "['t1']",
         }))
         .unwrap();
@@ -456,7 +456,9 @@ mod tests {
             identity.team_id,
             Some(Scalar::Stringified {
                 text: "['t1']".to_owned(),
-                truthy: true
+                truthy: true,
+                hashable: false,
+                integer: false,
             })
         );
         assert_ne!(identity.team_id, identity.team_alias);
