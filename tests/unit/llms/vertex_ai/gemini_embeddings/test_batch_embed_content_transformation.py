@@ -29,12 +29,17 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
     transform_openai_input_gemini_embed_content,
 )
 from litellm.types.llms.vertex_ai import VertexAIBatchEmbeddingsResponseObject
-from litellm.types.utils import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse, Usage
 
 IMAGE_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
 GCS_URL = "gs://my-bucket/image.png"
 VIDEO_DATA_URI = "data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAA"
 FILES_URI = "https://generativelanguage.googleapis.com/v1beta/files/clip123"
+
+
+def _prompt_cost(model: str, usage: Usage) -> float:
+    cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="vertex_ai")
+    return cost
 
 
 def _file_block(**file: object) -> dict[str, object]:
@@ -386,7 +391,7 @@ class TestProcessEmbedContentResponseUsage:
         https://ai.google.dev/gemini-api/docs/pricing "Document token billing", read 2026-11-13.
         """
 
-        def usage_for(details: list[dict[str, object]], prompt_tokens: int):
+        def usage_for(details: tuple[dict[str, object], ...], prompt_tokens: int) -> Usage:
             return process_embed_content_response(
                 input=[{"type": "file", "file": {"file_data": "gs://bucket/invoice.pdf", "format": "application/pdf"}}],
                 model_response=EmbeddingResponse(),
@@ -396,27 +401,25 @@ class TestProcessEmbedContentResponseUsage:
                     "usageMetadata": {
                         "promptTokenCount": prompt_tokens,
                         "totalTokenCount": prompt_tokens,
-                        "promptTokensDetails": details,
+                        "promptTokensDetails": list(details),
                     },
                 },
             ).usage
 
-        def prompt_cost(usage) -> float:
-            cost, _ = generic_cost_per_token(model=self.MODEL, usage=usage, custom_llm_provider="vertex_ai")
-            return cost
-
-        document_usage = usage_for(
-            [{"modality": "TEXT", "tokenCount": 12}, {"modality": "DOCUMENT", "tokenCount": 258}], 270
+        document_usage: Final = usage_for(
+            ({"modality": "TEXT", "tokenCount": 12}, {"modality": "DOCUMENT", "tokenCount": 258}), 270
         )
-        image_usage = usage_for([{"modality": "TEXT", "tokenCount": 12}, {"modality": "IMAGE", "tokenCount": 258}], 270)
+        image_usage: Final = usage_for(
+            ({"modality": "TEXT", "tokenCount": 12}, {"modality": "IMAGE", "tokenCount": 258}), 270
+        )
 
         assert document_usage.prompt_tokens == 270
         assert document_usage.prompt_tokens_details.text_tokens == 12
         assert document_usage.prompt_tokens_details.image_tokens == 258
-        assert prompt_cost(document_usage) == prompt_cost(image_usage) > 0
+        assert _prompt_cost(self.MODEL, document_usage) == _prompt_cost(self.MODEL, image_usage) > 0
 
     def test_unrecognized_modality_keeps_usage_and_bills_as_text(self):
-        def usage_for(modality: str):
+        def usage_for(modality: str) -> Usage:
             return process_embed_content_response(
                 input=["gs://bucket/clip.mp4"],
                 model_response=EmbeddingResponse(),
@@ -434,15 +437,11 @@ class TestProcessEmbedContentResponseUsage:
                 },
             ).usage
 
-        def prompt_cost(usage) -> float:
-            cost, _ = generic_cost_per_token(model=self.MODEL, usage=usage, custom_llm_provider="vertex_ai")
-            return cost
-
-        unknown_usage = usage_for("MODALITY_UNSPECIFIED")
+        unknown_usage: Final = usage_for("MODALITY_UNSPECIFIED")
 
         assert unknown_usage.prompt_tokens == 112
         assert unknown_usage.prompt_tokens_details.text_tokens == 112
-        assert prompt_cost(unknown_usage) == prompt_cost(usage_for("TEXT")) > 0
+        assert _prompt_cost(self.MODEL, unknown_usage) == _prompt_cost(self.MODEL, usage_for("TEXT")) > 0
 
     def test_video_modality_preserves_token_count(self):
         response_json = {
