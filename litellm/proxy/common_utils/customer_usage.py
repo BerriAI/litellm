@@ -100,6 +100,12 @@ def _input(metadata: Mapping[str, object], binding: Mapping[str, object]) -> Cus
         return CustomerUsageFailure(CustomerUsageError.INVALID)
 
 
+def _hierarchy_failure(error: CustomerUsageError, *, administrator: bool) -> CustomerUsageFailure:
+    if administrator:
+        return CustomerUsageFailure(error)
+    return CustomerUsageFailure(CustomerUsageError.FORBIDDEN)
+
+
 async def resolve_customer_usage(
     *,
     metadata: Mapping[str, object],
@@ -125,10 +131,10 @@ async def resolve_customer_usage(
         else None
     )
     if candidate.customer_member_id is not None and member is None:
-        return CustomerUsageFailure(CustomerUsageError.NOT_FOUND)
+        return _hierarchy_failure(CustomerUsageError.NOT_FOUND, administrator=administrator)
     member_team: Final = _Member.model_validate(member).parent_team_id if member is not None else None
     if candidate.customer_team_id is not None and member_team is not None and candidate.customer_team_id != member_team:
-        return CustomerUsageFailure(CustomerUsageError.MISMATCH)
+        return _hierarchy_failure(CustomerUsageError.MISMATCH, administrator=administrator)
     team_id: Final = candidate.customer_team_id or member_team
     team: Final = (
         await database.litellm_customerteamtable.find_unique(where={"customer_team_id": team_id})
@@ -136,10 +142,10 @@ async def resolve_customer_usage(
         else None
     )
     if team_id is not None and team is None:
-        return CustomerUsageFailure(CustomerUsageError.NOT_FOUND)
+        return _hierarchy_failure(CustomerUsageError.NOT_FOUND, administrator=administrator)
     team_org: Final = _Team.model_validate(team).parent_org_id if team is not None else None
     if candidate.customer_org_id is not None and team_org is not None and candidate.customer_org_id != team_org:
-        return CustomerUsageFailure(CustomerUsageError.MISMATCH)
+        return _hierarchy_failure(CustomerUsageError.MISMATCH, administrator=administrator)
     organization_id: Final = candidate.customer_org_id or team_org
     if organization_id is None:
         return CustomerUsageFailure(CustomerUsageError.INVALID)
@@ -147,7 +153,7 @@ async def resolve_customer_usage(
         where={"customer_org_id": organization_id}
     )
     if organization is None:
-        return CustomerUsageFailure(CustomerUsageError.NOT_FOUND)
+        return _hierarchy_failure(CustomerUsageError.NOT_FOUND, administrator=administrator)
     return CustomerUsageAttribution(
         customer_org_id=organization_id,
         customer_team_id=team_id,

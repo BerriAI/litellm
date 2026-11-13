@@ -17,14 +17,13 @@ import { ModelMark } from "@/app/(dashboard)/usage/_components/components/overvi
 import { colorForModel } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import { providerForModel } from "@/app/(dashboard)/usage/_components/components/overview/modelProvider";
 
-export const CUSTOMER_USAGE_DIMENSIONS = ["models", "api_keys", "teams", "members"] as const;
+export const CUSTOMER_USAGE_DIMENSIONS = ["models", "api_keys", "teams"] as const;
 export type CustomerUsageDimension = (typeof CUSTOMER_USAGE_DIMENSIONS)[number];
 
 const DIMENSION_LABELS: Record<CustomerUsageDimension, ParseKeys> = {
   models: "customerPortal.analytics.models",
   api_keys: "customerPortal.analytics.keys",
   teams: "customerPortal.analytics.teams",
-  members: "customerPortal.analytics.members",
 };
 const PAGE_SIZE = 10;
 
@@ -37,7 +36,7 @@ interface CustomerUsageRankingsProps {
   colorByModel: ReadonlyMap<string, string>;
   onSearchChange: (search: string) => void;
   onPageChange: (page: number) => void;
-  onDrillDown: (dimension: "teams" | "members", id: string) => void;
+  onDrillDown: (dimension: "teams", id: string) => void;
 }
 
 export default function CustomerUsageRankings({
@@ -56,7 +55,7 @@ export default function CustomerUsageRankings({
   const lastPage = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(Math.max(1, page), lastPage);
   const start = (currentPage - 1) * PAGE_SIZE;
-  const canDrillDown = dimension === "teams" || dimension === "members";
+  const canDrillDown = dimension === "teams";
 
   return (
     <section className="min-w-0" aria-label={t("customerPortal.analytics.breakdown")}>

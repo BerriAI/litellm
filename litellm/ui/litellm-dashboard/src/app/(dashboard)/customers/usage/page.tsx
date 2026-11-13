@@ -21,7 +21,6 @@ const TOP_DIMENSION_LABELS = {
   models: "customerPortal.analytics.topModels",
   api_keys: "customerPortal.analytics.topKeys",
   teams: "customerPortal.analytics.topTeams",
-  members: "customerPortal.analytics.topMembers",
 } as const;
 
 export default function CustomerHierarchyUsagePage() {
@@ -123,7 +122,7 @@ export default function CustomerHierarchyUsagePage() {
               />
             </>
           )}
-          {data && <CustomerMemberSpend data={data} />}
+          {data && <CustomerMemberSpend data={data} onMemberClick={(id) => drillDown("members", id)} />}
           {(params.team || params.member) && (
             <Button variant="link" className="h-auto p-0 text-xs text-muted-foreground" onClick={selectOrganization}>
               {t("customerPortal.analytics.allOrganizationUsage")}

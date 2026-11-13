@@ -66,10 +66,13 @@ async def test_resolves_ancestors_without_requiring_redundant_request_ids(
     ("metadata", "key_metadata", "administrator", "expected"),
     (
         ({"customer_member_id": "member-1", "customer_team_id": "team-2"}, {}, True, CustomerUsageError.MISMATCH),
-        ({"customer_member_id": "member-1"}, {"customer_org_id": "org-2"}, False, CustomerUsageError.MISMATCH),
+        ({"customer_member_id": "member-1"}, {"customer_org_id": "org-2"}, False, CustomerUsageError.FORBIDDEN),
+        ({"customer_team_id": "team-2", "customer_org_id": "org-1"}, {}, True, CustomerUsageError.MISMATCH),
         ({"customer_org_id": "org-2"}, {"customer_org_id": "org-1"}, False, CustomerUsageError.FORBIDDEN),
         ({"customer_org_id": "org-1"}, {}, False, CustomerUsageError.UNBOUND),
         ({"customer_member_id": "missing"}, {}, True, CustomerUsageError.NOT_FOUND),
+        ({"customer_team_id": "missing"}, {}, True, CustomerUsageError.NOT_FOUND),
+        ({"customer_org_id": "missing"}, {}, True, CustomerUsageError.NOT_FOUND),
         ({"customer_org_id": 123}, {}, True, CustomerUsageError.INVALID),
     ),
 )
@@ -87,6 +90,47 @@ async def test_rejects_cross_organization_attribution_and_invalid_identifiers(
         ledger_enabled=True,
     )
     assert actual == CustomerUsageFailure(expected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata", "key_metadata"),
+    (
+        ({"customer_member_id": "missing"}, {"customer_org_id": "org-1"}),
+        ({"customer_member_id": "member-1"}, {"customer_org_id": "org-2"}),
+        (
+            {"customer_member_id": "member-1"},
+            {"customer_org_id": "org-2", "customer_team_id": "team-2"},
+        ),
+        ({"customer_team_id": "missing"}, {"customer_org_id": "org-1"}),
+        ({"customer_team_id": "team-2"}, {"customer_org_id": "org-1"}),
+        ({}, {"customer_org_id": "missing"}),
+    ),
+)
+async def test_non_admin_cannot_distinguish_missing_and_other_organization_identifiers(
+    metadata: Mapping[str, object], key_metadata: Mapping[str, object]
+) -> None:
+    actual: Final = await resolve_customer_usage(
+        metadata=metadata,
+        key_metadata=key_metadata,
+        administrator=False,
+        database=DATABASE,
+        ledger_enabled=True,
+    )
+    assert actual == CustomerUsageFailure(CustomerUsageError.FORBIDDEN)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("administrator", (False, True))
+async def test_invalid_identifier_types_keep_validation_errors(administrator: bool) -> None:
+    actual: Final = await resolve_customer_usage(
+        metadata={"customer_member_id": 123},
+        key_metadata={"customer_org_id": "org-1"},
+        administrator=administrator,
+        database=DATABASE,
+        ledger_enabled=True,
+    )
+    assert actual == CustomerUsageFailure(CustomerUsageError.INVALID)
 
 
 @pytest.mark.asyncio

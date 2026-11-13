@@ -58,10 +58,7 @@ export const customerUsageSeries = (
         return [row.id, dimension === "api_keys" && (!label || label === row.id) ? unnamedKey : label];
       }),
   );
-  const days =
-    dimension === "api_keys"
-      ? data.results
-      : entityDays(data.results, dimension === "teams" ? data.teamResults : data.memberResults, labels);
+  const days = dimension === "api_keys" ? data.results : entityDays(data.results, data.teamResults, labels);
   const breakdown = dimension === "api_keys" ? "api_keys" : "model_groups";
   const ranking = rollUpBreakdown(days, breakdown).sort((a, b) => b.spend - a.spend || a.key.localeCompare(b.key));
   const colors = new Map(ranking.map((row, index) => [row.key, stackedUsageColor(index)]));

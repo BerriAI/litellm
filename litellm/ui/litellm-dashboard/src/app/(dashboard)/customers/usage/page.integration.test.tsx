@@ -179,7 +179,7 @@ describe("CustomerHierarchyUsagePage", () => {
     expect(activityUrl("customer_organizations", "org-1")?.searchParams.get("end_date")).toBe("2026-11-03");
   });
 
-  it("should apply the global metric to sorting and shares across models, keys, teams and members", async () => {
+  it("should apply the global metric to sorting and shares across models, keys and teams", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
     await screen.findByRole("table", { name: "Models" });
@@ -191,7 +191,6 @@ describe("CustomerHierarchyUsagePage", () => {
     for (const [tab, leader] of [
       ["API keys", "Search key"],
       ["Teams", "Operations"],
-      ["Members", "Member Two"],
     ]) {
       await selectBreakdown(user, tab);
       expect(tableRows(tab)[0]).toHaveTextContent(leader);
@@ -200,8 +199,8 @@ describe("CustomerHierarchyUsagePage", () => {
     }
 
     await user.click(screen.getByRole("radio", { name: "Requests" }));
-    expect(tableRows("Members")[0]).toHaveTextContent("Member Two");
-    expect(within(tableRows("Members")[0]).getByText("71.4%")).toBeInTheDocument();
+    expect(tableRows("Teams")[0]).toHaveTextContent("Operations");
+    expect(within(tableRows("Teams")[0]).getByText("71.4%")).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Requests" })).toHaveAttribute("aria-sort", "descending");
   });
 
@@ -217,9 +216,8 @@ describe("CustomerHierarchyUsagePage", () => {
     expect(activityUrl("customer_teams", "team-a")?.pathname).toBe("/management/v1/customer_teams/daily/activity");
     expect(activityUrl("customer_teams", "team-a")?.searchParams.get("customer_team_ids")).toBe("team-a");
 
-    await selectBreakdown(user, "Members");
     await user.click(
-      within(screen.getByRole("table", { name: "Members" })).getByRole("button", { name: "Member One" }),
+      within(screen.getByRole("table", { name: "Member spend" })).getByRole("button", { name: "Member One" }),
     );
     expect(await screen.findByRole("heading", { name: "Member One" })).toBeInTheDocument();
     const memberUrl = activityUrl("customer_members", "member-a")!;
@@ -238,6 +236,21 @@ describe("CustomerHierarchyUsagePage", () => {
     await user.click(screen.getByRole("button", { name: "Customer organization" }));
     expect(await screen.findByRole("heading", { name: "Customer organization" })).toBeInTheDocument();
     expect(onUrlUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ queryString: initialUrl }));
+  });
+
+  it("should fall back to Models for a removed Members breakdown and offer only chart breakdowns", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: `${initialUrl}&breakdown=members` });
+
+    expect(await screen.findByRole("table", { name: "Models" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Top models" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Member spend" })).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Break down by" }));
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "Models",
+      "API keys",
+      "Teams",
+    ]);
   });
 
   it("should retain a separate member spend table with range usage and current budget status across chart breakdowns", async () => {

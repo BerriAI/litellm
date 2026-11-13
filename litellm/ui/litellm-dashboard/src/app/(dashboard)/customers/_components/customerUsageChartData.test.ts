@@ -97,7 +97,6 @@ describe("customerUsageSeries", () => {
     ["models", "alpha", 60],
     ["api_keys", "Support", 30],
     ["teams", "Product", 25],
-    ["members", "Member A", 20],
   ])("should use %s values without adding the other breakdowns", (dimension, label, value) => {
     const series = customerUsageSeries(snapshot(), dimension, "spend", modelColors);
 

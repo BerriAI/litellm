@@ -23,7 +23,6 @@ const DIMENSION_LABELS = {
   models: "customerPortal.analytics.models",
   api_keys: "customerPortal.analytics.keys",
   teams: "customerPortal.analytics.teams",
-  members: "customerPortal.analytics.members",
 } as const;
 
 interface CustomerUsageTrendProps {

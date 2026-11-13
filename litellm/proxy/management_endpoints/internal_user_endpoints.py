@@ -569,11 +569,6 @@ async def new_user(
         if prisma_client is None:
             raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
 
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=500,
-                detail=CommonProxyErrors.db_not_connected_error.value,
-            )
         validate_budget_duration(data.budget_duration)
 
         # Check for duplicate user_id or email

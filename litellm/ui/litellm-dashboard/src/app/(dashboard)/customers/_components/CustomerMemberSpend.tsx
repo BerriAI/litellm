@@ -20,7 +20,13 @@ const memberStatus = (member: CustomerUsageEntity) => {
   return "customerPortal.analytics.withinBudget" as const;
 };
 
-export default function CustomerMemberSpend({ data }: { data: CustomerHierarchyUsage }) {
+export default function CustomerMemberSpend({
+  data,
+  onMemberClick,
+}: {
+  data: CustomerHierarchyUsage;
+  onMemberClick: (id: string) => void;
+}) {
   const { t } = useTranslation();
   const [table, setTable] = useQueryStates(MEMBER_TABLE_PARSERS);
   const search = table.memberSearch;
@@ -84,7 +90,13 @@ export default function CustomerMemberSpend({ data }: { data: CustomerHierarchyU
                         .toLocaleUpperCase()}
                     </span>
                     <div className="min-w-0">
-                      <span className="block font-medium">{member.label}</span>
+                      <button
+                        type="button"
+                        className="block text-left font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
+                        onClick={() => onMemberClick(member.id)}
+                      >
+                        {member.label}
+                      </button>
                       <span className="block font-mono text-[11px] text-muted-foreground">{member.id}</span>
                     </div>
                   </div>

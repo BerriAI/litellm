@@ -3022,7 +3022,9 @@ async def add_litellm_data_to_request(
             status_code=customer_usage_http_status(_customer_usage.error), detail=_customer_usage.error.value
         )
     if _customer_usage is not None:
-        data[_metadata_variable_name][CUSTOMER_USAGE_METADATA_KEY] = _customer_usage.model_dump_json()
+        data[_metadata_variable_name][CUSTOMER_USAGE_METADATA_KEY] = (  # rebind-ok: data is an out-param
+            _customer_usage.model_dump_json()
+        )
 
     data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=data,
