@@ -69,7 +69,6 @@ const lastCalendarMonths = (months: number, labelKey: ParseKeys): RelativeTimeOp
   }),
 });
 
-/** Whole calendar months ending with the current, partial, month, so monthly buckets start on a month boundary. */
 export const calendarMonthOptions: readonly RelativeTimeOption[] = [
   lastCalendarMonths(3, "shared.dateRangePresets.last3Months"),
   lastCalendarMonths(6, "shared.dateRangePresets.last6Months"),

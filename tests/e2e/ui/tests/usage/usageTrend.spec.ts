@@ -12,8 +12,6 @@ import {
   waitForSpendLog,
 } from "../../helpers/traffic";
 
-/** Covers the Usage trend panel on /ui/usage: paired token and spend charts and the contribution table. */
-
 const trendPanel = (page: PlaywrightPage): Locator => page.getByTestId("usage-trend");
 
 test.describe("Usage trend", () => {

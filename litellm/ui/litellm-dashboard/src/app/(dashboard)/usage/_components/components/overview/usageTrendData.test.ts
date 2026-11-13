@@ -181,7 +181,6 @@ describe("usageTrend", () => {
     expect(trend.series.tokens.colors.at(-1)).toBe(OTHER_COLOR);
     expect(new Set(trend.series.tokens.colors.slice(0, 8)).size).toBe(8);
 
-    // model-8 (9000 tokens, $60) and model-9 (10000 tokens, $55) are the Other segment, per month.
     expect(valueOf(trend, "tokens", "2026-10", "Other")).toBe(19000);
     expect(valueOf(trend, "spend", "2026-11", "Other")).toBe(115);
   });

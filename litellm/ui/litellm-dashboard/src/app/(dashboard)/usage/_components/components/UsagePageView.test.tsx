@@ -283,7 +283,6 @@ vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
   useUserLookup: vi.fn(() => ({ data: null })),
 }));
 
-// Only the previous-period request asks for one key per day without naming a key.
 const isComparisonRequest = (request: unknown): boolean => {
   const fields = request as { apiKeyLimit?: number; apiKey?: string | null };
   return fields.apiKeyLimit === 1 && !fields.apiKey;

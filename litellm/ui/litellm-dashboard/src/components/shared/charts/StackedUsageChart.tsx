@@ -90,7 +90,6 @@ const bucketTotals = (
 const TOTAL_LABEL_CHAR_PX = 7;
 const TOTAL_LABEL_GAP_PX = 8;
 
-/** Bar totals are only printed when the widest one fits inside each bucket's share of the measured plot width. */
 export const totalsFitPlot = (plotWidth: number, labels: readonly string[]): boolean => {
   if (labels.length === 0) return false;
   const widest = Math.max(...labels.map((label) => label.length)) * TOTAL_LABEL_CHAR_PX + TOTAL_LABEL_GAP_PX;
