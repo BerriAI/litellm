@@ -7,7 +7,7 @@ import { SimpleTooltip } from "@/components/ui/tooltip";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import type { ResolvedCustomerHierarchy } from "../../../customers/_components/customerHierarchyApi";
 import { TargetPicker } from "./Pickers";
-import { remainingCustomerBudget, safeCustomerValue, type CustomerRequestFailure } from "./customerContext";
+import { remainingCustomerBudget, safeCustomerValue, type CustomerRequestFailure } from "./customerContextUtils";
 import type { usePlaygroundCustomer } from "./usePlaygroundCustomer";
 
 type CustomerState = ReturnType<typeof usePlaygroundCustomer>;

@@ -5,7 +5,7 @@ import {
   customerPlaygroundHref,
   customerRequestFailure,
   remainingCustomerBudget,
-} from "./customerContext";
+} from "./customerContextUtils";
 
 describe("customer deep links", () => {
   it("encodes IDs without making them URL paths or executable URLs", () => {

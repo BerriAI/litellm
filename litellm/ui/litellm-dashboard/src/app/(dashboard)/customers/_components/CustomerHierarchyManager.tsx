@@ -14,7 +14,7 @@ import CustomerHierarchySettings from "./CustomerHierarchySettings";
 import { customerEntityId, customerEntityLabel } from "./customerHierarchyForms";
 import useCustomerHierarchy, { type CustomerHierarchyContext } from "./useCustomerHierarchy";
 import type { CustomerHierarchyScope } from "./customerHierarchyApi";
-import { customerPlaygroundHref } from "../../playground/components/chat/customerContext";
+import { customerPlaygroundHref } from "../../playground/components/chat/customerContextUtils";
 
 type Hierarchy = ReturnType<typeof useCustomerHierarchy>;
 interface ScopeProps {

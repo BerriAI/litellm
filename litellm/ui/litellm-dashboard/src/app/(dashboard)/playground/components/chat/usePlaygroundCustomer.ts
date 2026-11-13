@@ -7,7 +7,7 @@ import { customerFromHeaderPairs, customerHeaderPairs } from "@/components/llm_c
 import type { KeyValuePair } from "@/components/key_value_input";
 import type { components } from "@/lib/http/schema";
 import { resolveCustomerHierarchy } from "../../../customers/_components/customerHierarchyApi";
-import { CUSTOMER_CONTEXT_PARSERS, customerRequestFailure, safeCustomerValue } from "./customerContext";
+import { CUSTOMER_CONTEXT_PARSERS, customerRequestFailure, safeCustomerValue } from "./customerContextUtils";
 import type { PlaygroundSettings } from "./playgroundSettings";
 
 type Organization = components["schemas"]["Organization"];
