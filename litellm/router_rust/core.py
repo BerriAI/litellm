@@ -29,7 +29,7 @@ from functools import partial
 from time import perf_counter
 from time import time as unix_time
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, TypeVar, final, overload
+from typing import TYPE_CHECKING, Final, Literal, NoReturn, Protocol, TypeAlias, TypeVar, final, overload
 
 from pydantic import TypeAdapter
 
@@ -1009,6 +1009,7 @@ def _listing_team_id(request: Mapping[str, object]) -> str | None:
 
 # Request fallback settings, which replace the router's for the call.
 _REQUEST_FALLBACK_KEYS: Final = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "max_fallbacks")
+_REQUEST_FALLBACK_LIST_KEYS: Final = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
 
 
 def _strings(value: object) -> "tuple[str, ...]":
@@ -1030,6 +1031,39 @@ def _routed_model(request: Mapping[str, object]) -> object:
     return model if model is None or isinstance(model, str) else str(model)
 
 
+def _invalid_request_fallback(field: str, request: Mapping[str, object], expected: str) -> NoReturn:
+    import litellm.exceptions as litellm_exceptions
+
+    model: Final = request.get("model")
+    raise litellm_exceptions.BadRequestError(
+        message=f"{field} must be {expected}",
+        model=model if isinstance(model, str) else None,
+        llm_provider="",
+    )
+
+
+def _request_fallback_value(field: str, request: Mapping[str, object]) -> object:
+    value: Final = request[field]
+    if value is None:
+        return None
+    if field == "max_fallbacks":
+        try:
+            parsed: Final = int(value) if isinstance(value, str) else value
+        except ValueError:
+            _invalid_request_fallback(field, request, "a non-negative 32-bit integer or a decimal string")
+        if isinstance(parsed, bool) or not isinstance(parsed, int) or not 0 <= parsed <= _U32_MAX:
+            _invalid_request_fallback(field, request, "a non-negative 32-bit integer or a decimal string")
+        return parsed
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list | tuple):
+        _invalid_request_fallback(field, request, "a string, a list of strings and dictionaries, or null")
+    plain: Final = _plain(value)
+    if not isinstance(plain, list) or not all(isinstance(entry, str | dict) for entry in plain):
+        _invalid_request_fallback(field, request, "a string, a list of strings and dictionaries, or null")
+    return plain
+
+
 def _start_fields(request: Mapping[str, object]) -> Mapping[str, object]:
     """The request fields the Rust core routes on."""
     fields: Final = {
@@ -1040,7 +1074,7 @@ def _start_fields(request: Mapping[str, object]) -> Mapping[str, object]:
     specific: Final = {"specific_deployment": True} if request.get("specific_deployment") is True else {}
     # `record_disable_fallbacks(kwargs, disable_fallbacks is True)`: only True turns them off.
     disabled: Final = {"disable_fallbacks": True} if request.get("disable_fallbacks") is True else {}
-    lists: Final = {key: _plain(request[key]) for key in _REQUEST_FALLBACK_KEYS if key in request}
+    lists: Final = {key: _request_fallback_value(key, request) for key in _REQUEST_FALLBACK_KEYS if key in request}
     weights: Final = request.get("_router_weights")
     team_id: Final = get_request_team_id(request)
     listing_team_id: Final = _listing_team_id(request)
@@ -2853,7 +2887,7 @@ class RustCore(
             resolved.fallbacks,
             resolved.context_window_fallbacks,
             resolved.content_policy_fallbacks,
-            *(request.get(key) for key in _REQUEST_FALLBACK_KEYS),
+            *(request.get(key) for key in _REQUEST_FALLBACK_LIST_KEYS),
         )
         return frozenset((*_strings(request.get("model")), *_strings(lists)))
 
