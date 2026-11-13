@@ -1,6 +1,8 @@
 import asyncio
 import os
 import unittest
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Final
 from unittest.mock import patch
 
@@ -43,6 +45,20 @@ def _flagged_deployment(model: str, **litellm_params) -> dict:
 
 def _passthrough_router(llm_router: litellm.Router | None) -> PassthroughEndpointRouter:
     return PassthroughEndpointRouter(llm_router_getter=lambda: llm_router)
+
+
+@contextmanager
+def _isolated_registered_vertex_credentials() -> Iterator[PassthroughEndpointRouter]:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        passthrough_endpoint_router,
+    )
+
+    stored = dict(passthrough_endpoint_router.deployment_key_to_vertex_credentials)
+    try:
+        yield passthrough_endpoint_router
+    finally:
+        passthrough_endpoint_router.deployment_key_to_vertex_credentials.clear()
+        passthrough_endpoint_router.deployment_key_to_vertex_credentials.update(stored)
 
 
 def test_credential_loaded_after_deployment_registration_still_resolves():
@@ -452,6 +468,106 @@ def test_vertex_deployment_with_deleted_credential_is_skipped(monkeypatch):
     assert passthrough_router.get_vertex_credentials_from_router_deployments(model=None) is None
 
 
+def test_disabling_pass_through_unregisters_vertex_credentials():
+    from litellm.router_api import ChangeSet
+    from litellm.types.router import Deployment
+
+    with _isolated_registered_vertex_credentials() as registered:
+        llm_router = litellm.Router(
+            model_list=[
+                _vertex_deployment(
+                    "gemini-live",
+                    "vertex_ai/gemini-live-2.5-flash",
+                    vertex_project="proj-disable",
+                    vertex_location="us-central1",
+                    vertex_credentials='{"type": "service_account"}',
+                )
+            ]
+        )
+        key = "proj-disable-us-central1"
+        assert key in registered.deployment_key_to_vertex_credentials
+
+        deployments = llm_router.registry().deployments()
+        assert deployments is not None
+        disabled = Deployment(
+            **{**deployments[0], "litellm_params": {**deployments[0]["litellm_params"], "use_in_pass_through": False}}
+        )
+        llm_router.apply(ChangeSet(upsert=[disabled]))
+
+        assert key not in registered.deployment_key_to_vertex_credentials
+        assert (
+            registered.get_vertex_credentials(project_id="proj-disable", location="us-central1") is None
+        )
+        assert (
+            _passthrough_router(llm_router).get_vertex_credentials_from_router_deployments(model=None)
+            is None
+        )
+
+
+def test_deleting_pass_through_deployment_unregisters_vertex_credentials():
+    from litellm.router_api import ChangeSet
+
+    with _isolated_registered_vertex_credentials() as registered:
+        llm_router = litellm.Router(
+            model_list=[
+                _vertex_deployment(
+                    "gemini-live",
+                    "vertex_ai/gemini-live-2.5-flash",
+                    vertex_project="proj-delete",
+                    vertex_location="us-central1",
+                    vertex_credentials='{"type": "service_account"}',
+                )
+            ]
+        )
+        key = "proj-delete-us-central1"
+        assert key in registered.deployment_key_to_vertex_credentials
+
+        deployments = llm_router.registry().deployments()
+        assert deployments is not None
+        deployment_id = deployments[0]["model_info"]["id"]
+        assert deployment_id is not None
+        llm_router.apply(ChangeSet(delete=[deployment_id]))
+
+        assert key not in registered.deployment_key_to_vertex_credentials
+        assert (
+            registered.get_vertex_credentials(project_id="proj-delete", location="us-central1") is None
+        )
+
+
+def test_deleting_one_deployment_sharing_a_vertex_key_keeps_credentials():
+    from litellm.router_api import ChangeSet
+
+    with _isolated_registered_vertex_credentials() as registered:
+        llm_router = litellm.Router(
+            model_list=[
+                _vertex_deployment(
+                    "gemini-flash",
+                    "vertex_ai/gemini-2.5-flash",
+                    vertex_project="proj-shared",
+                    vertex_location="global",
+                    vertex_credentials='{"type": "service_account"}',
+                ),
+                _vertex_deployment(
+                    "gemini-live",
+                    "vertex_ai/gemini-live-2.5-flash",
+                    vertex_project="proj-shared",
+                    vertex_location="global",
+                    vertex_credentials='{"type": "service_account"}',
+                ),
+            ]
+        )
+        key = "proj-shared-global"
+        assert key in registered.deployment_key_to_vertex_credentials
+
+        deployments = llm_router.registry().deployments()
+        assert deployments is not None
+        deployment_id = deployments[0]["model_info"]["id"]
+        assert deployment_id is not None
+        llm_router.apply(ChangeSet(delete=[deployment_id]))
+
+        assert key in registered.deployment_key_to_vertex_credentials
+
+
 def _token_file(tmp_path, monkeypatch, value: str):
     monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
     token = tmp_path / "token"
@@ -755,6 +871,33 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
         )
         # Should not add None values
         assert len(router.deployment_key_to_vertex_credentials) == 1
+
+    def test_remove_vertex_credentials(self):
+        """Test remove_vertex_credentials functionality"""
+        router = PassthroughEndpointRouter()
+
+        router.add_vertex_credentials(
+            project_id="test-project",
+            location="us-central1",
+            vertex_credentials='{"credentials": "test-creds"}',
+        )
+
+        assert "test-project-us-central1" in router.deployment_key_to_vertex_credentials
+
+        removed = router.remove_vertex_credentials(
+            project_id="test-project",
+            location="us-central1",
+        )
+
+        assert removed is not None
+        assert removed.vertex_project == "test-project"
+        assert removed.vertex_location == "us-central1"
+        assert removed.vertex_credentials == '{"credentials": "test-creds"}'
+        assert "test-project-us-central1" not in router.deployment_key_to_vertex_credentials
+        assert router.get_vertex_credentials(project_id="test-project", location="us-central1") is None
+        assert (
+            router.remove_vertex_credentials(project_id="test-project", location="us-central1") is None
+        )
 
     def test_default_credentials(self):
         """

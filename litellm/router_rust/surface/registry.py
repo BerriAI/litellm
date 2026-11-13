@@ -1260,6 +1260,66 @@ class HostRegistry(HostModelInfo):
         if self.strategies is not None:
             self.strategies.register(deployment)
 
+    @staticmethod
+    def _vertex_pass_through_key(litellm_params: Mapping[str, object]) -> tuple[str, str] | None:
+        """The (project, location) a flagged vertex pass-through deployment registers, if any."""
+        if litellm_params.get("use_in_pass_through") is not True:
+            return None
+        model: Final = litellm_params.get("model")
+        if not isinstance(model, str):
+            return None
+        custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+        try:
+            _, provider = resolve_model_and_provider_for_metadata(
+                model=model,
+                custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+            )
+        except litellm_exceptions.BadRequestError:
+            return None
+        if provider != "vertex_ai":
+            return None
+        credential_name: Final = litellm_params.get("litellm_credential_name")
+        credential_values: Final = (
+            CredentialAccessor.get_credential_values(credential_name) if isinstance(credential_name, str) else {}
+        )
+        project: Final = credential_values.get("vertex_project") or litellm_params.get("vertex_project")
+        location: Final = credential_values.get("vertex_location") or litellm_params.get("vertex_location")
+        if project is None or location is None:
+            return None
+        return str(project), str(location)
+
+    def _vertex_pass_through_key_in_use(self, project: str, location: str) -> bool:
+        """Whether any live deployment still registers vertex pass-through credentials for the key."""
+        for entry in self._core_model_list:
+            litellm_params: Final = as_str_mapping(entry.get("litellm_params"))
+            if litellm_params is not None and self._vertex_pass_through_key(litellm_params) == (
+                project,
+                location,
+            ):
+                return True
+        return False
+
+    def _unregister_vertex_pass_through_credentials(self, litellm_params: Mapping[str, object] | None) -> None:
+        """Forget a removed deployment's vertex pass-through credentials, unless a live deployment still claims them."""
+        if litellm_params is None:
+            return
+        key: Final = self._vertex_pass_through_key(litellm_params)
+        if key is None:
+            return
+        project, location = key
+        if self._vertex_pass_through_key_in_use(project, location):
+            return
+        from litellm.router_host import router_host
+
+        try:
+            router_host().remove_vertex_pass_through_credentials(project_id=project, location=location)
+        except Exception:  # noqa: BLE001  # credential cleanup must not fail a deployment write
+            verbose_router_logger.warning(
+                "Could not unregister vertex pass-through credentials for %s-%s",
+                project,
+                location,
+            )
+
     def _initialize_deployment_for_pass_through(self, deployment: Deployment, custom_llm_provider: str) -> None:
         """Register vertex credentials for a pass-through deployment (``_initialize_deployment_for_pass_through``)."""
         if deployment.litellm_params.use_in_pass_through is not True or custom_llm_provider != "vertex_ai":
@@ -1332,6 +1392,10 @@ class HostRegistry(HostModelInfo):
             self._restore_deployment_after_failed_upsert(on_router, model_id)
             return None
         else:
+            if on_router is not None:
+                self._unregister_vertex_pass_through_credentials(
+                    as_str_mapping(on_router.to_json(exclude_none=True).get("litellm_params"))
+                )
             return deployment
 
     def _restore_deployment_after_failed_upsert(self, previous: Deployment | None, model_id: str) -> None:
@@ -1499,6 +1563,7 @@ class HostRegistry(HostModelInfo):
                     return None
                 item: Final = self._core_model_list[deployment_idx]  # pyright: ignore[reportArgumentType]  # raises IndexError for a position past the list, as the pop does
                 self._remove(id)
+                self._unregister_vertex_pass_through_credentials(as_str_mapping(item.get("litellm_params")))
             if self.checks is not None:
                 self.checks.unregister_deployment_budget(id)
             if self.strategies is not None:

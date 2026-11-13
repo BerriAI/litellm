@@ -72,6 +72,7 @@ def test_default_host_keeps_nothing_and_compresses_nothing():
 
     host = RouterHost()
     assert host.add_vertex_pass_through_credentials("p", "l", None) is None
+    assert host.remove_vertex_pass_through_credentials("p", "l") is None
     assert host.compression_policy(None, "auto", {}, ()) is None
     assert host.model_hop_compression_armed() is False
     assert asyncio.run(host.messages_for_routing(None, [{"role": "user", "content": "hi"}], {})) is None
