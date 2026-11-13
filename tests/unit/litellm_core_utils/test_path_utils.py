@@ -1,8 +1,30 @@
 import os
+from collections.abc import Callable
+from pathlib import Path
+from typing import Final
 
 import pytest
 
 from litellm.litellm_core_utils.path_utils import is_within, join_within, safe_filename, safe_join, try_safe_join
+
+
+@pytest.mark.parametrize("join", (safe_join, try_safe_join, join_within))
+def test_join_accepts_filesystem_root(join: Callable[[str, str], str | None], tmp_path: Path) -> None:
+    root: Final = tmp_path.anchor
+    relative: Final = os.path.relpath(str(tmp_path / "file.yaml"), root)
+    assert join(root, relative) == str(tmp_path / "file.yaml")
+
+
+def test_is_within_accepts_filesystem_root(tmp_path: Path) -> None:
+    assert is_within(str(tmp_path / "file.yaml"), tmp_path.anchor)
+    assert is_within(tmp_path.anchor, tmp_path.anchor)
+
+
+@pytest.mark.parametrize("use_root", (True, False))
+@pytest.mark.parametrize("parts", ((), (".",), ("subdir", "..")))
+def test_join_within_rejects_base_itself(tmp_path: Path, use_root: bool, parts: tuple[str, ...]) -> None:
+    base: Final = tmp_path.anchor if use_root else str(tmp_path)
+    assert join_within(base, *parts) is None
 
 
 class TestSafeJoin:
