@@ -73,6 +73,8 @@ describe("CreateCustomerDialog", () => {
     const user = userEvent.setup();
     renderWithProviders(<Harness />);
     fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Example customer" } });
+    await user.click(screen.getByRole("combobox", { name: "Group 2 at the cap" }));
+    await user.click(screen.getByRole("option", { name: "Pause, they can request more" }));
     await user.click(screen.getByRole("button", { name: "Add budget group" }));
     fireEvent.change(screen.getByLabelText("Group 4 name"), { target: { value: "custom_user" } });
     fireEvent.change(screen.getByLabelText("Group 4 yearly budget (USD)"), { target: { value: "300" } });
@@ -83,7 +85,11 @@ describe("CreateCustomerDialog", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith("created-org"));
     expect(creations).toHaveLength(1);
     expect(creations[0]).toMatchObject({
-      default_budgets: [{ name: "power_user" }, { name: "default_user" }, { name: "low_user" }],
+      default_budgets: [
+        { name: "power_user", cap_policy: "pause_until_reset" },
+        { name: "default_user", cap_policy: "pause_allow_increase" },
+        { name: "low_user", cap_policy: "pause_until_reset" },
+      ],
       default_budget_template: "power_user",
     });
   });

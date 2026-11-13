@@ -28,6 +28,7 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    BudgetGroupsUpdate,
     BudgetTemplate,
     CustomerMember,
     MemberCreate,
@@ -51,6 +52,11 @@ T: Final = TypeVar("T")
 
 _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyType(
     {
+        ErrorCode.CAPACITY_BUSY: (
+            503,
+            "Customer portal busy",
+            "Customer portal capacity is being updated. Retry the request.",
+        ),
         ErrorCode.FREE_TIER_LIMIT: (
             403,
             "Free customer portal limit reached",
@@ -102,6 +108,11 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
         ),
         ErrorCode.FORBIDDEN: (403, "Forbidden", "Only proxy admins can manage customer hierarchies."),
         ErrorCode.DATABASE_UNAVAILABLE: (503, "Database not connected", "Database not connected."),
+        ErrorCode.CONFIGURATION_CONFLICT: (
+            409,
+            "Budget groups changed",
+            "Budget groups changed since you started editing. Reload before saving.",
+        ),
         ErrorCode.ALIAS_ALREADY_EXISTS: (
             409,
             "Customer org alias already exists",
@@ -524,6 +535,26 @@ async def add_customer_budget_template(
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
 ) -> Organization:
     return resolve(await hierarchy.add_template(customer_org_id, data, actor))
+
+
+@router.patch(
+    "/customer_organizations/{customer_org_id}/default_budgets",
+    response_model=Organization,
+    description="Atomically configure budget groups and their default. Requires the current budget_groups_revision. "
+    "Existing groups retain omitted settings and window reset dates. Stale revisions and referenced deletions "
+    "return 409 without applying changes. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def configure_customer_budget_groups(
+    customer_org_id: str,
+    data: BudgetGroupsUpdate,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
+) -> Organization:
+    organization: Final = resolve(await hierarchy.configure_templates(customer_org_id, data, actor))
+    await forget_customer_hierarchies(resolve(await hierarchy.member_ids_in_organization(customer_org_id)), cache)
+    return organization
 
 
 @router.patch(

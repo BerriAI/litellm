@@ -15,6 +15,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     BudgetTemplate,
+    CustomerMember,
     MemberCreate,
     MemberPatch,
     MemberUpsert,
@@ -159,7 +160,7 @@ async def customer_team(
             else Failure(ErrorCode.CUSTOMER_ORG_MISMATCH)
         )
     if not store.premium_user:
-        await store.lock_free_capacity()
+        await store.lock_free_capacity(f"teams:{organization_id}")
         if (
             await store.teams.find_unique(where={"customer_team_id": default_team_id(organization_id)}) is None
             and await store.teams.count(where={"parent_org_id": organization_id}) >= FREE_TEAMS_PER_ORGANIZATION_LIMIT
@@ -182,6 +183,23 @@ async def customer_team(
     if isinstance(team, Failure):
         return team
     return team if team.parent_org_id == organization_id else Failure(ErrorCode.CUSTOMER_ORG_MISMATCH)
+
+
+async def member_team_ids(
+    store: CustomerHierarchyStore,
+    organization_id: str,
+    existing: CustomerMember | Failure,
+    team_id: str | None,
+    actor: str,
+) -> tuple[str, ...] | Failure:
+    if not isinstance(existing, Failure) and team_id is None:
+        return existing.parent_team_ids
+    team: Final = await customer_team(store, organization_id, team_id, actor)
+    if isinstance(team, Failure):
+        return team
+    if isinstance(existing, Failure):
+        return (team.customer_team_id,)
+    return (team.customer_team_id, *(tid for tid in existing.parent_team_ids if tid != team.customer_team_id))
 
 
 async def upsert_member(
@@ -226,23 +244,18 @@ async def upsert_member(
     )
     if selected is None and override is None:
         return Failure(ErrorCode.BUDGET_REQUIRED)
-    team: Final = await customer_team(store, organization.customer_org_id, payload.parent_team_id, actor)
-    if isinstance(team, Failure):
-        return team
-    team_ids: Final = (
-        (team.customer_team_id,)
-        if isinstance(existing, Failure)
-        else existing.parent_team_ids
-        if payload.parent_team_id is None
-        else (team.customer_team_id, *(tid for tid in existing.parent_team_ids if tid != team.customer_team_id))
+    team_ids: Final = await member_team_ids(
+        store, organization.customer_org_id, existing, payload.parent_team_id, actor
     )
+    if isinstance(team_ids, Failure):
+        return team_ids
     if isinstance(existing, Failure):
         member: Final = await store.create_member(
             MemberCreate.model_validate(
                 {
                     **patch.model_dump(exclude_unset=True),
                     "customer_member_id": payload.customer_member_id,
-                    "parent_team_ids": (team.customer_team_id,),
+                    "parent_team_ids": team_ids,
                 }
             ),
             actor,

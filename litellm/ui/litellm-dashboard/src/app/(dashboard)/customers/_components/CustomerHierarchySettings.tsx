@@ -141,7 +141,7 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
   };
 
   return (
-    <div className="max-w-3xl space-y-8">
+    <div className="w-full space-y-8">
       <form onSubmit={(event) => void save(event)} className="space-y-7">
         <fieldset disabled={pending !== null} className="space-y-7">
           <section className="space-y-4" aria-labelledby="hierarchy-general-title">

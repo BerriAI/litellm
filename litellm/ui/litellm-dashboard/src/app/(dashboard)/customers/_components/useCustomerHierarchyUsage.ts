@@ -21,6 +21,7 @@ import type { DailyData } from "@/components/UsagePage/types";
 import { customerHierarchyUsageCall, type CustomerUsageScope } from "./customerUsageApi";
 import { rankCustomerModels, rankCustomerUsage } from "./customerUsageData";
 import { CUSTOMER_USAGE_DIMENSIONS, type CustomerUsageDimension } from "./CustomerUsageRankings";
+import { calendarDate, customerPresetRange } from "./customerUsageRange";
 
 const usageParsers = {
   org: parseAsString,
@@ -60,9 +61,30 @@ export default function useCustomerHierarchyUsage() {
   const endDate = dateValue.to ? formatDate(dateValue.to) : undefined;
   const scope = params.org ? { org: params.org, team: params.team, member: params.member } : null;
   const request = usageRequest(scope, accessToken, startDate, endDate);
+  const month = customerPresetRange("month");
+  const monthStartDate = calendarDate(month.from);
+  const monthEndDate = calendarDate(month.to);
+  const year = customerPresetRange("YTD");
+  const yearStartDate = calendarDate(year.from);
+  const yearEndDate = calendarDate(year.to);
   const usage = useQuery({
-    queryKey: ["customer-hierarchy", "usage", params.org, params.team, params.member, startDate, endDate],
-    queryFn: request ? ({ signal }) => customerHierarchyUsageCall({ ...request, signal }) : skipToken,
+    queryKey: [
+      "customer-hierarchy",
+      "usage",
+      params.org,
+      params.team,
+      params.member,
+      startDate,
+      endDate,
+      monthStartDate,
+      yearEndDate,
+    ],
+    queryFn: request
+      ? ({ signal }) => {
+          const periodRequest = { ...request, monthStartDate, monthEndDate, yearStartDate, yearEndDate, signal };
+          return customerHierarchyUsageCall(periodRequest);
+        }
+      : skipToken,
   });
   const data = usage.data;
   const results = data?.results ?? EMPTY_RESULTS;

@@ -9894,7 +9894,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Configure Customer Budget Groups
+         * @description Atomically configure budget groups and their default. Requires the current budget_groups_revision. Existing groups retain omitted settings and window reset dates. Stale revisions and referenced deletions return 409 without applying changes. Proxy admins only.
+         */
+        patch: operations["configure_customer_budget_groups_management_v1_customer_organizations__customer_org_id__default_budgets_patch"];
         trace?: never;
     };
     "/management/v1/customer_organizations/{customer_org_id}/default_budgets/{budget_id}": {
@@ -29635,6 +29639,58 @@ export interface components {
             /** Id */
             id: string;
         };
+        /** BudgetGroupChange */
+        BudgetGroupChange: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /**
+             * Budget Id
+             * @description Existing template ID. Omit to create a template.
+             */
+            budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
+            /**
+             * Cap Policy
+             * @description What a paused member can do at the cap: wait for the reset (default) or request a temporary increase
+             */
+            cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Name */
+            name: string;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+        };
+        /** BudgetGroupsUpdate */
+        BudgetGroupsUpdate: {
+            /**
+             * Default Budget Template
+             * @description Final name of the default group, or null for no default.
+             */
+            default_budget_template: string | null;
+            /**
+             * Default Budgets
+             * @description Complete retained group list. Existing groups patch only supplied fields. Omitted groups are deleted.
+             */
+            default_budgets: components["schemas"]["BudgetGroupChange"][];
+            /** Expected Revision */
+            expected_revision: string;
+        };
         /** BudgetIncreaseRejection */
         BudgetIncreaseRejection: {
             /** Review Notes */
@@ -33374,6 +33430,24 @@ export interface components {
              */
             type: "custom";
         };
+        /** CustomerBudgetUsage */
+        CustomerBudgetUsage: {
+            /** Budget Duration */
+            budget_duration: string | null;
+            /** Max Budget */
+            max_budget: number;
+            /** Reset At */
+            reset_at?: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "scalar" | "window";
+            /** Spend */
+            spend: number | null;
+            /** Window Start */
+            window_start?: string | null;
+        };
         /**
          * CustomerHierarchyAuth
          * @description The levels a request is charged to. A request that named only an organization alias has no team or member.
@@ -33413,6 +33487,11 @@ export interface components {
             budget_override_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
             /**
              * Created At
              * Format: date-time
@@ -38053,6 +38132,12 @@ export interface components {
             output_cost_per_token_ultrafast?: number | null;
             /** Output Cost Per Video */
             output_cost_per_video?: number | null;
+            /** Output Cost Per Video Clip */
+            output_cost_per_video_clip?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            } | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
@@ -40814,6 +40899,11 @@ export interface components {
             budget_override_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
             /** Created */
             created: boolean;
             /**
@@ -42710,10 +42800,17 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /** Budget Groups Revision */
+            readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
             /**
              * Created At
              * Format: date-time
@@ -42905,10 +43002,17 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /** Budget Groups Revision */
+            readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
             /** Created */
             created: boolean;
             /**
@@ -49725,6 +49829,11 @@ export interface components {
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+            /**
              * Created At
              * Format: date-time
              */
@@ -54715,6 +54824,12 @@ export interface components {
             output_cost_per_token_ultrafast?: number | null;
             /** Output Cost Per Video */
             output_cost_per_video?: number | null;
+            /** Output Cost Per Video Clip */
+            output_cost_per_video_clip?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            } | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
@@ -69298,6 +69413,41 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    configure_customer_budget_groups_management_v1_customer_organizations__customer_org_id__default_budgets_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
