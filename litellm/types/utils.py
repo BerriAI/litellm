@@ -4884,6 +4884,7 @@ class SearchProviders(str, Enum):
     NIMBLE = "nimble"
     BING_GROUNDING = "bing_grounding"
     WEBIQ = "webiq"
+    KEIROLABS = "keirolabs"
     DEEPSEEK = "deepseek"
     XAI = "xai"
 

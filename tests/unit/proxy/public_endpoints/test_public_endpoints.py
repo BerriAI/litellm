@@ -1285,7 +1285,8 @@ def test_get_supported_endpoints_lists_streamlake_on_chat_messages_and_responses
     assert "embeddings" not in streamlake_endpoints
 
 
-def test_get_supported_endpoints_lists_webiq_search(reset_endpoints_cache: None) -> None:
+@pytest.mark.parametrize(("slug", "display_name"), [("webiq", "Microsoft Web IQ"), ("keirolabs", "Keirolabs")])
+def test_get_supported_endpoints_lists_search_provider(reset_endpoints_cache: None, slug: str, display_name: str) -> None:
     app: Final = FastAPI()
     app.include_router(router)
     with TestClient(app) as client:
@@ -1294,7 +1295,7 @@ def test_get_supported_endpoints_lists_webiq_search(reset_endpoints_cache: None)
 
     search: Final = next(endpoint for endpoint in response.json()["endpoints"] if endpoint["key"] == "search")
     assert search["endpoint"] == "/search"
-    assert {"slug": "webiq", "display_name": "Microsoft Web IQ"} in search["providers"]
+    assert {"slug": slug, "display_name": display_name} in search["providers"]
 
 
 def test_get_supported_endpoints_display_names_have_no_slug_suffix(
