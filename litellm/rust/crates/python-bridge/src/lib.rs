@@ -1,6 +1,7 @@
 mod cache;
 mod callable;
 mod coercion;
+mod cost;
 mod credentials;
 mod db;
 mod diagnostics;
@@ -25,6 +26,10 @@ mod _native {
     use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
     use pyo3::{prelude::*, types::PyModule};
 
+    #[pymodule_export]
+    use crate::cost::{
+        NativeCallContext, NativePriced, NativePrices, NativeQuote, NativeTokenUsage,
+    };
     #[pymodule_export]
     use crate::db::NativeDatabase;
     #[cfg(feature = "panic-test")]
@@ -183,6 +188,11 @@ mod tests {
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
+                "NativePrices",
+                "NativeTokenUsage",
+                "NativeCallContext",
+                "NativePriced",
+                "NativeQuote",
                 "NativeModelCostMapState",
                 "NativeInstalled",
                 "NativeRejected",

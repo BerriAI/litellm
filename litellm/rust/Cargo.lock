@@ -3210,10 +3210,12 @@ dependencies = [
  "jiff-core",
  "jiff-static",
  "jiff-tzdb",
+ "jiff-tzdb-platform",
  "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "windows-link",
 ]
 
 [[package]]
@@ -3243,6 +3245,15 @@ name = "jiff-tzdb"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa8377070c6bae868759445e5a77f66d84f0b72f3a054bfb00e6d038b8282da7"
+
+[[package]]
+name = "jiff-tzdb-platform"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "875a5a69ac2bab1a891711cf5eccbec1ce0341ea805560dcd90b7a2e925132e8"
+dependencies = [
+ "jiff-tzdb",
+]
 
 [[package]]
 name = "jni"
@@ -4398,6 +4409,7 @@ dependencies = [
  "fancy-regex 0.19.2",
  "futures-util",
  "indexmap 2.14.0",
+ "jiff",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-cache",
@@ -4405,6 +4417,7 @@ dependencies = [
  "litellm-callbacks-legacy-python",
  "litellm-circuit-breaker",
  "litellm-core-utils",
+ "litellm-cost",
  "litellm-error",
  "litellm-host",
  "litellm-host-python",
@@ -5813,6 +5826,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4688ddedf473e32662b9b067670129a8afb8c18e351482c70d62ba4a88171e8b"
 dependencies = [
  "indexmap 2.14.0",
+ "jiff",
  "libc",
  "once_cell",
  "portable-atomic",

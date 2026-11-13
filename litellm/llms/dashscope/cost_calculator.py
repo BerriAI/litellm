@@ -7,20 +7,18 @@ cached, cache-creation, output, reasoning) is billed at that one tier's rate.
 See https://help.aliyun.com/zh/model-studio/billing-for-model-studio
 """
 
-from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
-from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    TokenRates,
-    apply_off_peak_pricing,
+    call_context,
     parse_completion_tokens_details,
     parse_prompt_tokens_details,
-    resolve_explicit_cache_read_cost_rate,
+    reads_explicit_cache,
 )
-from litellm.types.utils import ModelInfo, Usage
+from litellm.rust_bridge._native import NativePrices
+from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
 
@@ -55,61 +53,6 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
     )
 
 
-def _flat_rate(value: float | None, fallback_value: float | None) -> float:
-    if value is None:
-        return float(fallback_value or 0.0)
-    return float(value)
-
-
-def _flat_rates(model_info: ModelInfo) -> TokenRates:
-    reasoning_rate: Final = model_info.get("output_cost_per_reasoning_token")
-    return TokenRates(
-        input_rate=float(model_info.get("input_cost_per_token") or 0.0),
-        cache_read_rate=_flat_rate(
-            model_info.get("cache_read_input_token_cost"), model_info.get("input_cost_per_token")
-        ),
-        cache_creation_rate=_flat_rate(
-            model_info.get("cache_creation_input_token_cost"), model_info.get("input_cost_per_token")
-        ),
-        output_rate=float(model_info.get("output_cost_per_token") or 0.0),
-        reasoning_rate=None if reasoning_rate is None else float(reasoning_rate),
-    )
-
-
-def _tier_rates(model_info: ModelInfo, tier: Mapping[str, object]) -> TokenRates:
-    # A tier that declares output rates keeps the request on them, all-or-nothing. A tier table
-    # spelling out only input rates would serve every completion for free, so there the model's
-    # own output rates stand in
-    flat_rates: Final = _flat_rates(model_info)
-    tier_declares_output: Final = "output_cost_per_token" in tier
-    tier_declares_reasoning: Final = "output_cost_per_reasoning_token" in tier
-    return TokenRates(
-        input_rate=tier_rate(tier, "input_cost_per_token"),
-        cache_read_rate=tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token"),
-        cache_creation_rate=tier_rate(tier, "cache_creation_input_token_cost", "input_cost_per_token"),
-        output_rate=tier_rate(tier, "output_cost_per_token") if tier_declares_output else flat_rates.output_rate,
-        reasoning_rate=(
-            tier_rate(tier, "output_cost_per_reasoning_token")
-            if tier_declares_reasoning
-            else None
-            if tier_declares_output
-            else flat_rates.reasoning_rate
-        ),
-    )
-
-
-def _bill(breakdown: TokenBreakdown, rates: TokenRates) -> tuple[float, float]:
-    prompt_cost: Final = (
-        (breakdown.text_tokens * rates.input_rate)
-        + (breakdown.cached_tokens * rates.cache_read_rate)
-        + (breakdown.cache_creation_tokens * rates.cache_creation_rate)
-    )
-    completion_cost: Final = (breakdown.completion_tokens * rates.output_rate) + (
-        breakdown.reasoning_tokens * rates.billed_reasoning_rate
-    )
-    return prompt_cost, completion_cost
-
-
 def cost_per_token(
     model: str,
     usage: Usage,
@@ -133,22 +76,16 @@ def cost_per_token(
     """
     model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     breakdown: Final = _extract_token_breakdown(usage)
-    raw_tiers: Final = model_info.get("tiered_pricing")
-    tiered_pricing: Final = raw_tiers if isinstance(raw_tiers, list) else None
-    tier: Final = (
-        select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=breakdown.total_input_tokens)
-        if tiered_pricing
-        else None
+    quote: Final = NativePrices(model_info, custom_llm_provider).quote(
+        breakdown.total_input_tokens, call_context(None, None, None, current_time)
     )
-    standard_rates: Final = _flat_rates(model_info) if tier is None else _tier_rates(model_info, tier)
-    rates: Final = apply_off_peak_pricing(model_info, current_time, standard_rates)
-    explicit_cache_read_rate: Final = resolve_explicit_cache_read_cost_rate(
-        model_info=model_info,
-        usage=usage,
-        current_time=current_time,
+    cache_read_rate: Final = quote.explicit_cache_read if reads_explicit_cache(usage) else quote.cache_read
+    prompt_cost: Final = (
+        (breakdown.text_tokens * quote.input)
+        + (breakdown.cached_tokens * cache_read_rate)
+        + (breakdown.cache_creation_tokens * quote.cache_write)
     )
-    billed_rates: Final = (
-        rates if explicit_cache_read_rate is None else replace(rates, cache_read_rate=explicit_cache_read_rate)
+    completion_cost: Final = (breakdown.completion_tokens * quote.output) + (
+        breakdown.reasoning_tokens * quote.reasoning
     )
-
-    return _bill(breakdown, billed_rates)
+    return prompt_cost, completion_cost

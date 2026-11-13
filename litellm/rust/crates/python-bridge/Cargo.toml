@@ -60,10 +60,12 @@ litellm-router-types.workspace = true
 litellm-router-core.workspace = true
 litellm-host-python.workspace = true
 litellm-model-catalog.workspace = true
+litellm-cost.workspace = true
+jiff = { version = "0.2.37", default-features = false, features = ["std"] }
 litellm-model-catalog-refresh.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
 indexmap = "2.14.0"
-pyo3 = { workspace = true, features = ["indexmap"] }
+pyo3 = { workspace = true, features = ["indexmap", "jiff-02"] }
 prost.workspace = true
 pyo3-async-runtimes.workspace = true
 reqwest.workspace = true

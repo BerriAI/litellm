@@ -9,6 +9,8 @@ pub struct CallContext {
     pub channel: Channel,
     /// OpenAI data residency, picks the residency uplift
     pub residency: Option<Residency>,
+    /// OpenAI call sent to the FedRAMP endpoint, picks the FedRAMP uplift
+    pub fedramp_endpoint: bool,
     /// Vertex call sent to a regional endpoint, picks the regional uplift
     pub non_global_endpoint: bool,
     /// Anthropic `speed: fast`, picks the speed uplift

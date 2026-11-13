@@ -18,8 +18,16 @@ pub struct Priced {
     pub lines: Vec<Line>,
     /// Meters with usage and no price and no fallback
     pub missing: Vec<Meter>,
-    /// Sum of `lines`
-    pub total: Usd,
+    /// The prompt-side lines summed in main's order, then uplifted
+    pub prompt: Usd,
+    /// The completion-side lines summed in main's order, then uplifted
+    pub completion: Usd,
+}
+
+impl Priced {
+    pub fn total(&self) -> Usd {
+        self.prompt + self.completion
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
