@@ -20,7 +20,7 @@ const organization: Organization = {
   ...audit,
   customer_org_id: "org-1",
   alias: "Example customer",
-  default_budget_id: "standard-template",
+  default_budget_template_id: "standard-template",
   default_budgets: [{ name: "Standard", is_default: true, budget_id: "standard-template", max_budget: 100 }],
 };
 const team: Team = { ...audit, customer_team_id: "team-1", parent_org_id: "org-1", alias: "Support" };
@@ -106,7 +106,7 @@ describe("CreateCustomerHierarchyDialog", () => {
     const created = {
       ...audit,
       customer_member_id: "new-member",
-      parent_team_id: "team-1",
+      parent_team_ids: ["team-1"],
       alias: "Jamie",
       budget_id: "standard-template",
       budget_override_id: null,
@@ -134,7 +134,7 @@ describe("CreateCustomerHierarchyDialog", () => {
       method: "POST",
       path: "/management/v1/customer_members",
       body: {
-        parent_team_id: "team-1",
+        parent_team_ids: ["team-1"],
         alias: "Jamie",
         budget_id: "standard-template",
         budget_override: null,

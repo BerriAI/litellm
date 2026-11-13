@@ -52,11 +52,11 @@ const operations = { ...audit, customer_team_id: "team-b", parent_org_id: "org-1
 const member = {
   ...audit,
   customer_member_id: "member-a",
-  parent_team_id: "team-a",
+  parent_team_ids: ["team-a"],
   alias: "Member One",
   effective_budget: { max_budget: 10 },
 };
-const supportMember = { ...member, customer_member_id: "member-b", parent_team_id: "team-c", alias: "Member Two" };
+const supportMember = { ...member, customer_member_id: "member-b", parent_team_ids: ["team-c"], alias: "Member Two" };
 const fetchMock = vi.fn<typeof fetch>();
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -252,7 +252,7 @@ describe("customer hierarchy management", () => {
       const createdId = `created-${kind}`;
       const alias = `New customer ${kind}`;
       const collection = isTeam ? "customer_teams" : "customer_members";
-      const parent = isTeam ? { parent_org_id: "org-1" } : { parent_team_id: "team-a" };
+      const parent = isTeam ? { parent_org_id: "org-1" } : { parent_team_ids: ["team-a"] };
       const created = isTeam
         ? { ...product, ...parent, customer_team_id: createdId, alias }
         : { ...member, ...parent, customer_member_id: createdId, alias, budget_id: "template-default" };
@@ -269,7 +269,7 @@ describe("customer hierarchy management", () => {
         if (url.pathname === "/management/v1/customer_organizations/org-1")
           return json({
             ...organization,
-            default_budget_id: "template-default",
+            default_budget_template_id: "template-default",
             default_budgets: [{ budget_id: "template-default", name: "Default", is_default: true, max_budget: 20 }],
           });
         return serve(input);

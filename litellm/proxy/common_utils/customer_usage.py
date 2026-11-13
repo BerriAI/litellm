@@ -57,7 +57,7 @@ class _Team(_Organization):
 class _Member(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
-    parent_team_id: str
+    parent_team_ids: tuple[str, ...] = ()
     budget: _HierarchyBudget | None = None
     budget_override: _HierarchyBudget | None = None
     budget_override_expires_at: datetime | None = None
@@ -186,10 +186,10 @@ async def resolve_customer_usage(
     if candidate.customer_member_id is not None and member is None:
         return _hierarchy_failure(CustomerUsageError.NOT_FOUND, administrator=administrator)
     member_record: Final = _Member.model_validate(member) if member is not None else None
-    member_team: Final = member_record.parent_team_id if member_record is not None else None
-    if candidate.customer_team_id is not None and member_team is not None and candidate.customer_team_id != member_team:
+    member_teams: Final = member_record.parent_team_ids if member_record is not None else ()
+    if candidate.customer_team_id is not None and member_teams and candidate.customer_team_id not in member_teams:
         return _hierarchy_failure(CustomerUsageError.MISMATCH, administrator=administrator)
-    team_id: Final = candidate.customer_team_id or member_team
+    team_id: Final = candidate.customer_team_id or (member_teams[0] if member_teams else None)
     team: Final = (
         await database.litellm_customerteamtable.find_unique(
             where={"customer_team_id": team_id}, include={"budget": True}

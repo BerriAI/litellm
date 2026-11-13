@@ -22,7 +22,7 @@ struct Shared {
     runtime: Handle,
     logs: Dispatch,
     post_call_deadline: Duration,
-    deadline_tag: Option<CallTag>,
+    deadline_tag: DeadlineTag,
     batches: Mutex<Vec<ClientBatches>>,
     follow_ups: Mutex<Vec<JoinHandle<()>>>,
     deadline: Mutex<Option<oneshot::Sender<()>>>,
@@ -60,15 +60,16 @@ impl RequestRedis {
     /// Python one that has no Tokio context. Work spawned for the request logs to the subscriber
     /// current here, since a declaring thread may have none.
     pub fn new(runtime: Handle, post_call_deadline: Duration) -> Self {
-        Self::with_deadline_tag(runtime, post_call_deadline, None)
+        Self::with_deadline_tag(runtime, post_call_deadline, Arc::new(|| None))
     }
 
-    /// As `new`, with the deadline's flush of the post-call batch run inside `tagged(deadline_tag)`,
-    /// the scope an explicit `flush_post` runs in.
+    /// As `new`, with the deadline's flush of the post-call batch run inside the tag `deadline_tag`
+    /// gives for the declaration that armed it, as an explicit `flush_post` runs inside its
+    /// caller's.
     pub fn with_deadline_tag(
         runtime: Handle,
         post_call_deadline: Duration,
-        deadline_tag: Option<CallTag>,
+        deadline_tag: DeadlineTag,
     ) -> Self {
         Self(Arc::new(Shared {
             runtime,
@@ -105,6 +106,16 @@ impl RequestRedis {
             .runtime
             .spawn(self.logged(within(current_tag(), task)));
         lock(&self.0.follow_ups).push(follow_up);
+    }
+
+    /// Runs `task` on the request's runtime without `flush_post` waiting for it, for work that
+    /// settles with the pre-call batch whoever awaits it.
+    pub(crate) fn detach(&self, task: impl Future<Output = ()> + std::marker::Send + 'static) {
+        drop(
+            self.0
+                .runtime
+                .spawn(self.logged(within(current_tag(), task))),
+        );
     }
 
     fn logged<F: Future>(&self, task: F) -> impl Future<Output = F::Output> + use<F> {
@@ -151,6 +162,12 @@ impl RequestRedis {
     }
 
     fn arm_deadline(&self) {
+        if lock(&self.0.deadline).is_some() {
+            return;
+        }
+        // Asked before taking the lock: the host may answer under its interpreter lock, which
+        // another declaring thread can hold while it waits for this one.
+        let tag = (self.0.deadline_tag)();
         let mut deadline = lock(&self.0.deadline);
         if deadline.is_some() {
             return;
@@ -158,7 +175,6 @@ impl RequestRedis {
         let (disarm, disarmed) = oneshot::channel();
         *deadline = Some(disarm);
         let request = self.clone();
-        let tag = self.0.deadline_tag.clone();
         self.0.runtime.spawn(self.logged(async move {
             tokio::select! {
                 () = tokio::time::sleep(request.0.post_call_deadline) => within(tag, request.flush_post()).await,
@@ -167,6 +183,10 @@ impl RequestRedis {
         }));
     }
 }
+
+/// Names the scope a deadline flush runs in. It is asked when a post-call declaration arms the
+/// deadline, on the declaring thread, so it can describe that declaration's caller.
+pub type DeadlineTag = Arc<dyn Fn() -> Option<CallTag> + std::marker::Send + Sync>;
 
 async fn within<F: Future>(tag: Option<CallTag>, task: F) -> F::Output {
     match tag {
@@ -193,6 +213,14 @@ impl Send<'_> {
             Self::Now => RedisBatch::alone(client.clone()),
             Self::PreCall(request) => request.pre(client),
             Self::PostCall(request) => request.post(client),
+        }
+    }
+
+    /// The request the op rides, `None` for one on its own.
+    pub(crate) fn request(&self) -> Option<&RequestRedis> {
+        match self {
+            Self::Now => None,
+            Self::PreCall(request) | Self::PostCall(request) => Some(request),
         }
     }
 

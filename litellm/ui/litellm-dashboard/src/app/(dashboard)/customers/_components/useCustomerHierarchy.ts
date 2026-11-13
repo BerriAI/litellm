@@ -68,7 +68,7 @@ async function customerHierarchyChildren(
     if (
       !response.data ||
       (context.team !== null &&
-        response.data.data.some((member) => member.parent_team_id !== context.team?.customer_team_id))
+        response.data.data.some((member) => !member.parent_team_ids.includes(context.team?.customer_team_id ?? "")))
     ) {
       throw scopeFailure();
     }
@@ -155,7 +155,7 @@ export default function useCustomerHierarchy() {
         if (current.member !== parent.member) return {};
         return {
           org: parent.org,
-          team: created.kind === "team" ? created.record.customer_team_id : created.record.parent_team_id,
+          team: created.kind === "team" ? created.record.customer_team_id : created.record.parent_team_ids[0] ?? null,
           member: created.kind === "member" ? created.record.customer_member_id : null,
           tab: created.kind === "team" ? ("settings" as const) : null,
           hierarchyPage: null,

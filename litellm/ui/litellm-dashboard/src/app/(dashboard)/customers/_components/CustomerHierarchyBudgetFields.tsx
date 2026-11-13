@@ -30,7 +30,7 @@ export default function CustomerHierarchyBudgetFields({
     if (!templateId) return t("customerPortal.hierarchy.noTemplate");
     const template = organization.default_budgets.find((budget) => budget.budget_id === templateId);
     if (!template) return t("customerPortal.hierarchy.unknownTemplate", { id: templateId });
-    if (templateId === organization.default_budget_id)
+    if (templateId === organization.default_budget_template_id)
       return t("customerPortal.hierarchy.defaultTemplate", { name: template.name });
     return template.name;
   };
@@ -61,7 +61,7 @@ export default function CustomerHierarchyBudgetFields({
               <SelectValue>{templateLabel(fields.templateId)}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {(operation === "edit" || !organization.default_budget_id) && (
+              {(operation === "edit" || !organization.default_budget_template_id) && (
                 <SelectItem value="__none__">{t("customerPortal.hierarchy.noTemplate")}</SelectItem>
               )}
               {organization.default_budgets.map((template) => (

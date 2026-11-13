@@ -1,11 +1,14 @@
+from collections.abc import Mapping
 from math import ceil
-from typing import Annotated, Final, NoReturn, TypeVar
+from types import MappingProxyType
+from typing import Annotated, Final, NoReturn, TypeAlias, TypeVar
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from typing_extensions import assert_never
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.customer_hierarchy_auth import forget_customer_hierarchies, forget_customer_organization_aliases
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import (
     PROBLEM_TYPE_BASE,
     ManagementProblem,
@@ -35,40 +38,59 @@ from litellm.types.proxy.management_endpoints.management_v1 import ListMeta, Lis
 T: Final = TypeVar("T")
 
 
+_ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyType(
+    {
+        ErrorCode.NOT_FOUND: (404, "Not found", "Customer entity not found."),
+        ErrorCode.PARENT_NOT_FOUND: (404, "Parent not found", "Customer parent not found."),
+        ErrorCode.ALREADY_EXISTS: (409, "Already exists", "Customer entity ID already exists."),
+        ErrorCode.INVALID_DEFAULT_BUDGET: (
+            422,
+            "Invalid default budget",
+            "default_budget_template must name one of default_budgets, or default_budgets must hold one template.",
+        ),
+        ErrorCode.TEMPLATE_NOT_IN_ORG: (
+            422,
+            "Template not in organization",
+            "Budget template must belong to the member's organization.",
+        ),
+        ErrorCode.HAS_CHILDREN: (409, "Has children", "Delete the customer's children before deleting the parent."),
+        ErrorCode.INVALID_TEMPLATE_NAMES: (
+            422,
+            "Invalid template names",
+            "Budget template names must be unique within the organization.",
+        ),
+        ErrorCode.TEMPLATE_IN_USE: (409, "Template in use", "A default or referenced template cannot be deleted."),
+        ErrorCode.BUDGET_REQUIRED: (422, "Budget required", "A member requires a template or a budget override."),
+        ErrorCode.INCREASE_NOT_ALLOWED: (
+            422,
+            "Increase not allowed",
+            "The member's budget does not allow temporary increase requests.",
+        ),
+        ErrorCode.REQUEST_NOT_PENDING: (
+            409,
+            "Request not pending",
+            "Only a pending increase request can be approved or rejected.",
+        ),
+        ErrorCode.REQUEST_ALREADY_PENDING: (
+            409,
+            "Request already pending",
+            "The member already has an increase request waiting for review.",
+        ),
+        ErrorCode.EXPIRY_IN_PAST: (422, "Expiry in past", "A temporary increase must expire in the future."),
+        ErrorCode.KEY_NOT_IN_ORG: (
+            403,
+            "Key not in organization",
+            "The key may only act for members of its own customer organization.",
+        ),
+        ErrorCode.FORBIDDEN: (403, "Forbidden", "Only proxy admins can manage customer hierarchies."),
+        ErrorCode.DATABASE_UNAVAILABLE: (503, "Database not connected", "Database not connected."),
+    }
+)
+assert _ERROR_DETAILS.keys() == frozenset(ErrorCode), "every ErrorCode needs a public problem"
+
+
 def error_details(code: ErrorCode) -> tuple[int, str, str]:
-    match code:
-        case ErrorCode.NOT_FOUND:
-            return 404, "Not found", "Customer entity not found."
-        case ErrorCode.PARENT_NOT_FOUND:
-            return 404, "Parent not found", "Customer parent not found."
-        case ErrorCode.ALREADY_EXISTS:
-            return 409, "Already exists", "Customer entity ID already exists."
-        case ErrorCode.INVALID_DEFAULT_BUDGET:
-            return (
-                422,
-                "Invalid default budget",
-                "Exactly one organization budget must be marked default.",
-            )
-        case ErrorCode.TEMPLATE_NOT_IN_ORG:
-            return (
-                422,
-                "Template not in organization",
-                "Budget template must belong to the member's organization.",
-            )
-        case ErrorCode.HAS_CHILDREN:
-            return 409, "Has children", "Delete the customer's children before deleting the parent."
-        case ErrorCode.INVALID_TEMPLATE_NAMES:
-            return 422, "Invalid template names", "Budget template names must be unique within the organization."
-        case ErrorCode.TEMPLATE_IN_USE:
-            return 409, "Template in use", "A default or referenced template cannot be deleted."
-        case ErrorCode.BUDGET_REQUIRED:
-            return 422, "Budget required", "A member requires a template or a budget override."
-        case ErrorCode.FORBIDDEN:
-            return 403, "Forbidden", "Only proxy admins can manage customer hierarchies."
-        case ErrorCode.DATABASE_UNAVAILABLE:
-            return 503, "Database not connected", "Database not connected."
-        case _:
-            assert_never(code)
+    return _ERROR_DETAILS[code]
 
 
 def raise_public(failure: Failure) -> NoReturn:
@@ -140,6 +162,15 @@ router: Final = APIRouter(
 )
 
 
+def get_user_api_key_cache() -> UserApiKeyCache:
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    return user_api_key_cache
+
+
+AuthCache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
+
+
 @router.post(
     "/customer_organizations",
     status_code=201,
@@ -179,8 +210,13 @@ async def update_customer_organization(
     data: OrganizationPatch,
     actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
 ) -> Organization:
-    return resolve(await hierarchy.update_organization(customer_org_id, data, actor))
+    previous: Final = resolve(await hierarchy.get_organization(customer_org_id))
+    organization: Final = resolve(await hierarchy.update_organization(customer_org_id, data, actor))
+    await forget_customer_hierarchies(resolve(await hierarchy.member_ids_in_organization(customer_org_id)), cache)
+    await forget_customer_organization_aliases((previous.alias, organization.alias), cache)
+    return organization
 
 
 @router.delete(
@@ -192,9 +228,12 @@ async def update_customer_organization(
 async def delete_customer_organization(
     customer_org_id: str,
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
     cascade: Annotated[bool, Query(description="Also delete this customer organization's teams and members.")] = False,
 ) -> Response:
+    previous: Final = resolve(await hierarchy.get_organization(customer_org_id))
     resolve(await hierarchy.delete_organization(customer_org_id, cascade=cascade))
+    await forget_customer_organization_aliases((previous.alias,), cache)
     return Response(status_code=204)
 
 
@@ -256,8 +295,11 @@ async def update_customer_team(
     data: TeamPatch,
     actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
 ) -> Team:
-    return resolve(await hierarchy.update_team(customer_team_id, data, actor))
+    team: Final = resolve(await hierarchy.update_team(customer_team_id, data, actor))
+    await forget_customer_hierarchies(resolve(await hierarchy.member_ids_in_team(customer_team_id)), cache)
+    return team
 
 
 @router.delete(
@@ -333,8 +375,11 @@ async def update_customer_member(
     data: MemberPatch,
     actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
 ) -> CustomerMember:
-    return resolve(await hierarchy.update_member(customer_member_id, data, actor))
+    member: Final = resolve(await hierarchy.update_member(customer_member_id, data, actor))
+    await forget_customer_hierarchies((customer_member_id,), cache)
+    return member
 
 
 @router.delete(
@@ -346,8 +391,10 @@ async def update_customer_member(
 async def delete_customer_member(
     customer_member_id: str,
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
 ) -> Response:
     resolve(await hierarchy.delete_member(customer_member_id))
+    await forget_customer_hierarchies((customer_member_id,), cache)
     return Response(status_code=204)
 
 
@@ -399,8 +446,11 @@ async def update_customer_budget_template(
     data: TemplatePatch,
     actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
 ) -> Organization:
-    return resolve(await hierarchy.update_template(customer_org_id, budget_id, data, actor))
+    organization: Final = resolve(await hierarchy.update_template(customer_org_id, budget_id, data, actor))
+    await forget_customer_hierarchies(resolve(await hierarchy.member_ids_using_template(budget_id)), cache)
+    return organization
 
 
 @router.delete(

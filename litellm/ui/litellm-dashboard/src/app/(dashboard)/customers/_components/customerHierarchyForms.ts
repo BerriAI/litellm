@@ -94,7 +94,7 @@ export const customerHierarchyFields = (entity: CustomerHierarchyEntity): Custom
 
 export const newCustomerHierarchyFields = (target: CustomerHierarchyCreateTarget): CustomerHierarchyFields => {
   const template = target.organization.default_budgets.find(
-    (budget) => budget.budget_id === target.organization.default_budget_id,
+    (budget) => budget.budget_id === target.organization.default_budget_template_id,
   );
   const isMember = target.kind === "member";
   return {
@@ -184,7 +184,7 @@ const createMember = (
   fields: CustomerHierarchyFields,
   common: { alias: string | null; budget: Budget | null; identifier: string },
 ): CreateResult => {
-  const templateId = fields.templateId || target.organization.default_budget_id || null;
+  const templateId = fields.templateId || target.organization.default_budget_template_id || null;
   if (templateId && !target.organization.default_budgets.some((template) => template.budget_id === templateId))
     return { ok: false, error: "invalidTemplate" };
   if (!templateId && !fields.budgetEnabled) return { ok: false, error: "budgetRequired" };
@@ -195,7 +195,7 @@ const createMember = (
     create: {
       kind: "member",
       body: {
-        parent_team_id: target.team.customer_team_id,
+        parent_team_ids: [target.team.customer_team_id],
         alias: common.alias,
         ...(common.identifier ? { customer_member_id: common.identifier } : {}),
         budget_id: templateId,

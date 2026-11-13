@@ -133,10 +133,10 @@ function hierarchyRows({ hierarchy, selected, scope }: ScopeProps) {
       label: member.alias || member.customer_member_id,
       spend: member.spend,
       budget: member.effective_budget.max_budget,
-      open: () => hierarchy.openMember(member.customer_member_id, member.parent_team_id),
-      edit: () => hierarchy.openMember(member.customer_member_id, member.parent_team_id),
-      parentTeamId: member.parent_team_id,
-      openParentTeam: () => hierarchy.openTeam(member.parent_team_id),
+      open: () => hierarchy.openMember(member.customer_member_id, member.parent_team_ids[0] ?? ""),
+      edit: () => hierarchy.openMember(member.customer_member_id, member.parent_team_ids[0] ?? ""),
+      parentTeamId: member.parent_team_ids[0] ?? "",
+      openParentTeam: () => hierarchy.openTeam(member.parent_team_ids[0] ?? ""),
       usageScope: { org: scope.org, team: selected.team?.customer_team_id ?? null, member: member.customer_member_id },
     }));
   return [];

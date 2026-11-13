@@ -57,7 +57,7 @@ DATABASE: Final = cast(  # cast-ok: the external Prisma fake implements the look
     Database(
         Table("customer_org_id", {"org-1": {}, "org-2": {}}),
         Table("customer_team_id", {"team-1": {"parent_org_id": "org-1"}, "team-2": {"parent_org_id": "org-2"}}),
-        Table("customer_member_id", {"member-1": {"parent_team_id": "team-1"}}),
+        Table("customer_member_id", {"member-1": {"parent_team_ids": ["team-1"]}}),
     ),
 )
 
@@ -79,7 +79,7 @@ def _budget_database(
                 "customer_member_id",
                 {
                     "member-1": {
-                        "parent_team_id": "team-1",
+                        "parent_team_ids": ["team-1"],
                         "budget": {"allowed_models": template},
                         "budget_override": {"allowed_models": override},
                         "budget_override_expires_at": expires_at,

@@ -3145,6 +3145,11 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_user_email: str | None
     user_api_key_team_alias: str | None
     user_api_key_end_user_id: str | None
+    user_api_key_customer_member_id: ReadOnly[str | None]
+    user_api_key_customer_team_id: ReadOnly[str | None]
+    user_api_key_customer_org_id: ReadOnly[str | None]
+    user_api_key_customer_budget_scopes: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_hierarchy: NotRequired[ReadOnly[Mapping[str, object] | None]]
     user_api_key_request_route: str | None
     user_api_key_auth_metadata: dict[str, str] | None
 

@@ -28,6 +28,11 @@ id = "GHSA-45c3-73f7-pv4m"
 ignoreUntil = 2027-02-01
 reason = "dnspython 2.9.0 (published 2026-10-09) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 2.8.0 while 3.11+ locks 2.9.0; the advisory is CPU use in dns.name.from_wire_parser and litellm only reaches dnspython through pydantic EmailStr, which never does DNS lookups; remove this entry once 3.10 is dropped or a 3.10-compatible fix ships"
 
+[[IgnoredVulns]]
+id = "GHSA-mmhr-3c5m-f64f"
+ignoreUntil = 2027-02-01
+reason = "soupsieve 4.0 is the first fix and requires Python >= 3.11.5, so Python 3.10 and 3.11.0-3.11.4 resolve 2.10 while newer Python versions resolve 4.1. litellm declares beautifulsoup4 in its ci dependency group and uses BeautifulSoup in tests/code_coverage_tests/bedrock_pricing.py to parse AWS pricing HTML with html.parser and find table rows and cells, not CSS selectors; no runtime litellm code imports soupsieve or beautifulsoup4. Remove once 3.10 is dropped and the minimum Python version is at least 3.11.5"
+
 [[PackageOverrides]]
 name = "pillow"
 version = "12.3.0"

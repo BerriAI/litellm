@@ -34,7 +34,7 @@ const organization: Organization = {
 const member: Member = {
   ...audit,
   customer_member_id: "member-1",
-  parent_team_id: "team-1",
+  parent_team_ids: ["team-1"],
   alias: "Member One",
   budget_id: "template-1",
   budget_override_id: "override-1",
@@ -213,7 +213,7 @@ describe("customer hierarchy creation payloads", () => {
   const teamTarget: CustomerHierarchyCreateTarget = { kind: "team", organization };
   const organizationWithTemplate: Organization = {
     ...organization,
-    default_budget_id: "standard-template",
+    default_budget_template_id: "standard-template",
     default_budgets: [{ budget_id: "standard-template", name: "Standard", is_default: true, max_budget: 50 }],
   };
   const memberTarget: CustomerHierarchyCreateTarget = {
@@ -250,7 +250,7 @@ describe("customer hierarchy creation payloads", () => {
       create: {
         kind: "member",
         body: {
-          parent_team_id: "team-1",
+          parent_team_ids: ["team-1"],
           alias: null,
           budget_id: "standard-template",
           budget_override: null,
