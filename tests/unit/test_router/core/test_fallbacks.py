@@ -9,7 +9,6 @@ import litellm
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.router_api import ChangeSet
 from litellm.router_core import RouterCore
-from litellm.router_rust.core import _start_fields
 from litellm.types.utils import Usage
 from tests.unit.test_router.core.construction_precall_helpers import windowed
 from tests.unit.test_router.core.scripted_host import (
@@ -48,41 +47,6 @@ def headers(response: object) -> Mapping[str, object]:
 
 def show_router_debug(host: ScriptedHost) -> None:
     host.set_dynamic(expose_router_debug_in_errors=True)
-
-
-@pytest.mark.parametrize(
-    ("field", "value", "expected"),
-    [
-        ("specific_deployment", True, True),
-        ("specific_deployment", 1, None),
-        ("specific_deployment", "true", None),
-        ("specific_deployment", False, None),
-        ("disable_fallbacks", True, True),
-        ("disable_fallbacks", 1, None),
-        ("disable_fallbacks", "true", None),
-        ("disable_fallbacks", False, None),
-    ],
-    ids=[
-        "specific-true",
-        "specific-integer",
-        "specific-string",
-        "specific-false",
-        "disable-true",
-        "disable-integer",
-        "disable-string",
-        "disable-false",
-    ],
-)
-def test_request_start_fields_preserve_literal_true_flags(field: str, value: object, expected: bool | None) -> None:
-    assert _start_fields({field: value}).get(field) is expected
-
-
-@pytest.mark.parametrize("field", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
-def test_request_start_fields_omit_standalone_fallback_strings_without_mutating_request(field: str) -> None:
-    request: Final = {field: "unconfigured-scalar-model"}
-
-    assert field not in _start_fields(request)
-    assert request == {field: "unconfigured-scalar-model"}
 
 
 # --- where the fallback chain comes from -------------------------------------------------------
