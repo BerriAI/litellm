@@ -4,6 +4,7 @@ mod policy;
 pub(crate) mod rate_limits;
 pub(crate) mod request;
 pub(crate) mod router_cooldowns;
+pub(crate) mod router_session_pins;
 pub(crate) mod router_usage;
 pub(crate) mod sensitive_route_pins;
 pub(crate) mod spend_counters;
@@ -234,6 +235,10 @@ impl<'py, T: IntoValue> IntoPyObject<'py> for PyData<T> {
     fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
         PyValue(self.0.into_value()).into_pyobject(py)
     }
+}
+
+fn unwrap_values(values: Vec<PyValue>) -> Vec<litellm_python_compat::Value> {
+    values.into_iter().map(|value| value.0).collect()
 }
 
 fn unwrap_all<T>(values: Vec<PyData<T>>) -> Vec<T> {

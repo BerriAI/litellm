@@ -10,6 +10,7 @@ pub mod rate_limits;
 mod remote;
 mod request;
 pub mod router_cooldowns;
+pub mod router_session_pins;
 pub mod router_usage;
 pub mod sensitive_route_pins;
 pub mod spend_counters;

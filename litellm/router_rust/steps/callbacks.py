@@ -51,6 +51,7 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.redis.stores.router_session_pins import RouterSessionPinStore
     from litellm.redis.stores.router_usage import RouterUsage
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.steps.selection import StrategySelectors
@@ -111,6 +112,7 @@ class OptionalChecks:
         host: "PythonHost",
         cache: DualCache,
         usage: "RouterUsage",
+        pins: "RouterSessionPinStore",
         hosted: "HostRegistry",
         ctx: object,
         arguments: Mapping[str, object],
@@ -119,6 +121,7 @@ class OptionalChecks:
         self._host: Final = host
         self._cache: Final = cache
         self._usage: Final = usage
+        self._pins: Final = pins
         self._hosted: Final = hosted
         self._ctx: Final = ctx
         self.optional_callbacks: list[object] | None = None  # mutable-ok: the router's live list, as Python keeps it
@@ -212,7 +215,7 @@ class OptionalChecks:
 
     def _affinity_check(self, user_key: bool, responses_api: bool, session_id: bool) -> DeploymentAffinityCheck:
         return DeploymentAffinityCheck(
-            cache=self._cache,
+            pins=self._pins,
             ttl_seconds=self.deployment_affinity_ttl_seconds,  # pyright: ignore[reportArgumentType]  # the argument as passed
             enable_user_key_affinity=user_key,
             enable_responses_api_affinity=responses_api,
