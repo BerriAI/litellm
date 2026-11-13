@@ -3966,6 +3966,81 @@ class TestResponsesWSFirstFrameModelAuth:
         proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
         assert (key_tokens, ptu_tokens > 0) == (0, keeps_its_ptu_estimate)
 
+    async def test_a_socket_whose_relay_failed_frees_its_legacy_parallel_slot(self):
+        from litellm.exceptions import EndpointNotSupportedByModelError
+        from litellm.proxy._types import hash_token
+        from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+        from litellm.proxy.utils import InternalUsageCache
+
+        limiter: Final = PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=InternalUsageCache(DualCache()),
+            clock=lambda: datetime.datetime(2026, 1, 31, 12, 0, 30),
+        )
+        release_through: Final = ProxyLogging(user_api_key_cache=DualCache())
+        release_through.proxy_hook_mapping["parallel_request_limiter"] = limiter
+        key: Final = UserAPIKeyAuth(api_key=hash_token("sk-legacy-socket-relay-failed"), max_parallel_requests=1)
+
+        async def admit() -> None:
+            running_before: Final = asyncio.all_tasks()
+            await limiter.async_pre_call_hook(
+                user_api_key_dict=key, cache=DualCache(), data={}, call_type="aresponses_websocket"
+            )
+            await asyncio.gather(*(asyncio.all_tasks() - running_before))
+
+        async def admitted(**kwargs: object) -> tuple[dict[str, object], MagicMock]:
+            await admit()
+            return {"model": "embed-only", "litellm_metadata": {}}, MagicMock()
+
+        async def opens_another_session() -> bool:
+            try:
+                await admit()
+            except ProxyRateLimitError:
+                return False
+            return True
+
+        ws: Final = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "embed-only", "input": []})
+        )
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+        processor: Final = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(side_effect=admitted)
+        proxy_logging_obj: Final = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.arelease_responses_websocket_slot = release_through.arelease_responses_websocket_slot
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy, so it admits through the real limiter only
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam that refuses a model without /v1/responses support
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                side_effect=EndpointNotSupportedByModelError(
+                    message="/v1/responses is not supported by model=embed-only", model="embed-only"
+                ),
+            ),
+            patch(  # test-quality-ok: the failure row and the release go through the proxy's limiter hook
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            await responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=key)
+
+        assert (await opens_another_session(), await opens_another_session()) == (True, False)
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "relay_outcome",
@@ -4154,6 +4229,8 @@ class TestResponsesWSFirstFrameModelAuth:
 
         booked = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
         assert booked["original_exception"] is (crash if ending == "crash" else refusal)
+        closed_as: Final = proxy_logging_obj.arelease_responses_websocket_slot.await_args.args[1]
+        assert closed_as == ("relay_failed" if ending == "crash" else "turns_finished")
 
     @pytest.mark.asyncio
     async def test_a_crashed_socket_whose_failure_row_cannot_be_built_still_gets_its_error_frame_and_close(self):

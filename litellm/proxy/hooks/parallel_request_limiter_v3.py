@@ -340,7 +340,7 @@ class WindowGuardedIncrement:
 ReservationOperation: TypeAlias = CounterIncrement | WindowGuardedIncrement
 
 ResponsesWebSocketClose: TypeAlias = Literal[
-    "refused_at_open", "turns_finished", "turn_unfinished", "settled_by_its_log"
+    "refused_at_open", "relay_failed", "turns_finished", "turn_unfinished", "settled_by_its_log"
 ]
 
 
@@ -5330,12 +5330,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         turns_logged: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Free the slot a Responses WebSocket took at admission once it closes, and settle its token reservations.
-        A socket refused at open sent nothing upstream, so it refunds them all. Turns log under their own call ids
-        and charge their own key TPM, but never the team PTU, so a socket whose turns all finished refunds its TPM
-        in the background once ``turns_logged`` says their charges are in, and keeps the PTU estimate. A turn cut
-        before its terminal event charged nothing, so its socket keeps every reservation until the window ends. A
-        socket that logs as one row under its own call id is settled by that row, like an HTTP request, so its close
-        only frees the slot."""
+        A socket refused at open, or whose relay failed before it returned, relayed nothing, so it refunds them all.
+        Turns log under their own call ids and charge their own key TPM, but never the team PTU, so a socket whose
+        turns all finished refunds its TPM in the background once ``turns_logged`` says their charges are in, and
+        keeps the PTU estimate. A turn cut before its terminal event charged nothing, so its socket keeps every
+        reservation until the window ends. A socket that logs as one row under its own call id is settled by that
+        row, like an HTTP request, so its close only frees the slot."""
         parent_otel_span: Final = user_api_key_dict.parent_otel_span
         release_error: Final = await self._release_stashed_admission(
             lambda stash: self._settle_closed_responses_websocket(stash, close, turns_logged, parent_otel_span),
@@ -5360,7 +5360,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         parent_otel_span: Span | None,
     ) -> None:
         match close:
-            case "refused_at_open":
+            case "refused_at_open" | "relay_failed":
                 await self._settle_stashed_reservations(
                     stash, MappingProxyType({}), parent_otel_span, guards_late_refund=True
                 )

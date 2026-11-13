@@ -2775,7 +2775,7 @@ async def _responses_websocket_session(
                 user_api_key_dict,
                 "turn_unfinished"
                 if unfinished_turn.is_set()
-                else "refused_at_open"
+                else "relay_failed"
                 if relay_crashed.is_set()
                 else "turns_finished",
                 socket_logging.finished,

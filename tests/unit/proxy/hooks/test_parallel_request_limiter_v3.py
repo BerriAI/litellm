@@ -6403,7 +6403,7 @@ async def test_a_responses_websocket_whose_relay_crashed_refunds_its_whole_reser
         await socket.roll_the_window_with_usage(20)
 
     await socket.write_failure_row(failure_row)
-    await socket.close("refused_at_open")
+    await socket.close("relay_failed")
 
     assert socket.key_and_ptu_tokens() == key_and_ptu_tokens_after_close
 
