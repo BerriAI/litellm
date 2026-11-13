@@ -46,6 +46,7 @@ from typing import (
     Final,
     Literal,
     NamedTuple,
+    NoReturn,
     Optional,
     Protocol,
     TypeAlias,
@@ -3421,7 +3422,7 @@ def fail_closed_budget_enforcement_enabled() -> bool:
     return _fail_closed_budget_enforcement()
 
 
-def _raise_budget_unverifiable(counter_key: str) -> None:
+def _raise_budget_unverifiable(counter_key: str) -> NoReturn:
     verbose_proxy_logger.warning(
         "fail_closed_budget_enforcement: rejecting request — spend for %s could "
         "not be verified against Redis or the database",
@@ -3433,7 +3434,7 @@ def _raise_budget_unverifiable(counter_key: str) -> None:
             "error": (
                 "Budget enforcement unavailable: current spend could not be "
                 "verified against Redis or the database, and "
-                "fail_closed_budget_enforcement is enabled, so the request was "
+                "an authoritative budget balance is required, so the request was "
                 "rejected to avoid exceeding the configured budget. Retry shortly."
             )
         },
@@ -3449,6 +3450,8 @@ async def get_current_spend(
     window_duration: str | None = None,
     window_start: datetime | None = None,
     fallback_authoritative: bool = False,
+    *,
+    require_authoritative_window: bool = False,
 ) -> float:
     """
     Read current spend from the cross-pod spend counter.
@@ -3479,7 +3482,16 @@ async def get_current_spend(
     and cached in-process for a few seconds, so a persistently stale counter
     drives at most one read per counter per window rather than one per request.
     """
-    current, verified = await _read_spend_counter_estimate(counter_key=counter_key, fallback_spend=fallback_spend)
+    current, verified = (
+        (
+            await _read_authoritative_window_spend(
+                counter_key, window_entity_type, window_entity_id, window_duration, window_start
+            ),
+            True,
+        )
+        if require_authoritative_window
+        else await _read_spend_counter_estimate(counter_key=counter_key, fallback_spend=fallback_spend)
+    )
     if fallback_authoritative:
         verified = True
 
@@ -3645,6 +3657,30 @@ async def read_spend_counter_cache_value(counter_key: str) -> tuple[float | None
 
     value, authoritative = await spend_counter_store.read(counter_key)
     return (float(value) if value is not None else None), authoritative
+
+
+async def _read_authoritative_window_spend(
+    counter_key: str,
+    entity_type: str | None,
+    entity_id: str | None,
+    window_duration: str | None,
+    window_start: datetime | None,
+) -> float:
+    if entity_type is None or entity_id is None or window_start is None:
+        raise ValueError("Authoritative window reads require the window entity and start")
+    window_spend: Final = await SpendCounterReseed.coalesced_window(
+        prisma_client=prisma_client,
+        spend_counter_store=spend_counter_store,
+        counter_key=counter_key,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        window_duration=window_duration,
+        window_start=window_start,
+        require_authoritative=True,
+    )
+    if window_spend is None:
+        _raise_budget_unverifiable(counter_key)
+    return window_spend
 
 
 async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) -> tuple[float, bool]:

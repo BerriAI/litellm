@@ -417,11 +417,14 @@ class SpendCounterReseed:
         entity_id: str,
         window_duration: str | None,
         window_start: datetime,
+        *,
+        require_authoritative: bool = False,
     ) -> float | None:
+        strict: Final = require_authoritative or entity_type.startswith("customer_")
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
             cached, authoritative = await SpendCounterReseed._cached_reading(spend_counter_store, counter_key)
-            if entity_type.startswith("customer_") and spend_counter_store.has_redis and not authoritative:
+            if strict and spend_counter_store.has_redis and not authoritative:
                 # A pod-local value or durable floor omits other workers' holds and unflushed charges.
                 return None
             if cached is not None:
@@ -443,7 +446,7 @@ class SpendCounterReseed:
                     "SpendCounterReseed.coalesced_window: failed to warm counter %s",
                     counter_key,
                 )
-                if entity_type.startswith("customer_"):
+                if strict:
                     return None
                 raise
             if spend_counter_store.has_redis:

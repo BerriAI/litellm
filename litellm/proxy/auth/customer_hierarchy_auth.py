@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, TypeAlias
 
-from fastapi import status
+from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
@@ -25,7 +25,6 @@ from litellm.proxy.auth.customer_member_auto_create import ensure_customer_membe
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
-from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.management_helpers.customer_hierarchy import (
     Failure,
     PrismaRecord,
@@ -33,7 +32,6 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     related_budget,
     utc_now,
 )
-from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import CustomerTeamRepository
 from litellm.types.proxy.auth.customer_hierarchy import (
@@ -339,14 +337,24 @@ def check_customer_hierarchy_budget(hierarchy: CustomerHierarchyAuth) -> None:
 
 async def check_customer_hierarchy_windows(
     hierarchy: CustomerHierarchyAuth,
-    prisma_client: "PrismaClient | None",
-    spend_counter_store: SpendCounterStore,
     now: datetime | None = None,
 ) -> None:
-    from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
+    from itertools import chain
 
-    for scope in hierarchy.scopes:
-        for counter in customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now):
+    from litellm.proxy.proxy_server import get_current_spend, spend_counter_store
+    from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
+    from litellm.proxy.spend_tracking.spend_counter_batch import spend_counter_batch_scope
+
+    counters: Final = tuple(
+        chain.from_iterable(
+            customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now)
+            for scope in hierarchy.scopes
+        )
+    )
+    with spend_counter_batch_scope(
+        spend_counter_store, counter_keys=frozenset(counter.counter_key for counter in counters)
+    ):
+        for counter in counters:
             if counter.window_start is None:
                 raise ProxyException(
                     message="Customer budget window is unavailable.",
@@ -354,29 +362,31 @@ async def check_customer_hierarchy_windows(
                     param="budget_limits",
                     code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
-            spend = await SpendCounterReseed.coalesced_window(
-                prisma_client=prisma_client,
-                spend_counter_store=spend_counter_store,
-                counter_key=counter.counter_key,
-                entity_type=scope.key,
-                entity_id=scope.entity_id,
-                window_duration=counter.window_duration,
-                window_start=counter.window_start,
-            )
-            if spend is None:
+            try:
+                spend = await get_current_spend(
+                    counter_key=counter.counter_key,
+                    fallback_spend=0.0,
+                    max_budget=counter.max_budget,
+                    window_entity_type=counter.entity_type,
+                    window_entity_id=counter.entity_id,
+                    window_duration=counter.window_duration,
+                    window_start=counter.window_start,
+                    require_authoritative_window=True,
+                )
+            except HTTPException as error:
                 raise ProxyException(
                     message="Customer budget window spend is unavailable.",
                     type=ProxyErrorTypes.internal_server_error,
                     param="budget_limits",
                     code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
+                ) from error
             if spend >= counter.max_budget:
                 raise litellm.BudgetExceededError(
                     current_cost=spend,
                     max_budget=counter.max_budget,
-                    message=f"ExceededBudget: {scope.key}={scope.entity_id} over {counter.window_duration} budget.",
-                    entity_type=scope.key,
-                    entity_id=scope.entity_id,
+                    message=f"ExceededBudget: {counter.entity_type}={counter.entity_id} over {counter.window_duration} budget.",
+                    entity_type=counter.entity_type,
+                    entity_id=counter.entity_id,
                 )
 
 
@@ -517,9 +527,7 @@ async def resolve_customer_hierarchy(
     if not RouteChecks.is_info_route(route):
         check_customer_hierarchy_budget(hierarchy)
         if any(scope.budget_limits for scope in hierarchy.scopes):
-            from litellm.proxy.proxy_server import spend_counter_store
-
-            await check_customer_hierarchy_windows(hierarchy, prisma_client, spend_counter_store)
+            await check_customer_hierarchy_windows(hierarchy)
     requested: Final = (request_model,) if isinstance(request_model, str) else tuple(request_model or ())
     for model in requested:
         if model:

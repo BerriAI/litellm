@@ -466,7 +466,7 @@ async def test_auth_rejects_redis_outage_with_503(accounting_state):
         scopes=(CustomerScopeAuth(key="customer_member", entity_id="member", budget_limits=LIMITS),),
     )
     with pytest.raises(ProxyException) as error:
-        await check_customer_hierarchy_windows(hierarchy, prisma, ps.spend_counter_store)
+        await check_customer_hierarchy_windows(hierarchy)
     assert error.value.code == "503"
 
 
