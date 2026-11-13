@@ -16,7 +16,7 @@ from litellm.types.utils import ImageObject, ImageResponse
     [
         ({"duration": "8", "resolution": "720p"}, 0.6),
         ({"duration": 5, "resolution": "540p"}, 0.1),
-        ({"resolution": "720p"}, 0.3),
+        ({"resolution": "720p"}, None),
         ({"duration": 8}, None),
         ({"duration": 8, "resolution": "1080p"}, None),
         ({"duration": "invalid", "resolution": "720p"}, None),
@@ -35,6 +35,25 @@ def test_passthrough_video_clip_pricing(body: dict[str, object], expected: float
         persist_across_reloads=False,
     )
     assert fal_ai_passthrough_cost("test-clip", body) == expected
+
+
+@pytest.mark.parametrize(
+    ("fallback", "expected"),
+    [
+        ({}, None),
+        ({"output_cost_per_video": 0.0}, 0.0),
+        ({"output_cost_per_video": 0.37}, 0.37),
+        ({"output_cost_per_image": 0.11}, 0.11),
+    ],
+)
+def test_passthrough_missing_duration_uses_existing_fallback(
+    fallback: dict[str, float], expected: float | None
+) -> None:
+    litellm.register_model(
+        {"fal_ai/test-clip-fallback": {"output_cost_per_video_clip": {"5s": {"720p": 0.3}}, **fallback}},
+        persist_across_reloads=False,
+    )
+    assert fal_ai_passthrough_cost("test-clip-fallback", {"resolution": "720p"}) == expected
 
 
 @pytest.fixture(autouse=True)

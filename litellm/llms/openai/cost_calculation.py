@@ -147,16 +147,13 @@ def video_clip_cost(model_info: Mapping[str, object], duration: object, resoluti
         prices: Final = _VIDEO_CLIP_PRICES.validate_python(model_info.get("output_cost_per_video_clip"))
     except ValidationError:
         return None
-    durations: Final = tuple(key for key in prices if key.endswith("s") and key[:-1].isdigit())
-    if not durations:
-        return None
-    if duration is None or duration == 0:
-        duration_key: Final = min(durations, key=lambda key: int(key[:-1]))
-        return prices[duration_key].get(resolution.strip().lower())
     if isinstance(duration, bool) or not isinstance(duration, (str, int, float)):
         return None
     try:
-        requested_key: Final = f"{round(float(duration))}s"
+        duration_seconds: Final = float(duration)
+        if duration_seconds <= 0:
+            return None
+        requested_key: Final = f"{round(duration_seconds)}s"
     except (ValueError, OverflowError):
         return None
     return prices.get(requested_key, {}).get(resolution.strip().lower())

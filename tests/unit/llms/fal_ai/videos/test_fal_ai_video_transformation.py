@@ -1,3 +1,4 @@
+import json
 import sys
 from typing import Final
 from unittest.mock import AsyncMock, Mock
@@ -68,6 +69,15 @@ async def test_router_video_uses_configured_deployment_price(
 
 @pytest.mark.parametrize("drop_params", [False, True])
 @pytest.mark.parametrize(
+    "model",
+    [
+        "fal-ai/pixverse/v5/text-to-video",
+        "pixverse/v6/text-to-video",
+        "fal_ai/pixverse/v6/text-to-video",
+        "fal_ai/fal-ai/pixverse/v5/text-to-video",
+    ],
+)
+@pytest.mark.parametrize(
     ("size", "resolution"),
     [
         ("360p", "360p"),
@@ -79,14 +89,14 @@ async def test_router_video_uses_configured_deployment_price(
         ("720x1280", "720p"),
     ],
 )
-def test_pixverse_resolution_maps_to_request_and_billing(size: str, resolution: str, drop_params: bool) -> None:
+def test_pixverse_resolution_maps_to_request_and_billing(
+    size: str, resolution: str, drop_params: bool, model: str
+) -> None:
     config: Final = FalAIVideoConfig()
-    params: Final = config.map_openai_params(
-        {"seconds": "5", "size": size}, "fal-ai/pixverse/v5/text-to-video", drop_params
-    )
+    params: Final = config.map_openai_params({"seconds": "5", "size": size}, model, drop_params)
     assert params["resolution"] == resolution
     response: Final = config.transform_video_create_response(
-        model="fal-ai/pixverse/v5/text-to-video",
+        model=model,
         raw_response=httpx.Response(
             200, json={"request_id": "pixverse-clip"}, request=httpx.Request("POST", "https://queue.fal.run")
         ),
@@ -95,6 +105,55 @@ def test_pixverse_resolution_maps_to_request_and_billing(size: str, resolution: 
     )
     assert response.usage is not None
     assert response.usage["video_resolution"] == resolution
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["fal-ai/pixverse/v5/text-to-video", "pixverse/v6/text-to-video"])
+@pytest.mark.parametrize(
+    ("seconds", "native_duration", "expected_duration", "expected_cost"),
+    [(None, None, "5", 0.19), ("8", None, "8", 0.31), (None, "8", "8", 0.31)],
+)
+async def test_pixverse_duration_reaches_request_usage_and_clip_billing(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    seconds: str | None,
+    native_duration: str | None,
+    expected_duration: str,
+    expected_cost: float,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost})
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "pixverse-clip",
+                "litellm_params": {"model": f"fal_ai/{model}", "api_key": "synthetic-fal-key"},
+                "model_info": {
+                    "output_cost_per_video_clip": {
+                        "4s": {"540p": 0.04},
+                        "5s": {"540p": 0.19, "720p": 0.61},
+                        "8s": {"540p": 0.31},
+                    }
+                },
+            }
+        ]
+    )
+    with respx.mock:
+        upstream: Final = respx.post(f"https://queue.fal.run/{model}").respond(
+            200, json={"request_id": "pixverse-duration"}
+        )
+        video: Final = await router.avideo_generation(
+            model="pixverse-clip",
+            prompt="clip",
+            size="540p",
+            seconds=seconds,
+            extra_body={"duration": native_duration} if native_duration is not None else None,
+        )
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls.last.request.content)["duration"] == expected_duration
+    assert video.seconds == expected_duration
+    assert video.usage == {"duration_seconds": float(expected_duration), "video_resolution": "540p"}
+    assert video._hidden_params["response_cost"] == pytest.approx(expected_cost)
 
 
 @pytest.mark.parametrize("drop_params", [False, True])
