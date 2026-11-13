@@ -213,7 +213,11 @@ def test_is_database_service_unavailable_error_prisma_engine_malformed_payload(
 
     assert "no attribute 'get'" in str(exc_info.value)
     assert PrismaDBExceptionHandler.is_database_service_unavailable_error(exc_info.value) is True
-    assert PrismaDBExceptionHandler.is_database_connection_error(exc_info.value) is transient
+    assert PrismaDBExceptionHandler.is_database_connection_error(exc_info.value) is False
+    assert (
+        PrismaDBExceptionHandler.is_database_connection_error(exc_info.value, authenticated_customer_hierarchy=True)
+        is transient
+    )
     assert PrismaDBExceptionHandler.is_database_transport_error(exc_info.value) is transient
 
 
@@ -998,7 +1002,7 @@ def test_is_statement_timeout_error(error: Exception, expected: bool) -> None:
         ("invalid engine response", False),
     ],
 )
-def test_engine_connection_closure_allows_fail_open_but_permanent_engine_faults_do_not(
+def test_engine_connection_closure_only_allows_authenticated_customer_fail_open(
     body: str,
     retryable: bool,
 ) -> None:
@@ -1007,7 +1011,11 @@ def test_engine_connection_closure_allows_fail_open_but_permanent_engine_faults_
     error: Final = EngineRequestError(Response(httpx.Response(500)), body)
     assert PrismaDBExceptionHandler.is_database_transport_error(error) is retryable
     assert PrismaDBExceptionHandler.is_permanent_database_fault(error) is not retryable
-    assert PrismaDBExceptionHandler.is_database_connection_error(error) is retryable
+    assert PrismaDBExceptionHandler.is_database_connection_error(error) is False
+    assert (
+        PrismaDBExceptionHandler.is_database_connection_error(error, authenticated_customer_hierarchy=True)
+        is retryable
+    )
 
 
 def test_connection_closure_code_survives_prisma_data_error_wrapping() -> None:

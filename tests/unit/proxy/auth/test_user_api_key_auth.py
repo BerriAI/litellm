@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException, WebSocket, status
 from prisma.engine import utils as prisma_engine_utils
+from prisma.engine.errors import EngineConnectionError
 from starlette.datastructures import URL
 from starlette.requests import Request as StarletteRequest
 from starlette.types import Message
@@ -2750,6 +2751,47 @@ async def test_customer_hierarchy_database_outage_respects_fail_open_setting(
         with pytest.raises(ProxyException) as denied:
             await user_api_key_auth(request=request, api_key=f"Bearer {key}")
         assert denied.value.code == "503"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_code", ("P1001", "P1017"))
+@pytest.mark.parametrize("key_lookup_disconnected", (False, True))
+async def test_unverified_virtual_key_is_not_admitted_by_customer_outage_recovery(
+    monkeypatch: pytest.MonkeyPatch, error_code: str, key_lookup_disconnected: bool
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    with pytest.raises(AttributeError) as decoder_error:
+        prisma_engine_utils.handle_response_errors(
+            None,
+            [{"user_facing_error": {"error_code": error_code, "message": "database unavailable", "meta": None}}],
+        )
+    key_error: Final = (
+        EngineConnectionError("query engine unavailable") if key_lookup_disconnected else decoder_error.value
+    )
+    prisma: Final = MagicMock(
+        get_data=AsyncMock(side_effect=key_error), attempt_db_reconnect=AsyncMock(return_value=False)
+    )
+    prisma.db.litellm_customerorganizationtable.find_many = AsyncMock(side_effect=decoder_error.value)
+    monkeypatch.setattr(server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(server, "general_settings", {"allow_requests_on_db_unavailable": True})
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(server, "prisma_client", prisma)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    request: Final = StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/responses",
+            "headers": [(b"x-litellm-customer-org-alias", b"customer-a")],
+        },
+        receive=AsyncMock(
+            return_value={"type": "http.request", "body": b'{"model":"gpt-4o-mini","input":"Hello"}'}
+        ),
+    )
+    with pytest.raises(ProxyException) as denied:
+        await user_api_key_auth(request=request, api_key="Bearer sk-never-issued-customer-outage")
+    assert denied.value.code == "503"
 
 
 @pytest.mark.asyncio

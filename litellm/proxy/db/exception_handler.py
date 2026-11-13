@@ -174,7 +174,7 @@ class PrismaDBExceptionHandler:
         return False
 
     @staticmethod
-    def is_database_connection_error(e: Exception) -> bool:
+    def is_database_connection_error(e: Exception, *, authenticated_customer_hierarchy: bool = False) -> bool:
         """True only for a database that is temporarily unreachable and is
         expected to come back on its own.
 
@@ -201,7 +201,7 @@ class PrismaDBExceptionHandler:
             return True
         if isinstance(e, _exception_types(prisma.engine.errors.EngineConnectionError)):
             return True
-        if _prisma_error_code(e) in (_UNREACHABLE_PRISMA_CODE, "P1017"):
+        if authenticated_customer_hierarchy and _prisma_error_code(e) in (_UNREACHABLE_PRISMA_CODE, "P1017"):
             return True
         if PrismaDBExceptionHandler.is_database_capacity_error(e):
             return True

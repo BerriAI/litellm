@@ -4567,7 +4567,9 @@ async def _authorize_authenticated_request(
                 except Exception as e:
                     if not (
                         PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
-                        and PrismaDBExceptionHandler.is_database_connection_error(e)
+                        and PrismaDBExceptionHandler.is_database_connection_error(
+                            e, authenticated_customer_hierarchy=user_api_key_auth_obj.via_virtual_key
+                        )
                     ):
                         raise
                     verbose_proxy_logger.warning(
