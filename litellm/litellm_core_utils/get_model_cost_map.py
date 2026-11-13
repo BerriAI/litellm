@@ -199,7 +199,7 @@ class ModelCostMapNotModified:
 
     @property
     def model_cost_map(self) -> dict[str, dict[str, object]]:
-        """Compat for callers that publish every reload. Nothing changed, so there is nothing to publish."""
+        """Compat for main's callers. Use ``GetModelCostMap.loaded_model_cost_map()``."""
         return model_cost_inputs.loaded()
 
 

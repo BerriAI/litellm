@@ -433,6 +433,7 @@ def test_a_reload_of_an_unchanged_source_sends_the_installed_etag_and_installs_n
 
     assert result == ModelCostMapNotModified()
     assert result.model_count == len(loaded)
+    assert result.model_cost_map.keys() == loaded.keys()
     assert server.validators == [None, '"v1"']
     assert litellm.model_cost is installed
     assert get_model_cost_map_provenance() == provenance
