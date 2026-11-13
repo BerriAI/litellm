@@ -170,11 +170,10 @@ def _chat(message: Mapping[str, object], finish_reason: str, stream: bool) -> ht
         else message
     )
     events: Final = (
-        {**head, "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
         {
             **head,
             "object": "chat.completion.chunk",
-            "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
         },
         {**head, "object": "chat.completion.chunk", "choices": [], "usage": usage},
     )

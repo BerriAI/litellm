@@ -3185,7 +3185,9 @@ async def test_a_failed_continuation_after_every_mcp_tool_call_was_blocked_is_st
     ledger: Final = Ledger()
     auth: Final = serve_ledger(monkeypatch, ledger)
     monkeypatch.setattr(
-        litellm, "callbacks", [_BlockEveryLedgerCall(guardrail_name="block-ledger", event_hook="pre_mcp_call")]
+        litellm,
+        "callbacks",
+        [_BlockEveryLedgerCall(guardrail_name="block-ledger", event_hook="pre_mcp_call", default_on=True)],
     )
     upstream: Final = ModelUpstream(tool_calls=1, continuation_fails=True)
     router: Final = ledger_router(respx_mock, monkeypatch, upstream)
