@@ -18,6 +18,13 @@ export function PoliciesPanel({ token, sourceId, teams }: { token: string; sourc
   const [editing, setEditing] = useState<PolicyInput | null>(null);
   const [tool, setTool] = useState("");
   const defaultPolicy = query.data?.find((policy) => !policy.team_id);
+  const newPolicy: PolicyInput = {
+    source_id: sourceId,
+    team_id: "",
+    blocked_tools: [],
+    allow_unmapped_actors: true,
+    require_owner: false,
+  };
   const submitForm = async (event: React.FormEvent<HTMLFormElement>) => {
     if (!editing) return;
     event.preventDefault();
@@ -65,13 +72,7 @@ export function PoliciesPanel({ token, sourceId, teams }: { token: string; sourc
           variant="outline"
           onClick={() => {
             setTool("");
-            setEditing({
-              source_id: sourceId,
-              team_id: "",
-              blocked_tools: [],
-              allow_unmapped_actors: true,
-              require_owner: false,
-            });
+            setEditing(newPolicy);
           }}
         >
           {t("agents.external.addTeamPolicy")}

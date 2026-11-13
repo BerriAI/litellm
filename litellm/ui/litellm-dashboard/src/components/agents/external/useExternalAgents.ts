@@ -18,12 +18,14 @@ export function hookUrl(sourceId: string) {
 }
 
 export function useExternalQuery<T>(token: string, path: string, query?: QueryParams, enabled = true) {
-  return useQuery<T>({
+  const options = {
     queryKey: [...externalKey, path, query],
-    queryFn: ({ signal }) => apiClient.get<T>(root + path, { accessToken: token, query, signal }),
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      apiClient.get<T>(root + path, { accessToken: token, query, signal }),
     enabled: Boolean(token) && enabled,
     refetchInterval: 15000,
-  });
+  };
+  return useQuery<T>(options);
 }
 
 export function useExternalMutation(token: string) {

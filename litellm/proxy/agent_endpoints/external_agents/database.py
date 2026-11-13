@@ -1,6 +1,8 @@
 import asyncio
 from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING, Final, LiteralString, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
+
+from typing_extensions import LiteralString
 
 if TYPE_CHECKING:
     from litellm.proxy.db.prisma_client import PrismaWrapper

@@ -57,33 +57,16 @@ export default function ExternalAgentsPanel({ token, teams }: { token: string; t
           {t("agents.external.connectGrokBot")}
         </Button>
       </header>
-      {sources.isPending && <p role="status">{t("agents.external.loadingConnections")}</p>}
-      {(sources.error || summary.error) && (
-        <div role="alert" className="rounded-lg border border-destructive/30 p-4 text-destructive">
-          <p>{(sources.error || summary.error)?.message}</p>
-          <Button
-            variant="outline"
-            onClick={() => {
-              void sources.refetch();
-              if (source) void summary.refetch();
-            }}
-          >
-            {t("agents.external.retry")}
-          </Button>
-        </div>
-      )}
-      {!sources.isPending && !sources.error && !source && (
-        <div className="rounded-xl border border-dashed bg-card px-8 py-20 text-center space-y-4">
-          <PlugZap className="mx-auto size-10 text-muted-foreground" />
-          <h2 className="text-xl font-semibold">{t("agents.external.governEveryBotWithoutManualRegistration")}</h2>
-          <p className="mx-auto max-w-xl text-sm text-muted-foreground">
-            {t("agents.external.grokBotSendsASignedCheckBeforeModelAndToolCallsLiteLLMAppliesYourTeamsPolicyAnd")}
-          </p>
-          <p className="text-sm text-muted-foreground">
-            {t("agents.external.startInShadowModeToSeeExceptionsBeforeEnforcingYourPolicies")}
-          </p>
-        </div>
-      )}
+      <ConnectionFeedback
+        pending={sources.isPending}
+        sourceError={sources.error}
+        summaryError={summary.error}
+        hasSource={Boolean(source)}
+        onRetry={() => {
+          void sources.refetch();
+          if (source) void summary.refetch();
+        }}
+      />
       {source && (
         <>
           <SourceOverview
@@ -136,6 +119,48 @@ export default function ExternalAgentsPanel({ token, teams }: { token: string; t
         <MemberMappingDialog token={token} sourceId={source.source_id} onClose={() => setMapping(false)} />
       )}
     </section>
+  );
+}
+
+function ConnectionFeedback({
+  pending,
+  sourceError,
+  summaryError,
+  hasSource,
+  onRetry,
+}: {
+  pending: boolean;
+  sourceError: Error | null;
+  summaryError: Error | null;
+  hasSource: boolean;
+  onRetry: () => void;
+}) {
+  const { t } = useTranslation();
+  const error = sourceError || summaryError;
+  return (
+    <>
+      {pending && <p role="status">{t("agents.external.loadingConnections")}</p>}
+      {error && (
+        <div role="alert" className="rounded-lg border border-destructive/30 p-4 text-destructive">
+          <p>{error.message}</p>
+          <Button variant="outline" onClick={onRetry}>
+            {t("agents.external.retry")}
+          </Button>
+        </div>
+      )}
+      {!pending && !sourceError && !hasSource && (
+        <div className="rounded-xl border border-dashed bg-card px-8 py-20 text-center space-y-4">
+          <PlugZap className="mx-auto size-10 text-muted-foreground" />
+          <h2 className="text-xl font-semibold">{t("agents.external.governEveryBotWithoutManualRegistration")}</h2>
+          <p className="mx-auto max-w-xl text-sm text-muted-foreground">
+            {t("agents.external.grokBotSendsASignedCheckBeforeModelAndToolCallsLiteLLMAppliesYourTeamsPolicyAnd")}
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {t("agents.external.startInShadowModeToSeeExceptionsBeforeEnforcingYourPolicies")}
+          </p>
+        </div>
+      )}
+    </>
   );
 }
 

@@ -52,16 +52,18 @@ export function BotsPanel({ token, sourceId, teams }: { token: string; sourceId:
 
   const [state, setState] = useQueryStates(filters);
   const page = state.bot_page;
-  const query = useExternalQuery<Bot[]>(token, "", {
+  const queryParams = {
     source_id: sourceId,
     exceptions_only: state.exceptions_only,
     search: state.bot_search || undefined,
     team_id: state.bot_team || undefined,
     limit: pageSize,
     offset: (page - 1) * pageSize,
-  });
+  };
+  const query = useExternalQuery<Bot[]>(token, "", queryParams);
   const bots = query.data ?? [];
   const mutation = useExternalMutation(token);
+  const error = query.error || mutation.error;
   const [selection, setSelection] = useState<{ scope: string; ids: string[] }>({ scope: "", ids: [] });
   const scope = JSON.stringify(state);
   const selected = selection.scope === scope ? selection.ids.filter((id) => bots.some((bot) => bot.id === id)) : [];
@@ -193,9 +195,9 @@ export function BotsPanel({ token, sourceId, teams }: { token: string; sourceId:
           </span>
         </div>
       )}
-      {(query.error || mutation.error) && (
+      {error && (
         <p role="alert" className="text-destructive">
-          {(query.error || mutation.error)?.message}
+          {error.message}
         </p>
       )}
       <div className="rounded-xl border bg-card overflow-hidden">
