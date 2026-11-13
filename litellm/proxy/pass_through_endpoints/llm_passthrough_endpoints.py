@@ -590,8 +590,8 @@ def _fal_target(endpoint: str) -> httpx.URL:
 
 
 def _fal_upstream_endpoint(target: httpx.URL) -> str:
-    base_path: Final = httpx.URL(fal_ai_queue_base()).path.strip("/")
-    upstream_path: Final = target.path.lstrip("/")
+    base_path: Final = httpx.URL(fal_ai_queue_base()).raw_path.partition(b"?")[0].decode("ascii").strip("/")
+    upstream_path: Final = target.raw_path.partition(b"?")[0].decode("ascii").lstrip("/")
     return upstream_path.removeprefix(f"{base_path}/") if base_path else upstream_path
 
 

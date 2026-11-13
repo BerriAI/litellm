@@ -10799,6 +10799,22 @@ class TestFalAIPassthroughRoute:
             assert "no pricing entry" in response.text
             assert not route.calls
 
+    def test_submit_gate_rejects_an_encoded_spelling_that_stays_encoded_upstream(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post(url__regex=r"https://queue\.fal\.run/.*").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            plain: Final = client.post(
+                "/fal_ai/fal-ai/trellis-2", json={"image_url": "https://example.com/in.png", "resolution": 1536}
+            )
+            encoded: Final = client.post(
+                "/fal_ai/fal-ai/trellis%2525252D2", json={"image_url": "https://example.com/in.png", "resolution": 1536}
+            )
+
+            assert plain.status_code == 200, plain.text
+            assert encoded.status_code == 400, encoded.text
+            assert [str(call.request.url) for call in route.calls] == ["https://queue.fal.run/fal-ai/trellis-2"]
+
     def test_submit_gate_strips_the_queue_base_path_before_pricing(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
