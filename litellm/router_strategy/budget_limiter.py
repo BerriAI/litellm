@@ -55,6 +55,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import LiteLLM_Params, RouterErrors
 from litellm.types.utils import BudgetConfig, GenericBudgetConfigType, StandardLoggingPayload
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
+from litellm.utils import is_health_check_probe_log
 
 DEFAULT_REDIS_SYNC_INTERVAL: Final = 1
 _CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
@@ -576,6 +577,8 @@ class RouterBudgetLimiting(CustomLogger):
         standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
         if standard_logging_payload is None:
             raise ValueError("standard_logging_payload is required")
+        if is_health_check_probe_log(callback_fields.get("standard_logging_object")):
+            return
 
         polled_response, response_cost = _JOB_CHARGE_VALUES.validate_python(
             (response_obj, _CALLBACK_FIELDS.validate_python(standard_logging_payload).get("response_cost", 0))

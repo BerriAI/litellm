@@ -17,7 +17,8 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -39,7 +40,14 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.router import RouterErrors, parse_daily_reset_time
 from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import get_utc_datetime
+from litellm.utils import get_utc_datetime, is_health_check_probe_log
+
+
+class _LoggedKwargs(TypedDict, total=False):
+    standard_logging_object: ReadOnly[object]
+
+
+_LOGGED_KWARGS_ADAPTER: Final = TypeAdapter(_LoggedKwargs)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -477,7 +485,7 @@ class ModelRateLimitingCheck(CustomLogger):
             return deployment
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         from litellm.litellm_core_utils.core_helpers import (
             get_parent_otel_span_from_kwargs,
         )
@@ -491,7 +499,9 @@ class ModelRateLimitingCheck(CustomLogger):
                 parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
             )
 
-            if standard_logging_object is None:
+            if standard_logging_object is None or is_health_check_probe_log(
+                _LOGGED_KWARGS_ADAPTER.validate_python(kwargs).get("standard_logging_object")
+            ):
                 return
 
             model_id: Final = standard_logging_object.get("model_id")
@@ -546,7 +556,9 @@ class ModelRateLimitingCheck(CustomLogger):
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
             io_token_reconcile_success(self.dual_cache, kwargs, response_obj)
 
-            if standard_logging_object is None:
+            if standard_logging_object is None or is_health_check_probe_log(
+                _LOGGED_KWARGS_ADAPTER.validate_python(kwargs).get("standard_logging_object")
+            ):
                 return
 
             model_id: Final = standard_logging_object.get("model_id")

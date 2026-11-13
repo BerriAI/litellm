@@ -17,6 +17,7 @@ import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
@@ -882,3 +883,32 @@ class TestDailyResetTime:
             router.cache.in_memory_cache.get_cache("daily-test-id:openai/gpt-4.1-mini:tpd:2026-10-27")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # InMemoryCache.get_cache is untyped
         )
         assert day_before is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_api_key_hash", "expected_tpm"),
+    [(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, None), ("hashed-user-key", 50)],
+)
+async def test_a_health_check_probe_does_not_count_toward_its_deployment_tpm_limit(
+    user_api_key_hash: str, expected_tpm: int | None
+) -> None:
+    cache: Final = DualCache()
+    check: Final = ModelRateLimitingCheck(dual_cache=cache, clock=lambda: datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc))
+
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {
+                "model_id": "replica-test-id",
+                "total_tokens": 50,
+                "hidden_params": {"litellm_model_name": "gpt-4"},
+                "metadata": {"user_api_key_hash": user_api_key_hash},
+            }
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    tpm: Final = await cache.async_get_cache("replica-test-id:gpt-4:tpm:03-04")
+    assert tpm == expected_tpm, f"{user_api_key_hash} left the deployment tpm counter at {tpm}"

@@ -69,7 +69,6 @@ from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
-    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     NADIR_DEFAULT_API_BASE,
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
 )
@@ -215,6 +214,7 @@ from litellm.utils import (
     get_secret,
     get_standard_openai_params,
     is_explicitly_disabled_factory,
+    is_litellm_router_call,
     mock_completion_streaming_obj,
     pre_process_non_default_params,
     read_config_args,
@@ -5891,16 +5891,7 @@ def completion(
     try:
         if base_url is not None:
             api_base = base_url
-        probe_metadata: Final = cast(  # cast-ok: untyped kwargs
-            Mapping[str, object] | None, kwargs.get("litellm_metadata")
-        )
-        is_health_check_probe: Final = (
-            probe_metadata is not None
-            and probe_metadata.get("user_api_key_hash") == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
-        )
-        is_router_call: Final = not is_health_check_probe and any(
-            "model_group" in (kwargs.get(k) or ()) for k in ("metadata", "litellm_metadata")
-        )
+        is_router_call: Final = is_litellm_router_call(kwargs)
         if is_router_call:
             max_retries = 0
         elif num_retries is not None:

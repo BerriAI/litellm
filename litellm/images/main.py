@@ -65,6 +65,7 @@ from litellm.utils import (
     ProviderConfigManager,
     get_llm_provider,
     get_optional_params_image_gen,
+    is_litellm_router_call,
 )
 
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
@@ -296,10 +297,7 @@ def image_generation(
         base_model: Final = kwargs.get("base_model", None)
         call_kwargs: Final = cast(Mapping[str, object], kwargs)  # cast-ok: image_generation's **kwargs is untyped
         max_retries: Final = call_kwargs.get("max_retries")
-        is_router_call: Final = any(
-            isinstance(call_metadata := call_kwargs.get(k), Mapping) and "model_group" in call_metadata
-            for k in ("metadata", "litellm_metadata")
-        )
+        is_router_call: Final = is_litellm_router_call(call_kwargs)
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()

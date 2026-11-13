@@ -575,6 +575,34 @@ async def test_a_stamped_probe_still_retries_a_transient_upstream_error(monkeypa
     assert chat_route.call_count == 2
 
 
+@pytest.mark.asyncio
+async def test_a_stamped_image_probe_still_retries_a_transient_upstream_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as upstream:
+        image_route: Final = upstream.post("https://flaky-upstream.invalid/v1/images/generations").mock(
+            side_effect=[
+                httpx.Response(503, json={"error": {"message": "overloaded"}}),
+                httpx.Response(200, json={"created": 1, "data": [{"b64_json": "iVBORw0KGgo="}]}),
+            ]
+        )
+        result: Final = await hc_module._run_model_health_check(
+            {
+                "model_name": "images",
+                "litellm_params": {
+                    "model": "openai/provider-a-image",
+                    "api_base": "https://flaky-upstream.invalid/v1",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "provider-a-image", "mode": "image_generation"},
+            }
+        )
+
+    assert "error" not in result, result
+    assert image_route.call_count == 2
+
+
 _MANTLE_CLAUDE_DEPLOYMENT_PARAMS = {
     "model": "bedrock_mantle/anthropic.claude-haiku-4-5",
     "api_key": "test-bearer",
