@@ -47,7 +47,7 @@ class BudgetAssignment(LiteLLMBaseModel):
     windows: tuple[PersonBudgetWindow, ...]
 
 
-def _assignment(
+def budget_assignment(
     record: PersonBudgetRecord, subject_type: SubjectType, subject_id: str, now: datetime
 ) -> BudgetAssignment:
     effective: Final = record.effective_budget(now)
@@ -109,7 +109,7 @@ async def _validate_assignment_patch(
         raise HTTPException(status_code=422, detail=error)
 
 
-async def _update_user_budget(
+async def update_user_budget(
     store: CustomerHierarchyStore,
     user_id: str,
     patch: MemberPatch,
@@ -184,7 +184,7 @@ async def get_budget_assignment(
     async def read(store: CustomerHierarchyStore) -> BudgetAssignment | Failure:
         record: Final = await load_person_budget(store.db, subject_type, subject_id)
         return (
-            _assignment(record, subject_type, subject_id, store.now)
+            budget_assignment(record, subject_type, subject_id, store.now)
             if record is not None
             else Failure(ErrorCode.NOT_FOUND)
         )
@@ -225,5 +225,5 @@ async def update_budget_assignment(
     if subject_type == "customer_member":
         resolve(await hierarchy.transaction(lambda store: _update_customer_budget(store, subject_id, data, actor)))
     else:
-        resolve(await hierarchy.transaction(lambda store: _update_user_budget(store, subject_id, data, actor)))
+        resolve(await hierarchy.transaction(lambda store: update_user_budget(store, subject_id, data, actor)))
     return await get_budget_assignment(subject_type, subject_id, hierarchy)

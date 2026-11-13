@@ -452,6 +452,14 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/traces/{trace_id}/spans/{span_id}/error",
     )
 
+    budget_request_routes = (
+        "/management/v1/budget_increase_requests",
+        "/management/v1/budget_increase_requests/me",
+        "/management/v1/budget_increase_requests/{request_id}",
+        "/management/v1/budget_increase_requests/{request_id}/approve",
+        "/management/v1/budget_increase_requests/{request_id}/reject",
+    )
+
     skill_hub_routes = (
         "/skill-hub/skills",
         "/skill-hub/skills/upload",
@@ -741,6 +749,7 @@ class LiteLLMRoutes(enum.Enum):
         + mcp_management_routes
         + list(agent_management_routes)
         + list(skill_hub_routes)
+        + list(budget_request_routes)
     )
 
     spend_tracking_routes = [
@@ -984,6 +993,7 @@ class LiteLLMRoutes(enum.Enum):
         # inside agent_endpoints/endpoints.py
         *agent_management_routes,
         *skill_hub_routes,
+        *budget_request_routes,
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##

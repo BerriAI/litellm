@@ -9569,6 +9569,110 @@ export interface paths {
         patch: operations["update_budget_assignment_management_v1_budget_assignments__subject_type___subject_id__patch"];
         trace?: never;
     };
+    "/management/v1/budget_increase_requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Increases
+         * @description List owned requests. Proxy admins and admin viewers can read all requests.
+         */
+        get: operations["list_increases_management_v1_budget_increase_requests_get"];
+        put?: never;
+        /**
+         * Request Increase
+         * @description Request a temporary increase for the authenticated internal user. Only one request may be pending.
+         */
+        post: operations["request_increase_management_v1_budget_increase_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/budget_increase_requests/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Own Budget
+         * @description Read the authenticated internal user's personal limits, even when inference is paused.
+         */
+        get: operations["own_budget_management_v1_budget_increase_requests_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/budget_increase_requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Increase
+         * @description Read an owned request and its decision. Proxy admins and admin viewers may read any request.
+         */
+        get: operations["get_increase_management_v1_budget_increase_requests__request_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/budget_increase_requests/{request_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Approve Increase
+         * @description Approve a pending request and apply its temporary increase atomically. A different proxy admin must review.
+         */
+        put: operations["approve_increase_management_v1_budget_increase_requests__request_id__approve_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/budget_increase_requests/{request_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Reject Increase
+         * @description Reject a pending request with an explanation, without changing its budget. Proxy admins only.
+         */
+        put: operations["reject_increase_management_v1_budget_increase_requests__request_id__reject_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/budgets": {
         parameters: {
             query?: never;
@@ -29508,6 +29612,88 @@ export interface components {
         BudgetDeleteRequest: {
             /** Id */
             id: string;
+        };
+        /** BudgetIncreaseInput */
+        BudgetIncreaseInput: {
+            /**
+             * Amount
+             * @description Temporary additional USD, without resetting spend.
+             */
+            amount: number;
+            /**
+             * Duration
+             * @description Personal calendar-month or calendar-year limit to increase.
+             * @enum {string}
+             */
+            duration: "1mo" | "12mo";
+            /**
+             * Expires At
+             * Format: date-time
+             * @description Absolute expiry with timezone, which must still be future at approval.
+             */
+            expires_at: string;
+            /**
+             * Reason
+             * @description Reason shown to the reviewing proxy administrator.
+             */
+            reason: string;
+        };
+        /** BudgetIncreaseList */
+        BudgetIncreaseList: {
+            /** Has More */
+            has_more: boolean;
+            /** Requests */
+            requests: components["schemas"]["BudgetIncreaseRequest"][];
+        };
+        /** BudgetIncreaseRejection */
+        BudgetIncreaseRejection: {
+            /**
+             * Reason
+             * @description Explanation visible to the requester.
+             */
+            reason: string;
+        };
+        /** BudgetIncreaseRequest */
+        BudgetIncreaseRequest: {
+            /**
+             * Amount
+             * @description Temporary additional USD, without resetting spend.
+             */
+            amount: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Duration
+             * @description Personal calendar-month or calendar-year limit to increase.
+             * @enum {string}
+             */
+            duration: "1mo" | "12mo";
+            /**
+             * Expires At
+             * Format: date-time
+             * @description Absolute expiry with timezone, which must still be future at approval.
+             */
+            expires_at: string;
+            /** Id */
+            id: string;
+            /**
+             * Reason
+             * @description Reason shown to the reviewing proxy administrator.
+             */
+            reason: string;
+            /** Rejection Reason */
+            rejection_reason?: string | null;
+            /** Reviewed At */
+            reviewed_at?: string | null;
+            /** Reviewed By */
+            reviewed_by?: string | null;
+            /** Status */
+            status: ("pending_review" | "approved" | "rejected" | "withdrawn") | "expired";
+            /** Submitted By */
+            submitted_by: string;
         };
         /**
          * BudgetLimitEntry
@@ -68427,6 +68613,190 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BudgetAssignment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_increases_management_v1_budget_increase_requests_get: {
+        parameters: {
+            query?: {
+                /** @description Maximum requests in this page. */
+                limit?: number;
+                /** @description Number of requests to skip. */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_increase_management_v1_budget_increase_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetIncreaseInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    own_budget_management_v1_budget_increase_requests_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAssignment"];
+                };
+            };
+        };
+    };
+    get_increase_management_v1_budget_increase_requests__request_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_increase_management_v1_budget_increase_requests__request_id__approve_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_increase_management_v1_budget_increase_requests__request_id__reject_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetIncreaseRejection"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
                 };
             };
             /** @description Validation Error */

@@ -10,6 +10,7 @@ const LEGACY_PAGE_ROUTES: ReadonlyMap<string, string> = new Map(
     chat: "chat",
     "access-groups": "access-groups",
     budgets: "budgets",
+    "budget-requests": "budget-requests",
     customers: "customers",
     workflows: "workflows",
     "guardrails-monitor": "guardrails-monitor",

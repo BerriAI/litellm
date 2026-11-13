@@ -8221,7 +8221,8 @@
         "costTracking": "Cost Tracking",
         "uiTheme": "UI Theme",
         "telemetry": "Telemetry",
-        "customers": "Customers"
+        "customers": "Customers",
+        "budgetRequests": "Budget requests"
       },
       "homeLink": "LiteLLM home"
     },
@@ -20792,6 +20793,44 @@
       "withinBudget": "Within budget",
       "noMembers": "No members in this customer scope.",
       "overBudget": "Over budget"
+    }
+  },
+  "budgetRequests": {
+    "title": "Budget requests",
+    "adminIntro": "Review requests for temporary personal budget increases.",
+    "userIntro": "Request extra capacity for your personal monthly or annual budget and track the decision.",
+    "request": "Request increase",
+    "requestNotice": "The increase needs approval from another proxy admin. Your spend stays unchanged. Only one increase can be active at a time.",
+    "disabledPolicy": "This budget requires waiting until reset. Ask an admin to enable increase requests.",
+    "loading": "Loading…",
+    "empty": "No budget increase requests.",
+    "amount": "Additional budget (USD)",
+    "duration": "Applies to",
+    "expiryUtc": "Expires at (UTC)",
+    "expiry": "Expires at",
+    "reason": "Reason for request",
+    "submit": "Submit request",
+    "submitted": "Request sent for admin review",
+    "approved": "Increase approved",
+    "rejected": "Request rejected",
+    "failed": "The request could not be completed",
+    "details": "Request details",
+    "requester": "Requested by",
+    "reviewedBy": "Reviewed by {{name}} on {{date}}",
+    "currentLimits": "Current personal limits",
+    "noSelfReview": "Another proxy admin must review your request.",
+    "rejectionReason": "Reason for rejection (required to reject)",
+    "reject": "Reject",
+    "approve": "Approve increase",
+    "refresh": "Refresh",
+    "review": "Review request",
+    "expires": "Expires {{date}}",
+    "status": {
+      "pending_review": "Pending review",
+      "approved": "Approved",
+      "rejected": "Rejected",
+      "withdrawn": "Withdrawn",
+      "expired": "Expired"
     }
   }
 }

@@ -2358,3 +2358,21 @@ model LiteLLM_PerformanceAlertState {
   completed_at DateTime?
   updated_at   DateTime  @default(now()) @updatedAt
 }
+
+model LiteLLM_BudgetIncreaseRequest {
+  id               String   @id @default(uuid())
+  submitted_by     String
+  pending_user_id  String?  @unique
+  amount           Float
+  duration         String
+  expires_at       DateTime @client.Timestamptz(6)
+  reason           String
+  status           String   @default("pending_review")
+  created_at       DateTime @default(now()) @client.Timestamptz(6)
+  reviewed_by      String?
+  reviewed_at      DateTime? @client.Timestamptz(6)
+  rejection_reason String?
+
+  @@index([submitted_by, created_at, id])
+  @@index([created_at, id])
+}
