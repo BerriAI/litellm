@@ -185,6 +185,7 @@ impl AuthCache {
 
     /// The Redis `SET` of `key`, refused when the key was deleted on any pod since `lease` was
     /// read: the value may predate the write behind that delete. Memory is the caller's to write.
+    /// Also refused for a key no generation key can share a slot with, which no delete could void.
     /// `true` without Redis, and when Redis failed or `json.dumps` refuses the value, which only
     /// log as in [`AuthCache::set`].
     pub async fn set_leased(
@@ -203,11 +204,7 @@ impl AuthCache {
         let written = match codec::dumps(value) {
             Err(error) => Err(error),
             Ok(encoded) => match remote.client.sibling_key(key, GENERATION_LABEL) {
-                None => remote
-                    .client
-                    .send(commands::set(key, encoded, ttl))
-                    .await
-                    .map(|()| true),
+                None => Ok(false),
                 Some(generation) => {
                     remote
                         .client

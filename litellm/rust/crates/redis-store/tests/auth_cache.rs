@@ -799,11 +799,11 @@ async fn a_load_caches_what_it_read_when_only_another_key_was_deleted(
     );
 }
 
-// No hash tag can name the slot of a key that is hashed whole and holds a `}`, so it is written
-// and deleted as before, without a lease another pod can void
+// No hash tag can name the slot of a key that is hashed whole and holds a `}`, so no delete on
+// another pod could void its lease and the leased write is refused instead of going unguarded
 #[rstest]
 #[tokio::test]
-async fn a_key_no_lease_can_share_a_slot_with_is_still_written_and_deleted(
+async fn a_key_no_lease_can_share_a_slot_with_is_not_written_leased_and_is_still_deleted(
     #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
     #[values(Evict::Delete, Evict::DeclaredDelete)] how: Evict,
 ) {
@@ -814,17 +814,13 @@ async fn a_key_no_lease_can_share_a_slot_with_is_still_written_and_deleted(
 
     let lease = store.lease(key).await;
     assert!(
-        store
+        !store
             .set_leased(key, lease.as_deref(), team("t"), None)
             .await
     );
-    assert!(
-        raw.send(commands::get::<String>(key))
-            .await
-            .unwrap()
-            .is_some()
-    );
+    assert_eq!(raw.send(commands::get::<String>(key)).await.unwrap(), None);
 
+    store.set(key, team("t"), None).await.unwrap();
     evict(&store, how, key).await;
     assert_eq!(raw.send(commands::get::<String>(key)).await.unwrap(), None);
 }
