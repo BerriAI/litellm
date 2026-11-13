@@ -63354,9 +63354,28 @@
         "supported_endpoints": [
             "/v1/audio/transcriptions"
         ],
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "deprecation_date": "2026-06-30",
+        "deprecation_source": "https://docs.soniox.com/stt/models",
+        "successor_model": "soniox/stt-async-v5"
     },
     "soniox/stt-async-v5": {
+        "litellm_provider": "soniox",
+        "max_output_tokens": 8000,
+        "max_input_tokens": 8000,
+        "input_cost_per_second": 0.0,
+        "output_cost_per_second": 2.77778e-05,
+        "mode": "audio_transcription",
+        "source": "https://soniox.com/pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supports_audio_input": true,
+        "deprecation_date": "2026-12-15",
+        "deprecation_source": "https://docs.soniox.com/stt/models",
+        "successor_model": "soniox/stt-async-v6"
+    },
+    "soniox/stt-async-v6": {
         "litellm_provider": "soniox",
         "max_output_tokens": 8000,
         "max_input_tokens": 8000,
@@ -63370,6 +63389,29 @@
         "supports_audio_input": true
     },
     "soniox/stt-rt-v5": {
+        "input_cost_per_second": 3.333e-05,
+        "litellm_provider": "soniox",
+        "metadata": {
+            "calculation": "$0.12/3600 seconds = $0.00003333 per second",
+            "original_pricing_per_hour": 0.12
+        },
+        "mode": "audio_transcription",
+        "source": "https://soniox.com/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "deprecation_date": "2026-12-15",
+        "deprecation_source": "https://docs.soniox.com/stt/models",
+        "successor_model": "soniox/stt-rt-v6"
+    },
+    "soniox/stt-rt-v6": {
         "input_cost_per_second": 3.333e-05,
         "litellm_provider": "soniox",
         "metadata": {
@@ -63427,7 +63469,10 @@
         "supported_output_modalities": [
             "text"
         ],
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "deprecation_date": "2025-10-31",
+        "deprecation_source": "https://docs.soniox.com/stt/models",
+        "successor_model": "soniox/stt-rt-v3"
     },
     "soniox/stt-rt-v3": {
         "input_cost_per_second": 3.333e-05,
@@ -63447,7 +63492,10 @@
         "supported_output_modalities": [
             "text"
         ],
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "deprecation_date": "2026-02-28",
+        "deprecation_source": "https://docs.soniox.com/stt/models",
+        "successor_model": "soniox/stt-rt-v4"
     },
     "soniox/stt-rt-v3-preview": {
         "input_cost_per_second": 3.333e-05,
@@ -63487,7 +63535,10 @@
         "supported_output_modalities": [
             "text"
         ],
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "deprecation_date": "2026-06-30",
+        "deprecation_source": "https://docs.soniox.com/stt/models",
+        "successor_model": "soniox/stt-rt-v5"
     },
     "tensormesh/Qwen/Qwen3.5-397B-A17B-FP8": {
         "litellm_provider": "tensormesh",
