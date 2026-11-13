@@ -101640,5 +101640,24 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "fal_ai/decart/lucy-5b/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.15,
+        "source": "https://fal.ai/models/decart/lucy-5b/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/decart/lucy-5b/image-to-video": {
+        "alias_of": "fal_ai/decart/lucy-5b/image-to-video"
     }
 }
