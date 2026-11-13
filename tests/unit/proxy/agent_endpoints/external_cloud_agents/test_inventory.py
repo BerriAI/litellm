@@ -2,7 +2,13 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.agent_endpoints.external_cloud_agents.inventory import SourceCache, message_tools, parse_frame
+from litellm.proxy.agent_endpoints.external_cloud_agents.inventory import (
+    Block,
+    Message,
+    SourceCache,
+    message_tools,
+    parse_frame,
+)
 from tests.unit.proxy.agent_endpoints.external_cloud_agents.conftest import DatabaseDouble, Harness
 
 
@@ -71,6 +77,11 @@ def test_prompt_text_is_not_a_tool() -> None:
     frame: Final = parse_frame(b'{"messages":[{"content":[{"type":"text","name":"secret","text":"private"}]}]}')
     assert frame is not None
     assert message_tools(frame.messages[0]) == ()
+
+
+def test_tool_extraction_caps_a_forty_thousand_block_frame() -> None:
+    message: Final = Message(content=tuple(Block(type="tool_use", name=f"tool-{i:05}") for i in range(40000)))
+    assert message_tools(message) == tuple(f"tool-{i:05}" for i in range(50))
 
 
 @pytest.mark.parametrize("reads_fail", [False, True])

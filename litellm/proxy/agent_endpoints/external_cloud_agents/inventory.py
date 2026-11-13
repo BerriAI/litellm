@@ -1,7 +1,8 @@
 import hmac
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from itertools import chain
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
@@ -54,8 +55,20 @@ def parse_frame(body: bytes) -> Frame | None:
 def message_tools(message: Message) -> tuple[str, ...]:
     if isinstance(message.content, str):
         return ()
-    names: Final = tuple(tool_names(block) for block in message.content if block.type == "tool_use")
-    return sum(names, ())
+    names: Final = (tool_names(block) for block in message.content if block.type == "tool_use")
+    return ToolCollector().collect(chain.from_iterable(names))
+
+
+class ToolCollector:
+    def __init__(self) -> None:
+        self.names: frozenset[str] = frozenset()
+
+    def collect(self, names: Iterable[str]) -> tuple[str, ...]:
+        for name in names:
+            self.names = self.names | {name}
+            if len(self.names) >= 50:
+                break
+        return tuple(sorted(self.names))
 
 
 def tool_names(block: Block) -> tuple[str, ...]:
@@ -133,7 +146,7 @@ class Inventory:
             return None
         if not frame.session_id or not frame.tenant_id:
             return None
-        tools: Final = tuple(sorted(frozenset(sum(map(message_tools, frame.messages), ()))))[:50]
+        tools: Final = ToolCollector().collect(chain.from_iterable(map(message_tools, frame.messages)))
         await self.db.execute_raw(
             'INSERT INTO "LiteLLM_ExternalCloudAgent" AS a '
             "(source_id,external_id,last_actor_id,last_model,tools) VALUES ($1,$2,$3,$4,$5::text[]) "
