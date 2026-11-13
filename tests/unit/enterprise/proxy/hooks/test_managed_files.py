@@ -6685,6 +6685,44 @@ async def test_enforce_provider_file_access_denies_a_stranger_the_model_encoded_
     assert denied.value.status_code == 403
 
 
+_AZURE_UPLOAD_URL_NAMED_LIKE_ANOTHER_ID: Final = "https://acct.blob.core.windows.net/uploads/0c4e.files%2Ffile-victim"
+
+
+def _managed_file_row(unified_file_id: str, provider_file_id: str, owner: str) -> LiteLLM_ManagedFileTable:
+    return LiteLLM_ManagedFileTable(
+        unified_file_id=unified_file_id,
+        file_object=OpenAIFileObject(
+            id=unified_file_id,
+            object="file",
+            bytes=12,
+            created_at=1,
+            filename="input.jsonl",
+            purpose="batch",
+            status="processed",
+        ),
+        model_mappings={"model-a": provider_file_id},
+        flat_model_file_ids=[provider_file_id],
+        created_by=owner,
+        team_id=f"team-{owner}",
+    )
+
+
+@pytest.mark.asyncio
+async def test_enforce_provider_file_access_ignores_an_upload_named_to_collide_with_another_keys_id():
+    managed_files, _ = _managed_files_with_fake_prisma(
+        _managed_file_row("file-attacker-upload", _AZURE_UPLOAD_URL_NAMED_LIKE_ANOTHER_ID, "attacker"),
+        _managed_file_row("file-victim-upload", "file-victim", "victim"),
+    )
+    attacker: Final = UserAPIKeyAuth(user_id="attacker", team_id="team-attacker")
+    victim: Final = UserAPIKeyAuth(user_id="victim", team_id="team-victim")
+
+    with pytest.raises(HTTPException) as denied:
+        await managed_files.enforce_provider_file_access("file-victim", attacker)
+
+    assert denied.value.status_code == 403
+    assert await managed_files.enforce_provider_file_access("file-victim", victim) is None
+
+
 @pytest.mark.asyncio
 async def test_store_unified_file_id_indexes_the_canonical_provider_file_id():
     prisma_client: Final = AsyncMock()

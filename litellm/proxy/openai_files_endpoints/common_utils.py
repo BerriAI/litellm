@@ -440,15 +440,19 @@ def get_original_file_id(encoded_id: str) -> str:
         return encoded_id
 
 
+_GEMINI_FILES_HOST: Final = "generativelanguage.googleapis.com"
+
+
 def canonical_provider_file_id(file_id: str) -> str:
     """The one spelling of a provider file id that ownership rows store and look up, so ``files/abc``,
-    ``files%2Fabc``, ``abc/`` and the Gemini file URL all resolve to the bare ``abc``. Cloud storage URIs
-    (``s3://``, ``gs://``) are returned unchanged."""
+    ``files%2Fabc``, ``abc/`` and the Gemini file URL all resolve to the bare ``abc``. Every other URL or URI
+    (``s3://``, ``gs://``, a storage blob URL) is returned unchanged, so an upload whose name happens to contain
+    ``files/<id>`` never indexes someone else's ``<id>``."""
     decoded: Final = unquote(file_id).strip()
-    is_http_url: Final = decoded.startswith(("http://", "https://"))
-    if "://" in decoded and not is_http_url:
-        return decoded
-    path: Final = urlparse(decoded).path if is_http_url else decoded
+    is_url: Final = "://" in decoded
+    if is_url and urlparse(decoded).hostname != _GEMINI_FILES_HOST:
+        return file_id
+    path: Final = urlparse(decoded).path if is_url else decoded
     files_index: Final = path.find("files/")
     bare: Final = (path[files_index:] if files_index != -1 else path).strip("/").removeprefix("files/").strip("/")
     return bare or decoded
