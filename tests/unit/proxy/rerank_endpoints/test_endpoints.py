@@ -58,7 +58,9 @@ def _build_request(headers: tuple[tuple[bytes, bytes], ...] = ()) -> Request:
     )
 
 
-async def _call_rerank(hidden_params: dict = HIDDEN_PARAMS, general_settings: Mapping[str, object] = MappingProxyType({})) -> Response:
+async def _call_rerank(
+    hidden_params: dict = HIDDEN_PARAMS, general_settings: Mapping[str, object] = MappingProxyType({})
+) -> Response:
     response = RerankResponse(id="rerank-1", results=[{"index": 0, "relevance_score": 0.9}])
     response._hidden_params = dict(hidden_params)
 
@@ -231,8 +233,9 @@ async def test_a_rejection_raised_before_routing_keeps_its_own_status(monkeypatc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_on_disconnect", [True, "true"])
 async def test_hang_up_with_cancel_on_disconnect_cancels_the_rerank_call_and_answers_499(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, cancel_on_disconnect: object
 ) -> None:
     body: Final = json.dumps({"model": "rerank-model", "query": "q", "documents": ["a", "b"]}).encode()
     messages: Final = iter(({"type": "http.request", "body": body, "more_body": False}, {"type": "http.disconnect"}))
@@ -262,7 +265,7 @@ async def test_hang_up_with_cancel_on_disconnect_cancels_the_rerank_call_and_ans
     proxy_logging_obj: Final = MagicMock()
     proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
     proxy_logging_obj.post_call_failure_hook = AsyncMock()
-    monkeypatch.setattr(proxy_server_mod, "general_settings", {"cancel_on_disconnect": True})
+    monkeypatch.setattr(proxy_server_mod, "general_settings", {"cancel_on_disconnect": cancel_on_disconnect})
     monkeypatch.setattr(proxy_server_mod, "add_litellm_data_to_request", fake_add_litellm_data_to_request)
     monkeypatch.setattr(proxy_server_mod, "route_request", holding_route_request)
     monkeypatch.setattr(proxy_server_mod, "proxy_logging_obj", proxy_logging_obj)

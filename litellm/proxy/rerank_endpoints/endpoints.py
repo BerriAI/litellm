@@ -90,7 +90,7 @@ async def rerank(
         )
         response: Final = _DECODED_JSON.validate_python(
             await await_llm_call_cancelling_on_disconnect(request, asyncio.ensure_future(llm_call))
-            if "cancel_on_disconnect" in general_settings and general_settings["cancel_on_disconnect"] is True
+            if general_settings.get("cancel_on_disconnect", False)  # pyright: ignore[reportUnknownMemberType]  # untyped general_settings
             else await llm_call
         )
 
