@@ -8439,6 +8439,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             return LiteLLM_EndUserTable(user_id="cust-1", models=["gpt-3.5-turbo"], blocked=False)
 
         monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_end_user_object", customer)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
         router = litellm.Router(
             model_list=[
                 {"model_name": name, "litellm_params": {"model": "openai/gpt-4.1-nano", "api_key": "fake"}}
@@ -8466,6 +8467,44 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         assert processor.data["model"] == "gpt-3.5-turbo"
+
+    @pytest.mark.asyncio
+    async def test_an_end_user_without_a_database_keeps_its_fallbacks(self, monkeypatch):
+        from litellm.proxy import proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth as ProxyKey
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        monkeypatch.setattr(proxy_server, "prisma_client", None)
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4", "user": "cust-1"})
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == "gpt-4":
+                raise ProxyRateLimitError(detail="TPM limit exceeded", headers={"retry-after": "30"})
+            return processor.data, MagicMock()
+
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = [{"gpt-4": ["claude-3-haiku"]}]
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+            await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=ProxyKey(end_user_id="cust-1"),
+                version=None,
+                proxy_config=_proxy_config(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert processor.data["model"] == "claude-3-haiku"
 
     @pytest.mark.asyncio
     async def test_a_refused_fallbacks_rate_limit_hold_is_released_before_the_walk_moves_on(self):

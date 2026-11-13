@@ -2490,7 +2490,7 @@ async def _fallback_grant(
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
             )
-            if user_api_key_dict.end_user_id is not None
+            if user_api_key_dict.end_user_id is not None and prisma_client is not None
             else None
         )
         if end_user is not None and end_user.models:
