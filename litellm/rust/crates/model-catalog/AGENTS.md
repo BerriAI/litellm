@@ -20,12 +20,13 @@ Every price in a row lowers to one `Price { meter, channel, when }` and its `Uni
   - A variation only one meter has stays inside it (cache TTL, image size, resolution, `_above_Ns_interval`, `max_results_range`)
 - `UnitPrice` is USD for one unit of the meter, such as one token, image, page or second
 - Band is a range of prompt sizes, starting where `_above_<N>_tokens` or `_above_<N>k_tokens` says
-  - `Prices::band` picks one band from prompt tokens alone, the highest edge passed wins, and `Band::Base` is below every edge
-  - The whole call moves, so every token meter, output included, bills all its tokens at that band's rate
+  - `Quote::rate` reads a meter at the highest of its own bands the prompt passes, and `Band::Base` is below every edge
+  - Prompt tokens alone pick the band, so output and cache tokens bill all their tokens at the band the prompt reached
+  - A meter with no price in the top band keeps its own lower band, never the base
   - `Billing::band_edge` says whether a prompt exactly at the edge is in the band (exclusive by default, inclusive for xAI)
   - A band only another tier or the batch channel prices never moves the call
 - `When` is the request's condition, its service tier and band
-  - A missing price falls back from `(tier, band)` to `(standard, band)`, `(tier, base)`, then `(standard, base)`
+  - Within a band the call's tier is read before standard, and any band the prompt passes is read before the base
 - `Channel` is the route whose price list the call reads, and each falls back differently
   - `Online` falls back across `When` as above
   - `Batch` (`_batches`) uses bands but no service tier, and a missing price is half the online rate
@@ -63,7 +64,7 @@ The price vocabulary lives in `litellm-cost`, and only this crate knows JSON key
 
 A new `N`, image size or resolution in an existing key shape parses with no Rust change. A new unit, token kind, feature or tier needs a variant in `litellm-cost` plus its spelling in `wire/flat_key.rs` and `FLAT_KEY_PATTERN` in `schema.rs`
 
-`Prices::band` and `Prices::rate` are pinned to Python's `_get_token_base_cost` by `tests/price_lookup_reference.json`. After a billing change in Python, regenerate it from the repo root with `PYTHONPATH=. python litellm/rust/crates/model-catalog/tests/generate_price_lookup_reference.py`
+`Prices::try_from` is the strict lowering the catalog checks use. `billed_prices` lowers the same row for billing and never fails, because a deployment's `model_info` merged over a catalog row can hold what the checks reject. When such a row has token tiers, the flat text token prices they replace are dropped the way Python's tiered path ignored them, and any other contradiction keeps the price read first
 
 ## Tests
 
