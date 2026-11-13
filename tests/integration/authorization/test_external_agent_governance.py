@@ -273,6 +273,31 @@ def test_concurrent_retries_discover_and_count_once(hook: Hook) -> None:
     assert decisions == [{"request_id": request_id}]
 
 
+def test_racing_retries_return_the_inserted_verdict_even_when_evaluations_differ(hook: Hook) -> None:
+    hook.policy(blocked_tools=("Shell",))
+    request_id: Final = str(uuid.uuid4())
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        responses: Final = tuple(
+            executor.map(
+                lambda tool: hook.send("shared-bot", request_id=request_id, tool=tool),
+                ("Shell", "ReadFile") * 4,
+            )
+        )
+    assert tuple(response.status_code for response in responses) == (200,) * 8
+    decisions: Final = hook.gateway.rows(
+        'SELECT verdict,reason FROM "LiteLLM_ExternalAgentDecision" WHERE source_id=%s',
+        (hook.source_id,),
+    )
+    assert len(decisions) == 1
+    expected: Final = (
+        {"action": "deny", "deny_reason": decisions[0]["reason"]}
+        if decisions[0]["verdict"] == "deny"
+        else {"action": "allow"}
+    )
+    assert tuple(response.json() for response in responses) == (expected,) * 8
+    assert hook.agents()[0]["request_count"] == 1
+
+
 def test_concurrent_first_frames_cannot_overwrite_the_bound_tenant(hook: Hook) -> None:
     with ThreadPoolExecutor(max_workers=2) as executor:
         responses: Final = tuple(

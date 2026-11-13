@@ -110,10 +110,11 @@ def database_with_rows(rows: Sequence[object]) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_retry_returns_stored_verdict_without_rediscovery() -> None:
+@pytest.mark.parametrize("stored_source", ["source", "other"])
+async def test_retry_returns_stored_verdict_after_racing_evaluation(stored_source: str) -> None:
     decision: Final = Decision(
         request_id="request",
-        source_id="source",
+        source_id=stored_source,
         external_agent_id="bot",
         frame_type="tool_call",
         verdict="deny",
@@ -124,13 +125,20 @@ async def test_retry_returns_stored_verdict_without_rediscovery() -> None:
     )
     db: Final = database_with_rows(
         [
-            [SOURCE.model_dump(exclude=set()) | {"signing_secret": "encrypted", "tenant_id": "tenant"}],
+            [],
+            [AGENT.model_dump()],
+            [],
+            [],
             [decision.model_dump()],
         ]
     )
-    result: Final = await ExternalAgentGovernance(db).evaluate(SOURCE, EVENT)
-    assert result == Verdict(action="deny", deny_reason="Stored decision")
-    assert db.query_raw.await_count == 2
+    result: Final = await ExternalAgentGovernance(db).evaluate(SOURCE.model_copy(update={"tenant_id": "tenant"}), EVENT)
+    assert result == (
+        Verdict(action="deny", deny_reason="Stored decision")
+        if stored_source == "source"
+        else HookFailure(status=401, reason="Webhook id belongs to another source")
+    )
+    assert db.query_raw.await_count == 5
 
 
 @pytest.mark.asyncio
@@ -148,15 +156,15 @@ async def test_first_tenant_binding_checks_the_committed_winner(tenant: str | No
 
 @pytest.mark.asyncio
 async def test_tenant_mismatch_rejected_before_discovery() -> None:
-    db: Final = database_with_rows([[SOURCE.model_dump() | {"tenant_id": "other", "signing_secret": "encrypted"}]])
-    result: Final = await ExternalAgentGovernance(db).evaluate(SOURCE, EVENT)
+    db: Final = database_with_rows([])
+    result: Final = await ExternalAgentGovernance(db).evaluate(SOURCE.model_copy(update={"tenant_id": "other"}), EVENT)
     assert result == HookFailure(status=401, reason="Tenant does not match source")
     assert db.execute_raw.await_count == 0
 
 
 @pytest.mark.asyncio
 async def test_config_test_does_not_discover_or_log() -> None:
-    db: Final = database_with_rows([[SOURCE.model_dump() | {"signing_secret": "encrypted"}], [], []])
+    db: Final = database_with_rows([[], []])
     result: Final = await ExternalAgentGovernance(db).evaluate(
         SOURCE,
         EVENT.model_copy(update={"application": "config-test"}),
@@ -180,11 +188,19 @@ async def test_database_failure_returns_mode_safe_verdict(mode: str, action: str
 async def test_shadow_logs_would_deny_but_returns_allow() -> None:
     source: Final = SOURCE.model_copy(update={"mode": "shadow", "tenant_id": "tenant"})
     policy: Final = Policy(policy_id="policy", source_id="source", blocked_tools=("Shell",))
-    db: Final = database_with_rows(
-        [[source.model_dump() | {"signing_secret": "encrypted"}], [], [], [AGENT.model_dump()], [policy.model_dump()]]
+    decision: Final = Decision(
+        request_id="request",
+        source_id="source",
+        external_agent_id="bot",
+        frame_type="tool_call",
+        verdict="allow",
+        would_verdict="deny",
+        enforced=False,
+        created_at=NOW,
     )
+    db: Final = database_with_rows([[], [AGENT.model_dump()], [policy.model_dump()], [decision.model_dump()]])
     result: Final = await ExternalAgentGovernance(db).evaluate(source, EVENT)
     assert result == Verdict(action="allow")
-    log_args: Final = db.execute_raw.call_args.args
+    log_args: Final = db.query_raw.call_args.args
     assert log_args[9:11] == ("allow", "deny")
     assert "messages" not in str(log_args)

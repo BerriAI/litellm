@@ -3,6 +3,7 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
+from litellm.proxy.agent_endpoints.external_agents.cache import GovernanceMetadata
 from litellm.proxy.agent_endpoints.external_agents.database import Database
 from litellm.proxy.agent_endpoints.external_agents.models import (
     ActorsPut,
@@ -22,8 +23,13 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helpe
 
 
 class ExternalAgentManagement:
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: Database, cache: GovernanceMetadata | None = None) -> None:
         self.db = db
+        self.cache = cache
+
+    def invalidate(self) -> None:
+        if self.cache is not None:
+            self.cache.invalidate()
 
     async def create_source(self, data: SourceCreate, user_id: str) -> Source | HookFailure:
         secret: Final = data.signing_secret.get_secret_value()
@@ -41,6 +47,7 @@ class ExternalAgentManagement:
                 user_id,
             )
         )
+        self.invalidate()
         return rows[0]
 
     async def sources(self) -> tuple[Source, ...]:
@@ -67,6 +74,7 @@ class ExternalAgentManagement:
                 user_id,
             )
         )
+        self.invalidate()
         return rows[0] if rows else HookFailure(status=404, reason="Unknown source")
 
     async def agents(
@@ -179,7 +187,8 @@ class ExternalAgentManagement:
                     policy_id,
                     data.source_id,
                 )
-            return rows[0]
+        self.invalidate()
+        return rows[0]
 
     async def actors(self, data: ActorsPut) -> int | HookFailure:
         async with self.db.tx() as tx:
@@ -201,7 +210,8 @@ class ExternalAgentManagement:
                     mapping.external_actor_id,
                     mapping.user_id,
                 )
-            return len(data.mappings)
+        self.invalidate()
+        return len(data.mappings)
 
     async def decisions(
         self,

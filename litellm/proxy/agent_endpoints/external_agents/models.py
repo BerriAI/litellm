@@ -13,6 +13,11 @@ class HookFailure(FrozenModel):
     reason: str
 
 
+class MappedUser(FrozenModel):
+    user_id: str
+    teams: tuple[str, ...] = ()
+
+
 class ObservedAgentEvent(FrozenModel):
     request_id: str
     tenant_id: str

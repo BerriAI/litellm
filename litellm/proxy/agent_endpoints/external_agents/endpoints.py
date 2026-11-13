@@ -5,6 +5,7 @@ from anyio import fail_after
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.external_agents.cache import metadata
 from litellm.proxy.agent_endpoints.external_agents.database import Database, ProxyDatabase
 from litellm.proxy.agent_endpoints.external_agents.governance import ExternalAgentGovernance, ExternalAgentStore
 from litellm.proxy.agent_endpoints.external_agents.management import ExternalAgentManagement
@@ -66,7 +67,7 @@ async def inference_hook(source_id: str, request: Request, db: DB) -> Verdict:
     """Authenticate a signed GrokBot frame and return a content-free governance verdict."""
     adapter: Final = GrokBotHookSource()
     with fail_after(0.7):
-        source: Final = await ExternalAgentStore(db).source(source_id)
+        source: Final = await ExternalAgentStore(db, metadata).source(source_id)
         if source is None:
             return raise_public(HookFailure(status=404, reason="Unknown source"))
         body: Final = await request.body()
@@ -81,13 +82,13 @@ async def inference_hook(source_id: str, request: Request, db: DB) -> Verdict:
         if failure:
             return raise_public(failure)
         event: Final[ObservedAgentEvent] = raise_public(adapter.parse(body, request.headers.get("webhook-id", "")))
-    return adapter.format_verdict(raise_public(await ExternalAgentGovernance(db).evaluate(source, event)))
+    return adapter.format_verdict(raise_public(await ExternalAgentGovernance(db, metadata).evaluate(source, event)))
 
 
 @router.post("/v1/external_agents/sources", response_model=Source)
 async def create_source(data: SourceCreate, auth: Admin, db: DB) -> Source:
     """Register a signed hook source without exposing its signing secrets."""
-    return raise_public(await ExternalAgentManagement(db).create_source(data, auth.user_id or "proxy_admin"))
+    return raise_public(await ExternalAgentManagement(db, metadata).create_source(data, auth.user_id or "proxy_admin"))
 
 
 @router.get("/v1/external_agents/sources", response_model=tuple[Source, ...])
@@ -99,7 +100,9 @@ async def list_sources(auth: Admin, db: DB) -> tuple[Source, ...]:
 @router.patch("/v1/external_agents/sources/{id}", response_model=Source)
 async def patch_source(id: str, data: SourcePatch, auth: Admin, db: DB) -> Source:
     """Update a source and retain its previous secret during signing key rotation."""
-    return raise_public(await ExternalAgentManagement(db).patch_source(id, data, auth.user_id or "proxy_admin"))
+    return raise_public(
+        await ExternalAgentManagement(db, metadata).patch_source(id, data, auth.user_id or "proxy_admin")
+    )
 
 
 @router.get("/v1/external_agents/", response_model=tuple[Agent, ...])
@@ -138,13 +141,13 @@ async def get_policies(source_id: str, auth: Admin, db: DB) -> tuple[Policy, ...
 @router.put("/v1/external_agents/policies", response_model=Policy)
 async def put_policy(data: PolicyPut, auth: Admin, db: DB) -> Policy:
     """Upsert the team policy or source-wide default when team_id is null."""
-    return raise_public(await ExternalAgentManagement(db).put_policy(data))
+    return raise_public(await ExternalAgentManagement(db, metadata).put_policy(data))
 
 
 @router.post("/v1/external_agents/actors/bulk", response_model=Updated)
 async def bulk_actors(data: ActorsPut, auth: Admin, db: DB) -> Updated:
     """Map source-scoped external actor ids to existing LiteLLM users."""
-    return Updated(updated=raise_public(await ExternalAgentManagement(db).actors(data)))
+    return Updated(updated=raise_public(await ExternalAgentManagement(db, metadata).actors(data)))
 
 
 @router.get("/v1/external_agents/decisions", response_model=tuple[Decision, ...])
