@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from typing_extensions import assert_never
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key
+from litellm.proxy.auth.customer_hierarchy_auth import forget_customer_hierarchy
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.list_api.common import (
     PROBLEM_TYPE_BASE,
@@ -145,7 +145,7 @@ async def _forget_cached_member(customer_member_id: str) -> None:
     """Request auth caches the member's resolved hierarchy, so a changed or deleted member must not serve from it."""
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    await user_api_key_cache.async_delete_cache(customer_member_cache_key(customer_member_id))
+    await forget_customer_hierarchy(customer_member_id, user_api_key_cache)
 
 
 @router.post(

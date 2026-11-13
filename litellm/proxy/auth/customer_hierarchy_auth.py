@@ -243,3 +243,9 @@ def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_met
         param=CUSTOMER_MEMBER_ID_HEADER,
         code=status.HTTP_403_FORBIDDEN,
     )
+
+
+@with_service_target(AUTH_OBJECTS_TARGET)
+async def forget_customer_hierarchy(customer_member_id: str, user_api_key_cache: UserApiKeyCache) -> None:
+    """Drop the cached hierarchy of a member that was changed or deleted so request auth reloads it."""
+    await user_api_key_cache.async_delete_cache(customer_member_cache_key(customer_member_id))
