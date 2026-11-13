@@ -101706,5 +101706,22 @@
     },
     "fal_ai/fal-ai/decart/lucy-5b/image-to-video": {
         "alias_of": "fal_ai/decart/lucy-5b/image-to-video"
+    },
+    "github_copilot/gemini-4-hydrogen": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-06,
+        "source": "https://github.blog/changelog/2026-11-13-gemini-4-hydrogen-in-github-copilot",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true
     }
 }
