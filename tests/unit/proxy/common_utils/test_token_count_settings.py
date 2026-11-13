@@ -239,6 +239,37 @@ def test_no_setting_anywhere_means_the_model_counts_itself_without_framing() -> 
 
 
 @pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ({}, True),
+        ({"use_token_counting_api": True}, True),
+        ({"use_token_counting_api": False}, False),
+        ({"use_token_counting_api": "false"}, False),
+        ({"use_token_counting_api": " False "}, False),
+        ({"use_token_counting_api": "true"}, True),
+        ({"use_token_counting_api": "no"}, True),
+        ({"use_token_counting_api": 0}, True),
+        ({"use_token_counting_api": None}, True),
+    ],
+)
+def test_only_an_explicit_false_turns_the_provider_token_count_off(
+    configured: dict[str, object], expected: bool
+) -> None:
+    settings: Final = resolve_token_count_settings(configured=configured, default={}, deployment_region=_in_us_west_2)
+
+    assert settings.use_token_counting_api is expected
+
+
+def test_the_token_count_opt_out_stays_off_the_shared_model_entry() -> None:
+    from litellm.types.utils import shared_backend_model_info
+
+    shared: Final = shared_backend_model_info({"use_token_counting_api": False, "max_input_tokens": 4096})
+
+    assert "use_token_counting_api" not in shared
+    assert shared["max_input_tokens"] == 4096
+
+
+@pytest.mark.parametrize(
     ("value", "expected"),
     [("kimi_k3", "kimi_k3"), ("cl100k_base", None), (None, None), (True, None)],
 )
