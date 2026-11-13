@@ -63,6 +63,7 @@ def wire_request(item: PlannedRequest, setup: CaseSetup) -> WireRequest:
         token_source=setup.token_source(item.caller),
         stream=item.stream,
         blocked=item.blocked,
+        send_at_s=item.send_at_s,
     )
 
 

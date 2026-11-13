@@ -66,6 +66,7 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
     server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset()
+    wants_failed_prompt_token_estimate: ClassVar[bool] = False
 
     enforces_request_content: bool = False
     """
@@ -513,7 +514,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
-    ) -> Any:
+    ) -> object:
         pass
 
     async def async_post_call_streaming_hook(
@@ -759,7 +760,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         response: object,
         plan: AgenticLoopPlan,
         kwargs: dict,
-    ) -> Any:
+    ) -> object:
         """
         Post-process the response returned by the agentic-loop follow-up call.
 
@@ -896,6 +897,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         return OLD_LITELLM_METADATA_FIELD
 
     def redacts_messages_itself(self) -> bool:
+        return False
+
+    def exempt_from_message_redaction(self) -> bool:
+        """Router pre-call checks that key routing off the request and never log it return True, so
+        `turn_off_message_logging` leaves the success event they receive unredacted."""
         return False
 
     def redact_standard_logging_payload_from_model_call_details(self, model_call_details: dict) -> dict:

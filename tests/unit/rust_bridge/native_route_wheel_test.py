@@ -87,7 +87,7 @@ def assert_native_request(
 def native_response(status: int) -> bytes:
     if status == 429:
         return b'{"error":"native-rate-limit"}'
-    return b'{"output":{"message":{"content":[{"text":"native-transcription"}]}}}'
+    return b'{"output":{"message":{"content":[{"text":"native-transcription"}]}},"usage":{"inputTokens":390,"outputTokens":60}}'
 
 
 def load_native(native_path: Path) -> object:
@@ -130,6 +130,9 @@ def assert_success(route: str, response: object) -> None:
         raise TypeError(f"{route} returned {type(response).__name__}, expected dict")
     if response["text"] != "native-transcription":
         raise AssertionError(f"{route} returned {response['text']!r}, expected 'native-transcription'")
+    expected_usage: Final = {"type": "tokens", "input_tokens": 390, "output_tokens": 60, "total_tokens": 450}
+    if response.get("usage") != expected_usage:
+        raise AssertionError(f"{route} returned usage {response.get('usage')!r}, expected {expected_usage!r}")
 
 
 def assert_rate_limit(route: str, error: BaseException) -> None:

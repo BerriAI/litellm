@@ -42,9 +42,10 @@ from _logging_only_scope_support import (
     _record_audit_properties as _record_audit_properties,
 )
 from anthropic import APIConnectionError as AnthropicAPIConnectionError
+from integration._support.budget import readiness_seconds
 from integration._support.client import Gateway, eventually
 from integration._support.ports import allocate_port
-from integration._support.process import owned_proxy, owned_proxy_process
+from integration._support.process import graceful_stop_seconds, owned_proxy, owned_proxy_process
 from integration._support.timing import Timed, assert_not_delayed_by, timed
 from integration._support.wire import Reply, Request
 from openai import APIConnectionError as OpenAIAPIConnectionError
@@ -55,7 +56,7 @@ pytestmark: Final = pytest.mark.shares_worker_state
 _EDGE_DELAY_SECONDS: Final = 5
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(4 * graceful_stop_seconds() + 120)
 def test_K1_policy_edge_restart_mid_burst_keeps_output_observation_fail_open(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = f"logging-scope-k1-{uuid.uuid4().hex}"
     marker: Final = uuid.uuid4().hex
@@ -214,7 +215,7 @@ def test_K1_policy_edge_restart_mid_burst_keeps_output_observation_fail_open(gat
                 ) == tuple((identity, "logging_only", expected_status) for _ in expected_directions), (index, entries)
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(4 * graceful_stop_seconds() + 120)
 def test_K2_policy_edge_delay_does_not_delay_concurrent_callers(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = f"logging-scope-k2-{uuid.uuid4().hex}"
     marker: Final = uuid.uuid4().hex
@@ -574,7 +575,7 @@ def test_K3_two_worker_sigkill_checks_post_kill_spend_rows(
                     )
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(3 * readiness_seconds(2) + 3 * graceful_stop_seconds() + 180)
 def test_K4_proxy_restart_after_fifteen_responses_records_lost_ids(
     gateway: Gateway,
     tmp_path: Path,
@@ -627,7 +628,7 @@ def test_K4_proxy_restart_after_fifteen_responses_records_lost_ids(
                 if call.index < 15:
                     return first_gateway
                 second_wave_barrier.wait(timeout=90)
-                assert restart_gate.wait(timeout=90)
+                assert restart_gate.wait(timeout=readiness_seconds(2) + 90)
                 return restarted_gateways.get()
 
             def run(call: ChaosCall, first_gateway: Gateway) -> tuple[int, CallerResult]:

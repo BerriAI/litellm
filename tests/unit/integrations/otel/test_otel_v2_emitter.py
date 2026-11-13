@@ -2,6 +2,7 @@
 legacy dual-emit, hierarchy, error status, and idempotency. Needs the OTel SDK."""
 
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -23,6 +24,7 @@ from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.emitter import SpanEmitter, attribute_budget, span_attribute_limit  # noqa: E402
 from litellm.integrations.otel.emitter import stamp_error  # noqa: E402
+from litellm.integrations.otel.mappers import LangfuseMapper  # noqa: E402  # after the opentelemetry importorskip
 from litellm.integrations.otel.mappers.utils import MAX_TOOL_DEFINITION_ATTRS_PER_SPAN  # noqa: E402
 from litellm.integrations.otel.model.payloads import (  # noqa: E402
     GuardrailSpanData,
@@ -89,6 +91,61 @@ def test_llm_call_span_cost_breakdown():
     assert a[f"{LiteLLM.COST_PREFIX}cache_read"] == 0.001
     # Unreported components are omitted, not zero-filled.
     assert f"{LiteLLM.COST_PREFIX}margin_total_amount" not in a
+
+
+_PRICE_LOOKUP_FAILED: Final = {"error_str": "This model isn't mapped yet. model=openai/unpriced-model", "traceback_str": ""}
+
+
+@pytest.mark.parametrize(
+    ("cost_fields", "expected_cost"),
+    [
+        pytest.param({"response_cost": 0.0}, 0.0, id="free-model"),
+        pytest.param(
+            {"response_cost": 0.0, "response_cost_failure_debug_info": _PRICE_LOOKUP_FAILED},
+            None,
+            id="unpriced",
+        ),
+        pytest.param(
+            {"response_cost": 0.0, "response_cost_failure_debug_info": _PRICE_LOOKUP_FAILED, "cache_hit": True},
+            0.0,
+            id="unpriced-cache-hit",
+        ),
+    ],
+)
+def test_llm_call_span_tells_unpriced_call_from_free_call(
+    cost_fields: Mapping[str, object], expected_cost: float | None
+) -> None:
+    engine, exporter = _engine()
+    data: Final = LLMCallSpanData.from_standard_logging_payload(_payload(**cost_fields))
+
+    engine.emit(SpanRole.LLM_CALL, data)
+
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes.get(f"{LiteLLM.COST_PREFIX}total") == expected_cost
+    langfuse_cost_details: Final = LangfuseMapper().map(data).get("langfuse.observation.cost_details")
+    langfuse_cost: Final = json.loads(langfuse_cost_details)["total"] if langfuse_cost_details is not None else None
+    assert langfuse_cost == expected_cost
+
+
+def test_unpriced_call_keeps_the_guardrail_charge_on_the_guardrail_span() -> None:
+    engine, exporter = _engine()
+    payload: Final = _payload(
+        response_cost=0.002,
+        response_cost_failure_debug_info=_PRICE_LOOKUP_FAILED,
+        cost_breakdown={"guardrail_cost": 0.002, "total_cost": 0.002},
+    )
+
+    engine.emit(SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(payload))
+    engine.emit(
+        SpanRole.GUARDRAIL,
+        GuardrailSpanData.from_logging_entry(
+            {"guardrail_name": "bedrock", "guardrail_status": "success", "guardrail_cost": 0.002}
+        ),
+    )
+
+    llm_span, guardrail_span = exporter.get_finished_spans()
+    assert f"{LiteLLM.COST_PREFIX}total" not in llm_span.attributes
+    assert guardrail_span.attributes[LiteLLM.GUARDRAIL_COST] == 0.002
 
 
 def test_tracer_scope_carries_litellm_version():
@@ -840,6 +897,37 @@ def test_indexed_messages_follow_the_span_limits_of_a_per_request_tracer_overrid
     _assert_core_intact(span)
     assert 39 <= len(span.attributes) <= 40
     assert span.attributes["llm.output_messages.0.message.content"] == "reply 0"
+
+
+def _team_conversation_span(monkeypatch, redact, max_span_attributes):
+    monkeypatch.setattr("litellm.redact_user_api_key_info", redact)
+    return _conversation_span(
+        ["genai", "openinference", "langfuse"],
+        _conversation_payload(60),
+        span_limits=SpanLimits(max_span_attributes=max_span_attributes),
+    )
+
+
+def test_langfuse_identity_sheds_before_any_attribute_the_span_carries_without_it(monkeypatch):
+    """At its attribute limit a span drops the Langfuse identity keys first, then exactly what it drops without them."""
+    plain = _team_conversation_span(monkeypatch, True, SpanLimits.UNSET).attributes
+    full = _team_conversation_span(monkeypatch, False, SpanLimits.UNSET).attributes
+    identity_keys = set(full) - set(plain)
+    assert identity_keys == {
+        "langfuse.observation.metadata",
+        "langfuse.trace.metadata.user_api_key_team_id",
+        "langfuse.trace.metadata.user_api_key_team_alias",
+    }
+
+    squeezed_limit = len(plain) - 10
+    squeezed_plain = _team_conversation_span(monkeypatch, True, squeezed_limit)
+    squeezed = _team_conversation_span(monkeypatch, False, squeezed_limit)
+    assert dict(squeezed.attributes) == dict(squeezed_plain.attributes)
+    assert squeezed.dropped_attributes == squeezed_plain.dropped_attributes == 0
+
+    roomy = _team_conversation_span(monkeypatch, False, len(plain) + 2).attributes
+    assert {key: roomy.get(key) for key in plain} == dict(plain)
+    assert len(set(roomy) & identity_keys) == 2
 
 
 def test_span_attribute_limit_falls_back_to_the_environment_for_spans_outside_the_sdk(monkeypatch):

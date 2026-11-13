@@ -363,19 +363,48 @@ def test_proxy_admin_viewer_allowed_management_reads(allowed_read_route):
     )
 
 
-def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed():
+@pytest.mark.parametrize("group, route", (
+    ("openai_routes", "/chat/completions"),
+    ("skill_hub_routes", "/skill-hub/skills/release-notes/downloads"),
+    ("management_routes", "/skill-hub/skills/release-notes/downloads"),
+    ("anthropic_routes", "/claude-code/plugins/release-notes/downloads"),
+))
+def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed(group: str, route: str) -> None:
     """Test that virtual key is allowed to call routes when allowed_routes contains LiteLLMRoutes member name"""
 
     # Create a UserAPIKeyAuth with allowed_routes containing a LiteLLMRoutes member name
     valid_token = UserAPIKeyAuth(
         user_id="test_user",
-        allowed_routes=["openai_routes"],  # This is a member name in LiteLLMRoutes enum
+        allowed_routes=[group],
     )
 
     # Test that a route from the openai_routes group is allowed
     result = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/chat/completions",  # This is in LiteLLMRoutes.openai_routes.value
+        route=route,
         valid_token=valid_token,
+    )
+
+    assert result is True
+
+
+@pytest.mark.parametrize(
+    "route,method",
+    [
+        ("/model/update", "POST"),
+        ("/model/123e4567-e89b-12d3-a456-426614174000/update", "PATCH"),
+        ("/management/v1/customer_organizations", "POST"),
+        ("/management/v1/customer_organizations/org-1/default_budgets/budget-1", "DELETE"),
+        ("/management/v1/customer_teams/team-1", "PATCH"),
+        ("/management/v1/customer_members/member-1", "GET"),
+    ],
+)
+def test_virtual_key_management_routes_allows_model_update(route: str, method: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=["management_routes"])
+
+    result: Final = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route,
+        valid_token=valid_token,
+        request=_mock_request(method),
     )
 
     assert result is True
@@ -662,6 +691,41 @@ def test_virtual_key_llm_api_routes_allows_model_info(route):
     assert result is True
 
 
+@pytest.mark.parametrize(
+    ("route", "is_llm_route"),
+    [
+        ("/eu_jev/v1/systemone", True),
+        ("/eu_jev/v1/systemone/extra", False),
+        ("/eu_jev/v1/systemone2", False),
+        ("/eu_jev/custom", False),
+    ],
+)
+def test_only_the_built_in_eu_jev_decision_path_is_an_llm_route(route: str, is_llm_route: bool) -> None:
+    assert RouteChecks.is_llm_api_route(route=route) is is_llm_route
+
+
+@pytest.mark.usefixtures("configured_eu_jev_route")
+def test_a_pass_through_configured_at_the_eu_jev_decision_path_is_not_an_llm_route() -> None:
+    assert RouteChecks.is_llm_api_route(route="/eu_jev/v1/systemone") is False
+
+
+@pytest.mark.usefixtures("configured_eu_jev_route_with_trailing_slash")
+@pytest.mark.parametrize("route", ["/eu_jev/v1/systemone", "/eu_jev/v1/systemone/"])
+def test_a_pass_through_configured_at_the_eu_jev_decision_path_with_a_trailing_slash_is_not_an_llm_route(
+    route: str,
+) -> None:
+    assert RouteChecks.is_llm_api_route(route=route) is False
+
+
+@pytest.mark.parametrize("allowed_route", ["llm_api_routes", "llm_api_routes_without_mcp"])
+def test_an_llm_api_key_can_call_the_built_in_eu_jev_decision_route(allowed_route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=[allowed_route])
+
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/eu_jev/v1/systemone", valid_token=valid_token, request=_mock_request("POST")
+    )
+
+
 @pytest.mark.parametrize("route", ["/model/info", "/v1/model/info", "/model_group/info"])
 def test_model_info_not_classified_as_llm_api(route):
     """Membership in `llm_api_routes` must not promote /model/info to an
@@ -781,6 +845,52 @@ def test_realtime_webrtc_http_routes_classified_as_llm_api(route):
 
     assert RouteChecks.is_llm_api_route(route=route) is True
     assert RouteChecks.is_management_route(route=route) is False
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/realtime/translations",
+        "/v1/realtime/translations",
+        "/realtime/translations/client_secrets",
+        "/v1/realtime/translations/client_secrets",
+        "/realtime/translations/calls",
+        "/v1/realtime/translations/calls",
+    ],
+)
+def test_realtime_translation_routes_allowed_for_openai_virtual_keys(route):
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["openai_routes"],
+    )
+
+    assert RouteChecks.is_llm_api_route(route=route) is True
+    assert RouteChecks.is_management_route(route=route) is False
+    assert (
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route,
+            valid_token=valid_token,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/openai/v1/realtime/translations",
+        "/openai/v1/realtime/translations/client_secrets",
+        "/openai/v1/realtime/translations/calls",
+    ],
+)
+def test_openai_prefixed_realtime_translation_routes_denied_for_openai_virtual_keys(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=["openai_routes"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert f"Tried to call route: {route}" in str(exc_info.value.detail)
 
 
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
@@ -2218,7 +2328,7 @@ def test_proxy_admin_viewer_can_access_audit_logs(route):
 # layer, even though the underlying handlers already gate on PROXY_ADMIN_VIEW_ONLY.
 #
 # Each route below corresponds to a network call made by the Logs page
-# (ui/litellm-dashboard/src/components/logs/) — see the comment on each.
+# (litellm/ui/litellm-dashboard/src/components/logs/) — see the comment on each.
 ADMIN_VIEWER_LOGS_PAGE_ROUTES = [
     # Main paginated log list — uiSpendLogsCall in request/useLogFilterLogic.ts & index.tsx
     "/spend/logs/ui",
@@ -2472,6 +2582,7 @@ def test_proxy_admin_viewer_can_access_settings_read_endpoints(route):
 ADMIN_VIEWER_REPORTED_GET_ROUTES = [
     "/health/latest",
     "/credentials",
+    "/model/model-pods-1/kubernetes_pods",
     "/v1/mcp/network/client-ip",
     "/claude-code/plugins",
     "/policy/templates",
@@ -2662,6 +2773,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
             "..",
             "..",
             "..",
+            "litellm",
             "enterprise",
             "litellm_enterprise",
             "proxy",
@@ -3615,6 +3727,59 @@ def test_internal_user_still_blocked_from_another_users_info():
     assert "key not allowed to access this user's info" in str(exc_info.value.detail)
 
 
+def test_internal_user_cannot_access_kubernetes_pod_discovery_route() -> None:
+    route: Final = "/model/model-pods-1/kubernetes_pods"
+    user_obj: Final = LiteLLM_UserTable(
+        user_id="internal_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request: Final = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+
+    assert RouteChecks.is_management_route(route=route)
+    with pytest.raises(Exception, match="Only proxy admin can be used"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
+def test_proxy_admin_viewer_can_access_kubernetes_pod_discovery_route() -> None:
+    route: Final = "/model/model-pods-1/kubernetes_pods"
+    user_obj: Final = LiteLLM_UserTable(
+        user_id="admin_viewer",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="admin_viewer",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request: Final = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+
+    assert RouteChecks.is_management_route(route=route)
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
 @pytest.mark.parametrize(
     "route",
     [
@@ -3688,7 +3853,7 @@ def test_team_spend_by_user_reachable_by_non_admin(user_role):
         return "allowed"
 
     assert outcome("/team/spend/by_user") == "allowed"
-    assert outcome("/team/spend/by_key").startswith("denied: Only proxy admin")
+    assert outcome("/team/spend/by_key").startswith("denied: Authentication Error, Only proxy admin")
 
 
 def test_user_daily_activity_aggregated_not_covered_by_prefix_match():
@@ -3836,6 +4001,7 @@ AGENT_INFERENCE_ROUTES = [
     "/a2a/abc-123",
     "/a2a/abc-123/message/send",
     "/a2a/abc-123/message/stream",
+    "/v1/a2a/abc-123/message/stream",
     "/a2a/abc-123/.well-known/agent-card.json",
 ]
 
@@ -4966,3 +5132,25 @@ def test_every_dashboard_role_can_send_telemetry_ui_events(
         )
     except HTTPException as exc:
         pytest.fail(f"{user_role.value} was denied {method} {route}: {exc.detail}")
+
+
+@pytest.mark.parametrize("route", [
+    "/skill-hub/skills/{name}/versions",
+    "/skill-hub/skills/{name}/versions/{version_id}",
+    "/skill-hub/skills/{name}/versions/{version_id}/archive",
+])
+def test_member_can_reach_skill_history_visibility_checks(route: str) -> None:
+    request: Final = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=LiteLLM_UserTable(user_id="reader", user_role=LitellmUserRoles.INTERNAL_USER.value),
+            _user_role=LitellmUserRoles.INTERNAL_USER,
+            route=route,
+            request=request,
+            valid_token=UserAPIKeyAuth(user_id="reader", user_role=LitellmUserRoles.INTERNAL_USER),
+            request_data={},
+        )
+    except HTTPException as exc:
+        pytest.fail(f"History visibility could not run: {exc.detail}")

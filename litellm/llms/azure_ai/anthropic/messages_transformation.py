@@ -3,12 +3,13 @@ Azure Anthropic messages transformation config - extends AnthropicMessagesConfig
 """
 
 from collections.abc import Sequence
-from typing import Any, Final
+from typing import Final
 
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -96,25 +97,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
                 "Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
             )
 
-        # Ensure the URL ends with /v1/messages
-        api_base = api_base.rstrip("/")
-        if api_base.endswith("/v1/messages") or api_base.endswith("/anthropic/v1/messages"):
-            # Already correct
-            pass
-        else:
-            # Check if /anthropic is already in the path
-            if "/anthropic" in api_base:
-                # /anthropic exists, ensure we end with /anthropic/v1/messages
-                # Extract the base URL up to and including /anthropic
-                parts: Final = api_base.split("/anthropic", 1)
-                api_base = parts[0] + "/anthropic"
-            else:
-                # /anthropic not in path, add it
-                api_base = api_base + "/anthropic"
-            # Add /v1/messages
-            api_base = api_base + "/v1/messages"
-
-        return api_base
+        return azure_anthropic_messages_url(api_base)
 
     def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:
         """
@@ -126,14 +109,10 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         Processes both `system` and `messages` content blocks.
         """
 
-        def _sanitize(cache_control: Any) -> None:
-            if isinstance(cache_control, dict):
-                cache_control.pop("scope", None)
-
         def _process_content_list(content: list) -> None:
             for item in content:
-                if isinstance(item, dict) and "cache_control" in item:
-                    _sanitize(item["cache_control"])
+                if isinstance(item, dict) and "cache_control" in item and isinstance(item["cache_control"], dict):
+                    item["cache_control"].pop("scope", None)
 
         if "system" in anthropic_messages_request:
             system: Final = anthropic_messages_request["system"]
@@ -162,6 +141,8 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
-        self._normalize_system_role_messages(anthropic_messages_request, model=model)
+        self._normalize_system_role_messages(
+            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
+        )
         self._remove_scope_from_cache_control(anthropic_messages_request)
         return anthropic_messages_request

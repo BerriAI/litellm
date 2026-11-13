@@ -3,7 +3,11 @@ from collections.abc import Mapping
 from typing import Final
 
 from httpx import Headers, Response
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
+from litellm.litellm_core_utils.core_helpers import json_contains, keyword_arguments
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -17,6 +21,12 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
 from ..common_utils import OpenAIError
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _TranscriptionResponseFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _header_value(headers: Mapping[str, str], key: str, default: str) -> str:
@@ -46,9 +56,9 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         # if endswith "/v1"
         if api_base and api_base.endswith("/v1"):
-            api_base = f"{api_base}/audio/transcriptions"
+            api_base = join_api_base(api_base, "audio/transcriptions")
         else:
-            api_base = f"{api_base}/v1/audio/transcriptions"
+            api_base = join_api_base(api_base, "v1/audio/transcriptions")
 
         return api_base or ""
 
@@ -130,17 +140,16 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         raw_response: Response,
     ) -> TranscriptionResponse:
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except json.JSONDecodeError:
             content_type: Final = _header_value(raw_response.headers, "content-type", "").lower()
             if "application/json" in content_type:
                 raise
             return TranscriptionResponse(text=raw_response.text)
 
-        if any(key in raw_response_json for key in TranscriptionResponse.model_fields):
-            return TranscriptionResponse(**raw_response_json)
-        else:
-            raise ValueError(
-                "Invalid response format. Received response does not match the expected format. Got: ",
-                raw_response_json,
+        if any(json_contains(raw_response_json, key) for key in TranscriptionResponse.model_fields):
+            return TranscriptionResponse(
+                **_TranscriptionResponseFields(**keyword_arguments(raw_response_json, TranscriptionResponse))
             )
+        else:
+            raise ValueError("Invalid response format. Received response does not match the expected format.")

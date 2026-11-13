@@ -115,14 +115,16 @@ class AlertingHangingRequestCheck:
             if hanging_request_data.alerted:
                 continue
 
-            request_status = await proxy_logging_obj.internal_usage_cache.async_get_cache(
-                key=f"request_status:{hanging_request_data.request_id}",
-                litellm_parent_otel_span=None,
-                local_only=True,
-            )
             # this means the request status was either success or fail
             # and is not hanging
-            if request_status is not None:
+            if (
+                await proxy_logging_obj.internal_usage_cache.async_get_cache(
+                    key=f"request_status:{hanging_request_data.request_id}",
+                    litellm_parent_otel_span=None,
+                    local_only=True,
+                )
+                is not None
+            ):
                 # clear this request from hanging request cache since the request was either success or failed
                 self.hanging_request_cache._remove_key(
                     key=request_id,

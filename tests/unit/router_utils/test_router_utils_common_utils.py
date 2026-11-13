@@ -10,15 +10,15 @@ from litellm import Router
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.router_utils.common_utils import (
+from litellm.litellm_core_utils.routing_common_utils import (
     _deployment_supports_web_search,
     add_model_file_id_mappings,
     filter_team_based_models,
     filter_web_search_deployments,
+    format_content_policy_no_fallback_note,
     format_fallback_outcome_message,
     provider_for_generic_call,
     resolve_model_group_alias,
-    resolve_served_model,
     truncate_fallback_error_detail,
     PROVIDER_SCOPED_CREDENTIAL_PARAMS,
     warn_on_provider_credential_mismatch,
@@ -53,16 +53,12 @@ class TestFilterTeamBasedModels:
             {"model_info": {"id": "deployment-2"}},
         ]
 
-    def test_filter_team_based_models_none_request_kwargs(
-        self, sample_deployments_with_teams
-    ):
+    def test_filter_team_based_models_none_request_kwargs(self, sample_deployments_with_teams):
         """Test that when request_kwargs is None, all deployments are returned unchanged"""
         result = filter_team_based_models(sample_deployments_with_teams, None)
         assert result == sample_deployments_with_teams
 
-    def test_filter_team_based_models_empty_request_kwargs(
-        self, sample_deployments_with_teams
-    ):
+    def test_filter_team_based_models_empty_request_kwargs(self, sample_deployments_with_teams):
         """Test with empty request_kwargs"""
         result = filter_team_based_models(sample_deployments_with_teams, {})
         # Should include all deployments since no team_id in request
@@ -75,9 +71,7 @@ class TestFilterTeamBasedModels:
         # Should include only non-team based deployments
         assert len(result) == 1
 
-    def test_filter_team_based_models_team_match_metadata(
-        self, sample_deployments_with_teams
-    ):
+    def test_filter_team_based_models_team_match_metadata(self, sample_deployments_with_teams):
         """Test filtering when team_id is in metadata"""
         request_kwargs = {"metadata": {"user_api_key_team_id": "team-a"}}
         result = filter_team_based_models(sample_deployments_with_teams, request_kwargs)
@@ -92,9 +86,7 @@ class TestFilterTeamBasedModels:
         result_ids = [d.get("model_info", {}).get("id") for d in result]
         assert sorted(result_ids) == sorted(expected_ids)
 
-    def test_filter_team_based_models_team_match_litellm_metadata(
-        self, sample_deployments_with_teams
-    ):
+    def test_filter_team_based_models_team_match_litellm_metadata(self, sample_deployments_with_teams):
         """Test filtering when team_id is in litellm_metadata"""
         request_kwargs = {"litellm_metadata": {"user_api_key_team_id": "team-b"}}
         result = filter_team_based_models(sample_deployments_with_teams, request_kwargs)
@@ -109,9 +101,7 @@ class TestFilterTeamBasedModels:
         result_ids = [d.get("model_info", {}).get("id") for d in result]
         assert sorted(result_ids) == sorted(expected_ids)
 
-    def test_filter_team_based_models_priority_metadata_over_litellm(
-        self, sample_deployments_with_teams
-    ):
+    def test_filter_team_based_models_priority_metadata_over_litellm(self, sample_deployments_with_teams):
         """Test that metadata.user_api_key_team_id takes priority over litellm_metadata.user_api_key_team_id"""
         request_kwargs = {
             "metadata": {
@@ -126,9 +116,7 @@ class TestFilterTeamBasedModels:
         result_ids = [d.get("model_info", {}).get("id") for d in result]
         assert sorted(result_ids) == sorted(expected_ids)
 
-    def test_filter_team_based_models_no_matching_team(
-        self, sample_deployments_with_teams
-    ):
+    def test_filter_team_based_models_no_matching_team(self, sample_deployments_with_teams):
         """Test when request team doesn't match any deployment teams"""
         request_kwargs = {"metadata": {"user_api_key_team_id": "team-nonexistent"}}
         result = filter_team_based_models(sample_deployments_with_teams, request_kwargs)
@@ -138,9 +126,7 @@ class TestFilterTeamBasedModels:
         result_ids = [d.get("model_info", {}).get("id") for d in result]
         assert result_ids == expected_ids
 
-    def test_filter_team_based_models_no_team_restrictions(
-        self, sample_deployments_no_teams
-    ):
+    def test_filter_team_based_models_no_team_restrictions(self, sample_deployments_no_teams):
         """Test with deployments that have no team restrictions"""
         request_kwargs = {"metadata": {"user_api_key_team_id": "any-team"}}
         result = filter_team_based_models(sample_deployments_no_teams, request_kwargs)
@@ -187,9 +173,7 @@ class TestFilterTeamBasedModels:
 
     def test_filter_team_based_models_empty_deployments(self):
         """Test with empty deployments list"""
-        result = filter_team_based_models(
-            [], {"metadata": {"user_api_key_team_id": "team-a"}}
-        )
+        result = filter_team_based_models([], {"metadata": {"user_api_key_team_id": "team-a"}})
         assert result == []
 
     def test_filter_team_based_models_none_team_id_in_deployment(self):
@@ -300,6 +284,35 @@ class TestFilterWebSearchDeployments:
         )
         assert result == sample_deployments
 
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 1},
+            {"type": "web_search_20260301", "name": "web_search"},
+            {"googleSearch": {}},
+            {"google_search": {}},
+        ],
+        ids=["anthropic_versioned", "anthropic_newer_version", "gemini_camel_case", "gemini_snake_case"],
+    )
+    def test_a_provider_native_web_search_tool_filters_unsupported(
+        self, sample_deployments: list[dict[str, object]], tool: dict[str, object]
+    ) -> None:
+        result: Final = filter_web_search_deployments(sample_deployments, {"tools": [{"type": "function"}, tool]})
+        assert [d["model_info"]["id"] for d in result] == ["deployment-1", "deployment-2"]
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "function", "function": {"name": "web_search"}},
+            {"codeExecution": {}},
+        ],
+        ids=["function_named_web_search", "gemini_code_execution"],
+    )
+    def test_a_tool_that_is_no_web_search_keeps_every_deployment(
+        self, sample_deployments: list[dict[str, object]], tool: dict[str, object]
+    ) -> None:
+        assert filter_web_search_deployments(sample_deployments, {"tools": [tool]}) == sample_deployments
+
     def test_web_search_preview_filters_unsupported(self, sample_deployments):
         """web_search_preview type should also trigger filtering"""
         request_kwargs = {"tools": [{"type": "web_search_preview"}]}
@@ -346,9 +359,7 @@ class TestFilterWebSearchDeployments:
         deployments = [
             {"model_info": {"id": "d1"}},  # No supports_web_search - defaults to True
             {"model_info": {"id": "d2"}},  # No supports_web_search - defaults to True
-            {
-                "model_info": {"id": "d3", "supports_web_search": False}
-            },  # Explicit False
+            {"model_info": {"id": "d3", "supports_web_search": False}},  # Explicit False
         ]
         request_kwargs = {"tools": [{"type": "web_search"}]}
         result = filter_web_search_deployments(deployments, request_kwargs)
@@ -374,26 +385,8 @@ class TestFilterWebSearchDeployments:
         assert result == deployment
 
 
-def test_invalidate_model_group_info_cache():
-    """Test that _invalidate_model_group_info_cache clears the LRU cache."""
-    router = Router(
-        model_list=[
-            {
-                "model_name": "gpt-4",
-                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
-            }
-        ]
-    )
-    # Populate the cache
-    router._cached_get_model_group_info("gpt-4")
-    assert router._cached_get_model_group_info.cache_info().currsize > 0
-
-    # Invalidate and verify cache is cleared
-    router._invalidate_model_group_info_cache()
-    assert router._cached_get_model_group_info.cache_info().currsize == 0
-
-
-def test_filter_deployments_by_model_access_groups_access_group_only_key():
+@pytest.mark.asyncio
+async def test_filter_deployments_by_model_access_groups_access_group_only_key():
     """
     Access-group-only keys should only route to deployments in allowed groups,
     even when multiple deployments share the same public model name.
@@ -402,13 +395,13 @@ def test_filter_deployments_by_model_access_groups_access_group_only_key():
         model_list=[
             {
                 "model_name": "gpt-5",
-                "litellm_params": {"model": "openai/gpt-5.1", "api_key": "key-1"},
-                "model_info": {"access_groups": ["AG1"]},
+                "litellm_params": {"model": "openai/gpt-5.1", "api_key": "key-1", "mock_response": "ag1"},
+                "model_info": {"id": "ag1", "access_groups": ["AG1"]},
             },
             {
                 "model_name": "gpt-5",
-                "litellm_params": {"model": "openai/gpt-4o", "api_key": "key-2"},
-                "model_info": {"access_groups": ["AG2"]},
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "key-2", "mock_response": "ag2"},
+                "model_info": {"id": "ag2", "access_groups": ["AG2"]},
             },
         ]
     )
@@ -419,21 +412,20 @@ def test_filter_deployments_by_model_access_groups_access_group_only_key():
         models=["AG2"],
         team_models=["AG2"],
     )
+    metadata = {"user_api_key_team_id": "team-2", "user_api_key_auth": scoped_key}
 
-    filtered = router._filter_deployments_by_model_access_groups(
-        model="gpt-5",
-        healthy_deployments=router.get_all_deployments(model_name="gpt-5"),
-        request_kwargs={
-            "metadata": {
-                "user_api_key_team_id": "team-2",
-                "user_api_key_auth": scoped_key,
-            }
-        },
-        request_team_id="team-2",
-    )
+    healthy = await router.select("gpt-5", {"metadata": metadata}, kind="healthy")
+    served = {
+        (
+            await router.acompletion(
+                model="gpt-5", messages=[{"role": "user", "content": "hi"}], metadata=dict(metadata)
+            )
+        )._hidden_params["model_id"]
+        for _ in range(5)
+    }
 
-    assert len(filtered) == 1
-    assert filtered[0].get("model_info", {}).get("access_groups") == ["AG2"]
+    assert [deployment["model_info"]["id"] for deployment in healthy] == ["ag2"]
+    assert served == {"ag2"}
 
 
 class TestAddModelFileIdMappings:
@@ -586,25 +578,6 @@ class TestResolveModelGroupAlias:
         assert router.get_model_from_alias("group-b") is None
 
 
-@pytest.mark.parametrize(
-    "model, model_alias_map, key_aliases, model_group_alias, expected",
-    [
-        pytest.param("a", {"a": "b"}, {"b": "c"}, {"c": "d"}, "d", id="global-key-router-order"),
-        pytest.param("a", {}, ["a", "b"], {}, "a", id="non-mapping-key-aliases-ignored"),
-        pytest.param("a", {}, {}, {"a": {"model": "x"}}, "x", id="router-item-entry"),
-        pytest.param("a", {}, {}, {}, "a", id="no-alias"),
-    ],
-)
-def test_resolves_served_model_aliases_in_order(
-    model: str,
-    model_alias_map: object,
-    key_aliases: object,
-    model_group_alias: object,
-    expected: str,
-) -> None:
-    assert resolve_served_model(model, model_alias_map, key_aliases, model_group_alias) == expected
-
-
 class TestTruncateFallbackErrorDetail:
     def test_short_detail_is_returned_unchanged(self):
         assert truncate_fallback_error_detail("boom") == "boom"
@@ -679,6 +652,14 @@ def test_format_fallback_outcome_preserves_attempted_failure_wording_without_ski
     )
 
 
+def test_content_policy_note_explains_the_failure_when_fallbacks_are_a_plain_model_list() -> None:
+    note: Final = format_content_policy_no_fallback_note("gpt-bg", ("gpt-bg",), None, ["backup"], False)
+
+    assert "content_policy_fallback=None" in note
+    assert "LiteLLM: model group 'gpt-bg' failed with the error above. No fallback was attempted." in note
+    assert "Fallbacks are configured for" not in note
+
+
 class TestWarnOnProviderCredentialMismatch:
     """A deployment that carries one provider's credentials while resolving to
     another is silently broken: litellm ignores the credentials and sends the
@@ -725,12 +706,7 @@ class TestWarnOnProviderCredentialMismatch:
         )
 
     def test_silent_when_no_provider_scoped_credentials_are_set(self):
-        assert (
-            warn_on_provider_credential_mismatch(
-                model_name="gpt-5.5", litellm_params={"model": "gpt-5.5"}
-            )
-            is None
-        )
+        assert warn_on_provider_credential_mismatch(model_name="gpt-5.5", litellm_params={"model": "gpt-5.5"}) is None
 
     def test_vertex_params_name_vertex_not_bedrock(self):
         """The hint must follow the params that were actually set, otherwise it
@@ -780,8 +756,7 @@ class TestWarnOnProviderCredentialMismatch:
 
         mismatch_warnings = [r for r in caplog.records if "resolves to provider" in r.getMessage()]
         assert len(mismatch_warnings) == 1, (
-            "exactly the prefix-less deployment should warn; "
-            f"got {[r.getMessage() for r in mismatch_warnings]}"
+            f"exactly the prefix-less deployment should warn; got {[r.getMessage() for r in mismatch_warnings]}"
         )
         assert "aws_region_name" in mismatch_warnings[0].getMessage()
 
@@ -858,7 +833,14 @@ class TestWarnOnProviderCredentialMismatch:
         ({"model": "no-provider-knows-this-model"}, None),
         ({"api_base": "https://my-resource.openai.azure.com"}, None),
     ],
-    ids=["declared_wins", "prefix_beats_host_flip", "prefix_beats_cohere_chat_flip", "unprefixed_inferred", "unknown", "no_model"],
+    ids=[
+        "declared_wins",
+        "prefix_beats_host_flip",
+        "prefix_beats_cohere_chat_flip",
+        "unprefixed_inferred",
+        "unknown",
+        "no_model",
+    ],
 )
 def test_provider_for_generic_call(litellm_params, expected, monkeypatch):
     monkeypatch.setenv("AZURE_AI_API_BASE", "https://unrelated.openai.azure.com")
@@ -894,7 +876,9 @@ def test_router_warns_only_for_a_capability_flag_set_under_litellm_params(caplog
 
 def test_router_serves_deployments_without_model_capability_flags():
     capability_flags: Final = frozenset(ProviderSpecificModelInfo.__annotations__) | frozenset(
-        key for key in chain.from_iterable(GetModelCostMap.loaded_model_cost_map().values()) if key.startswith("supports_")
+        key
+        for key in chain.from_iterable(GetModelCostMap.loaded_model_cost_map().values())
+        if key.startswith("supports_")
     )
     declared_params: Final = {"supports_system_message": False, "supports_system_prompt": True}
     router: Final = Router(

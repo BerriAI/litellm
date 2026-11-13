@@ -11,6 +11,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
 )
 from litellm.llms.vertex_ai.common_utils import (
     get_vertex_base_url,
+    map_vertex_image_size,
     pop_vertex_request_labels,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
@@ -72,24 +73,13 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         mapped_params["sampleCount"] = v
                     elif k == "size":
                         # Map OpenAI size format to Imagen aspectRatio
-                        mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(v)
+                        mapped_params["aspectRatio"] = (
+                            map_vertex_image_size(v, model, imagen=True) or {"aspectRatio": "1:1"}
+                        )["aspectRatio"]
                     else:
                         mapped_params[k] = v
 
         return mapped_params
-
-    def _map_size_to_aspect_ratio(self, size: str) -> str:
-        """
-        Map OpenAI size format to Imagen aspect ratio format
-        """
-        aspect_ratio_map: Final = {
-            "1024x1024": "1:1",
-            "1792x1024": "16:9",
-            "1024x1792": "9:16",
-            "1280x896": "4:3",
-            "896x1280": "3:4",
-        }
-        return aspect_ratio_map.get(size, "1:1")
 
     def _resolve_vertex_project(self) -> str | None:
         return (

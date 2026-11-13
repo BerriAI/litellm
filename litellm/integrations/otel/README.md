@@ -91,7 +91,7 @@ way (`pod_lock`, `budget_reset`, `spend_queue`, `health_check`, `scheduler_queue
 rather than a bare `redis.set`; `tests/unit/test_internal_context.py` scans every
 module under `litellm/` and `enterprise/` that calls a shared cache or declares a
 read or write on the request batch (`reserve_redis_batch_reads`,
-`declare_batch_get`, `batch.mget`, `batch.set`, `batch.script`) and fails when
+`batch.mget`, `batch.set`, `batch.script`) and fails when
 one has no declared family, with the process-local `InMemoryCache` callers listed
 as the only exemptions. A batch op carries the family that was active when it was
 declared, so the routing prefetch armed before deployment selection
@@ -325,7 +325,13 @@ nothing here imports outside it:
   on `langfuse_otel`, `arize`, `weave_otel` and `newrelic` callbacks.
 - [`baggage.py`](./model/baggage.py) — the single definition of which request-identity
   values are promoted into Baggage (so child spans inherit them) and under which
-  attribute keys.
+  attribute keys. A team or key destination can list extra `requester_metadata.<key>`
+  paths in `baggage_metadata_keys` in its own `callback_vars`. They are never written
+  into Baggage: the tenant fan-out adds them as `litellm.metadata.<key>` to that
+  destination's view of each span, on top of the global list, so the operator's
+  exporter and other destinations never see them. A key the span already carries
+  wins, and names of proxy identity fields and `requester_metadata.headers.*` (the
+  request headers the proxy copies there) are rejected when saved.
 - [`utils.py`](./model/utils.py) — value coercion, JSON serialization, and
   extractor-table application, shared across the package.
 

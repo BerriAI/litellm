@@ -21,6 +21,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -45,6 +46,7 @@ _CHAT_ROW: Final[TypeAdapter[AllMessageValues]] = TypeAdapter(AllMessageValues)
 _SENT_ROW: Final = TypeAdapter(Mapping[str, object])
 _SENT_ROWS: Final = TypeAdapter(Sequence[Mapping[str, object]])
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 # Headers whose values are forwarded as-is (case-insensitive). Glob patterns supported (e.g. x-stainless-*, x-litellm*).
 _HEADER_VALUE_ALLOWLIST: Final = frozenset(
@@ -126,6 +128,13 @@ def _sanitize_inbound_headers(
     return sanitized or None
 
 
+def _logged_inbound_headers(details: Mapping[str, object]) -> Mapping[object, object] | None:
+    litellm_params: Final = as_str_mapping(details.get("litellm_params", {}))
+    metadata: Final = as_str_mapping(litellm_params.get("metadata", {})) if litellm_params is not None else None
+    headers: Final = metadata.get("headers", None) if metadata is not None else None
+    return headers if isinstance(headers, dict) else None
+
+
 def _extract_inbound_headers(
     request_data: dict,
     logging_obj: Optional["LiteLLMLoggingObj"],
@@ -163,7 +172,7 @@ def _extract_inbound_headers(
     if logging_obj and getattr(logging_obj, "model_call_details", None):
         try:
             details: Final = logging_obj.model_call_details or {}
-            headers = details.get("litellm_params", {}).get("metadata", {}).get("headers", None)
+            headers = _logged_inbound_headers(details)
             if headers:
                 return _sanitize_inbound_headers(headers, extra_allowlist=extra_allowlist)
         except Exception:
@@ -234,6 +243,16 @@ def _structured_rows_to_write_back(
     )
 
 
+def _guardrail_response_from_json(response_json: object) -> GenericGuardrailAPIResponse:
+    if isinstance(response_json, dict):
+        return GenericGuardrailAPIResponse.from_dict(response_json)
+    raise AttributeError(
+        f"{type(response_json).__name__!r} object has no attribute 'get'",
+        name="get",
+        obj=response_json,
+    )
+
+
 class GenericGuardrailAPI(CustomGuardrail):
     """
     Generic Guardrail API integration for LiteLLM.
@@ -283,7 +302,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         )
         self.num_retries: int = num_retries or 0
         self.headers = headers or {}
-        self.extra_headers = extra_headers or []
+        self.extra_headers: Sequence[object] = extra_headers or []
 
         # If api_key is provided, add it as x-api-key header
         if api_key:
@@ -388,7 +407,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"],
         error: Exception,
-        http_status_code: int | None = None,
+        http_status_code: object = None,
     ) -> GenericGuardrailAPIInputs:
         status_suffix: Final = f" http_status_code={http_status_code}" if http_status_code else ""
         error_type: Final = "HTTPStatusError" if isinstance(error, httpx.HTTPStatusError) else type(error).__name__
@@ -474,7 +493,7 @@ class GenericGuardrailAPI(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         unreachable_fail_open: Final = is_unreachable and self.unreachable_fallback == "fail_open"
         if unreachable_fail_open or not self.fail_on_error:
-            http_status_code: Final = getattr(getattr(error, "response", None), "status_code", None)
+            http_status_code: Final = attribute_or_none(attribute_or_none(error, "response"), "status_code")
             return self._fail_open_passthrough(
                 inputs=inputs,
                 input_type=input_type,
@@ -600,11 +619,11 @@ class GenericGuardrailAPI(CustomGuardrail):
             )
 
             response.raise_for_status()
-            response_json: Final = response.json()
+            response_json: Final = _DECODED_JSON.validate_python(response.json())
 
             verbose_proxy_logger.debug("Generic Guardrail API response: %s", response_json)
 
-            guardrail_response: Final = GenericGuardrailAPIResponse.from_dict(response_json)
+            guardrail_response: Final = _guardrail_response_from_json(response_json)
 
             # Handle the response
             if guardrail_response.action == "BLOCKED":
@@ -656,4 +675,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.during_call,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.during_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
         ]

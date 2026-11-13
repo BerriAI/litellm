@@ -10,7 +10,9 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains, subscript
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -28,6 +30,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class StabilityImageEditConfig(BaseImageEditConfig):
@@ -259,7 +263,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         OpenAI expects: {"data": [{"b64_json": "base64..."}], "created": timestamp}
         """
         try:
-            response_data: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Stability AI response: {e}",
@@ -268,14 +272,15 @@ class StabilityImageEditConfig(BaseImageEditConfig):
             )
 
         # Check for errors in response
-        if "errors" in response_data:
+        if json_contains(response_json, "errors"):
             raise self.get_error_class(
-                error_message=f"Stability AI error: {response_data['errors']}",
+                error_message=f"Stability AI error: {subscript(response_json, 'errors')}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
         # Check finish_reason
+        response_data: Final = decoded_json_object(response_json)
         finish_reason: Final = response_data.get("finish_reason", "")
         if finish_reason == "CONTENT_FILTERED":
             raise self.get_error_class(

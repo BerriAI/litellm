@@ -3,10 +3,13 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
+import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
@@ -15,18 +18,21 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_unified_file_ids,
     get_credentials_for_model,
     get_team_provider_credentials,
+    get_team_provider_deployment,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
+    prepare_data_with_credentials,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
 from litellm.types.utils import LiteLLMBatch
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 _RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
 
 
 def test_get_credentials_for_model_rejects_an_unknown_model_without_persisting_the_raw_model():
-    llm_router: Final = MagicMock()
+    llm_router: Final = route_entry_points_to_stubs(MagicMock())
     llm_router.get_deployment_credentials_with_provider.return_value = None
 
     with pytest.raises(ProxyModelNotFoundError) as raised:
@@ -390,74 +396,6 @@ async def test_a_caller_that_handed_off_accounting_still_leaves_the_marker_alone
     data = update_mock.await_args.kwargs["data"]
     assert "batch_processed" not in data
     assert data["status"] == "complete"
-
-
-# =========================================================================== #
-# add_internal_model_credentials - the snapshot that lets a completed
-# batch's output file be read, and therefore its cost be recorded
-# =========================================================================== #
-
-
-def test_add_internal_model_credentials_attaches_an_immutable_snapshot():
-    """Cost accounting for a completed batch reads its output file, and Bedrock resolves
-    that bucket only from this snapshot. It must be immutable so nothing downstream can
-    redirect the bucket that managed file ids are validated against."""
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        add_internal_model_credentials,
-    )
-
-    router = MagicMock()
-    router.get_deployment_credentials_with_provider = MagicMock(
-        return_value={"s3_bucket_name": "configured-bucket", "aws_region_name": "us-east-1"}
-    )
-    data = {"batch_id": "unified-batch-id"}
-
-    add_internal_model_credentials(data=data, llm_router=router, model_id="deployment-1")
-
-    snapshot = data["_litellm_internal_model_credentials"]
-    assert snapshot["s3_bucket_name"] == "configured-bucket"
-    assert isinstance(snapshot, MappingProxyType)
-    with pytest.raises(TypeError):
-        snapshot["s3_bucket_name"] = "attacker-bucket"
-    router.get_deployment_credentials_with_provider.assert_called_once_with(model_id="deployment-1")
-
-
-@pytest.mark.parametrize(
-    "model_id, credentials",
-    [(None, {"s3_bucket_name": "b"}), ("deployment-1", None)],
-    ids=["no-model-id", "deployment-has-no-credentials"],
-)
-def test_add_internal_model_credentials_is_a_noop_without_a_resolvable_deployment(model_id, credentials):
-    """An unroutable batch must be left alone rather than given an empty snapshot, which
-    would look like a configured bucket of nothing."""
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        add_internal_model_credentials,
-    )
-
-    router = MagicMock()
-    router.get_deployment_credentials_with_provider = MagicMock(return_value=credentials)
-    data = {"batch_id": "unified-batch-id"}
-
-    add_internal_model_credentials(data=data, llm_router=router, model_id=model_id)
-
-    assert "_litellm_internal_model_credentials" not in data
-
-
-def test_add_internal_model_credentials_survives_a_failing_deployment_lookup():
-    """The snapshot only enables cost accounting, so a batch whose deployment no longer
-    resolves, which happens when a model group is removed while batches are in flight,
-    must still be retrievable rather than failing the request on the lookup."""
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        add_internal_model_credentials,
-    )
-
-    router = MagicMock()
-    router.get_deployment_credentials_with_provider = MagicMock(side_effect=KeyError("deployment-gone"))
-    data = {"batch_id": "unified-batch-id"}
-
-    add_internal_model_credentials(data=data, llm_router=router, model_id="deployment-gone")
-
-    assert data == {"batch_id": "unified-batch-id"}
 
 
 from openai.types.batch import BatchRequestCounts
@@ -834,6 +772,61 @@ def test_a_team_keeps_its_older_openai_deployment_when_a_newer_one_has_a_lower_i
     assert credentials["api_key"] == "older-key"
 
 
+@pytest.mark.parametrize("newer_first", [True, False])
+def test_the_team_provider_deployment_is_the_one_whose_credentials_the_team_resolves(newer_first: bool):
+    older: Final = _team_openai_deployment("deployment-z", "older-key", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    newer: Final = _team_openai_deployment("deployment-a", "newer-key", datetime(2026, 6, 1, tzinfo=timezone.utc))
+    router: Final = Router(model_list=[newer, older] if newer_first else [older, newer])
+    team_member: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a")
+
+    deployment: Final = get_team_provider_deployment(
+        llm_router=router, user_api_key_dict=team_member, custom_llm_provider="openai"
+    )
+
+    assert deployment is not None
+    assert (deployment.deployment_id, deployment.public_model_name) == ("deployment-z", "team-gpt-deployment-z")
+    assert dict(deployment.credentials) == get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=team_member,
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+    assert deployment.credentials["api_key"] == "older-key"
+
+
+def test_the_team_provider_deployment_carries_the_team_public_model_name():
+    deployment: Final = get_team_provider_deployment(
+        llm_router=_team_openai_router("openai/*", "openai/*"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+    )
+
+    assert deployment is not None
+    assert (deployment.deployment_id, deployment.public_model_name) == ("team-a-openai", "openai/*")
+
+
+def test_a_key_with_only_an_accessible_non_team_deployment_has_no_team_provider_deployment():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "openai-deployment-key"},
+            }
+        ]
+    )
+    caller: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", models=["openai/*"])
+
+    accessible_credentials: Final = get_team_provider_credentials(
+        llm_router=router, user_api_key_dict=caller, custom_llm_provider="openai", include_accessible_deployments=True
+    )
+
+    assert accessible_credentials is not None
+    assert accessible_credentials["api_key"] == "openai-deployment-key"
+    assert (
+        get_team_provider_deployment(llm_router=router, user_api_key_dict=caller, custom_llm_provider="openai") is None
+    )
+
+
 def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_db_ones():
     db_deployment: Final = _team_openai_deployment("deployment-a", "db-key", datetime(2020, 1, 1, tzinfo=timezone.utc))
     config_deployments: Final = tuple(
@@ -851,3 +844,128 @@ def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_db_ones
 
     assert credentials is not None
     assert credentials["api_key"] == "deployment-z-key"
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "openrouter_key", "api_key"),
+    [("openai", "sk-or-files-openai", "openai-key"), ("openrouter", "sk-or-files-openrouter", "sk-or-files-openrouter")],
+)
+def test_a_provider_credential_lookup_never_lists_an_openrouter_wildcards_live_catalog(
+    monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, openrouter_key: str, api_key: str
+):
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openrouter/*",
+                "litellm_params": {
+                    "model": "openrouter/*",
+                    "api_key": openrouter_key,
+                    "api_base": "https://openrouter.ai/api/v1",
+                },
+            },
+            {"model_name": "gpt-5.4-mini", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "openai-key"}},
+        ]
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        catalog_route: Final = respx_mock.get("https://openrouter.ai/api/v1/models/user").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "openai/gpt-5.4-mini"}]})
+        )
+        credentials: Final = get_team_provider_credentials(
+            llm_router=router,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            custom_llm_provider=custom_llm_provider,
+            include_accessible_deployments=True,
+        )
+
+    assert credentials is not None
+    assert (credentials["custom_llm_provider"], credentials["api_key"]) == (custom_llm_provider, api_key)
+    assert catalog_route.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("key_models", "deployments", "custom_llm_provider", "api_key"),
+    [
+        (
+            ["anthropic/*"],
+            (("anthropic/claude-*", "anthropic/claude-*", "anthropic-narrow-key"),),
+            "anthropic",
+            "anthropic-narrow-key",
+        ),
+        (["anthropic/claude-3*"], (("anthropic/*", "anthropic/*", "anthropic-wide-key"),), "anthropic", "anthropic-wide-key"),
+        (["openrouter/*"], (("openrouter/openai/*", "openrouter/openai/*", "sk-or-narrow"),), "openrouter", "sk-or-narrow"),
+        (
+            ["team/*"],
+            (("team/*", "openrouter/*", "sk-or-team"), ("team/openai/*", "openai/*", "openai-team-key")),
+            "openai",
+            "openai-team-key",
+        ),
+    ],
+)
+def test_a_key_wildcard_finds_the_deployment_it_grants_without_listing_any_provider_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+    key_models: list[str],
+    deployments: tuple[tuple[str, str, str], ...],
+    custom_llm_provider: str,
+    api_key: str,
+):
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    router: Final = Router(
+        model_list=[
+            {"model_name": model_name, "litellm_params": {"model": model, "api_key": deployment_key}}
+            for model_name, model, deployment_key in deployments
+        ]
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        catalog_requests: Final = respx_mock.route().mock(return_value=httpx.Response(200, json={"data": []}))
+        credentials: Final = get_team_provider_credentials(
+            llm_router=router,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", models=key_models),
+            custom_llm_provider=custom_llm_provider,
+            include_accessible_deployments=True,
+        )
+
+    assert credentials is not None
+    assert (credentials["custom_llm_provider"], credentials["api_key"]) == (custom_llm_provider, api_key)
+    assert catalog_requests.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("deployed_name", "api_key"), [("gpt-4o-mini", None), ("openai/gpt-4o-mini", "openai-deployment-key")]
+)
+def test_a_provider_wildcard_grant_finds_only_deployments_named_under_it(deployed_name: str, api_key: str | None):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": deployed_name,
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "openai-deployment-key"},
+            }
+        ]
+    )
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", models=["openai/*"]),
+        custom_llm_provider="openai",
+        include_accessible_deployments=True,
+    )
+
+    assert (None if credentials is None else credentials["api_key"]) == api_key
+
+
+@pytest.mark.parametrize("field", ["s3_bucket_name", "s3_output_bucket_name"])
+def test_create_paths_keep_a_request_bucket_and_reads_keep_the_deployment_bucket(field: str) -> None:
+    deployment: Final = {"custom_llm_provider": "bedrock", "api_key": "sk-deployment", field: "model-bucket"}
+    create_with_bucket: Final[dict[str, object]] = {field: "team-a-bucket"}
+    create_without_bucket: Final[dict[str, object]] = {}
+    read_with_bucket: Final[dict[str, object]] = {field: "team-a-bucket"}
+
+    prepare_data_with_credentials(data=create_with_bucket, credentials=dict(deployment), keep_request_buckets=True)
+    prepare_data_with_credentials(data=create_without_bucket, credentials=dict(deployment), keep_request_buckets=True)
+    prepare_data_with_credentials(data=read_with_bucket, credentials=dict(deployment))
+
+    assert create_with_bucket == {field: "team-a-bucket", "api_key": "sk-deployment"}
+    assert create_without_bucket == {field: "model-bucket", "api_key": "sk-deployment"}
+    assert read_with_bucket == {field: "model-bucket", "api_key": "sk-deployment"}

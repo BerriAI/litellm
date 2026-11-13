@@ -8,8 +8,10 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from litellm.types.decisions import DecisionsCallParams
+from litellm.types.extraction import ExtractionCallParams
 
 DECISIONS_CALL_PARAMS: Final[TypeAdapter[DecisionsCallParams]] = TypeAdapter(DecisionsCallParams)
+EXTRACTION_CALL_PARAMS: Final[TypeAdapter[ExtractionCallParams]] = TypeAdapter(ExtractionCallParams)
 OPTIONAL_STR: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 
 

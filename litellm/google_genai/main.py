@@ -16,6 +16,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes
@@ -39,6 +40,7 @@ else:
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
 _GENERATE_CONTENT_RESULT: Final = TypeAdapter(object)
+_GENERATE_CONTENT_PAYLOAD: Final = TypeAdapter(object)
 #################################################
 
 
@@ -194,12 +196,14 @@ class GenerateContentHelper:
         if litellm_logging_obj is None:
             raise ValueError("litellm_logging_obj is required, but got None")
 
+        vertex_location: Final = VertexBase.explicit_vertex_ai_location(dict(litellm_params))
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,
             optional_params=dict(generate_content_config_dict),
             litellm_params={
                 "litellm_call_id": litellm_call_id,
+                **({"vertex_location": vertex_location} if vertex_location else {}),
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -365,8 +369,8 @@ def generate_content(
         response: Final = _GENERATE_CONTENT_RESULT.validate_python(
             base_llm_http_handler.generate_content_handler(
                 model=setup_result.model,
-                contents=contents,
-                tools=tools,
+                contents=_GENERATE_CONTENT_PAYLOAD.validate_python(contents),
+                tools=_GENERATE_CONTENT_PAYLOAD.validate_python(tools),
                 generate_content_provider_config=setup_result.generate_content_provider_config,
                 generate_content_config_dict=setup_result.generate_content_config_dict,
                 custom_llm_provider=setup_result.custom_llm_provider,
@@ -462,10 +466,10 @@ async def agenerate_content_stream(
         return _GENERATE_CONTENT_RESULT.validate_python(
             await base_llm_http_handler.generate_content_handler(
                 model=setup_result.model,
-                contents=contents,
+                contents=_GENERATE_CONTENT_PAYLOAD.validate_python(contents),
                 generate_content_provider_config=setup_result.generate_content_provider_config,
                 generate_content_config_dict=setup_result.generate_content_config_dict,
-                tools=tools,
+                tools=_GENERATE_CONTENT_PAYLOAD.validate_python(tools),
                 custom_llm_provider=setup_result.custom_llm_provider,
                 litellm_params=setup_result.litellm_params,
                 logging_obj=setup_result.litellm_logging_obj,
@@ -553,10 +557,10 @@ def generate_content_stream(
         return _GENERATE_CONTENT_RESULT.validate_python(
             base_llm_http_handler.generate_content_handler(
                 model=setup_result.model,
-                contents=contents,
+                contents=_GENERATE_CONTENT_PAYLOAD.validate_python(contents),
                 generate_content_provider_config=setup_result.generate_content_provider_config,
                 generate_content_config_dict=setup_result.generate_content_config_dict,
-                tools=tools,
+                tools=_GENERATE_CONTENT_PAYLOAD.validate_python(tools),
                 custom_llm_provider=setup_result.custom_llm_provider,
                 litellm_params=setup_result.litellm_params,
                 logging_obj=setup_result.litellm_logging_obj,

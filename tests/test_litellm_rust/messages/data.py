@@ -1,7 +1,6 @@
 from typing import Final
 
 import litellm
-from tests.test_litellm_rust.support.gaps import gap
 from tests.test_litellm_rust.support.recording_server import RecordingServer
 from tests.test_litellm_rust.support.routing import call_public
 
@@ -57,6 +56,3 @@ async def call(server: RecordingServer, *, asynchronous: bool = True, **kwargs: 
         asynchronous=asynchronous,
         **kwargs,
     )
-
-
-BODY_HOOKS: Final = gap("native Messages does not run the handler body hooks")

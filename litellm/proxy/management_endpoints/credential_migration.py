@@ -42,6 +42,7 @@ from litellm.proxy.db.db_span import db_span
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import PrismaClient
+    from litellm.repositories.prisma_protocols import TableActions
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # legacy module exports
     _ALGO_AES_GCM,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _ENCRYPTION_ALGORITHM_SETTING,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -523,7 +524,7 @@ async def _scan_one_table(
     scalar_columns: tuple,
 ) -> LocationReport:
     report: Final = LocationReport(location=location)
-    table: Final = getattr(prisma_client.db, db_attr, None)
+    table: Final[TableActions[object] | None] = getattr(prisma_client.db, db_attr, None)
     if table is None:
         return report
     try:

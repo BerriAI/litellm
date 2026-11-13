@@ -62,7 +62,9 @@ def wait_idle(connection: psycopg.Connection[dict[str, object]], evidence: Path,
             for query in queries:
                 if cancel and query.leader_pid is None:
                     _ = connection.execute(
-                        "SELECT pg_cancel_backend(%s)" if query.state == "active" else "SELECT pg_terminate_backend(%s)",
+                        "SELECT pg_cancel_backend(%s)"
+                        if query.state == "active"
+                        else "SELECT pg_terminate_backend(%s)",
                         (query.pid,),
                     )
         else:

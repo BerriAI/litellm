@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -22,6 +23,8 @@ from litellm.types.utils import CallTypesLiteral, GuardrailStatus
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class JavelinGuardrail(CustomGuardrail):
@@ -113,7 +116,9 @@ class JavelinGuardrail(CustomGuardrail):
                 json=dict(request),
                 timeout=self.timeout,
             )
-            verbose_proxy_logger.debug("Javelin Guardrail: Javelin guard API response: %s", response.json())
+            verbose_proxy_logger.debug(
+                "Javelin Guardrail: Javelin guard API response: %s", _DECODED_JSON.validate_python(response.json())
+            )
             response_data: Final = response.json()
             # Ensure the response has the required assessments field
             if "assessments" not in response_data:

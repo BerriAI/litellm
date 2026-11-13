@@ -17,6 +17,7 @@ from litellm.decisions.call import (
     SystemOneQuestions,
     SystemOneRequestFields,
     asend,
+    log_caller_request,
     prepare_call,
     reject_images_next_to_input,
     send,
@@ -78,6 +79,16 @@ def _prepare_decisions_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
+    log_caller_request(
+        kwargs,
+        {
+            "input": decision_input,
+            "questions": questions,
+            "audio": audio,
+            "videos": videos,
+            **{key: kwargs[key] for key in _SYSTEMONE_FIELDS if key in kwargs},
+        },
+    )
     return prepare_call(
         model=model,
         fields=_request_fields(model, decision_input, questions, audio, videos, kwargs),

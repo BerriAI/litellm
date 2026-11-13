@@ -3,18 +3,23 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from enum import Enum
+from itertools import groupby
 from typing import Any, Final, Literal, cast
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils import batch_utils as core_batch_utils
+from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.llms.bedrock.batches.transformation import titan_embedding_usage_from_batch_output
 from litellm.llms.vertex_ai.batches.transformation import (
     is_native_vertex_batch_output_row,
+    native_vertex_batch_row_model,
     native_vertex_batch_row_stats,
 )
 from litellm.types.llms.openai import Batch
@@ -36,8 +41,8 @@ class BatchCostUsageResult:
     completion_cost: float = 0.0
 
 
-_COMPLETED_BATCH_STATUSES: Final = frozenset({"completed", "complete"})
 _DECODED_BATCH_LINE: Final = TypeAdapter(object)
+batch_cost_is_final: Final = core_batch_utils.batch_cost_is_final
 
 
 def _uses_native_vertex_output(
@@ -45,6 +50,10 @@ def _uses_native_vertex_output(
     model_name: str | None,
     first_row: Mapping[str, object] | None,
 ) -> bool:
+    if custom_llm_provider == "gemini":
+        from litellm.llms.gemini.batches.transformation import is_native_gemini_batch_output_row
+
+        return first_row is not None and is_native_gemini_batch_output_row(first_row)
     if custom_llm_provider != "vertex_ai":
         return False
     if model_name and litellm.disable_vertex_batch_output_transformation:
@@ -52,34 +61,15 @@ def _uses_native_vertex_output(
     return first_row is not None and is_native_vertex_batch_output_row(first_row)
 
 
-_TERMINAL_BATCH_STATUSES: Final = _COMPLETED_BATCH_STATUSES | frozenset({"failed", "cancelled", "expired"})
-
-
-def batch_cost_is_final(batch: Batch) -> bool:
-    """Whether this retrieve of the batch is the one to account its cost from.
-
-    A batch still in flight has nothing to price, and a "completed" batch can report
-    no output_file_id for a moment before the output populates; pricing either records
-    $0 under the batch's single spend row and pins it there. Final means a completed
-    batch whose output file has arrived or whose counts prove no line succeeded, or
-    any other terminal status (failed, cancelled, expired).
-    """
-    if batch.status not in _TERMINAL_BATCH_STATUSES:
-        return False
-    if batch.status not in _COMPLETED_BATCH_STATUSES or batch.output_file_id is not None:
-        return True
-    request_counts: Final = batch.request_counts
-    return request_counts is not None and request_counts.total > 0 and request_counts.completed == 0
-
-
 async def calculate_batch_cost_and_usage(
     file_content_dictionary: Sequence[dict[str, object]],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
+    vertex_location: str | None = None,
 ) -> BatchCostUsageResult:
     """Calculate the cost and usage of a batch, see batch_cost_and_usage."""
-    return batch_cost_and_usage(file_content_dictionary, custom_llm_provider, model_name, model_info)
+    return batch_cost_and_usage(file_content_dictionary, custom_llm_provider, model_name, model_info, vertex_location)
 
 
 def batch_cost_and_usage(
@@ -87,6 +77,7 @@ def batch_cost_and_usage(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
+    vertex_location: str | None = None,
 ) -> BatchCostUsageResult:
     """
     Calculate the cost and usage of a batch.
@@ -96,16 +87,21 @@ def batch_cost_and_usage(
             pricing. Threaded through to batch_cost_calculator so that
             deployment-specific pricing (e.g. input_cost_per_token_batches)
             is used instead of the global cost map.
+        vertex_location: The Vertex AI location the batch ran on; non-global
+            locations apply the model's regional-endpoint uplift multiplier.
     """
     first_row: Final = file_content_dictionary[0] if file_content_dictionary else None
     if _uses_native_vertex_output(custom_llm_provider, model_name, first_row):
-        return calculate_vertex_ai_batch_cost_and_usage(file_content_dictionary, model_name, model_info=model_info)
+        return calculate_vertex_ai_batch_cost_and_usage(
+            file_content_dictionary, model_name, model_info=model_info, vertex_location=vertex_location
+        )
 
     return _aggregate_batch_cost_usage_models(
         entries=file_content_dictionary,
         custom_llm_provider=custom_llm_provider,
         model_name=model_name,
         model_info=model_info,
+        vertex_location=vertex_location,
     )
 
 
@@ -115,6 +111,7 @@ async def handle_completed_batch(
     model_name: str | None = None,
     litellm_params: dict[str, object] | None = None,
     model_info: ModelInfo | None = None,
+    vertex_location: str | None = None,
 ) -> BatchCostUsageResult:
     """Fetch a completed batch's output file and aggregate its cost, usage, and
     models in a single pass over the JSONL lines, so the parsed file content is
@@ -128,6 +125,8 @@ async def handle_completed_batch(
         model_info: Optional deployment-level model info with custom pricing,
             threaded through so a deployment's configured rates win over the
             global cost map.
+        vertex_location: The Vertex AI location the batch ran on; non-global
+            locations apply the model's regional-endpoint uplift multiplier.
     """
     # A completed batch whose request lines all failed has no output file - the
     # results are written to a separate error_file_id and output_file_id is None.
@@ -155,7 +154,10 @@ async def handle_completed_batch(
 
     output_file_result: Final = (
         calculate_vertex_ai_batch_cost_and_usage(
-            _iter_batch_output_entries(file_content), model_name, model_info=model_info
+            _iter_batch_output_entries(file_content),
+            model_name,
+            model_info=model_info,
+            vertex_location=vertex_location,
         )
         if _uses_native_vertex_output(
             custom_llm_provider, model_name, next(_iter_batch_output_entries(file_content), None)
@@ -165,6 +167,7 @@ async def handle_completed_batch(
             custom_llm_provider=custom_llm_provider,
             model_name=model_name,
             model_info=model_info,
+            vertex_location=vertex_location,
         )
     )
 
@@ -196,6 +199,7 @@ class _BatchOutputLineStats:
     cache_creation_tokens: int
     reasoning_tokens: int
     model: str | None
+    usage: Usage | None
 
 
 def _classify_output_line_stats(
@@ -203,6 +207,7 @@ def _classify_output_line_stats(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None,
     model_info: ModelInfo | None,
+    vertex_location: str | None = None,
 ) -> Iterator[_BatchOutputLineStats | _LineOutcome]:
     """Classify every output line in a single pass, so counting failures never needs
     a second read of a potentially huge output file. A line the provider reported as
@@ -213,7 +218,7 @@ def _classify_output_line_stats(
         if not _batch_response_was_successful(entry, custom_llm_provider):
             yield _LineOutcome.PROVIDER_FAILED
             continue
-        stats = _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info)
+        stats = _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
         yield stats if stats is not None else _LineOutcome.UNCOSTABLE
 
 
@@ -222,13 +227,14 @@ def _safe_output_line_stats(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None,
     model_info: ModelInfo | None,
+    vertex_location: str | None = None,
 ) -> _BatchOutputLineStats | None:
     """Return the stats for one provider-successful batch output line, or None when
     it cannot be costed, so a single bad line never aborts the whole batch's cost
     accounting."""
     custom_id: Final = entry.get("custom_id") if isinstance(entry, dict) else None
     try:
-        return _compute_output_line_stats(entry, custom_llm_provider, model_name, model_info)
+        return _compute_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
     except Exception as e:  # noqa: BLE001  # any single line's costing failure must not abort the whole batch
         verbose_logger.warning(
             "batch output line could not be costed, so it is billed at $0 and the rest of the batch "
@@ -244,6 +250,7 @@ def _compute_output_line_stats(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None,
     model_info: ModelInfo | None,
+    vertex_location: str | None = None,
 ) -> _BatchOutputLineStats:
     response_body: Final = _get_response_from_batch_job_output_file(entry, custom_llm_provider)
     usage: Final = _get_batch_job_usage_from_response_body(response_body, custom_llm_provider)
@@ -251,13 +258,14 @@ def _compute_output_line_stats(
     raw_model: Final = response_body.get("model")
     response_model: Final = raw_model if isinstance(raw_model, str) and raw_model else None
     completion_details: Final = usage.completion_tokens_details
-    line_prompt_cost, line_completion_cost = _output_line_cost(
+    line_prompt_cost, line_completion_cost = _output_line_cost_or_pending(
         response_body=response_body,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
         model_name=model_name,
         response_model=response_model,
         model_info=model_info,
+        vertex_location=vertex_location,
     )
     return _BatchOutputLineStats(
         prompt_cost=line_prompt_cost,
@@ -268,7 +276,15 @@ def _compute_output_line_stats(
         cache_read_tokens=prompt_details["cache_hit_tokens"],
         cache_creation_tokens=prompt_details["cache_creation_tokens"],
         reasoning_tokens=(completion_details.reasoning_tokens if completion_details else None) or 0,
-        model=response_model,
+        model=response_model or model_name,
+        usage=(
+            usage.model_copy(update=ocr_usage.model_dump(exclude_none=True))
+            if (ocr_usage := _ocr_usage_info_from_response_body(response_body)) is not None
+            and ocr_usage.model_dump(exclude_none=True)
+            else usage
+            if response_body.get("usage") is not None or usage.total_tokens > 0
+            else None
+        ),
     )
 
 
@@ -280,6 +296,54 @@ def _ocr_usage_info_from_response_body(response_body: Mapping[str, object]) -> O
     return OCRUsageInfo.model_validate(raw_usage_info)
 
 
+def _output_line_cost_or_pending(
+    response_body: Mapping[str, object],
+    usage: Usage,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    model_name: str | None,
+    response_model: str | None,
+    model_info: ModelInfo | None,
+    vertex_location: str | None,
+) -> tuple[float, float]:
+    try:
+        return _output_line_cost(
+            response_body, usage, custom_llm_provider, model_name, response_model, model_info, vertex_location
+        )
+    except Exception:  # noqa: BLE001  # retain measured usage when existing batch pricing fails
+        verbose_logger.warning("Batch line pricing unavailable; retaining usage with the existing zero-cost fallback")
+        return 0.0, 0.0
+
+
+def _combined_reported_batch_usage(usages: tuple[Usage | None, ...]) -> Mapping[str, object] | None:
+    from litellm.cost_calculator import BaseTokenUsageProcessor
+
+    reported: Final = [usage for usage in usages if usage is not None]
+    if not reported:
+        return None
+    fields: Final = tuple(TypeAdapter(dict[str, JsonValue]).validate_python(usage.model_dump()) for usage in reported)
+    quantities: Final = {
+        key: sum(value for usage in fields if isinstance(value := usage.get(key), (int, float)))
+        for key in OCRUsageInfo.model_fields
+        if any(isinstance(usage.get(key), (int, float)) for usage in fields)
+    }
+    return {**BaseTokenUsageProcessor.combine_usage_objects(usage_objects=reported).model_dump(), **quantities}
+
+
+def _batch_usage_by_request(usages: tuple[tuple[str | None, Usage | None], ...]) -> tuple[Mapping[str, object], ...]:
+    rows: Final = tuple(
+        {"model": model, "usage": usage.model_dump() if usage is not None else None} for model, usage in usages
+    )
+    return tuple(sorted(rows, key=lambda row: json.dumps(row, sort_keys=True)))
+
+
+def _batch_usage_by_model(usages: tuple[tuple[str | None, Usage | None], ...]) -> Mapping[str, object]:
+    ordered: Final = sorted(usages, key=lambda item: item[0] or "")
+    return {
+        model: _combined_reported_batch_usage(tuple(item[1] for item in group))
+        for model, group in groupby(ordered, key=lambda item: item[0] or "")
+    }
+
+
 def _output_line_cost(
     response_body: Mapping[str, object],
     usage: Usage,
@@ -287,6 +351,7 @@ def _output_line_cost(
     model_name: str | None,
     response_model: str | None,
     model_info: ModelInfo | None,
+    vertex_location: str | None = None,
 ) -> tuple[float, float]:
     """(prompt_cost, completion_cost) for one output line, priced at batch rates."""
     from litellm.cost_calculator import batch_cost_calculator, ocr_batch_cost
@@ -307,6 +372,7 @@ def _output_line_cost(
         model=cost_model,
         custom_llm_provider=custom_llm_provider,
         model_info=model_info,
+        vertex_location=vertex_location,
     )
 
 
@@ -315,11 +381,14 @@ def _aggregate_batch_cost_usage_models(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
+    vertex_location: str | None = None,
 ) -> BatchCostUsageResult:
     """Aggregate cost, usage, models, and pass/fail counts from batch output
     entries in a single pass, holding one small stats record per line instead
     of the parsed file."""
-    all_results: Final = tuple(_classify_output_line_stats(entries, custom_llm_provider, model_name, model_info))
+    all_results: Final = tuple(
+        _classify_output_line_stats(entries, custom_llm_provider, model_name, model_info, vertex_location)
+    )
     line_stats: Final = tuple(result for result in all_results if isinstance(result, _BatchOutputLineStats))
     failed_requests: Final = sum(1 for result in all_results if result is _LineOutcome.PROVIDER_FAILED)
     successful_requests: Final = len(all_results) - failed_requests
@@ -338,6 +407,9 @@ def _aggregate_batch_cost_usage_models(
         completion_tokens=sum(stats.completion_tokens for stats in line_stats),
         reasoning_tokens=sum(stats.reasoning_tokens for stats in line_stats),
         **cache_token_params,
+        batch_usage_by_model=_batch_usage_by_model(tuple((stats.model, stats.usage) for stats in line_stats)),
+        batch_usage_by_request=_batch_usage_by_request(tuple((stats.model, stats.usage) for stats in line_stats)),
+        batch_unknown_usage_requests=sum(stats.usage is None for stats in line_stats),
     )
     batch_models: Final = [model_name] if model_name else [stats.model for stats in line_stats if stats.model]
     total_prompt_cost: Final = sum((stats.prompt_cost for stats in line_stats), 0.0)
@@ -366,6 +438,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
     vertex_ai_batch_responses: Iterable[dict[str, object]],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
+    vertex_location: str | None = None,
 ) -> BatchCostUsageResult:
     """
     Cost and usage of a native Vertex predictions.jsonl, one
@@ -377,16 +450,21 @@ def calculate_vertex_ai_batch_cost_and_usage(
     from litellm.cost_calculator import batch_cost_calculator
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
-    row_stats: Final = tuple(
-        native_vertex_batch_row_stats(
-            row,
-            model_name,
-            model_info=model_info,
-            calculate_usage=VertexGeminiConfig.calculate_usage,
-            cost_calculator=batch_cost_calculator,
+    observations: Final = tuple(
+        (
+            native_vertex_batch_row_model(row, model_name),
+            native_vertex_batch_row_stats(
+                row,
+                model_name,
+                model_info=model_info,
+                calculate_usage=VertexGeminiConfig.calculate_usage,
+                cost_calculator=batch_cost_calculator,
+                vertex_location=vertex_location,
+            ),
         )
         for row in vertex_ai_batch_responses
     )
+    row_stats: Final = tuple(stats for _, stats in observations)
     priced: Final = tuple(stats for stats in row_stats if stats is not None)
     total_prompt_cost: Final = sum(stats.prompt_cost for stats in priced)
     total_completion_cost: Final = sum(stats.completion_cost for stats in priced)
@@ -410,6 +488,13 @@ def calculate_vertex_ai_batch_cost_and_usage(
             total_tokens=total_tokens,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            batch_usage_by_model=_batch_usage_by_model(
+                tuple((model, stats.usage if stats is not None else None) for model, stats in observations)
+            ),
+            batch_usage_by_request=_batch_usage_by_request(
+                tuple((model, stats.usage if stats is not None else None) for model, stats in observations)
+            ),
+            batch_unknown_usage_requests=sum(stats is None for stats in row_stats),
         ),
         models=(
             [model_name]
@@ -472,7 +557,7 @@ async def fetch_batch_managed_file_content(
         "file_id": provider_output_file_id,
         "custom_llm_provider": custom_llm_provider,
         **cast(  # cast-ok: preserve dynamic provider credentials without validation
-            FileContentCallOptions, credentials
+            FileContentCallOptions, {**credentials, **stored_s3_bucket_kwargs(provider_output_file_id)}
         ),
     }
 
@@ -562,9 +647,11 @@ def extract_file_access_credentials(
             "bucket_name",
             "s3_endpoint_url",
             "s3_region_name",
+            "s3_bucket_name",
+            "s3_output_bucket_name",
+            "allow_legacy_cloud_file_ids",
             "timeout",
             "max_retries",
-            "_litellm_internal_model_credentials",
             *AWS_CREDENTIAL_KWARGS_KEYS,
             # A federated deployment holds no api_key, so without these the fetch that reads a
             # finished batch's output has nothing to authenticate with and its cost is never billed.
@@ -749,6 +836,12 @@ def _get_batch_job_usage_from_response_body(
     _usage_dict: Final = response_body.get("usage", None) or {}
     if ResponseAPILoggingUtils.is_response_api_usage(_usage_dict):
         return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(_usage_dict)
+    if custom_llm_provider == "gemini":
+        from litellm.llms.gemini.batches.transformation import is_gemini_batch_usage_shape, usage_from_batch_output
+
+        gemini_usage: Final = cast(Mapping[str, object], _usage_dict)  # cast-ok: usage block comes from provider JSON
+        if is_gemini_batch_usage_shape(gemini_usage):
+            return usage_from_batch_output(gemini_usage)
     usage: Final[Usage] = Usage(**_usage_dict)
     if custom_llm_provider == "xai":
         from litellm.llms.xai.chat.transformation import XAIChatConfig
@@ -757,14 +850,14 @@ def _get_batch_job_usage_from_response_body(
     return usage
 
 
-def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping[str, Any]) -> Mapping[str, Any]:
+def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping[str, object]) -> Mapping[str, object]:
     """
     Get the ``result`` object from a line of an Anthropic message batch results JSONL file.
 
     Anthropic batch results lines look like:
     ``{"custom_id": ..., "result": {"type": "succeeded", "message": {..., "usage": {...}}}}``
     """
-    return batch_results_line.get("result", None) or {}
+    return decoded_json_object(batch_results_line.get("result", None) or {})
 
 
 def _get_response_from_batch_job_output_file(
@@ -774,7 +867,9 @@ def _get_response_from_batch_job_output_file(
     Get the response from the batch job output file
     """
     if custom_llm_provider == "anthropic":
-        return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("message", None) or {}
+        return decoded_json_object(
+            _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("message", None) or {}
+        )
     if custom_llm_provider == "bedrock":
         return batch_job_output_file.get("modelOutput", None) or {}
     _response: Final = cast(  # cast-ok: batch output response comes from provider JSON

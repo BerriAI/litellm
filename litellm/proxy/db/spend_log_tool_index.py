@@ -19,7 +19,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import chain, groupby
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
+from types import TracebackType
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import LiteralString
@@ -63,9 +64,24 @@ def response_tool_call_names(completion_response: object) -> tuple[str, ...]:
     )
     return tuple(
         stripped
-        for name in chain(called_names, _auto_executed_mcp_tool_names(completion_response))
+        for name in chain(
+            _server_tool_call_names(completion_response),
+            called_names,
+            _auto_executed_mcp_tool_names(completion_response),
+        )
         if isinstance(name, str) and (stripped := name.strip())
     )
+
+
+def _server_tool_call_names(completion_response: object) -> tuple[str | None, ...]:
+    from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
+    from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
+
+    server_tool_calls: Final = chain.from_iterable(
+        anthropic_server_tool_call_params(message_field(choice, "message"))
+        for choice in parts_of(message_field(completion_response, "choices"))
+    )
+    return tuple(server_tool_call["function"].get("name") for server_tool_call in server_tool_calls)
 
 
 class _ExecutedTool(BaseModel):
@@ -122,7 +138,7 @@ def build_tool_usage_transaction(
     spend: float,
     total_tokens: int,
     completion_response: object,
-    realtime_tool_calls: Any = None,
+    realtime_tool_calls: object = None,
 ) -> ToolUsageTransaction | None:
     """None when the request invoked no tools. Realtime sessions carry invoked
     tools in kwargs["realtime_tool_calls"] (OpenAI tool_calls shape) rather than
@@ -160,7 +176,8 @@ class _ToolRollupTable(Protocol):
 
 
 class _ToolRollupBatch(Protocol):
-    litellm_dailytoolspend: _ToolRollupTable
+    @property
+    def litellm_dailytoolspend(self) -> _ToolRollupTable: ...
 
     def execute_raw(self, query: LiteralString, *args: object) -> None: ...
 
@@ -168,7 +185,13 @@ class _ToolRollupBatch(Protocol):
 class _ToolRollupBatchManager(Protocol):
     async def __aenter__(self) -> _ToolRollupBatch: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 def _tool_rollup_batch(prisma_client: PrismaClient) -> _ToolRollupBatchManager:
