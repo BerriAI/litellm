@@ -3,8 +3,15 @@ import time
 from typing import Final
 
 import pytest
+from prometheus_client import CollectorRegistry, Gauge, Histogram
 
-from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded, DBLookupStallTracker, bounded_db_lookup
+from litellm.proxy.db.db_lookup_gate import (
+    DBLookupDeadlineExceeded,
+    DBLookupInFlightInstruments,
+    DBLookupInFlightTracker,
+    DBLookupStallTracker,
+    bounded_db_lookup,
+)
 
 
 async def _never_answers() -> None:
@@ -125,3 +132,109 @@ def test_stall_tracker_reports_a_stall_only_inside_the_window():
     tracker.record_hit()
     tracker.clear()
     assert tracker.stalled_within(30) is False
+
+
+def _in_flight_tracker(registry: CollectorRegistry) -> DBLookupInFlightTracker:
+    instruments: Final = DBLookupInFlightInstruments(
+        in_flight=Gauge("in_flight", "in flight", registry=registry),
+        in_flight_at_admission=Histogram("at_admission", "at admission", buckets=(1, 2, 3), registry=registry),
+    )
+    return DBLookupInFlightTracker(lambda: instruments)
+
+
+@pytest.mark.asyncio
+async def test_bounded_db_lookup_counts_lookups_in_flight_and_samples_the_count_at_each_admission():
+    registry: Final = CollectorRegistry()
+    in_flight: Final = _in_flight_tracker(registry)
+    release: Final = asyncio.Event()
+
+    async def answers_on_release() -> str:
+        await release.wait()
+        return "row"
+
+    lookups: Final = tuple(
+        asyncio.ensure_future(bounded_db_lookup(answers_on_release(), name="key", in_flight=in_flight))
+        for _ in range(3)
+    )
+    await asyncio.sleep(0)
+
+    assert in_flight.count == 3
+    assert registry.get_sample_value("in_flight") == 3
+    assert registry.get_sample_value("at_admission_bucket", {"le": "1.0"}) == 1
+    assert registry.get_sample_value("at_admission_bucket", {"le": "2.0"}) == 2
+    assert registry.get_sample_value("at_admission_bucket", {"le": "3.0"}) == 3
+    assert registry.get_sample_value("at_admission_sum") == 1 + 2 + 3
+
+    release.set()
+    assert await asyncio.gather(*lookups) == ["row", "row", "row"]
+    await asyncio.sleep(0)
+
+    assert in_flight.count == 0
+    assert registry.get_sample_value("in_flight") == 0
+    assert registry.get_sample_value("at_admission_count") == 3
+
+
+@pytest.mark.asyncio
+async def test_bounded_db_lookup_keeps_counting_an_abandoned_lookup_until_it_actually_stops():
+    in_flight: Final = _in_flight_tracker(CollectorRegistry())
+    absorbed: Final = asyncio.Event()
+    let_go: Final = asyncio.Event()
+
+    async def absorbs_the_cancel() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            absorbed.set()
+            await let_go.wait()
+
+    with pytest.raises(DBLookupDeadlineExceeded):
+        await bounded_db_lookup(
+            absorbs_the_cancel(),
+            name="key",
+            deadline_seconds=0.05,
+            tracker=DBLookupStallTracker(),
+            in_flight=in_flight,
+        )
+    await asyncio.wait_for(absorbed.wait(), timeout=1)
+
+    assert in_flight.count == 1
+
+    let_go.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert in_flight.count == 0
+
+
+@pytest.mark.asyncio
+async def test_bounded_db_lookup_releases_a_lookup_that_raises_or_is_cancelled():
+    in_flight: Final = _in_flight_tracker(CollectorRegistry())
+
+    async def raises() -> None:
+        raise ValueError("no row")
+
+    with pytest.raises(ValueError):
+        await bounded_db_lookup(raises(), name="key", in_flight=in_flight)
+
+    cancelled: Final = asyncio.ensure_future(bounded_db_lookup(_never_answers(), name="key", in_flight=in_flight))
+    await asyncio.sleep(0)
+    assert in_flight.count == 1
+    cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    await asyncio.sleep(0)
+
+    assert in_flight.count == 0
+
+
+@pytest.mark.asyncio
+async def test_in_flight_tracker_still_counts_when_prometheus_is_unavailable():
+    in_flight: Final = DBLookupInFlightTracker(lambda: None)
+
+    async def answers() -> str:
+        return "row"
+
+    assert await bounded_db_lookup(answers(), name="key", in_flight=in_flight) == "row"
+    await asyncio.sleep(0)
+
+    assert in_flight.count == 0

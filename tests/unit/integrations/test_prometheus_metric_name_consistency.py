@@ -23,6 +23,7 @@ from prometheus_client.registry import Collector
 import litellm
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.prometheus_services import PrometheusServicesLogger
+from litellm.proxy.db.db_lookup_gate import prometheus_db_lookup_in_flight_instruments
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import SpendLogCleanupMetrics
 from litellm.proxy.middleware.admission_control_middleware import create_prometheus_admission_metrics
 from litellm.proxy.middleware.in_flight_requests_middleware import InFlightRequestsMiddleware
@@ -66,6 +67,8 @@ def _lazy_owner_collectors() -> tuple[Collector, ...]:
     lens: Final = lens_export_counters()
     assert lens.written is not None
     assert lens.dropped is not None
+    db_lookups: Final = prometheus_db_lookup_in_flight_instruments()
+    assert db_lookups is not None
     return (
         SpendLogCleanupMetrics.rows_deleted,
         SpendLogCleanupMetrics.batch_duration,
@@ -78,6 +81,8 @@ def _lazy_owner_collectors() -> tuple[Collector, ...]:
         services.redis_breaker_failures,
         lens.written,
         lens.dropped,
+        db_lookups.in_flight,
+        db_lookups.in_flight_at_admission,
     )
 
 
