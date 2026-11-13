@@ -49,7 +49,6 @@ from litellm.proxy.auth.auth_checks import (
     get_key_object,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
@@ -105,6 +104,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 )
 from litellm.proxy.proxy_server import app, budget_windows_absent_cache_key
 from litellm.redis.stores.auth_cache import AuthObject
+from litellm.redis.stores.auth_cache_invalidation import PythonCaches
 from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
@@ -113,6 +113,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
 )
 from litellm.types.utils import CredentialItem
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
+from tests.unit.redis.stores.auth_cache_invalidation_double import FakeChannel, Worker, channel
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
@@ -5795,77 +5796,10 @@ async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypat
     )
 
 
-class _ChannelSubscription:
-    """Marks a message done when the subscriber comes back for the next one, so ``messages.join()``
-    returns once every delivered message has been applied"""
-
-    def __init__(self) -> None:
-        self.messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
-        self._holding_message = False
-
-    async def subscribe(self, *channels: str) -> None:
-        return None
-
-    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> dict[str, object] | None:
-        if self._holding_message:
-            self._holding_message = False
-            self.messages.task_done()
-        try:
-            message: Final = await asyncio.wait_for(self.messages.get(), timeout)
-        except asyncio.TimeoutError:
-            return None
-        self._holding_message = True
-        return message
-
-    async def aclose(self) -> None:
-        return None
-
-
-class _ChannelPipeline:
-    def __init__(self, redis: "_SharedCoordinationRedis") -> None:
-        self._redis = redis
-        self._messages: tuple[str, ...] = ()
-
-    def publish(self, channel: str, message: str) -> "_ChannelPipeline":
-        self._messages = (*self._messages, message)
-        return self
-
-    async def execute(self) -> None:
-        for message in self._messages:
-            self._redis.deliver(message)
-
-
-class _SharedCoordinationRedis:
-    """The coordination Redis two workers share: whatever one worker publishes reaches the other's subscriber"""
-
-    namespace = None
-
-    def __init__(self) -> None:
-        self.published: tuple[str, ...] = ()
-        self._subscriptions: tuple[_ChannelSubscription, ...] = ()
-
-    def init_pubsub_client(self) -> "_SharedCoordinationRedis":
-        return self
-
-    def pubsub(self) -> _ChannelSubscription:
-        subscription: Final = _ChannelSubscription()
-        self._subscriptions = (*self._subscriptions, subscription)
-        return subscription
-
-    def pipeline(self, transaction: bool = True) -> _ChannelPipeline:
-        return _ChannelPipeline(self)
-
-    async def publish(self, channel: str, message: str) -> int:
-        self.deliver(message)
-        return 1
-
-    def deliver(self, message: str) -> None:
-        self.published = (*self.published, message)
-        for subscription in self._subscriptions:
-            subscription.messages.put_nowait({"type": "message", "data": message.encode()})
-
-    async def until_every_subscriber_applied_its_messages(self) -> None:
-        _ = await asyncio.gather(*(subscription.messages.join() for subscription in self._subscriptions))
+def _install_channel(monkeypatch: pytest.MonkeyPatch, *workers: Worker) -> FakeChannel:
+    invalidation, fake = channel(*workers)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config.auth_cache_invalidation", invalidation)
+    return fake
 
 
 def _owned_key_row(hashed_token: str) -> LiteLLM_VerificationToken:
@@ -5910,26 +5844,17 @@ async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker(monkeyp
         cache.set_cache(
             key=AuthObject.virtual_key(hashed_token), value=UserAPIKeyAuth(token=hashed_token, user_id="user-123")
         )
-    coordination_redis: Final = _SharedCoordinationRedis()
-    peer_subscriber: Final = AuthCacheInvalidationSubscriber(
-        redis_cache=coordination_redis, user_api_key_cache=peer_worker_cache
-    )
-    peer_subscriber.start()
+    _ = _install_channel(monkeypatch, Worker(peer_worker_cache))
     prisma_client: Final = _prisma_with_key_row(_owned_key_row(hashed_token))
-    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
 
-    try:
-        await delete_verification_tokens(
-            tokens=[raw_key],
-            user_api_key_cache=deleting_worker_cache,
-            user_api_key_dict=UserAPIKeyAuth(
-                user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value
-            ),
-        )
-        await coordination_redis.until_every_subscriber_applied_its_messages()
-    finally:
-        await peer_subscriber.stop()
+    await delete_verification_tokens(
+        tokens=[raw_key],
+        user_api_key_cache=deleting_worker_cache,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value
+        ),
+    )
 
     assert deleting_worker_cache.get_cache(key=AuthObject.virtual_key(hashed_token)) is None
     with pytest.raises(ProxyException) as denied:
@@ -5962,21 +5887,12 @@ async def test_delete_verification_tokens_evicts_a_requested_key_whose_row_is_al
     for cache in (deleting_worker_cache, peer_worker_cache):
         for token in (live_token, gone_token):
             cache.set_cache(key=AuthObject.virtual_key(token), value=UserAPIKeyAuth(token=token, user_id="user-123"))
-    coordination_redis: Final = _SharedCoordinationRedis()
-    peer_subscriber: Final = AuthCacheInvalidationSubscriber(
-        redis_cache=coordination_redis, user_api_key_cache=peer_worker_cache
-    )
-    peer_subscriber.start()
-    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis)
+    _ = _install_channel(monkeypatch, Worker(peer_worker_cache))
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _prisma_with_key_row(_owned_key_row(live_token)))
 
-    try:
-        await delete_verification_tokens(
-            tokens=[live_key, gone_key], user_api_key_cache=deleting_worker_cache, user_api_key_dict=deleter
-        )
-        await coordination_redis.until_every_subscriber_applied_its_messages()
-    finally:
-        await peer_subscriber.stop()
+    await delete_verification_tokens(
+        tokens=[live_key, gone_key], user_api_key_cache=deleting_worker_cache, user_api_key_dict=deleter
+    )
 
     tokens: Final = (AuthObject.virtual_key(live_token), AuthObject.virtual_key(gone_token))
     assert [deleting_worker_cache.get_cache(key=token) for token in tokens] == [None, None]
@@ -5998,31 +5914,21 @@ async def test_delete_verification_tokens_leaves_unowned_cache_entries_alone_on_
     peer_worker_cache.set_cache(
         key=AuthObject.virtual_key(hashed_token), value=UserAPIKeyAuth(token=hashed_token, user_id="user-123")
     )
-    coordination_redis: Final = _SharedCoordinationRedis()
-    peer_subscriber: Final = AuthCacheInvalidationSubscriber(
-        redis_cache=coordination_redis,
-        user_api_key_cache=peer_worker_cache,
-        additional_in_memory_caches=(peer_spend_counters,),
-    )
-    peer_subscriber.start()
-    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis)
+    peer: Final = Worker(peer_worker_cache, PythonCaches(copies=(peer_spend_counters,)))
+    fake: Final = _install_channel(monkeypatch, peer)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _prisma_with_key_row(_owned_key_row(hashed_token)))
 
-    try:
-        await delete_verification_tokens(
-            tokens=[other_team_counter, raw_key],
-            user_api_key_cache=deleting_worker_cache,
-            user_api_key_dict=UserAPIKeyAuth(
-                user_id="user-123", api_key="sk-owner", user_role=LitellmUserRoles.INTERNAL_USER.value
-            ),
-        )
-        await coordination_redis.until_every_subscriber_applied_its_messages()
-    finally:
-        await peer_subscriber.stop()
+    await delete_verification_tokens(
+        tokens=[other_team_counter, raw_key],
+        user_api_key_cache=deleting_worker_cache,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="user-123", api_key="sk-owner", user_role=LitellmUserRoles.INTERNAL_USER.value
+        ),
+    )
 
     assert peer_worker_cache.get_cache(key=AuthObject.virtual_key(hashed_token)) is None
     assert peer_spend_counters.get_cache(other_team_counter) == 42.0
-    assert coordination_redis.published == (json.dumps({"cache_key": hashed_token}),)
+    assert fake.published == [(hashed_token, None, None)]
 
 
 @pytest.mark.asyncio

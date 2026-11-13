@@ -121,7 +121,6 @@ async def test_new_user_returns_conflict_when_id_is_taken_after_duplicate_check(
 
 
 if TYPE_CHECKING:
-    from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.utils import PrismaClient
 
 
@@ -2650,26 +2649,14 @@ async def test_user_update_reaches_cached_user_on_every_worker(
 ) -> None:
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.auth.auth_checks import get_user_object
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update, user_update
+    from litellm.proxy.proxy_server import proxy_config
+    from tests.unit.redis.stores.auth_cache_invalidation_double import Worker, channel
     from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
         BulkUpdateUserRequest,
         UpdateUserRequestNoUserIDorEmail,
     )
-
-    published: Final[list[tuple[str, str]]] = []  # mutable-ok: captures messages from the async Redis publisher
-
-    class _RecordingRedisClient:
-        async def publish(self, channel: str, message: str) -> int:
-            published.append((channel, message))
-            return 1
-
-    class _FakeRedisCache:
-        namespace: str | None = None
-
-        def init_pubsub_client(self) -> _RecordingRedisClient:
-            return _RecordingRedisClient()
 
     class _UserTableMocks:
         def __init__(
@@ -2752,10 +2739,8 @@ async def test_user_update_reaches_cached_user_on_every_worker(
     mocker.patch(  # test-quality-ok: exercise a real isolated cache for the endpoint's worker
         "litellm.proxy.proxy_server.user_api_key_cache", handling_worker_cache
     )
-    mocker.patch(  # test-quality-ok: inject an in-memory pub/sub client without live Redis
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(),
-    )
+    invalidation, _ = channel(Worker(other_worker_cache))
+    mocker.patch.object(proxy_config, "auth_cache_invalidation", invalidation)
 
     handling_user_before: Final = await get_user_object(
         user_id=saved_user.user_id,
@@ -2792,15 +2777,6 @@ async def test_user_update_reaches_cached_user_on_every_worker(
         )
         assert prisma_client.update_data_payload is not None
         assert prisma_client.update_data_payload[field] == new_value
-
-    remote_subscriber: Final = AuthCacheInvalidationSubscriber(
-        redis_cache=cast("RedisCache", _FakeRedisCache()),
-        user_api_key_cache=other_worker_cache,
-    )
-    for _, message in published:
-        remote_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
-            {"type": "message", "data": message}
-        )
 
     handling_user_after: Final = await get_user_object(
         user_id=saved_user.user_id,

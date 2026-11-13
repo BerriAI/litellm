@@ -47,7 +47,7 @@ fn numbers(values: Option<Vec<Option<Number>>>) -> Option<Vec<Option<PyNumber>>>
 
 /// The proxy's spend counters, Redis first with this worker's memory copy behind it.
 #[pyclass(frozen, name = "NativeSpendCounters")]
-pub(crate) struct NativeSpendCounters(Arc<SpendCounters>);
+pub(crate) struct NativeSpendCounters(pub(super) Arc<SpendCounters>);
 
 #[pymethods]
 impl NativeSpendCounters {

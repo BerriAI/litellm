@@ -527,10 +527,7 @@ from litellm.proxy.common_utils.anthropic_error_payload import (
     anthropic_internal_server_error_response,
     uses_anthropic_error_envelope,
 )
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
-    AuthCacheInvalidationSubscriber,
-    publish_auth_cache_invalidation,
-)
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.codex_catalog_source import codex_catalog_source
 from litellm.proxy.common_utils.codex_model_catalog import CodexCatalogRow, codex_catalog_rows, codex_model_list_body
@@ -899,6 +896,7 @@ from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
 from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
 from litellm.redis.stores.auth_cache import AuthObject
+from litellm.redis.stores.auth_cache_invalidation import AuthCacheInvalidation, PythonCaches, connect_invalidation
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
@@ -2060,7 +2058,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
 
             await proxy_config.stop_config_sync_subscriber()
 
-            await proxy_config.stop_auth_cache_invalidation_subscriber()
+            proxy_config.stop_auth_cache_invalidation()
 
             await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
 
@@ -6049,7 +6047,7 @@ class ProxyConfig:
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
-        self.auth_cache_invalidation_subscriber: AuthCacheInvalidationSubscriber | None = None
+        self.auth_cache_invalidation: AuthCacheInvalidation | None = None
         from litellm.litellm_core_utils.get_model_cost_map import (
             get_model_cost_map_loaded_at,
         )
@@ -9064,38 +9062,40 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.error("Error stopping config sync subscriber: %s", e)
 
-    def start_auth_cache_invalidation_subscriber(
+    def start_auth_cache_invalidation(
         self,
         redis_cache: RedisCache | None,
         user_api_key_cache: UserApiKeyCache,
     ) -> None:
-        if redis_cache is None or self.auth_cache_invalidation_subscriber is not None:
+        if redis_cache is None or self.auth_cache_invalidation is not None:
             return
-        subscriber: Final = AuthCacheInvalidationSubscriber(
-            redis_cache=redis_cache,
-            user_api_key_cache=user_api_key_cache,
-            additional_in_memory_caches=(spend_counter_cache.in_memory_cache, byok_credential_cache),
-            evicted_caches=(
-                budget_windows_absent_cache.in_memory_cache,
-                hook_cache.in_memory_cache,
-                mcp_state_cache.in_memory_cache,
-                jwks_cache.in_memory_cache,
-                ui_settings_cache.in_memory_cache,
+        channel: Final = connect_invalidation(
+            connect(redis_cache),
+            redis_cache.namespace,
+            user_api_key_cache.store,
+            spend_counter_store,
+            PythonCaches(
+                copies=(spend_counter_cache.in_memory_cache, byok_credential_cache),
+                evicted=(
+                    budget_windows_absent_cache.in_memory_cache,
+                    hook_cache.in_memory_cache,
+                    mcp_state_cache.in_memory_cache,
+                    jwks_cache.in_memory_cache,
+                    ui_settings_cache.in_memory_cache,
+                ),
             ),
-            spend_counters=spend_counter_store,
         )
-        self.auth_cache_invalidation_subscriber = subscriber
-        subscriber.start()
-
-    async def stop_auth_cache_invalidation_subscriber(self) -> None:
-        subscriber: Final = self.auth_cache_invalidation_subscriber
-        if subscriber is None:
+        if channel is None:
             return
-        self.auth_cache_invalidation_subscriber = None
-        try:
-            await subscriber.stop()
-        except Exception as e:  # noqa: BLE001  # best-effort: a failing stop must not break proxy shutdown
-            verbose_proxy_logger.error("Error stopping auth cache invalidation subscriber: %s", e)
+        self.auth_cache_invalidation = channel
+        channel.start()
+
+    def stop_auth_cache_invalidation(self) -> None:
+        channel: Final = self.auth_cache_invalidation
+        if channel is None:
+            return
+        self.auth_cache_invalidation = None
+        channel.stop()
 
     async def _init_non_llm_objects_in_db(
         self, prisma_client: PrismaClient, *, refresh_pass_through_endpoints: bool = True
@@ -11853,7 +11853,7 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
-        proxy_config.start_auth_cache_invalidation_subscriber(
+        proxy_config.start_auth_cache_invalidation(
             redis_cache=redis_usage_cache,
             user_api_key_cache=user_api_key_cache,
         )

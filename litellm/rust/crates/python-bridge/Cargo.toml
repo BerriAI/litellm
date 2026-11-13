@@ -64,6 +64,7 @@ litellm-model-catalog-refresh.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
 indexmap = "2.14.0"
 pyo3 = { workspace = true, features = ["indexmap"] }
+parking_lot.workspace = true
 prost.workspace = true
 pyo3-async-runtimes.workspace = true
 reqwest.workspace = true
