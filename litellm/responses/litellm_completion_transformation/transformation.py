@@ -3817,7 +3817,7 @@ class LiteLLMCompletionResponsesConfig:
                                 if text
                             ],
                             encrypted_content=encrypted_content,
-                        )
+                        ).model_copy(update={"summary": []})
                     ]
         return []
 
