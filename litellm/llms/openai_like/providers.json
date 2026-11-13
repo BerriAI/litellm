@@ -314,5 +314,20 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "nousresearch": {
+    "base_url": "https://inference-api.nousresearch.com/v1",
+    "api_key_env": "NOUSRESEARCH_API_KEY",
+    "api_base_env": "NOUSRESEARCH_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/completions",
+      "/v1/embeddings",
+      "/v1/responses",
+      "/v1/messages"
+    ]
   }
 }

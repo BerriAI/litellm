@@ -1048,6 +1048,13 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             bedrock_mantle_models.add(key)
 
 
+def _nousresearch_models() -> frozenset[str]:
+    from pydantic import TypeAdapter
+
+    rows: Final = TypeAdapter(Mapping[str, Mapping[str, object]]).validate_python(model_cost)
+    return frozenset(name for name, entry in rows.items() if entry.get("litellm_provider") == "nousresearch")
+
+
 def add_known_models(model_cost_map: Optional[Dict] = None):
     """Fold `model_cost_map` (defaults to `litellm.model_cost`) into the per-provider model sets,
     then refresh `models_by_provider` from those sets so the additions reach wildcard expansion.
@@ -1163,6 +1170,7 @@ model_list = list(
     | kyma_models
     | streamlake_models
     | wally_models
+    | _nousresearch_models()
     | zerogpu_models
     | v0_models
     | morph_models
@@ -1295,6 +1303,7 @@ def _build_models_by_provider() -> dict:
         "kyma": kyma_models,
         "streamlake": streamlake_models,
         "wally": wally_models,
+        "nousresearch": _nousresearch_models(),
         "zerogpu": zerogpu_models,
         "v0": v0_models,
         "morph": morph_models,
