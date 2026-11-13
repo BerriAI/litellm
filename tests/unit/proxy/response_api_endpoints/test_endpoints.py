@@ -10,6 +10,7 @@ import json
 import re
 import unittest
 from collections.abc import AsyncIterator, Callable, Mapping
+from types import MappingProxyType
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1678,6 +1679,88 @@ async def test_a_plain_read_through_the_proxy_still_answers_json(monkeypatch: py
     assert result.status_code == 200, result.text
     assert result.json()["id"] == _proxy_issued_id("resp_read")
     assert [dict(request.url.params) for request in upstream_requests] == [{}]
+
+
+_PUBLIC_UPSTREAM: Final = "https://public.example/v1"
+_PRIVATE_UPSTREAM: Final = "https://private.example/v1"
+
+
+def _auth_allowing(models: tuple[str, ...]) -> Callable[[], UserAPIKeyAuth]:
+    def auth() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key="sk-access-group", models=list(models))
+
+    return auth
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("models", "model_id", "status_code", "served_upstream"),
+    [
+        pytest.param(("public",), "shared-public", 200, _PUBLIC_UPSTREAM, id="pinned-to-the-keys-access-group"),
+        pytest.param(("public",), "shared-private", 400, None, id="pinned-outside-the-keys-access-group"),
+        pytest.param(
+            ("shared-responses*", "public"),
+            "shared-private",
+            200,
+            _PRIVATE_UPSTREAM,
+            id="a-wildcard-for-the-group-keeps-every-pin",
+        ),
+        pytest.param(
+            ("shared-other*", "public"), "shared-private", 400, None, id="an-unrelated-wildcard-grants-no-pin"
+        ),
+    ],
+)
+async def test_a_response_read_reaches_only_a_deployment_in_the_keys_access_group(
+    monkeypatch: pytest.MonkeyPatch,
+    models: tuple[str, ...],
+    model_id: str,
+    status_code: int,
+    served_upstream: str | None,
+) -> None:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "shared-responses",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": upstream, "api_key": "fixture-key"},
+                "model_info": {"id": deployment_id, "access_groups": [access_group]},
+            }
+            for deployment_id, upstream, access_group in (
+                ("shared-public", _PUBLIC_UPSTREAM, "public"),
+                ("shared-private", _PRIVATE_UPSTREAM, "private"),
+            )
+        ],
+        num_retries=0,
+    )
+    try:
+        monkeypatch.setattr(ps, "llm_router", router)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_allowing(models))
+        response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id=model_id, response_id="resp_pinned"
+        )
+        stored: Final = _background_response("resp_pinned", "in_progress", 100).model_dump(mode="json")
+        with respx.mock(assert_all_called=False) as transport:
+            reads: Final = MappingProxyType(
+                {
+                    upstream: transport.get(f"{upstream}/responses/resp_pinned").mock(
+                        return_value=httpx.Response(200, json=stored)
+                    )
+                    for upstream in (_PUBLIC_UPSTREAM, _PRIVATE_UPSTREAM)
+                }
+            )
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+                result: Final = await client.get(f"/v1/responses/{response_id}")
+
+        assert result.status_code == status_code, result.text
+        assert {upstream: route.call_count for upstream, route in reads.items()} == {
+            upstream: 1 if upstream == served_upstream else 0 for upstream in reads
+        }
+    finally:
+        router.retire()
 
 
 @pytest.mark.asyncio
