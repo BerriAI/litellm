@@ -47,6 +47,7 @@ const RESET_OPTIONS: readonly { value: string; labelKey: ParseKeys }[] = [
   { value: "24h", labelKey: "budgets.form.resetOptions.perDay" },
   { value: "7d", labelKey: "budgets.form.resetOptions.perWeek" },
   { value: "30d", labelKey: "budgets.form.resetOptions.perMonth" },
+  { value: "12mo", labelKey: "budgets.form.resetOptions.perYear" },
 ];
 
 const numberProps = <T extends { value?: number | null; onChange: (value: number | null) => void }>({
