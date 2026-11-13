@@ -222,6 +222,14 @@ def test_included_metadata_fields_are_the_only_ones_stored_besides_always_kept(
     assert set(object_value(row["metadata"])) == {"status", "cold_storage_object_key", "user_api_key_alias"}
 
 
+def test_excluded_nested_metadata_key_is_not_stored_while_its_parent_is(gateway: Gateway, tmp_path: Path) -> None:
+    row, _ = _stored_row_after_one_chat(gateway, tmp_path, {"exclude": ["usage_object.prompt_tokens_details"]})
+
+    usage: Final = object_value(object_value(row["metadata"])["usage_object"])
+    assert "prompt_tokens_details" not in usage, usage
+    assert (usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]) == (10, 2, 12), usage
+
+
 def test_guardrail_usage_is_tracked_when_guardrail_information_is_not_stored(gateway: Gateway, tmp_path: Path) -> None:
     guardrail_name: Final = f"metadata-fields-guardrail-{uuid4()}"
     with (

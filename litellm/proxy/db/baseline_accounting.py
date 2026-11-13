@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 from typing_extensions import Self
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import SPEND_LOGS_METADATA_REWRITTEN_FIELDS
 from litellm.proxy.db.autorouter_session_rollup import (
     AutoRouterTurnTransaction,
     write_autorouter_turn,
@@ -243,7 +244,6 @@ WHERE scope = $1 AND revision > $2::bigint
   AND ($5::float8 IS NULL OR publication::jsonb->>'status' = 'estimated')
 ORDER BY started_at, request_id
 """
-_PUBLISHED_LOG_FIELDS: Final = ("autorouter_savings_estimate", "autorouter_savings")
 _UPDATE_LOGS: Final = """
 WITH changes AS (
     SELECT request_id, publication::jsonb AS publication
@@ -401,7 +401,9 @@ async def _publish(db: SupportsRawQueries, changes: Sequence[_Change]) -> None:
     from litellm.proxy.spend_tracking.spend_tracking_utils import configured_spend_logs_metadata_fields
 
     fields: Final = configured_spend_logs_metadata_fields()
-    unstored: Final = tuple(name for name in _PUBLISHED_LOG_FIELDS if fields is not None and not fields.keeps(name))
+    unstored: Final = tuple(
+        name for name in sorted(SPEND_LOGS_METADATA_REWRITTEN_FIELDS) if fields is not None and not fields.keeps(name)
+    )
     await db.execute_raw(_UPDATE_LOGS, serialized, json.dumps(unstored))
     await db.execute_raw(_UPDATE_SESSIONS, serialized)
     if any(change.user_id for change in changes):

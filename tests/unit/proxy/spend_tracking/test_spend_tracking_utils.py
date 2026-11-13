@@ -7227,6 +7227,36 @@ def test_spend_log_row_include_keeps_listed_and_always_kept_fields() -> None:
     }
 
 
+def test_spend_log_row_drops_only_the_excluded_nested_metadata_key() -> None:
+    stored: Final = spend_log_row_with_retained_metadata(
+        _spend_log_row(
+            {**_STORED_METADATA, "usage_object": {"prompt_tokens": 3, "attribution": {"tool": {"calls": 2}, "web": 1}}}
+        ),
+        SpendLogsMetadataFields(exclude=("usage_object.attribution.tool", "model_map_information")),
+    )
+
+    assert json.loads(cast(str, stored["metadata"])) == {
+        "status": "success",
+        "cold_storage_object_key": "logs/req-1.json",
+        "usage_object": {"prompt_tokens": 3, "attribution": {"web": 1}},
+        "user_api_key_alias": "alias",
+    }
+
+
+def test_spend_log_row_keeps_metadata_when_excluded_nested_paths_do_not_resolve() -> None:
+    stored: Final = spend_log_row_with_retained_metadata(
+        _spend_log_row({**_STORED_METADATA, "guardrail_information": [{"guardrail_mode": "pre_call"}]}),
+        SpendLogsMetadataFields(
+            exclude=("usage_object.attribution.tool", "user_api_key_alias.alias", "guardrail_information.guardrail_mode")
+        ),
+    )
+
+    assert json.loads(cast(str, stored["metadata"])) == {
+        **_STORED_METADATA,
+        "guardrail_information": [{"guardrail_mode": "pre_call"}],
+    }
+
+
 @pytest.mark.parametrize(
     "configured",
     [
@@ -7237,6 +7267,13 @@ def test_spend_log_row_include_keeps_listed_and_always_kept_fields() -> None:
         {"exclude": ["status"]},
         {"exclude": ["cold_storage_object_key"]},
         {"exclude": ["model_map_information"], "drop": ["usage_object"]},
+        {"exclude": ["usage_objekt.attribution"]},
+        {"exclude": ["usage_object."]},
+        {"exclude": ["usage_object..attribution"]},
+        {"exclude": ["status.code"]},
+        {"include": ["usage_object.attribution"]},
+        {"exclude": ["autorouter_savings_estimate.baseline_spend"]},
+        {"exclude": ["autorouter_savings.saved_spend"]},
     ],
 )
 def test_spend_logs_metadata_fields_rejects_ambiguous_or_lossy_config(configured: dict[str, list[str]]) -> None:
@@ -7246,6 +7283,18 @@ def test_spend_logs_metadata_fields_rejects_ambiguous_or_lossy_config(configured
 
     with pytest.raises(ValidationError):
         ConfigGeneralSettings.model_validate({"spend_logs_metadata_fields": configured})
+
+
+def test_spend_logs_metadata_fields_accepts_whole_rewritten_keys() -> None:
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    settings: Final = ConfigGeneralSettings.model_validate(
+        {"spend_logs_metadata_fields": {"exclude": ["autorouter_savings_estimate", "autorouter_savings"]}}
+    )
+
+    assert settings.spend_logs_metadata_fields == SpendLogsMetadataFields(
+        exclude=("autorouter_savings_estimate", "autorouter_savings")
+    )
 
 
 def test_configured_spend_logs_metadata_fields_ignores_invalid_runtime_value() -> None:

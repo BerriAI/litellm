@@ -3,6 +3,7 @@ import json
 import os
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from functools import reduce
 from types import MappingProxyType as MappingProxyType  # noqa: PLC0414  # public re-export
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, TypeAlias
 
@@ -2530,6 +2531,7 @@ class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
 
 
 SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS: Final = frozenset({"status", "cold_storage_object_key"})
+SPEND_LOGS_METADATA_REWRITTEN_FIELDS: Final = frozenset({"autorouter_savings_estimate", "autorouter_savings"})
 
 
 def _known_spend_logs_metadata_field(name: str) -> str:
@@ -2538,20 +2540,42 @@ def _known_spend_logs_metadata_field(name: str) -> str:
     return name
 
 
+def _known_spend_logs_metadata_path(path: str) -> str:
+    segments: Final = path.split(".")
+    if not all(segments):
+        raise ValueError(f"{path!r} has an empty segment")
+    _ = _known_spend_logs_metadata_field(segments[0])
+    if len(segments) > 1 and segments[0] in SPEND_LOGS_METADATA_REWRITTEN_FIELDS:
+        raise ValueError(f"{path!r} cannot be excluded in part because {segments[0]!r} is rewritten after insert")
+    return path
+
+
 SpendLogsMetadataFieldName: TypeAlias = Annotated[str, AfterValidator(_known_spend_logs_metadata_field)]
+SpendLogsMetadataFieldPath: TypeAlias = Annotated[str, AfterValidator(_known_spend_logs_metadata_path)]
+
+
+def _without_path(value: JsonValue, path: tuple[str, ...]) -> JsonValue:
+    head: Final = path[0]
+    if not isinstance(value, dict) or head not in value:
+        return value
+    if len(path) == 1:
+        return {key: child for key, child in value.items() if key != head}
+    return {**value, head: _without_path(value[head], path[1:])}
 
 
 class SpendLogsMetadataFields(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     include: tuple[SpendLogsMetadataFieldName, ...] | None = None
-    exclude: tuple[SpendLogsMetadataFieldName, ...] | None = None
+    exclude: tuple[SpendLogsMetadataFieldPath, ...] | None = None
 
     @model_validator(mode="after")
     def _exactly_one_list(self) -> "SpendLogsMetadataFields":
         if (self.include is None) == (self.exclude is None):
             raise ValueError("set exactly one of 'include' or 'exclude'")
-        always_kept_excluded: Final = sorted(SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS.intersection(self.exclude or ()))
+        always_kept_excluded: Final = sorted(
+            path for path in self.exclude or () if path.split(".")[0] in SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS
+        )
         if always_kept_excluded:
             raise ValueError(f"{always_kept_excluded} are always kept and cannot be excluded")
         return self
@@ -2562,6 +2586,11 @@ class SpendLogsMetadataFields(BaseModel):
         if self.include is not None:
             return name in self.include
         return name not in (self.exclude or ())
+
+    def retained(self, metadata: Mapping[str, JsonValue]) -> JsonValue:
+        kept: Final = {name: value for name, value in metadata.items() if self.keeps(name)}
+        nested: Final = tuple(tuple(path.split(".")) for path in self.exclude or () if "." in path)
+        return reduce(_without_path, nested, kept)
 
 
 DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS: Final[float] = 3600.0
@@ -2979,7 +3008,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     spend_logs_metadata_fields: SpendLogsMetadataFields | None = Field(
         None,
-        description="Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key",
+        description="Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). An 'exclude' entry may be a dotted path such as 'usage_object.attribution', which drops that nested key and keeps the rest of its parent. 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key",
     )
     disable_auto_add_proxy_admin_to_teams: bool | None = Field(
         None,
