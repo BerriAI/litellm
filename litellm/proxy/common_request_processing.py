@@ -809,7 +809,7 @@ _UNSEEN_DEPLOYMENT: Final = DropPolicy(drop_params=True, additional_drop_params=
 
 class _DashboardBillingRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
-    data: Mapping[str, object]
+    dashboard_fallback_model: str | None = None
 
 
 async def _check_dashboard_request_billing(processing: object, auth: object, llm_router: Router | None) -> None:
@@ -819,8 +819,7 @@ async def _check_dashboard_request_billing(processing: object, auth: object, llm
         return
     from litellm.proxy.auth.fallback_model_access import dashboard_fallback_billing_allowed
 
-    data: Final = _DashboardBillingRequest.model_validate(processing, from_attributes=True).data
-    model: Final = data.get("model")
+    model: Final = _DashboardBillingRequest.model_validate(processing, from_attributes=True).dashboard_fallback_model
     if isinstance(model, str) and not await dashboard_fallback_billing_allowed(model, auth, RoutingContext(llm_router)):
         raise HTTPException(403, "Dashboard fallbacks cannot change the billing team")
 
@@ -2683,6 +2682,7 @@ class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict, served_model: str | None = None):
         self.data = data
         self.served_model = served_model
+        self.dashboard_fallback_model: str | None = None
         self._tags_before_guardrails: frozenset[str] | None = None
         self.route_type: str | None = None
 
@@ -3342,6 +3342,7 @@ class ProxyBaseLLMRequestProcessing:
                         continue
                     self.data = independent_snapshot(pristine)
                     self.data["model"] = fallback_model
+                    self.dashboard_fallback_model = fallback_model
                     try:
                         if endpoint_unsupported_by_model(
                             route_type,

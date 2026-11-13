@@ -1,5 +1,6 @@
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,7 +23,12 @@ from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, common_c
 from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
 from litellm.proxy.auth.fallback_model_access import RouterFallbackAccessCheck
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, move_guardrails_to_metadata
-from litellm.proxy.common_request_processing import _fallback_grant
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    _check_dashboard_request_billing,
+    _fallback_grant,
+    global_then_key_alias_target,
+)
 from litellm.proxy.policy_engine import policy_registry
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.spend_tracking.budget_reservation import get_reserved_counter_keys, release_budget_reservation
@@ -616,6 +622,77 @@ def _billing_database(monkeypatch: pytest.MonkeyPatch, owner: LiteLLM_UserTable)
     monkeypatch.setattr(proxy_server, "spend_counter_store", SpendCounterStore(connect(None).spend_counters()))
     monkeypatch.setattr(proxy_server, "master_key", "test-master")
     monkeypatch.setattr(proxy_server, "user_custom_auth", None)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_admitted_team_reservation_does_not_deny_same_team_fallback(
+    monkeypatch: pytest.MonkeyPatch, teams: None
+) -> None:
+    window_limit: Final = 0.000001
+    limited: Final = _TEAMS["team-billing-a"].model_copy(
+        update={"budget_limits": [{"budget_duration": "30d", "max_budget": window_limit}]}
+    )
+    monkeypatch.setitem(_TEAMS, limited.team_id, limited)
+    owner: Final = LiteLLM_UserTable(user_id="u1", models=["no-default-models"], teams=[limited.team_id])
+    _billing_database(monkeypatch, owner)
+    counter: Final = auth_checks.team_window_counter(limited.team_id, "30d")
+    proxy_server.prisma_client.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
+    proxy_server.prisma_client.db.litellm_spendlogs.group_by = AsyncMock(return_value=[])
+    proxy_server.spend_counter_store.set_local(counter, 0.0)
+    token: Final = UserAPIKeyAuth(
+        api_key="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, models=[],
+        user_role=LitellmUserRoles.INTERNAL_USER, max_budget=20, spend=0,
+    )
+    request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    billed: Final = await _authorize_authenticated_request(
+        token, request, {"model": "shared"}, "/chat/completions", "dashboard-key", force_virtual_key_checks=True
+    )
+    assert billed is not None and billed.budget_reservation is not None
+    reservation: Final = billed.budget_reservation
+    assert reservation["reserved_cost"] == pytest.approx(window_limit)
+    assert proxy_server.spend_counter_store.get_local(counter) == pytest.approx(window_limit)
+    try:
+        assert await RouterFallbackAccessCheck(is_enforced=lambda: True)(
+            model="gpt-b", request_kwargs={"metadata": {"user_api_key_auth": billed}}, ctx=RoutingContext(_ROUTER)
+        ) is True
+        await _check_dashboard_request_billing(
+            SimpleNamespace(data={"model": "gpt-b"}, dashboard_fallback_model="gpt-b"), billed, _ROUTER
+        )
+        assert billed.team_id == limited.team_id
+        assert billed.budget_reservation is reservation
+    finally:
+        await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner_unavailable", [False, True])
+async def test_dashboard_own_primary_alias_keeps_its_admitted_billing_identity(
+    monkeypatch: pytest.MonkeyPatch, teams: None, owner_unavailable: bool
+) -> None:
+    monkeypatch.setattr(litellm, "model_alias_map", {"caller-alias": "shared"})
+    owner: Final = LiteLLM_UserTable(user_id="u1", models=["caller-alias"], teams=["team-billing-a"])
+    _billing_database(monkeypatch, owner)
+    token: Final = UserAPIKeyAuth(
+        api_key="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, models=[],
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    billed: Final = await _authorize_authenticated_request(
+        token, request, {"model": "caller-alias"}, "/chat/completions", "dashboard-key", force_virtual_key_checks=True
+    )
+    assert billed is not None
+    if owner_unavailable:
+        proxy_server.user_api_key_cache.delete_cache(owner.user_id)
+        proxy_server.prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=RuntimeError("offline"))
+    prepared: Final = ProxyBaseLLMRequestProcessing(
+        data={"model": global_then_key_alias_target("caller-alias", billed)}
+    )
+    await _check_dashboard_request_billing(prepared, billed, _ROUTER)
+    assert billed.team_id == UI_TEAM_ID
+    proxy_server.user_api_key_cache.set_cache(owner.user_id, owner, model_type=LiteLLM_UserTable)
+    assert await RouterFallbackAccessCheck(is_enforced=lambda: True)(
+        model="shared", request_kwargs={"metadata": {"user_api_key_auth": billed}}, ctx=RoutingContext(_ROUTER)
+    ) is True
 
 
 @pytest.mark.asyncio

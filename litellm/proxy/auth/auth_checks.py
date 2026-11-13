@@ -6314,6 +6314,11 @@ async def _personal_key_team_within_budget(
     *,
     check_db_only: bool = False,
 ) -> bool:
+    if (
+        valid_token.dashboard_session_origin is not None
+        and valid_token.dashboard_session_billing_team_id == team.team_id
+    ):
+        return True
     source: Final = valid_token.model_copy(
         update={"team_id": team.team_id, "org_id": valid_token.org_id or team.organization_id}
     )
@@ -6489,11 +6494,11 @@ async def dashboard_model_billing_auth(
     )
     original_billing: Final = TypeAdapter(Mapping[str, object]).validate_python(origin.model_dump(include=set(fields)))
     base: Final = auth.model_copy(update=original_billing)
-    if auth.dashboard_session_origin is None:
-        base.bind_dashboard_session(origin)
     if _dashboard_user_grants_model(model, origin, owner, llm_router):
+        if auth.dashboard_session_origin is None:
+            base.bind_dashboard_session(origin, model=model)
         return base
-    team: Final = await _dashboard_model_billing_team(origin, model, llm_router)
+    team: Final = await _dashboard_model_billing_team(base, model, llm_router)
     membership: Final = (
         await get_team_membership(
             user_id=origin.user_id,
@@ -6506,7 +6511,10 @@ async def dashboard_model_billing_auth(
         else None
     )
     update: Final = await team_grant_billing_auth_update(base, team, membership)
-    return base.model_copy(update=update)
+    billed: Final = base.model_copy(update=update)
+    if auth.dashboard_session_origin is None:
+        billed.bind_dashboard_session(origin, model=model)
+    return billed
 
 
 async def _dashboard_model_billing_team(

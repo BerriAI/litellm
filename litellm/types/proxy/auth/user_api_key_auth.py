@@ -142,13 +142,25 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     api_key: str | None = None
     _access_group_rule_grants: frozenset[str] = PrivateAttr(default=frozenset())
     _dashboard_session_origin: "UserAPIKeyAuth | None" = PrivateAttr(default=None)
+    _dashboard_session_billing_team_id: str | None = PrivateAttr(default=None)
+    _dashboard_session_model: str | None = PrivateAttr(default=None)
 
     @property
     def dashboard_session_origin(self) -> "UserAPIKeyAuth | None":
         return self._dashboard_session_origin
 
-    def bind_dashboard_session(self, origin: "UserAPIKeyAuth") -> None:
+    @property
+    def dashboard_session_billing_team_id(self) -> str | None:
+        return self._dashboard_session_billing_team_id
+
+    @property
+    def dashboard_session_model(self) -> str | None:
+        return self._dashboard_session_model
+
+    def bind_dashboard_session(self, origin: "UserAPIKeyAuth", *, model: str | None = None) -> None:
         self._dashboard_session_origin = origin
+        self._dashboard_session_billing_team_id = self.team_id
+        self._dashboard_session_model = model
 
     def dashboard_model_access_auth(self) -> "UserAPIKeyAuth":
         if self._dashboard_session_origin is None:
