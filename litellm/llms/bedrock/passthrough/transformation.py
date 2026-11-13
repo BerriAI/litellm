@@ -415,7 +415,9 @@ def _invoke_embedding_response(model: str, httpx_response: Response, has_input_i
             prompt_tokens=parsed.input_text_token_count,
             completion_tokens=0,
             total_tokens=parsed.input_text_token_count,
-            prompt_tokens_details=PromptTokensDetailsWrapper(image_count=1) if has_input_image else None,
+            prompt_tokens_details=PromptTokensDetailsWrapper(image_count=1, text_tokens=parsed.input_text_token_count)
+            if has_input_image
+            else None,
         ),
         data=[Embedding(embedding=list(parsed.vector), index=0, object="embedding")],
     )

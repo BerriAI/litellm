@@ -1880,10 +1880,10 @@ def test_invoke_titan_image_embedding_reply_bills_the_input_image(text_tokens: i
     assert logged.usage.prompt_tokens == text_tokens
     assert logged.usage.prompt_tokens_details is not None
     assert logged.usage.prompt_tokens_details.image_count == 1
-    assert (
-        litellm.completion_cost(model=f"bedrock/{model}", completion_response=logged, call_type="aembedding")
-        >= litellm.model_cost[model]["input_cost_per_image"]
-    )
+    prices: Final = litellm.model_cost[model]
+    assert litellm.completion_cost(
+        model=f"bedrock/{model}", completion_response=logged, call_type="aembedding"
+    ) == pytest.approx(text_tokens * prices["input_cost_per_token"] + prices["input_cost_per_image"])
 
 
 def test_invoke_titan_text_reply_is_still_logged_as_a_chat_completion() -> None:
