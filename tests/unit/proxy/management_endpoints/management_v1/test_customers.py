@@ -793,6 +793,7 @@ def test_customer_member_upsert_rejects_cross_customer_org_identity(mismatch: st
     "resource,payload,status",
     (
         ("customer_organizations", {}, 422),
+        ("customer_organizations", {"customer_org_id": "", "alias": "new"}, 422),
         ("customer_members", {"customer_member_id": "m"}, 422),
         ("customer_members", {"customer_org_id": "org"}, 422),
         ("customer_members", {"customer_member_id": "m", "customer_org_id": "missing"}, 404),

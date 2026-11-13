@@ -55,6 +55,8 @@ class OrganizationCreate(OrganizationPatch):
 
 
 class OrganizationUpsert(OrganizationCreate):
+    customer_org_id: str | None = Field(default=None, min_length=1)
+
     @model_validator(mode="after")
     def require_identity(self) -> "OrganizationUpsert":
         if not self.customer_org_id and not self.alias:
