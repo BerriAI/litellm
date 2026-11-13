@@ -7154,27 +7154,21 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def append_system_prompt_messages(kwargs: dict | None = None, messages: Any | None = None):
         """
-        Append system prompt messages to the messages
+        Prepend the request's top-level `system` prompt, text or content blocks, to the logged messages
         """
-        if kwargs is not None:
-            if kwargs.get("system") is not None and isinstance(kwargs.get("system"), str):
-                if messages is None:
-                    return [{"role": "system", "content": kwargs.get("system")}]
-                elif isinstance(messages, list):
-                    if len(messages) == 0:
-                        return [{"role": "system", "content": kwargs.get("system")}]
-                    # check for duplicates
-                    if messages[0].get("role") == "system" and messages[0].get("content") == kwargs.get("system"):
-                        return messages
-                    messages = [{"role": "system", "content": kwargs.get("system")}] + messages
-                elif isinstance(messages, str):
-                    messages = [
-                        {"role": "system", "content": kwargs.get("system")},
-                        {"role": "user", "content": messages},
-                    ]
-                return messages
-
-        return messages
+        system: Final = kwargs.get("system") if kwargs is not None else None
+        if not isinstance(system, str) and not (isinstance(system, list) and system):
+            return messages
+        system_message: Final = {"role": "system", "content": system}
+        if messages is None:
+            return [system_message]
+        if isinstance(messages, str):
+            return [system_message, {"role": "user", "content": messages}]
+        if not isinstance(messages, list):
+            return messages
+        if messages and messages[0].get("role") == "system" and messages[0].get("content") == system:
+            return messages
+        return [system_message, *messages]
 
     @staticmethod
     def merge_litellm_metadata(litellm_params: Mapping[str, object]) -> dict[str, object]:
