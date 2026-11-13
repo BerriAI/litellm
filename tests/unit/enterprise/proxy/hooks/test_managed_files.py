@@ -51,8 +51,7 @@ class _InMemoryManagedFileTable:
         or_filters: Final = where.get("OR")
         if isinstance(or_filters, list):
             for clause in or_filters:
-                matched: Final = await self.find_first(clause)
-                if matched is not None:
+                if (matched := await self.find_first(clause)) is not None:
                     return matched
             return None
         unified_file_id: Final = where.get("unified_file_id")
@@ -6156,6 +6155,8 @@ _GEMINI_OUTPUT_SPELLINGS: Final = (
     "files%2Fbatch-out1",
     "batch-out1/",
     "https://generativelanguage.googleapis.com/v1beta/files/batch-out1",
+    "HTTPS://generativelanguage.googleapis.com/v1beta/files/batch-out1",
+    "x://h/files/batch-out1",
 )
 
 

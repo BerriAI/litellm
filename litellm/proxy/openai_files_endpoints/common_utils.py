@@ -2,7 +2,7 @@ import base64
 import logging
 import mimetypes
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import (
@@ -361,11 +361,27 @@ def canonical_provider_file_id(file_id: str) -> str:
 _GEMINI_FILES_URL: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
 
 
+def _gemini_files_tail(file_id: str) -> str:
+    """The id Gemini resolves ``file_id`` to, whatever scheme or case wraps it: the text after its ``files/``."""
+    files_index: Final = file_id.find("files/")
+    return file_id[files_index:].strip("/").removeprefix("files/").strip("/") if files_index != -1 else ""
+
+
+def _iter_stored_forms(bare_ids: Sequence[str]) -> Iterator[str]:
+    for bare_id in bare_ids:
+        yield bare_id
+        yield f"files/{bare_id}"
+        yield f"{_GEMINI_FILES_URL}{bare_id}"
+
+
 def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:
     """Every spelling an ownership row may hold for ``file_id``: as sent, unwrapped from a model-encoded id and
-    canonicalized, plus the ``files/`` and Gemini URL forms that upload rows stored before ids were canonicalized."""
-    canonical: Final = canonical_provider_file_id(get_original_file_id(file_id))
-    return tuple(dict.fromkeys((file_id, canonical, f"files/{canonical}", f"{_GEMINI_FILES_URL}{canonical}")))
+    canonicalized, reduced the way Gemini reduces it, plus the ``files/`` and Gemini URL forms that upload rows
+    stored before ids were canonicalized."""
+    original: Final = get_original_file_id(file_id)
+    reductions: Final = (canonical_provider_file_id(original), _gemini_files_tail(unquote(original)))
+    bare_ids: Final = tuple(dict.fromkeys(bare for bare in reductions if bare))
+    return tuple(dict.fromkeys((file_id, *_iter_stored_forms(bare_ids))))
 
 
 def is_model_embedded_id(file_id: str) -> bool:
