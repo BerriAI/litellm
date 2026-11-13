@@ -1,8 +1,8 @@
 use std::{future::Future, pin::Pin, sync::Arc, time::SystemTime};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use litellm_gateway_auth::keys::{KeyHash, KeyStatus};
-use litellm_secret_value::SecretValue;
+use litellm_gateway_auth::keys::KeyStatus;
+use litellm_gateway_auth_core::{KeyHash, Token};
 use rand::{RngCore, rngs::OsRng};
 
 use crate::Error;
@@ -21,7 +21,7 @@ pub struct KeyRecord {
 
 #[derive(Debug)]
 pub struct GeneratedKey {
-    pub token: SecretValue,
+    pub token: Token,
     pub record: KeyRecord,
 }
 
@@ -58,8 +58,8 @@ impl Keys {
         }
         let mut entropy = [0_u8; 32];
         OsRng.try_fill_bytes(&mut entropy).map_err(Error::Entropy)?;
-        let token = SecretValue::new(format!("sk-{}", URL_SAFE_NO_PAD.encode(entropy)));
-        let hash = KeyHash::from_token(&token);
+        let token = Token::new(format!("sk-{}", URL_SAFE_NO_PAD.encode(entropy)));
+        let hash = token.hash();
         self.store
             .create(NewKey {
                 hash: hash.clone(),

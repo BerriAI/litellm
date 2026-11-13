@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Mutex};
 
-use litellm_gateway_auth::keys::KeyStatus;
-use litellm_gateway_auth::keys::{KeyHash, KeyLookup, LookupFuture};
+use litellm_gateway_auth::keys::{KeyLookup, KeyStatus, LookupFuture};
+use litellm_gateway_auth_core::KeyHash;
 use litellm_gateway_management::{
     Error,
     keys::{KeyRecord, KeyStore, NewKey, Revocation, StoreFuture},

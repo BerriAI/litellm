@@ -6,8 +6,6 @@ mod identity;
 pub mod keys;
 mod ui;
 
-use sha2::{Digest, Sha256};
-
 pub use authentication::{
     Auth, AuthFuture, Authenticator, Clock, Credential, IdentityResolver, LocalAdministrator,
     MasterKeyAuthenticator, SystemClock,
@@ -23,7 +21,3 @@ pub use identity::{
     ResolvedIdentity, SharedCaller, VerifiedIdentity,
 };
 pub use ui::{UI_CSRF_KEY, UiAuthSession, UiBackend, UiCredentials, UiSession, UiUser};
-
-pub fn hash_token(token: &str) -> String {
-    format!("{:x}", Sha256::digest(token.as_bytes()))
-}

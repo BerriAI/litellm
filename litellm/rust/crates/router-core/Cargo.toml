@@ -11,7 +11,7 @@ arc-swap.workspace = true
 async-trait.workspace = true
 litellm-cache.workspace = true
 litellm-router-types.workspace = true
-jiff = { version = "0.2.37", default-features = false, features = ["std", "tzdb-zoneinfo", "tzdb-bundle-always"] }
+jiff = { workspace = true, features = ["tzdb-zoneinfo", "tzdb-bundle-always"] }
 parking_lot.workspace = true
 rand.workspace = true
 serde.workspace = true
