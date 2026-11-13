@@ -101702,5 +101702,68 @@
     },
     "fal_ai/fal-ai/decart/lucy-5b/image-to-video": {
         "alias_of": "fal_ai/decart/lucy-5b/image-to-video"
+    },
+        "fal_ai/fal-ai/decart/lucy-5b/image-to-video": {
+        "alias_of": "fal_ai/decart/lucy-5b/image-to-video"
+    },
+    "01ai/yi-lightning": {
+        "max_tokens": 16384,
+        "max_input_tokens": 16384,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000009,
+        "output_cost_per_token": 0.0000009,
+        "litellm_provider": "01ai",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "01ai/yi-large": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "01ai",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "01ai/yi-large-turbo": {
+        "max_tokens": 16384,
+        "max_input_tokens": 16384,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000012,
+        "output_cost_per_token": 0.0000012,
+        "litellm_provider": "01ai",
+        "mode": "chat",
+        "supports_function_calling": false
+    },
+    "baichuan/Baichuan4-Turbo": {
+        "max_tokens": 8192,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.000015,
+        "litellm_provider": "baichuan",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "baichuan/Baichuan4-Air": {
+        "max_tokens": 8192,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0000019,
+        "output_cost_per_token": 0.0000019,
+        "litellm_provider": "baichuan",
+        "mode": "chat",
+        "supports_function_calling": false
+    },
+    "baichuan/Baichuan4": {
+        "max_tokens": 8192,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000014,
+        "output_cost_per_token": 0.000014,
+        "litellm_provider": "baichuan",
+        "mode": "chat",
+        "supports_function_calling": false
     }
 }
