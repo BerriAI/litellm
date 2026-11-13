@@ -1580,7 +1580,7 @@ def _tenant_destination(
             )
         )
     )
-    otel_settings: Final = (litellm.callback_settings or {}).get("otel", {})
+    otel_settings: Final = as_str_mapping((litellm.callback_settings or {}).get("otel")) or {}
     return destination_for(
         name,
         _tenant_otel_params(callback_vars),

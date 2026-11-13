@@ -3083,6 +3083,39 @@ class TestSpanScope:
         destinations: Final = resolve_tenant_otel_destinations(auth)
         assert [destination.span_scope for destination in destinations] == [expected]
 
+    @pytest.mark.parametrize("otel_settings", [None, "invalid", [], 42])
+    @pytest.mark.parametrize("default", [None, "llm_only"])
+    def test_non_mapping_otel_settings_preserve_key_destination(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        allow_test_hosts: None,
+        otel_settings: object,
+        default: str | None,
+    ) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setattr(litellm, "callback_settings", {"otel": otel_settings})
+        monkeypatch.delenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", raising=False)
+        if default is not None:
+            monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", default)
+        is_otel_v2_enabled.cache_clear()
+        auth: Final = UserAPIKeyAuth(
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse_otel",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "langfuse_public_key": "pk",
+                            "langfuse_secret_key": "sk",
+                            "langfuse_host": "http://x",
+                        },
+                    }
+                ]
+            }
+        )
+
+        assert [destination.span_scope for destination in resolve_tenant_otel_destinations(auth)] == [default or "full"]
+
     def test_callback_settings_destination_scope_wins_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", "full")
         assert langfuse_destination_span_scope(" LLM_ONLY\n") == "llm_only"
