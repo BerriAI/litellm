@@ -18,6 +18,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol, Union, cast
 
+import anyio
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
@@ -2235,6 +2236,18 @@ async def _read_request_body_deferring_parse_failure(
 
 
 PREFLIGHT_FAILURE_JSON_BODY_MAX_BYTES: Final = 64 * 1024
+PREFLIGHT_FAILURE_JSON_BODY_TIMEOUT_SECONDS: Final = 1.0
+
+
+def _preflight_failure_model(
+    body: Mapping[str, object], route: str, request: Request, team_id: str | None
+) -> str | Sequence[str] | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    try:
+        return _get_model_from_request_context(dict(body), route, request, llm_router, team_id)
+    except Exception:  # noqa: BLE001  # logging enrichment must never replace the existing preflight rejection
+        return None
 
 
 async def _preflight_failure_request_data(
@@ -2242,18 +2255,18 @@ async def _preflight_failure_request_data(
 ) -> Mapping[str, object]:
     from litellm.proxy.common_request_processing import resolve_litellm_call_id
     from litellm.proxy.litellm_pre_call_utils import key_and_team_logging_fields
-    from litellm.proxy.proxy_server import llm_router, proxy_config
+    from litellm.proxy.proxy_server import proxy_config
     from litellm.proxy.utils import (
         _call_type_for_route,  # pyright: ignore[reportPrivateUsage]  # share proxy failure route classification
     )
 
     body: Final = await _small_preflight_failure_json(request)
-    model: Final = _get_model_from_request_context(dict(body), route, request, llm_router, cached_key.team_id)
+    model: Final = _preflight_failure_model(body, route, request, cached_key.team_id)
     call_type: Final = _call_type_for_route(route, method=request.method)
     _seed_request_destinations(cached_key, request)
     seed_request_identity(cached_key, model=model, request_data=body)
     return {
-        **body,
+        **{key: value for key, value in body.items() if key != "model"},
         **({"model": model} if model is not None else {}),
         "litellm_call_id": resolve_litellm_call_id(request.headers.get("x-litellm-call-id")),
         "call_type": call_type,
@@ -2274,12 +2287,13 @@ async def _small_preflight_failure_json(request: Request) -> Mapping[str, object
         return {}
     buffered: Final = bytearray()
     try:
-        async for chunk in request.stream():
-            if len(buffered) + len(chunk) > PREFLIGHT_FAILURE_JSON_BODY_MAX_BYTES:
-                return {}
-            buffered.extend(chunk)
+        with anyio.fail_after(PREFLIGHT_FAILURE_JSON_BODY_TIMEOUT_SECONDS):
+            async for chunk in request.stream():
+                if len(buffered) + len(chunk) > PREFLIGHT_FAILURE_JSON_BODY_MAX_BYTES:
+                    return {}
+                buffered.extend(chunk)
         parsed: Final = _GENERAL_SETTINGS_ADAPTER.validate_json(buffered)
-    except (ValidationError, RuntimeError, ClientDisconnect):
+    except (ValidationError, RuntimeError, ClientDisconnect, TimeoutError):
         return {}
     return {
         **({"model": parsed["model"]} if isinstance(parsed.get("model"), str) else {}),
