@@ -102,9 +102,7 @@ fn with_null_keys<'py>(
     }
     let copied = entries.copy()?;
     for key in &options.null_keys {
-        if copied.contains(key)? {
-            copied.set_item(key, payload.py().None())?;
-        }
+        copied.set_item(key, payload.py().None())?;
     }
     Ok(copied.into_any())
 }

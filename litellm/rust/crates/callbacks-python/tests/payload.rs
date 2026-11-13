@@ -99,7 +99,7 @@ nested["seen"].append("after the hook")
 nested["added"] = {"later": 1}
 payload["id"] = "changed on the original, not the copy"
 later = safe_dumps(copy)
-prompts_only = safe_dumps({**copy, "messages": None})
+prompts_only = safe_dumps({**copy, "messages": None, "response": None})
 "#;
 
 #[fixture]
@@ -179,7 +179,7 @@ fn a_payload_handed_by_reference_renders_as_safe_dumps_does_and_frees_on_release
 
     let later = runtime.block_on(payload.render(RenderOptions::default()));
     let prompts_only = runtime.block_on(payload.render(RenderOptions {
-        null_keys: vec!["messages".to_owned(), "absent".to_owned()],
+        null_keys: vec!["messages".to_owned(), "response".to_owned()],
     }));
     let held = refcount();
     drop(payload);
