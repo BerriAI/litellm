@@ -669,6 +669,11 @@ async def test_batch_cancel_updates_database(caplog: pytest.LogCaptureFixture):
         ("file-abc123", "file-abc123"),
         ("s3://bucket/path/files/output.jsonl", "s3://bucket/path/files/output.jsonl"),
         ("gs://bucket/prefix/predictions.jsonl", "gs://bucket/prefix/predictions.jsonl"),
+        (
+            "https://acct.blob.core.windows.net/uploads/0c4e.files%2Ffile-victim",
+            "https://acct.blob.core.windows.net/uploads/0c4e.files%2Ffile-victim",
+        ),
+        ("x://h/files/batch-out1", "x://h/files/batch-out1"),
     ),
 )
 def test_canonical_provider_file_id_collapses_every_spelling_to_the_stored_id(file_id: str, canonical: str):
