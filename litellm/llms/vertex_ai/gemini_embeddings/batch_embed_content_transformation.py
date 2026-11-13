@@ -5,6 +5,7 @@ Why separate file? Make it easy to see how transformation works
 """
 
 from collections.abc import Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import Annotated, Final, Literal, cast
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
@@ -378,16 +379,59 @@ def _build_part_for_input(
 
 
 _SUPPORTED_EMBED_PARAMS: Final = {"outputDimensionality", "taskType", "title"}
+_GEMINI_PARAM_BY_OPENAI_PARAM: Final = (("dimensions", "outputDimensionality"), ("task_type", "taskType"))
+_EMBED_CONTENT_CONFIG_FIELD: Final = "embedContentConfig"
+_STRING_KEYED_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_EMBED_CONTENT_CONFIG_FIELD_BY_PARAM: Final = MappingProxyType(
+    {
+        "document_ocr": "documentOcr",
+        "documentOcr": "documentOcr",
+        "audio_track_extraction": "audioTrackExtraction",
+        "audioTrackExtraction": "audioTrackExtraction",
+        "auto_truncate": "autoTruncate",
+        "autoTruncate": "autoTruncate",
+    }
+)
+
+
+def embed_content_config_fields(request_body: Mapping[str, object]) -> Mapping[str, object]:
+    """The `embedContentConfig` object of a Gemini embedding request body, empty when the body has none."""
+    config: Final = request_body.get(_EMBED_CONTENT_CONFIG_FIELD)
+    return _STRING_KEYED_FIELDS.validate_python(config) if isinstance(config, Mapping) else {}
+
+
+def _embed_content_config(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    """The named config params under `embedContentConfig`, on top of any config the caller sent in `extra_body`."""
+    named_config: Final = {
+        field: optional_params[param]
+        for param, field in _EMBED_CONTENT_CONFIG_FIELD_BY_PARAM.items()
+        if optional_params.get(param) is not None
+    }
+    if not named_config:
+        return {}
+    return {
+        _EMBED_CONTENT_CONFIG_FIELD: {
+            **embed_content_config_fields(extra_body_fields(optional_params)),
+            **named_config,
+        }
+    }
 
 
 def _filter_embed_params(optional_params: dict) -> dict:
     """Map and filter optional_params to only include Gemini embedding fields."""
-    gemini_params: Final = optional_params.copy()
-    if "dimensions" in gemini_params:
-        gemini_params["outputDimensionality"] = gemini_params.pop("dimensions")
-    if "task_type" in gemini_params:
-        gemini_params["taskType"] = gemini_params.pop("task_type")
-    return {k: v for k, v in gemini_params.items() if k in _SUPPORTED_EMBED_PARAMS}
+    params: Final = _STRING_KEYED_FIELDS.validate_python(optional_params)
+    gemini_params: Final = {
+        **params,
+        **{
+            gemini_param: params[openai_param]
+            for openai_param, gemini_param in _GEMINI_PARAM_BY_OPENAI_PARAM
+            if openai_param in params
+        },
+    }
+    return {
+        **{k: v for k, v in gemini_params.items() if k in _SUPPORTED_EMBED_PARAMS},
+        **_embed_content_config(params),
+    }
 
 
 def transform_openai_input_gemini_content(
@@ -557,10 +601,10 @@ def _usage_from_embed_content_response(
             ),
         )
 
-    text_tokens: Final = _tokens_for_modality(details, "TEXT")
     audio_tokens: Final = _tokens_for_modality(details, "AUDIO")
-    image_tokens: Final = _tokens_for_modality(details, "IMAGE")
+    image_tokens: Final = _tokens_for_modality(details, "IMAGE") + _tokens_for_modality(details, "DOCUMENT")
     video_tokens: Final = _tokens_for_modality(details, "VIDEO")
+    text_tokens: Final = sum(detail["tokenCount"] for detail in details) - audio_tokens - image_tokens - video_tokens
 
     return Usage(
         prompt_tokens=prompt_tokens,

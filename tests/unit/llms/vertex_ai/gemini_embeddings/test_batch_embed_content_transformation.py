@@ -29,12 +29,17 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
     transform_openai_input_gemini_embed_content,
 )
 from litellm.types.llms.vertex_ai import VertexAIBatchEmbeddingsResponseObject
-from litellm.types.utils import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse, Usage
 
 IMAGE_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
 GCS_URL = "gs://my-bucket/image.png"
 VIDEO_DATA_URI = "data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAA"
 FILES_URI = "https://generativelanguage.googleapis.com/v1beta/files/clip123"
+
+
+def _prompt_cost(model: str, usage: Usage) -> float:
+    cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="vertex_ai")
+    return cost
 
 
 def _file_block(**file: object) -> dict[str, object]:
@@ -380,6 +385,64 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert prompt_cost > 0
 
+    def test_document_modality_is_billed_as_image_tokens(self):
+        """PDF usage arrives as DOCUMENT tokens, which Google bills at the image token rate.
+
+        https://ai.google.dev/gemini-api/docs/pricing "Document token billing", read 2026-11-13.
+        """
+
+        def usage_for(details: tuple[dict[str, object], ...], prompt_tokens: int) -> Usage:
+            return process_embed_content_response(
+                input=[{"type": "file", "file": {"file_data": "gs://bucket/invoice.pdf", "format": "application/pdf"}}],
+                model_response=EmbeddingResponse(),
+                model=self.MODEL,
+                response_json={
+                    "embedding": {"values": [0.1, 0.2]},
+                    "usageMetadata": {
+                        "promptTokenCount": prompt_tokens,
+                        "totalTokenCount": prompt_tokens,
+                        "promptTokensDetails": list(details),
+                    },
+                },
+            ).usage
+
+        document_usage: Final = usage_for(
+            ({"modality": "TEXT", "tokenCount": 12}, {"modality": "DOCUMENT", "tokenCount": 258}), 270
+        )
+        image_usage: Final = usage_for(
+            ({"modality": "TEXT", "tokenCount": 12}, {"modality": "IMAGE", "tokenCount": 258}), 270
+        )
+
+        assert document_usage.prompt_tokens == 270
+        assert document_usage.prompt_tokens_details.text_tokens == 12
+        assert document_usage.prompt_tokens_details.image_tokens == 258
+        assert _prompt_cost(self.MODEL, document_usage) == _prompt_cost(self.MODEL, image_usage) > 0
+
+    def test_unrecognized_modality_keeps_usage_and_bills_as_text(self):
+        def usage_for(modality: str) -> Usage:
+            return process_embed_content_response(
+                input=["gs://bucket/clip.mp4"],
+                model_response=EmbeddingResponse(),
+                model=self.MODEL,
+                response_json={
+                    "embedding": {"values": [0.1]},
+                    "usageMetadata": {
+                        "promptTokenCount": 112,
+                        "totalTokenCount": 112,
+                        "promptTokensDetails": [
+                            {"modality": "TEXT", "tokenCount": 12},
+                            {"modality": modality, "tokenCount": 100},
+                        ],
+                    },
+                },
+            ).usage
+
+        unknown_usage: Final = usage_for("MODALITY_UNSPECIFIED")
+
+        assert unknown_usage.prompt_tokens == 112
+        assert unknown_usage.prompt_tokens_details.text_tokens == 112
+        assert _prompt_cost(self.MODEL, unknown_usage) == _prompt_cost(self.MODEL, usage_for("TEXT")) > 0
+
     def test_video_modality_preserves_token_count(self):
         response_json = {
             "embedding": {"values": [0.1]},
@@ -652,6 +715,54 @@ def test_gemini_embedding(respx_mock: respx.MockRouter) -> None:
     expected_prompt_tokens: Final = litellm.token_counter(model="gemini/gemini-embedding-001", text="Hello, world!")
     assert response.usage.prompt_tokens == expected_prompt_tokens
     assert response.usage.total_tokens == expected_prompt_tokens
+
+
+class TestEmbedContentConfigParams:
+    """`document_ocr`, `audio_track_extraction` and `auto_truncate` only exist inside `embedContentConfig`."""
+
+    @pytest.mark.parametrize(
+        "optional_params",
+        [
+            {"document_ocr": True, "audio_track_extraction": True, "auto_truncate": False},
+            {"documentOcr": True, "audioTrackExtraction": True, "autoTruncate": False},
+        ],
+    )
+    def test_embed_content_request_nests_the_named_params(self, optional_params: dict[str, object]) -> None:
+        request: Final = transform_openai_input_gemini_embed_content(
+            input=["hello"], model="gemini-embedding-2", optional_params={**optional_params, "dimensions": 256}
+        )
+
+        assert request == {
+            "content": {"parts": [{"text": "hello"}]},
+            "outputDimensionality": 256,
+            "embedContentConfig": {"documentOcr": True, "audioTrackExtraction": True, "autoTruncate": False},
+        }
+
+    def test_batch_embed_contents_nests_the_named_params_in_every_request(self) -> None:
+        body: Final = transform_openai_input_gemini_content(
+            input=["first", "second"], model="gemini-embedding-2", optional_params={"document_ocr": True}
+        )
+
+        assert [request["embedContentConfig"] for request in body["requests"]] == [{"documentOcr": True}] * 2
+
+    def test_named_params_merge_over_an_extra_body_config(self) -> None:
+        request: Final = transform_openai_input_gemini_embed_content(
+            input=["hello"],
+            model="gemini-embedding-2",
+            optional_params={
+                "document_ocr": True,
+                "extra_body": {"embedContentConfig": {"documentOcr": False, "autoTruncate": False}},
+            },
+        )
+
+        assert request["embedContentConfig"] == {"documentOcr": True, "autoTruncate": False}
+
+    def test_requests_without_the_named_params_carry_no_config(self) -> None:
+        request: Final = transform_openai_input_gemini_embed_content(
+            input=["hello"], model="gemini-embedding-2", optional_params={"document_ocr": None, "dimensions": 256}
+        )
+
+        assert "embedContentConfig" not in request
 
 
 def test_gemini_embedding_sends_extra_body_fields_on_each_request(respx_mock: respx.MockRouter) -> None:

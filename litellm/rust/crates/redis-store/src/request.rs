@@ -1,16 +1,10 @@
-use std::{
-    collections::HashSet,
-    future::Future,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{collections::HashSet, future::Future, sync::Arc, time::Duration};
 
 use futures_util::future::{BoxFuture, join_all};
 use litellm_redis_client::{CallTag, Declared, RedisBatch, RedisClient, current_tag, tagged};
+use parking_lot::Mutex;
 use tokio::{runtime::Handle, sync::oneshot, task::JoinHandle};
 use tracing::{Dispatch, Instrument, instrument::WithSubscriber};
-
-use crate::memory::lock;
 
 /// One request's Redis batches: a pre-call batch for the reads it needs before answering and a
 /// post-call batch for the writes nobody waits on, one of each per Redis client. The host that owns
@@ -43,15 +37,15 @@ pub(crate) struct Misses(Arc<Mutex<HashSet<String>>>);
 
 impl Misses {
     pub(crate) fn contains(&self, key: &str) -> bool {
-        lock(&self.0).contains(key)
+        self.0.lock().contains(key)
     }
 
     pub(crate) fn note(&self, keys: impl IntoIterator<Item = String>) {
-        lock(&self.0).extend(keys);
+        self.0.lock().extend(keys);
     }
 
     pub(crate) fn forget(&self, key: &str) {
-        lock(&self.0).remove(key);
+        self.0.lock().remove(key);
     }
 }
 
@@ -105,7 +99,7 @@ impl RequestRedis {
             .0
             .runtime
             .spawn(self.logged(within(current_tag(), task)));
-        lock(&self.0.follow_ups).push(follow_up);
+        self.0.follow_ups.lock().push(follow_up);
     }
 
     /// Runs `task` on the request's runtime without `flush_post` waiting for it, for work that
@@ -129,8 +123,8 @@ impl RequestRedis {
     /// Sends every post-call op declared so far and waits for the follow-ups spawned on them; the
     /// shutdown drain calls it too.
     pub async fn flush_post(&self) {
-        lock(&self.0.deadline).take();
-        let follow_ups = std::mem::take(&mut *lock(&self.0.follow_ups));
+        self.0.deadline.lock().take();
+        let follow_ups = std::mem::take(&mut *self.0.follow_ups.lock());
         join_all(self.batches().iter().map(|batches| batches.post.flush())).await;
         join_all(follow_ups)
             .await
@@ -140,11 +134,11 @@ impl RequestRedis {
     }
 
     fn batches(&self) -> Vec<ClientBatches> {
-        lock(&self.0.batches).clone()
+        self.0.batches.lock().clone()
     }
 
     fn batches_for(&self, client: &RedisClient) -> ClientBatches {
-        let mut batches = lock(&self.0.batches);
+        let mut batches = self.0.batches.lock();
         if let Some(existing) = batches
             .iter()
             .find(|batches| batches.client.same_client(client))
@@ -162,13 +156,13 @@ impl RequestRedis {
     }
 
     fn arm_deadline(&self) {
-        if lock(&self.0.deadline).is_some() {
+        if self.0.deadline.lock().is_some() {
             return;
         }
         // Asked before taking the lock: the host may answer under its interpreter lock, which
         // another declaring thread can hold while it waits for this one.
         let tag = (self.0.deadline_tag)();
-        let mut deadline = lock(&self.0.deadline);
+        let mut deadline = self.0.deadline.lock();
         if deadline.is_some() {
             return;
         }

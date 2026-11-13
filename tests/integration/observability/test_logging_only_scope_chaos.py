@@ -337,7 +337,7 @@ def test_K2_policy_edge_delay_does_not_delay_concurrent_callers(gateway: Gateway
                     ) == tuple((identity, "logging_only", "success") for _ in expected_directions), entries
 
 
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(3 * readiness_seconds(2) + 3 * graceful_stop_seconds() + 180)
 def test_K3_two_worker_sigkill_checks_post_kill_spend_rows(
     gateway: Gateway,
     tmp_path: Path,

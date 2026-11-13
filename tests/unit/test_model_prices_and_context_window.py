@@ -1112,3 +1112,57 @@ def test_azure_ai_claude_rows_priced_for_web_search_say_they_support_it(path: Pa
     assert priced_rows
     unflagged: Final = tuple(key for key, row in priced_rows.items() if row.get("supports_web_search") is not True)
     assert unflagged == (), unflagged
+
+
+@pytest.mark.parametrize(
+    ("model", "supports_vision", "supports_video_input", "supports_audio_input"),
+    (
+        ("deepinfra/zai-org/GLM-5.3-Flash", True, True, False),
+        ("deepinfra/XiaomiMiMo/MiMo-V2.6-Flash", True, True, True),
+        ("deepinfra/nvidia/NVIDIA-Nemotron-3.5-Super-VL", True, True, False),
+        ("deepinfra/tencent/Hy4-preview", False, False, False),
+    ),
+)
+def test_deepinfra_new_catalog_models_resolve_pricing_and_capabilities(
+    model: str,
+    supports_vision: bool,
+    supports_video_input: bool,
+    supports_audio_input: bool,
+    local_model_cost_map: None,
+) -> None:
+    from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
+
+    catalog: Final = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
+    backup: Final = TypeAdapter(dict[str, JsonValue]).validate_json(BACKUP_PRICES_PATH.read_bytes())
+    row: Final = catalog[model]
+    assert isinstance(row, dict)
+    assert row == backup[model]
+    assert (row["litellm_provider"], row["mode"]) == ("deepinfra", "chat")
+
+    max_input: Final = row["max_input_tokens"]
+    input_cost: Final = row["input_cost_per_token"]
+    output_cost: Final = row["output_cost_per_token"]
+    cache_read_cost: Final = row["cache_read_input_token_cost"]
+    assert isinstance(max_input, int) and max_input > 0
+    assert isinstance(input_cost, float) and isinstance(output_cost, float) and isinstance(cache_read_cost, float)
+    assert 0 < cache_read_cost < input_cost and output_cost > 0
+
+    bare_model: Final = model.removeprefix("deepinfra/")
+    info: Final = litellm.get_model_info(model=bare_model, custom_llm_provider="deepinfra")
+    assert info["input_cost_per_token"] == input_cost
+    assert info["output_cost_per_token"] == output_cost
+    assert info["cache_read_input_token_cost"] == cache_read_cost
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model, prompt_tokens=1_000_000, completion_tokens=1_000_000
+    )
+    assert (prompt_cost, completion_cost) == pytest.approx((input_cost * 1_000_000, output_cost * 1_000_000))
+
+    assert litellm.supports_reasoning(model=model) is True
+    assert litellm.supports_function_calling(model=model) is True
+    assert litellm.supports_response_schema(model=model) is True
+    assert litellm.utils.supports_prompt_caching(model=model) is True
+    assert litellm.supports_vision(model=model) is supports_vision
+    assert litellm.supports_video_input(model=model) is supports_video_input
+    assert litellm.supports_audio_input(model=model) is supports_audio_input
+    assert "reasoning_effort" in DeepInfraConfig().get_supported_openai_params(model=model)

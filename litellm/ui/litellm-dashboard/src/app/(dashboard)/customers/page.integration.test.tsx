@@ -224,6 +224,7 @@ describe("customer organization usage", () => {
           default_budgets: [
             {
               name: "power_user",
+              cap_policy: "pause_until_reset",
               budget_limits: [
                 { budget_duration: "1mo", max_budget: 200 },
                 { budget_duration: "12mo", max_budget: 1500 },
@@ -231,6 +232,7 @@ describe("customer organization usage", () => {
             },
             {
               name: "default_user",
+              cap_policy: "pause_until_reset",
               budget_limits: [
                 { budget_duration: "1mo", max_budget: 50 },
                 { budget_duration: "12mo", max_budget: 500 },
@@ -238,6 +240,7 @@ describe("customer organization usage", () => {
             },
             {
               name: "low_user",
+              cap_policy: "pause_until_reset",
               budget_limits: [
                 { budget_duration: "1mo", max_budget: 10 },
                 { budget_duration: "12mo", max_budget: 100 },
