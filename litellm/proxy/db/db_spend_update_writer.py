@@ -3579,8 +3579,8 @@ class DBSpendUpdateWriter:
     ) -> None:
         if prisma_client is None or customer_hierarchy is None:
             return
-        member_id: Final = customer_hierarchy.customer_member_id
-        team_id: Final = customer_hierarchy.customer_team_id
+        member_id: Final = customer_hierarchy.customer_member_id or ""
+        team_id: Final = customer_hierarchy.customer_team_id or ""
         org_id: Final = customer_hierarchy.customer_org_id
         base: Final = await self._common_add_spend_log_transaction_to_daily_transaction(  # pyright: ignore[reportUnknownMemberType]  # existing helper accepts legacy untyped payloads
             {**payload, "customer_member_id": member_id, "customer_team_id": team_id, "customer_org_id": org_id},

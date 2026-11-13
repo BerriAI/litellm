@@ -131,7 +131,7 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.customer_hierarchy_auth import (
-    customer_member_id_from_headers,
+    customer_identity_from_headers,
     resolve_customer_hierarchy,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
@@ -4544,14 +4544,14 @@ async def _authorize_authenticated_request(
             user_model,
         )
 
-        customer_member_id: Final = customer_member_id_from_headers(
+        customer_identity: Final = customer_identity_from_headers(
             safe_get_request_headers(request)  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
-        if customer_member_id is not None:
+        if customer_identity is not None:
             with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
                 user_api_key_auth_obj.customer_hierarchy = await resolve_customer_hierarchy(  # rebind-ok: the gate updates the request-owned auth object in place
-                    customer_member_id=customer_member_id,
+                    identity=customer_identity,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     llm_router=llm_router,
