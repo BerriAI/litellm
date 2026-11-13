@@ -7,6 +7,8 @@ import i18n from "@/i18n/i18n";
 import { isProxyAdminRole } from "@/utils/roles";
 import type { components } from "@/lib/http/schema";
 import { resolveCustomerHierarchy, type CustomerHierarchyScope } from "./customerHierarchyApi";
+import { customerChildSpendCall, customerUsageEntity } from "./customerUsageApi";
+import { calendarDate, customerPresetRange } from "./customerUsageRange";
 import type {
   CreatedCustomerHierarchyEntity,
   CustomerHierarchyEntity,
@@ -103,6 +105,56 @@ function organizationView(
   return requested === "budget_groups" && !team ? "budget_groups" : children;
 }
 
+function useChildSpend(
+  list: ChildList | undefined,
+  scope: CustomerHierarchyScope | null,
+  accessToken: string | null,
+  enabled: boolean,
+) {
+  const childEntities =
+    list?.kind === "teams"
+      ? list.data.map((team) => customerUsageEntity(team.customer_team_id, team))
+      : list?.data.map((member) => customerUsageEntity(member.customer_member_id, member)) ?? [];
+  const month = customerPresetRange("month");
+  const year = customerPresetRange("YTD");
+  const monthStartDate = calendarDate(month.from);
+  const monthEndDate = calendarDate(month.to);
+  const yearStartDate = calendarDate(year.from);
+  const yearEndDate = calendarDate(year.to);
+  const activeList = enabled ? list : undefined;
+  return useQuery({
+    queryKey: [
+      "customer-hierarchy",
+      "child-spend",
+      scope?.org,
+      scope?.team,
+      list?.kind,
+      childEntities.map((entity) => entity.id),
+      monthStartDate,
+      monthEndDate,
+      yearStartDate,
+      yearEndDate,
+    ],
+    queryFn:
+      activeList && accessToken && scope
+        ? ({ signal }) => {
+            const request = {
+              organizationId: scope.org,
+              kind: activeList.kind,
+              entities: childEntities,
+              accessToken,
+              monthStartDate,
+              monthEndDate,
+              yearStartDate,
+              yearEndDate,
+              signal,
+            };
+            return customerChildSpendCall(request);
+          }
+        : skipToken,
+  });
+}
+
 export default function useCustomerHierarchy() {
   const { accessToken, userRole, isLoading } = useAuthorized();
   const canManage = isProxyAdminRole(userRole);
@@ -140,6 +192,7 @@ export default function useCustomerHierarchy() {
         ? ({ signal }) => customerHierarchyChildren(childContext, childTab, page, signal)
         : skipToken,
   });
+  const childUsage = useChildSpend(children.data, scope, accessToken, enabled && showChildren);
   useEffect(() => {
     if (!children.isSuccess) return;
     if (page <= Math.max(1, children.data.meta.total_pages)) return;
@@ -190,6 +243,7 @@ export default function useCustomerHierarchy() {
     scope,
     context,
     children,
+    childUsage,
     selected,
     tab,
     childTab,
