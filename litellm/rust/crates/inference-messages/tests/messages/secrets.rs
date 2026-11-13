@@ -19,8 +19,7 @@ use super::*;
     &[
         "AZURE_OPENAI_API_KEY",
         "AZURE_API_KEY",
-        "AZURE_API_BASE",
-        "AZURE_AD_TOKEN"
+        "AZURE_API_BASE"
     ]
 )]
 #[case::deepseek(
@@ -222,5 +221,45 @@ async fn azure_without_a_base_anywhere_fails_before_sending(call: MessagesCall) 
             provider: "Azure",
             guidance: "Set `api_base` or the AZURE_API_BASE environment variable. Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
         })
+    );
+}
+
+#[rstest]
+#[case::a_keyed_call(Some("sk-azure"), &[], false)]
+#[case::a_caller_x_api_key(None, &[("x-api-key", "caller")], false)]
+#[case::a_caller_bearer(None, &[("Authorization", "Bearer caller")], false)]
+#[case::a_caller_api_key(None, &[("Api-Key", "caller")], false)]
+#[case::no_key_and_no_caller_credential(None, &[], true)]
+#[tokio::test]
+async fn azure_ad_token_is_looked_up_only_where_python_looks_it_up(
+    call: MessagesCall,
+    #[case] api_key: Option<&str>,
+    #[case] forwarded: &[(&str, &str)],
+    #[case] looked_up: bool,
+) {
+    let upstream = upstream([message_response()]).await;
+    let secrets = Arc::new(RecordingSecrets::empty());
+
+    run_with(
+        secrets.clone(),
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: Default::default(),
+            api_key: api_key.map(Into::into),
+            api_base: Some(upstream.uri()),
+            extra_headers: headers(forwarded.iter().copied()),
+            ..call
+        },
+    )
+    .await
+    .expect("messages call succeeds");
+
+    assert_eq!(
+        secrets
+            .requested()
+            .iter()
+            .filter(|name| name.as_str() == "AZURE_AD_TOKEN")
+            .count(),
+        usize::from(looked_up)
     );
 }

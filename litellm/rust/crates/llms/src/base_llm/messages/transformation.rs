@@ -67,6 +67,18 @@ pub trait BaseMessagesConfig: Sync {
 
     fn secret_names(&self) -> &'static [&'static str];
 
+    /// Secrets read only on some paths, as Python's lazy `get_secret_str` calls are: resolved
+    /// just before `validate_environment`, and only when this call names them.
+    fn deferred_secret_names(
+        &self,
+        _headers: &Headers,
+        _api_key: Option<&str>,
+        _litellm_params: &LitellmParams,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Shapes the forwarded headers and names the credential, the way Python's
     /// `validate_environment` does, without applying it: `resolve_auth` does that once
     /// for every config.

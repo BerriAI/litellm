@@ -183,6 +183,7 @@ pub(super) async fn execute(
             auth: &route.auth,
             workload_identity: route.workload_identity.as_deref(),
             azure_ad_token_hosts: route.azure_ad_token_hosts.clone(),
+            deferred_secrets: Some(route.secrets.as_ref()),
         },
         provider,
         model,
@@ -254,6 +255,7 @@ struct CallerCredentials<'a> {
     auth: &'a AuthServices,
     workload_identity: Option<&'a dyn WorkloadIdentity>,
     azure_ad_token_hosts: AzureAdTokenHosts,
+    deferred_secrets: Option<&'a dyn litellm_secrets::source::SecretSource>,
 }
 
 async fn provider_call(
@@ -308,6 +310,18 @@ async fn provider_call(
         .module_api_key
         .as_ref()
         .map(SecretValue::expose));
+    let deferred = match (
+        credentials.deferred_secrets,
+        config.deferred_secret_names(&forwarded, configured_key, &connection_params, &env_lookup),
+    ) {
+        (Some(source), names) if !names.is_empty() => Some(source.resolve(names).await?),
+        _ => None,
+    };
+    let env_lookup = |key: &str| {
+        secrets
+            .get(key)
+            .or_else(|| deferred.as_ref().and_then(|deferred| deferred.get(key)))
+    };
     let validated = match config.validate_federated_environment(
         forwarded,
         configured_key,
@@ -1114,6 +1128,7 @@ mod tests {
                 auth: &AuthServices::default(),
                 workload_identity,
                 azure_ad_token_hosts: AzureAdTokenHosts::default(),
+                deferred_secrets: None,
             },
             config,
             model,

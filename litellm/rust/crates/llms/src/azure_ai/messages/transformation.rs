@@ -107,8 +107,30 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
             AZURE_OPENAI_API_KEY_ENV,
             AZURE_API_KEY_ENV,
             AZURE_API_BASE_ENV,
-            AZURE_AD_TOKEN_ENV,
         ]
+    }
+
+    /// `AZURE_AD_TOKEN`, which Python reads through `get_secret_str` only when there is no key,
+    /// no caller credential and no `azure_ad_token` param.
+    fn deferred_secret_names(
+        &self,
+        headers: &Headers,
+        api_key: Option<&str>,
+        litellm_params: &LitellmParams,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> &'static [&'static str] {
+        let token_param = litellm_params
+            .extra
+            .get("azure_ad_token")
+            .and_then(Value::as_str)
+            .is_some_and(|token| !token.is_empty());
+        match has_caller_credential(headers)
+            || resolve_azure_api_key(api_key, env_lookup).is_some()
+            || token_param
+        {
+            true => &[],
+            false => &[AZURE_AD_TOKEN_ENV],
+        }
     }
 
     /// A forwarded `x-api-key`, `api-key` (sent as `x-api-key`) or `Authorization` other than a
@@ -154,6 +176,12 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_safeguards_beta(headers, request, BetaProvider::AzureAi)
     }
+}
+
+fn has_caller_credential(headers: &Headers) -> bool {
+    has_header(headers, API_KEY_PLACEMENT.header_name())
+        || has_header(headers, AZURE_API_KEY_HEADER)
+        || has_caller_authorization(headers)
 }
 
 /// Any `Authorization` the caller sends is their credential, except a bearer with no token.
@@ -1079,14 +1107,52 @@ mod tests {
         );
         let requested = requested.into_inner();
         assert!(!requested.is_empty());
+        let deferred = AZURE_ANTHROPIC_MESSAGES_CONFIG.deferred_secret_names(
+            &Vec::new(),
+            None,
+            &LitellmParams::default(),
+            &|_| None,
+        );
         let undeclared: Vec<&String> = requested
             .iter()
             .filter(|name| {
                 !AZURE_ANTHROPIC_MESSAGES_CONFIG
                     .secret_names()
                     .contains(&name.as_str())
+                    && !deferred.contains(&name.as_str())
             })
             .collect();
         assert_eq!(undeclared, Vec::<&String>::new());
+    }
+
+    #[rstest]
+    #[case::no_key_and_no_caller_credential(&[], None, json!({}), &["AZURE_AD_TOKEN"])]
+    #[case::a_key(&[], Some("sk-azure"), json!({}), &[])]
+    #[case::an_azure_ad_token_param(&[], None, json!({"azure_ad_token": "tok"}), &[])]
+    #[case::an_empty_azure_ad_token_param(&[], None, json!({"azure_ad_token": ""}), &["AZURE_AD_TOKEN"])]
+    #[case::a_caller_x_api_key(&[("X-Api-Key", "caller")], None, json!({}), &[])]
+    #[case::a_caller_api_key(&[("API-Key", "caller")], None, json!({}), &[])]
+    #[case::a_caller_bearer(&[("authorization", "Bearer caller")], None, json!({}), &[])]
+    #[case::a_caller_basic_authorization(&[("Authorization", "Basic caller")], None, json!({}), &[])]
+    #[case::a_blank_caller_bearer(&[("Authorization", "Bearer ")], None, json!({}), &["AZURE_AD_TOKEN"])]
+    fn the_azure_ad_token_secret_is_read_only_where_python_reads_it(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] api_key: Option<&str>,
+        #[case] params: serde_json::Value,
+        #[case] expected: &[&str],
+    ) {
+        let headers: Headers = forwarded
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        assert_eq!(
+            AZURE_ANTHROPIC_MESSAGES_CONFIG.deferred_secret_names(
+                &headers,
+                api_key,
+                &litellm_params(params),
+                &|_| None
+            ),
+            expected
+        );
     }
 }
