@@ -75,6 +75,14 @@ _H3_MAX_PROFILE: Final[_ModelProfile] = _ModelProfile(
     reference_key="image_url",
     reference_as_list=False,
 )
+_LUMA_RAY_PROFILE: Final[_ModelProfile] = _ModelProfile(
+    resolutions=frozenset({"540p", "720p", "1080p"}),
+    resolution_tiers=((540, "540p"), (720, "720p"), (sys.maxsize, "1080p")),
+    default_resolution="540p",
+    integer_duration=False,
+    reference_key="image_url",
+    reference_as_list=False,
+)
 _SEEDANCE_REFERENCE_PROFILE: Final[_ModelProfile] = replace(
     _SEEDANCE_PROFILE,
     reference_key="image_urls",
@@ -118,6 +126,8 @@ def _profile_for_model(model: str) -> _ModelProfile:
         return _H3_PROFILE
     if model.startswith("minimax/h3-max"):
         return _H3_MAX_PROFILE
+    if model.startswith("luma/agent/ray/"):
+        return _LUMA_RAY_PROFILE
     is_seedance_reference: Final = model.startswith("bytedance/seedance-") and model.endswith("/reference-to-video")
     return _SEEDANCE_REFERENCE_PROFILE if is_seedance_reference else _SEEDANCE_PROFILE
 

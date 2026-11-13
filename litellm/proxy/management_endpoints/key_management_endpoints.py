@@ -82,6 +82,12 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
+from litellm.proxy.common_utils.customer_usage import (
+    CustomerUsageFailure,
+    customer_usage_fields,
+    customer_usage_http_status,
+    normalize_customer_key_metadata,
+)
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
@@ -1479,6 +1485,25 @@ async def _stored_user_role(prisma_client: PrismaClient | None, user_id: str | N
     return user_row.user_role if user_row is not None else None
 
 
+def validated_customer_key_metadata(
+    metadata: object,
+    existing_metadata: object,
+    actor: UserAPIKeyAuth | None,
+) -> Mapping[str, object] | None:
+    binding: Final = normalize_customer_key_metadata(
+        customer_usage_fields(metadata) if metadata is not None else None,
+        customer_usage_fields(existing_metadata) if existing_metadata is not None else None,
+        administrator=actor is not None and actor.user_role == LitellmUserRoles.PROXY_ADMIN.value,
+    )
+    if isinstance(binding, CustomerUsageFailure):
+        raise HTTPException(status_code=customer_usage_http_status(binding.error), detail=binding.error.value)
+    return binding
+
+
+def customer_key_actor(value: object) -> UserAPIKeyAuth | None:
+    return value if isinstance(value, UserAPIKeyAuth) else None
+
+
 async def _common_key_generation_helper(
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1492,6 +1517,8 @@ async def _common_key_generation_helper(
         premium_user,
         prisma_client,
     )
+
+    validated_customer_key_metadata(data.metadata, None, user_api_key_dict)
 
     acting_as_team_admin: Final = _team_admin_requests_member_key(
         data=data,
@@ -1857,7 +1884,7 @@ async def _common_key_generation_helper(
 
     try:
         response = await generate_key_helper_fn(
-            request_type="key", **data_json, table_name="key", llm_router=llm_router
+            request_type="key", **data_json, table_name="key", llm_router=llm_router, actor=user_api_key_dict
         )
     except KeyProjectBindingError:
         if prisma_client is not None:
@@ -3062,6 +3089,7 @@ async def prepare_key_update_data(
     *,
     prisma_client: PrismaClient | None = None,
     llm_router: Router | None = None,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
     if data.router_settings is not None or (
         "router_settings" not in data.model_fields_set
@@ -3080,6 +3108,13 @@ async def prepare_key_update_data(
             llm_router=llm_router,
         )
     data_json: Final[dict] = data.model_dump(exclude_unset=True)
+    if "metadata" in data_json:
+        customer_binding: Final = validated_customer_key_metadata(
+            data.metadata,
+            _StoredKeyMetadata.model_validate(existing_key_row, from_attributes=True).metadata,
+            user_api_key_dict,
+        )
+        data_json["metadata"] = dict(customer_binding) if customer_binding is not None else None
     data_json.pop("key", None)
     data_json.pop("new_key", None)
     data_json.pop("grace_period", None)  # Request-only param, not a DB column
@@ -3477,7 +3512,11 @@ async def _process_single_key_update(
     # Prepare update data
     raise_on_logging_credential_change(key_request.metadata, existing_key_row, user_api_key_dict)
     non_default_values = await prepare_key_update_data(
-        data=key_request, existing_key_row=existing_key_row, prisma_client=prisma_client, llm_router=llm_router
+        data=key_request,
+        existing_key_row=existing_key_row,
+        prisma_client=prisma_client,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
     )
 
     await _enforce_custom_key_policy(
@@ -4231,7 +4270,11 @@ async def update_key_fn(
         _enforce_upperbound_key_params(data, fill_defaults=False)
         raise_on_logging_credential_change(data.metadata, existing_key_row, user_api_key_dict)
         non_default_values: Final = await prepare_key_update_data(
-            data=data, existing_key_row=existing_key_row, prisma_client=prisma_client, llm_router=llm_router
+            data=data,
+            existing_key_row=existing_key_row,
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
         )
 
         # Only validate key_alias format if it's actually being changed
@@ -5384,7 +5427,9 @@ async def generate_key_helper_fn(
     budget_limits: list | None = None,  # multiple concurrent budget windows
     *,
     llm_router: Router | None = None,
+    actor: UserAPIKeyAuth | None = None,
 ):
+    customer_metadata: Final = validated_customer_key_metadata(_DECODED_JSON.validate_python(metadata), None, actor)
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
     if prisma_client is None:
@@ -5436,7 +5481,7 @@ async def generate_key_helper_fn(
     router_settings_json: Final = safe_dumps(router_settings) if router_settings is not None else safe_dumps({})
 
     metadata_json: Final = metadata_json_with_limits(
-        metadata,
+        customer_metadata,
         model_rpm_limit=model_rpm_limit,
         model_tpm_limit=model_tpm_limit,
         mcp_rpm_limit=mcp_rpm_limit,
@@ -6419,7 +6464,11 @@ async def _execute_virtual_key_regeneration(
         _enforce_upperbound_key_params(data, fill_defaults=False)
         raise_on_logging_credential_change(data.metadata, key_in_db, user_api_key_dict)
         non_default_values = await prepare_key_update_data(
-            data=data, existing_key_row=key_in_db, prisma_client=prisma_client, llm_router=llm_router
+            data=data,
+            existing_key_row=key_in_db,
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
         )
         # Only validate key_alias format if it's actually being changed
         new_key_alias: Final = non_default_values.get("key_alias")
