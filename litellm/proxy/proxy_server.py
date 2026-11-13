@@ -13374,6 +13374,7 @@ async def chat_completion(
             request_data=_data,
         )
         _chat_response = litellm.ModelResponse()
+        _chat_response.model = e.model
         _chat_response.choices[0].message.content = e.message
 
         if data.get("stream", None) is not None and data["stream"] is True:
@@ -13531,6 +13532,7 @@ async def completion(
         else:
             _response = litellm.TextCompletionResponse()
             _response.choices[0].text = e.message
+            _response.model = e.model
             return _response
     except Exception as e:
         if is_provider_overload(e):
