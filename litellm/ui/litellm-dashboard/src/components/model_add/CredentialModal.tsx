@@ -150,8 +150,14 @@ export default function CredentialModal({
     const patch = sameStoredProvider
       ? buildCredentialPatch(storedValues, projectedValues, storedSelection, selection)
       : buildProviderChangePatch(storedValues, projectedValues, selection);
+    const preservedKeyReference =
+      projectedValues.github_copilot_auth_type === "github_app" && !projectedValues.github_copilot_app_private_key
+        ? "github_copilot_app_private_key_ref"
+        : undefined;
     const authTypeValuesToDelete = sameStoredProvider
-      ? authTypeFieldKeys(selectedProvider).filter((key) => key in storedValues && !(key in projectedValues))
+      ? authTypeFieldKeys(selectedProvider).filter(
+          (key) => key in storedValues && !(key in projectedValues) && key !== preservedKeyReference,
+        )
       : [];
     const valuesToDelete = Array.from(new Set([...patch.credential_values_to_delete, ...authTypeValuesToDelete]));
     onSubmit({ ...meta, credential_values: patch.credential_values }, valuesToDelete);

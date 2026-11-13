@@ -3468,7 +3468,9 @@ def _github_app_values() -> dict[str, str]:
 
 
 @pytest.mark.parametrize("invalid", ["-----BEGIN PRIVATE KEY-----", "oidc/https://attacker.example", ""])
-def test_create_github_app_rejects_invalid_key_reference_before_storage(credential_store, invalid):
+def test_create_github_app_rejects_invalid_key_reference_before_storage(
+    credential_store: _InstallCredentialStore, invalid: str
+) -> None:
     create: Final = AsyncMock()
     credential_store(create=create)
     response: Final = _create_credential(
@@ -3482,7 +3484,7 @@ def test_create_github_app_rejects_invalid_key_reference_before_storage(credenti
     create.assert_not_awaited()
 
 
-def test_create_github_app_preserves_the_secret_reference(credential_store):
+def test_create_github_app_preserves_the_secret_reference(credential_store: _InstallCredentialStore) -> None:
     create: Final = AsyncMock()
     credential_store(create=create)
     response: Final = _create_credential(
@@ -3497,7 +3499,7 @@ def test_create_github_app_preserves_the_secret_reference(credential_store):
     create.assert_awaited_once()
 
 
-def test_update_github_app_validates_merged_values_before_storage(credential_store):
+def test_update_github_app_validates_merged_values_before_storage(credential_store: _InstallCredentialStore) -> None:
     stored: Final = CredentialItem(
         credential_name="copilot-app",
         credential_values=_github_app_values(),
@@ -3526,7 +3528,7 @@ def test_update_github_app_validates_merged_values_before_storage(credential_sto
 
 
 @pytest.fixture
-def app_pem():
+def app_pem() -> str:
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -3537,7 +3539,9 @@ def app_pem():
     )
 
 
-def test_uploaded_app_key_is_encrypted_at_rest_and_masked_on_read(credential_store, app_pem):
+def test_uploaded_app_key_is_encrypted_at_rest_and_masked_on_read(
+    credential_store: _InstallCredentialStore, app_pem: str
+) -> None:
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 
     create: Final = AsyncMock()
@@ -3594,7 +3598,9 @@ def test_uploaded_app_key_replaces_reference_with_explicit_deletion(
 
 
 @pytest.mark.parametrize("pem", ["not-a-private-key", "x" * 16385, "-----BEGIN PRIVATE KEY----- secret-invalid"])
-def test_invalid_uploaded_app_key_is_rejected_without_echoing_it(credential_store, pem):
+def test_invalid_uploaded_app_key_is_rejected_without_echoing_it(
+    credential_store: _InstallCredentialStore, pem: str
+) -> None:
     create: Final = AsyncMock()
     credential_store(create=create)
     values: Final = {key: value for key, value in _github_app_values().items() if not key.endswith("_ref")}

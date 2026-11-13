@@ -101,6 +101,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
   const { t } = useTranslation();
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = useFormContext<MountedFormValues>();
+  const hasAppKeyReference = Boolean(form.watch("github_copilot_app_private_key_ref"));
   const authTypes = authTypesFor(selectedProvider);
   const availableAuthTypes = React.useMemo(
     () =>
@@ -237,12 +238,13 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
     }
 
     const fieldsToHide = [...(hiddenFieldKeys ?? []), ...authTypeHiddenFieldKeys, "github_copilot_app_private_key_ref"];
+    const requiresAppKey = selectedAuthType?.id === "github_app" && !hasAppKeyReference;
 
     return providerFields
       .filter((field) => !fieldsToHide.includes(field.key))
       .map((field) =>
         selectedAuthType?.requiredFieldKeys.includes(field.key) ||
-        (selectedAuthType?.id === "github_app" && field.key === "github_copilot_app_private_key")
+        (requiresAppKey && field.key === "github_copilot_app_private_key")
           ? { ...field, required: true }
           : field,
       );
@@ -253,6 +255,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
     authTypeHiddenFieldKeys,
     selectedAuthType,
     credentialOnlySelected,
+    hasAppKeyReference,
   ]);
 
   const hasApiVersionField = React.useMemo(() => allFields.some((field) => field.key === "api_version"), [allFields]);
@@ -302,6 +305,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
     }
 
     if (field.type === "upload") {
+      const hasAppKey = Boolean(control.value) || hasAppKeyReference;
       return (
         <>
           <Button type="button" variant="outline" className="w-fit" onClick={() => credentialsFileRef.current?.click()}>
@@ -318,7 +322,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
             onBlur={control.onBlur}
             onChange={pickCredentialsFile(field, control.onChange)}
           />
-          {field.key === "github_copilot_app_private_key" && Boolean(control.value) && (
+          {field.key === "github_copilot_app_private_key" && hasAppKey && (
             <p className="text-sm text-muted-foreground">{t("addModel.providerAuthTypes.githubApp.keyProvided")}</p>
           )}
         </>

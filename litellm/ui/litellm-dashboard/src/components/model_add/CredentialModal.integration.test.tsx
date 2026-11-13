@@ -644,6 +644,51 @@ describe("CredentialModal with GitHub Copilot auth types", () => {
   });
 
   it.each(["GITHUB_COPILOT", "github_copilot"])(
+    "edits a stored %s App credential without replacing its saved key reference",
+    async (provider) => {
+      const user = userEvent.setup();
+      const onSubmit = renderModal({
+        mode: "edit",
+        existingCredential: {
+          credential_name: "copilot-service",
+          credential_info: { custom_llm_provider: provider },
+          credential_values: {
+            github_copilot_auth_type: "github_app",
+            github_copilot_app_id: "test-client",
+            github_copilot_app_installation_id: "123",
+            github_copilot_app_private_key_ref: "os.e****",
+          },
+        },
+      });
+      await screen.findByLabelText("Installation ID");
+      fill("Installation ID", "456");
+      expect(screen.getByRole("button", { name: "Click to Upload" })).toBeInTheDocument();
+      expect(screen.queryByLabelText("Private key secret reference")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Update Credential" }));
+      expect(onSubmit).toHaveBeenCalledWith(
+        {
+          credential_name: "copilot-service",
+          custom_llm_provider: provider,
+          credential_values: { github_copilot_app_installation_id: "456" },
+        },
+        [],
+      );
+    },
+  );
+
+  it("requires a PEM when creating a new App credential", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ initialProvider: "GITHUB_COPILOT", initialAuthTypeId: "github_app" });
+    await screen.findByLabelText("Installation ID");
+    fill("Credential Name:", "copilot-new");
+    fill("App client ID", "test-client");
+    fill("Installation ID", "123");
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
+  it.each(["GITHUB_COPILOT", "github_copilot"])(
     "replaces a stored %s secret reference with an uploaded PEM and deletes the reference",
     async (provider) => {
       const user = userEvent.setup();

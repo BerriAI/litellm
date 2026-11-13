@@ -617,7 +617,9 @@ def test_session_serialization_redacts_bearer_token(is_app: bool) -> None:
     assert "sensitive-bearer" not in params.model_dump_json()
 
 
-def test_uploaded_key_is_kept_out_of_model_kwargs_and_used_for_signing(private_key, monkeypatch):
+def test_uploaded_key_is_kept_out_of_model_kwargs_and_used_for_signing(
+    private_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
     from litellm.utils import with_named_credential
 
@@ -661,7 +663,7 @@ def test_uploaded_key_is_kept_out_of_model_kwargs_and_used_for_signing(private_k
 
 
 @pytest.mark.parametrize("kind", ["weak-rsa", "ec", "encrypted"])
-def test_uploaded_key_rejects_unsupported_key_types(kind):
+def test_uploaded_key_rejects_unsupported_key_types(kind: str) -> None:
     from cryptography.hazmat.primitives.asymmetric import ec
 
     key: Final = (
