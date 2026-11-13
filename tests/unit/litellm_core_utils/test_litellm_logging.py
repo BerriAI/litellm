@@ -4874,20 +4874,22 @@ async def test_anthropic_messages_system_prompt_reaches_logged_messages(system: 
         "stop_sequence": None,
         "usage": {"input_tokens": 5, "output_tokens": 1},
     }
-    upstream: Final = AsyncHTTPHandler()
-    upstream.client = httpx.AsyncClient(
+    upstream: Final = AsyncHTTPHandler(
         transport=httpx.MockTransport(lambda request: httpx.Response(200, json=reply, request=request))
     )
-    await litellm.anthropic.messages.acreate(
-        model="anthropic/claude-sonnet-5-5",
-        max_tokens=16,
-        system=system,
-        messages=[user_turn],
-        api_key="sk-test",
-        client=upstream,
-        callbacks=[recorder],
-    )
-    await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+    try:
+        await litellm.anthropic.messages.acreate(
+            model="anthropic/claude-sonnet-5-5",
+            max_tokens=16,
+            system=system,
+            messages=[user_turn],
+            api_key="sk-test",
+            client=upstream,
+            callbacks=[recorder],
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+    finally:
+        await upstream.close()
     assert recorder.messages == [{"role": "system", "content": system}, user_turn]
 
 

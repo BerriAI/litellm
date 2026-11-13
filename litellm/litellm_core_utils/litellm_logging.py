@@ -201,6 +201,7 @@ from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.openai import (
     AllMessageValues,
     Batch,
+    ChatCompletionSystemMessage,
     FineTuningJob,
     HttpxBinaryResponseContent,
     OpenAIFileObject,
@@ -7409,7 +7410,7 @@ class StandardLoggingPayloadSetup:
         system: Final = kwargs.get("system") if kwargs is not None else None
         if not isinstance(system, str) and not (isinstance(system, list) and system):
             return messages
-        system_message: Final[dict[str, object]] = {"role": "system", "content": system}
+        system_message: Final = ChatCompletionSystemMessage(role="system", content=system)
         if messages is None:
             return [system_message]
         if isinstance(messages, str):
