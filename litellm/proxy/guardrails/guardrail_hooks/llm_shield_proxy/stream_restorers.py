@@ -261,7 +261,8 @@ class ResponsesStreamRestorer:
       own window, keyed by the family, the item id and the part index.
     - Any `*.done` event closes the stream of the same family. Whatever its window still
       holds goes out first, as a copy of that stream's last delta event -- so it carries
-      the stream's own ids, and repeats that event's `sequence_number`. Then every text
+      the stream's own ids. It takes the done event's `sequence_number`, and every later
+      event's number moves up by one, so the numbers stay unique and in order. Then every text
       field on the done event is restored in full: its string fields other than
       identifiers, plus any `part` or `item` it repeats.
     - `response.completed` / `response.incomplete` repeat the whole reply, and are
@@ -273,6 +274,8 @@ class ResponsesStreamRestorer:
         self._rehydrate: Final = rehydrate
         self._carries: Final[dict[ResponsesStreamKey, str]] = {}  # mutable-ok: per-stream windows advanced in place.
         self._last_deltas: Final[dict[ResponsesStreamKey, object]] = {}  # mutable-ok: newest delta per stream.
+        self._inserted: int = 0
+        self._last_sequence_number: int | None = None
 
     async def restore(self, event: object) -> tuple[object, ...]:
         """The events to emit in place of `event`: any flush, then the event itself."""
@@ -281,7 +284,7 @@ class ResponsesStreamRestorer:
             return (event,)
         if kind.endswith(".delta") and kind not in RESPONSES_BINARY_DELTAS:
             await self._restore_delta(event, kind)
-            return (event,)
+            return self._numbered((), event)
         slots: Final[SlotSink] = []
         flushed: Final = await self._flush(responses_stream_key(event, kind)) if kind.endswith(".done") else ()
         if kind.endswith(".done"):
@@ -294,12 +297,29 @@ class ResponsesStreamRestorer:
             for item in read_list(read_field(event, "response"), "output"):
                 collect_response_item(item, slots)
         await rehydrate_slots(slots, self._rehydrate)
-        return (*flushed, event)
+        return self._numbered(flushed, event)
 
     async def finish(self) -> tuple[object, ...]:
         """Flushes every stream the provider never closed, e.g. a truncated reply."""
-        flushed: Final = tuple([await self._flush(key) for key in tuple(self._carries)])
-        return tuple(itertools.chain.from_iterable(flushed))
+        flushed: Final = tuple(itertools.chain.from_iterable([await self._flush(key) for key in tuple(self._carries)]))
+        last: Final = self._last_sequence_number
+        if last is not None:
+            for offset, flush in enumerate(flushed, start=1):
+                write_field(flush, "sequence_number", last + offset)
+        return flushed
+
+    def _numbered(self, flushed: tuple[object, ...], event: object) -> tuple[object, ...]:
+        """Gives each flush the slot `event` arrived in and moves `event` and later events up."""
+        number: Final = read_field(event, "sequence_number")
+        if not isinstance(number, int):
+            return (*flushed, event)
+        for offset, flush in enumerate(flushed):
+            write_field(flush, "sequence_number", number + self._inserted + offset)
+        self._inserted += len(flushed)
+        self._last_sequence_number = number + self._inserted
+        if self._inserted:
+            write_field(event, "sequence_number", self._last_sequence_number)
+        return (*flushed, event)
 
     async def _restore_delta(self, event: object, kind: str) -> None:
         text: Final = read_field(event, "delta")
