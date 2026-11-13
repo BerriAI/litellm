@@ -3,6 +3,7 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from hashlib import sha256
 from itertools import chain
 from typing import TYPE_CHECKING, Final, Generic, Protocol, TypeVar
 from uuid import uuid4
@@ -10,6 +11,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.models.person_budget import PersonBudgetAssignmentRecord, PersonBudgetDefinition, PersonBudgetPolicy
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.list_api.common import escape_like
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
@@ -19,6 +21,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     BudgetTemplate,
     CustomerMember,
+    MemberBudget,
     MemberCreate,
     MemberPatch,
     Organization,
@@ -34,6 +37,8 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
 if TYPE_CHECKING:
     from prisma import Prisma
 
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
 
 class ErrorCode(str, Enum):
     NOT_FOUND = "not_found"
@@ -47,11 +52,14 @@ class ErrorCode(str, Enum):
     INVALID_TEMPLATE_NAMES = "invalid_template_names"
     TEMPLATE_IN_USE = "template_in_use"
     BUDGET_REQUIRED = "budget_required"
+    INVALID_BUDGET = "invalid_budget"
+    REVISION_CONFLICT = "revision_conflict"
 
 
 @dataclass(frozen=True, slots=True)
 class Failure:
     code: ErrorCode
+    detail: str | None = None
 
 
 _LOCK_ORGANIZATION_SQL: Final = (
@@ -83,6 +91,76 @@ class Page(Generic[T]):
 
 class BudgetRecord(Budget):
     model_config = ConfigDict(frozen=True, extra="ignore")
+
+
+class MemberBudgetRecord(MemberBudget):
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+
+
+def budget_revision(budget: PersonBudgetDefinition) -> str:
+    return sha256(budget.model_dump_json().encode()).hexdigest()
+
+
+def assignment_revision(assignment: PersonBudgetAssignmentRecord) -> str:
+    # Subject updated_at may change when usage is flushed. Only policy changes
+    # invalidate an editor, including changes to the referenced source budgets.
+    return sha256(assignment.model_dump_json(exclude={"updated_at"}).encode()).hexdigest()
+
+
+def validate_person_budget_change(
+    override: PersonBudgetPolicy | None,
+    effective: PersonBudgetPolicy,
+    changed: frozenset[str],
+    now: datetime,
+) -> Failure | None:
+    if override is None or not changed.intersection(
+        ("temp_budget_increase", "temp_budget_expiry", "temp_budget_duration", "budget_limits")
+    ):
+        return None
+    if override.temp_budget_increase is None or override.temp_budget_increase == 0:
+        return None
+    # An elapsed increase is retained for audit and must not block ordinary edits.
+    increase_changed: Final = changed.intersection(
+        ("temp_budget_increase", "temp_budget_expiry", "temp_budget_duration")
+    )
+    if not increase_changed and override.temp_budget_expiry is not None and override.temp_budget_expiry <= now:
+        return None
+    if override.temp_budget_expiry is None or (increase_changed and override.temp_budget_expiry <= now):
+        return Failure(ErrorCode.INVALID_BUDGET, "A temporary increase requires a future expiration.")
+    if not any(limit.budget_duration == override.temp_budget_duration for limit in effective.budget_limits or ()):
+        return Failure(ErrorCode.INVALID_BUDGET, "A temporary increase must target an effective budget duration.")
+    return None
+
+
+def merged_member_override(current: MemberBudget | None, patch: MemberBudget) -> MemberBudget:
+    cleared: Final = (
+        {"temp_budget_expiry": None, "temp_budget_duration": None}
+        if "temp_budget_increase" in patch.model_fields_set and patch.temp_budget_increase is None
+        else {}
+    )
+    return MemberBudget.model_validate(
+        {**(current.model_dump() if current is not None else {}), **patch.model_dump(exclude_unset=True), **cleared}
+    )
+
+
+async def invalidate_person_budget_sources(budget_ids: tuple[str, ...], user_id: str | None = None) -> None:
+    from litellm.proxy.auth.person_budget import person_budget_definition_cache_key
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    keys: Final = tuple(person_budget_definition_cache_key(budget_id) for budget_id in dict.fromkeys(budget_ids))
+    await evict_and_broadcast((*keys, *((user_id,) if user_id is not None else ())), user_api_key_cache)
+
+
+async def invalidate_person_budget_members(member_ids: tuple[str, ...], cache: "UserApiKeyCache | None" = None) -> None:
+    from litellm.proxy.auth.customer_hierarchy_auth import forget_customer_hierarchies
+    from litellm.proxy.auth.person_budget import person_budget_assignment_cache_key
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    target: Final = cache if cache is not None else user_api_key_cache
+    await forget_customer_hierarchies(member_ids, target)
+    await evict_and_broadcast(tuple(person_budget_assignment_cache_key(member_id) for member_id in member_ids), target)
 
 
 class OrganizationMemberCount(BaseModel):
@@ -207,17 +285,21 @@ def effective_member_budget(
 
 def member_response(row: PrismaRecord, now: datetime) -> CustomerMember:
     values: Final = row.model_dump()
-    override: Final = related_budget(values.get("budget_override"))
+    raw_override: Final = values.get("budget_override")
+    override: Final = MemberBudgetRecord.model_validate(raw_override) if raw_override is not None else None
     template: Final = related_budget(values.get("budget"), now)
     effective_override: Final = related_budget(
         values.get("budget_override"), now, template.max_budget if template is not None else None
     )
     expiry: Final = _EXPIRY.validate_python(values.get("budget_override_expires_at"))
+    assignment: Final = PersonBudgetAssignmentRecord.model_validate(values)
+    personal: Final = assignment.effective_budget(now)
+    scalar: Final = effective_member_budget(template, effective_override, expiry, now)
     return CustomerMember.model_validate(
         {
             **values,
             "budget_override": override,
-            "effective_budget": effective_member_budget(template, effective_override, expiry, now),
+            "effective_budget": MemberBudget.model_validate({**scalar.model_dump(), **personal.model_dump()}),
         }
     )
 
@@ -256,6 +338,28 @@ class CustomerHierarchyStore:
         self.teams: TableActions[PrismaRecord] = db.litellm_customerteamtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.members: TableActions[PrismaRecord] = db.litellm_customermembertable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.budgets: TableActions[PrismaRecord] = db.litellm_budgettable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
+        self.invalidated_budget_ids: tuple[str, ...] = ()
+        self.invalidated_member_ids: tuple[str, ...] = ()
+
+    async def lock_budgets(self, budget_ids: tuple[str, ...]) -> None:
+        if budget_ids:
+            await self.db.query_raw(
+                'SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = ANY($1::text[]) '
+                "ORDER BY budget_id FOR SHARE",
+                list(sorted(set(budget_ids))),
+            )
+
+    async def lock_member(self, member_id: str) -> None:
+        await self.db.query_raw(
+            'SELECT customer_member_id FROM "LiteLLM_CustomerMemberTable" WHERE customer_member_id = $1 FOR UPDATE',
+            member_id,
+        )
+
+    async def person_definition(self, budget_id: str | None) -> PersonBudgetDefinition | None:
+        if budget_id is None:
+            return None
+        row: Final = await self.budgets.find_unique(where={"budget_id": budget_id})
+        return PersonBudgetDefinition.model_validate(row.model_dump()) if row is not None else None
 
     async def organization_responses(self, rows: Sequence[PrismaRecord]) -> tuple[Organization, ...]:
         records: Final = tuple(
@@ -307,35 +411,53 @@ class CustomerHierarchyStore:
         return member_response(row, self.now) if row is not None else Failure(ErrorCode.NOT_FOUND)
 
     async def create_budget(self, budget: Budget, actor: str) -> str:
+        from prisma import Json
+
         budget_id: Final = str(uuid4())
+        personal: Final = (
+            {"budget_limits": Json([limit.model_dump() for limit in budget.budget_limits])}
+            if isinstance(budget, MemberBudget) and budget.budget_limits is not None
+            else {}
+        )
         await create_budget_row(
             self.budgets,
             budget_row_values(
                 {
                     **budget_values(budget),
+                    **personal,
                     "allowed_models": budget.allowed_models or (),
                     "budget_id": budget_id,
                 }
             ),
             actor,
         )
+        self.invalidated_budget_ids = (*self.invalidated_budget_ids, budget_id)
         return budget_id
 
     async def update_budget(self, budget_id: str | None, budget: Budget, actor: str) -> str:
+        from prisma import Json
+
         if budget_id is None:
             return await self.create_budget(budget, actor)
         patch: Final = _VALUES.validate_python(budget.model_dump(exclude_unset=True))
+        personal: Final = (
+            {"budget_limits": Json([limit.model_dump() for limit in budget.budget_limits])}
+            if isinstance(budget, MemberBudget) and budget.budget_limits is not None
+            else {}
+        )
         await update_budget_row(
             self.budgets,
             budget_id,
             budget_row_values(
                 {
                     **patch,
+                    **personal,
                     **({"allowed_models": budget.allowed_models or ()} if "allowed_models" in patch else {}),
                 }
             ),
             actor,
         )
+        self.invalidated_budget_ids = (*self.invalidated_budget_ids, budget_id)
         return budget_id
 
     async def write_template_metadata(
@@ -402,6 +524,7 @@ class CustomerHierarchyStore:
     async def delete_released_budget(self, previous_id: str | None, current_id: str | None) -> None:
         if previous_id is not None and current_id is None:
             await self.budgets.delete(where={"budget_id": previous_id})
+            self.invalidated_budget_ids = (*self.invalidated_budget_ids, previous_id)
 
     async def update_organization(
         self, organization_id: str, payload: OrganizationPatch, actor: str
@@ -468,6 +591,7 @@ class CustomerHierarchyStore:
         remaining: Final = {key: name for key, name in names.items() if key != budget_id}
         await self.write_template_metadata(organization_id, remaining, organization.default_budget_id, actor)
         await self.budgets.delete(where={"budget_id": budget_id})
+        self.invalidated_budget_ids = (*self.invalidated_budget_ids, budget_id)
         return None
 
     async def resolve_member_template(self, team_id: str, template_id: str | None) -> str | Failure | None:
@@ -480,6 +604,10 @@ class CustomerHierarchyStore:
         selected: Final = template_id if template_id is not None else organization.default_budget_id
         if selected is None:
             return None
+        await self.lock_budgets((selected,))
+        definition: Final = await self.person_definition(selected)
+        if definition is not None and definition.is_profile:
+            return selected
         if not any(template.budget_id == selected for template in organization.default_budgets):
             return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
         return selected
@@ -520,6 +648,14 @@ class CustomerHierarchyStore:
             return template_id
         if template_id is None and payload.budget_override is None:
             return Failure(ErrorCode.BUDGET_REQUIRED)
+        invalid: Final = await self.validate_member_override(
+            template_id,
+            payload.budget_override,
+            payload.budget_override_expires_at,
+            frozenset(payload.budget_override.model_fields_set) if payload.budget_override is not None else frozenset(),
+        )
+        if invalid is not None:
+            return invalid
         override_id: Final = (
             await self.create_budget(payload.budget_override, actor) if payload.budget_override is not None else None
         )
@@ -536,6 +672,7 @@ class CustomerHierarchyStore:
                 "updated_by": actor,
             }
         )
+        self.invalidated_member_ids = (*self.invalidated_member_ids, member_id)
         return await self.get_member(member_id)
 
     async def member_template_patch(self, member: CustomerMember, payload: MemberPatch) -> str | Failure | None:
@@ -550,9 +687,43 @@ class CustomerHierarchyStore:
             return member.budget_override_id
         if payload.budget_override is None:
             return None
-        return await self.update_budget(member.budget_override_id, payload.budget_override, actor)
+        return await self.update_budget(
+            member.budget_override_id, merged_member_override(member.budget_override, payload.budget_override), actor
+        )
+
+    async def validate_member_override(
+        self, template_id: str | None, override: MemberBudget | None, expiry: datetime | None, changed: frozenset[str]
+    ) -> Failure | None:
+        if override is None and expiry is not None:
+            return Failure(ErrorCode.INVALID_BUDGET, "An override expiration requires an override.")
+        definition: Final = (
+            PersonBudgetDefinition(
+                budget_id="override",
+                budget_limits=override.budget_limits,
+                cap_policy=override.cap_policy,
+                temp_budget_increase=override.temp_budget_increase,
+                temp_budget_expiry=override.temp_budget_expiry,
+                temp_budget_duration=override.temp_budget_duration,
+            )
+            if override is not None
+            else None
+        )
+        if (
+            definition is not None
+            and definition.temp_budget_increase
+            and changed.intersection(("temp_budget_increase", "temp_budget_expiry", "temp_budget_duration"))
+            and expiry is not None
+            and utc_datetime(expiry) <= self.now
+        ):
+            return Failure(ErrorCode.INVALID_BUDGET, "Renew the expired override before adding a temporary increase.")
+        assignment: Final = PersonBudgetAssignmentRecord(
+            budget=await self.person_definition(template_id),
+            budget_override=definition,
+        )
+        return validate_person_budget_change(definition, assignment.effective_budget(self.now), changed, self.now)
 
     async def update_member(self, member_id: str, payload: MemberPatch, actor: str) -> CustomerMember | Failure:
+        await self.lock_member(member_id)
         member: Final = await self.get_member(member_id)
         if isinstance(member, Failure):
             return member
@@ -560,18 +731,37 @@ class CustomerHierarchyStore:
         if isinstance(selected, Failure):
             return selected
         override: Final = (
-            payload.budget_override if "budget_override" in payload.model_fields_set else member.budget_override
+            merged_member_override(member.budget_override, payload.budget_override)
+            if payload.budget_override is not None
+            else None
+            if "budget_override" in payload.model_fields_set
+            else member.budget_override
         )
         if selected is None and override is None:
             return Failure(ErrorCode.BUDGET_REQUIRED)
-        override_id: Final = await self.member_override_patch(member, payload, actor)
+        if (
+            override is None
+            and payload.budget_override_expires_at is not None
+            and "budget_override" not in payload.model_fields_set
+        ):
+            return Failure(ErrorCode.INVALID_BUDGET, "An override expiration requires an override.")
         expiry: Final = (
-            payload.budget_override_expires_at
+            None
+            if override is None
+            else payload.budget_override_expires_at
             if "budget_override_expires_at" in payload.model_fields_set
             else member.budget_override_expires_at
-            if override_id is not None
-            else None
         )
+        await self.lock_budgets(tuple(item for item in (selected, member.budget_override_id) if item is not None))
+        invalid: Final = await self.validate_member_override(
+            selected,
+            override,
+            expiry,
+            frozenset(payload.budget_override.model_fields_set) if payload.budget_override is not None else frozenset(),
+        )
+        if invalid is not None:
+            return invalid
+        override_id: Final = await self.member_override_patch(member, payload, actor)
         await self.members.update(
             where={"customer_member_id": member_id},
             data={
@@ -583,6 +773,7 @@ class CustomerHierarchyStore:
             },
         )
         await self.delete_released_budget(member.budget_override_id, override_id)
+        self.invalidated_member_ids = (*self.invalidated_member_ids, member_id)
         return await self.get_member(member_id)
 
     async def list_organizations(self, page: int, page_size: int, search: str = "") -> Page[Organization]:
@@ -642,12 +833,15 @@ class CustomerHierarchyStore:
         return _member_ids(await self.members.find_many(where={"budget_id": budget_id}))
 
     async def delete_member(self, member_id: str) -> None | Failure:
+        await self.lock_member(member_id)
         member: Final = await self.get_member(member_id)
         if isinstance(member, Failure):
             return member
         await self.members.delete(where={"customer_member_id": member_id})
+        self.invalidated_member_ids = (*self.invalidated_member_ids, member_id)
         if member.budget_override_id is not None:
             await self.budgets.delete(where={"budget_id": member.budget_override_id})
+            self.invalidated_budget_ids = (*self.invalidated_budget_ids, member.budget_override_id)
         return None
 
     async def delete_team(self, team_id: str) -> None | Failure:
@@ -659,6 +853,7 @@ class CustomerHierarchyStore:
         await self.teams.delete(where={"customer_team_id": team_id})
         if team.budget_id is not None:
             await self.budgets.delete(where={"budget_id": team.budget_id})
+            self.invalidated_budget_ids = (*self.invalidated_budget_ids, team.budget_id)
         return None
 
     async def delete_organization(self, organization_id: str) -> None | Failure:
@@ -670,15 +865,25 @@ class CustomerHierarchyStore:
         await self.organizations.delete(where={"customer_org_id": organization_id})
         for template in organization.default_budgets:
             await self.budgets.delete(where={"budget_id": template.budget_id})
+            self.invalidated_budget_ids = (*self.invalidated_budget_ids, template.budget_id)
         if organization.budget_id is not None:
             await self.budgets.delete(where={"budget_id": organization.budget_id})
+            self.invalidated_budget_ids = (*self.invalidated_budget_ids, organization.budget_id)
         return None
 
 
 class CustomerHierarchy:
-    def __init__(self, db: TransactionSource, clock: Callable[[], datetime] = utc_now) -> None:
+    def __init__(
+        self,
+        db: TransactionSource,
+        clock: Callable[[], datetime] = utc_now,
+        invalidate: Callable[[tuple[str, ...]], Awaitable[None]] = invalidate_person_budget_sources,
+        invalidate_members: Callable[[tuple[str, ...]], Awaitable[None]] = invalidate_person_budget_members,
+    ) -> None:
         self.db = db
         self.clock = clock
+        self.invalidate = invalidate
+        self.invalidate_members = invalidate_members
 
     async def transaction(
         self,
@@ -690,7 +895,13 @@ class CustomerHierarchy:
 
         try:
             async with self.db.tx() as tx:
-                return await operation(CustomerHierarchyStore(tx, self.clock()))
+                store: Final = CustomerHierarchyStore(tx, self.clock())
+                result: Final = await operation(store)
+            if store.invalidated_budget_ids:
+                await self.invalidate(store.invalidated_budget_ids)
+            if store.invalidated_member_ids:
+                await self.invalidate_members(store.invalidated_member_ids)
+            return result
         except UniqueViolationError:
             return Failure(ErrorCode.ALREADY_EXISTS)
         except RecordNotFoundError:

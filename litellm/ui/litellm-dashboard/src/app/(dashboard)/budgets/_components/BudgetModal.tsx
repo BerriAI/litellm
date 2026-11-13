@@ -1,7 +1,7 @@
 import React, { useId } from "react";
 import { useTranslation } from "react-i18next";
 import { useCreateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
-import { applyBudgetPrecision } from "./budgetPrecision";
+import { budgetProfilePayload } from "./budgetProfilePayload";
 import { BudgetFormFields, type BudgetFormValues, useBudgetForm } from "./BudgetFormFields";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,7 @@ interface BudgetModalProps {
 const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVisible }) => {
   const { t } = useTranslation();
   const formId = useId();
-  const form = useBudgetForm({ budget_id: "" });
+  const form = useBudgetForm({ budget_id: "", cap_policy: "pause_until_reset" });
   const createBudget = useCreateBudget();
 
   const handleCancel = () => {
@@ -25,7 +25,7 @@ const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVis
   const handleCreate = async (formValues: BudgetFormValues) => {
     try {
       toast.info(t("budgets.createModal.toast.pending"));
-      await createBudget.mutateAsync(applyBudgetPrecision(formValues));
+      await createBudget.mutateAsync(budgetProfilePayload(formValues));
       toast.success(t("budgets.createModal.toast.created"));
       form.reset();
       setIsModalVisible(false);
@@ -48,7 +48,7 @@ const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVis
         </form>
         <DialogFooter>
           <DialogClose render={<Button variant="outline" />}>{t("budgets.createModal.cancel")}</DialogClose>
-          <Button type="submit" form={formId}>
+          <Button type="submit" form={formId} disabled={createBudget.isPending}>
             {t("budgets.createModal.submit")}
           </Button>
         </DialogFooter>

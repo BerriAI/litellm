@@ -1534,6 +1534,50 @@ async def test_create_still_upserts_and_claims_attribution():
 
 
 @pytest.mark.asyncio
+async def test_managed_job_persists_only_creator_personal_and_canonical_customer_attribution():
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from litellm_enterprise.proxy.common_utils.managed_object_attribution import ManagedObjectCreatorAttribution
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
+    from litellm.proxy.spend_tracking.carried_budget_state import creator_budget_metadata
+    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
+
+    managed_files, prisma = _make_object_store_instance()
+    creator = UserAPIKeyAuth(user_id="creator")
+    creator.person_budget_windows = (PersonBudgetWindow(
+        entity_type="customer_member", entity_id="original-member", budget_duration="12mo",
+        window_start=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        reset_at=datetime(2027, 1, 1, tzinfo=timezone.utc), max_budget=50,
+    ),)
+    creator.customer_hierarchy = CustomerHierarchyAuth(
+        customer_org_id="original-org", customer_team_id="original-team", customer_member_id="original-member", scopes=(),
+    )
+    await managed_files.store_unified_object_id(
+        unified_object_id="job", file_object=_make_batch_response(status="validating"),
+        litellm_parent_otel_span=None, model_object_id="batch-1", file_purpose="batch",
+        user_api_key_dict=creator, persist_attribution=True,
+    )
+    first = prisma.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]
+    persisted = first["create"]["budget_attribution"].data
+    await managed_files.store_unified_object_id(
+        unified_object_id="job", file_object=_make_batch_response(status="completed"),
+        litellm_parent_otel_span=None, model_object_id="batch-1", file_purpose="batch",
+        user_api_key_dict=UserAPIKeyAuth(user_id="reader"), persist_attribution=True,
+    )
+    second = prisma.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    job = SimpleNamespace(created_by="creator", api_key=None, team_id=None, budget_attribution=persisted)
+    metadata = await ManagedObjectCreatorAttribution(prisma, "test").batch_metadata(job, "job")
+
+    assert persisted == creator_budget_metadata(creator)
+    assert "budget_attribution" not in first["update"]
+    assert "budget_attribution" not in second["update"]
+    assert {key: metadata[key] for key in persisted} == persisted
+    assert metadata["user_api_key_user_id"] == "creator"
+
+
+@pytest.mark.asyncio
 async def test_a_stored_background_response_names_its_creators_end_user_and_holds_none_of_its_output():
     """Billing reads only a stored response's status and model, so neither the row nor its cache
     entry keeps what the model generated, and the row names the end user the create billed to."""

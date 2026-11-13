@@ -176,6 +176,59 @@ def _tool_usage_prisma() -> MagicMock:
     return prisma
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("logs_disabled", [False, True])
+async def test_personal_windows_share_ledger_delivery_without_duplicating_customer_spend(monkeypatch, logs_disabled):
+    from litellm.accounting.projection import project
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
+    from litellm.proxy.spend_tracking.carried_budget_state import creator_budget_metadata
+    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
+    from litellm.types.utils import ModelResponse, Usage
+
+    window = PersonBudgetWindow(
+        entity_type="customer_member", entity_id="member", budget_duration="1mo",
+        window_start=datetime(2026, 11, 1, 5, 30, tzinfo=timezone.utc),
+        reset_at=datetime(2026, 12, 1, 5, 30, tzinfo=timezone.utc), max_budget=10,
+    )
+    creator = UserAPIKeyAuth()
+    creator.person_budget_windows = (window,)
+    creator.customer_hierarchy = CustomerHierarchyAuth(
+        customer_org_id="org", customer_team_id="team", customer_member_id="member", scopes=(),
+    )
+    prisma = _tool_usage_prisma()
+    prisma.get_request_status.return_value = "success"
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", logs_disabled)
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": True})
+    writer = DBSpendUpdateWriter()
+    now = datetime(2026, 11, 12, tzinfo=timezone.utc)
+    assert await writer.update_database(
+        token=None, user_id=None, team_id=None, org_id=None, end_user_id=None,
+        kwargs={"model": "gpt-4o", "litellm_call_id": "person-cost",
+                "litellm_params": {"metadata": dict(creator_budget_metadata(creator))}},
+        completion_response=ModelResponse(model="gpt-4o", usage=Usage(prompt_tokens=10, completion_tokens=5)),
+        start_time=now, end_time=now, response_cost=0.25,
+    )
+    await drain_logging_tasks()
+    assert len(prisma.spend_log_transactions) == 1
+    contributions = project(prisma.spend_log_transactions[0]["accounting_payload"])
+    personal = [contribution for contribution in contributions if contribution.table == "LiteLLM_BudgetWindowSpend"]
+    customer = [contribution for contribution in contributions if contribution.table in {
+        "LiteLLM_CustomerOrganizationTable", "LiteLLM_CustomerTeamTable", "LiteLLM_CustomerMemberTable",
+    }]
+    assert [(dict(item.key), dict(item.increments)) for item in personal] == [({
+        "entity_type": "customer_member", "entity_id": "member", "window_duration": window.window_duration,
+    }, {"spend": 0.25})]
+    assert [(item.table, dict(item.increments)["spend"]) for item in customer] == [
+        ("LiteLLM_CustomerOrganizationTable", 0.25),
+        ("LiteLLM_CustomerTeamTable", 0.25),
+        ("LiteLLM_CustomerMemberTable", 0.25),
+    ]
+    assert await writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions() == ()
+
+
 def _minimal_spend_payload() -> dict:
     return {
         "request_id": "req-tool-1",

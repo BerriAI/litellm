@@ -3091,6 +3091,12 @@ async def prepare_key_update_data(
     llm_router: Router | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
+    from litellm.proxy.management_helpers.utils import checked_legacy_budget
+
+    if prisma_client is not None:
+        await checked_legacy_budget(prisma_client, data.budget_id)
+        if data.soft_budget is not None and existing_key_row.budget_id != data.budget_id:
+            await checked_legacy_budget(prisma_client, existing_key_row.budget_id)
     if data.router_settings is not None or (
         "router_settings" not in data.model_fields_set
         and "team_id" in data.model_fields_set
@@ -3704,7 +3710,9 @@ async def _validate_end_user_budget_id_change(
         raise HTTPException(status_code=403, detail=forbidden_detail)
     if requested_budget_id == "":
         return
-    budget_row: Final = await BudgetRepository(_require_prisma_client(prisma_client)).find_by_id(requested_budget_id)
+    from litellm.proxy.management_helpers.utils import checked_legacy_budget
+
+    budget_row: Final = await checked_legacy_budget(_require_prisma_client(prisma_client), requested_budget_id)
     if budget_row is None:
         missing_detail: Final = {"error": f"end_user_budget_id={requested_budget_id} does not match any budget."}
         raise HTTPException(status_code=400, detail=missing_detail)
@@ -5375,7 +5383,7 @@ async def generate_key_helper_fn(
     spend: float = 0.0,
     key_max_budget: float | None = None,  # key_max_budget is used to Budget Per key
     key_budget_duration: str | None = None,
-    budget_id: float | None = None,  # budget id <-> LiteLLM_BudgetTable
+    budget_id: str | None = None,  # budget id <-> LiteLLM_BudgetTable
     soft_budget: float | None = None,  # soft_budget is used to set soft Budgets Per user
     max_budget: float | None = None,  # max_budget is used to Budget Per user
     blocked: bool | None = None,
@@ -5434,6 +5442,10 @@ async def generate_key_helper_fn(
 
     if prisma_client is None:
         raise Exception("Connect Proxy to database to generate keys - https://docs.litellm.ai/docs/proxy/virtual_keys ")
+
+    from litellm.proxy.management_helpers.utils import checked_legacy_budget
+
+    await checked_legacy_budget(prisma_client, budget_id)
 
     await validate_router_settings_weights(
         router_settings,

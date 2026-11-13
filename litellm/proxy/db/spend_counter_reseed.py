@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, Optional
+from urllib.parse import unquote
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -54,6 +55,8 @@ _WINDOW_SPEND_ENTITY_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "Key": Litellm_EntityType.KEY.value,
         "Team": Litellm_EntityType.TEAM.value,
+        "User": Litellm_EntityType.USER.value,
+        "CustomerMember": "customer_member",
     }
 )
 
@@ -81,6 +84,7 @@ class SpendCounterReseed:
         spend:user:{user_id}              -> LiteLLM_UserTable.spend
         spend:org:{org_id}                -> LiteLLM_OrganizationTable.spend
         spend:project:{project_id}        -> LiteLLM_ProjectTable.spend
+        spend:person:{type}:{id}:window:{duration}@{start} -> LiteLLM_BudgetWindowSpend.spend
 
     End-user and tag spend counters intentionally do not reseed here. Their
     auth paths already load the corresponding objects via get_end_user_object()
@@ -133,6 +137,8 @@ class SpendCounterReseed:
         """
         if prisma_client is None:
             return None
+        if counter_key.startswith("spend:person:"):
+            return await SpendCounterReseed._person_window_from_db(prisma_client, counter_key)
         # Per-window key/team counters share prefixes with primary counters
         # but don't correspond to a DB row. Do not reject arbitrary entity IDs
         # or tag names that merely contain ":window:".
@@ -148,6 +154,28 @@ class SpendCounterReseed:
         if row is None:
             return None
         return float(getattr(row, "spend", 0.0) or 0.0)
+
+    @staticmethod
+    async def _person_window_from_db(prisma_client: "PrismaClient", counter_key: str) -> float | None:
+        parts: Final = counter_key.split(":", 5)
+        if len(parts) != 6 or parts[4] != "window" or parts[2] not in ("user", "customer_member"):
+            return None
+        duration, separator, start = parts[5].partition("@")
+        if not separator or duration not in ("1mo", "12mo"):
+            return None
+        try:
+            window_start: Final = datetime.fromisoformat(start)
+        except ValueError:
+            return None
+        if window_start.tzinfo is None:
+            return None
+        return await SpendCounterReseed.window_from_db(
+            prisma_client,
+            "User" if parts[2] == "user" else "CustomerMember",
+            unquote(parts[3]),
+            window_duration=parts[5],
+            window_start=window_start,
+        )
 
     @staticmethod
     async def _counter_row(prisma_client: "PrismaClient", counter_key: str) -> object | None:
@@ -290,9 +318,11 @@ class SpendCounterReseed:
         means the window boundary was crossed and nothing has rolled the row
         yet, so its spend belongs to a previous window.
 
-        Returns None for a missing, stale or unreadable row so the caller falls
-        back to the spend-logs aggregate. ``entity_type`` is the counter-facing
-        label ("Key"/"Team"); anything else has no row and returns None.
+        Key/team windows return None for a missing, stale or unreadable row so
+        the caller can fall back to the spend-logs aggregate. Personal windows
+        use an exact-boundary row: a missing row is zero, and a read failure is
+        unknown. ``entity_type`` is the counter-facing label ("Key", "Team",
+        "User" or "CustomerMember").
         """
         if prisma_client is None:
             return None
@@ -320,7 +350,7 @@ class SpendCounterReseed:
             return None
 
         if row is None:
-            return None
+            return 0.0 if entity_type in ("User", "CustomerMember") else None
         if _as_utc(row.window_start) < _as_utc(expected_window_start):
             return None
         return float(row.spend or 0.0)
@@ -410,7 +440,14 @@ class SpendCounterReseed:
     ) -> float | None:
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
-            cached: Final = await SpendCounterReseed._read_cached(spend_counter_store, counter_key)
+            if entity_type in {"User", "CustomerMember"} and spend_counter_store.has_redis:
+                reading: Final = await SpendCounterReseed._read_active_batch(counter_key)
+                cached, from_redis = reading if reading is not None else await spend_counter_store.read(counter_key)
+                # A pod's memory cannot include the personal holds or charges on other pods.
+                if not from_redis:
+                    return None
+            else:
+                cached = await SpendCounterReseed._read_cached(spend_counter_store, counter_key)
             if cached is not None:
                 return cached
 

@@ -1122,7 +1122,7 @@ from litellm.types.llms.openai import (
     ResponseInProgressEvent,
     ResponsesAPIResponse,
 )
-from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
+from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys, PersonBudgetWindow
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
@@ -3680,6 +3680,7 @@ async def increment_spend_counters(
     project_id: str | None = None,
     committed_spend_scope: EntitySpendCounterKeys | None = None,
     windows_from_ledger: bool = False,
+    person_budget_windows: tuple[PersonBudgetWindow, ...] = (),
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3702,7 +3703,8 @@ async def increment_spend_counters(
             tags=tags,
             model_access_groups=model_access_groups,
             project_id=project_id,
-        ),
+        )
+        | frozenset(window.counter_key for window in person_budget_windows),
     ):
         await _increment_spend_counters_batched(
             token=token,
@@ -3718,6 +3720,7 @@ async def increment_spend_counters(
             project_id=project_id,
             committed_spend_scope=committed_spend_scope,
             windows_from_ledger=windows_from_ledger,
+            person_budget_windows=person_budget_windows,
         )
 
 
@@ -3834,6 +3837,7 @@ async def _increment_spend_counters_batched(
     project_id: str | None = None,
     committed_spend_scope: EntitySpendCounterKeys | None = None,
     windows_from_ledger: bool = False,
+    person_budget_windows: tuple[PersonBudgetWindow, ...] = (),
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
     the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
@@ -3896,6 +3900,31 @@ async def _increment_spend_counters_batched(
                 request_started_at=request_started_at,
             )
         return pending_window
+
+    async def _person_window_increment(window: PersonBudgetWindow) -> tuple[_SpendScopeItem, ...]:
+        pending: Final = (
+            await _prepare_window_spend_counter_increment(
+                counter_key=window.counter_key,
+                entity_type=window.counter_entity_type,
+                entity_id=window.entity_id,
+                window_duration=window.window_duration,
+                window_start=window.window_start,
+                increment=cost,
+            )
+            if window.counter_key not in reserved_counter_keys
+            else None
+        )
+        if not windows_from_ledger:
+            await _enqueue_window_spend_row_update(
+                entity_type=window.entity_type,
+                entity_id=window.entity_id,
+                reset_at=window.reset_at,
+                window_duration=window.window_duration,
+                window_start=window.window_start,
+                increment=cost,
+                request_started_at=request_started_at,
+            )
+        return (pending,) if pending is not None else ()
 
     async def _window_increments(
         entity_type: Litellm_EntityType, entity_id: str, budget_limits: object
@@ -3996,6 +4025,7 @@ async def _increment_spend_counters_batched(
     scope_coros: Final = tuple(
         coro
         for coro in (
+            *(_person_window_increment(window) for window in person_budget_windows),
             _key_scope(token) if token is not None else None,
             _team_scope(team_id) if team_id is not None else None,
             _team_member_scope(user_id, team_id) if user_id is not None and team_id is not None else None,
@@ -4303,7 +4333,7 @@ async def _prepare_spend_counter_increment(
 
 
 async def _enqueue_window_spend_row_update(
-    entity_type: Litellm_EntityType,
+    entity_type: Litellm_EntityType | str,
     entity_id: str,
     reset_at: datetime | str | None,
     window_duration: str,
@@ -4330,10 +4360,11 @@ async def _enqueue_window_spend_row_update(
     """
     if window_start is None or not reset_at:
         return
+    row_entity_type: Final = entity_type.value if isinstance(entity_type, Litellm_EntityType) else entity_type
     try:
         await proxy_logging_obj.db_spend_update_writer.window_spend_update_queue.add_update(
             build_window_spend_transaction(
-                entity_type=entity_type.value,
+                entity_type=row_entity_type,
                 entity_id=entity_id,
                 window_duration=window_duration,
                 window_start=window_start,
@@ -4344,7 +4375,7 @@ async def _enqueue_window_spend_row_update(
     except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback
         verbose_proxy_logger.debug(
             "Unable to enqueue budget window spend update for %s=%s window=%s: %s",
-            entity_type.value,
+            row_entity_type,
             entity_id,
             window_duration,
             e,

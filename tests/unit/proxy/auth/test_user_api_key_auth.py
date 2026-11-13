@@ -124,7 +124,11 @@ async def test_restricted_key_model_list_denial_names_the_denied_model(
     request: Final = StarletteRequest({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     with pytest.raises(ProxyException) as denied:
         await _authorize_authenticated_request(
-            identity, request, {"model": ["model-a", "model-b"]}, "/chat/completions", "synthetic",
+            identity,
+            request,
+            {"model": ["model-a", "model-b"]},
+            "/chat/completions",
+            "synthetic",
             force_virtual_key_checks=True,
         )
     assert denied.value.code == "403"
@@ -688,8 +692,6 @@ def test_get_api_key_from_custom_header_different_casing():
         custom_header_name="X-Custom-API-Key",
         expected_api_key=token,
     )
-
-
 
 
 @pytest.mark.parametrize(
@@ -2649,28 +2651,44 @@ async def test_non_object_metadata_is_served_like_unset_mappings_whatever_the_ba
     assert mapped[1] == "app-deployment"
 
 
+def _customer_auth_database(stored: UserAPIKeyAuth) -> MagicMock:
+    from datetime import datetime, timezone
+
+    from prisma.models import LiteLLM_CustomerMemberTable
+
+    stamp: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    common: Final = {"spend": 0, "created_at": stamp, "updated_at": stamp, "created_by": "admin", "updated_by": "admin"}
+    member: Final = LiteLLM_CustomerMemberTable.model_validate(
+        {
+            **common,
+            "customer_member_id": "m1",
+            "parent_team_id": "t1",
+            "parent_team": {
+                **common,
+                "customer_team_id": "t1",
+                "parent_org_id": "o1",
+                "parent_org": {**common, "customer_org_id": "o1", "budget_ids": [], "budget_names": "{}"},
+            },
+        }
+    )
+    return MagicMock(
+        get_data=AsyncMock(return_value=stored),
+        db=MagicMock(litellm_customermembertable=MagicMock(find_unique=AsyncMock(return_value=member))),
+    )
+
+
 @pytest.mark.asyncio
 async def test_customer_hierarchy_survives_virtual_key_auth_without_legacy_end_user(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from litellm.proxy.auth import customer_hierarchy_auth as hierarchy_module
-    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 
     server: Final = litellm.proxy.proxy_server
     key: Final = "sk-hierarchy-member"
     stored: Final = UserAPIKeyAuth(token=server.hash_token(key))
-    hierarchy: Final = CustomerHierarchyAuth(
-        customer_member_id="m1",
-        customer_team_id="t1",
-        customer_org_id="o1",
-        scopes=(CustomerScopeAuth(key="customer_member", entity_id="m1", rpm_limit=1),),
-    )
-    loader: Final = AsyncMock(return_value=hierarchy)
-    monkeypatch.setattr(hierarchy_module, "get_customer_hierarchy", loader)
     monkeypatch.setattr(server, "master_key", MASTER_KEY)
     monkeypatch.setattr(server, "general_settings", {})
     monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
-    monkeypatch.setattr(server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=stored)))
+    monkeypatch.setattr(server, "prisma_client", _customer_auth_database(stored))
     monkeypatch.setattr(server, "llm_router", None)
     monkeypatch.setattr(server, "user_custom_auth", None)
     request: Final = StarletteRequest(
@@ -2689,9 +2707,10 @@ async def test_customer_hierarchy_survives_virtual_key_auth_without_legacy_end_u
         ),
     )
     identity: Final = await user_api_key_auth(request=request, api_key=f"Bearer {key}")
-    assert identity.customer_hierarchy == hierarchy
+    assert identity.customer_hierarchy is not None
+    assert identity.customer_hierarchy.customer_member_id == "m1"
+    assert identity.customer_hierarchy.customer_org_id == "o1"
     assert identity.end_user_id is None
-    assert loader.await_args is not None and loader.await_args.args[0] == "m1"
 
 
 @pytest.mark.asyncio
@@ -2699,24 +2718,15 @@ async def test_customer_hierarchy_survives_virtual_key_auth_without_legacy_end_u
 async def test_a_key_pinned_to_a_customer_org_only_serves_that_orgs_members(
     monkeypatch: pytest.MonkeyPatch, key_org: str | None, allowed: bool
 ) -> None:
-    from litellm.proxy.auth import customer_hierarchy_auth as hierarchy_module
-    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 
     server: Final = litellm.proxy.proxy_server
     key: Final = "sk-hierarchy-scoped"
     metadata: Final = {"customer_org_id": key_org} if key_org is not None else {}
     stored: Final = UserAPIKeyAuth(token=server.hash_token(key), metadata=metadata)
-    hierarchy: Final = CustomerHierarchyAuth(
-        customer_member_id="m1",
-        customer_team_id="t1",
-        customer_org_id="o1",
-        scopes=(CustomerScopeAuth(key="customer_member", entity_id="m1"),),
-    )
-    monkeypatch.setattr(hierarchy_module, "get_customer_hierarchy", AsyncMock(return_value=hierarchy))
     monkeypatch.setattr(server, "master_key", MASTER_KEY)
     monkeypatch.setattr(server, "general_settings", {})
     monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
-    monkeypatch.setattr(server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=stored)))
+    monkeypatch.setattr(server, "prisma_client", _customer_auth_database(stored))
     monkeypatch.setattr(server, "llm_router", None)
     monkeypatch.setattr(server, "user_custom_auth", None)
     request: Final = StarletteRequest(
@@ -2736,7 +2746,8 @@ async def test_a_key_pinned_to_a_customer_org_only_serves_that_orgs_members(
     )
     if allowed:
         identity: Final = await user_api_key_auth(request=request, api_key=f"Bearer {key}")
-        assert identity.customer_hierarchy == hierarchy
+        assert identity.customer_hierarchy is not None
+        assert identity.customer_hierarchy.customer_org_id == key_org or key_org is None
     else:
         with pytest.raises(ProxyException) as denied:
             await user_api_key_auth(request=request, api_key=f"Bearer {key}")

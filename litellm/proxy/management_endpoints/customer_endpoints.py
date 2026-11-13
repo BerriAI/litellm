@@ -272,7 +272,16 @@ def new_budget_request(data: NewCustomerRequest) -> BudgetNewRequest | None:
     """
     Return a new budget object if new budget params are passed.
     """
-    budget_params: Final = BudgetNewRequest.model_fields.keys()
+    from litellm.proxy.management_helpers.utils import reject_person_budget_fields
+
+    reject_person_budget_fields(data)
+    budget_params: Final = BudgetNewRequest.model_fields.keys() - {
+        "budget_id",
+        "is_profile",
+        "budget_limits",
+        "cap_policy",
+        "revision",
+    }
     budget_kv_pairs: Final = {}
 
     # Get the actual values from the data object using getattr
@@ -451,6 +460,9 @@ async def new_end_user(
         new_end_user_obj: dict[str, object] = {}
 
         ## CREATE BUDGET ## if set
+        from litellm.proxy.management_helpers.utils import checked_legacy_budget
+
+        await checked_legacy_budget(prisma_client, data.budget_id)
         _new_budget: Final = new_budget_request(data)
         if _new_budget is not None:
             try:
@@ -698,6 +710,11 @@ async def update_end_user(
             )
 
         end_user_table_data_typed: Final = LiteLLM_EndUserTable.model_validate(end_user_table_data.model_dump())
+
+        from litellm.proxy.management_helpers.utils import checked_legacy_budget, reject_person_budget_fields
+
+        reject_person_budget_fields(data_json)
+        await checked_legacy_budget(prisma_client, data.budget_id)
 
         ## Get budget table data ##
         end_user_budget_table: Final = end_user_table_data_typed.litellm_budget_table

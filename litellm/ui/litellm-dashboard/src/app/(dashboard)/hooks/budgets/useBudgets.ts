@@ -7,14 +7,16 @@ import { useCallback } from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { apiClient, budgetCreateCall, budgetUpdateCall, budgetDeleteCall } from "@/components/networking";
 import type { components } from "@/lib/http/schema";
+import { ApiError } from "@/lib/http/client";
 
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { useResourceList, type ResourceListQuery, type ResourceListResult } from "../common/useResourceList";
 import { serializeBudgetFilters } from "./budgetFilters";
+import type { BudgetProfileFields, BudgetWrite } from "./budgetProfileTypes";
 
-export type budgetItem = components["schemas"]["BudgetListItem"];
+export type budgetItem = components["schemas"]["BudgetListItem"] & BudgetProfileFields;
 
-type BudgetListResponse = components["schemas"]["ListResponse_BudgetListItem_"];
+type BudgetListResponse = Omit<components["schemas"]["ListResponse_BudgetListItem_"], "data"> & { data: budgetItem[] };
 
 export const BUDGET_LIST_PATH = "/management/v1/budgets";
 
@@ -47,7 +49,7 @@ export const useCreateBudget = () => {
   const { accessToken } = useAuthorized();
   const queryClient = useQueryClient();
 
-  return useMutation<unknown, Error, Record<string, any>>({
+  return useMutation<unknown, Error, BudgetWrite>({
     mutationFn: async (formValues) => {
       if (!accessToken) {
         throw new Error("Access token is required");
@@ -64,7 +66,7 @@ export const useUpdateBudget = () => {
   const { accessToken } = useAuthorized();
   const queryClient = useQueryClient();
 
-  return useMutation<unknown, Error, Record<string, any>>({
+  return useMutation<unknown, Error, BudgetWrite>({
     mutationFn: async (formValues) => {
       if (!accessToken) {
         throw new Error("Access token is required");
@@ -73,6 +75,11 @@ export const useUpdateBudget = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: budgetKeys.all });
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        queryClient.invalidateQueries({ queryKey: budgetKeys.all });
+      }
     },
   });
 };

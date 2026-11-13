@@ -17,6 +17,10 @@ pub enum SpendCounter {
         team_id: String,
     },
     User(String),
+    PersonWindow {
+        person_id: String,
+        window: String,
+    },
     EndUser(String),
     Org(String),
     Tag(String),
@@ -45,6 +49,9 @@ impl SpendCounter {
                 format!("spend:team_member:{user_id}:{team_id}")
             }
             Self::User(id) => format!("spend:user:{id}"),
+            Self::PersonWindow { person_id, window } => {
+                format!("spend:person:{person_id}:window:{window}")
+            }
             Self::EndUser(id) => format!("spend:end_user:{id}"),
             Self::Org(id) => format!("spend:org:{id}"),
             Self::Tag(name) => format!("spend:tag:{name}"),
@@ -89,6 +96,13 @@ impl SpendCounter {
                 }
             }
             "user" => Self::User(id.to_owned()),
+            "person" => {
+                let (person_id, window) = windowed();
+                Self::PersonWindow {
+                    person_id,
+                    window: window.ok_or_else(invalid)?,
+                }
+            }
             "end_user" => Self::EndUser(id.to_owned()),
             "org" => Self::Org(id.to_owned()),
             "tag" => Self::Tag(id.to_owned()),
@@ -97,5 +111,21 @@ impl SpendCounter {
             "shadow_eval" => Self::ShadowEval(id.to_owned()),
             _ => return Err(invalid()),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SpendCounter;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::monthly_user("spend:person:user:person%3Aone:window:1mo@2026-11-01T05:30:00+00:00")]
+    #[case::annual_customer("spend:person:customer_member:person%2Ftwo:window:12mo@2026-01-01T08:00:00+00:00")]
+    fn personal_windows_round_trip_without_a_committed_twin(#[case] key: &str) {
+        let counter = SpendCounter::parse(key).expect("valid personal window");
+        assert!(matches!(counter, SpendCounter::PersonWindow { .. }));
+        assert_eq!(counter.key(), key);
+        assert!(SpendCounter::parse(&key.replacen("spend:", "spend:committed:", 1)).is_err());
     }
 }

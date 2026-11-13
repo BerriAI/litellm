@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 import httpx
+from fastapi import HTTPException
 from openai.types.batch import Errors
 from openai.types.batch_error import BatchError
 from openai.types.batch_request_counts import BatchRequestCounts
@@ -18,7 +19,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid as uuid_module
-from litellm.constants import LITELLM_EXECUTED_BATCH_CONCURRENCY
+from litellm.constants import LITELLM_EXECUTED_BATCH_CONCURRENCY, LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
 from litellm.llms.base_llm.files.storage_backend import BaseFileStorageBackend
@@ -27,9 +28,14 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import is_request_body_safe
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
 from litellm.proxy.openai_files_endpoints.common_utils import LITELLM_EXECUTED_BATCH_ID_PREFIX
 from litellm.proxy.openai_files_endpoints.storage_backend_service import StorageBackendFileService
+from litellm.proxy.spend_tracking.budget_reservation import (
+    release_unbound_budget_reservation,
+    reserve_budget_for_request,
+)
+from litellm.proxy.spend_tracking.carried_budget_state import creator_budget_metadata
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.managed_batch_repository import ManagedBatchRepository
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -49,6 +55,7 @@ BatchStatus: TypeAlias = Literal[
 TERMINAL_BATCH_STATUSES: Final[frozenset[str]] = frozenset({"completed", "failed", "cancelled", "expired"})
 _STOP_STATUSES: Final[frozenset[str]] = TERMINAL_BATCH_STATUSES | frozenset({"cancelling"})
 _BATCH_ENDPOINT_ADAPTER: Final[TypeAdapter[BatchEndpoint]] = TypeAdapter(BatchEndpoint)
+_ROUTER_PARAMS: Final = TypeAdapter(dict[str, object])
 _CANCEL_POLL_SECONDS: Final = 1.0
 _HEARTBEAT_SECONDS: Final = 30.0
 _STALE_AFTER_SECONDS: Final = 180.0
@@ -645,10 +652,89 @@ class LiteLLMExecutedBatchRunner:
         return RowOutcome(custom_id=line.custom_id, status_code=200, body=body, succeeded=True)
 
     async def _dispatch(self, run: _BatchRun, line: BatchInputLine) -> Mapping[str, object]:
+        if run.user_api_key_dict.person_budget_windows:
+            return await self._dispatch_personal_budget_row(run, line)
         params: Final = MappingProxyType(
             {**line.body, "model": run.model, "metadata": self._row_metadata(run), "disable_fallbacks": True}
         )
         return _dump(await self._router_call(run.endpoint)(**params))
+
+    async def _dispatch_personal_budget_row(self, run: _BatchRun, line: BatchInputLine) -> Mapping[str, object]:
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        # Each concurrent row owns its hold; the creator's auth object belongs to the whole batch.
+        auth: Final = run.user_api_key_dict.model_copy(
+            update={"budget_reservation": None, "request_route": run.endpoint}
+        )
+        metadata: Final = self._row_metadata(run)
+        metadata_field: Final = metadata_variable_name_for_request(run.endpoint, line.body)
+        params: Final = {
+            **line.body,
+            "model": run.model,
+            metadata_field: metadata,
+            "disable_fallbacks": True,
+            "litellm_call_id": str(uuid_module.uuid4()),
+        }
+        reservation_task: Final = asyncio.create_task(
+            reserve_budget_for_request(
+                request_body=params,
+                route=run.endpoint,
+                llm_router=self.llm_router,
+                valid_token=auth,
+                team_object=None,
+                user_object=None,
+                prisma_client=self.prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=self.proxy_logging_obj,
+                fail_closed_budget_enforcement=True,
+                personal_budget_only=True,
+            )
+        )
+        try:
+            auth.budget_reservation = await asyncio.shield(reservation_task)
+        except asyncio.CancelledError:
+            await asyncio.shield(_release_cancelled_row_reservation(reservation_task))
+            raise
+        metadata["user_api_key_budget_reservation"] = auth.budget_reservation
+        try:
+            # Keep the same logging object on failure so billed retries retain their costs and attribution.
+            setup: Final = litellm.utils.function_setup(
+                original_function=_ROUTER_METHODS[run.endpoint],
+                rules_obj=litellm.utils.Rules(),
+                start_time=datetime.now(timezone.utc),
+                is_async_call=True,
+                **params,
+            )
+            call_params: Final = _ROUTER_PARAMS.validate_python(setup[1])
+            call_params["litellm_logging_obj"] = setup[0]
+            try:
+                return _dump(await self._router_call(run.endpoint)(**call_params))
+            except asyncio.CancelledError:
+                await asyncio.shield(
+                    self.proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # the shared hook accepts the legacy request dict
+                        request_data=call_params,
+                        original_exception=HTTPException(
+                            status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
+                            detail="Batch row cancelled while awaiting the provider",
+                        ),
+                        user_api_key_dict=auth,
+                        route=run.endpoint,
+                        dispatched_call_type=_ROUTER_METHODS[run.endpoint],
+                    )
+                )
+                raise
+            except Exception as error:
+                await self.proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # the shared hook accepts the legacy request dict
+                    request_data=call_params,
+                    original_exception=error,
+                    user_api_key_dict=auth,
+                    route=run.endpoint,
+                    dispatched_call_type=_ROUTER_METHODS[run.endpoint],
+                )
+                raise
+        finally:
+            if auth.budget_reservation is not None:
+                await asyncio.shield(release_unbound_budget_reservation(auth.budget_reservation))
 
     def _router_call(self, endpoint: BatchEndpoint) -> _RouterCall:
         method: Final[object] = getattr(self.llm_router, _ROUTER_METHODS[endpoint], None)
@@ -660,6 +746,7 @@ class LiteLLMExecutedBatchRunner:
         return {
             **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(run.user_api_key_dict),
             **LiteLLMProxyRequestSetup.get_tenant_logging_metadata(run.user_api_key_dict),
+            **creator_budget_metadata(run.user_api_key_dict),
             "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(run.user_api_key_dict),
             "user_api_end_user_max_budget": run.user_api_key_dict.end_user_max_budget,
             "tags": list(run.request_tags),
@@ -706,6 +793,16 @@ class LiteLLMExecutedBatchRunner:
         if await self.batches.compare_and_set(updated, unchanged, run.user_api_key_dict.user_id):
             return status
         return await self._advance(run, requested, fields)
+
+
+async def _release_cancelled_row_reservation(reservation_task: asyncio.Task[dict[str, object] | None]) -> None:
+    """Finish the in-flight Redis write before refunding a row that never reached the provider."""
+    try:
+        reservation: Final = await reservation_task
+    except Exception:  # noqa: BLE001  # the reservation owner already rolled back its failed admission
+        return
+    if reservation is not None:
+        await release_unbound_budget_reservation(reservation)
 
 
 def _record_batch_created(model: str, provider: str, user_api_key_dict: UserAPIKeyAuth) -> None:

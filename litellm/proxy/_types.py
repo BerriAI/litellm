@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
+from litellm.models.person_budget import PersonBudgetCapPolicy, PersonBudgetLimit
 from litellm.proxy.auth.access_group_rules import AccessGroupRule, _validate_rules
 from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
 from litellm.types.agents import (
@@ -1815,6 +1816,16 @@ class DeleteUserRequest(LiteLLMPydanticObjectBase):
 
 
 class BudgetNewRequest(LiteLLMPydanticObjectBase):
+    is_profile: bool | None = Field(default=None, description="Whether this budget defines reusable per-person limits.")
+    budget_limits: tuple[PersonBudgetLimit, ...] | None = Field(
+        default=None, description="Independent calendar-month (1mo) and calendar-year (12mo) caps per person."
+    )
+    cap_policy: PersonBudgetCapPolicy | None = Field(
+        default=None, description="Guidance when a person's cap blocks a request. Both policies pause requests."
+    )
+    revision: str | None = Field(
+        default=None, description="Revision returned by the budget list, required to edit a profile."
+    )
     budget_id: str | None = Field(default=None, description="The unique budget id.")
     max_budget: float | None = Field(
         default=None,

@@ -9545,6 +9545,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/budget_assignments/{subject_type}/{subject_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Budget Assignment
+         * @description Read a person's profile, owned override, effective calendar windows and revision. Proxy admins only.
+         */
+        get: operations["get_budget_assignment_management_v1_budget_assignments__subject_type___subject_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Budget Assignment
+         * @description Conditionally patch an assignment. Omitted fields preserve values; null clears. Stale revisions return 409.
+         */
+        patch: operations["patch_budget_assignment_management_v1_budget_assignments__subject_type___subject_id__patch"];
+        trace?: never;
+    };
     "/management/v1/budgets": {
         parameters: {
             query?: never;
@@ -9568,7 +9592,8 @@ export interface paths {
          *     tiebreaker. `q` is a case-insensitive substring match on `budget_id`.
          *     `page_size` defaults to 50 and is capped at 100. Filters are
          *     `filter[budget_duration][in|is_null]`, `filter[max_budget][gte|lte|is_null]`
-         *     and `filter[created_at][gte|lte]`.
+         *     and `filter[created_at][gte|lte]`. `filter[is_profile][eq]=true` selects reusable
+         *     per-person profiles; `false` selects shared scalar budgets. Owned personal overrides are excluded.
          *
          *     Example curl:
          *     ```
@@ -29461,6 +29486,61 @@ export interface components {
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
+        /** BudgetAssignment */
+        BudgetAssignment: {
+            /** Budget Id */
+            budget_id: string | null;
+            budget_override: components["schemas"]["PersonBudgetPolicy"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at: string | null;
+            /** Budget Override Id */
+            budget_override_id: string | null;
+            effective_budget: components["schemas"]["PersonBudgetPolicy"];
+            /** Revision */
+            revision: string;
+            /** Subject Id */
+            subject_id: string;
+            /**
+             * Subject Type
+             * @enum {string}
+             */
+            subject_type: "user" | "customer_member";
+            /** Windows */
+            windows: components["schemas"]["BudgetAssignmentWindow"][];
+        };
+        /** BudgetAssignmentPatch */
+        BudgetAssignmentPatch: {
+            /** Budget Id */
+            budget_id?: string | null;
+            budget_override?: components["schemas"]["PersonBudgetPolicy"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /**
+             * Revision
+             * @description Revision returned by the last assignment read.
+             */
+            revision: string;
+        };
+        /** BudgetAssignmentWindow */
+        BudgetAssignmentWindow: {
+            /**
+             * Budget Duration
+             * @enum {string}
+             */
+            budget_duration: "1mo" | "12mo";
+            /**
+             * Cap Policy
+             * @enum {string}
+             */
+            cap_policy: "pause_allow_increase" | "pause_until_reset";
+            /** Max Budget */
+            max_budget: number;
+            /**
+             * Reset At
+             * Format: date-time
+             */
+            reset_at: string;
+        };
         /** BudgetConfig */
         BudgetConfig: {
             /** Budget Duration */
@@ -29498,19 +29578,35 @@ export interface components {
          *     decimal strings, and a quoted "60000" breaks arithmetic in the dashboard.
          */
         BudgetListItem: {
+            /**
+             * Assignment Count
+             * @default 0
+             */
+            assignment_count: number;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Id */
             budget_id: string;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["PersonBudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Is Profile
+             * @default false
+             */
+            is_profile: boolean;
             /** Max Budget */
             max_budget?: number | null;
+            /** Revision */
+            readonly revision: string;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -29524,75 +29620,6 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
-        };
-        /** BudgetNewRequest */
-        BudgetNewRequest: {
-            /**
-             * Budget Duration
-             * @description Max duration budget should be set for (e.g. '1hr', '1d', '28d')
-             */
-            budget_duration?: string | null;
-            /**
-             * Budget Id
-             * @description The unique budget id.
-             */
-            budget_id?: string | null;
-            /**
-             * Budget Reset At
-             * @description Datetime when the budget is reset
-             */
-            budget_reset_at?: string | null;
-            /**
-             * Max Budget
-             * @description Requests will fail if this budget (in USD) is exceeded.
-             */
-            max_budget?: number | null;
-            /**
-             * Max Parallel Requests
-             * @description Max concurrent requests allowed for this budget id.
-             */
-            max_parallel_requests?: number | null;
-            /**
-             * Model Max Budget
-             * @description Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})
-             */
-            model_max_budget?: {
-                [key: string]: components["schemas"]["BudgetConfig"];
-            } | null;
-            /**
-             * Model Rpm Limit
-             * @description Max requests per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 200})
-             */
-            model_rpm_limit?: {
-                [key: string]: number;
-            } | null;
-            /**
-             * Model Tpm Limit
-             * @description Max tokens per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 400000})
-             */
-            model_tpm_limit?: {
-                [key: string]: number;
-            } | null;
-            /**
-             * Rpm Limit
-             * @description Max requests per minute, allowed for this budget id.
-             */
-            rpm_limit?: number | null;
-            /**
-             * Soft Budget
-             * @description Requests will NOT fail if this is exceeded. Will fire alerting though.
-             */
-            soft_budget?: number | null;
-            /**
-             * Tpd Limit
-             * @description Max tokens per day, charged by batch submissions, allowed for this budget id.
-             */
-            tpd_limit?: number | null;
-            /**
-             * Tpm Limit
-             * @description Max tokens per minute, allowed for this budget id.
-             */
-            tpm_limit?: number | null;
         };
         /** BudgetRequest */
         BudgetRequest: {
@@ -29627,6 +29654,95 @@ export interface components {
             /** Soft Budget */
             soft_budget?: number | null;
             /** Tpm Limit */
+            tpm_limit?: number | null;
+        };
+        /** BudgetWriteRequest */
+        BudgetWriteRequest: {
+            /**
+             * Budget Duration
+             * @description Max duration budget should be set for (e.g. '1hr', '1d', '28d')
+             */
+            budget_duration?: string | null;
+            /**
+             * Budget Id
+             * @description The unique budget id.
+             */
+            budget_id?: string | null;
+            /**
+             * Budget Limits
+             * @description Independent calendar-month (1mo) and calendar-year (12mo) caps per person.
+             */
+            budget_limits?: components["schemas"]["PersonBudgetLimit"][] | null;
+            /**
+             * Budget Reset At
+             * @description Datetime when the budget is reset
+             */
+            budget_reset_at?: string | null;
+            /**
+             * Cap Policy
+             * @description Guidance when a person's cap blocks a request. Both policies pause requests.
+             */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
+            /**
+             * Is Profile
+             * @description Whether this budget defines reusable per-person limits.
+             */
+            is_profile?: boolean | null;
+            /**
+             * Max Budget
+             * @description Requests will fail if this budget (in USD) is exceeded.
+             */
+            max_budget?: number | null;
+            /**
+             * Max Parallel Requests
+             * @description Max concurrent requests allowed for this budget id.
+             */
+            max_parallel_requests?: number | null;
+            /**
+             * Model Max Budget
+             * @description Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})
+             */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
+            /**
+             * Model Rpm Limit
+             * @description Max requests per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 200})
+             */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Model Tpm Limit
+             * @description Max tokens per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 400000})
+             */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Revision
+             * @description Revision returned by the budget list, required to edit a profile.
+             */
+            revision?: string | null;
+            /**
+             * Rpm Limit
+             * @description Max requests per minute, allowed for this budget id.
+             */
+            rpm_limit?: number | null;
+            /**
+             * Soft Budget
+             * @description Requests will NOT fail if this is exceeded. Will fire alerting though.
+             */
+            soft_budget?: number | null;
+            /**
+             * Tpd Limit
+             * @description Max tokens per day, charged by batch submissions, allowed for this budget id.
+             */
+            tpd_limit?: number | null;
+            /**
+             * Tpm Limit
+             * @description Max tokens per minute, allowed for this budget id.
+             */
             tpm_limit?: number | null;
         };
         /**
@@ -33161,7 +33277,7 @@ export interface components {
             alias?: string | null;
             /** Budget Id */
             budget_id?: string | null;
-            budget_override?: components["schemas"]["Budget"] | null;
+            budget_override?: components["schemas"]["MemberBudget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
             /** Budget Override Id */
@@ -33177,7 +33293,7 @@ export interface components {
             created_by: string;
             /** Customer Member Id */
             customer_member_id: string;
-            effective_budget: components["schemas"]["Budget"];
+            effective_budget: components["schemas"]["MemberBudget"];
             /** Parent Team Id */
             parent_team_id: string;
             /**
@@ -36370,6 +36486,15 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["PersonBudgetLimit"][] | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
+            /**
+             * Is Profile
+             * @default false
+             */
+            is_profile: boolean;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -36390,6 +36515,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
             /** Temp Budget Expiry */
             temp_budget_expiry?: string | null;
             /** Temp Budget Increase */
@@ -36410,13 +36537,22 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["PersonBudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Is Profile
+             * @default false
+             */
+            is_profile: boolean;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -36437,6 +36573,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
             /** Temp Budget Expiry */
             temp_budget_expiry?: string | null;
             /** Temp Budget Increase */
@@ -38271,6 +38409,12 @@ export interface components {
             allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Budget Override Id */
+            budget_override_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -38363,6 +38507,12 @@ export interface components {
             allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Budget Override Id */
+            budget_override_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -40462,13 +40612,49 @@ export interface components {
              */
             user_id?: string | null;
         };
+        /**
+         * MemberBudget
+         * @description Personal policy alongside the existing customer-member scalar limits.
+         */
+        MemberBudget: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["PersonBudgetLimit"][] | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+        };
         /** MemberCreate */
         MemberCreate: {
             /** Alias */
             alias?: string | null;
             /** Budget Id */
             budget_id?: string | null;
-            budget_override?: components["schemas"]["Budget"] | null;
+            budget_override?: components["schemas"]["MemberBudget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
             /** Customer Member Id */
@@ -40482,7 +40668,7 @@ export interface components {
             alias?: string | null;
             /** Budget Id */
             budget_id?: string | null;
-            budget_override?: components["schemas"]["Budget"] | null;
+            budget_override?: components["schemas"]["MemberBudget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
         };
@@ -41098,12 +41284,27 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /**
+             * Budget Limits
+             * @description Independent calendar-month (1mo) and calendar-year (12mo) caps per person.
+             */
+            budget_limits?: components["schemas"]["PersonBudgetLimit"][] | null;
+            /**
              * Budget Reset At
              * @description Datetime when the budget is reset
              */
             budget_reset_at?: string | null;
+            /**
+             * Cap Policy
+             * @description Guidance when a person's cap blocks a request. Both policies pause requests.
+             */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
             /** Default Model */
             default_model?: string | null;
+            /**
+             * Is Profile
+             * @description Whether this budget defines reusable per-person limits.
+             */
+            is_profile?: boolean | null;
             /**
              * Max Budget
              * @description Requests will fail if this budget (in USD) is exceeded.
@@ -41138,6 +41339,11 @@ export interface components {
             /** Models */
             models?: string[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /**
+             * Revision
+             * @description Revision returned by the budget list, required to edit a profile.
+             */
+            revision?: string | null;
             /**
              * Rpm Limit
              * @description Max requests per minute, allowed for this budget id.
@@ -41338,6 +41544,15 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["PersonBudgetLimit"][] | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
+            /**
+             * Is Profile
+             * @default false
+             */
+            is_profile: boolean;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -41372,6 +41587,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
             /** Temp Budget Expiry */
             temp_budget_expiry?: string | null;
             /** Temp Budget Increase */
@@ -41447,10 +41664,19 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["PersonBudgetLimit"][] | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
             /** Description */
             description?: string | null;
             /** Guardrails */
             guardrails?: string[] | null;
+            /**
+             * Is Profile
+             * @default false
+             */
+            is_profile: boolean;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -41499,6 +41725,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id: string;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
             /** Temp Budget Expiry */
             temp_budget_expiry?: string | null;
             /** Temp Budget Increase */
@@ -43211,6 +43439,29 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /** PersonBudgetLimit */
+        PersonBudgetLimit: {
+            /**
+             * Budget Duration
+             * @enum {string}
+             */
+            budget_duration: "1mo" | "12mo";
+            /** Max Budget */
+            max_budget: number;
+        };
+        /** PersonBudgetPolicy */
+        PersonBudgetPolicy: {
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["PersonBudgetLimit"][] | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
         };
         /**
          * PiiAction
@@ -51774,10 +52025,19 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["PersonBudgetLimit"][] | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_allow_increase" | "pause_until_reset") | null;
             /** Description */
             description?: string | null;
             /** Guardrails */
             guardrails?: string[] | null;
+            /**
+             * Is Profile
+             * @default false
+             */
+            is_profile: boolean;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -51823,6 +52083,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** Temp Budget Duration */
+            temp_budget_duration?: ("1mo" | "12mo") | null;
             /** Temp Budget Expiry */
             temp_budget_expiry?: string | null;
             /** Temp Budget Increase */
@@ -57927,7 +58189,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BudgetNewRequest"];
+                "application/json": components["schemas"]["BudgetWriteRequest"];
             };
         };
         responses: {
@@ -57968,7 +58230,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ConfigList"][];
                 };
             };
             /** @description Validation Error */
@@ -57991,7 +58253,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BudgetNewRequest"];
+                "application/json": components["schemas"]["BudgetWriteRequest"];
             };
         };
         responses: {
@@ -68146,6 +68408,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_budget_assignment_management_v1_budget_assignments__subject_type___subject_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subject_type: "user" | "customer_member";
+                subject_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAssignment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_budget_assignment_management_v1_budget_assignments__subject_type___subject_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subject_type: "user" | "customer_member";
+                subject_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAssignmentPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAssignment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

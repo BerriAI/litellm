@@ -1857,6 +1857,8 @@ def _key_generation_prisma_client(
 
     budget_table: Final = MagicMock()
     budget_table.create = AsyncMock(return_value=MagicMock(budget_id="created-budget-id"))
+    budget_table.find_unique = AsyncMock(return_value=LiteLLM_BudgetTable(budget_id="created-budget-id"))
+    budget_table.count = AsyncMock(return_value=0)
     budget_table.delete = AsyncMock()
     object_permission_table: Final = MagicMock()
     object_permission_table.create = AsyncMock(
@@ -1865,6 +1867,7 @@ def _key_generation_prisma_client(
     object_permission_table.delete = AsyncMock()
 
     prisma_client.db.litellm_budgettable = budget_table
+    prisma_client.writer_db.litellm_budgettable = budget_table
     prisma_client.db.litellm_objectpermissiontable = object_permission_table
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
     prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(return_value=project_record)
@@ -2012,6 +2015,7 @@ async def test_generate_key_end_user_budget_id_rejected_for_non_admin():
     """A key's default end-user budget overrides the proxy-wide one, so a non-admin must not
     be able to pick a looser one for the customers their key creates."""
     mock_prisma_client = MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock()
     with pytest.raises(HTTPException) as exc:
         await _validate_end_user_budget_id_change(
@@ -2045,6 +2049,7 @@ async def test_generate_key_end_user_budget_id_must_name_an_existing_budget():
     """A typo in end_user_budget_id would silently leave new customers on the proxy-wide default,
     so key creation rejects an id that matches no budget row."""
     mock_prisma_client = MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
     with pytest.raises(HTTPException) as exc:
         await _validate_end_user_budget_id_change(
@@ -2066,7 +2071,9 @@ async def test_generate_key_end_user_budget_id_lands_in_key_metadata():
     budget_row = MagicMock()
     budget_row.model_dump.return_value = {"budget_id": "svc-a-budget", "max_budget": 0.5}
     mock_prisma_client = MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
+    mock_prisma_client.db.litellm_budgettable.count = AsyncMock(return_value=0)
     with (
         patch(  # test-quality-ok: the helper reads proxy_server globals, no seam
             "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
@@ -2145,6 +2152,7 @@ async def test_update_key_clears_end_user_budget_id_with_empty_string():
 
     existing_key = LiteLLM_VerificationToken(token="hashed", metadata={"end_user_budget_id": "svc-a-budget"})
     mock_prisma_client = MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
 
     await _validate_update_key_data(
@@ -2171,6 +2179,7 @@ async def test_update_key_metadata_body_without_end_user_budget_id_is_a_clear_fo
     would detach the key default; that must be refused like an explicit clear, while an admin may do it."""
     existing_key = LiteLLM_VerificationToken(token="hashed", metadata={"end_user_budget_id": "svc-a-budget"})
     mock_prisma_client = MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
     non_admin = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-alice", user_id="alice")
 
@@ -22572,6 +22581,10 @@ async def test_key_update_rejects_team_change_for_project_bound_key(monkeypatch:
         budget_id="budget-update",
     )
     mock_prisma_client: Final = _wire_update_key_fn(monkeypatch, existing_key_row)
+    mock_prisma_client.writer_db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=LiteLLM_BudgetTable(budget_id="budget-update")
+    )
+    mock_prisma_client.writer_db.litellm_budgettable.count = AsyncMock(return_value=0)
     existing_permission: Final = LiteLLM_ObjectPermissionTable(
         object_permission_id="permission-update",
         vector_stores=["existing-store"],
@@ -24704,3 +24717,35 @@ async def test_proxy_admin_can_replace_or_clear_customer_key_binding(
         user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
     )
     assert actual["metadata"] == metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("consumer", ("create", "update", "end_user_default"))
+@pytest.mark.parametrize("budget_fields", (
+    {"is_profile": True},
+    {"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]},
+))
+async def test_keys_reject_references_to_personal_budgets(monkeypatch, consumer, budget_fields):
+    from tests.unit.proxy.management_endpoints.test_budget_endpoints import CatalogClient
+    from litellm.proxy import proxy_server
+
+    database = CatalogClient()
+    await database.db.litellm_budgettable.create(data={"budget_id": "personal", **budget_fields})
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    with pytest.raises(HTTPException) as rejected:
+        if consumer == "create":
+            await generate_key_helper_fn(request_type="key", budget_id="personal")
+        elif consumer == "update":
+            await prepare_key_update_data(
+                data=UpdateKeyRequest(key="sk-test", budget_id="personal"),
+                existing_key_row=LiteLLM_VerificationToken(token="hashed"),
+                prisma_client=database,
+            )
+        else:
+            await _validate_end_user_budget_id_change(
+                requested_budget_id="personal", existing_budget_id=None,
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                prisma_client=database,
+            )
+    assert rejected.value.status_code == 400
+    assert tuple(database.db.litellm_budgettable.rows) == ("personal",)

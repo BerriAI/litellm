@@ -19,6 +19,7 @@ from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.carried_budget_state import (
     CommittedBudgetSpend,
     OrgBudgetSnapshot,
+    PersonBudgetWindow,
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
 )
@@ -219,6 +220,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         ),
     )
     budget_reservation: dict[str, object] | None = Field(default=None, exclude=True)
+    person_budget_windows: tuple[PersonBudgetWindow, ...] = Field(default=(), exclude=True)
     team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
     user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
     org_budget_snapshot: OrgBudgetSnapshot | None = Field(default=None, exclude=True)
@@ -262,6 +264,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("invoked_agent_policy", None)
         values.pop("agent_invocation_cost", None)
         values.pop("billing_agent_policy", None)
+        values.pop("person_budget_windows", None)
         api_key: Final = values.get("api_key")
         if api_key is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(api_key)})  # pyright: ignore[reportArgumentType]  # non-str fails in the hasher

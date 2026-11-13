@@ -1,3 +1,4 @@
+from functools import partial
 from math import ceil
 from typing import Annotated, Final, NoReturn, TypeAlias, TypeVar
 
@@ -15,7 +16,13 @@ from litellm.proxy.list_api.common import (
     reject_unknown_query_params,
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
-from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, ErrorCode, Failure, Page
+from litellm.proxy.management_helpers.customer_hierarchy import (
+    CustomerHierarchy,
+    ErrorCode,
+    Failure,
+    Page,
+    invalidate_person_budget_members,
+)
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
 )
@@ -65,6 +72,10 @@ def error_details(code: ErrorCode) -> tuple[int, str, str]:
             return 409, "Template in use", "A default or referenced template cannot be deleted."
         case ErrorCode.BUDGET_REQUIRED:
             return 422, "Budget required", "A member requires a template or a budget override."
+        case ErrorCode.INVALID_BUDGET:
+            return 422, "Invalid budget", "The personal budget configuration is invalid."
+        case ErrorCode.REVISION_CONFLICT:
+            return 409, "Budget changed", "Reload the budget before saving changes."
         case ErrorCode.FORBIDDEN:
             return 403, "Forbidden", "Only proxy admins can manage customer hierarchies."
         case ErrorCode.DATABASE_UNAVAILABLE:
@@ -80,7 +91,7 @@ def raise_public(failure: Failure) -> NoReturn:
             type=f"{PROBLEM_TYPE_BASE}customer-hierarchy-{failure.code.value.replace('_', '-')}",
             title=title,
             status=status,
-            detail=detail,
+            detail=failure.detail or detail,
         )
     )
 
@@ -95,12 +106,21 @@ def customer_actor(auth: Annotated[UserAPIKeyAuth, Depends(require_customer_admi
     return auth.user_id or "proxy_admin"
 
 
-def get_customer_hierarchy() -> CustomerHierarchy:
+def get_user_api_key_cache() -> UserApiKeyCache:
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    return user_api_key_cache
+
+
+AuthCache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
+
+
+def get_customer_hierarchy(cache: AuthCache) -> CustomerHierarchy:
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise_public(Failure(ErrorCode.DATABASE_UNAVAILABLE))
-    return CustomerHierarchy(prisma_client)
+    return CustomerHierarchy(prisma_client, invalidate_members=partial(invalidate_person_budget_members, cache=cache))
 
 
 def resolve(result: T | Failure) -> T:
@@ -140,15 +160,6 @@ router: Final = APIRouter(
     tags=["customer hierarchy"],
     dependencies=(Depends(require_customer_admin), Depends(reject_unknown_query_params)),
 )
-
-
-def get_user_api_key_cache() -> UserApiKeyCache:
-    from litellm.proxy.proxy_server import user_api_key_cache
-
-    return user_api_key_cache
-
-
-AuthCache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
 
 
 @router.post(
@@ -348,10 +359,8 @@ async def update_customer_member(
     data: MemberPatch,
     actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
-    cache: AuthCache,
 ) -> CustomerMember:
     member: Final = resolve(await hierarchy.update_member(customer_member_id, data, actor))
-    await forget_customer_hierarchies((customer_member_id,), cache)
     return member
 
 
@@ -364,10 +373,8 @@ async def update_customer_member(
 async def delete_customer_member(
     customer_member_id: str,
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
-    cache: AuthCache,
 ) -> Response:
     resolve(await hierarchy.delete_member(customer_member_id))
-    await forget_customer_hierarchies((customer_member_id,), cache)
     return Response(status_code=204)
 
 

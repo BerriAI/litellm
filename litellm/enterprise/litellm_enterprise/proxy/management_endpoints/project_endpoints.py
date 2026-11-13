@@ -636,6 +636,10 @@ async def new_project(
                     param="project_id",
                 )
 
+        from litellm.proxy.management_helpers.utils import checked_legacy_budget, reject_person_budget_fields
+
+        reject_person_budget_fields(data)
+        await checked_legacy_budget(prisma_client, data.budget_id)
         # Create budget if not provided
         if data.budget_id is None:
             data.budget_id = await _create_budget_for_project(
@@ -791,9 +795,9 @@ async def update_project(
             )
 
         # Fetch existing project
-        existing_project: (
-            prisma_models.LiteLLM_ProjectTable | None
-        ) = await _project_table(prisma_client).find_unique(where={"project_id": data.project_id})
+        existing_project: prisma_models.LiteLLM_ProjectTable | None = await _project_table(prisma_client).find_unique(
+            where={"project_id": data.project_id}
+        )
 
         if existing_project is None:
             raise ProxyException(
@@ -868,8 +872,16 @@ async def update_project(
                 router_model_routes(llm_router, target_team_id),
             )
 
+        from litellm.proxy.management_helpers.utils import checked_legacy_budget, reject_person_budget_fields
+
+        reject_person_budget_fields(data)
+        await checked_legacy_budget(prisma_client, data.budget_id)
+        if existing_project.budget_id != data.budget_id:
+            await checked_legacy_budget(prisma_client, existing_project.budget_id)
         # Prepare update data
-        update_data = _jsonified(prisma_client, data.model_dump(exclude_none=True, exclude={"project_id"}))
+        update_data = _jsonified(
+            prisma_client, data.model_dump(exclude_none=True, exclude={"project_id", "is_profile"})
+        )
         update_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
 
         # Handle budget updates
@@ -1044,9 +1056,9 @@ async def delete_project(
                 )
 
             # Check if there are any keys associated with this project
-            associated_keys: Sequence[
-                prisma_models.LiteLLM_VerificationToken
-            ] = await _verification_token_table(prisma_client).find_many(where={"project_id": project_id})
+            associated_keys: Sequence[prisma_models.LiteLLM_VerificationToken] = await _verification_token_table(
+                prisma_client
+            ).find_many(where={"project_id": project_id})
 
             if len(associated_keys) > 0:
                 raise ProxyException(
@@ -1057,9 +1069,9 @@ async def delete_project(
                 )
 
             # Delete the project
-            deleted_project: (
-                prisma_models.LiteLLM_ProjectTable | None
-            ) = await _project_table(prisma_client).delete(where={"project_id": project_id})
+            deleted_project: prisma_models.LiteLLM_ProjectTable | None = await _project_table(prisma_client).delete(
+                where={"project_id": project_id}
+            )
 
             await delete_cached_project_object(
                 project_id=project_id,
@@ -1167,9 +1179,7 @@ async def list_projects(
 
         # If proxy admin, get all projects
         if user_api_key_has_admin_view(user_api_key_dict):
-            projects: Sequence[
-                prisma_models.LiteLLM_ProjectTable
-            ] = await _project_table(prisma_client).find_many(
+            projects: Sequence[prisma_models.LiteLLM_ProjectTable] = await _project_table(prisma_client).find_many(
                 include={"litellm_budget_table": True, "object_permission": True}
             )
         else:

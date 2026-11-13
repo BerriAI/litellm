@@ -86,6 +86,57 @@ def _row(window_start: datetime, spend: float) -> SimpleNamespace:
     return SimpleNamespace(window_start=window_start, spend=spend)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entity_type", ["user", "customer_member"])
+async def test_personal_window_never_uses_pod_memory_when_redis_is_unavailable(entity_type):
+    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    window = PersonBudgetWindow(
+        entity_type=entity_type, entity_id="person", budget_duration="1mo",
+        window_start=WINDOW_START, reset_at=WINDOW_START + timedelta(days=31), max_budget=10,
+    )
+    counters = FakeSpendCounters(redis={}, memory={window.counter_key: 0.0}, fail=True)
+    prisma = _FakePrismaClient(row=_row(WINDOW_START, 9.0))
+
+    result = await SpendCounterReseed.coalesced_window(
+        prisma, counters.store(), window.counter_key, window.counter_entity_type,
+        window.entity_id, window.window_duration, window.window_start,
+    )
+
+    assert result is None
+    assert prisma.db.litellm_budgetwindowspend.where_clauses == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entity_type", ["user", "customer_member"])
+@pytest.mark.parametrize(("row_exists", "read_fails", "expected"), [
+    (True, False, 7.25), (False, False, 0.0), (False, True, None),
+])
+async def test_personal_reseed_uses_maintained_exact_window_and_never_lifetime_or_logs(
+    entity_type, row_exists, read_fails, expected,
+):
+    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
+
+    window = PersonBudgetWindow(
+        entity_type=entity_type, entity_id="person:one/é", budget_duration="1mo",
+        window_start=datetime.fromisoformat("2026-11-01T05:30:00+00:00"),
+        reset_at=datetime.fromisoformat("2026-12-01T05:30:00+00:00"), max_budget=10,
+    )
+    prisma = _FakePrismaClient(
+        row=_row(window.window_start, 7.25) if row_exists else None,
+        spend_logs_total=999, error=RuntimeError("database unavailable") if read_fails else None,
+    )
+
+    assert await SpendCounterReseed.from_db(prisma, window.counter_key) == expected
+    assert prisma.db.litellm_budgetwindowspend.where_clauses == [{
+        "entity_type_entity_id_window_duration": {
+            "entity_type": entity_type, "entity_id": "person:one/é", "window_duration": window.window_duration,
+        },
+    }]
+    assert prisma.db.litellm_spendlogs.call_count == 0
+
+
 class _PausedSpendTable:
     def __init__(self, spend: float) -> None:
         self.spend: Final = spend
@@ -217,7 +268,7 @@ async def test_window_from_table_treats_naive_row_timestamp_as_utc():
     "prisma, entity_type",
     [
         (_FakePrismaClient(row=None), "Key"),
-        (_FakePrismaClient(row=_row(WINDOW_START, 1.0)), "User"),
+        (_FakePrismaClient(row=_row(WINDOW_START, 1.0)), "Organization"),
         (_FakePrismaClient(error=RuntimeError("connection reset")), "Key"),
         (None, "Key"),
     ],

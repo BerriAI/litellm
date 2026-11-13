@@ -38,6 +38,7 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
     TEAM_ADVISORY_LOCK_SQL,
     USER_ROWS_LOCK_SQL,
 )
+from litellm.proxy.management_helpers.utils import checked_legacy_budget_row
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
 from litellm.repositories.team_repository import TeamRepository
@@ -195,7 +196,7 @@ async def _member_budget_ids(
     default_budget_id: Final = _default_member_budget_id(team)
     if default_budget_id is None:
         return MappingProxyType({})
-    default_budget: Final = await _budget_tx_db(tx).find_unique(where={"budget_id": default_budget_id})
+    default_budget: Final = await checked_legacy_budget_row(_budget_tx_db(tx), default_budget_id)
     return MappingProxyType(dict.fromkeys(user_ids, default_budget_id if default_budget is not None else None))
 
 

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+import litellm
 from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 from openai.types.batch_request_counts import BatchRequestCounts
 
@@ -57,6 +58,178 @@ ALL_STATUSES: Final[tuple[BatchStatus, ...]] = (
     "cancelled",
     "expired",
 )
+
+
+class _BudgetBatchProvider(litellm.CustomLLM):
+    def __init__(self):
+        self.entered = asyncio.Event()
+        self.finish = asyncio.Event()
+        self.calls = 0
+        self.fail = False
+
+    async def acompletion(self, model, messages, **kwargs):
+        kwargs["logging_obj"].pre_call(input=messages, api_key="", additional_args={})
+        self.calls += 1
+        self.entered.set()
+        await self.finish.wait()
+        if self.fail:
+            raise litellm.ServiceUnavailableError(message="provider unavailable", model=model, llm_provider="budgetbatch")
+        return ModelResponse(
+            model=model,
+            choices=[{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            usage=litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+
+
+@pytest.fixture
+def personal_batch(monkeypatch, request):
+    from litellm.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    provider = _BudgetBatchProvider()
+    monkeypatch.setattr(litellm, "budget_exceeded_status_code", 429)
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "budgetbatch", "custom_handler": provider}])
+    litellm.utils.custom_llm_setup()
+    for callbacks in ("callbacks", "success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, callbacks, [])
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger()])
+    router = Router(model_list=[{
+        "model_name": BATCH_MODEL,
+        "litellm_params": {"model": "budgetbatch/model", "input_cost_per_token": getattr(request, "param", 0.0), "output_cost_per_token": 1.0},
+        "model_info": {"id": DEPLOYMENT_ID},
+    }], num_retries=0)
+    window = PersonBudgetWindow(
+        entity_type="user", entity_id="person", budget_duration="1mo",
+        window_start=datetime(2026, 11, 1, tzinfo=timezone.utc),
+        reset_at=datetime(2026, 12, 1, tzinfo=timezone.utc), max_budget=1.5,
+    )
+    auth = UserAPIKeyAuth(user_id="person")
+    auth.person_budget_windows = (window,)
+    counters = FakeSpendCounters(redis={window.counter_key: 0.0})
+    logging = ProxyLogging(user_api_key_cache=DualCache())
+    monkeypatch.setattr(proxy_server, "spend_counter_store", counters.store())
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging)
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": False, "disable_budget_reservation": True})
+    harness = make_runner(user=auth, general_settings={"disable_budget_reservation": True})
+    harness.runner.llm_router = router
+    harness.runner.proxy_logging_obj = logging
+    line = BatchInputLine.model_validate(chat_row("one", "hello", max_tokens=1))
+    run = litellm_executed_batches._BatchRun(
+        unified_batch_id="batch", llm_batch_id="batch", model=BATCH_MODEL, endpoint=CHAT_ENDPOINT,
+        lines=(line,), user_api_key_dict=auth, request_tags=(), deadline=float("inf"),
+    )
+    yield harness.runner, run, line, provider, counters, logging
+    provider.finish.set()
+    router.discard()
+
+
+@pytest.mark.timeout(30)
+async def test_personal_batch_rows_reserve_concurrently_even_when_legacy_reservations_are_disabled(personal_batch):
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    runner, run, line, provider, counters, logging = personal_batch
+    first = asyncio.create_task(runner._row_outcome(run, line))
+    try:
+        await asyncio.wait_for(provider.entered.wait(), 10)
+        rejected = await asyncio.wait_for(runner._row_outcome(run, line.model_copy(update={"custom_id": "two"})), 10)
+        assert rejected.status_code == 429
+        assert provider.calls == 1
+        assert counters.redis[run.user_api_key_dict.person_budget_windows[0].counter_key] == 1.0
+    finally:
+        provider.finish.set()
+        completed = await first
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), 10)
+    assert completed.status_code == 200
+    assert run.user_api_key_dict.budget_reservation is None
+    assert counters.redis[run.user_api_key_dict.person_budget_windows[0].counter_key] == 1.0
+    rows = await logging.db_spend_update_writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
+    assert len(rows) == 1
+    assert rows[0]["spend"] == 1.0
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_personal_batch_failure_or_cancellation_releases_its_own_hold(personal_batch, cancel):
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    runner, run, line, provider, counters, logging = personal_batch
+    provider.fail = True
+    task = asyncio.create_task(runner._row_outcome(run, line))
+    try:
+        await asyncio.wait_for(provider.entered.wait(), 10)
+        if cancel:
+            task.cancel()
+        provider.finish.set()
+        result = (await asyncio.gather(task, return_exceptions=True))[0]
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), 10)
+    finally:
+        provider.finish.set()
+        await asyncio.gather(task, return_exceptions=True)
+    assert isinstance(result, asyncio.CancelledError) if cancel else result.status_code == 503
+    assert counters.redis[run.user_api_key_dict.person_budget_windows[0].counter_key] == 0.0
+    assert run.user_api_key_dict.budget_reservation is None
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize("personal_batch", [0.01], indirect=True)
+async def test_personal_batch_cancel_persists_the_dispatched_input_cost(personal_batch):
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    runner, run, line, provider, counters, logging = personal_batch
+    task = asyncio.create_task(runner._row_outcome(run, line))
+    try:
+        await asyncio.wait_for(provider.entered.wait(), 10)
+        task.cancel()
+        result = (await asyncio.gather(task, return_exceptions=True))[0]
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), 10)
+    finally:
+        provider.finish.set()
+        await asyncio.gather(task, return_exceptions=True)
+    assert isinstance(result, asyncio.CancelledError)
+    spend = counters.redis[run.user_api_key_dict.person_budget_windows[0].counter_key]
+    assert 0 < spend < 1.0
+    rows = await logging.db_spend_update_writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
+    assert len(rows) == 1
+    assert rows[0]["spend"] == pytest.approx(spend)
+
+
+@pytest.mark.timeout(30)
+async def test_personal_batch_cancel_during_reservation_refunds_before_dispatch(personal_batch, monkeypatch):
+    runner, run, line, provider, counters, logging = personal_batch
+    written, release_reply = asyncio.Event(), asyncio.Event()
+    increment = counters.increment_many
+
+    async def paused_redis_reply(increments):
+        result = await increment(increments)
+        if not written.is_set():
+            written.set()
+            await release_reply.wait()
+        return result
+
+    monkeypatch.setattr(counters, "increment_many", paused_redis_reply)
+    task = asyncio.create_task(runner._row_outcome(run, line))
+    try:
+        await asyncio.wait_for(written.wait(), 10)
+        task.cancel()
+        release_reply.set()
+        result = (await asyncio.gather(task, return_exceptions=True))[0]
+    finally:
+        release_reply.set()
+        await asyncio.gather(task, return_exceptions=True)
+    assert isinstance(result, asyncio.CancelledError)
+    assert provider.calls == 0
+    assert counters.redis[run.user_api_key_dict.person_budget_windows[0].counter_key] == 0.0
+    assert run.user_api_key_dict.budget_reservation is None
 
 
 def chat_row(custom_id: str, content: str, **body_extra: object) -> dict[str, object]:

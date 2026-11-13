@@ -26,7 +26,13 @@ def matches_where(row: Mapping[str, object], where: Mapping[str, object]) -> boo
             nested: Final = TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(value)
             matched: Final = tuple(matches_where(row, part) for part in nested)
             return any(matched) if key == "OR" else all(matched)
+        if key == "NOT":
+            return not matches_where(row, TypeAdapter(Mapping[str, object]).validate_python(value))
         if isinstance(value, Mapping):
+            if "some" in value:
+                return bool(row.get(key))
+            if "has" in value:
+                return value["has"] in (row.get(key) or ())
             if "in" in value:
                 return row.get(key) in value["in"]
             if "not" in value:
@@ -79,20 +85,41 @@ class Table:
                 "budget_names": {},
                 "created_at": NOW,
                 "updated_at": NOW,
+                "is_profile": False,
                 **{key: value.data if isinstance(value, Json) else value for key, value in data.items()},
             }
         )
         self.rows = {**self.rows, str(data[self.id_field]): row}
         return await self.include(row, include)
 
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> Record | None:
+    async def update(
+        self, where: Mapping[str, object], data: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> Record | None:
         row_id: Final = str(where[self.id_field])
         if row_id not in self.rows:
             return None
         values: Final = {key: value.data if isinstance(value, Json) else value for key, value in data.items()}
         row: Final = self.rows[row_id].model_copy(update=values)
         self.rows = {**self.rows, row_id: row}
-        return row
+        return await self.include(row, include)
+
+    def query_values(self, row: Record) -> Mapping[str, object]:
+        if self.id_field != "budget_id":
+            return row.model_dump()
+        budget_id: Final = row.model_dump()["budget_id"]
+        related: Final = {
+            "customer_member_overrides": (self.database.litellm_customermembertable, "budget_override_id"),
+            "user_overrides": (self.database.litellm_usertable, "budget_override_id"),
+            "customer_members": (self.database.litellm_customermembertable, "budget_id"),
+            "user_profiles": (self.database.litellm_usertable, "budget_id"),
+        }
+        return {
+            **row.model_dump(),
+            **{
+                relation: tuple(item for item in table.rows.values() if item.model_dump().get(field) == budget_id)
+                for relation, (table, field) in related.items()
+            },
+        }
 
     async def find_many(
         self,
@@ -102,7 +129,7 @@ class Table:
         skip: int = 0,
         take: int | None = None,
     ) -> tuple[Record, ...]:
-        matches: Final = tuple(row for row in self.rows.values() if matches_where(row.model_dump(), where or {}))
+        matches: Final = tuple(row for row in self.rows.values() if matches_where(self.query_values(row), where or {}))
         ordered: Final = reduce(
             lambda rows, key: tuple(
                 sorted(
@@ -138,10 +165,11 @@ class Database:
         self.litellm_customerteamtable = Table("customer_team_id", self)
         self.litellm_customermembertable = Table("customer_member_id", self)
         self.litellm_budgettable = Table("budget_id", self)
+        self.litellm_usertable = Table("user_id", self)
         self.locked_organization_ids: tuple[str, ...] = ()
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
-        if "FOR UPDATE" in query:
+        if "FOR UPDATE" in query or "FOR SHARE" in query:
             self.locked_organization_ids = (*self.locked_organization_ids, *(str(arg) for arg in args))
             return ()
         with sqlite3.connect(":memory:") as connection:
@@ -179,6 +207,7 @@ class Database:
             self.litellm_customerteamtable,
             self.litellm_customermembertable,
             self.litellm_budgettable,
+            self.litellm_usertable,
         )
         snapshots: Final = tuple(table.rows for table in tables)
         try:

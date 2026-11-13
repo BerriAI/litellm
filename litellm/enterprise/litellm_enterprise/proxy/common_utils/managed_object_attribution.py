@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import CLI_SESSION_KEY_PREFIX
+from litellm.proxy.spend_tracking.carried_budget_state import stored_budget_metadata
 from litellm.repositories.table_repositories import (
     DeletedVerificationTokenRepository,
     DeprecatedVerificationTokenRepository,
@@ -70,6 +71,9 @@ class ManagedObjectRow(Protocol):
 
     @property
     def end_user_id(self) -> str | None: ...
+
+    @property
+    def budget_attribution(self) -> object: ...
 
 
 _TAG_LIST_ADAPTER: Final[TypeAdapter[list[object]]] = TypeAdapter(list[object])
@@ -327,6 +331,7 @@ def _shared_metadata(job: ManagedObjectRow, rows: _CreatorRows) -> Mapping[str, 
         **({"user_api_key_team_alias": team_alias} if team_alias is not None else {}),
         **({"user_api_key_org_id": org_id} if org_id is not None else {}),
         **({"tags": tags} if tags else {}),
+        **stored_budget_metadata(getattr(job, "budget_attribution", None)),
     }
 
 

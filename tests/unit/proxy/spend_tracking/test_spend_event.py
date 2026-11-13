@@ -117,6 +117,36 @@ def test_event_is_compact_and_omits_bodies_by_default():
     assert decoded["litellm_params"]["proxy_server_request"] is None
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_spend_event_replay_preserves_personal_window_and_customer_identity(stream):
+    from litellm.proxy.spend_tracking.carried_budget_state import creator_budget_metadata, person_budget_windows_from_kwargs
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, customer_hierarchy_ids_from_request
+    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
+
+    creator = UserAPIKeyAuth()
+    creator.person_budget_windows = (PersonBudgetWindow(
+        entity_type="customer_member", entity_id="member", budget_duration="12mo",
+        window_start=datetime.fromisoformat("2026-01-01T00:30:00-05:00"),
+        reset_at=datetime.fromisoformat("2027-01-01T00:30:00-05:00"), max_budget=100,
+    ),)
+    creator.customer_hierarchy = CustomerHierarchyAuth(
+        customer_org_id="org", customer_team_id="team", customer_member_id="member", scopes=(),
+    )
+    kwargs = _success_kwargs()
+    kwargs["stream"] = stream
+    kwargs["litellm_params"]["metadata"].update(creator_budget_metadata(creator))
+    if stream:
+        kwargs["complete_streaming_response"] = _response()
+    event = decode_spend_event(_build(kwargs, _response()))
+    assert not isinstance(event, SpendEventDecodeError)
+    replay = spend_event_callback_args(event).kwargs
+
+    assert person_budget_windows_from_kwargs(replay) == creator.person_budget_windows
+    ids = customer_hierarchy_ids_from_request(replay)
+    assert ids is not None
+    assert (ids.customer_org_id, ids.customer_team_id, ids.customer_member_id) == ("org", "team", "member")
+
+
 def test_event_carries_bodies_when_spend_logs_store_them():
     line: Final = _build(_success_kwargs(), _response(), store_bodies=True)
     decoded: Final = json.loads(line)

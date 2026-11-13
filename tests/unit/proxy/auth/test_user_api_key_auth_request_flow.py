@@ -5256,6 +5256,7 @@ async def test_centralized_common_checks_carries_team_and_user_budget_state_on_t
             setattr(_proxy_server_mod, k, v)
 
     assert dict(carried_budget_metadata(token)) == {
+        "user_api_key_person_budget_windows": [],
         "user_api_key_team_budget_reset_at": "2026-10-01T00:00:00Z",
         "user_api_key_team_table_max_budget": 300.0,
         "user_api_key_user_budget_reset_at": None,

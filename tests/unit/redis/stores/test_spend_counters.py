@@ -17,6 +17,7 @@ from litellm.redis.stores.spend_counters import (
     key_window_counter,
     model_access_group_counter,
     org_counter,
+    person_window_counter,
     project_counter,
     shadow_eval_counter,
     tag_counter,
@@ -41,6 +42,14 @@ _KEYS: Final = (
     (team_window_counter("team-a", "1h"), "spend:team:team-a:window:1h"),
     (team_member_counter("user:with:colons", "team-a"), "spend:team_member:user:with:colons:team-a"),
     (user_counter("user@example.com"), "spend:user:user@example.com"),
+    (
+        person_window_counter("user", "person:one", "1mo@2026-11-01T05:30:00+00:00"),
+        "spend:person:user:person%3Aone:window:1mo@2026-11-01T05:30:00+00:00",
+    ),
+    (
+        person_window_counter("customer_member", "person/two", "12mo@2026-01-01T08:00:00+00:00"),
+        "spend:person:customer_member:person%2Ftwo:window:12mo@2026-01-01T08:00:00+00:00",
+    ),
     (end_user_counter("customer é 1"), "spend:end_user:customer é 1"),
     (org_counter("org-1"), "spend:org:org-1"),
     (tag_counter("prod:eu"), "spend:tag:prod:eu"),

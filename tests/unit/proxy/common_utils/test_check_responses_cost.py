@@ -77,6 +77,7 @@ class _StoredResponse:
     org_id: str | None = None
     request_tags: object = None
     end_user_id: str | None = None
+    budget_attribution: object = None
 
 
 class _InMemoryManagedObjectTable:
@@ -284,7 +285,7 @@ class TestCheckResponsesCost:
     ):
         """Test check_responses_cost with a completed response"""
         # Mock job with response ID
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = "resp_test_123"
         mock_job.created_by = "test-user"
         mock_job.id = "job-123"
@@ -332,7 +333,7 @@ class TestCheckResponsesCost:
     ):
         """Test check_responses_cost with a failed response"""
         # Mock job
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = "resp_test_456"
         mock_job.created_by = "test-user"
         mock_job.id = "job-456"
@@ -375,7 +376,7 @@ class TestCheckResponsesCost:
     ):
         """Test check_responses_cost with a cancelled response"""
         # Mock job
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = "resp_test_789"
         mock_job.created_by = "test-user"
         mock_job.id = "job-789"
@@ -418,7 +419,7 @@ class TestCheckResponsesCost:
     ):
         """Test check_responses_cost with a response still in progress"""
         # Mock job
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = "resp_test_in_progress"
         mock_job.created_by = "test-user"
         mock_job.id = "job-in-progress"
@@ -462,7 +463,7 @@ class TestCheckResponsesCost:
     ):
         """Test check_responses_cost with a queued response"""
         # Mock job
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = "resp_test_queued"
         mock_job.created_by = "test-user"
         mock_job.id = "job-queued"
@@ -506,7 +507,7 @@ class TestCheckResponsesCost:
     ):
         """Test check_responses_cost handles exceptions gracefully"""
         # Mock job
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = "resp_test_error"
         mock_job.created_by = "test-user"
         mock_job.id = "job-error"
@@ -551,7 +552,7 @@ class TestCheckResponsesCost:
             response_id="resp_upstream_404",
         )
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = encoded_response_id
         mock_job.created_by = "test-user"
         mock_job.id = "job-404"
@@ -614,7 +615,7 @@ class TestCheckResponsesCost:
             )
         assert mapped.value.status_code == 404
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = encoded_response_id
         mock_job.created_by = "test-user"
         mock_job.id = "job-404-mapped"
@@ -647,7 +648,7 @@ class TestCheckResponsesCost:
             response_id="resp_upstream_gone",
         )
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = encoded_response_id
         mock_job.created_by = "test-user"
         mock_job.id = "job-404-fallback"
@@ -686,7 +687,7 @@ class TestCheckResponsesCost:
             response_id="resp_upstream_still_there",
         )
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = encoded_response_id
         mock_job.created_by = "test-user"
         mock_job.id = "job-404-other"
@@ -724,13 +725,13 @@ class TestCheckResponsesCost:
             custom_llm_provider="openai", model_id="deployment-healthy", response_id="resp_upstream_healthy"
         )
 
-        broken_job = MagicMock()
+        broken_job = MagicMock(budget_attribution=None)
         broken_job.unified_object_id = broken_response_id
         broken_job.created_by = "test-user"
         broken_job.id = "job-broken"
         broken_job.file_object = {"model": "gpt-5.5", "id": broken_response_id}
 
-        healthy_job = MagicMock()
+        healthy_job = MagicMock(budget_attribution=None)
         healthy_job.unified_object_id = healthy_response_id
         healthy_job.created_by = "test-user"
         healthy_job.id = "job-healthy"
@@ -778,7 +779,7 @@ class TestCheckResponsesCost:
             response_id="resp_upstream_500",
         )
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = encoded_response_id
         mock_job.created_by = "test-user"
         mock_job.id = "job-500"
@@ -808,19 +809,19 @@ class TestCheckResponsesCost:
     ):
         """Test check_responses_cost with multiple jobs"""
         # Mock multiple jobs
-        mock_job1 = MagicMock()
+        mock_job1 = MagicMock(budget_attribution=None)
         mock_job1.unified_object_id = "resp_test_1"
         mock_job1.created_by = "user1"
         mock_job1.id = "job-1"
         mock_job1.file_object = {"model": "gpt-4o", "id": "resp_test_1"}
 
-        mock_job2 = MagicMock()
+        mock_job2 = MagicMock(budget_attribution=None)
         mock_job2.unified_object_id = "resp_test_2"
         mock_job2.created_by = "user2"
         mock_job2.id = "job-2"
         mock_job2.file_object = {"model": "gpt-4o", "id": "resp_test_2"}
 
-        mock_job3 = MagicMock()
+        mock_job3 = MagicMock(budget_attribution=None)
         mock_job3.unified_object_id = "resp_test_3"
         mock_job3.created_by = "user3"
         mock_job3.id = "job-3"
@@ -906,7 +907,7 @@ class TestCheckResponsesCost:
             response_id="resp_upstream_123",
         )
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = encoded_response_id
         mock_job.created_by = "test-user"
         mock_job.id = "job-router"
@@ -980,7 +981,7 @@ class TestCheckResponsesCost:
             )
         )
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = encrypted_response_id
         mock_job.created_by = "test-user"
         mock_job.id = "job-encrypted"
@@ -1028,7 +1029,7 @@ class TestCheckResponsesCost:
         self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
     ):
         """Ids that carry no deployment info can't be routed, so fall back to the SDK."""
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = "resp_plain_upstream_id"
         mock_job.created_by = "test-user"
         mock_job.id = "job-plain"
@@ -1077,7 +1078,7 @@ class TestCheckResponsesCost:
             response_id="resp_upstream_789",
         )
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = encoded_response_id
         mock_job.created_by = "test-user"
         mock_job.id = "job-missing-deployment"
@@ -1122,7 +1123,7 @@ class TestCheckResponsesCost:
         self, check_responses_cost_instance, mock_prisma_client
     ):
         """'incomplete' is terminal in the Responses API, so the row must not stay queued."""
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = "resp_test_incomplete"
         mock_job.created_by = "test-user"
         mock_job.id = "job-incomplete"
@@ -1158,7 +1159,7 @@ class TestCheckResponsesCost:
         self, check_responses_cost_instance, mock_prisma_client
     ):
         """When file_object has no 'model' key, model_name is None and metadata skips model fields."""
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = "resp_test_no_model"
         mock_job.created_by = "test-user"
         mock_job.id = "job-no-model"
@@ -1195,7 +1196,7 @@ class TestCheckResponsesCost:
             is_unbilled_non_inference_call,
         )
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = "resp_test_billed"
         mock_job.created_by = "test-user"
         mock_job.id = "job-billed"
@@ -1227,7 +1228,7 @@ class TestCheckResponsesCost:
         """The poll's billing event is the one billed event of a background job, so its spend row must name
         the key, team, org, user, and tags of the create it settles, read off the managed object row,
         never the poller itself."""
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.unified_object_id = "resp_test_attributed"
         mock_job.id = "job-attributed"
         mock_job.created_by = "alice"
@@ -1760,6 +1761,7 @@ def _priced_poller(
     requested_model: str = "priced-gpt",
     model_group_alias: Mapping[str, str] = MappingProxyType({}),
     team_id: str | None = None,
+    budget_attribution: object = None,
 ) -> _PricedPoller:
     from types import SimpleNamespace
 
@@ -1778,6 +1780,7 @@ def _priced_poller(
                 unified_object_id=response_id,
                 status="queued",
                 api_key=api_key,
+                budget_attribution=budget_attribution,
                 file_object={"model": requested_model},
                 team_id=team_id or _team_alpha_when_its_rows_exist(team_row, deleted_team_row, default_team_settings),
             ),
@@ -1901,6 +1904,81 @@ async def test_the_billing_event_prices_the_fetched_usage_at_the_deployment_rate
     assert payload["metadata"]["user_api_key_hash"] == _CREATING_KEY_HASH
     assert read.hidden_params == {"response_cost": 0.0}
     assert billing.table.statuses == {"job-priced": "completed"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ledger", [False, True])
+async def test_deferred_response_race_charges_creator_window_and_customer_once(monkeypatch, ledger):
+    import litellm
+    from litellm.accounting.projection import project
+    from litellm.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.spend_tracking.carried_budget_state import creator_budget_metadata
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.responses.streaming_iterator import drain_logging_tasks
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
+    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
+    from tests.unit.proxy.db.test_db_spend_update_writer import _tool_usage_prisma
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    window = PersonBudgetWindow(
+        entity_type="customer_member", entity_id="original-member", budget_duration="1mo",
+        window_start=datetime.fromisoformat("2026-11-01T05:30:00+00:00"),
+        reset_at=datetime.fromisoformat("2026-12-01T05:30:00+00:00"), max_budget=10,
+    )
+    creator = UserAPIKeyAuth(user_id="creator")
+    creator.person_budget_windows = (window,)
+    creator.customer_hierarchy = CustomerHierarchyAuth(
+        customer_org_id="original-org", customer_team_id="original-team", customer_member_id="original-member", scopes=(),
+    )
+    priced = _priced_poller(budget_attribution=json.loads(json.dumps(dict(creator_budget_metadata(creator)))))
+    counters = FakeSpendCounters(redis={window.counter_key: 2.0}, redis_default=0.0)
+    prisma = _tool_usage_prisma()
+    prisma.get_request_status.return_value = "success"
+    prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    logging = ProxyLogging(user_api_key_cache=DualCache())
+    for callbacks in ("callbacks", "success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, callbacks, [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [ProxyDBLogger()])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": ledger})
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", True)
+    monkeypatch.setattr(proxy_server, "spend_counter_store", counters.store())
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "llm_router", priced.poller.llm_router)
+
+    results = await asyncio.gather(priced.bill(_terminal_response()), priced.bill(_terminal_response()))
+    await drain_logging_tasks()
+
+    assert sum(result is not None for result in results) == 1
+    assert counters.redis[window.counter_key] == pytest.approx(2.2)
+    writer = logging.db_spend_update_writer
+    windows = await writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
+    if ledger:
+        assert windows == ()
+        assert len(prisma.spend_log_transactions) == 1
+        contributions = project(prisma.spend_log_transactions[0]["accounting_payload"])
+        personal = [c for c in contributions if c.table == "LiteLLM_BudgetWindowSpend"]
+        assert len(personal) == 1
+        assert dict(personal[0].key) == {
+            "entity_type": "customer_member", "entity_id": "original-member", "window_duration": window.window_duration,
+        }
+        customer = [c for c in contributions if c.table in {
+            "LiteLLM_CustomerOrganizationTable", "LiteLLM_CustomerTeamTable", "LiteLLM_CustomerMemberTable",
+        }]
+        assert len(customer) == 3
+        assert all(dict(c.increments)["spend"] == pytest.approx(0.2) for c in (*personal, *customer))
+    else:
+        assert len(windows) == 1
+        assert windows[0]["window_duration"] == window.window_duration
+        assert windows[0]["spend"] == pytest.approx(0.2)
+        transactions = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+        assert transactions["customer_member_list_transactions"] == {"original-member": pytest.approx(0.2)}
+        assert transactions["customer_team_list_transactions"] == {"original-team": pytest.approx(0.2)}
+        assert transactions["customer_org_list_transactions"] == {"original-org": pytest.approx(0.2)}
 
 
 @pytest.mark.asyncio

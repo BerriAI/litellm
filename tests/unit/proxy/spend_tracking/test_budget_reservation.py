@@ -7,6 +7,7 @@ from typing import Final
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.caching import DualCache
@@ -59,6 +60,47 @@ def _budgeted_token() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key="sk-test", token="hashed-token", max_budget=100.0, spend=0.0)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("spend", "redis_fails", "expected_error"), [
+    (1.0, False, None),
+    (10.0, False, litellm.BudgetExceededError),
+    (0.0, True, HTTPException),
+    (None, False, HTTPException),
+])
+async def test_unpriced_personal_requests_still_check_current_window(monkeypatch, spend, redis_fails, expected_error):
+    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    window = PersonBudgetWindow(
+        entity_type="user", entity_id="person", budget_duration="1mo",
+        window_start=datetime(2026, 11, 1, tzinfo=timezone.utc),
+        reset_at=datetime(2026, 12, 1, tzinfo=timezone.utc), max_budget=10,
+    )
+    auth = UserAPIKeyAuth(user_id="person")
+    auth.person_budget_windows = (window,)
+    counters = FakeSpendCounters(
+        redis={} if spend is None else {window.counter_key: spend},
+        memory={window.counter_key: 0.0}, fail=redis_fails,
+    )
+    monkeypatch.setattr(proxy_server, "spend_counter_store", counters.store())
+    body = {"model": "openai/personal-unpriced-test", "messages": [{"role": "user", "content": "hi"}]}
+    assert estimate_request_max_cost(body, "/chat/completions", None) is None
+    call = reserve_budget_for_request(
+        request_body=body, route="/chat/completions", llm_router=None, valid_token=auth,
+        team_object=None, user_object=None, prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        personal_budget_only=True, fail_closed_budget_enforcement=True,
+    )
+    if expected_error is None:
+        assert await call is None
+    else:
+        with pytest.raises(expected_error) as raised:
+            await call
+        if expected_error is HTTPException:
+            assert raised.value.status_code == 503
+    assert not any(command.startswith(("PIPELINE", "INCRBYFLOAT")) for command in counters.commands)
+
+
 async def _reserve(route: str) -> dict | None:
     return await reserve_budget_for_request(
         request_body={"model": "gpt-4o", "input": "hello"},
@@ -85,6 +127,64 @@ async def test_non_exempt_llm_route_still_reserves_budget():
 
     assert reservation is not None
     assert reservation["reserved_cost"] > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ledger", [False, True])
+@pytest.mark.parametrize("evicted", [False, True])
+async def test_personal_reservation_settles_actual_once_and_uses_one_window_writer(monkeypatch, ledger, evicted):
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import build_window_spend_transaction
+    from litellm.proxy.spend_tracking.budget_reservation import release_budget_reservation
+    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    window = PersonBudgetWindow(
+        entity_type="customer_member", entity_id="person/one", budget_duration="1mo",
+        window_start=datetime(2026, 11, 1, 5, 30, tzinfo=timezone.utc),
+        reset_at=datetime(2026, 12, 1, 5, 30, tzinfo=timezone.utc), max_budget=100,
+    )
+    auth = UserAPIKeyAuth()
+    auth.person_budget_windows = (window,)
+    counters = FakeSpendCounters(redis={window.counter_key: 2.25})
+    prisma = SimpleNamespace(db=SimpleNamespace(litellm_budgetwindowspend=SimpleNamespace(
+        find_unique=AsyncMock(return_value=SimpleNamespace(window_start=window.window_start, spend=2.25)),
+    )))
+    logger = ProxyLogging(user_api_key_cache=DualCache())
+    monkeypatch.setattr(proxy_server, "spend_counter_store", counters.store())
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logger)
+    reservation = await reserve_budget_for_request(
+        request_body={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 10},
+        route="/v1/chat/completions", llm_router=None, valid_token=auth,
+        team_object=None, user_object=None, prisma_client=prisma,
+        user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=logger,
+    )
+    assert reservation is not None
+    assert counters.redis[window.counter_key] == pytest.approx(2.25 + reservation["reserved_cost"])
+    if evicted:
+        counters.redis.clear()
+        counters.memory.clear()
+    started = datetime(2026, 11, 12, tzinfo=timezone.utc)
+    await proxy_server.increment_spend_counters(
+        token=None, team_id=None, user_id=None, response_cost=0.125,
+        budget_reservation=reservation, person_budget_windows=auth.person_budget_windows,
+        request_started_at=started, windows_from_ledger=ledger,
+    )
+    await release_budget_reservation(reservation)
+
+    assert counters.redis == {window.counter_key: pytest.approx(2.375)}
+    assert reservation["finalized"] is True
+    queue = logger.db_spend_update_writer.window_spend_update_queue
+    assert await queue.flush_and_get_aggregated_window_spend_transactions() == (() if ledger else (
+        build_window_spend_transaction(
+            entity_type=window.entity_type, entity_id=window.entity_id,
+            window_duration=window.window_duration, window_start=window.window_start,
+            spend=0.125, started_at=started,
+        ),
+    ))
 
 
 @pytest.mark.asyncio

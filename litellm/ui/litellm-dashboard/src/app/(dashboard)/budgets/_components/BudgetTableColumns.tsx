@@ -9,6 +9,7 @@ import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
 import type { budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { buttonVariants } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
 import {
   DropdownMenu,
@@ -102,7 +103,16 @@ export const getBudgetTableColumns = (
     meta: { title: t("budgets.table.columns.budgetId") },
     header: ({ column }) => <DataTableSortHeader column={column} title={t("budgets.table.columns.budgetId")} />,
     cell: ({ row }) => (
-      <IdCell value={row.original.budget_id} variant="plain" truncate={false} copyable className="whitespace-nowrap" />
+      <div className="flex items-center gap-2">
+        <IdCell
+          value={row.original.budget_id}
+          variant="plain"
+          truncate={false}
+          copyable
+          className="whitespace-nowrap"
+        />
+        {row.original.is_profile && <Badge variant="secondary">{t("budgetProfiles.profile")}</Badge>}
+      </div>
     ),
   },
   {
@@ -112,9 +122,34 @@ export const getBudgetTableColumns = (
     meta: { title: t("budgets.table.columns.maxBudget"), numeric: true },
     header: ({ column }) => <DataTableSortHeader column={column} title={t("budgets.table.columns.maxBudget")} />,
     size: 120,
-    cell: ({ row }) => (
-      <MoneyCell value={row.original.max_budget} decimals={2} showZero emptyText={t("budgets.table.cells.unlimited")} />
-    ),
+    cell: ({ row }) =>
+      row.original.is_profile ? (
+        <div className="space-y-1 text-right tabular-nums">
+          {row.original.budget_limits?.map((limit) => (
+            <div key={limit.budget_duration}>
+              {t("budgetProfiles.profileLimits", {
+                amount: limit.max_budget,
+                period: t(limit.budget_duration === "1mo" ? "budgetProfiles.monthly" : "budgetProfiles.annual"),
+              })}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <MoneyCell
+          value={row.original.max_budget}
+          decimals={2}
+          showZero
+          emptyText={t("budgets.table.cells.unlimited")}
+        />
+      ),
+  },
+  {
+    id: "assignment_count",
+    accessorKey: "assignment_count",
+    meta: { title: t("budgetProfiles.assignments"), numeric: true },
+    header: () => t("budgetProfiles.assignments"),
+    enableSorting: false,
+    cell: ({ row }) => (row.original.is_profile ? <RateLimitCell value={row.original.assignment_count} /> : null),
   },
   {
     id: "tpm_limit",

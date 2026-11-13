@@ -47,6 +47,11 @@ from litellm.proxy.db.db_spend_update_writer import (
 from litellm.proxy.hooks.search_free_tier import apply_search_free_tier
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.spend_tracking.carried_budget_state import (
+    carried_budget_metadata,
+    creator_budget_metadata,
+    person_budget_windows_from_kwargs,
+)
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, warm_committed_counter_keys
 from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
@@ -77,7 +82,7 @@ from litellm.proxy.utils import (
     ProxyUpdateSpend,
 )
 from litellm.types.proxy.auth.user_api_key_auth import committed_budget_spend_of_row
-from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
+from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys, PersonBudgetWindow
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     CallTypes,
@@ -251,6 +256,12 @@ def failure_row_response_cost(request_data: Mapping[str, object]) -> float:
         float(finalized_amount)
         if finalized_failure.get("cost_finalized") is True and isinstance(finalized_amount, (int, float))
         else recovered_stream_cost + guardrail_information_cost(_failure_row_guardrail_information(request_data))
+    )
+
+
+def _has_billed_failure_cost(request_data: Mapping[str, object]) -> bool:
+    return failure_row_response_cost(request_data) > 0 or any(
+        attempt.response_cost > 0 for attempt in _billed_failed_attempts(request_data)
     )
 
 
@@ -490,6 +501,7 @@ class _ProxyDBLogger(CustomLogger):
         if (
             ProxyDBLogger._should_track_errors_in_db() is False
             and not completed_cost
+            and not _has_billed_failure_cost(_REQUEST_DATA.validate_python(request_data))
             or ProxyDBLogger._skips_pre_routing_rejections()
             and is_pre_routing_rejection(original_exception, _REQUEST_DATA.validate_python(request_data))
             or not route_is_trackable
@@ -503,6 +515,8 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         _metadata.update(LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict))
+        _metadata.update(creator_budget_metadata(user_api_key_dict))
+        _metadata.update(carried_budget_metadata(user_api_key_dict))
         _metadata["status"] = "failure"
         _error_information = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,
@@ -772,6 +786,7 @@ class _ProxyDBLogger(CustomLogger):
                 ),
                 project_id=user_api_key_dict.project_id,
                 committed_spend_scope=_committed_spend_scope(user_api_key_dict),
+                person_budget_windows=person_budget_windows_from_kwargs(row_kwargs),
                 **_ledger_counter_options(row_kwargs.get(ACCOUNTING_LEDGER_KWARG)),
             )
         except Exception:  # noqa: BLE001  # one row's counter failure must not keep the other rows' counters from landing
@@ -1286,6 +1301,7 @@ class _IncrementSpendCounters(Protocol):
         project_id: str | None = None,
         committed_spend_scope: EntitySpendCounterKeys | None = None,
         windows_from_ledger: bool = False,
+        person_budget_windows: tuple[PersonBudgetWindow, ...] = (),
     ) -> None: ...
 
 
@@ -1324,7 +1340,7 @@ async def _update_database_and_spend_counters(
     end_user_id: str | None,
     team_id: str | None,
     org_id: str | None,
-    kwargs: dict,
+    kwargs: dict[str, object],
     completion_response: object,
     start_time: datetime | None,
     end_time: datetime | None,
@@ -1346,17 +1362,19 @@ async def _update_database_and_spend_counters(
         await _reconcile_budget_reservation_before_db_update(
             budget_reservation=budget_reservation, response_cost=response_cost
         )
-    counter_keys: Final = frozenset(
-        get_reserved_counter_keys(budget_reservation=budget_reservation)
-    ) | post_call_counter_keys(
-        token=user_api_key,
-        team_id=team_id,
-        user_id=user_id,
-        org_id=org_id,
-        end_user_id=end_user_id,
-        tags=request_tags,
-        model_access_groups=model_access_groups,
-        project_id=project_id,
+    counter_keys: Final = (
+        frozenset(get_reserved_counter_keys(budget_reservation=budget_reservation))
+        | post_call_counter_keys(
+            token=user_api_key,
+            team_id=team_id,
+            user_id=user_id,
+            org_id=org_id,
+            end_user_id=end_user_id,
+            tags=request_tags,
+            model_access_groups=model_access_groups,
+            project_id=project_id,
+        )
+        | frozenset(window.counter_key for window in person_budget_windows_from_kwargs(kwargs))
     )
     with spend_counter_batch_scope(spend_counter_store, counter_keys=counter_keys):
         return await _update_database_and_spend_counters_in_batch(
@@ -1389,7 +1407,7 @@ async def _update_database_and_spend_counters_in_batch(
     end_user_id: str | None,
     team_id: str | None,
     org_id: str | None,
-    kwargs: dict,
+    kwargs: dict[str, object],
     completion_response: object,
     start_time: datetime | None,
     end_time: datetime | None,
@@ -1453,6 +1471,7 @@ async def _update_database_and_spend_counters_in_batch(
             request_started_at=start_time,
             model_access_groups=model_access_groups,
             project_id=project_id,
+            person_budget_windows=person_budget_windows_from_kwargs(kwargs),
             committed_spend_scope=(
                 committed_spend_scope
                 if committed_spend_scope is not None

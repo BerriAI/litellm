@@ -56,7 +56,11 @@ def _in(where: Mapping[str, object], field: str) -> set[str] | None:
 def _matches(row: Mapping[str, object], where: Mapping[str, object]) -> bool:
     if "OR" in where:
         return any(_matches(row, clause) for clause in where["OR"])
-    return all((wanted := _in(where, field)) is not None and row.get(field) in wanted for field in where)
+    return all(
+        row.get(field) == value if isinstance(value, bool)
+        else (wanted := _in(where, field)) is not None and row.get(field) in wanted
+        for field, value in where.items()
+    )
 
 
 class _Rows:
@@ -133,6 +137,7 @@ class _Db:
         self.litellm_invitationlink = _Rows(invitations)
         self.litellm_organizationmembership = _Rows(org_memberships)
         self.litellm_jwtkeymapping = _Rows(jwt_mappings)
+        self.litellm_budgettable = _Rows()
 
 
 class _Tx:
@@ -152,6 +157,7 @@ class _Tx:
         self.litellm_deletedverificationtoken = db.litellm_deletedverificationtoken
         self.litellm_invitationlink = db.litellm_invitationlink
         self.litellm_organizationmembership = db.litellm_organizationmembership
+        self.litellm_budgettable = db.litellm_budgettable
         self._on_lock = on_lock
         self._fail_locks = fail_locks
         self.locks: list[str] = []
@@ -297,6 +303,25 @@ async def _remove(
         user_api_key_cache=cache or UserApiKeyCache(),
         proxy_logging_obj=None,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_commit", (False, True))
+async def test_user_deletion_removes_owned_override_atomically_and_preserves_profile(fail_commit: bool) -> None:
+    user: Final = _UserRow(user_id="person", budget_id="profile", budget_override_id="override")
+    prisma: Final = _FakePrisma(users=(user,), fail_commit=fail_commit)
+    prisma.db.litellm_budgettable.rows = [
+        {"budget_id": "profile", "is_profile": True},
+        {"budget_id": "override", "is_profile": False},
+    ]
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(key="person_budget:override", value={"budget_id": "override"}, local_only=True)
+    results: Final = await _delete(prisma, ("person",), cache=cache)
+    assert results[0].success is not fail_commit
+    ids: Final = {row["budget_id"] for row in prisma.db.litellm_budgettable.rows}
+    assert ids == ({"profile", "override"} if fail_commit else {"profile"})
+    assert ("person" in prisma.db.litellm_usertable.rows) is fail_commit
+    assert (cache.get_cache(key="person_budget:override", local_only=True) is not None) is fail_commit
 
 
 @pytest.mark.asyncio

@@ -71,6 +71,7 @@ async def test_shared_default_clone_keeps_inheriting_updated_team_model_caps(
             )
         ),
         create=AsyncMock(return_value=SimpleNamespace(budget_id="private-budget")),
+        count=AsyncMock(return_value=0),
     )
     membership_table = SimpleNamespace(upsert=AsyncMock())
     tx = SimpleNamespace(litellm_budgettable=budget_table, litellm_teammembership=membership_table)
@@ -1557,3 +1558,30 @@ def test_validate_team_model_max_budget_is_license_gated_only_when_set() -> None
             model_max_budget={"gpt-4o": BudgetConfig(max_budget=1.0, budget_duration="1d")}, premium_user=False
         )
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shared", (False, True))
+@pytest.mark.parametrize("fields,owned", (
+    ({"is_profile": True}, False),
+    ({"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]}, False),
+    ({"max_budget": 0}, True),
+))
+async def test_membership_budget_edits_reject_personal_source(shared, fields, owned):
+    from tests.unit.proxy.management_helpers.test_customer_hierarchy import Database
+
+    database: Final = Database()
+    database.litellm_teammembership = SimpleNamespace(update=AsyncMock(), upsert=AsyncMock())
+    original: Final = await database.litellm_budgettable.create(data={"budget_id": "personal", **fields})
+    if owned:
+        await database.litellm_usertable.create(data={"user_id": "owner", "budget_override_id": "personal"})
+    with pytest.raises(HTTPException) as rejected:
+        await upsert_budget_and_membership(
+            database, team_id="team", user_id="member", existing_budget_id="personal",
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin"), budget_patch={"max_budget": 10},
+            team_default_budget_id="personal" if shared else None,
+        )
+    assert rejected.value.status_code == 400
+    assert database.litellm_budgettable.rows == {"personal": original}
+    database.litellm_teammembership.update.assert_not_awaited()
+    database.litellm_teammembership.upsert.assert_not_awaited()

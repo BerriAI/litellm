@@ -7,17 +7,19 @@ reads them back with ``from_metadata``. ``None`` means this request never carrie
 """
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import ConfigDict, Field, ValidationError
+from pydantic import AwareDatetime, ConfigDict, Field, ValidationError, model_validator
 from typing_extensions import Self
 
+from litellm.models.person_budget import PersonBudgetCapPolicy, PersonBudgetDuration, PersonBudgetSubject
 from litellm.redis.stores.spend_counters.types import (
     end_user_counter,
     key_counter,
     org_counter,
+    person_window_counter,
     team_counter,
     user_counter,
 )
@@ -36,6 +38,50 @@ class _BudgetSnapshot(LiteLLMBaseModel):
             return cls.model_validate(metadata, by_name=False)
         except ValidationError:
             return None
+
+
+PERSON_BUDGET_WINDOWS_METADATA_KEY: Final = "user_api_key_person_budget_windows"
+
+
+class PersonBudgetWindow(LiteLLMBaseModel):
+    """The creator's immutable accounting period, independent of the assigned profile."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    entity_type: PersonBudgetSubject
+    entity_id: str = Field(min_length=1)
+    budget_duration: PersonBudgetDuration
+    window_start: AwareDatetime
+    reset_at: AwareDatetime
+    max_budget: float = Field(ge=0, allow_inf_nan=False)
+    cap_policy: PersonBudgetCapPolicy = "pause_until_reset"
+
+    @model_validator(mode="after")
+    def ordered_boundaries(self) -> Self:
+        if self.reset_at <= self.window_start:
+            raise ValueError("reset_at must follow window_start")
+        return self
+
+    @property
+    def window_duration(self) -> str:
+        # Equivalent instants must share a counter, including non-UTC configured resets.
+        return f"{self.budget_duration}@{self.window_start.astimezone(timezone.utc).isoformat()}"
+
+    @property
+    def counter_key(self) -> str:
+        return person_window_counter(self.entity_type, self.entity_id, self.window_duration)
+
+    @property
+    def counter_entity_type(self) -> str:
+        return "User" if self.entity_type == "user" else "CustomerMember"
+
+    def accounting_window(self) -> Mapping[str, object]:
+        return {
+            "entity_type": self.entity_type,
+            "entity_id": self.entity_id,
+            "window_duration": self.window_duration,
+            "window_start": self.window_start.astimezone(timezone.utc).isoformat(),
+        }
 
 
 class KeyBudgetSnapshot(_BudgetSnapshot):

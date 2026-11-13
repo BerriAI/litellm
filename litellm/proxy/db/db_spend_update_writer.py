@@ -85,6 +85,7 @@ from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction, u
 from litellm.proxy.db.request_error_tracking import request_error_accumulator
 from litellm.proxy.db.rollup_lock_timeout import apply_rollup_lock_timeout
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.spend_tracking.carried_budget_state import person_budget_windows_from_kwargs
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
@@ -880,7 +881,12 @@ class DBSpendUpdateWriter:
                     model_access_groups=debitable_model_access_groups(
                         get_request_model_access_groups(request_fields), payload["model_id"], llm_router
                     ),
-                    windows=await accounting_window_keys(hashed_token, team_id) if billable_cost else (),
+                    windows=(
+                        *await accounting_window_keys(hashed_token, team_id),
+                        *(window.accounting_window() for window in person_budget_windows_from_kwargs(request_fields)),
+                    )
+                    if billable_cost
+                    else (),
                     router=get_llm_router,
                 )
             keep_spend_logs: Final = disable_spend_logs is False and not (

@@ -138,6 +138,7 @@ from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
+from litellm.proxy.auth.person_budget import prepare_person_budget_windows, require_person_budget_windows
 from litellm.proxy.auth.resolvers import CredentialRef, Principal
 from litellm.proxy.auth.resolvers.grants import (
     GrantResolver,
@@ -173,6 +174,7 @@ from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401  # legacy 
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
 )
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_settings
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     end_user_cache_key,
@@ -4119,6 +4121,7 @@ async def run_centralized_common_checks(
         )
 
     user_object: LiteLLM_UserTable | None = user_result if isinstance(user_result, LiteLLM_UserTable) else None
+    personal_budget_user: Final = user_object
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
         None if isinstance(project_result, BaseException) else project_result
     )
@@ -4243,6 +4246,22 @@ async def run_centralized_common_checks(
     bind_admission_counter_keys(user_api_key_auth_obj, end_user_id=end_user_id)
     bind_committed_admission_counters(user_api_key_auth_obj, end_user_id=end_user_id)
     try:
+        if (
+            RouteChecks.is_llm_api_route(route)
+            and not skip_budget_checks
+            and not route_skips_budget_checks(route=route)
+        ):
+            user_api_key_auth_obj.person_budget_windows = require_person_budget_windows(
+                await prepare_person_budget_windows(
+                    user=personal_budget_user,
+                    customer=user_api_key_auth_obj.customer_hierarchy,
+                    prisma_client=prisma_client,
+                    cache=user_api_key_cache,
+                    store=spend_counter_store,
+                    now=datetime.now(timezone.utc),
+                    settings=get_budget_reset_settings(),
+                )
+            )
         _ = await common_checks(
             request=request,
             request_body=request_data,
@@ -4422,7 +4441,9 @@ async def _reserve_budget_after_common_checks(
     request: Request | None = None,
 ) -> None:
     user_api_key_auth_obj.budget_reservation = None
-    if not skip_budget_checks and general_settings.get("disable_budget_reservation") is not True:
+    if not skip_budget_checks and (
+        general_settings.get("disable_budget_reservation") is not True or user_api_key_auth_obj.person_budget_windows
+    ):
         from litellm.proxy.spend_tracking.budget_reservation import (
             reserve_budget_for_request,
         )
@@ -4441,9 +4462,11 @@ async def _reserve_budget_after_common_checks(
             end_user_id=end_user_id,
             end_user_object=end_user_object,
             apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
+            personal_budget_only=general_settings.get("disable_budget_reservation") is True,
             fail_closed_budget_enforcement=(
                 general_settings.get("fail_closed_budget_enforcement") is True
                 or user_api_key_auth_obj.billing_agent_policy is not None
+                or bool(user_api_key_auth_obj.person_budget_windows)
             ),
             raw_body=await read_raw_json_body(request=request),
             path_params=reservation_path_params,
@@ -4822,6 +4845,7 @@ async def user_api_key_auth(
             authenticated.model_copy() if settings.get("access_group_rules") else authenticated
         )
         user_api_key_auth_obj.budget_reservation = None
+        user_api_key_auth_obj.person_budget_windows = ()
         user_api_key_auth_obj.agent_caller = agent_caller_from_headers(
             safe_get_request_headers(request), user_api_key_auth_obj
         )

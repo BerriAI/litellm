@@ -21,6 +21,7 @@ import { useBudgetList, useDeleteBudget, budgetItem } from "@/app/(dashboard)/ho
 import BudgetModal from "./BudgetModal";
 import BudgetTable from "./BudgetTable";
 import EditBudgetModal from "./EditBudgetModal";
+import BudgetAssignmentModal from "./BudgetAssignmentModal";
 import { CREATE_END_USER_CURL_COMMAND, CHAT_COMPLETIONS_CURL_COMMAND, OPENAI_SDK_PYTHON_CODE } from "./constants";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { isProxyAdminRole } from "@/utils/roles";
@@ -36,6 +37,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [selectedBudget, setSelectedBudget] = useState<budgetItem | null>(null);
   const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
+  const [isAssignmentVisible, setIsAssignmentVisible] = useState(false);
 
   const { userRole } = useAuthorized();
   // Admin Viewer follows the read-parity rule: see budgets, no writes.
@@ -98,6 +100,9 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                     <Plus className="size-4" />
                     {t("budgets.panel.createButton")}
                   </Button>
+                  <Button variant="outline" onClick={() => setIsAssignmentVisible(true)}>
+                    {t("budgetProfiles.manage")}
+                  </Button>
                   <ToolbarSeparator className="mx-0 h-6" />
                 </>
               )}
@@ -109,6 +114,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
         <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col" keepMounted>
           <div className="flex min-h-0 flex-1 flex-col">
             <BudgetModal isModalVisible={isCreateModelVisible} setIsModalVisible={setIsCreateModelVisible} />
+            {isAssignmentVisible && <BudgetAssignmentModal open onOpenChange={setIsAssignmentVisible} />}
             {selectedBudget && (
               <EditBudgetModal
                 isModalVisible={isEditModalVisible}

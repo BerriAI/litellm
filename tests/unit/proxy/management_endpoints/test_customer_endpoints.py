@@ -95,6 +95,9 @@ def test_should_update_field(
 @pytest.fixture
 def mock_prisma_client():
     with patch("litellm.proxy.proxy_server.prisma_client") as mock:
+        mock.writer_db = mock.db
+        mock.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+        mock.db.litellm_budgettable.count = AsyncMock(return_value=0)
         yield mock
 
 
@@ -987,6 +990,10 @@ _EXPECTED_CUSTOMER = {
         "allowed_models": [],
         "temp_budget_increase": None,
         "temp_budget_expiry": None,
+        "temp_budget_duration": None,
+        "is_profile": False,
+        "budget_limits": None,
+        "cap_policy": None,
         "budget_reset_at": "2024-02-01T00:00:00",
         "created_at": "2024-01-01T00:00:00",
     },
@@ -1460,3 +1467,40 @@ def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_cl
         "end_user_id:c2",
         "end_user_restricted_registry",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("new", "update"))
+@pytest.mark.parametrize("inline", (False, True))
+async def test_end_users_reject_personal_budgets_before_writing(monkeypatch, operation, inline):
+    from types import SimpleNamespace
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import NewCustomerRequest, UpdateCustomerRequest
+    from litellm.proxy.management_endpoints.customer_endpoints import new_end_user, update_end_user
+    from tests.unit.proxy.management_endpoints.test_budget_endpoints import CatalogClient
+
+    database: Final = CatalogClient()
+    await database.db.litellm_budgettable.create(data={"budget_id": "personal", "is_profile": True})
+    end_users: Final = SimpleNamespace(
+        find_first=AsyncMock(return_value=LiteLLM_EndUserTable(user_id="customer", blocked=False)),
+        create=AsyncMock(), update=AsyncMock(),
+    )
+    database.db.litellm_endusertable = end_users
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    fields: Final = {"is_profile": True, "budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]} if inline else {"budget_id": "personal"}
+    admin: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    if operation == "update" and inline:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="Unknown fields"):
+            UpdateCustomerRequest.model_validate({"user_id": "customer", **fields})
+        end_users.update.assert_not_awaited()
+        return
+    with pytest.raises(ProxyException) as rejected:
+        if operation == "new":
+            await new_end_user(NewCustomerRequest.model_validate({"user_id": "customer", **fields}), admin)
+        else:
+            await update_end_user(UpdateCustomerRequest.model_validate({"user_id": "customer", **fields}), admin)
+    assert int(rejected.value.code) == 400
+    end_users.create.assert_not_awaited()
+    end_users.update.assert_not_awaited()

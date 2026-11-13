@@ -33,7 +33,7 @@ from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cach
 
 ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin")
 TEAM: Final = "t1"
-READS: Final = ("query_raw", "teamtable.find_unique", "usertable.find_many", "budgettable.find_unique")
+READS: Final = ("query_raw", "teamtable.find_unique", "usertable.find_many", "budgettable.find_unique", "budgettable.count")
 _STRINGS: Final = TypeAdapter(list[str])
 _FILTER: Final = TypeAdapter(dict[str, object])
 _FILTERS: Final = TypeAdapter(list[dict[str, object]])
@@ -75,6 +75,8 @@ def _clause_matches(row: Mapping[str, object], field: str, clause: object) -> bo
     if not isinstance(clause, dict):
         return row.get(field) == clause
     operator = _FILTER.validate_python(clause)
+    if "some" in operator:
+        return any(_matches(item, _FILTER.validate_python(operator["some"])) for item in _FILTERS.validate_python(row.get(field) or []))
     if "in" in operator:
         return row.get(field) in set(_STRINGS.validate_python(operator["in"]))
     if "has" in operator:
@@ -104,6 +106,10 @@ class _Rows:
     async def find_unique(self, where: Mapping[str, object]) -> _Record | None:
         self._ran("find_unique")
         return next((_Record.model_validate(r) for r in self.rows if _matches(r, where)), None)
+
+    async def count(self, where: Mapping[str, object]) -> int:
+        self._ran("count")
+        return sum(_matches(row, where) for row in self.rows)
 
     async def delete_many(self, where: Mapping[str, object]) -> int:
         self._ran("delete_many")
@@ -904,3 +910,24 @@ async def test_the_statement_count_does_not_grow_with_the_member_count(
         assert _tokens(prisma) == ({f"key-{u}" for u in old} if keeps_old else set())
         counts[size] = len(prisma.ledger.statements)
     assert counts[500] == counts[5]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fields", (
+    {"is_profile": True},
+    {"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]},
+    {"user_overrides": [{"user_id": "owner"}]},
+))
+async def test_roster_rejects_personal_default_without_changing_membership(fields):
+    from fastapi import HTTPException
+
+    prisma: Final = _FakePrisma(
+        users=[_user("carol")],
+        teams=[_team(metadata={"team_member_budget_id": "personal"})],
+        budgets=[{"budget_id": "personal", **fields}],
+    )
+    with pytest.raises(HTTPException) as rejected:
+        await _sync(prisma, RosterDelta(add=frozenset({"carol"}), remove=frozenset()))
+    assert rejected.value.status_code == 400
+    assert prisma.writer_db.litellm_teammembership.rows == []
+    assert prisma.writer_db.litellm_usertable.rows["carol"].teams == []

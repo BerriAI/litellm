@@ -44,6 +44,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
+from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.spend_tracking.input_tokens import (
     count_input_tokens,
     count_input_tokens_for_model,
@@ -65,6 +66,7 @@ from litellm.redis.stores.spend_counters import (
     user_counter,
 )
 from litellm.router import Router
+from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
 from litellm.types.utils import CallTypes
@@ -88,6 +90,7 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
     "Team": Litellm_EntityType.TEAM.value,
     "TeamMember": Litellm_EntityType.TEAM_MEMBER.value,
     "User": Litellm_EntityType.USER.value,
+    "CustomerMember": "customer_member",
     "EndUser": Litellm_EntityType.END_USER.value,
     "Tag": Litellm_EntityType.TAG.value,
     "Model access group": Litellm_EntityType.MODEL_ACCESS_GROUP.value,
@@ -253,7 +256,7 @@ def _raise_counter_budget_exceeded(
 
 
 async def reserve_budget_for_request(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     llm_router: Router | None,
     valid_token: UserAPIKeyAuth | None,
@@ -268,7 +271,8 @@ async def reserve_budget_for_request(
     fail_closed_budget_enforcement: bool = False,
     raw_body: bytes | None = None,
     path_params: Mapping[str, object] | None = None,
-) -> dict | None:
+    personal_budget_only: bool = False,
+) -> dict[str, object] | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
     if RouteChecks.is_unbilled_route(route):
@@ -287,6 +291,7 @@ async def reserve_budget_for_request(
         end_user_id=end_user_id,
         end_user_object=end_user_object,
         apply_user_budget_to_team_keys=apply_user_budget_to_team_keys,
+        personal_budget_only=personal_budget_only,
     )
     if not counters:
         return None
@@ -311,6 +316,7 @@ async def reserve_budget_for_request(
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
     # In that case we fall back to read-time enforcement only.
     if reservation_cost is None or reservation_cost <= 0:
+        await check_person_budget_windows(valid_token.person_budget_windows, prisma_client)
         return None
 
     applied_entries: Final[list[dict[str, float | str]]] = []
@@ -344,7 +350,7 @@ async def reserve_budget_for_request(
         input_token_counts=input_token_counts,
         path_params=path_params,
     )
-    budget_reservation: Final = {
+    budget_reservation: Final[dict[str, object]] = {
         "reserved_cost": reservation_cost,
         "entries": applied_entries,
         "finalized": False,
@@ -354,9 +360,43 @@ async def reserve_budget_for_request(
     }
     _start_reservation_lease_renewal(
         budget_reservation=budget_reservation,
-        counter_keys=frozenset(get_reserved_counter_keys(budget_reservation=budget_reservation)),
+        counter_keys=frozenset(str(entry["counter_key"]) for entry in applied_entries),
     )
     return budget_reservation
+
+
+async def check_person_budget_windows(
+    windows: tuple[PersonBudgetWindow, ...], prisma_client: PrismaClient | None
+) -> None:
+    """Read-time enforcement when pricing cannot provide a reservation estimate."""
+    from litellm.proxy.proxy_server import spend_counter_store
+
+    with _counters_batch_scope(frozenset(window.counter_key for window in windows)):
+        spends: Final = await asyncio.gather(
+            *(
+                SpendCounterReseed.coalesced_window(
+                    prisma_client=prisma_client,
+                    spend_counter_store=spend_counter_store,
+                    counter_key=window.counter_key,
+                    entity_type=window.counter_entity_type,
+                    entity_id=window.entity_id,
+                    window_duration=window.window_duration,
+                    window_start=window.window_start,
+                )
+                for window in windows
+            )
+        )
+        for window, spend in zip(windows, spends):
+            if spend is None:
+                _raise_reservation_unavailable(window.counter_key)
+            if spend >= window.max_budget:
+                raise litellm.BudgetExceededError(
+                    current_cost=spend,
+                    max_budget=window.max_budget,
+                    entity_type=window.entity_type,
+                    entity_id=window.entity_id,
+                    message=f"Personal budget exceeded for {window.budget_duration}; resets at {window.reset_at.isoformat()}.",
+                )
 
 
 async def reconcile_budget_reservation(
@@ -501,8 +541,23 @@ async def _get_budget_counters(
     end_user_id: str | None = None,
     end_user_object: object = None,
     apply_user_budget_to_team_keys: bool = False,
+    personal_budget_only: bool = False,
 ) -> list[_BudgetCounter]:
-    counters: Final[list[_BudgetCounter]] = []
+    counters: Final[list[_BudgetCounter]] = [
+        _BudgetCounter(
+            counter_key=window.counter_key,
+            max_budget=window.max_budget,
+            fallback_spend=0.0,
+            entity_type=window.counter_entity_type,
+            entity_id=f"{window.entity_id}:{window.window_duration}",
+            spend_log_entity_id=window.entity_id,
+            window_duration=window.window_duration,
+            window_start=window.window_start,
+        )
+        for window in valid_token.person_budget_windows
+    ]
+    if personal_budget_only:
+        return counters
 
     if valid_token.token is not None:
         if valid_token.max_budget is not None and valid_token.max_budget > 0:

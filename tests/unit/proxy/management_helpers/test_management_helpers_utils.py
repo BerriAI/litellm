@@ -1,7 +1,6 @@
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,6 +18,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_helpers.utils import add_new_member
 from litellm.proxy.utils import PrismaClient
+from tests.unit.proxy.management_endpoints.test_budget_endpoints import CatalogClient
 
 
 @pytest.mark.asyncio
@@ -201,6 +201,9 @@ async def test_add_new_member_links_default_team_budget_id():
 
     mock_default_budget_row = MagicMock()
     mock_default_budget_row.budget_id = test_default_budget_id
+    mock_default_budget_row.model_dump.return_value = {"budget_id": test_default_budget_id}
+    mock_prisma_client.db.litellm_budgettable.count = AsyncMock(return_value=0)
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
         return_value=mock_default_budget_row
     )
@@ -254,11 +257,11 @@ async def test_handle_budget_for_entity_updates_with_existing_budget_id_in_reque
     from litellm.proxy.management_helpers.utils import handle_budget_for_entity
     from litellm.types.tag_management import TagUpdateRequest
 
-    budget_update: Final = AsyncMock()
-    prisma_client: Final = cast(
-        PrismaClient,
-        SimpleNamespace(db=SimpleNamespace(litellm_budgettable=SimpleNamespace(update=budget_update))),
-    )
+    database: Final = CatalogClient()
+    await database.db.litellm_budgettable.create(data={"budget_id": "budget-1"})
+    budget_update: Final = AsyncMock(wraps=database.db.litellm_budgettable.update)
+    database.db.litellm_budgettable.update = budget_update
+    prisma_client: Final = cast(PrismaClient, database)
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
@@ -301,11 +304,11 @@ async def test_handle_budget_for_entity_updates_only_cleared_or_supplied_fields(
 
     request_data: Final = {"name": "budget-tag", **request_fields}
     tag: Final = TagUpdateRequest.model_validate(request_data)
-    budget_update: Final = AsyncMock()
-    prisma_client: Final = cast(
-        PrismaClient,
-        SimpleNamespace(db=SimpleNamespace(litellm_budgettable=SimpleNamespace(update=budget_update))),
-    )
+    database: Final = CatalogClient()
+    await database.db.litellm_budgettable.create(data={"budget_id": "budget-1"})
+    budget_update: Final = AsyncMock(wraps=database.db.litellm_budgettable.update)
+    database.db.litellm_budgettable.update = budget_update
+    prisma_client: Final = cast(PrismaClient, database)
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
@@ -359,6 +362,7 @@ async def test_add_new_member_no_budget_when_default_budget_row_is_missing():
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mock_user_response
     )
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_budgettable.create = AsyncMock()
     mock_membership = MagicMock()
@@ -413,6 +417,7 @@ async def test_add_new_member_budget_duration_only_clones_default_max_budget():
         return_value=mock_user_response
     )
     mock_default_budget_row = MagicMock()
+    mock_prisma_client.db.litellm_budgettable.count = AsyncMock(return_value=0)
     mock_default_budget_row.model_dump.return_value = {
         "budget_id": "default-dc",
         "max_budget": 100.0,
@@ -424,6 +429,7 @@ async def test_add_new_member_budget_duration_only_clones_default_max_budget():
         "budget_duration": "1d",
         "allowed_models": [],
     }
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
         return_value=mock_default_budget_row
     )
@@ -499,6 +505,7 @@ async def test_add_new_member_no_budget_when_no_default_and_no_max_budget():
     )
 
     # Even though we mock these, they must NOT be called on the no-budget path.
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock()
     mock_prisma_client.db.litellm_budgettable.create = AsyncMock()
 
@@ -797,6 +804,9 @@ async def test_add_new_member_with_user_email_links_default_budget():
 
     mock_default_budget_row = MagicMock()
     mock_default_budget_row.budget_id = test_default_budget_id
+    mock_default_budget_row.model_dump.return_value = {"budget_id": test_default_budget_id}
+    mock_prisma_client.db.litellm_budgettable.count = AsyncMock(return_value=0)
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
         return_value=mock_default_budget_row
     )
@@ -869,6 +879,9 @@ class _FakeBudgetTable:
     async def find_unique(self, *, where: Mapping[str, str]) -> LiteLLM_BudgetTable | None:
         return self._record(where["budget_id"]) if where["budget_id"] in self.rows else None
 
+    async def count(self, *, where: Mapping[str, object]) -> int:
+        return 0
+
     async def update(self, *, where: Mapping[str, str], data: Mapping[str, object]) -> LiteLLM_BudgetTable:
         self.rows[where["budget_id"]] = {**self.rows[where["budget_id"]], **_as_stored(data)}
         return self._record(where["budget_id"])
@@ -940,6 +953,13 @@ async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
     db: Final = _FakeDb()
     prisma_client: Final = MagicMock()
     prisma_client.db = db
+    prisma_client.writer_db = db
+    prisma_client.tx.return_value.__aenter__.return_value = db
+    db.query_raw = AsyncMock(return_value=())
+    db.litellm_customerorganizationtable = MagicMock()
+    db.litellm_customerteamtable = MagicMock()
+    db.litellm_customermembertable = MagicMock()
+    db.litellm_customermembertable.find_many = AsyncMock(return_value=())
     admin: Final = UserAPIKeyAuth(user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN)
     team_id: Final = "team-shared-default"
     default_budget: Final = await db.litellm_budgettable.create(data={"budget_id": "team-default", "max_budget": 100.0})
@@ -1298,6 +1318,7 @@ async def test_add_new_member_appends_team_only_if_absent_for_existing_user():
     }
     mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_after)
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
     mock_membership = MagicMock()
     mock_membership.model_dump.return_value = {
@@ -1372,6 +1393,7 @@ async def test_add_new_member_creates_missing_user_atomically_via_upsert():
     mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_created)
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock()
     mock_prisma_client.db.litellm_usertable.create = AsyncMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
     mock_membership = MagicMock()
     mock_membership.model_dump.return_value = {
@@ -1480,3 +1502,63 @@ async def test_add_new_member_runs_every_write_on_the_caller_transaction(new_mem
     prisma_client.db.assert_not_called()
     prisma_client.get_data.assert_not_awaited()
     prisma_client.insert_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget_fields,owned", (
+    ({"is_profile": True}, False),
+    ({"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]}, False),
+    ({"budget_limits": []}, False),
+    ({"max_budget": 0}, True),
+))
+@pytest.mark.parametrize("consumer", ("entity", "member", "member_clone"))
+async def test_legacy_budget_attachments_reject_personal_budgets(budget_fields, owned, consumer):
+    from fastapi import HTTPException
+    from litellm.proxy.management_helpers.utils import handle_budget_for_entity, _resolve_member_budget_id
+
+    database: Final = CatalogClient()
+    await database.db.litellm_budgettable.create(data={"budget_id": "personal", **budget_fields})
+    if owned:
+        await database.db.litellm_usertable.create(data={"user_id": "owner", "budget_override_id": "personal"})
+    prisma: Final = cast(PrismaClient, database)
+    admin: Final = UserAPIKeyAuth(user_id="admin")
+    with pytest.raises(HTTPException) as rejected:
+        if consumer == "entity":
+            await handle_budget_for_entity(
+                {"budget_id": "personal"}, None, admin, prisma, "admin"
+            )
+        else:
+            await _resolve_member_budget_id(
+                prisma_client=prisma, default_team_budget_id="personal", max_budget_in_team=None, allowed_models=None,
+                budget_duration="1d" if consumer == "member_clone" else None,
+                user_api_key_dict=admin, litellm_proxy_admin_name="admin",
+            )
+    assert rejected.value.status_code == 400
+    assert tuple(database.db.litellm_budgettable.rows) == ("personal",)
+
+
+@pytest.mark.asyncio
+async def test_legacy_entity_still_accepts_zero_scalar_budget():
+    from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+
+    database: Final = CatalogClient()
+    await database.db.litellm_budgettable.create(data={"budget_id": "scalar", "max_budget": 0})
+    result: Final = await handle_budget_for_entity(
+        {"budget_id": "scalar"}, None, UserAPIKeyAuth(user_id="admin"), cast(PrismaClient, database), "admin"
+    )
+    assert result == "scalar"
+
+
+@pytest.mark.asyncio
+async def test_personal_budget_validation_uses_writer_when_replica_is_stale():
+    from fastapi import HTTPException
+    from litellm.proxy.management_helpers.utils import checked_legacy_budget
+    from tests.unit.proxy.management_helpers.test_customer_hierarchy import Database
+
+    database: Final = CatalogClient()
+    database.writer_db = Database()
+    await database.writer_db.litellm_budgettable.create(data={"budget_id": "profile", "is_profile": True})
+    with pytest.raises(HTTPException) as rejected:
+        await checked_legacy_budget(cast(PrismaClient, database), "profile")
+    assert rejected.value.status_code == 400
+    assert database.db.litellm_budgettable.rows == {}

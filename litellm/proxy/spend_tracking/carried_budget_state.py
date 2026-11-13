@@ -4,18 +4,111 @@ from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    get_litellm_metadata_from_kwargs,  # pyright: ignore[reportUnknownVariableType]  # legacy shared helper; its output is validated below
+)
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.proxy.auth.customer_hierarchy import (
+    CustomerHierarchyAuth,
+    customer_hierarchy_ids_from_request,
+)
 from litellm.types.proxy.carried_budget_state import (
+    PERSON_BUDGET_WINDOWS_METADATA_KEY,
     CommittedBudgetSpend,
     EntitySpendCounterKeys,
     OrgBudgetSnapshot,
+    PersonBudgetWindow,
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
 )
+
+_PERSON_WINDOWS: Final = TypeAdapter(tuple[PersonBudgetWindow, ...])
+_METADATA: Final = TypeAdapter(Mapping[str, object])
+_CUSTOMER_FIELDS: Final = (
+    "user_api_key_customer_org_id",
+    "user_api_key_customer_team_id",
+    "user_api_key_customer_member_id",
+)
+
+
+def person_budget_windows_from_kwargs(kwargs: Mapping[str, object]) -> tuple[PersonBudgetWindow, ...]:
+    """Read the authenticated snapshot, including serialized spend-event replay."""
+    metadata: Final = _METADATA.validate_python(get_litellm_metadata_from_kwargs(dict(kwargs)) or {})
+    standard: Final = as_str_mapping(kwargs.get("standard_logging_object")) or {}
+    fallback: Final = as_str_mapping(standard.get("metadata")) or {}
+    windows: Final = metadata.get(PERSON_BUDGET_WINDOWS_METADATA_KEY, fallback.get(PERSON_BUDGET_WINDOWS_METADATA_KEY))
+    return _PERSON_WINDOWS.validate_python(windows) if windows else ()
+
+
+def creator_budget_metadata(valid_token: UserAPIKeyAuth) -> Mapping[str, object]:
+    """Only authenticated creator state is eligible for durable deferred attribution."""
+    customer: Final = valid_token.customer_hierarchy
+    customer_ids: Final = (
+        {
+            "user_api_key_customer_org_id": customer.customer_org_id,
+            "user_api_key_customer_team_id": customer.customer_team_id,
+            "user_api_key_customer_member_id": customer.customer_member_id,
+        }
+        if customer is not None
+        else {}
+    )
+    return {
+        **(
+            {
+                PERSON_BUDGET_WINDOWS_METADATA_KEY: [
+                    window.model_dump(mode="json") for window in valid_token.person_budget_windows
+                ]
+            }
+            if valid_token.person_budget_windows
+            else {}
+        ),
+        **customer_ids,
+    }
+
+
+def stored_budget_metadata(value: object) -> Mapping[str, object]:
+    """Validate the saved personal windows and customer IDs; old managed rows have neither."""
+    if value is None:
+        return {}
+    metadata: Final = _METADATA.validate_python(value or {})
+    windows: Final = _PERSON_WINDOWS.validate_python(metadata.get(PERSON_BUDGET_WINDOWS_METADATA_KEY) or ())
+    return {
+        **(
+            {PERSON_BUDGET_WINDOWS_METADATA_KEY: [window.model_dump(mode="json") for window in windows]}
+            if windows
+            else {}
+        ),
+        **_customer_metadata(metadata),
+    }
+
+
+def _customer_metadata(metadata: Mapping[str, object]) -> Mapping[str, str]:
+    return {field: value for field in _CUSTOMER_FIELDS if isinstance(value := metadata.get(field), str) and value}
+
+
+def restore_creator_budget_metadata(valid_token: UserAPIKeyAuth, metadata: Mapping[str, object]) -> None:
+    """Restore trusted internal metadata after auth construction strips request-only fields."""
+    valid_token.person_budget_windows = _PERSON_WINDOWS.validate_python(
+        metadata.get(PERSON_BUDGET_WINDOWS_METADATA_KEY) or ()
+    )
+    customer: Final = customer_hierarchy_ids_from_request({"litellm_params": {"metadata": metadata}})
+    valid_token.customer_hierarchy = (
+        CustomerHierarchyAuth(
+            customer_org_id=customer.customer_org_id,
+            customer_team_id=customer.customer_team_id,
+            customer_member_id=customer.customer_member_id,
+            scopes=(),
+        )
+        if customer is not None
+        else None
+    )
 
 
 def carry_team_and_user_budget_state(
@@ -82,6 +175,7 @@ def carry_organization_budget_state(valid_token: UserAPIKeyAuth, org_table: Lite
 
 
 def carried_budget_metadata(valid_token: UserAPIKeyAuth) -> Mapping[str, object]:
+    """Overwrite request metadata from auth, including clearing an unassigned person's windows."""
     snapshots: Final = (
         valid_token.team_budget_snapshot,
         valid_token.user_budget_snapshot,
@@ -89,9 +183,14 @@ def carried_budget_metadata(valid_token: UserAPIKeyAuth) -> Mapping[str, object]
     )
     return MappingProxyType(
         {
-            key: value
-            for snapshot in snapshots
-            if snapshot is not None
-            for key, value in snapshot.metadata_entries().items()
+            PERSON_BUDGET_WINDOWS_METADATA_KEY: [
+                window.model_dump(mode="json") for window in valid_token.person_budget_windows
+            ],
+            **{
+                key: value
+                for snapshot in snapshots
+                if snapshot is not None
+                for key, value in snapshot.metadata_entries().items()
+            },
         }
     )

@@ -15,6 +15,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import strip_null_bytes
+from litellm.proxy.spend_tracking.carried_budget_state import restore_creator_budget_metadata
 from litellm.types.utils import LiteLLMBatch, SpecialEnums
 
 if TYPE_CHECKING:
@@ -149,6 +150,7 @@ def register_passthrough_batch(
         model_max_budget={},
         model_spend={},
     )
+    restore_creator_budget_metadata(user_api_key_dict, request_metadata)
     task: Final[asyncio.Task[None]] = asyncio.create_task(
         managed_files_hook.store_unified_object_id(
             unified_object_id=unified_object_id,

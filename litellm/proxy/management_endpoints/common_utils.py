@@ -2,7 +2,7 @@ import json
 import math
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -69,8 +69,12 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
+    from prisma import Prisma
+    from prisma import models as prisma_models
+
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+    from litellm.repositories.prisma_protocols import TableActions
 
 _user_has_admin_view: Final = user_api_key_has_admin_view
 
@@ -626,7 +630,7 @@ def _has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
 
 
 async def upsert_budget_and_membership(
-    tx,
+    tx: "Prisma",
     *,
     team_id: str,
     user_id: str,
@@ -656,6 +660,15 @@ async def upsert_budget_and_membership(
     A patch whose every field already matches the shared row changes nothing and
     is a no-op rather than a clone.
     """
+    from litellm.proxy.management_helpers.utils import checked_legacy_budget_row, reject_person_budget_fields
+
+    reject_person_budget_fields(budget_patch)
+    budget_table: Final = cast(  # cast-ok: Prisma actions have narrower generated input types than TableActions
+        "TableActions[prisma_models.LiteLLM_BudgetTable]", tx.litellm_budgettable
+    )
+    membership_table: Final = cast(  # cast-ok: Prisma actions have narrower generated input types than TableActions
+        "TableActions[prisma_models.LiteLLM_TeamMembership]", tx.litellm_teammembership
+    )
     ignore_default_model_budget_clear: Final = (
         existing_budget_id is not None
         and existing_budget_id == team_default_budget_id
@@ -686,28 +699,25 @@ async def upsert_budget_and_membership(
         existing_budget_id == team_default_budget_id or existing_budget_id in (shared_budget_ids or frozenset())
     )
 
-    async def _disconnect():
-        await tx.litellm_teammembership.update(
+    async def _disconnect() -> None:
+        await membership_table.update(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
             data={"litellm_budget_table": {"disconnect": True}},
         )
 
     if existing_budget_id is not None and not is_shared_default:
-        existing_budget: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
-        merged: Final = existing_budget.model_dump() if existing_budget is not None else {}
-        merged.update(write_data)
+        existing_budget: Final = await checked_legacy_budget_row(budget_table, existing_budget_id)
+        merged: Final = {**(existing_budget.model_dump() if existing_budget is not None else {}), **write_data}
         if not _has_meaningful_budget_limit(merged):
             await _disconnect()
             return
-        await tx.litellm_budgettable.update(
+        await budget_table.update(
             where={"budget_id": existing_budget_id},
             data={"updated_by": user_api_key_dict.user_id or "", **_prisma_payload(write_data)},
         )
         return
 
-    source_row: Final = (
-        await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id}) if is_shared_default else None
-    )
+    source_row: Final = await checked_legacy_budget_row(budget_table, existing_budget_id) if is_shared_default else None
     source: Final[Mapping[str, object]] = (
         MappingProxyType(_BUDGET_COLUMNS.validate_python(source_row.model_dump()))
         if source_row is not None
@@ -747,11 +757,11 @@ async def upsert_budget_and_membership(
             await _disconnect()
         return
 
-    new_budget: Final = await tx.litellm_budgettable.create(
+    new_budget: Final = await budget_table.create(
         data=_prisma_payload(create_data),
         include={"team_membership": True},
     )
-    await tx.litellm_teammembership.upsert(
+    await membership_table.upsert(
         where={
             "user_id_team_id": {
                 "user_id": user_id,

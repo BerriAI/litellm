@@ -1250,6 +1250,7 @@ def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
     mock_prisma.db.litellm_projecttable.find_unique = mock.AsyncMock(return_value=existing_row)
     mock_prisma.db.litellm_projecttable.update = mock.AsyncMock(return_value=mock.MagicMock())
     mock_prisma.writer_db = mock.MagicMock()
+    mock_prisma.writer_db.litellm_budgettable.find_unique = mock.AsyncMock(return_value=None)
     mock_prisma.writer_db.litellm_projecttable.find_unique = mock.AsyncMock(
         return_value={"project_id": "project-update-test", "team_id": None}
     )
@@ -1324,6 +1325,7 @@ async def test_update_project_rejects_move_when_attached_teamless_key_exists(
     )
     mock_prisma.db.litellm_verificationtoken.count = mock.AsyncMock(return_value=0)
     mock_prisma.writer_db = mock.MagicMock()
+    mock_prisma.writer_db.litellm_budgettable.find_unique = mock.AsyncMock(return_value=None)
     mock_prisma.writer_db.litellm_projecttable.find_unique = mock.AsyncMock(
         return_value=LiteLLM_ProjectTable(project_id=project_id, team_id="team-a")
     )
@@ -2411,3 +2413,43 @@ async def test_project_writes_reject_an_unregistered_guardrail(monkeypatch, oper
     assert str(getattr(exc.value, "code", None) or getattr(exc.value, "status_code", "")) == "400"
     mock_prisma.db.litellm_projecttable.create.assert_not_awaited()
     mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("new", "update"))
+@pytest.mark.parametrize("inline", (False, True))
+async def test_projects_reject_personal_budgets_before_writing(monkeypatch, operation, inline):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from litellm.proxy import proxy_server
+    from tests.unit.proxy.management_endpoints.test_budget_endpoints import CatalogClient
+    from tests.unit.proxy.management_helpers.test_customer_hierarchy import Record
+
+    database: Final = CatalogClient()
+    await database.db.litellm_budgettable.create(data={"budget_id": "personal", "is_profile": True})
+    projects: Final = SimpleNamespace(
+        find_unique=AsyncMock(return_value=Record(project_id="project", team_id="team", budget_id=None, metadata={})),
+        create=AsyncMock(), update=AsyncMock(),
+    )
+    database.db.litellm_projecttable = projects
+    database.db.litellm_teamtable = SimpleNamespace(
+        find_unique=AsyncMock(return_value=LiteLLM_TeamTable(team_id="team")),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    fields: Final = {"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]} if inline else {"budget_id": "personal"}
+    admin: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(ProxyException) as rejected:
+        if operation == "new":
+            await new_project(
+                NewProjectRequest.model_validate({"team_id": "team", **fields}),
+                Request({"type": "http", "method": "POST", "path": "/project/new"}), admin,
+            )
+        else:
+            await update_project(
+                UpdateProjectRequest.model_validate({"project_id": "project", **fields}),
+                Request({"type": "http", "method": "POST", "path": "/project/update"}), admin,
+            )
+    assert int(rejected.value.code) == 400
+    projects.create.assert_not_awaited()
+    projects.update.assert_not_awaited()

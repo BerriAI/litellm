@@ -1,12 +1,12 @@
 # tests/test_budget_endpoints.py
 
 import json
-import types
 from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm.proxy.proxy_server as ps
@@ -14,6 +14,88 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.proxy_server import app
+from tests.unit.proxy.management_helpers.test_customer_hierarchy import Database, NOW, Record
+
+
+class CatalogClient:
+    def __init__(self) -> None:
+        self.db = Database()
+        self.writer_db = self.db
+
+    def tx(self):
+        return self.db.tx()
+
+
+@pytest.mark.asyncio
+async def test_profile_updates_are_conditional_and_owned_overrides_never_enter_catalog(monkeypatch):
+    from litellm.proxy._types import BudgetDeleteRequest, BudgetRequest
+    from litellm.proxy.management_endpoints.budget_management_endpoints import (
+        BudgetWriteRequest, delete_budget, info_budget, list_budget, new_budget, update_budget,
+    )
+
+    database: Final = CatalogClient()
+    monkeypatch.setattr(ps, "prisma_client", database)
+    cache: Final = UserApiKeyCache()
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    admin: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    created: Final = await new_budget(BudgetWriteRequest(
+        budget_id="profile", is_profile=True,
+        budget_limits=({"budget_duration": "1mo", "max_budget": 0},),
+    ), admin)
+    await cache.async_set_cache("person_budget:profile", "old definition", local_only=True)
+    saved: Final = await update_budget(BudgetWriteRequest(
+        budget_id="profile", revision=created.revision, cap_policy="pause_until_reset",
+    ), admin)
+    assert saved.revision != created.revision
+    assert cache.get_cache("person_budget:profile", local_only=True) is None
+    assert saved.model_dump(mode="json")["budget_limits"] == [
+        {"budget_duration": "1mo", "max_budget": 0},
+    ]
+    with pytest.raises(HTTPException) as stale:
+        await update_budget(BudgetWriteRequest(
+            budget_id="profile", revision=created.revision, budget_limits=({"budget_duration": "1mo", "max_budget": 2},),
+        ), admin)
+    assert stale.value.status_code == 409
+    with pytest.raises(HTTPException) as changed_kind:
+        await update_budget(BudgetWriteRequest(budget_id="profile", revision=saved.revision, is_profile=False), admin)
+    assert changed_kind.value.status_code == 400
+    await database.db.litellm_budgettable.create(data={"budget_id": "owned", "is_profile": False})
+    await database.db.litellm_usertable.create(data={
+        "user_id": "owner", "budget_id": "profile", "budget_override_id": "owned",
+    })
+    assert await list_budget(admin) == ()
+    assert await info_budget(BudgetRequest(budgets=["owned"])) == ()
+    for request in (
+        update_budget(BudgetWriteRequest(budget_id="owned", max_budget=5), admin),
+        delete_budget(BudgetDeleteRequest(id="owned"), admin),
+        delete_budget(BudgetDeleteRequest(id="profile"), admin),
+    ):
+        with pytest.raises(HTTPException) as protected:
+            await request
+        assert protected.value.status_code == 409
+    assert set(database.db.litellm_budgettable.rows) == {"profile", "owned"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fields", (
+    {"is_profile": True},
+    {"is_profile": True, "budget_limits": []},
+    {"is_profile": True, "budget_limits": [{"budget_duration": "1mo", "max_budget": 1}], "max_budget": 1},
+    {"budget_limits": [{"budget_duration": "1mo", "max_budget": 1}]},
+    {"is_profile": True, "budget_limits": [
+        {"budget_duration": "1mo", "max_budget": 1}, {"budget_duration": "1mo", "max_budget": 2},
+    ]},
+))
+async def test_profile_validation_rejects_empty_shared_and_duplicate_definitions(monkeypatch, fields):
+    from litellm.proxy.management_endpoints.budget_management_endpoints import BudgetWriteRequest, new_budget
+
+    database: Final = CatalogClient()
+    monkeypatch.setattr(ps, "prisma_client", database)
+    admin: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as invalid:
+        await new_budget(BudgetWriteRequest.model_validate({"budget_id": "invalid", **fields}), admin)
+    assert invalid.value.status_code == 400
+    assert not database.db.litellm_budgettable.rows
 
 
 @pytest.fixture
@@ -21,13 +103,16 @@ def client_and_mocks(monkeypatch):
     # Setup MagicMock Prisma
     mock_prisma = MagicMock()
     mock_table = MagicMock()
-    mock_table.create = AsyncMock(side_effect=lambda *, data: data)
-    mock_table.update = AsyncMock(side_effect=lambda *, where, data: {**where, **data})
-
-    mock_prisma.db = types.SimpleNamespace(
-        litellm_budgettable=mock_table,
-        litellm_dailyspend=mock_table,
+    mock_table.create = AsyncMock(side_effect=lambda *, data: Record.model_validate(data))
+    mock_table.update = AsyncMock(side_effect=lambda *, where, data: Record.model_validate({**where, **data}))
+    mock_table.find_unique = AsyncMock(
+        side_effect=lambda *, where: Record.model_validate({**where, "updated_at": NOW})
     )
+    mock_table.count = AsyncMock(return_value=0)
+
+    mock_prisma.db = Database()
+    mock_prisma.db.litellm_budgettable = mock_table
+    mock_prisma.tx.return_value.__aenter__.return_value = mock_prisma.db
 
     # Monkeypatch Mocked Prisma client into the server module
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
@@ -271,7 +356,7 @@ async def test_update_budget_allows_null_max_budget(client_and_mocks):
 
     async def capture_update(*, where, data):
         captured_data.update(data)
-        return {**where, **data}
+        return Record.model_validate({**where, **data})
 
     mock_table.update = AsyncMock(side_effect=capture_update)
 
@@ -395,7 +480,7 @@ def _capture_update_data(mock_table):
 
     async def capture(*, where, data):
         captured.update(data)
-        return {**where, **data}
+        return Record.model_validate({**where, **data})
 
     mock_table.update = AsyncMock(side_effect=capture)
     return captured

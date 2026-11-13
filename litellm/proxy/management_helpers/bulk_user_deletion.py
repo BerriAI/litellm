@@ -15,13 +15,14 @@ from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 
 from fastapi import HTTPException
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.models.person_budget import PersonBudgetAssignmentRecord
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LitellmUserRoles,
@@ -30,6 +31,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import delete_cache_key_objects, get_jwt_key_mapping_cache_keys_for_tokens
+from litellm.proxy.auth.person_budget import person_budget_definition_cache_key
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
@@ -75,7 +77,7 @@ _AUDIT_LOG_CONCURRENCY: Final = 10
 _BATCH_TX_TIMEOUT: Final = timedelta(seconds=60)
 _USER_DELETE_ATTEMPTS: Final = 3
 
-_UserKeys = Literal["delete", "keep"]
+_UserKeys: TypeAlias = Literal["delete", "keep"]
 
 
 class _OrgAdminFilter(TypedDict):
@@ -109,6 +111,7 @@ class _UserBatchDeletion:
     deleted_keys: tuple["prisma_models.LiteLLM_VerificationToken", ...]
     jwt_mapping_cache_keys: tuple[str, ...]
     deleted_users: int
+    deleted_override_ids: tuple[str, ...] = ()
 
     @property
     def deleted_key_tokens(self) -> tuple[str, ...]:
@@ -133,6 +136,7 @@ _NO_DELETED_KEYS: Final = _DeletedKeys(keys=(), jwt_mapping_cache_keys=())
 class _DeletedUserRows:
     keys: _DeletedKeys
     users: int
+    override_ids: tuple[str, ...] = ()
 
 
 def _team_not_found(team_id: str) -> ManagementProblem:
@@ -442,6 +446,15 @@ async def _delete_user_rows(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
 ) -> _DeletedUserRows:
+    # Read after the user locks, so an assignment changed while deletion waited
+    # cannot leak the newly owned override.
+    assignments: Final = tuple(
+        PersonBudgetAssignmentRecord.model_validate(row)
+        for row in await _user_tx_db(tx).find_many(where=_in_filter("user_id", user_ids))
+    )
+    override_ids: Final = tuple(
+        assignment.budget_override_id for assignment in assignments if assignment.budget_override_id is not None
+    )
     deleted_keys: Final = (
         await _delete_user_keys(prisma_client, tx, user_ids, user_api_key_dict, litellm_changed_by)
         if user_keys == "delete"
@@ -457,7 +470,12 @@ async def _delete_user_rows(
     await _org_membership_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
     await _membership_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
     deleted_users: Final = await _user_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
-    return _DeletedUserRows(keys=deleted_keys, users=deleted_users)
+    if override_ids:
+        budgets: Final = cast(  # cast-ok: Prisma actions implement TableActions with narrower generated mapping inputs
+            "TableActions[prisma_models.LiteLLM_BudgetTable]", tx.litellm_budgettable
+        )
+        await budgets.delete_many(where={"budget_id": {"in": override_ids}, "is_profile": False})
+    return _DeletedUserRows(keys=deleted_keys, users=deleted_users, override_ids=override_ids)
 
 
 def _teams_of(
@@ -536,6 +554,7 @@ async def _delete_users_tx(
         jwt_mapping_cache_keys=deleted_rows.keys.jwt_mapping_cache_keys
         + tuple(k for r in removals.values() for k in r.jwt_mapping_cache_keys),
         deleted_users=deleted_rows.users,
+        deleted_override_ids=deleted_rows.override_ids,
     )
 
 
@@ -587,6 +606,10 @@ async def _after_users_deleted(
     )
     await evict_and_broadcast(cache_keys=deletion.jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
     await evict_and_broadcast(cache_keys=sorted(user_ids), user_api_key_cache=user_api_key_cache)
+    await evict_and_broadcast(
+        cache_keys=tuple(person_budget_definition_cache_key(budget_id) for budget_id in deletion.deleted_override_ids),
+        user_api_key_cache=user_api_key_cache,
+    )
     from litellm.proxy.proxy_server import spend_counter_store
 
     await drop_committed_spend(spend_counter_store, tuple(user_counter(user_id) for user_id in sorted(user_ids)))

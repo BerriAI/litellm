@@ -8,9 +8,10 @@ from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter, computed_field
 
 from litellm._logging import verbose_proxy_logger
+from litellm.models.person_budget import PersonBudgetCapPolicy, PersonBudgetDefinition, PersonBudgetLimit
 from litellm.proxy._types import (
     CommonProxyErrors,
     UserAPIKeyAuth,
@@ -35,6 +36,7 @@ from litellm.proxy.list_api.list_framework import (
     where_sql,
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
+from litellm.proxy.management_helpers.customer_hierarchy import budget_revision
 from litellm.proxy.utils import PrismaClient, query_raw_rows
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.management_v1 import (
@@ -55,7 +57,13 @@ class BudgetListItem(LiteLLMBaseModel):
     decimal strings, and a quoted "60000" breaks arithmetic in the dashboard.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     budget_id: str
+    is_profile: bool = False
+    budget_limits: tuple[PersonBudgetLimit, ...] | None = None
+    cap_policy: PersonBudgetCapPolicy | None = None
+    assignment_count: int = Field(default=0, ge=0)
     max_budget: float | None = None
     soft_budget: float | None = None
     tpm_limit: int | None = None
@@ -66,15 +74,36 @@ class BudgetListItem(LiteLLMBaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @computed_field
+    @property
+    def revision(self) -> str:
+        return budget_revision(PersonBudgetDefinition.model_validate(self, from_attributes=True))
+
 
 class _RowCount(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     count: int
 
 
 _BUDGET_ROWS: Final = TypeAdapter(tuple[BudgetListItem, ...])
 _ROW_COUNTS: Final = TypeAdapter(tuple[_RowCount, ...])
 
-SELECTED_COLUMNS: Final = ", ".join(f'"{name}"' for name in BudgetListItem.model_fields)
+_ASSIGNMENT_COUNT: Final = (
+    '((SELECT COUNT(*) FROM "LiteLLM_UserTable" u '
+    'WHERE u.budget_id = "LiteLLM_BudgetTable".budget_id) + '
+    '(SELECT COUNT(*) FROM "LiteLLM_CustomerMemberTable" m '
+    'WHERE m.budget_id = "LiteLLM_BudgetTable".budget_id)) AS assignment_count'
+)
+SELECTED_COLUMNS: Final = ", ".join(
+    _ASSIGNMENT_COUNT if name == "assignment_count" else f'"{name}"' for name in BudgetListItem.model_fields
+)
+_REUSABLE_ONLY: Final = (
+    'NOT EXISTS (SELECT 1 FROM "LiteLLM_UserTable" u '
+    'WHERE u.budget_override_id = "LiteLLM_BudgetTable".budget_id) AND '
+    'NOT EXISTS (SELECT 1 FROM "LiteLLM_CustomerMemberTable" m '
+    'WHERE m.budget_override_id = "LiteLLM_BudgetTable".budget_id)'
+)
 
 
 # Unicode 17.0 Nd zeroes, each followed by its other nine digits in UnicodeData.txt.
@@ -112,12 +141,16 @@ class PrismaBudgetListExecutor:
 
     async def count(self, where: tuple[Predicate, ...]) -> int:
         clauses, params = where_sql(where)
-        sql: Final = f"SELECT COUNT(*) AS count FROM {BUDGET_TABLE}" + (f" WHERE {clauses}" if clauses else "")
+        filtered: Final = clauses.replace('"is_profile"', '"is_profile"::text')
+        sql: Final = f"SELECT COUNT(*) AS count FROM {BUDGET_TABLE} WHERE {_REUSABLE_ONLY}" + (
+            f" AND ({filtered})" if filtered else ""
+        )
         counted: Final = _ROW_COUNTS.validate_python(await query_raw_rows(self.prisma_client.db, sql, *params))
         return counted[0].count if counted else 0
 
     async def find_many(self, plan: QueryPlan) -> Sequence[BudgetListItem]:
         clauses, params = where_sql(plan.where)
+        filtered: Final = clauses.replace('"is_profile"', '"is_profile"::text')
         ordering: Final = ", ".join(
             order_by_sql((key,)).replace("NULLS LAST", "NULLS FIRST")
             if key.descending and key.field in ("max_budget", "tpm_limit", "rpm_limit", "tpd_limit")
@@ -126,7 +159,8 @@ class PrismaBudgetListExecutor:
         ).replace('"budget_duration"', _BUDGET_DURATION_SECONDS)
         sql: Final = (
             f"SELECT {SELECTED_COLUMNS} FROM {BUDGET_TABLE}"
-            + (f" WHERE {clauses}" if clauses else "")
+            + f" WHERE {_REUSABLE_ONLY}"
+            + (f" AND ({filtered})" if filtered else "")
             + f" ORDER BY {ordering}"
             + f" LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
         )
@@ -151,6 +185,7 @@ BUDGET_FILTERS: Final[Mapping[str, FilterSpec]] = MappingProxyType(
         "budget_duration": FilterSpec(type=str, ops=frozenset(("in", "is_null"))),
         "max_budget": FilterSpec(type=float, ops=frozenset(("gte", "lte", "is_null"))),
         "created_at": FilterSpec(type=datetime, ops=frozenset(("gte", "lte"))),
+        "is_profile": FilterSpec(type=str, ops=frozenset(("eq",))),
     }
 )
 
@@ -172,7 +207,7 @@ BUDGETS_LIST_SPEC: Final[ListSpec[BudgetListItem, BudgetListItem]] = ListSpec(
 
 @router.get(
     "/budgets",
-    tags=("budget management",),
+    tags=["budget management"],
     dependencies=(Depends(user_api_key_auth),),
     response_model=ListResponse[BudgetListItem],
 )
@@ -195,7 +230,8 @@ async def list_budgets(
     tiebreaker. `q` is a case-insensitive substring match on `budget_id`.
     `page_size` defaults to 50 and is capped at 100. Filters are
     `filter[budget_duration][in|is_null]`, `filter[max_budget][gte|lte|is_null]`
-    and `filter[created_at][gte|lte]`.
+    and `filter[created_at][gte|lte]`. `filter[is_profile][eq]=true` selects reusable
+    per-person profiles; `false` selects shared scalar budgets. Owned personal overrides are excluded.
 
     Example curl:
     ```
@@ -213,6 +249,16 @@ async def list_budgets(
                     title="Database not connected",
                     status=503,
                     detail=CommonProxyErrors.db_not_connected_error.value,
+                )
+            )
+
+        if request.query_params.get("filter[is_profile][eq]") not in (None, "true", "false"):
+            raise ManagementProblem(
+                ProblemDetail(
+                    type=f"{PROBLEM_TYPE_BASE}invalid-query-parameter",
+                    title="Invalid profile filter",
+                    status=400,
+                    detail="filter[is_profile][eq] must be true or false.",
                 )
             )
 

@@ -281,7 +281,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-fallback-1"
         mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
         mock_job.created_by = "user-1"
@@ -380,7 +380,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-bedrock-1"
         mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
         mock_job.created_by = "user-1"
@@ -481,7 +481,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-poller-rates-1"
         mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
         mock_job.created_by = "user-1"
@@ -579,7 +579,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-masked-api-base-1"
         mock_job.unified_object_id = base64.urlsafe_b64encode(
             b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
@@ -657,7 +657,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-primary-1"
         mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
         mock_job.created_by = "user-1"
@@ -766,7 +766,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-unattributed-1"
         mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
         mock_job.created_by = None
@@ -887,7 +887,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-anthropic-1"
         mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
         mock_job.created_by = "user-1"
@@ -949,7 +949,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-terminal-1"
         mock_job.unified_object_id = base64.urlsafe_b64encode(
             b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
@@ -1024,7 +1024,7 @@ class TestCheckBatchCost:
 
         mock_prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(side_effect=find_managed_file)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-terminal-mint-1"
         mock_job.unified_object_id = unified_batch_uid
         mock_job.created_by = "user-1"
@@ -1113,7 +1113,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-completed-no-output-1"
         mock_job.unified_object_id = base64.urlsafe_b64encode(
             b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
@@ -1184,7 +1184,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-completed-lagging-output-1"
         mock_job.unified_object_id = base64.urlsafe_b64encode(
             b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
@@ -1227,7 +1227,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-in-progress-1"
         mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
         mock_job.created_by = "user-1"
@@ -1282,7 +1282,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-terminal-with-output-1"
         mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
         mock_job.created_by = "user-1"
@@ -1390,7 +1390,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-error-file-1"
         mock_job.unified_object_id = base64.urlsafe_b64encode(
             b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
@@ -1496,7 +1496,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-output-gone-1"
         mock_job.unified_object_id = base64.urlsafe_b64encode(
             b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
@@ -1557,7 +1557,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-        mock_job = MagicMock()
+        mock_job = MagicMock(budget_attribution=None)
         mock_job.id = "job-raw-file-1"
         mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
         mock_job.created_by = "user-1"
@@ -1693,7 +1693,7 @@ class TestUnmanagedVertexRouting:
         )
 
     def _job(self, file_object=None):
-        job = MagicMock()
+        job = MagicMock(budget_attribution=None)
         job.unified_object_id = "8823717160934178816"
         job.file_object = file_object if file_object is not None else _unmanaged_vertex_file_object()
         return job
@@ -2004,7 +2004,7 @@ class TestUnmanagedBedrockRouting:
         )
 
     def _job(self, file_object=None):
-        job = MagicMock()
+        job = MagicMock(budget_attribution=None)
         job.unified_object_id = self._ARN
         job.file_object = file_object if file_object is not None else _unmanaged_bedrock_file_object()
         return job
@@ -2239,11 +2239,11 @@ class TestUnmanagedBatchCostFlagIsGeneralized:
             track_unmanaged_batch_cost=True,
         )
 
-        vertex_job = MagicMock()
+        vertex_job = MagicMock(budget_attribution=None)
         vertex_job.unified_object_id = "8823717160934178816"
         vertex_job.file_object = _unmanaged_vertex_file_object()
 
-        bedrock_job = MagicMock()
+        bedrock_job = MagicMock(budget_attribution=None)
         bedrock_job.unified_object_id = TestUnmanagedBedrockRouting._ARN
         bedrock_job.file_object = _unmanaged_bedrock_file_object()
 
@@ -2280,7 +2280,7 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
     def _job(self, input_file_id: str) -> MagicMock:
         from litellm.types.utils import LiteLLMBatch
 
-        job = MagicMock()
+        job = MagicMock(budget_attribution=None)
         job.id = "job-lit-4964"
         job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
         job.created_by = "user-1"
@@ -2770,7 +2770,7 @@ class TestPollPageStarvation:
         return prisma
 
     def _job(self, job_id, unified_object_id):
-        job = MagicMock()
+        job = MagicMock(budget_attribution=None)
         job.id = job_id
         job.unified_object_id = unified_object_id
         job.created_by = "user-1"

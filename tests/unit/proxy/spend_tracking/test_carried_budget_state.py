@@ -30,6 +30,80 @@ from litellm.types.proxy.carried_budget_state import (
 RESET_AT = datetime(2026, 10, 1, 12, 30, tzinfo=timezone.utc)
 
 
+@pytest.mark.parametrize("entity_type", ["user", "customer_member"])
+def test_personal_counter_identity_keeps_the_exact_reset_instant(entity_type):
+    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
+
+    window = PersonBudgetWindow(
+        entity_type=entity_type, entity_id="person:one/é", budget_duration="1mo",
+        window_start=datetime.fromisoformat("2026-11-01T00:30:00-05:00"),
+        reset_at=datetime.fromisoformat("2026-12-01T00:30:00-05:00"), max_budget=10,
+    )
+    same_instant = window.model_copy(update={"window_start": datetime.fromisoformat("2026-11-01T05:30:00+00:00")})
+    midnight = window.model_copy(update={"window_start": datetime(2026, 11, 1, tzinfo=timezone.utc)})
+
+    assert window.counter_key == (
+        f"spend:person:{entity_type}:person%3Aone%2F%C3%A9:window:1mo@2026-11-01T05:30:00+00:00"
+    )
+    assert window.counter_key == same_instant.counter_key
+    assert window.counter_key != midnight.counter_key
+    assert window.accounting_window() == {
+        "entity_type": entity_type, "entity_id": "person:one/é",
+        "window_duration": "1mo@2026-11-01T05:30:00+00:00",
+        "window_start": "2026-11-01T05:30:00+00:00",
+    }
+
+
+def test_deferred_creator_windows_and_customer_usage_survive_json_and_auth_reconstruction():
+    import json
+
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
+    from litellm.proxy.spend_tracking.carried_budget_state import (
+        creator_budget_metadata, person_budget_windows_from_kwargs,
+        restore_creator_budget_metadata, stored_budget_metadata,
+    )
+    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
+
+    creator = UserAPIKeyAuth(user_id="creator")
+    creator.person_budget_windows = (PersonBudgetWindow(
+        entity_type="customer_member", entity_id="member", budget_duration="12mo",
+        window_start=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        reset_at=datetime(2027, 1, 1, tzinfo=timezone.utc), max_budget=100,
+    ),)
+    creator.customer_hierarchy = CustomerHierarchyAuth(
+        customer_org_id="org", customer_team_id="team", customer_member_id="member", scopes=(),
+    )
+    persisted = json.loads(json.dumps(creator_budget_metadata(creator)))
+    restored = UserAPIKeyAuth(person_budget_windows=creator.person_budget_windows)
+    assert restored.person_budget_windows == ()
+    restore_creator_budget_metadata(restored, stored_budget_metadata(persisted))
+
+    assert restored.person_budget_windows == creator.person_budget_windows
+    assert restored.customer_hierarchy == creator.customer_hierarchy
+    assert person_budget_windows_from_kwargs({"standard_logging_object": {"metadata": persisted}}) == (
+        creator.person_budget_windows
+    )
+    assert person_budget_windows_from_kwargs({"litellm_params": {"litellm_metadata": persisted}}) == (
+        creator.person_budget_windows
+    )
+    assert stored_budget_metadata(None) == {}
+
+
+@pytest.mark.parametrize("missing", ["user_api_key_customer_member_id", "user_api_key_customer_team_id"])
+def test_deferred_snapshot_drops_malformed_customer_ids(missing):
+    from litellm.proxy.spend_tracking.carried_budget_state import restore_creator_budget_metadata, stored_budget_metadata
+
+    metadata = {"user_api_key_customer_org_id": "org", "user_api_key_customer_team_id": "team",
+                "user_api_key_customer_member_id": "member", missing: None}
+    persisted = stored_budget_metadata(metadata)
+    auth = UserAPIKeyAuth()
+    restore_creator_budget_metadata(auth, persisted)
+
+    assert missing not in persisted
+    assert persisted["user_api_key_customer_org_id"] == "org"
+    assert auth.customer_hierarchy is None
+
+
 def test_team_and_user_state_round_trips_through_metadata():
     token = UserAPIKeyAuth(token="hashed", team_id="t1", user_id="u1")
     carry_team_and_user_budget_state(
@@ -41,6 +115,7 @@ def test_team_and_user_state_round_trips_through_metadata():
     metadata = dict(carried_budget_metadata(token))
 
     assert metadata == {
+        "user_api_key_person_budget_windows": [],
         "user_api_key_team_budget_reset_at": RESET_AT.isoformat().replace("+00:00", "Z"),
         "user_api_key_team_table_max_budget": 300.0,
         "user_api_key_user_budget_reset_at": None,
@@ -66,15 +141,58 @@ def test_team_model_max_budget_rides_on_the_token():
     assert token.team_model_max_budget == team_model_max_budget
 
 
-def test_missing_objects_leave_no_metadata_and_no_snapshot():
+def test_missing_objects_clear_personal_metadata_and_leave_no_snapshot():
     token = UserAPIKeyAuth(token="hashed", team_id="t1", user_id="u1")
     carry_team_and_user_budget_state(valid_token=token, team_object=None, user_object=None)
 
-    assert dict(carried_budget_metadata(token)) == {}
+    assert dict(carried_budget_metadata(token)) == {"user_api_key_person_budget_windows": []}
     assert TeamBudgetSnapshot.from_metadata({}) is None
     assert UserBudgetSnapshot.from_metadata({"user_api_key_user_alias": "Alice"}) is None
     assert OrgBudgetSnapshot.from_metadata({"user_api_key_org_spend": 1.0}) is None
     assert KeyBudgetSnapshot.from_metadata({}) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/responses"])
+@pytest.mark.parametrize("serialized", [False, True])
+async def test_request_enrichment_clears_forged_personal_windows_for_unassigned_auth(monkeypatch, route, serialized):
+    import json
+    from starlette.requests import Request
+    from litellm.proxy import proxy_server
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request, metadata_variable_name_for_request
+    from litellm.proxy.spend_tracking.carried_budget_state import creator_budget_metadata, person_budget_windows_from_kwargs
+    from litellm.types.proxy.carried_budget_state import PERSON_BUDGET_WINDOWS_METADATA_KEY, PersonBudgetWindow
+
+    fake = PersonBudgetWindow(
+        entity_type="user", entity_id="victim", budget_duration="1mo",
+        window_start=datetime(2026, 11, 1, tzinfo=timezone.utc),
+        reset_at=datetime(2026, 12, 1, tzinfo=timezone.utc), max_budget=100,
+    )
+    metadata = {PERSON_BUDGET_WINDOWS_METADATA_KEY: [fake.model_dump(mode="json")]}
+    data = {
+        "model": "gpt-4o",
+        "metadata": json.dumps(metadata) if serialized else dict(metadata),
+        "litellm_metadata": json.dumps(metadata) if serialized else dict(metadata),
+        **({"input": "hello"} if route.endswith("responses") else {"messages": [{"role": "user", "content": "hello"}]}),
+    }
+    request = Request({
+        "type": "http", "method": "POST", "path": route, "scheme": "http",
+        "server": ("localhost", 80), "client": ("127.0.0.1", 1000),
+        "headers": [(b"content-type", b"application/json")], "query_string": b"",
+    })
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "premium_user", False)
+    auth = UserAPIKeyAuth(user_id="requester")
+    enriched = await add_litellm_data_to_request(
+        data=data, request=request, user_api_key_dict=auth,
+        proxy_config=proxy_server.ProxyConfig(), general_settings={},
+    )
+
+    bucket = metadata_variable_name_for_request(route, enriched)
+    assert enriched[bucket][PERSON_BUDGET_WINDOWS_METADATA_KEY] == []
+    assert person_budget_windows_from_kwargs({"litellm_params": enriched}) == ()
+    assert creator_budget_metadata(auth) == {}
 
 
 def test_organization_state_carries_alias_spend_and_max_budget():

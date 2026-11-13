@@ -1423,6 +1423,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         request_started_at=start_time,
         model_access_groups=("premium",),
         project_id=None,
+        person_budget_windows=(),
         committed_spend_scope=EntitySpendCounterKeys(),
     )
 
@@ -3035,6 +3036,77 @@ async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
     assert await _counter_values(live_spend_counters) == pytest.approx(
         {key: spend + charged for key, spend in _LIVE_COUNTERS.items()}
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hide_error_logs", [False, True])
+@pytest.mark.parametrize("hide_spend_logs", [False, True])
+async def test_billed_failure_and_retries_charge_personal_windows_and_durable_queue_once(
+    live_spend_counters, monkeypatch, hide_error_logs, hide_spend_logs,
+):
+    from datetime import timezone
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
+
+    window = PersonBudgetWindow(
+        entity_type="user", entity_id="creator", budget_duration="1mo",
+        window_start=datetime(2026, 11, 1, tzinfo=timezone.utc),
+        reset_at=datetime(2026, 12, 1, tzinfo=timezone.utc), max_budget=100,
+    )
+    auth = UserAPIKeyAuth(user_id="creator")
+    auth.person_budget_windows = (window,)
+    live_spend_counters.set_local(window.counter_key, 2.0)
+    logging = ProxyLogging(user_api_key_cache=DualCache())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging)
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": False, "disable_error_logs": hide_error_logs})
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", hide_spend_logs)
+    await ProxyDBLogger().async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-4.1", "metadata": {}, "messages": [{"role": "user", "content": "hi"}],
+            "proxy_server_request": {"request_id": "billed-person-failure"},
+            **_failure_with_billed_attempts(),
+        },
+        original_exception=RuntimeError("stream broke"), user_api_key_dict=auth,
+    )
+
+    assert live_spend_counters.get_local(window.counter_key) == pytest.approx(3.25)
+    queued = await logging.db_spend_update_writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
+    assert len(queued) == 1
+    assert (queued[0]["entity_type"], queued[0]["entity_id"], queued[0]["window_duration"], queued[0]["spend"]) == (
+        "user", "creator", window.window_duration, 1.25,
+    )
+
+
+@pytest.mark.asyncio
+async def test_billed_failure_clears_forged_personal_windows_from_unassigned_auth(live_spend_counters, monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.proxy.carried_budget_state import PERSON_BUDGET_WINDOWS_METADATA_KEY, PersonBudgetWindow
+
+    victim = PersonBudgetWindow(
+        entity_type="user", entity_id="victim", budget_duration="1mo",
+        window_start=datetime(2026, 11, 1, tzinfo=timezone.utc),
+        reset_at=datetime(2026, 12, 1, tzinfo=timezone.utc), max_budget=100,
+    )
+    live_spend_counters.set_local(victim.counter_key, 2.0)
+    logging = ProxyLogging(user_api_key_cache=DualCache())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging)
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": False})
+    forged = {PERSON_BUDGET_WINDOWS_METADATA_KEY: [victim.model_dump(mode="json")]}
+    await ProxyDBLogger().async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-4.1", "messages": [{"role": "user", "content": "hello"}],
+            "metadata": dict(forged), "litellm_params": {"litellm_metadata": dict(forged)},
+            "proxy_server_request": {"request_id": "forged-person-failure"},
+            **_failure_with_billed_attempts(),
+        },
+        original_exception=RuntimeError("stream broke"), user_api_key_dict=UserAPIKeyAuth(user_id="requester"),
+    )
+
+    assert live_spend_counters.get_local(victim.counter_key) == 2.0
+    assert await logging.db_spend_update_writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions() == ()
 
 
 @pytest.mark.asyncio

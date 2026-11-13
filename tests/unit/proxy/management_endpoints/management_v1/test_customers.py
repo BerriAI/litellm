@@ -1,4 +1,5 @@
 import asyncio
+from functools import partial
 from typing import TYPE_CHECKING, Final, cast
 
 import pytest
@@ -12,7 +13,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import ManagementProblem, problem_response
 from litellm.proxy.management_endpoints.management_v1 import router
 from litellm.proxy.management_endpoints.management_v1.customers import get_customer_hierarchy, get_user_api_key_cache
-from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy
+from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, invalidate_person_budget_members
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import NOW, Database
 
 if TYPE_CHECKING:
@@ -28,12 +29,14 @@ def client(role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN, cache: UserApi
         return problem_response(exc.problem)
 
     auth: Final = UserAPIKeyAuth(user_id="admin", user_role=role)
+    auth_cache: Final = cache if cache is not None else UserApiKeyCache()
     hierarchy: Final = CustomerHierarchy(
-        cast("Prisma", Database()), clock=lambda: NOW
+        cast("Prisma", Database()), clock=lambda: NOW,
+        invalidate_members=partial(invalidate_person_budget_members, cache=auth_cache),
     )  # cast-ok: in-memory Prisma edge
     app.dependency_overrides[user_api_key_auth] = lambda: auth
     app.dependency_overrides[get_customer_hierarchy] = lambda: hierarchy
-    app.dependency_overrides[get_user_api_key_cache] = lambda: cache if cache is not None else UserApiKeyCache()
+    app.dependency_overrides[get_user_api_key_cache] = lambda: auth_cache
     return TestClient(app)
 
 
@@ -172,6 +175,11 @@ def test_template_edits_propagate_and_only_live_override_fields_win() -> None:
         "budget_duration": None,
         "model_tpm_limit": None,
         "model_rpm_limit": None,
+        "budget_limits": None,
+        "cap_policy": None,
+        "temp_budget_increase": None,
+        "temp_budget_expiry": None,
+        "temp_budget_duration": None,
     }
     fallback: Final = http.get("/management/v1/customer_members/expired")
     assert fallback.status_code == 200, fallback.text

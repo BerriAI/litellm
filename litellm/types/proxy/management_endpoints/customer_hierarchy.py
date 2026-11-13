@@ -4,6 +4,12 @@ from typing import Final
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, NonNegativeInt, field_validator
 
+from litellm.models.person_budget import (
+    PersonBudgetCapPolicy,
+    PersonBudgetDuration,
+    PersonBudgetLimit,
+    PersonBudgetPolicy,
+)
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 
 
@@ -31,6 +37,21 @@ class Budget(BaseModel):
 class BudgetTemplate(Budget):
     name: str = Field(min_length=1)
     is_default: bool = False
+
+
+class MemberBudget(Budget):
+    """Personal policy alongside the existing customer-member scalar limits."""
+
+    budget_limits: tuple[PersonBudgetLimit, ...] | None = None
+    cap_policy: PersonBudgetCapPolicy | None = None
+    temp_budget_increase: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    temp_budget_expiry: AwareDatetime | None = None
+    temp_budget_duration: PersonBudgetDuration | None = None
+
+    @field_validator("budget_limits")
+    @classmethod
+    def unique_durations(cls, value: tuple[PersonBudgetLimit, ...] | None) -> tuple[PersonBudgetLimit, ...] | None:
+        return PersonBudgetPolicy(budget_limits=value).budget_limits
 
 
 class TemplatePatch(Budget):
@@ -71,7 +92,7 @@ class MemberPatch(BaseModel):
 
     alias: str | None = None
     budget_id: str | None = None
-    budget_override: Budget | None = None
+    budget_override: MemberBudget | None = None
     budget_override_expires_at: AwareDatetime | None = None
 
 
@@ -113,6 +134,6 @@ class CustomerMember(AuditFields):
     parent_team_id: str
     budget_id: str | None = None
     budget_override_id: str | None = None
-    budget_override: Budget | None = None
+    budget_override: MemberBudget | None = None
     budget_override_expires_at: datetime | None = None
-    effective_budget: Budget
+    effective_budget: MemberBudget

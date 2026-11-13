@@ -11,6 +11,8 @@ from typing import Final
 
 from pydantic import ConfigDict
 
+from litellm.models.person_budget import PersonBudgetCapPolicy, PersonBudgetDuration, PersonBudgetLimit
+
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
@@ -36,6 +38,10 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     allowed_models: list[str] | None = None  # per-member model scope; empty = inherit team models
     temp_budget_increase: float | None = None
     temp_budget_expiry: datetime | None = None
+    temp_budget_duration: PersonBudgetDuration | None = None
+    budget_limits: tuple[PersonBudgetLimit, ...] | None = None
+    is_profile: bool = False
+    cap_policy: PersonBudgetCapPolicy | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -52,7 +58,7 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     def effective_max_budget(self, now: datetime) -> float | None:
         if self.max_budget is None:
             return None
-        return self.max_budget + self.active_temp_budget_increase(now)
+        return self.max_budget + (self.active_temp_budget_increase(now) if self.temp_budget_duration is None else 0.0)
 
 
 class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):

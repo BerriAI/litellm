@@ -39,6 +39,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     optional_str,
     request_tags_from_metadata,
 )
+from litellm.proxy.spend_tracking.carried_budget_state import restore_creator_budget_metadata
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
@@ -838,6 +839,8 @@ class AnthropicPassthroughLoggingHandler:
                     model_max_budget={},  # Set to empty dict instead of None
                     model_spend={},  # Set to empty dict instead of None
                 )
+
+                restore_creator_budget_metadata(user_api_key_dict, _JSON_OBJECT.validate_python(_request_metadata))
 
                 # Store the unified object for batch cost tracking
                 task: Final = asyncio.create_task(

@@ -5,7 +5,7 @@ from collections.abc import Set as AbstractSet
 from datetime import datetime
 from functools import wraps
 from types import MappingProxyType
-from typing import Any, Final, ParamSpec, Protocol, TypeVar
+from typing import Any, Final, ParamSpec, Protocol, TypeVar, cast
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
@@ -17,7 +17,6 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
-    BudgetNewRequest,
     DeleteCustomerRequest,
     DeleteTeamRequest,
     DeleteUserRequest,
@@ -48,6 +47,7 @@ from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
 
 _BUDGET_DATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_BUDGET_ID: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 
 
 class _PrismaRecord(Protocol):
@@ -78,6 +78,8 @@ class _PrismaBudgetTable(Protocol):
     async def create(self, *, data: Mapping[str, object]) -> _PrismaBudgetRecord: ...
 
     async def find_unique(self, *, where: Mapping[str, object]) -> _PrismaBudgetRecord | None: ...
+
+    async def count(self, *, where: Mapping[str, object]) -> int: ...
 
 
 class _PrismaUserTable(Protocol):
@@ -124,6 +126,52 @@ def _user_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _Prism
 
 def _budget_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _PrismaBudgetTable:
     return tx.litellm_budgettable if tx is not None else BudgetRepository(prisma_client).table
+
+
+def reject_person_budget_fields(data: BaseModel | Mapping[str, object]) -> None:
+    """Legacy scalar consumers cannot enforce the personal-policy fields on a budget row."""
+    values: Final = _BUDGET_DATA_MAPPING.validate_python(data.model_dump() if isinstance(data, BaseModel) else data)
+    if values.get("is_profile") is True or any(
+        values.get(name) is not None for name in ("budget_limits", "cap_policy", "temp_budget_duration")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Personal budget profiles can only be assigned to internal users or customer members."},
+        )
+
+
+async def checked_legacy_budget(
+    prisma_client: PrismaClient, budget_id: str | None, tx: MemberWriteTx | None = None
+) -> _PrismaBudgetRecord | None:
+    """Validate one existing budget at the shared scalar attachment boundary."""
+    if not budget_id:
+        return None
+    table: Final = (
+        tx.litellm_budgettable
+        if tx is not None
+        else cast(  # cast-ok: Prisma actions use narrower generated input types than this boundary protocol
+            _PrismaBudgetTable, prisma_client.writer_db.litellm_budgettable
+        )
+    )
+    return await checked_legacy_budget_row(table, budget_id)
+
+
+async def checked_legacy_budget_row(table: _PrismaBudgetTable, budget_id: str | None) -> _PrismaBudgetRecord | None:
+    if not budget_id:
+        return None
+    row: Final = await table.find_unique(where={"budget_id": budget_id})
+    if row is None:
+        return None
+    reject_person_budget_fields(row.model_dump())
+    empty: Final[Mapping[str, object]] = {}
+    if await table.count(
+        where={
+            "budget_id": budget_id,
+            "OR": ({"customer_member_overrides": {"some": empty}}, {"user_overrides": {"some": empty}}),
+        }
+    ):
+        raise HTTPException(status_code=400, detail={"error": "A personal budget override cannot be shared."})
+    return row
 
 
 def _team_membership_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _PrismaTeamMembershipTable:
@@ -213,16 +261,24 @@ async def handle_budget_for_entity(
         Optional[str]: The budget_id to use, or None if no budget was created/updated
     """
     from litellm.proxy.management_endpoints.budget_management_endpoints import (
+        BudgetWriteRequest,
         update_budget,
     )
 
     # Get all budget field names
-    budget_params: Final = LiteLLM_BudgetTable.model_fields.keys() - {"budget_id"}
+    budget_params: Final = LiteLLM_BudgetTable.model_fields.keys() - {
+        "budget_id",
+        "is_profile",
+        "budget_limits",
+        "cap_policy",
+        "temp_budget_duration",
+    }
 
     # Extract budget fields from data
     _json_data: Final = _BUDGET_DATA_MAPPING.validate_python(
         data.model_dump(exclude_none=True) if isinstance(data, BaseModel) else data
     )
+    reject_person_budget_fields(_json_data)
     _budget_data: Final = MappingProxyType(
         {
             k: _json_data.get(k)
@@ -232,7 +288,10 @@ async def handle_budget_for_entity(
     )
 
     # Check if budget_id is explicitly provided in the data
-    data_budget_id: Final[str | None] = getattr(data, "budget_id", None)
+    data_budget_id: Final = _BUDGET_ID.validate_python(_json_data.get("budget_id"))
+    await checked_legacy_budget(prisma_client, data_budget_id)
+    if _budget_data and existing_budget_id != data_budget_id:
+        await checked_legacy_budget(prisma_client, existing_budget_id)
 
     # Case 1: Creating new entity - no existing budget_id
     if existing_budget_id is None:
@@ -262,7 +321,7 @@ async def handle_budget_for_entity(
         # If budget fields are provided, update the existing budget
         if _budget_data:
             await update_budget(
-                budget_obj=BudgetNewRequest.model_validate({"budget_id": existing_budget_id, **_budget_data}),
+                budget_obj=BudgetWriteRequest.model_validate({"budget_id": existing_budget_id, **_budget_data}),
                 user_api_key_dict=user_api_key_dict,
             )
 
@@ -312,7 +371,7 @@ async def _clone_team_default_budget_for_member(
     member's reset cadence without discarding the team default's max_budget.
     """
     budget_table: Final[_PrismaBudgetTable] = _budget_table(prisma_client, tx)
-    default_budget: Final = await budget_table.find_unique(where={"budget_id": default_team_budget_id})
+    default_budget: Final = await checked_legacy_budget(prisma_client, default_team_budget_id, tx)
     if default_budget is None:
         return None
 
@@ -366,9 +425,7 @@ async def _resolve_member_budget_id(
     has_explicit_limit: Final = max_budget_in_team is not None or allowed_models is not None
 
     if not has_explicit_limit and default_team_budget_id is not None and budget_duration is None:
-        default_budget: Final = await _budget_table(prisma_client, tx).find_unique(
-            where={"budget_id": default_team_budget_id}
-        )
+        default_budget: Final = await checked_legacy_budget(prisma_client, default_team_budget_id, tx)
         return default_team_budget_id if default_budget is not None else None
 
     if not has_explicit_limit and default_team_budget_id is not None:

@@ -1,6 +1,10 @@
 from dataclasses import replace
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Final, cast
+import sqlite3
+import re
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,12 +23,16 @@ from litellm.proxy.list_api.list_framework import (
     Compare,
     ScopeWhere,
     build_query_plan,
+    QueryPlan,
+    SortKey,
 )
 from litellm.proxy.management_endpoints.management_v1 import router
 from litellm.proxy.management_endpoints.management_v1.budgets import (
     BUDGETS_LIST_SPEC,
     BudgetListItem,
+    PrismaBudgetListExecutor,
 )
+from litellm.proxy.utils import PrismaClient
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 
@@ -130,6 +138,11 @@ def test_serves_the_columns_the_budgets_page_renders(query_raw, as_proxy_admin):
 
     assert set(row) == {
         "budget_id",
+        "budget_limits",
+        "cap_policy",
+        "is_profile",
+        "assignment_count",
+        "revision",
         "max_budget",
         "soft_budget",
         "tpm_limit",
@@ -272,7 +285,7 @@ def test_admins_and_admin_viewers_may_read_every_budget(query_raw, role):
 
     assert response.status_code == 200
     assert [row["budget_id"] for row in response.json()["data"]] == ["b-1"]
-    assert "WHERE" not in _select_call(query_raw)[0]
+    assert "budget_override_id" in _select_call(query_raw)[0]
 
 
 def test_a_denied_caller_stays_denied_whatever_they_filter_on(query_raw):
@@ -503,10 +516,49 @@ def test_the_spec_serves_what_the_row_model_declares():
     missing from the other and produce a row the validator rejects."""
     from litellm.proxy.management_endpoints.management_v1.budgets import SELECTED_COLUMNS
 
-    assert SELECTED_COLUMNS == ", ".join(f'"{name}"' for name in BudgetListItem.model_fields)
+    assert " AS assignment_count" in SELECTED_COLUMNS
     assert BUDGETS_LIST_SPEC.tiebreaker in BudgetListItem.model_fields
     assert BUDGETS_LIST_SPEC.sortable <= frozenset(BudgetListItem.model_fields)
     assert frozenset(BUDGETS_LIST_SPEC.filters) <= frozenset(BudgetListItem.model_fields)
+
+
+@pytest.mark.asyncio
+async def test_catalog_counts_both_person_types_and_excludes_owned_overrides_before_paging() -> None:
+    with sqlite3.connect(":memory:") as database:
+        database.row_factory = sqlite3.Row
+        database.executescript('''
+            CREATE TABLE "LiteLLM_BudgetTable" (
+                budget_id TEXT, is_profile BOOLEAN, budget_limits TEXT, cap_policy TEXT,
+                max_budget REAL, soft_budget REAL, tpm_limit INTEGER, rpm_limit INTEGER, tpd_limit INTEGER,
+                budget_duration TEXT, budget_reset_at TEXT, created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE "LiteLLM_UserTable" (user_id TEXT, budget_id TEXT, budget_override_id TEXT);
+            CREATE TABLE "LiteLLM_CustomerMemberTable" (customer_member_id TEXT, budget_id TEXT, budget_override_id TEXT);
+            INSERT INTO "LiteLLM_BudgetTable" (budget_id, is_profile, created_at, updated_at) VALUES
+                ('profile', TRUE, '2026-01-01', '2026-01-01'),
+                ('shared', FALSE, '2026-01-01', '2026-01-01'),
+                ('owned-user', FALSE, '2026-01-01', '2026-01-01'),
+                ('owned-member', FALSE, '2026-01-01', '2026-01-01');
+            INSERT INTO "LiteLLM_UserTable" VALUES ('u1', 'profile', 'owned-user'), ('u2', 'profile', NULL);
+            INSERT INTO "LiteLLM_CustomerMemberTable" VALUES ('m1', 'profile', 'owned-member');
+        ''')
+
+        class CatalogDatabase:
+            async def query_raw(self, query: str, *values: object) -> Sequence[Mapping[str, object]]:
+                return tuple(dict(row) for row in database.execute(re.sub(r"\$\d+", "?", query), values))
+
+        executor: Final = PrismaBudgetListExecutor(cast(PrismaClient, SimpleNamespace(db=CatalogDatabase())))
+        assert await executor.count(()) == 2
+        first: Final = await executor.find_many(QueryPlan(
+            where=(), order=(SortKey(field="budget_id", descending=False),), skip=0, take=1,
+        ))
+        assert len(first) == 1 and first[0].budget_id == "profile"
+        assert first[0].assignment_count == 3
+        second: Final = await executor.find_many(QueryPlan(
+            where=(), order=(SortKey(field="budget_id", descending=False),), skip=1, take=1,
+        ))
+        assert len(second) == 1 and second[0].budget_id == "shared"
+        assert second[0].assignment_count == 0
 
 
 def test_is_reachable_by_the_roles_that_can_open_the_budgets_page():
