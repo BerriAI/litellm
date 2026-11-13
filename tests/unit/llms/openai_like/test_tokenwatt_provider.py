@@ -315,3 +315,43 @@ async def test_tokenwatt_anthropic_messages_request_is_bridged_to_chat_completio
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert body["max_tokens"] == 32
     assert any(block.get("text") == "Hello from TokenWatt" for block in response["content"])
+
+
+@pytest.fixture
+def openai_credentials_but_no_tokenwatt_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("TOKENWATT_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-must-not-leak")
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "org-must-not-leak")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", "sk-openai-module-key-must-not-leak")
+
+
+def test_tokenwatt_missing_key_is_rejected_without_using_the_openai_key(openai_credentials_but_no_tokenwatt_key):
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError, match="TOKENWATT_API_KEY"):
+            litellm.completion(model=_MODEL, messages=[{"role": "user", "content": "Say hello"}])
+
+    assert route.call_count == 0
+
+
+def test_tokenwatt_missing_key_is_rejected_on_the_bridged_responses_route(openai_credentials_but_no_tokenwatt_key):
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError, match="TOKENWATT_API_KEY"):
+            litellm.responses(model=_MODEL, input="Say hello")
+
+    assert route.call_count == 0
+
+
+def test_tokenwatt_env_key_is_used_and_no_openai_organization_is_sent(
+    openai_credentials_but_no_tokenwatt_key, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("TOKENWATT_API_KEY", "tokenwatt-env-key")
+    with respx.mock() as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        litellm.completion(model=_MODEL, messages=[{"role": "user", "content": "Say hello"}])
+
+    request: Final = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer tokenwatt-env-key"
+    assert "openai-organization" not in request.headers

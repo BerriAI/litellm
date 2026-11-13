@@ -2806,9 +2806,18 @@ def _complete_custom_openai(
         raise litellm.AuthenticationError(
             message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
         )
+    # Never fall back to the OpenAI key (below) for TokenWatt: it would be sent to api.tokenwatt.io.
+    if custom_llm_provider == "tokenwatt" and not api_key:
+        raise litellm.AuthenticationError(
+            message="Set TOKENWATT_API_KEY or pass api_key", llm_provider="tokenwatt", model=model
+        )
     organization = (
         organization
-        or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
+        or (
+            None
+            if custom_llm_provider in ("bigmodel", "tokenwatt")
+            else litellm.organization or get_secret("OPENAI_ORGANIZATION")
+        )
         or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
     )
     openai.organization = organization
