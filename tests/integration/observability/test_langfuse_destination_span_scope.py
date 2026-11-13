@@ -36,7 +36,7 @@ def provider() -> Iterator[Wire]:
         yield wire
 
 
-@pytest.fixture(scope="module", params=["llm_only", None], ids=["proxy-llm-only", "proxy-unset"])
+@pytest.fixture(scope="module", params=["llm_only", None, "full"], ids=["proxy-llm-only", "proxy-unset", "proxy-full"])
 def proxy(
     request: pytest.FixtureRequest,
     audit_sinks: SpanSinks,
@@ -45,6 +45,7 @@ def proxy(
 ) -> Iterator[tuple[Gateway, bool]]:
     directory: Final = tmp_path_factory.mktemp("langfuse-destination-scope")
     narrowed: Final = request.param == "llm_only"
+    default: Final = "llm_only" if narrowed else "full"
     with (
         gateway_from_environment() as gateway,
         owned_proxy_process(
@@ -52,7 +53,8 @@ def proxy(
             directory,
             {
                 "LITELLM_OTEL_V2": "true",
-                **({"LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE": "llm_only"} if narrowed else {}),
+                "ARIZE_HTTP_ENDPOINT": audit_sinks.arize + "/v1/traces",
+                **({"LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE": default} if request.param is not None else {}),
             },
             config=otel_audit_config(directory, {}),
             remove_environment=(
@@ -60,7 +62,7 @@ def proxy(
                 "LANGFUSE_SECRET_KEY",
                 "LANGFUSE_HOST",
                 "LITELLM_OTEL_LANGFUSE_SPAN_SCOPE",
-                *(("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE",) if not narrowed else ()),
+                *(("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE",) if request.param is None else ()),
             ),
             workers=2,
         ) as owned,
@@ -68,10 +70,21 @@ def proxy(
         yield owned.gateway, narrowed
 
 
-@pytest.mark.parametrize(("level", "scope"), [("key", None), ("key", "full"), ("team", None)])
+@pytest.mark.parametrize(
+    ("level", "scope", "backend"),
+    [
+        ("key", None, "langfuse_otel"),
+        ("key", "full", "langfuse_otel"),
+        ("team", None, "langfuse_otel"),
+        ("key", "llm_only", "langfuse_otel"),
+        ("key", None, "arize"),
+    ],
+    ids=["key-default", "key-full", "team-default", "key-llm-only", "arize-default"],
+)
 def test_proxy_default_limits_only_destinations_without_an_explicit_scope(
     level: Literal["key", "team"],
     scope: str | None,
+    backend: Literal["langfuse_otel", "arize"],
     proxy: tuple[Gateway, bool],
     provider: Wire,
     audit_sinks: SpanSinks,
@@ -79,14 +92,19 @@ def test_proxy_default_limits_only_destinations_without_an_explicit_scope(
     gateway, narrowed = proxy
     logging: Final[list[JsonValue]] = [
         {
-            "callback_name": "langfuse_otel",
+            "callback_name": backend,
             "callback_type": "success",
             "callback_vars": {
-                **langfuse_callback_variables(audit_sinks),
+                **(
+                    langfuse_callback_variables(audit_sinks)
+                    if backend == "langfuse_otel"
+                    else {"arize_api_key": "arize-test-key", "arize_space_id": "arize-test-space"}
+                ),
                 **({"langfuse_span_scope": scope} if scope else {}),
             },
         }
     ]
+    sink: Final = audit_sinks.tenant if backend == "langfuse_otel" else audit_sinks.arize
     with gateway.scenario() as scenario:
         model: Final = scenario.model(api_base=provider.url + "/v1")
         key: Final = (
@@ -94,7 +112,7 @@ def test_proxy_default_limits_only_destinations_without_an_explicit_scope(
             if level == "key"
             else scenario.key(team_id=scenario.team(metadata={"logging": logging}))
         )
-        since: Final = recorded_spans(audit_sinks.tenant)[0]
+        since: Final = recorded_spans(sink)[0]
         trace_id: Final = uuid.uuid4().hex
         response: Final = gateway.request(
             "POST",
@@ -105,12 +123,12 @@ def test_proxy_default_limits_only_destinations_without_an_explicit_scope(
         )
         assert response.status_code == 200, response.text
         spans: Final = held(
-            lambda: spans_for_trace(recorded_spans(audit_sinks.tenant, since)[1], trace_id),
+            lambda: spans_for_trace(recorded_spans(sink, since)[1], trace_id),
             lambda found: any("gen_ai.operation.name" in span["attributes"] for span in found),
             holding=3,
             seconds=40,
         )
-    if narrowed and scope is None:
+    if backend == "langfuse_otel" and (scope == "llm_only" or (narrowed and scope is None)):
         assert len(spans) == 1, [(span["name"], span["kind"]) for span in spans]
         assert "gen_ai.operation.name" in spans[0]["attributes"], spans
         assert not any(span["kind"] == 2 or span["attributes"].get("db.system") == "postgresql" for span in spans)
