@@ -545,7 +545,7 @@ fn build_credential(
                 client_options: client_options(
                     authority.map(Sourced::into_value),
                     transport,
-                    RetryOptions::default(),
+                    RetryOptions::none(),
                 ),
             }),
         )
@@ -771,8 +771,21 @@ mod tests {
         .unwrap()
     }
 
+    fn client_assertion_token_request() -> ValidatedAzureRequest {
+        ValidatedAzureRequest::new(NativeAzureRequest::ClientAssertion {
+            tenant_id: deployment("tenant".to_string()),
+            client_id: deployment("client".to_string()),
+            assertion: deployment(SecretValue::new("oidc-assertion")),
+            assertion_identity: "oidc".to_string(),
+            scope: deployment("https://service.test/.default".to_string()),
+            authority: Some(deployment("https://login.test".to_string())),
+        })
+        .unwrap()
+    }
+
     // Python's counts and delays come from azure-core 1.41.0 RetryPolicy defaults (retry_status=3,
     // retry_backoff_factor=0.8, Retry-After honoured) that azure-identity 1.25.2 uses for token POSTs.
+    // OIDC is minted by litellm's own HTTPHandler in Python, which posts once.
     #[rstest::rstest]
     #[case::client_secret_500_retries_three_times_with_backoff(
         client_secret_token_request,
@@ -805,6 +818,13 @@ mod tests {
     #[case::client_secret_401_invalid_client_posts_once(
         client_secret_token_request,
         StatusCode::Unauthorized,
+        None,
+        1,
+        Duration::ZERO
+    )]
+    #[case::client_assertion_503_posts_once(
+        client_assertion_token_request,
+        StatusCode::ServiceUnavailable,
         None,
         1,
         Duration::ZERO
