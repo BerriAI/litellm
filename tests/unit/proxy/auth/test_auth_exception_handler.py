@@ -1152,11 +1152,16 @@ async def _reject_and_read_failure_row(
     route: str,
     headers: dict[str, str],
     request_data: dict[str, object],
+    recorder: _AuthFailureRecorder | None = None,
 ) -> tuple[ProxyException, Mapping[str, object]]:
     from litellm.proxy import proxy_server
 
     spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
-    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [*([recorder] if recorder is not None else []), ProxyDBLogger(spend_writer=lambda: spend_writer)],
+    )
     monkeypatch.setattr(proxy_server, "general_settings", {"allow_requests_on_db_unavailable": False})
     with pytest.raises(ProxyException) as exc_info:
         await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
@@ -1258,7 +1263,7 @@ async def test_auth_failure_row_spend_logs_metadata_precedence(
     "route, body",
     [
         pytest.param("/v1/responses", {"input": "hi", "metadata": {"native": "keep-me"}}, id="responses"),
-        pytest.param("/v1/messages", {"messages": [], "metadata": {"user_id": "keep-me"}}, id="messages"),
+        pytest.param("/v1/messages", {"messages": [], "metadata": {"native": "keep-me"}}, id="messages"),
     ],
 )
 async def test_auth_failure_row_keeps_spend_logs_metadata_header_on_litellm_metadata_routes(
@@ -1266,6 +1271,7 @@ async def test_auth_failure_row_keeps_spend_logs_metadata_header_on_litellm_meta
 ) -> None:
     request_data: Final[dict[str, object]] = {"model": "gpt-4o", **body}
     original_request_data: Final = copy.deepcopy(request_data)
+    recorder: Final = _AuthFailureRecorder()
 
     _, row_metadata = await _reject_and_read_failure_row(
         monkeypatch,
@@ -1273,9 +1279,17 @@ async def test_auth_failure_row_keeps_spend_logs_metadata_header_on_litellm_meta
         route,
         {"x-litellm-spend-logs-metadata": '{"marker": "routed"}'},
         request_data,
+        recorder,
     )
 
     assert row_metadata["spend_logs_metadata"] == {"marker": "routed"}
+    assert recorder.data is not None
+    litellm_metadata: Final = recorder.data["litellm_metadata"]
+    metadata: Final = recorder.data["metadata"]
+    assert isinstance(litellm_metadata, Mapping)
+    assert isinstance(metadata, Mapping)
+    assert litellm_metadata["spend_logs_metadata"] == {"marker": "routed"}
+    assert metadata["native"] == "keep-me"
     assert request_data == original_request_data
 
 

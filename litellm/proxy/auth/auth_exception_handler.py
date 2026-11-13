@@ -116,17 +116,25 @@ def _with_client_context(
     return {**request_data, key: {**base, **stamped}}
 
 
+def _metadata_bucket(request_data: Mapping[str, object], key: str) -> Mapping[str, object]:
+    metadata: Final = request_data.get(key)
+    return metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
+
+
 def _with_spend_logs_metadata(
     request_data: dict[str, object], route: str, spend_logs_metadata: Mapping[str, object] | None
 ) -> dict[str, object]:
+    """The failure spend row reads `metadata` on every route, while callbacks on
+    `litellm_metadata` routes read that bucket, so the header goes into both."""
     if spend_logs_metadata is None:
         return request_data
     from litellm.proxy.litellm_pre_call_utils import metadata_variable_name_for_request
 
-    key: Final = metadata_variable_name_for_request(route, request_data)
-    metadata: Final = request_data.get(key)
-    base: Final[Mapping[str, object]] = metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
-    return {**request_data, key: {**base, "spend_logs_metadata": spend_logs_metadata}}
+    keys: Final = frozenset(("metadata", metadata_variable_name_for_request(route, request_data)))
+    return {
+        **request_data,
+        **{key: {**_metadata_bucket(request_data, key), "spend_logs_metadata": spend_logs_metadata} for key in keys},
+    }
 
 
 def _escape_control_chars(value: str) -> str:
