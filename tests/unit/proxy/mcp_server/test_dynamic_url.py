@@ -32,7 +32,7 @@ def _warehouse(dynamic_url: MCPDynamicURL | None = _POLICY, url: str | None = No
     [
         "https://acct1.warehouse.example/mcp",
         "https://acct1.warehouse.example/mcp?key=tenant-secret",
-        "http://acct-2.warehouse.example:8443/mcp",
+        "https://acct-2.warehouse.example:8443/mcp",
         "HTTPS://ACCT1.WAREHOUSE.EXAMPLE/mcp",
     ],
 )
@@ -48,6 +48,7 @@ def test_an_allowed_url_is_used_exactly_as_sent(url: str) -> None:
         "https://attacker.test/acct1.warehouse.example",
         "https://a.b.warehouse.example/mcp",
         "https://acct1.warehouse.example./mcp",
+        "http://acct1.warehouse.example/mcp",
         "ftp://acct1.warehouse.example/mcp",
         "file:///etc/passwd",
         "acct1.warehouse.example/mcp",
@@ -62,6 +63,13 @@ def test_an_allowed_url_is_used_exactly_as_sent(url: str) -> None:
 )
 def test_a_url_outside_the_policy_is_rejected(url: str) -> None:
     assert resolve_dynamic_url(_POLICY, {"x-litellm-mcp-url": url}) == DynamicURLRejected()
+
+
+def test_http_is_accepted_only_when_the_admin_allows_it() -> None:
+    http_policy: Final = MCPDynamicURL(allowed_hosts_regex=_POLICY.allowed_hosts_regex, allow_http=True)
+    url: Final = "http://acct-2.warehouse.example:8443/mcp"
+
+    assert resolve_dynamic_url(http_policy, {"x-litellm-mcp-url": url}) == DynamicURLAccepted(url=url)
 
 
 @pytest.mark.parametrize("headers", [None, {}, {"x-litellm-mcp-url": ""}, {"x-mcp-url": "https://a.warehouse.example"}])
@@ -120,3 +128,24 @@ def test_a_missing_or_rejected_header_is_a_400_that_does_not_echo_the_url(
 def test_the_policy_needs_at_least_one_compiling_pattern(patterns: tuple[str, ...]) -> None:
     with pytest.raises(ValidationError):
         MCPDynamicURL(allowed_hosts_regex=patterns)
+
+
+def test_a_request_supplied_url_does_not_follow_redirects_and_logs_only_its_origin() -> None:
+    from litellm.mcp_client.client import MCPClient
+
+    url: Final = "https://acct1.warehouse.example:8443/t/tenant-secret/mcp?key=tenant-secret"
+    dynamic: Final = MCPClient(server_url=url, request_supplied_url=True)
+    configured: Final = MCPClient(server_url=url)
+
+    assert dynamic._create_httpx_client_factory()().follow_redirects is False
+    assert dynamic._log_target == "https://acct1.warehouse.example:8443"
+    assert configured._create_httpx_client_factory()().follow_redirects is True
+    assert configured._log_target == url
+
+
+def test_the_url_header_never_reaches_logging_metadata() -> None:
+    from litellm.proxy.mcp_server.utils import logging_safe_mcp_headers
+
+    headers: Final = {"X-LiteLLM-MCP-URL": "https://acct1.warehouse.example/mcp?key=tenant-secret", "x-trace": "1"}
+
+    assert logging_safe_mcp_headers(headers) == {"x-trace": "1"}

@@ -15,6 +15,7 @@ from functools import partial
 from importlib.metadata import version
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar, cast, overload
+from urllib.parse import urlsplit
 
 import anyio
 import httpx2
@@ -514,6 +515,7 @@ class MCPClient:
         protocol_version: MCPUpstreamProtocol = "auto",
         skip_tool_output_validation: bool = False,
         upstream_transport: httpx2.AsyncBaseTransport | None = None,
+        request_supplied_url: bool = False,
     ):
         self.protocol_version: MCPUpstreamProtocol = TypeAdapter[MCPUpstreamProtocol](
             MCPUpstreamProtocol
@@ -522,6 +524,10 @@ class MCPClient:
         # 2026-07-28 lists tools before every call, so its output check adds no list
         self.skip_tool_output_validation: Final = skip_tool_output_validation and self.protocol_version != "2026-07-28"
         self.server_url: str = server_url
+        # A URL taken from the caller's request is not trusted the way a configured one is: redirects
+        # are not followed, so an allowed host cannot send the request on to a host the policy rejects,
+        # and logs carry only its origin, since its path or query can hold a tenant credential.
+        self._request_supplied_url: Final = request_supplied_url
         self.transport_type: MCPTransport = transport_type
         self.auth_type: MCPAuthType = auth_type
         self.timeout: float = timeout if timeout is not None else MCP_CLIENT_TIMEOUT
@@ -547,6 +553,15 @@ class MCPClient:
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
+
+    @property
+    def _log_target(self) -> str:
+        if not self.server_url:
+            return "stdio"
+        if not self._request_supplied_url:
+            return self.server_url
+        parts: Final = urlsplit(self.server_url)
+        return f"{parts.scheme}://{parts.hostname or ''}{f':{parts.port}' if parts.port else ''}"
 
     def session_callbacks(self) -> _SessionCallbackMap:
         return {
@@ -895,11 +910,11 @@ class MCPClient:
                 verbose_logger.warning(
                     "MCP client timed out after %ss waiting for a valid MCP response from %s",
                     self.timeout,
-                    self.server_url or "stdio",
+                    self._log_target,
                 )
                 raise read_timeout from e
             _log: Final = verbose_logger.debug if quiet_on_error else verbose_logger.warning
-            _log("MCP client run_with_session failed for %s", self.server_url or "stdio")
+            _log("MCP client run_with_session failed for %s", self._log_target)
             raise
         finally:
             if http_client is not None:
@@ -1010,7 +1025,7 @@ class MCPClient:
                 timeout=timeout,
                 auth=effective_auth,
                 verify=ssl_config,
-                follow_redirects=True,
+                follow_redirects=not self._request_supplied_url,
                 event_hooks=MappingProxyType(
                     {
                         "response": list(
@@ -1080,7 +1095,7 @@ class MCPClient:
                 MCP client (triggering the upstream OAuth flow) rather than
                 masking them as "connected, no tools".
         """
-        verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
+        verbose_logger.debug("MCP client listing tools from %s", self._log_target)
 
         try:
             # A per-server timeout above the global default extends the whole-walk deadline
@@ -1091,9 +1106,7 @@ class MCPClient:
             )
             tool_count: Final = len(tools)
             tool_names: Final = tuple(tool.name for tool in tools)
-            verbose_logger.info(
-                "MCP client listed %s tools from %s: %s", tool_count, self.server_url or "stdio", tool_names
-            )
+            verbose_logger.info("MCP client listed %s tools from %s: %s", tool_count, self._log_target, tool_names)
             return tools
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_tools was cancelled")
@@ -1110,7 +1123,7 @@ class MCPClient:
                 f"MCP client list_tools failed - "
                 f"Error Type: {error_type}, "
                 f"Error: {e}, "
-                f"Server: {self.server_url or 'stdio'}, "
+                f"Server: {self._log_target}, "
                 f"Transport: {self.transport_type}"
             )
             # Check if it's a stream/connection error
@@ -1239,7 +1252,7 @@ class MCPClient:
             verbose_logger.info("MCP client tool call '%s' completed successfully", call_tool_request_params.name)
             return tool_result
         except asyncio.CancelledError:
-            verbose_logger.warning("MCP client tool call timed out after %ss for %s", self.timeout, self.server_url)
+            verbose_logger.warning("MCP client tool call timed out after %ss for %s", self.timeout, self._log_target)
             raise
         except Exception as e:
             import traceback
@@ -1259,7 +1272,7 @@ class MCPClient:
                 f"Error Type: {error_type}, "
                 f"Error: {e}, "
                 f"Tool: {call_tool_request_params.name}, "
-                f"Server: {self.server_url or 'stdio'}, "
+                f"Server: {self._log_target}, "
                 f"Transport: {self.transport_type}"
             )
             # Check if it's a stream/connection error
@@ -1316,7 +1329,7 @@ class MCPClient:
 
     async def list_prompts_result(self, *, raise_on_error: bool = False) -> ListPromptsResult:
         """List available prompts from the server."""
-        verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
+        verbose_logger.debug("MCP client listing tools from %s", self._log_target)
 
         async def _list_prompts_operation(session: ClientSession) -> ListPromptsResult:
             capabilities: Final = session.server_capabilities
@@ -1330,18 +1343,14 @@ class MCPClient:
             except MCPError as error:
                 if error.error.code != METHOD_NOT_FOUND:
                     raise
-                verbose_logger.debug(
-                    "MCP client list_prompts is unsupported by %s: %s", self.server_url or "stdio", error
-                )
+                verbose_logger.debug("MCP client list_prompts is unsupported by %s: %s", self._log_target, error)
                 return ListPromptsResult(prompts=[])
 
         try:
             result: Final = await self._run_optional_discovery(_list_prompts_operation)
             prompt_count: Final = len(result.prompts)
             prompt_names: Final = [prompt.name for prompt in result.prompts]
-            verbose_logger.info(
-                "MCP client listed %s tools from %s: %s", prompt_count, self.server_url or "stdio", prompt_names
-            )
+            verbose_logger.info("MCP client listed %s tools from %s: %s", prompt_count, self._log_target, prompt_names)
             return result
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_prompts was cancelled")
@@ -1354,7 +1363,7 @@ class MCPClient:
                 "MCP client list_prompts failed - Error Type: %s, Error: %s, Server: %s, Transport: %s",
                 error_type,
                 e,
-                self.server_url or "stdio",
+                self._log_target,
                 self.transport_type,
             )
             # Check if it's a stream/connection error
@@ -1413,7 +1422,7 @@ class MCPClient:
                 error_type,
                 e,
                 get_prompt_request_params.name,
-                self.server_url or "stdio",
+                self._log_target,
                 self.transport_type,
             )
             # Check if it's a stream/connection error
@@ -1429,7 +1438,7 @@ class MCPClient:
 
     async def list_resources_result(self, *, raise_on_error: bool = False) -> ListResourcesResult:
         """List available resources from the server."""
-        verbose_logger.debug("MCP client listing resources from %s", self.server_url or "stdio")
+        verbose_logger.debug("MCP client listing resources from %s", self._log_target)
 
         async def _list_resources_operation(session: ClientSession) -> ListResourcesResult:
             capabilities: Final = session.server_capabilities
@@ -1443,9 +1452,7 @@ class MCPClient:
             except MCPError as error:
                 if error.error.code != METHOD_NOT_FOUND:
                     raise
-                verbose_logger.debug(
-                    "MCP client list_resources is unsupported by %s: %s", self.server_url or "stdio", error
-                )
+                verbose_logger.debug("MCP client list_resources is unsupported by %s: %s", self._log_target, error)
                 return ListResourcesResult(resources=[])
 
         try:
@@ -1453,7 +1460,7 @@ class MCPClient:
             resource_count: Final = len(result.resources)
             resource_names: Final = [resource.name for resource in result.resources]
             verbose_logger.info(
-                "MCP client listed %s resources from %s: %s", resource_count, self.server_url or "stdio", resource_names
+                "MCP client listed %s resources from %s: %s", resource_count, self._log_target, resource_names
             )
             return result
         except asyncio.CancelledError:
@@ -1467,7 +1474,7 @@ class MCPClient:
                 "MCP client list_resources failed - Error Type: %s, Error: %s, Server: %s, Transport: %s",
                 error_type,
                 e,
-                self.server_url or "stdio",
+                self._log_target,
                 self.transport_type,
             )
             # Check if it's a stream/connection error
@@ -1484,7 +1491,7 @@ class MCPClient:
 
     async def list_resource_templates_result(self, *, raise_on_error: bool = False) -> ListResourceTemplatesResult:
         """List available resource templates from the server."""
-        verbose_logger.debug("MCP client listing resource templates from %s", self.server_url or "stdio")
+        verbose_logger.debug("MCP client listing resource templates from %s", self._log_target)
 
         async def _list_resource_templates_operation(session: ClientSession) -> ListResourceTemplatesResult:
             capabilities: Final = session.server_capabilities
@@ -1501,7 +1508,7 @@ class MCPClient:
                 if error.error.code != METHOD_NOT_FOUND:
                     raise
                 verbose_logger.debug(
-                    "MCP client list_resource_templates is unsupported by %s: %s", self.server_url or "stdio", error
+                    "MCP client list_resource_templates is unsupported by %s: %s", self._log_target, error
                 )
                 return ListResourceTemplatesResult(resource_templates=[])
 
@@ -1512,7 +1519,7 @@ class MCPClient:
             verbose_logger.info(
                 "MCP client listed %s resource templates from %s: %s",
                 resource_template_count,
-                self.server_url or "stdio",
+                self._log_target,
                 resource_template_names,
             )
             return result
@@ -1527,7 +1534,7 @@ class MCPClient:
                 "MCP client list_resource_templates failed - Error Type: %s, Error: %s, Server: %s, Transport: %s",
                 error_type,
                 e,
-                self.server_url or "stdio",
+                self._log_target,
                 self.transport_type,
             )
             # Check if it's a stream/connection error
@@ -1590,7 +1597,7 @@ class MCPClient:
                 error_type,
                 e,
                 url,
-                self.server_url or "stdio",
+                self._log_target,
                 self.transport_type,
             )
             # Check if it's a stream/connection error

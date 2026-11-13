@@ -9,12 +9,10 @@ from typing_extensions import assert_never
 
 from litellm.proxy.mcp_server.exceptions import MCPServerListError
 from litellm.proxy.mcp_server.faults.list_outcomes import ServerListFault
-from litellm.types.mcp_server.mcp_server_manager import MCPDynamicURL, MCPServer
+from litellm.types.mcp_server.mcp_server_manager import DYNAMIC_URL_HEADER, MCPDynamicURL, MCPServer
 
-DYNAMIC_URL_HEADER: Final = "x-litellm-mcp-url"
 _MAX_HOST_LENGTH: Final = 253
 _HOST_MATCH_TIMEOUT_SECONDS: Final = 0.05
-_ALLOWED_SCHEMES: Final = frozenset(("http", "https"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +61,8 @@ def _is_allowed_url(value: str, policy: MCPDynamicURL) -> bool:
         host: Final = url.raw_host.decode("ascii")
     except (httpx2.InvalidURL, UnicodeDecodeError):
         return False
-    return url.scheme in _ALLOWED_SCHEMES and not url.userinfo and _host_is_allowed(host, policy)
+    allowed_schemes: Final = ("http", "https") if policy.allow_http else ("https",)
+    return url.scheme in allowed_schemes and not url.userinfo and _host_is_allowed(host, policy)
 
 
 def resolve_dynamic_url(policy: MCPDynamicURL, raw_headers: Mapping[str, str] | None) -> DynamicURLResult:
@@ -96,7 +95,7 @@ def server_for_request(server: MCPServer, raw_headers: Mapping[str, str] | None)
                 status_code=400,
                 detail=(
                     f"The {DYNAMIC_URL_HEADER} header is not an allowed URL for MCP server '{server.name}'. "
-                    "It must be an http or https URL without credentials or a fragment, "
+                    "It must be an https URL (http only when the server sets allow_http) without credentials or a fragment, "
                     "and its host must match the server's allowed_hosts_regex"
                 ),
             )

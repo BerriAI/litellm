@@ -17,7 +17,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import has_attributes
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp_server.mcp_server_manager import DYNAMIC_URL_HEADER, MCPServer
 
 if typing.TYPE_CHECKING:
     from fastapi import Request
@@ -1119,7 +1119,7 @@ def logging_safe_mcp_headers(raw_headers: Mapping[str, str] | None) -> Mapping[s
     excluded: Final = (
         upstream_credential_headers(raw_headers.keys() if raw_headers else ())
         | UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
-        | frozenset({"host"})
+        | frozenset({"host", DYNAMIC_URL_HEADER})
     )
     cleaned: Final = clean_headers(
         Headers(raw_headers),

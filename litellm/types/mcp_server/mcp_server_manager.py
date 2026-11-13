@@ -102,15 +102,22 @@ def _compiles(pattern: str) -> bool:
     return bool(pattern)
 
 
+DYNAMIC_URL_HEADER: Final = "x-litellm-mcp-url"
+"""The request header a ``dynamic_url`` server takes its upstream URL from."""
+
+
 class MCPDynamicURL(LiteLLMBaseModel):
     """Opt-in for a server whose upstream URL arrives per request in the ``x-litellm-mcp-url`` header.
 
     The header URL is used only when its host fully matches one of ``allowed_hosts_regex``, so the
-    caller cannot point the proxy, and the credentials it attaches, at any other host."""
+    caller cannot point the proxy, and the credentials it attaches, at any other host. The URL must
+    use https unless the admin sets ``allow_http``, so a caller cannot send those credentials in
+    plaintext."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     allowed_hosts_regex: tuple[str, ...] = Field(min_length=1)
+    allow_http: bool = False
 
     @field_validator("allowed_hosts_regex")
     @classmethod
