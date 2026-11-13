@@ -20849,7 +20849,7 @@
       "removeGroup": "Remove {{name}}",
       "addGroup": "Add budget group",
       "defaultHelp": "The selected default group is assigned to new members automatically.",
-      "resetHelp": "Reaching either cap pauses usage until that budget resets.",
+      "resetHelp": "Each group's At the cap setting decides what happens when a member reaches either cap.",
       "advanced": "Advanced limits",
       "creating": "Creating customer...",
       "errors": {
