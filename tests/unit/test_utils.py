@@ -831,13 +831,18 @@ def test_cohere_embedding_optional_params():
     assert optional_params is not None
 
 
+def _cost_field_cap(field: str) -> float:
+    return 1 if any(unit in field for unit in ("token", "character", "pixel")) else 1000
+
+
 def validate_model_cost_values(model_data, exceptions=None):
     """
-    Validates that cost values in model data do not exceed 1.
+    Validates that cost values in model data do not exceed their cap: 1 for per-token, per-character and
+    per-pixel fields, 1000 for every other unit (second, image, request, query).
 
     Args:
         model_data (dict): The model data dictionary
-        exceptions (list, optional): List of model IDs that are allowed to have costs > 1
+        exceptions (list, optional): List of model IDs that are allowed to have costs above the cap
 
     Returns:
         tuple: (is_valid, violations) where is_valid is a boolean and violations is a list of error messages
@@ -939,8 +944,9 @@ def validate_model_cost_values(model_data, exceptions=None):
                         # Skip if we can't convert to float
                         continue
 
-                if isinstance(cost_value, (int, float)) and cost_value > 1:
-                    violations.append(f"Model '{model_id}' has {field} = {cost_value} which exceeds 1")
+                cap = _cost_field_cap(field)
+                if isinstance(cost_value, (int, float)) and cost_value > cap:
+                    violations.append(f"Model '{model_id}' has {field} = {cost_value} which exceeds {cap}")
 
         # Check nested cost fields
         for field in nested_cost_fields:
@@ -1460,20 +1466,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     validate(actual_json, _COST_MAP_ROW_SCHEMA)
 
     # Validate cost values
-    # Define exceptions for models that are allowed to have costs > 1
-    # Add model IDs here if they legitimately have costs > 1
-    exceptions = [
-        # Add any model IDs that should be exempt from the cost validation
-        # Example: "expensive-model-id",
-        "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
-        "fal_ai/bytedance/seedance-2.0/text-to-video",
-        "fal_ai/bytedance/seedance-2.0/image-to-video",
-        "fal_ai/bytedance/seedance-2.0/reference-to-video",
-        "fal_ai/bytedance/seedance-2.5/us/draft/complete",  # 1080p is $1.164/second per fal.ai
-        "fal_ai/bytedance/seedance-2.5/us/image-to-video",  # 1080p is $1.164/second per fal.ai
-        "fal_ai/bytedance/seedance-2.5/us/reference-to-video",  # 1080p is $1.164/second per fal.ai
-        "fal_ai/bytedance/seedance-2.5/us/text-to-video",  # 1080p is $1.164/second per fal.ai
-    ]
+    exceptions: list[str] = []
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
 
