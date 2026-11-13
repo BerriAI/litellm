@@ -66,6 +66,7 @@ from litellm.utils import provider_rejectable_params
 
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
+    from litellm.redis.stores.router_session_pins import RouterSessionPinStore
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.surface.registry import HostRegistry
     from litellm.router_strategy.auto_router.auto_router import PreRoutingHookResponse
@@ -172,13 +173,18 @@ class PreRoutingStrategies:
     reads ``_core_auto_routers`` and its siblings there)."""
 
     def __init__(
-        self, hosted: "HostRegistry", host: "PythonHost", ctx: object, capability_limit: object, cache: DualCache
+        self,
+        hosted: "HostRegistry",
+        host: "PythonHost",
+        ctx: object,
+        capability_limit: object,
+        pins: "RouterSessionPinStore",
     ) -> None:
         self._hosted: Final = hosted
         self._host: Final = host
         self._ctx: Final = ctx
         self._capability_limit: object = capability_limit
-        self._cache: Final = cache
+        self._pins: Final = pins
         self._affinity: object = None
         # The router's own `_ensure_deployment_affinity_callback` (its optional checks), when set.
         self.ensure_affinity: Callable[[], None] | None = None
@@ -454,7 +460,7 @@ class PreRoutingStrategies:
             return group is not None and group.routing_strategy == "priority"
 
         affinity: Final = DeploymentAffinityCheck(
-            cache=self._cache,
+            pins=self._pins,
             ttl_seconds=3600,
             enable_user_key_affinity=False,
             enable_responses_api_affinity=False,
