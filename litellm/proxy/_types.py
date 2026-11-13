@@ -5402,12 +5402,6 @@ class DailyAgentSpendTransaction(BaseDailySpendTransaction):
     agent_id: str
 
 
-class DailyCustomerMemberSpendTransaction(BaseDailySpendTransaction):
-    customer_member_id: ReadOnly[str]
-    customer_team_id: ReadOnly[str]
-    customer_org_id: ReadOnly[str]
-
-
 class DBSpendUpdateTransactions(TypedDict):
     """
     Internal Data Structure for buffering spend updates in Redis or in memory before committing them to the database

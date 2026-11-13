@@ -12,11 +12,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import groupby
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal
 
 from pydantic import TypeAdapter
 
-DailySpendEntity: TypeAlias = Literal["user", "team", "org", "tag", "end_user", "agent", "customer_member"]
+DailySpendEntity = Literal["user", "team", "org", "tag", "end_user", "agent"]
 
 SqlValue = str | int | float | None
 
@@ -32,16 +32,10 @@ class DailySpendTable:
     name: str
     entity_id_column: str
     carries_request_id: bool = False
-    parent_id_columns: tuple[str, ...] = ()
 
 
 DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingProxyType(
     {
-        "customer_member": DailySpendTable(
-            name="LiteLLM_DailyCustomerMemberSpend",
-            entity_id_column="customer_member_id",
-            parent_id_columns=("customer_team_id", "customer_org_id"),
-        ),
         "user": DailySpendTable(name="LiteLLM_DailyUserSpend", entity_id_column="user_id"),
         "team": DailySpendTable(name="LiteLLM_DailyTeamSpend", entity_id_column="team_id"),
         "org": DailySpendTable(name="LiteLLM_DailyOrganizationSpend", entity_id_column="organization_id"),
@@ -53,7 +47,6 @@ DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingP
 
 _ENTITY_INPUT_KEYS: Final[Mapping[DailySpendEntity, str]] = MappingProxyType(
     {
-        "customer_member": "customer_member_id",
         "user": "user",
         "team": "team_id",
         "org": "organization_id",
@@ -66,11 +59,6 @@ _TAGS: Final = TypeAdapter(tuple[object, ...])
 
 
 def daily_spend_entity_ids(payload: Mapping[str, object], entity: DailySpendEntity) -> tuple[str | None, ...]:
-    if entity == "customer_member" and not all(
-        isinstance(payload.get(column), str) and payload.get(column)
-        for column in ("customer_member_id", "customer_team_id", "customer_org_id")
-    ):
-        return ()
     key: Final = _ENTITY_INPUT_KEYS[entity]
     if key not in payload:
         return ()
@@ -139,10 +127,7 @@ def _as_float(value: object) -> float:
 
 def conflict_key(table: DailySpendTable, transaction: SpendRow) -> tuple[str, ...]:
     """The tuple the database arbitrates the upsert on, normalized free of NULLs."""
-    return tuple(
-        _as_text(transaction.get(column))
-        for column in (table.entity_id_column, *table.parent_id_columns, *_KEY_COLUMNS)
-    )
+    return tuple(_as_text(transaction.get(column)) for column in (table.entity_id_column, *_KEY_COLUMNS))
 
 
 def _merge(group: Sequence[SpendRow]) -> SpendRow:
@@ -191,7 +176,6 @@ def _insert_columns(table: DailySpendTable) -> tuple[str, ...]:
     return (
         "id",
         table.entity_id_column,
-        *table.parent_id_columns,
         *_KEY_COLUMNS,
         "model_group",
         *_COUNTER_COLUMNS,
@@ -230,7 +214,7 @@ def build_bulk_upsert(
     sql: Final = (
         f'INSERT INTO {quoted_table} ({_quoted(columns)}, "updated_at")\n'
         f"VALUES {rows}\n"
-        f"ON CONFLICT ({_quoted((table.entity_id_column, *table.parent_id_columns, *_KEY_COLUMNS))}) DO UPDATE SET\n"
+        f"ON CONFLICT ({_quoted((table.entity_id_column, *_KEY_COLUMNS))}) DO UPDATE SET\n"
         f"  {increments}{request_id_update},\n"
         f"  \"updated_at\" = (NOW() AT TIME ZONE 'UTC')"
     )

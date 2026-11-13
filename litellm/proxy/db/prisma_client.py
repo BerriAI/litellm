@@ -75,15 +75,6 @@ if TYPE_CHECKING:
 
     class PrismaBatchSession(Protocol):
         @property
-        def litellm_customermembertable(self) -> PrismaBatchActions: ...
-
-        @property
-        def litellm_customerteamtable(self) -> PrismaBatchActions: ...
-
-        @property
-        def litellm_customerorganizationtable(self) -> PrismaBatchActions: ...
-
-        @property
         def litellm_agentstable(self) -> PrismaBatchActions: ...
 
         @property

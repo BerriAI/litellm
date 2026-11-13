@@ -209,23 +209,3 @@ async def test_writer_survives_a_transaction_whose_key_columns_are_null():
     _, params = prisma_client.db.statements[0]
     assert None not in params[:9]
     assert transactions == {}
-
-
-def test_customer_daily_rows_keep_historical_parent_attribution_when_member_id_is_reused():
-    table = DAILY_SPEND_TABLES["customer_member"]
-    first = {
-        **tag_txn(),
-        "customer_member_id": "member",
-        "customer_team_id": "team-before",
-        "customer_org_id": "org-before",
-    }
-    second = {**first, "customer_team_id": "team-after", "customer_org_id": "org-after", "spend": 0.75}
-    merged = merge_by_conflict_key(table, (first, first, second))
-    assert len(merged) == 2
-    assert {(row["customer_team_id"], row["customer_org_id"], row["spend"]) for _, row in merged} == {
-        ("team-before", "org-before", 0.5),
-        ("team-after", "org-after", 0.75),
-    }
-    sql, params = build_bulk_upsert(table, merged)
-    assert 'ON CONFLICT ("customer_member_id", "customer_team_id", "customer_org_id",' in sql
-    assert all(identity in params for identity in ("member", "team-before", "org-before", "team-after", "org-after"))

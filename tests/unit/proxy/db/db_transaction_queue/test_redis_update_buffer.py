@@ -133,7 +133,6 @@ async def test_store_in_memory_spend_updates_uses_pipeline(redis_update_buffer, 
         daily_org_spend_update_queue=daily_org_queue,
         daily_end_user_spend_update_queue=daily_end_user_queue,
         daily_agent_spend_update_queue=daily_agent_queue,
-        daily_customer_member_spend_update_queue=DailySpendUpdateQueue(),
     )
 
     # Should be called exactly once (pipeline)
@@ -201,7 +200,6 @@ async def test_store_in_memory_spend_updates_restores_on_rpush_failure(redis_upd
         daily_org_spend_update_queue=daily_org_queue,
         daily_end_user_spend_update_queue=daily_end_user_queue,
         daily_agent_spend_update_queue=daily_agent_queue,
-        daily_customer_member_spend_update_queue=DailySpendUpdateQueue(),
     )
 
     # After restore, the main spend queue should hold one item per
@@ -241,7 +239,6 @@ async def test_store_in_memory_spend_updates_all_empty_returns_early(redis_updat
         daily_org_spend_update_queue=empty_daily_queue,
         daily_end_user_spend_update_queue=empty_daily_queue,
         daily_agent_spend_update_queue=empty_daily_queue,
-        daily_customer_member_spend_update_queue=DailySpendUpdateQueue(),
     )
 
     mock_redis_cache.async_rpush_pipeline.assert_not_called()
@@ -295,7 +292,7 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
 
     result = await redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
 
-    assert len(result) == 8
+    assert len(result) == 7
     (
         db_spend,
         daily_user,
@@ -304,7 +301,6 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
         daily_end_user,
         daily_agent,
         window_spend,
-        customer_spend,
     ) = result
 
     # Budget window spend from two pods is summed per window, not overwritten.
@@ -379,7 +375,6 @@ async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_fail
         daily_org_spend_update_queue=DailySpendUpdateQueue(),
         daily_end_user_spend_update_queue=DailySpendUpdateQueue(),
         daily_agent_spend_update_queue=DailySpendUpdateQueue(),
-        daily_customer_member_spend_update_queue=DailySpendUpdateQueue(),
     )
 
     restored_spend: Final = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
@@ -457,7 +452,6 @@ async def test_a_nan_spend_parked_by_an_older_version_drains_from_the_pipeline_a
         daily_user,
         *_rest,
         window_spend,
-        customer_spend,
     ) = await redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
 
     assert db_spend is not None
@@ -490,7 +484,7 @@ async def test_get_all_transactions_from_redis_buffer_pipeline_no_redis():
     """When redis_cache is None, should return all Nones"""
     buffer = RedisUpdateBuffer(redis_cache=None)
     result = await buffer.get_all_transactions_from_redis_buffer_pipeline()
-    assert result == (None, None, None, None, None, None, None, None)
+    assert result == (None, None, None, None, None, None, None)
 
 
 @pytest.mark.asyncio
@@ -728,7 +722,6 @@ async def test_store_in_memory_spend_updates_pushes_budget_window_spend(redis_up
         daily_end_user_spend_update_queue=empty_daily_queue,
         daily_agent_spend_update_queue=empty_daily_queue,
         window_spend_update_queue=window_queue,
-        daily_customer_member_spend_update_queue=DailySpendUpdateQueue(),
     )
 
     rpush_list = mock_redis_cache.async_rpush_pipeline.call_args.kwargs["rpush_list"]
@@ -820,7 +813,6 @@ async def test_store_in_memory_spend_updates_restores_budget_window_spend_on_rpu
         daily_end_user_spend_update_queue=empty_daily_queue,
         daily_agent_spend_update_queue=empty_daily_queue,
         window_spend_update_queue=window_queue,
-        daily_customer_member_spend_update_queue=DailySpendUpdateQueue(),
     )
 
     restored = await window_queue.flush_and_get_aggregated_window_spend_transactions()
