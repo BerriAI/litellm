@@ -1,7 +1,8 @@
-use litellm_llms_types::formats::messages::{
-    ContentBlock, ContentBlockType, Message, MessageContent, SystemPrompt,
+use litellm_llms_types::{
+    formats::messages::{ContentBlock, ContentBlockType, Message, MessageContent, SystemPrompt},
+    recognized::Recognized,
 };
-use serde_json::Map;
+use serde_json::{Map, Value};
 
 /// Python's `CONVERTED_SYSTEM_NOTE`.
 pub const CONVERTED_SYSTEM_NOTE: &str = "Operator note (not from the user): the following was originally a mid-conversation system-role reminder.";
@@ -26,6 +27,42 @@ pub fn message_content_blocks(content: MessageContent) -> Vec<ContentBlock> {
 
 pub fn is_system_role_message(message: &Message) -> bool {
     message.role == SYSTEM_ROLE
+}
+
+const CONTENT: &str = "content";
+const ROLE: &str = "role";
+
+fn is_contentless_system_message(fields: &Map<String, Value>) -> bool {
+    fields.get(ROLE).and_then(Value::as_str) == Some(SYSTEM_ROLE)
+        && fields.get(CONTENT).is_none_or(Value::is_null)
+}
+
+/// Python's `is_system_role_message` reads only the role, so a system message sent without
+/// content, or with `null` content, is still a system turn, one carrying no content blocks.
+pub fn system_turn(message: Recognized<Message>) -> Recognized<Message> {
+    match message {
+        Recognized::Unrecognized(Value::Object(fields))
+            if is_contentless_system_message(&fields) =>
+        {
+            Recognized::Known(Message {
+                role: SYSTEM_ROLE.into(),
+                content: MessageContent::Blocks(Vec::new()),
+                extra: fields
+                    .into_iter()
+                    .filter(|(key, _)| key != ROLE && key != CONTENT)
+                    .collect(),
+            })
+        }
+        message => message,
+    }
+}
+
+pub fn is_system_turn(message: &Recognized<Message>) -> bool {
+    match message {
+        Recognized::Known(message) => is_system_role_message(message),
+        Recognized::Unrecognized(Value::Object(fields)) => is_contentless_system_message(fields),
+        Recognized::Unrecognized(_) => false,
+    }
 }
 
 pub fn system_role_message_as_user(message: Message) -> Message {

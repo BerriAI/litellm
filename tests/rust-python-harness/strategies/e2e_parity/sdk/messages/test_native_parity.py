@@ -3836,6 +3836,23 @@ AZURE_SHAPING_CASES: Final = tuple(
             _kw(messages=_mid_conversation_system(content="Be brief.", output_config={"effort": "low"})),
             model=AZURE_CLAUDE,
         ),
+        Case("azure_ai_contentless_system_converted", _kw(messages=_mid_conversation_system()), model=AZURE_CLAUDE),
+        Case(
+            "azure_ai_null_content_system_with_clear_at_converted",
+            _kw(messages=_mid_conversation_system(content=None, clear_at={"type": "turns", "value": 2})),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_contentless_system_with_clear_at_dropped_under_drop_params",
+            _kw(drop_params=True, messages=_mid_conversation_system(clear_at={"type": "turns", "value": 2})),
+            model=AZURE_CLAUDE,
+            warned=True,
+        ),
+        Case(
+            "azure_ai_contentless_leading_system_hoisted",
+            _kw(messages=[{"role": "system", "content": "Be terse."}, {"role": "system"}, dict(USER)]),
+            model=AZURE_CLAUDE,
+        ),
         Case(
             "azure_ai_leading_system_tool_addition_under_drop_params",
             _kw(

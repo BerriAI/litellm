@@ -13,8 +13,8 @@ use crate::{
         common_utils::strip_billing_metadata_from_system,
     },
     base_llm::messages::mid_conversation_system::{
-        as_system_content_blocks, convert_mid_conversation_system_turns, is_system_role_message,
-        message_content_blocks,
+        as_system_content_blocks, convert_mid_conversation_system_turns, is_system_turn,
+        message_content_blocks, system_turn,
     },
 };
 
@@ -32,12 +32,13 @@ pub fn normalize_system_role_messages(
     let leading_count = request
         .messages
         .iter()
-        .take_while(|message| message.known().is_some_and(is_system_role_message))
+        .take_while(|message| is_system_turn(message))
         .count();
     let mut messages = request.messages.into_iter();
     let hoisted: Vec<Message> = messages
         .by_ref()
         .take(leading_count)
+        .map(system_turn)
         .filter_map(|message| match message {
             Recognized::Known(message) => Some(message),
             Recognized::Unrecognized(_) => None,
@@ -49,7 +50,7 @@ pub fn normalize_system_role_messages(
     } else {
         map_known_runs(
             strip_beta_gated_system_messages(
-                remaining,
+                remaining.into_iter().map(system_turn).collect(),
                 &BetaSet::default(),
                 drops_unsupported_params,
                 &request.model,
@@ -279,6 +280,84 @@ mod tests {
         assert_eq!(
             serde_json::to_value(normalized).unwrap()["messages"],
             sent["messages"]
+        );
+    }
+
+    fn sent_messages(
+        messages: Value,
+        supports_mid_conversation_system: bool,
+        drops_unsupported_params: bool,
+    ) -> Value {
+        serde_json::to_value(normalize_system_role_messages(
+            request(json!({"messages": messages})),
+            supports_mid_conversation_system,
+            drops_unsupported_params,
+            BetaProvider::AzureAi,
+        ))
+        .unwrap()
+    }
+
+    #[rstest]
+    #[case::missing_content(json!({"role": "system"}))]
+    #[case::null_content(json!({"role": "system", "content": null}))]
+    #[case::extra_keys(json!({"role": "system", "clear_at": "next_user_message", "name": "n"}))]
+    fn a_contentless_system_turn_is_a_system_turn_with_no_content(#[case] contentless: Value) {
+        assert_eq!(
+            sent_messages(
+                json!([
+                    {"role": "system", "content": "first"},
+                    contentless,
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "n", "input": {}}]},
+                    contentless,
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]},
+                    contentless
+                ]),
+                false,
+                false,
+            ),
+            json!({
+                "model": "test-model",
+                "max_tokens": 64,
+                "system": [{"type": "text", "text": "first"}],
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "n", "input": {}}]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]},
+                    {"role": "user", "content": [{"type": "text", "text": CONVERTED_SYSTEM_NOTE}]},
+                    {"role": "user", "content": [{"type": "text", "text": CONVERTED_SYSTEM_NOTE}]}
+                ]
+            })
+        );
+    }
+
+    #[rstest]
+    fn a_contentless_system_turn_stays_as_sent_on_a_model_that_accepts_it() {
+        let later = json!([
+            {"role": "user", "content": "hi"},
+            {"role": "system", "clear_at": "next_user_message"}
+        ]);
+        let sent = sent_messages(json!([{"role": "system"}, later[0], later[1]]), true, false);
+        assert_eq!(sent["messages"], later);
+        assert_eq!(sent.get("system"), None);
+    }
+
+    #[rstest]
+    fn a_contentless_system_turn_that_loses_its_gated_field_is_dropped() {
+        assert_eq!(
+            sent_messages(
+                json!([
+                    {"role": "user", "content": "hi"},
+                    {"role": "system", "clear_at": "next_user_message"},
+                    {"role": "user", "content": "go on"}
+                ]),
+                false,
+                true,
+            )["messages"],
+            json!([
+                {"role": "user", "content": "hi"},
+                {"role": "user", "content": "go on"}
+            ])
         );
     }
 
