@@ -818,10 +818,10 @@ class TestLensRenamePendingCheck:
         assert executed[0][1] == ("public",)
 
 
-class TestCustomerMemberOverrideRenamePendingCheck:
+class TestCustomerMemberBudgetRenamePendingCheck:
     _DATABASE_URL: Final = "postgresql://litellm:hunter2@localhost:5432/litellm?schema=tenant_a"
 
-    def test_a_leftover_budget_id_column_refuses_the_push(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_leftover_budget_template_id_column_refuses_the_push(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
         executed: Final[list[tuple[str, tuple[str]]]] = []
 
@@ -829,8 +829,8 @@ class TestCustomerMemberOverrideRenamePendingCheck:
             return _FakePsycopgConn(executed)
 
         with pytest.raises(RuntimeError) as err:
-            ProxyExtrasDBManager.raise_if_customer_member_override_rename_pending(connect=legacy_column_present)
-        assert "20261112120000_rename_customer_member_budget_override_id" in str(err.value)
+            ProxyExtrasDBManager.raise_if_customer_member_budget_rename_pending(connect=legacy_column_present)
+        assert "20261112120000_rename_customer_member_budget_columns" in str(err.value)
         assert executed[0][1] == ("tenant_a",)
 
     def test_an_unreachable_database_refuses_the_push(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -842,7 +842,7 @@ class TestCustomerMemberOverrideRenamePendingCheck:
             raise psycopg.OperationalError("FATAL:  sorry, too many clients already")
 
         with pytest.raises(RuntimeError) as err:
-            ProxyExtrasDBManager.raise_if_customer_member_override_rename_pending(connect=refuse)
+            ProxyExtrasDBManager.raise_if_customer_member_budget_rename_pending(connect=refuse)
         assert "FATAL:  sorry, too many clients already" in str(err.value)
 
 

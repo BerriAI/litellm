@@ -63,10 +63,12 @@ def test_only_the_dropped_accounting_models_may_be_removed() -> None:
 
 
 def test_only_the_renamed_customer_member_fields_may_be_removed() -> None:
-    member: Final = "model LiteLLM_CustomerMemberTable {\n alias String?\n budget_id String?\n budget Item?\n}\n"
+    member: Final = (
+        "model LiteLLM_CustomerMemberTable {\n alias String?\n budget_template_id String?\n budget_template Item?\n}\n"
+    )
     previous: Final = parse_model_fields(ORIGINAL + member)
-    renamed: Final = "model LiteLLM_CustomerMemberTable {\n alias String?\n budget_override_id String?\n}\n"
-    without_alias: Final = "model LiteLLM_CustomerMemberTable {\n budget_override_id String?\n}\n"
+    renamed: Final = "model LiteLLM_CustomerMemberTable {\n alias String?\n budget_id String?\n}\n"
+    without_alias: Final = "model LiteLLM_CustomerMemberTable {\n budget_id String?\n}\n"
 
     assert check_breaking_changes(previous, parse_model_fields(ORIGINAL + renamed)) == ()
     assert check_breaking_changes(previous, parse_model_fields(ORIGINAL + without_alias)) == (

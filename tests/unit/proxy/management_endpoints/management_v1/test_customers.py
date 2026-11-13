@@ -114,13 +114,13 @@ def test_template_edits_propagate_and_only_live_override_fields_win() -> None:
     )
     assert default.status_code == 201, default.text
     assert default.json()["budget_override_id"] is None
-    assert default.json()["budget_template_id"] == default_id
+    assert default.json()["budget_id"] == default_id
     override: Final = http.post(
         "/management/v1/customer_members",
         json={
             "customer_member_id": "override",
             "parent_team_id": "team",
-            "budget_template_id": other_id,
+            "budget_id": other_id,
             "budget_override": {"max_budget": 3, "allowed_models": []},
         },
     )
@@ -201,7 +201,7 @@ def test_override_can_be_reexpired_cleared_and_template_switched() -> None:
     switched: Final = http.patch(
         "/management/v1/customer_members/member",
         json={
-            "budget_template_id": org["default_budgets"][1]["budget_id"],
+            "budget_id": org["default_budgets"][1]["budget_id"],
             "budget_override": None,
         },
     )
@@ -209,7 +209,7 @@ def test_override_can_be_reexpired_cleared_and_template_switched() -> None:
     assert switched.json()["budget_override_id"] is None
     assert switched.json()["budget_override"] is None
     assert switched.json()["effective_budget"]["max_budget"] == 20
-    cleared: Final = http.patch("/management/v1/customer_members/member", json={"budget_template_id": None})
+    cleared: Final = http.patch("/management/v1/customer_members/member", json={"budget_id": None})
     assert cleared.status_code == 422, cleared.text
     after: Final = http.get("/management/v1/customer_members/member")
     assert after.json() == switched.json()
@@ -268,7 +268,7 @@ def test_template_deletion_guards_names_and_references() -> None:
         json={
             "customer_member_id": "member",
             "parent_team_id": "team",
-            "budget_template_id": selected_id,
+            "budget_id": selected_id,
         },
     )
     assert member.status_code == 201, member.text
@@ -312,7 +312,7 @@ def test_missing_template_requires_custom_budget_and_wrong_org_is_rejected() -> 
         "/management/v1/customer_members",
         json={
             "parent_team_id": "empty-team",
-            "budget_template_id": org["default_budget_id"],
+            "budget_id": org["default_budget_id"],
             "budget_override": {"max_budget": 2},
         },
     )
@@ -321,7 +321,7 @@ def test_missing_template_requires_custom_budget_and_wrong_org_is_rejected() -> 
         "/management/v1/customer_members", json={"parent_team_id": "empty-team", "budget_override": {"max_budget": 2}}
     )
     assert custom.status_code == 201, custom.text
-    assert custom.json()["budget_template_id"] is None
+    assert custom.json()["budget_id"] is None
     assert custom.json()["effective_budget"]["max_budget"] == 2
 
 

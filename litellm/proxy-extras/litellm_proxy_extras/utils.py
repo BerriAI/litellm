@@ -684,19 +684,19 @@ class ProxyExtrasDBManager:
             )
 
     @staticmethod
-    def raise_if_customer_member_override_rename_pending(connect: LensCheckConnect | None = None) -> None:
+    def raise_if_customer_member_budget_rename_pending(connect: LensCheckConnect | None = None) -> None:
         if ProxyExtrasDBManager._legacy_schema_object_exists(
             "SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid "
             "JOIN pg_namespace n ON n.oid=c.relnamespace "
             "WHERE n.nspname=%s AND c.relname='LiteLLM_CustomerMemberTable' "
-            "AND a.attname='budget_id' AND NOT a.attisdropped LIMIT 1",
-            "customer member budget override",
+            "AND a.attname='budget_template_id' AND NOT a.attisdropped LIMIT 1",
+            "customer member budget",
             connect,
         ):
             raise RuntimeError(
-                "LiteLLM_CustomerMemberTable still has the budget_id column. prisma db push would drop it "
-                "and unlink every customer member budget override. Apply the shipped "
-                "20261112120000_rename_customer_member_budget_override_id migration to this database schema "
+                "LiteLLM_CustomerMemberTable still has the budget_template_id column. prisma db push would drop it "
+                "and treat every customer member budget override as the member's budget. Apply the shipped "
+                "20261112120000_rename_customer_member_budget_columns migration to this database schema "
                 "before retrying. Deployments using migration history can upgrade without --use_prisma_db_push instead."
             )
 
@@ -1063,7 +1063,7 @@ class ProxyExtrasDBManager:
 
         if not use_migrate:
             ProxyExtrasDBManager.raise_if_lens_rename_pending()
-            ProxyExtrasDBManager.raise_if_customer_member_override_rename_pending()
+            ProxyExtrasDBManager.raise_if_customer_member_budget_rename_pending()
             if ProxyExtrasDBManager.spend_logs_is_partitioned():
                 raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
             original_dir = os.getcwd()
@@ -1742,7 +1742,7 @@ class ProxyExtrasDBManager:
                         raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
                     # Use prisma db push with increased timeout
                     ProxyExtrasDBManager.raise_if_lens_rename_pending()
-                    ProxyExtrasDBManager.raise_if_customer_member_override_rename_pending()
+                    ProxyExtrasDBManager.raise_if_customer_member_budget_rename_pending()
                     prisma_toolchain.run_prisma(
                         [_get_prisma_command(), "db", "push", "--accept-data-loss"],
                         timeout=prisma_command_timeout(),

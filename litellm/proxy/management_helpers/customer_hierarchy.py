@@ -178,7 +178,7 @@ def effective_member_budget(
 def member_response(row: PrismaRecord, now: datetime) -> CustomerMember:
     values: Final = row.model_dump()
     override: Final = related_budget(values.get("budget_override"))
-    template: Final = related_budget(values.get("budget_template"), now)
+    template: Final = related_budget(values.get("budget"), now)
     effective_override: Final = related_budget(
         values.get("budget_override"), now, template.max_budget if template is not None else None
     )
@@ -210,7 +210,7 @@ def alias_patch(payload: OrganizationPatch | TeamPatch | MemberPatch) -> Mapping
 
 
 _BUDGET_INCLUDE: Final = {"budget": True}
-_MEMBER_INCLUDE: Final = {"budget_override": True, "budget_template": True}
+_MEMBER_INCLUDE: Final = {"budget": True, "budget_override": True}
 
 
 class CustomerHierarchyStore:
@@ -405,7 +405,7 @@ class CustomerHierarchyStore:
             return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
         if organization.default_budget_id == budget_id:
             return Failure(ErrorCode.TEMPLATE_IN_USE)
-        if await self.members.count(where={"budget_template_id": budget_id}):
+        if await self.members.count(where={"budget_id": budget_id}):
             return Failure(ErrorCode.TEMPLATE_IN_USE)
         remaining: Final = {key: name for key, name in names.items() if key != budget_id}
         await self.write_template_metadata(organization_id, remaining, organization.default_budget_id, actor)
@@ -457,12 +457,12 @@ class CustomerHierarchyStore:
         return await self.get_team(team_id)
 
     async def create_member(self, payload: MemberCreate, actor: str) -> CustomerMember | Failure:
-        template_id: Final = await self.resolve_member_template(payload.parent_team_id, payload.budget_template_id)
+        template_id: Final = await self.resolve_member_template(payload.parent_team_id, payload.budget_id)
         if isinstance(template_id, Failure):
             return template_id
         if template_id is None and payload.budget_override is None:
             return Failure(ErrorCode.BUDGET_REQUIRED)
-        budget_id: Final = (
+        override_id: Final = (
             await self.create_budget(payload.budget_override, actor) if payload.budget_override is not None else None
         )
         member_id: Final = payload.customer_member_id or str(uuid4())
@@ -471,8 +471,8 @@ class CustomerHierarchyStore:
                 "customer_member_id": member_id,
                 "alias": payload.alias,
                 "parent_team_id": payload.parent_team_id,
-                "budget_template_id": template_id,
-                "budget_override_id": budget_id,
+                "budget_id": template_id,
+                "budget_override_id": override_id,
                 "budget_override_expires_at": payload.budget_override_expires_at,
                 "created_by": actor,
                 "updated_by": actor,
@@ -481,11 +481,11 @@ class CustomerHierarchyStore:
         return await self.get_member(member_id)
 
     async def member_template_patch(self, member: CustomerMember, payload: MemberPatch) -> str | Failure | None:
-        if "budget_template_id" not in payload.model_fields_set:
-            return member.budget_template_id
-        if payload.budget_template_id is None:
+        if "budget_id" not in payload.model_fields_set:
+            return member.budget_id
+        if payload.budget_id is None:
             return None
-        return await self.resolve_member_template(member.parent_team_id, payload.budget_template_id)
+        return await self.resolve_member_template(member.parent_team_id, payload.budget_id)
 
     async def member_override_patch(self, member: CustomerMember, payload: MemberPatch, actor: str) -> str | None:
         if "budget_override" not in payload.model_fields_set:
@@ -506,25 +506,25 @@ class CustomerHierarchyStore:
         )
         if selected is None and override is None:
             return Failure(ErrorCode.BUDGET_REQUIRED)
-        budget_id: Final = await self.member_override_patch(member, payload, actor)
+        override_id: Final = await self.member_override_patch(member, payload, actor)
         expiry: Final = (
             payload.budget_override_expires_at
             if "budget_override_expires_at" in payload.model_fields_set
             else member.budget_override_expires_at
-            if budget_id is not None
+            if override_id is not None
             else None
         )
         await self.members.update(
             where={"customer_member_id": member_id},
             data={
                 **alias_patch(payload),
-                "budget_override_id": budget_id,
-                "budget_template_id": selected,
+                "budget_id": selected,
+                "budget_override_id": override_id,
                 "budget_override_expires_at": expiry,
                 "updated_by": actor,
             },
         )
-        await self.delete_released_budget(member.budget_override_id, budget_id)
+        await self.delete_released_budget(member.budget_override_id, override_id)
         return await self.get_member(member_id)
 
     async def list_organizations(self, page: int, page_size: int) -> Page[Organization]:

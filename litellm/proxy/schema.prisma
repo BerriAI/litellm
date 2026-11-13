@@ -13,9 +13,9 @@ generator client {
 model LiteLLM_BudgetTable {
   customer_organization_defaults LiteLLM_CustomerOrganizationTable[] @relation("CustomerOrganizationDefaultBudget")
   customer_organizations LiteLLM_CustomerOrganizationTable[] @relation("CustomerOrganizationBudget")
-  customer_member_templates LiteLLM_CustomerMemberTable[] @relation("CustomerMemberTemplate")
   customer_teams LiteLLM_CustomerTeamTable[] @relation("CustomerTeamBudget")
   customer_members LiteLLM_CustomerMemberTable[] @relation("CustomerMemberBudget")
+  customer_member_overrides LiteLLM_CustomerMemberTable[] @relation("CustomerMemberBudgetOverride")
   budget_id String @id @default(uuid())
   max_budget Float?
   soft_budget Float?
@@ -87,17 +87,17 @@ model LiteLLM_CustomerMemberTable {
   alias String?
   parent_team_id String
   parent_team LiteLLM_CustomerTeamTable @relation(fields: [parent_team_id], references: [customer_team_id])
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("CustomerMemberBudget", fields: [budget_id], references: [budget_id], onDelete: Restrict)
   budget_override_id String?
-  budget_override LiteLLM_BudgetTable? @relation("CustomerMemberBudget", fields: [budget_override_id], references: [budget_id], onDelete: Restrict)
-  budget_template_id String?
-  budget_template LiteLLM_BudgetTable? @relation("CustomerMemberTemplate", fields: [budget_template_id], references: [budget_id], onDelete: Restrict)
+  budget_override LiteLLM_BudgetTable? @relation("CustomerMemberBudgetOverride", fields: [budget_override_id], references: [budget_id], onDelete: Restrict)
   budget_override_expires_at DateTime?
   created_at DateTime @default(now())
   created_by String
   updated_at DateTime @default(now()) @updatedAt
   updated_by String
   @@index([parent_team_id])
-  @@index([budget_template_id])
+  @@index([budget_id])
 }
 
 // Models on proxy
