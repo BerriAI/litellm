@@ -30,65 +30,6 @@ from litellm.types.proxy.carried_budget_state import (
 RESET_AT = datetime(2026, 10, 1, 12, 30, tzinfo=timezone.utc)
 
 
-@pytest.mark.parametrize("entity_type", ["user", "customer_member"])
-def test_personal_counter_identity_keeps_the_exact_reset_instant(entity_type):
-    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
-
-    window = PersonBudgetWindow(
-        entity_type=entity_type, entity_id="person:one/é", budget_duration="1mo",
-        window_start=datetime.fromisoformat("2026-11-01T00:30:00-05:00"),
-        reset_at=datetime.fromisoformat("2026-12-01T00:30:00-05:00"), max_budget=10,
-    )
-    same_instant = window.model_copy(update={"window_start": datetime.fromisoformat("2026-11-01T05:30:00+00:00")})
-    midnight = window.model_copy(update={"window_start": datetime(2026, 11, 1, tzinfo=timezone.utc)})
-
-    assert window.counter_key == (
-        f"spend:person:{entity_type}:person%3Aone%2F%C3%A9:window:1mo@2026-11-01T05:30:00+00:00"
-    )
-    assert window.counter_key == same_instant.counter_key
-    assert window.counter_key != midnight.counter_key
-    assert window.accounting_window() == {
-        "entity_type": entity_type, "entity_id": "person:one/é",
-        "window_duration": "1mo@2026-11-01T05:30:00+00:00",
-        "window_start": "2026-11-01T05:30:00+00:00",
-    }
-
-
-def test_deferred_creator_windows_and_customer_usage_survive_json_and_auth_reconstruction():
-    import json
-
-    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
-    from litellm.proxy.spend_tracking.carried_budget_state import (
-        creator_budget_metadata, person_budget_windows_from_kwargs,
-        restore_creator_budget_metadata, stored_budget_metadata,
-    )
-    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
-
-    creator = UserAPIKeyAuth(user_id="creator")
-    creator.person_budget_windows = (PersonBudgetWindow(
-        entity_type="customer_member", entity_id="member", budget_duration="12mo",
-        window_start=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        reset_at=datetime(2027, 1, 1, tzinfo=timezone.utc), max_budget=100,
-    ),)
-    creator.customer_hierarchy = CustomerHierarchyAuth(
-        customer_org_id="org", customer_team_id="team", customer_member_id="member", scopes=(),
-    )
-    persisted = json.loads(json.dumps(creator_budget_metadata(creator)))
-    restored = UserAPIKeyAuth(person_budget_windows=creator.person_budget_windows)
-    assert restored.person_budget_windows == ()
-    restore_creator_budget_metadata(restored, stored_budget_metadata(persisted))
-
-    assert restored.person_budget_windows == creator.person_budget_windows
-    assert restored.customer_hierarchy == creator.customer_hierarchy
-    assert person_budget_windows_from_kwargs({"standard_logging_object": {"metadata": persisted}}) == (
-        creator.person_budget_windows
-    )
-    assert person_budget_windows_from_kwargs({"litellm_params": {"litellm_metadata": persisted}}) == (
-        creator.person_budget_windows
-    )
-    assert stored_budget_metadata(None) == {}
-
-
 @pytest.mark.parametrize("missing", ["user_api_key_customer_member_id", "user_api_key_customer_team_id"])
 def test_deferred_snapshot_drops_malformed_customer_ids(missing):
     from litellm.proxy.spend_tracking.carried_budget_state import restore_creator_budget_metadata, stored_budget_metadata

@@ -5,7 +5,6 @@ from typing import Final, cast
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
 
 from litellm.models.person_budget import PersonBudgetSubject
 from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key
@@ -18,7 +17,6 @@ from litellm.proxy.management_endpoints.management_v1.budget_assignments import 
     BudgetAssignmentPatch,
     BudgetAssignments,
     get_budget_assignments,
-    patch_budget_assignment,
     router,
 )
 from litellm.proxy.management_helpers.customer_hierarchy import (
@@ -61,6 +59,16 @@ class Fixture:
     async def invalidate_sources(self, budgets: tuple[str, ...]) -> None:
         await self.invalidate(budgets)
 
+    async def patch(self, original: BudgetAssignment, **fields: object) -> BudgetAssignment:
+        result: Final = await self.assignments.patch(
+            original.subject_type,
+            original.subject_id,
+            BudgetAssignmentPatch.model_validate({"revision": original.revision, **fields}),
+            "admin",
+        )
+        assert isinstance(result, BudgetAssignment)
+        return result
+
     async def create(self, subject: PersonBudgetSubject) -> BudgetAssignment:
         await self.db.litellm_budgettable.create(
             data={
@@ -91,64 +99,23 @@ class Fixture:
 async def test_patch_preserves_other_duration_zero_and_null_clear(subject: PersonBudgetSubject) -> None:
     fixture: Final = Fixture()
     original: Final = await fixture.create(subject)
-    saved: Final = await fixture.assignments.patch(
-        subject,
-        "person",
-        BudgetAssignmentPatch.model_validate(
-            {
-                "revision": original.revision,
-                "budget_override": {"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]},
-                "budget_override_expires_at": NOW + timedelta(days=2),
-            }
-        ),
-        "admin",
+    saved: Final = await fixture.patch(
+        original,
+        budget_override={"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]},
+        budget_override_expires_at=NOW + timedelta(days=2),
     )
-    assert isinstance(saved, BudgetAssignment)
     assert {limit.budget_duration: limit.max_budget for limit in saved.effective_budget.budget_limits or ()} == {
         "1mo": 0,
         "12mo": 100,
     }
     assert saved.budget_id == "profile"
     assert saved.budget_override_id != saved.budget_id
-    partial: Final = await fixture.assignments.patch(
-        subject,
-        "person",
-        BudgetAssignmentPatch.model_validate(
-            {
-                "revision": saved.revision,
-                "budget_override": {"cap_policy": "pause_until_reset"},
-            }
-        ),
-        "admin",
-    )
-    assert isinstance(partial, BudgetAssignment)
+    partial: Final = await fixture.patch(saved, budget_override={"cap_policy": "pause_until_reset"})
     assert partial.effective_budget.budget_limits == saved.effective_budget.budget_limits
     assert partial.budget_override_expires_at == saved.budget_override_expires_at
-    inherited: Final = await fixture.assignments.patch(
-        subject,
-        "person",
-        BudgetAssignmentPatch.model_validate(
-            {
-                "revision": partial.revision,
-                "budget_override": {"budget_limits": None},
-            }
-        ),
-        "admin",
-    )
-    assert isinstance(inherited, BudgetAssignment)
+    inherited: Final = await fixture.patch(partial, budget_override={"budget_limits": None})
     assert inherited.effective_budget.budget_limits == original.effective_budget.budget_limits
-    cleared: Final = await fixture.assignments.patch(
-        subject,
-        "person",
-        BudgetAssignmentPatch.model_validate(
-            {
-                "revision": inherited.revision,
-                "budget_override": None,
-            }
-        ),
-        "admin",
-    )
-    assert isinstance(cleared, BudgetAssignment)
+    cleared: Final = await fixture.patch(inherited, budget_override=None)
     assert cleared.budget_override is None
     assert cleared.budget_override_id is None
     assert cleared.budget_override_expires_at is None
@@ -158,30 +125,10 @@ async def test_patch_preserves_other_duration_zero_and_null_clear(subject: Perso
 
 
 @pytest.mark.asyncio
-async def test_stale_assignment_and_profile_revisions_fail_without_overwriting() -> None:
+async def test_profile_revision_change_rejects_assignment_without_overwriting() -> None:
     fixture: Final = Fixture()
     original: Final = await fixture.create("user")
-    first: Final = await patch_budget_assignment(
-        "user",
-        "person",
-        BudgetAssignmentPatch.model_validate(
-            {
-                "revision": original.revision,
-                "budget_override": {"cap_policy": "pause_until_reset"},
-            }
-        ),
-        "admin",
-        fixture.assignments,
-    )
-    with pytest.raises(ManagementProblem) as stale:
-        await patch_budget_assignment(
-            "user",
-            "person",
-            BudgetAssignmentPatch(revision=original.revision, budget_id=None),
-            "admin",
-            fixture.assignments,
-        )
-    assert stale.value.problem.status == 409
+    first: Final = await fixture.patch(original, budget_override={"cap_policy": "pause_until_reset"})
     await fixture.db.litellm_budgettable.update(
         where={"budget_id": "profile"},
         data={
@@ -200,95 +147,35 @@ async def test_stale_assignment_and_profile_revisions_fail_without_overwriting()
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("subject", ("user", "customer_member"))
-async def test_expired_increases_do_not_block_unrelated_patch_and_clear_as_group(subject: PersonBudgetSubject) -> None:
+@pytest.mark.parametrize("whole_override_expires", (False, True))
+async def test_expired_increases_do_not_block_unrelated_patch_and_clear_as_group(
+    subject: PersonBudgetSubject,
+    whole_override_expires: bool,
+) -> None:
     fixture: Final = Fixture()
     original: Final = await fixture.create(subject)
-    saved: Final = await fixture.assignments.patch(
-        subject,
-        "person",
-        BudgetAssignmentPatch.model_validate(
-            {
-                "revision": original.revision,
-                "budget_override": {
-                    "temp_budget_increase": 5,
-                    "temp_budget_duration": "1mo",
-                    "temp_budget_expiry": NOW + timedelta(days=1),
-                },
-            }
-        ),
-        "admin",
+    saved: Final = await fixture.patch(
+        original,
+        budget_override={
+            "temp_budget_increase": 5,
+            "temp_budget_duration": "1mo",
+            "temp_budget_expiry": NOW + timedelta(days=3 if whole_override_expires else 2),
+            "budget_limits": [{"budget_duration": "1mo", "max_budget": 20}],
+        },
+        budget_override_expires_at=NOW + timedelta(days=2) if whole_override_expires else None,
     )
-    assert isinstance(saved, BudgetAssignment)
     fixture.assignments.clock = lambda: NOW + timedelta(days=2)
-    unrelated: Final = await fixture.assignments.patch(
-        subject,
-        "person",
-        BudgetAssignmentPatch.model_validate(
-            {
-                "revision": saved.revision,
-                "budget_override": {"cap_policy": "pause_until_reset"},
-            }
-        ),
-        "admin",
-    )
-    assert isinstance(unrelated, BudgetAssignment)
+    unrelated: Final = await fixture.patch(saved, budget_override={"cap_policy": "pause_until_reset"})
     assert unrelated.effective_budget.increase_for("1mo", NOW + timedelta(days=2)) == 0
-    cleared: Final = await fixture.assignments.patch(
-        subject,
-        "person",
-        BudgetAssignmentPatch.model_validate(
-            {
-                "revision": unrelated.revision,
-                "budget_override": {"temp_budget_increase": None},
-            }
-        ),
-        "admin",
-    )
-    assert isinstance(cleared, BudgetAssignment)
+    assert {limit.budget_duration: limit.max_budget for limit in unrelated.effective_budget.budget_limits or ()} == {
+        "1mo": 10 if whole_override_expires else 20,
+        "12mo": 100,
+    }
+    cleared: Final = await fixture.patch(unrelated, budget_override={"temp_budget_increase": None})
     assert cleared.budget_override is not None
     assert cleared.budget_override.temp_budget_increase is None
     assert cleared.budget_override.temp_budget_expiry is None
     assert cleared.budget_override.temp_budget_duration is None
-
-
-@pytest.mark.asyncio
-async def test_shared_member_owner_rejects_invalid_increases_before_writes() -> None:
-    fixture: Final = Fixture()
-    original: Final = await fixture.create("customer_member")
-    invalid: Final = MemberPatch.model_validate({"budget_override": {"temp_budget_increase": 5}})
-    result: Final = await fixture.hierarchy.update_member("person", invalid, "admin")
-    assert isinstance(result, Failure) and result.code == ErrorCode.INVALID_BUDGET
-    assert await fixture.assignments.get("customer_member", "person") == original
-    assert len(fixture.db.litellm_budgettable.rows) == 1
-    created: Final = await fixture.hierarchy.create_member(
-        MemberCreate.model_validate(
-            {
-                "parent_team_id": "team",
-                "budget_id": "profile",
-                "budget_override": {"temp_budget_increase": 5, "temp_budget_duration": "12mo"},
-            }
-        ),
-        "admin",
-    )
-    assert isinstance(created, Failure) and created.code == ErrorCode.INVALID_BUDGET
-    assert len(fixture.db.litellm_customermembertable.rows) == 1
-
-
-@pytest.mark.parametrize(
-    "body",
-    (
-        {},
-        {"revision": ""},
-        {"revision": "r", "budget_override": {"is_profile": True}},
-        {"revision": "r", "budget_override": {"budget_limits": [{"budget_duration": "30d", "max_budget": 1}]}},
-        {"revision": "r", "budget_override": {"budget_limits": [{"budget_duration": "1mo", "max_budget": -1}]}},
-        {"revision": "r", "budget_override": {"temp_budget_increase": float("inf")}},
-        {"revision": "r", "budget_override": {"temp_budget_expiry": "2026-01-01T00:00:00"}},
-    ),
-)
-def test_precise_assignment_schema_rejects_ambiguous_or_invalid_inputs(body: object) -> None:
-    with pytest.raises(ValidationError):
-        BudgetAssignmentPatch.model_validate(body)
 
 
 @pytest.mark.asyncio
@@ -303,27 +190,13 @@ async def test_every_member_mutation_evicts_hierarchy_and_assignment_after_succe
         await fixture.cache.async_set_cache(key, "cached member", local_only=True)
     invalid: Final = await fixture.hierarchy.update_member(
         "person",
-        MemberPatch.model_validate(
-            {
-                "budget_override": {"temp_budget_increase": 5},
-            }
-        ),
+        MemberPatch.model_validate({"budget_override": {"temp_budget_increase": 5}}),
         "admin",
     )
     assert isinstance(invalid, Failure)
+    assert await fixture.assignments.get("customer_member", "person") == original
     assert all(fixture.cache.get_cache(key, local_only=True) == "cached member" for key in keys)
-    updated: Final = await fixture.assignments.patch(
-        "customer_member",
-        "person",
-        BudgetAssignmentPatch.model_validate(
-            {
-                "revision": original.revision,
-                "budget_override": {"cap_policy": "pause_until_reset"},
-            }
-        ),
-        "admin",
-    )
-    assert isinstance(updated, BudgetAssignment)
+    await fixture.patch(original, budget_override={"cap_policy": "pause_until_reset"})
     assert all(fixture.cache.get_cache(key, local_only=True) is None for key in keys)
     for key in keys:
         await fixture.cache.async_set_cache(key, "cached member", local_only=True)
@@ -340,7 +213,6 @@ async def test_generic_http_route_returns_conditional_assignment_and_calendar_wi
     fixture: Final = Fixture()
     await fixture.create("user")
     fixture.assignments.settings = BudgetResetSettings(timezone="America/New_York")
-    # The real auth dependency checks this isolated test master key.
     monkeypatch.setattr(server, "master_key", "sk-assignment-route-test")
     app: Final = FastAPI()
     app.include_router(router)

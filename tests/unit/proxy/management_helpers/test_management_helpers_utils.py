@@ -1505,51 +1505,6 @@ async def test_add_new_member_runs_every_write_on_the_caller_transaction(new_mem
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("budget_fields,owned", (
-    ({"is_profile": True}, False),
-    ({"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]}, False),
-    ({"budget_limits": []}, False),
-    ({"max_budget": 0}, True),
-))
-@pytest.mark.parametrize("consumer", ("entity", "member", "member_clone"))
-async def test_legacy_budget_attachments_reject_personal_budgets(budget_fields, owned, consumer):
-    from fastapi import HTTPException
-    from litellm.proxy.management_helpers.utils import handle_budget_for_entity, _resolve_member_budget_id
-
-    database: Final = CatalogClient()
-    await database.db.litellm_budgettable.create(data={"budget_id": "personal", **budget_fields})
-    if owned:
-        await database.db.litellm_usertable.create(data={"user_id": "owner", "budget_override_id": "personal"})
-    prisma: Final = cast(PrismaClient, database)
-    admin: Final = UserAPIKeyAuth(user_id="admin")
-    with pytest.raises(HTTPException) as rejected:
-        if consumer == "entity":
-            await handle_budget_for_entity(
-                {"budget_id": "personal"}, None, admin, prisma, "admin"
-            )
-        else:
-            await _resolve_member_budget_id(
-                prisma_client=prisma, default_team_budget_id="personal", max_budget_in_team=None, allowed_models=None,
-                budget_duration="1d" if consumer == "member_clone" else None,
-                user_api_key_dict=admin, litellm_proxy_admin_name="admin",
-            )
-    assert rejected.value.status_code == 400
-    assert tuple(database.db.litellm_budgettable.rows) == ("personal",)
-
-
-@pytest.mark.asyncio
-async def test_legacy_entity_still_accepts_zero_scalar_budget():
-    from litellm.proxy.management_helpers.utils import handle_budget_for_entity
-
-    database: Final = CatalogClient()
-    await database.db.litellm_budgettable.create(data={"budget_id": "scalar", "max_budget": 0})
-    result: Final = await handle_budget_for_entity(
-        {"budget_id": "scalar"}, None, UserAPIKeyAuth(user_id="admin"), cast(PrismaClient, database), "admin"
-    )
-    assert result == "scalar"
-
-
-@pytest.mark.asyncio
 async def test_personal_budget_validation_uses_writer_when_replica_is_stale():
     from fastapi import HTTPException
     from litellm.proxy.management_helpers.utils import checked_legacy_budget

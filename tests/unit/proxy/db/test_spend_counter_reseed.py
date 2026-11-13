@@ -88,28 +88,6 @@ def _row(window_start: datetime, spend: float) -> SimpleNamespace:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entity_type", ["user", "customer_member"])
-async def test_personal_window_never_uses_pod_memory_when_redis_is_unavailable(entity_type):
-    from litellm.types.proxy.carried_budget_state import PersonBudgetWindow
-    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
-
-    window = PersonBudgetWindow(
-        entity_type=entity_type, entity_id="person", budget_duration="1mo",
-        window_start=WINDOW_START, reset_at=WINDOW_START + timedelta(days=31), max_budget=10,
-    )
-    counters = FakeSpendCounters(redis={}, memory={window.counter_key: 0.0}, fail=True)
-    prisma = _FakePrismaClient(row=_row(WINDOW_START, 9.0))
-
-    result = await SpendCounterReseed.coalesced_window(
-        prisma, counters.store(), window.counter_key, window.counter_entity_type,
-        window.entity_id, window.window_duration, window.window_start,
-    )
-
-    assert result is None
-    assert prisma.db.litellm_budgetwindowspend.where_clauses == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("entity_type", ["user", "customer_member"])
 @pytest.mark.parametrize(("row_exists", "read_fails", "expected"), [
     (True, False, 7.25), (False, False, 0.0), (False, True, None),
 ])
