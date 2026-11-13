@@ -251,7 +251,8 @@ export const usageTrend = ({
   const contributes = (row: Totals): boolean => row[rankBy] !== 0;
   const leaders = models.filter(contributes).slice(0, LEADING_MODEL_LIMIT);
   const leaderIndex = new Map(leaders.map((row, index) => [row.key, index]));
-  const hasOther = models.some((row) => !leaderIndex.has(row.key) && contributes(row));
+  const inOther = (row: KeyedTotals): boolean => !leaderIndex.has(row.key) && contributes(row);
+  const hasOther = models.some(inOther);
   const labels = [...leaders.map((row) => row.key), ...(hasOther ? [i18n.t("usage.overview.otherSeries")] : [])];
   const keys = labels.map((_, index) => `s${index}`);
   const colors = labels.map((label, index) =>
@@ -295,8 +296,8 @@ export const usageTrend = ({
     tokenShare: share(row.tokens, grand.tokens),
     spendShare: share(row.spend, grand.spend),
     rate: observedRate(row.spend, row.tokens),
-    color: leaderIndex.has(row.key) ? colorForModel(row.key, colorByModel) : OTHER_COLOR,
-    grouped: !leaderIndex.has(row.key),
+    color: inOther(row) ? OTHER_COLOR : colorForModel(row.key, colorByModel),
+    grouped: inOther(row),
   }));
 
   return {

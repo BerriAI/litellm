@@ -18,6 +18,7 @@ export function Panel({
   icon: Icon,
   title,
   subtitle,
+  wrapSubtitle = false,
   action,
   className,
   bodyClassName,
@@ -27,6 +28,7 @@ export function Panel({
   icon?: LucideIcon;
   title: ReactNode;
   subtitle?: ReactNode;
+  wrapSubtitle?: boolean;
   action?: ReactNode;
   className?: string;
   bodyClassName?: string;
@@ -47,7 +49,11 @@ export function Panel({
             {Icon && <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />}
             <span className="truncate">{title}</span>
           </h3>
-          {subtitle && <p className="mt-0.5 truncate text-xs text-muted-foreground">{subtitle}</p>}
+          {subtitle && (
+            <p className={cn("mt-0.5 text-xs text-muted-foreground", wrapSubtitle ? "text-pretty" : "truncate")}>
+              {subtitle}
+            </p>
+          )}
         </div>
         {action && <div className="flex flex-wrap items-center gap-2">{action}</div>}
       </header>

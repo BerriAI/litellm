@@ -108,6 +108,7 @@ export default function UsageTrendPanel({
       testId="usage-trend"
       title={t("usage.trend.title")}
       subtitle={subtitle}
+      wrapSubtitle
       action={action}
       bodyClassName="px-0 pt-4 pb-0"
     >

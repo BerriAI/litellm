@@ -229,6 +229,7 @@ export default function TopAgents({
       icon={Bot}
       title={t("usage.topAgents.title")}
       subtitle={subtitle}
+      wrapSubtitle
       testId="top-agents"
       bodyClassName="px-0 pt-4 pb-0"
     >

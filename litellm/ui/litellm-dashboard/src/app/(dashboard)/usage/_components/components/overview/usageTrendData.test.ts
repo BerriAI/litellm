@@ -333,6 +333,25 @@ describe("usageTrend", () => {
     expect(colorOf("tokens", "chatty")).toBe(colorOf("spend", "chatty"));
   });
 
+  it("keeps a model with none of the charted metric in the table under its own color, not In Other", () => {
+    const results = [day("2026-10-03", { chatty: { spend: 1, tokens: 9000 }, image: { spend: 5, tokens: 0 } })];
+    const colorByModel = modelColorMap(results);
+    const input = {
+      results,
+      range: { start: "2026-10-01", end: "2026-10-31" },
+      granularity: "month",
+      colorByModel,
+      rankBy: "tokens",
+    } as const;
+    const trend = usageTrend(input);
+    const image = trend.rows.find((row) => row.key === "image");
+
+    expect(trend.series.tokens.labels).toEqual(["chatty"]);
+    expect(image).toMatchObject({ grouped: false, spend: 5, tokens: 0 });
+    expect(image?.color).not.toBe(OTHER_COLOR);
+    expect(trend.total.spend).toBe(6);
+  });
+
   it("omits Other entirely when every model fits among the leaders", () => {
     const october = { start: "2026-10-01", end: "2026-10-31" };
     const trend = trendOf([day("2026-10-03", { a: { spend: 1, tokens: 1 } })], october, "month");
