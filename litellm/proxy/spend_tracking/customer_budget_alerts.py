@@ -15,6 +15,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.management_helpers.customer_hierarchy import (
     PrismaRecord,
+    customer_row_reset_at,
     effective_member_budget,
     related_budget,
     utc_now,
@@ -40,12 +41,10 @@ class _CustomerRow(BaseModel):
     alias: str | None = None
     customer_org_id: str | None = None
     customer_team_id: str | None = None
-    budget_reset_at: datetime | None = None
     budget: Mapping[str, object] | None = None
     budget_override: Mapping[str, object] | None = None
     budget_override_expires_at: datetime | None = None
     parent_org: "_CustomerRow | None" = None
-    parent_team: "_CustomerRow | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,14 +69,14 @@ _LEVELS: Final = (
         "customer_team_list_transactions",
         "customer_team_id",
         "litellm_customerteamtable",
-        {"budget": True, "parent_org": True},
+        {"budget": True, "budget_override": True, "parent_org": True},
     ),
     _Level(
         "customer_member",
         "customer_member_list_transactions",
         "customer_member_id",
         "litellm_customermembertable",
-        {"budget": True, "budget_override": True, "parent_team": {"include": {"parent_org": True}}},
+        {"budget": True, "budget_override": True, "parent_org": True},
     ),
 )
 _CHARGES: Final = TypeAdapter(Mapping[str, float])
@@ -89,13 +88,14 @@ def _events(level: _Level, entity_id: str, row: _CustomerRow, now: datetime) -> 
     override: Final = related_budget(row.budget_override, now, template.max_budget if template is not None else None)
     budget: Final = (
         effective_member_budget(template, override, row.budget_override_expires_at, now)
-        if level.scope == "customer_member"
+        if level.scope != "customer_org"
         else template
     )
     if budget is None:
         return ()
-    customer_team: Final = row.parent_team if level.scope == "customer_member" else row
-    customer_org: Final = row if level.scope == "customer_org" else customer_team.parent_org if customer_team else None
+    customer_team: Final = row if level.scope == "customer_team" else None
+    customer_org: Final = row if level.scope == "customer_org" else row.parent_org
+    reset_at: Final = customer_row_reset_at(row, now)
     thresholds: Final[tuple[tuple[CustomerBudgetEventType, float | None], ...]] = (
         ("soft_budget_crossed", budget.soft_budget),
         ("budget_crossed", budget.max_budget),
@@ -115,7 +115,7 @@ def _events(level: _Level, entity_id: str, row: _CustomerRow, now: datetime) -> 
             customer_member_alias=row.alias if level.scope == "customer_member" else None,
             spend=row.spend,
             budget=threshold,
-            period=row.budget_reset_at.isoformat() if row.budget_reset_at else "lifetime",
+            period=reset_at.isoformat() if reset_at is not None else "lifetime",
             timestamp=now,
         )
         for event, threshold in thresholds

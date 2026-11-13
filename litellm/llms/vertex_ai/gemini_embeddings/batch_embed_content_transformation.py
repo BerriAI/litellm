@@ -557,10 +557,10 @@ def _usage_from_embed_content_response(
             ),
         )
 
-    text_tokens: Final = _tokens_for_modality(details, "TEXT")
     audio_tokens: Final = _tokens_for_modality(details, "AUDIO")
-    image_tokens: Final = _tokens_for_modality(details, "IMAGE")
+    image_tokens: Final = _tokens_for_modality(details, "IMAGE") + _tokens_for_modality(details, "DOCUMENT")
     video_tokens: Final = _tokens_for_modality(details, "VIDEO")
+    text_tokens: Final = sum(detail["tokenCount"] for detail in details) - audio_tokens - image_tokens - video_tokens
 
     return Usage(
         prompt_tokens=prompt_tokens,

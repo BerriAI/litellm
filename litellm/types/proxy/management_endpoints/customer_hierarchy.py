@@ -4,7 +4,16 @@ from hashlib import sha256
 from json import dumps
 from typing import Final, Literal, TypeAlias
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, NonNegativeInt, computed_field, field_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from litellm.models.budget import BudgetLimits
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
@@ -83,6 +92,16 @@ class OrganizationCreate(OrganizationFields):
     default_budget_template: str | None = Field(default=None, min_length=1)
 
 
+class OrganizationUpsert(OrganizationCreate):
+    customer_org_id: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def require_identity(self) -> "OrganizationUpsert":
+        if not self.customer_org_id and not self.alias:
+            raise ValueError("A customer org ID or alias is required for upsert")
+        return self
+
+
 class TeamPatch(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -110,6 +129,19 @@ class MemberCreate(MemberPatch):
     customer_member_id: str | None = None
     parent_org_id: str | None = Field(default=None, description="Must match the parent teams' organization when set")
     parent_team_ids: tuple[str, ...] = Field(min_length=1, description="Teams the member belongs to, first is default")
+
+
+class MemberUpsert(MemberPatch):
+    customer_member_id: str = Field(min_length=1)
+    customer_org_id: str | None = None
+    customer_org_alias: str | None = None
+    parent_team_id: str | None = None
+
+    @model_validator(mode="after")
+    def require_customer_org(self) -> "MemberUpsert":
+        if not self.customer_org_id and not self.customer_org_alias:
+            raise ValueError("A customer org ID or alias is required for customer member upsert")
+        return self
 
 
 class AuditFields(BaseModel):
@@ -165,6 +197,14 @@ class CustomerMember(AuditFields):
     budget_override: Budget | None = None
     budget_override_expires_at: datetime | None = None
     effective_budget: Budget
+
+
+class OrganizationUpsertResponse(Organization):
+    created: bool
+
+
+class MemberUpsertResponse(CustomerMember):
+    created: bool
 
 
 class BudgetIncreaseRequestCreate(BaseModel):
