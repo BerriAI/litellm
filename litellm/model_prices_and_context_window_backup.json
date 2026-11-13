@@ -9148,11 +9148,7 @@
         "cache_creation_input_token_cost_above_272k_tokens_flex": 1.25e-05,
         "cache_read_input_token_cost_above_272k_tokens_flex": 1e-06,
         "input_cost_per_token_above_272k_tokens_flex": 1e-05,
-        "output_cost_per_token_above_272k_tokens_flex": 3.75e-05,
-        "input_cost_per_token_flex": 5e-06,
-        "output_cost_per_token_flex": 2.5e-05,
-        "cache_read_input_token_cost_flex": 5e-07,
-        "cache_creation_input_token_cost_flex": 6.25e-06
+        "output_cost_per_token_above_272k_tokens_flex": 3.75e-05
     },
     "azure/gpt-astra-latest": {
         "alias_of": "azure/gpt-6-astra"
@@ -9251,15 +9247,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true,
-        "cache_creation_input_token_cost_above_272k_tokens_flex": 1.25e-07,
-        "cache_creation_input_token_cost_flex": 6.25e-08,
-        "cache_read_input_token_cost_above_272k_tokens_flex": 1e-08,
-        "cache_read_input_token_cost_flex": 5e-09,
-        "input_cost_per_token_above_272k_tokens_flex": 1e-07,
-        "input_cost_per_token_flex": 5e-08,
-        "output_cost_per_token_above_272k_tokens_flex": 3.75e-07,
-        "output_cost_per_token_flex": 2.5e-07
+        "supports_xhigh_reasoning_effort": true
     },
     "azure/gpt-luna-latest": {
         "alias_of": "azure/gpt-6-luna"
@@ -51478,7 +51466,7 @@
         "input_cost_per_token_priority": 1.085e-06,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 163840,
-        "max_output_tokens": 163840,
+        "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 1.85e-06,
         "output_cost_per_token_batches": 9.25e-07,
@@ -51498,7 +51486,7 @@
         "input_cost_per_token_flex": 3.7e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 163840,
-        "max_output_tokens": 163840,
+        "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 2.22e-06,
         "output_cost_per_token_flex": 1.11e-06,
@@ -78119,7 +78107,8 @@
         "output_cost_per_token": 2.75e-06,
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-5-sonic.md",
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_function_calling": true
     },
     "azure/model-router": {
         "comment": "The flat $0.14 per M input tokens is the router's own fee, the routed model is priced on top of it",
