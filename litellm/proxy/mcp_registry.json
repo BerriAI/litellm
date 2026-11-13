@@ -281,6 +281,19 @@
       "env_vars": []
     },
     {
+      "name": "perplexity",
+      "title": "Perplexity",
+      "description": "Web search, cited answers, and deep research via the Perplexity API",
+      "icon_url": "/ui/assets/logos/perplexity.png",
+      "category": "Search",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/ai.perplexity%2Fmcp-server",
+      "transport": "http",
+      "url": "https://api.perplexity.ai/mcp",
+      "env_vars": [
+        {"name": "PERPLEXITY_API_KEY", "description": "Perplexity API Key", "secret": true}
+      ]
+    },
+    {
       "name": "tavily",
       "title": "Tavily",
       "description": "AI-optimized search engine for research and retrieval",
