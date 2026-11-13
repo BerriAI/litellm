@@ -2,6 +2,7 @@ mod callback;
 mod contract;
 mod field;
 mod hook;
+mod host;
 mod input;
 mod manifest;
 mod payload;
@@ -12,6 +13,9 @@ mod verdict;
 pub use callback::{Callback, CallbackError, HookOutput};
 pub use field::{BY_REFERENCE, DERIVED_ONLY, Field, FieldSet, FieldTier, TypedField, typed};
 pub use hook::{Hook, OutcomeKind};
+pub use host::{
+    Host, HostCall, HostCallError, HostException, HostFault, HostReply, HostRequest, Hosted, hosted,
+};
 pub use input::{
     CallFacts, CallIds, CallKind, CallTarget, CallTiming, FieldError, FieldValues, HookInput,
     RequestState,

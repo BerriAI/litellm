@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 futures-util.workspace = true
 litellm-callbacks.workspace = true
+litellm-coroutine.workspace = true
 litellm-host-python.workspace = true
 
 pyo3.workspace = true

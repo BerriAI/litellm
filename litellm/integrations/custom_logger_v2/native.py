@@ -2,7 +2,7 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict
 from types import MappingProxyType
-from typing import Annotated, ClassVar, Final, Literal, Protocol, TypeAlias
+from typing import Annotated, ClassVar, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Discriminator, TypeAdapter
 
@@ -20,6 +20,7 @@ from litellm.integrations.custom_logger_v2.hooks import HOOK_SPECS
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2, on
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 from litellm.integrations.custom_logger_v2.selection import Selection
+from litellm.rust_bridge.execution import Execution, drive
 from litellm.types.integrations.custom_logger_v2 import Strict
 
 
@@ -31,6 +32,17 @@ class NativeHandle(Protocol):
     def handle(
         self, hook: str, fields: Mapping[str, object], call: Mapping[str, object] | None, state: object, /
     ) -> Awaitable[object]: ...
+
+
+@runtime_checkable
+class HostedNative(Protocol):
+    def start(
+        self, hook: str, fields: Mapping[str, object], call: Mapping[str, object] | None, state: object, host: object, /
+    ) -> Execution: ...
+
+
+def _streamless(execution: Execution, head: object) -> object:
+    raise RuntimeError("a native callback cannot open a stream")
 
 
 class _Wire(BaseModel):
@@ -167,9 +179,12 @@ NO_PROJECTIONS: Final[Mapping[Field, Projection]] = MappingProxyType({})
 
 
 class NativeLogger(CustomLoggerV2):
-    def __init__(self, native: NativeHandle, projections: Mapping[Field, Projection] = NO_PROJECTIONS) -> None:
+    def __init__(
+        self, native: NativeHandle, projections: Mapping[Field, Projection] = NO_PROJECTIONS, host: object = None
+    ) -> None:
         self.native: Final = native
         self.projections: Final = projections
+        self.host: Final = host
 
     async def run_native(
         self, hook: Hook, reads: frozenset[Field], view: object, ctx: CallContext[object]
@@ -181,7 +196,16 @@ class NativeLogger(CustomLoggerV2):
         }
         call: Final = None if ctx.call is None else asdict(ctx.call)
         state: Final = ctx.state.handle if isinstance(ctx.state, NativeState) else None
-        return verdict(await self.native.handle(hook.value, fields, call, state))
+        return verdict(await self._handled(hook, fields, call, state))
+
+    def _handled(
+        self, hook: Hook, fields: Mapping[str, object], call: Mapping[str, object] | None, state: object
+    ) -> Awaitable[object]:
+        if self.host is None:
+            return self.native.handle(hook.value, fields, call, state)
+        if not isinstance(self.native, HostedNative):
+            raise TypeError(f"{type(self.native).__name__} cannot serve host calls")
+        return drive(self.native.start(hook.value, fields, call, state, self.host), _streamless)
 
 
 def _handler(
@@ -227,10 +251,12 @@ def _namespace(native: NativeHandle, manifest: WireManifest) -> dict[str, object
     }
 
 
-def native_logger(native: NativeHandle, projections: Mapping[Field, Projection] = NO_PROJECTIONS) -> NativeLogger:
+def native_logger(
+    native: NativeHandle, projections: Mapping[Field, Projection] = NO_PROJECTIONS, host: object = None
+) -> NativeLogger:
     manifest: Final = WireManifest.model_validate_json(native.manifest())
     cls: Final = type(manifest.selection.name, (NativeLogger,), _namespace(native, manifest))
-    return cls(native, projections)
+    return cls(native, projections, host)
 
 
 def contract_table() -> Mapping[str, object]:
@@ -257,6 +283,7 @@ def contract_table() -> Mapping[str, object]:
 
 __all__ = [
     "ABORT_ERRORS",
+    "HostedNative",
     "NativeHandle",
     "NativeLogger",
     "NativeState",

@@ -2,9 +2,9 @@ use std::{any::Any, panic::AssertUnwindSafe, sync::Arc};
 
 use futures_util::FutureExt;
 use litellm_callbacks::{
-    CallFacts, Callback, Field, FieldValues, Hook, HookInput, ManifestError, RequestState,
+    CallFacts, Callback, Field, FieldValues, Hook, HookInput, ManifestError, RequestState, Verdict,
 };
-use litellm_host_python::{from_py, json_from_py, json_to_py, run_async_value};
+use litellm_host_python::{Execution, from_py, json_from_py, json_to_py, run_async_value};
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
@@ -12,6 +12,7 @@ use pyo3::{
 };
 use serde_json::Value;
 
+mod hosted;
 pub mod payload;
 mod pyjson;
 
@@ -61,6 +62,16 @@ impl<'py> IntoPyObject<'py> for Jsonized {
     fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
         json_to_py(py, &self.0)
     }
+}
+
+fn verdict_object(py: Python<'_>, verdict: Option<Verdict>) -> PyResult<Py<PyAny>> {
+    let verdict = serde_json::to_value(verdict)
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    json_to_py(py, &verdict).map(Bound::unbind)
+}
+
+fn execution_steps(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
+    py.import("litellm.rust_bridge.execution")
 }
 
 fn panic_error(payload: Box<dyn Any + Send>) -> PyErr {
@@ -113,11 +124,31 @@ impl NativeCallback {
             )
             .await
             .map_err(panic_error)?;
-            let verdict = handled.map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            let verdict = handled.map_err(hosted::callback_error)?;
             serde_json::to_value(verdict)
                 .map(Jsonized)
                 .map_err(|error| PyRuntimeError::new_err(error.to_string()))
         })
+    }
+
+    #[pyo3(signature = (hook, fields, call, state, host, /))]
+    fn start<'py>(
+        &self,
+        py: Python<'py>,
+        hook: &str,
+        fields: &Bound<'py, PyDict>,
+        call: Option<&Bound<'py, PyAny>>,
+        state: Option<PyRef<'py, NativeRequestState>>,
+        host: Py<PyAny>,
+    ) -> PyResult<Execution> {
+        let input = contained(|| self.input(hook, fields, call, state))?;
+        let render_loop = matches!(input.fields.payload(), Ok(Some(_)))
+            .then(|| payload::running_loop(py))
+            .flatten();
+        Ok(Execution::new(
+            hosted::HostedExecution::new(Arc::clone(&self.callback), input, render_loop, host),
+            execution_steps,
+        ))
     }
 }
 
