@@ -3765,7 +3765,9 @@ async def customer_accounting_counters(
     try:
         scopes: Final = await get_customer_scopes_for_accounting(ids, prisma_client, user_api_key_cache)
     except Exception:
-        verbose_proxy_logger.exception("Unable to load customer budget windows for spend accounting")
+        logging.getLogger(verbose_proxy_logger.name).exception(
+            "Unable to load customer budget windows for spend accounting"
+        )
         return ()
     now: Final = datetime.now(timezone.utc)
     return tuple(

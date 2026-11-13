@@ -5,11 +5,12 @@ from collections.abc import Set as AbstractSet
 from datetime import datetime
 from functools import wraps
 from types import MappingProxyType
-from typing import Any, Final, LiteralString, ParamSpec, Protocol, TypeVar
+from typing import Any, Final, ParamSpec, Protocol, TypeVar
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from typing_extensions import LiteralString
 
 import litellm
 from litellm._internal_context import with_service_target
