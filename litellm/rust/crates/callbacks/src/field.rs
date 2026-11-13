@@ -62,16 +62,16 @@ macro_rules! fields {
 
 fields! {
     Model = 0, SmallRecord, std::string::String;
-    KeyIdentity = 1, SmallRecord, serde_json::Value;
-    Deployment = 2, SmallRecord, serde_json::Value;
+    KeyIdentity = 1, SmallRecord, crate::record::KeyIdentity;
+    Deployment = 2, SmallRecord, crate::record::Deployment;
     CandidateDeployments = 3, SmallRecord, serde_json::Value;
-    RequestTags = 4, SmallRecord, serde_json::Value;
+    RequestTags = 4, SmallRecord, std::vec::Vec<std::string::String>;
     DynamicParams = 5, SmallRecord, serde_json::Value;
-    GuardrailInfo = 6, SmallRecord, serde_json::Value;
-    Outcome = 7, SmallRecord, serde_json::Value;
+    GuardrailInfo = 6, SmallRecord, std::vec::Vec<crate::record::GuardrailEntry>;
+    Outcome = 7, SmallRecord, crate::record::Outcome;
     Error = 8, SmallRecord, serde_json::Value;
-    Usage = 9, SmallRecord, serde_json::Value;
-    Cost = 10, SmallRecord, serde_json::Value;
+    Usage = 9, SmallRecord, crate::record::Usage;
+    Cost = 10, SmallRecord, crate::record::Cost;
     Metadata = 11, Content, serde_json::Value;
     Messages = 12, Content, serde_json::Value;
     Input = 13, Content, serde_json::Value;
@@ -91,13 +91,54 @@ fields! {
     StandardLoggingPayload = 27, Compatibility, serde_json::Value;
     DeprecatedKwargs = 28, Compatibility, serde_json::Value;
     DeprecatedResponseObj = 29, Compatibility, serde_json::Value;
+    KeyLimits = 30, SmallRecord, crate::record::KeyLimits;
+    BudgetPlan = 31, SmallRecord, crate::record::BudgetPlan;
+    BudgetReservation = 32, SmallRecord, crate::record::BudgetReservation;
+    RateLimitStatuses = 33, SmallRecord, crate::record::RateLimitStatuses;
+    OutputCap = 34, SmallRecord, crate::record::OutputCap;
+    AttemptTiming = 35, SmallRecord, crate::record::AttemptTiming;
+    RateLimitState = 36, SmallRecord, crate::record::RateLimitState;
+    LoggedRequest = 37, SmallRecord, crate::record::LoggedRequest;
+    McpToolCall = 38, SmallRecord, crate::record::McpToolCall;
+    LogId = 39, SmallRecord, std::string::String;
+    ColdStorageObjectKey = 40, SmallRecord, std::string::String;
+    StandardLoggingPayloadRef = 41, Compatibility, u64;
 }
 
 impl Field {
     pub const fn bit(self) -> u8 {
         self as u8
     }
+
+    pub const fn derived_only(self) -> bool {
+        DERIVED_ONLY.contains(self)
+    }
+
+    pub const fn by_reference(self) -> bool {
+        BY_REFERENCE.contains(self)
+    }
 }
+
+pub const DERIVED_ONLY: FieldSet = FieldSet::of(&[
+    Field::KeyIdentity,
+    Field::Deployment,
+    Field::RequestTags,
+    Field::Outcome,
+    Field::Usage,
+    Field::Cost,
+    Field::KeyLimits,
+    Field::BudgetPlan,
+    Field::OutputCap,
+    Field::AttemptTiming,
+    Field::RateLimitState,
+    Field::LoggedRequest,
+    Field::McpToolCall,
+    Field::LogId,
+    Field::ColdStorageObjectKey,
+    Field::StandardLoggingPayloadRef,
+]);
+
+pub const BY_REFERENCE: FieldSet = FieldSet::of(&[Field::StandardLoggingPayloadRef]);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(from = "Vec<Field>", into = "Vec<Field>")]
@@ -126,6 +167,10 @@ impl FieldSet {
 
     pub const fn is_empty(self) -> bool {
         self.0 == 0
+    }
+
+    pub const fn intersection(self, other: Self) -> Self {
+        Self(self.0 & other.0)
     }
 
     pub const fn is_subset(self, other: Self) -> bool {
@@ -180,7 +225,9 @@ mod tests {
     #[rstest]
     #[case::first(Field::Model, 0, "model")]
     #[case::wire(Field::ProviderRequestBody, 24, "provider_request_body")]
-    #[case::last(Field::DeprecatedResponseObj, 29, "deprecated_response_obj")]
+    #[case::compatibility(Field::DeprecatedResponseObj, 29, "deprecated_response_obj")]
+    #[case::typed(Field::KeyLimits, 30, "key_limits")]
+    #[case::last(Field::StandardLoggingPayloadRef, 41, "standard_logging_payload_ref")]
     fn a_field_keeps_its_bit_and_its_snake_case_name(
         #[case] field: Field,
         #[case] bit: u8,
@@ -203,6 +250,23 @@ mod tests {
             set
         );
         assert_eq!(set.bits(), 0b10_0000_0001);
+    }
+
+    #[rstest]
+    fn no_hook_writes_a_derived_only_field() {
+        for hook in <crate::Hook as strum::VariantArray>::VARIANTS {
+            assert!(
+                hook.writable().intersection(DERIVED_ONLY).is_empty(),
+                "{hook:?}"
+            );
+        }
+    }
+
+    #[rstest]
+    fn a_by_reference_field_is_derived_only() {
+        assert!(BY_REFERENCE.is_subset(DERIVED_ONLY));
+        assert!(Field::StandardLoggingPayloadRef.by_reference());
+        assert!(!Field::StandardLoggingPayload.by_reference());
     }
 
     #[rstest]

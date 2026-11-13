@@ -186,6 +186,7 @@ async def test_a_native_logger_runs_at_its_position_between_two_legacy_loggers()
         "trace_id": None,
         "session_id": None,
         "parent_call_id": None,
+        "connection_id": None,
     }
 
 

@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{field::FieldSet, hook::Hook};
+use crate::{
+    field::{DERIVED_ONLY, FieldSet},
+    hook::Hook,
+};
 
 #[derive(
     Clone,
@@ -98,6 +101,10 @@ impl Subscription {
         if !self.hook.subscribable() {
             return Some(SubscriptionProblem::NotSubscribable);
         }
+        let derived = self.writes.intersection(DERIVED_ONLY);
+        if !derived.is_empty() {
+            return Some(SubscriptionProblem::DerivedWrite(derived));
+        }
         let forbidden = self.writes.difference(self.hook.writable());
         if !forbidden.is_empty() {
             return Some(SubscriptionProblem::Writes(forbidden));
@@ -126,6 +133,8 @@ pub struct Manifest {
 pub enum SubscriptionProblem {
     #[error("this hook point has no V2 subscription support yet")]
     NotSubscribable,
+    #[error("writes {0:?}, which are derived from the hook's arguments and never writable")]
+    DerivedWrite(FieldSet),
     #[error("writes {0:?}, which this hook point cannot apply")]
     Writes(FieldSet),
     #[error("may_abort is set, but this hook point allows no outcome")]
@@ -222,6 +231,12 @@ mod tests {
     #[case::abort_on_pre_call(Subscription { may_abort: true, ..Subscription::on(Hook::PreCall) })]
     #[case::read_off_path(Subscription { reads: FieldSet::of(&[Field::Usage]), ..Subscription::on(Hook::AttemptEnded) })]
     #[case::awaited_reader(Subscription { awaited: true, ..Subscription::on(Hook::PostCallSuccess) })]
+    #[case::reservation_in_place(Subscription {
+        reads: FieldSet::of(&[Field::BudgetPlan, Field::BudgetReservation]),
+        writes: FieldSet::of(&[Field::BudgetReservation]),
+        may_abort: true,
+        ..Subscription::on(Hook::PreCall)
+    })]
     #[case::merge_headers(Subscription {
         writes: FieldSet::of(&[Field::ResponseHeaders]),
         ..Subscription::on(Hook::ResponseHeaders)
@@ -236,8 +251,16 @@ mod tests {
         SubscriptionProblem::NotSubscribable
     )]
     #[case::write_elsewhere(
-        Subscription { writes: FieldSet::of(&[Field::Usage]), ..Subscription::on(Hook::PreCall) },
-        SubscriptionProblem::Writes(FieldSet::of(&[Field::Usage]))
+        Subscription { writes: FieldSet::of(&[Field::Response]), ..Subscription::on(Hook::PreCall) },
+        SubscriptionProblem::Writes(FieldSet::of(&[Field::Response]))
+    )]
+    #[case::derived_write(
+        Subscription { writes: FieldSet::of(&[Field::KeyIdentity, Field::Model]), ..Subscription::on(Hook::PreCall) },
+        SubscriptionProblem::DerivedWrite(FieldSet::of(&[Field::KeyIdentity]))
+    )]
+    #[case::derived_write_where_nothing_is_writable(
+        Subscription { writes: FieldSet::of(&[Field::Usage]), ..Subscription::on(Hook::AttemptEnded) },
+        SubscriptionProblem::DerivedWrite(FieldSet::of(&[Field::Usage]))
     )]
     #[case::abort_off_path(
         Subscription { may_abort: true, ..Subscription::on(Hook::AttemptEnded) },

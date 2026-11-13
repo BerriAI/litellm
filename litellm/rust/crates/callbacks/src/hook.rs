@@ -99,6 +99,8 @@ impl Hook {
                 Field::Tools,
                 Field::Model,
                 Field::Input,
+                Field::BudgetReservation,
+                Field::RateLimitStatuses,
             ]),
             Self::PreDeploymentCall => {
                 FieldSet::of(&[Field::ProviderRequestBody, Field::RequestHeaders])

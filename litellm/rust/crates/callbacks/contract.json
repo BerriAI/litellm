@@ -47,12 +47,14 @@
       "request_path": true,
       "subscribable": true,
       "writes": [
+        "budget_reservation",
         "guardrail_info",
         "input",
         "messages",
         "metadata",
         "model",
         "optional_params",
+        "rate_limit_statuses",
         "request_headers",
         "tools"
       ],
@@ -394,6 +396,66 @@
       "name": "deprecated_response_obj",
       "bit": 29,
       "tier": "compatibility"
+    },
+    {
+      "name": "key_limits",
+      "bit": 30,
+      "tier": "small_record"
+    },
+    {
+      "name": "budget_plan",
+      "bit": 31,
+      "tier": "small_record"
+    },
+    {
+      "name": "budget_reservation",
+      "bit": 32,
+      "tier": "small_record"
+    },
+    {
+      "name": "rate_limit_statuses",
+      "bit": 33,
+      "tier": "small_record"
+    },
+    {
+      "name": "output_cap",
+      "bit": 34,
+      "tier": "small_record"
+    },
+    {
+      "name": "attempt_timing",
+      "bit": 35,
+      "tier": "small_record"
+    },
+    {
+      "name": "rate_limit_state",
+      "bit": 36,
+      "tier": "small_record"
+    },
+    {
+      "name": "logged_request",
+      "bit": 37,
+      "tier": "small_record"
+    },
+    {
+      "name": "mcp_tool_call",
+      "bit": 38,
+      "tier": "small_record"
+    },
+    {
+      "name": "log_id",
+      "bit": 39,
+      "tier": "small_record"
+    },
+    {
+      "name": "cold_storage_object_key",
+      "bit": 40,
+      "tier": "small_record"
+    },
+    {
+      "name": "standard_logging_payload_ref",
+      "bit": 41,
+      "tier": "compatibility"
     }
   ],
   "tiers": [
@@ -413,6 +475,27 @@
       "name": "compatibility",
       "rank": 4
     }
+  ],
+  "derived_only": [
+    "attempt_timing",
+    "budget_plan",
+    "cold_storage_object_key",
+    "cost",
+    "deployment",
+    "key_identity",
+    "key_limits",
+    "log_id",
+    "logged_request",
+    "mcp_tool_call",
+    "outcome",
+    "output_cap",
+    "rate_limit_state",
+    "request_tags",
+    "standard_logging_payload_ref",
+    "usage"
+  ],
+  "by_reference": [
+    "standard_logging_payload_ref"
   ],
   "activations": [
     "required",

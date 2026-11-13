@@ -4,10 +4,12 @@ mod field;
 mod hook;
 mod input;
 mod manifest;
+mod payload;
+mod record;
 mod verdict;
 
 pub use callback::{Callback, CallbackError, HookOutput};
-pub use field::{Field, FieldSet, FieldTier, TypedField, typed};
+pub use field::{BY_REFERENCE, DERIVED_ONLY, Field, FieldSet, FieldTier, TypedField, typed};
 pub use hook::{Hook, OutcomeKind};
 pub use input::{
     CallFacts, CallIds, CallKind, CallTarget, CallTiming, FieldError, FieldValues, HookInput,
@@ -15,5 +17,12 @@ pub use input::{
 };
 pub use manifest::{
     Activation, Manifest, ManifestError, OptOutBy, Selection, Subscription, SubscriptionProblem,
+};
+pub use payload::{PayloadHost, PayloadRef, RenderOptions, Rendered, render_all};
+pub use record::{
+    AttemptTiming, BudgetPlan, BudgetPlanCounter, BudgetReservation, Cost, Deployment,
+    EstimatedOutputTokens, GuardrailEntry, KeyIdentity, KeyLimits, LoggedRequest, McpToolCall,
+    ModelInfo, ModelPreference, Moment, Outcome, OutputCap, RateLimitState, RateLimitStatus,
+    RateLimitStatuses, ReservationEntry, Usage, UsageRecord, ZeroCost,
 };
 pub use verdict::{Abort, AbortError, Patch, PatchOp, Verdict};

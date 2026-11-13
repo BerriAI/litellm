@@ -3,7 +3,7 @@ mod tests {
     use serde_json::{Value, json};
     use strum::VariantArray;
 
-    use crate::{Activation, Field, FieldTier, Hook, OptOutBy};
+    use crate::{Activation, BY_REFERENCE, DERIVED_ONLY, Field, FieldTier, Hook, OptOutBy};
 
     const CONTRACT: &str = include_str!("../contract.json");
 
@@ -38,6 +38,8 @@ mod tests {
                 "name": name(tier),
                 "rank": *tier as u8,
             })).collect::<Vec<_>>(),
+            "derived_only": sorted_names(DERIVED_ONLY.iter()),
+            "by_reference": sorted_names(BY_REFERENCE.iter()),
             "activations": Activation::VARIANTS.iter().map(name).collect::<Vec<_>>(),
             "opt_out_by": OptOutBy::VARIANTS.iter().map(name).collect::<Vec<_>>(),
         })

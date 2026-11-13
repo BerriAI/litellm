@@ -7,7 +7,15 @@ from typing import Annotated, ClassVar, Final, Literal, Protocol, TypeAlias
 from pydantic import BaseModel, ConfigDict, Discriminator, TypeAdapter
 
 from litellm.integrations.custom_logger_v2.call import CallContext
-from litellm.integrations.custom_logger_v2.enums import Activation, Field, FieldTier, Hook, OptOutBy
+from litellm.integrations.custom_logger_v2.enums import (
+    BY_REFERENCE,
+    DERIVED_ONLY,
+    Activation,
+    Field,
+    FieldTier,
+    Hook,
+    OptOutBy,
+)
 from litellm.integrations.custom_logger_v2.hooks import HOOK_SPECS
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2, on
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
@@ -233,6 +241,8 @@ def contract_table() -> Mapping[str, object]:
         ],
         "fields": [{"name": field.value, "bit": field.bit, "tier": field.tier.name} for field in Field],
         "tiers": [{"name": tier.name, "rank": tier.value} for tier in FieldTier],
+        "derived_only": sorted(field.value for field in DERIVED_ONLY),
+        "by_reference": sorted(field.value for field in BY_REFERENCE),
         "activations": [activation.value for activation in Activation],
         "opt_out_by": [scope.value for scope in OptOutBy],
     }
