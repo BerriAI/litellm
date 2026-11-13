@@ -54,6 +54,9 @@ class ErrorCode(str, Enum):
     BUDGET_REQUIRED = "budget_required"
     INCREASE_NOT_ALLOWED = "increase_not_allowed"
     REQUEST_NOT_PENDING = "request_not_pending"
+    REQUEST_ALREADY_PENDING = "request_already_pending"
+    EXPIRY_IN_PAST = "expiry_in_past"
+    KEY_NOT_IN_ORG = "key_not_in_org"
 
 
 @dataclass(frozen=True, slots=True)

@@ -65,9 +65,9 @@ async def test_annual_window_reset_waits_for_the_saved_instant(reset_at: str, no
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("today", ["2028-03-01", "2029-03-01"])
-async def test_annual_reset_persists_the_same_calendar_start_as_admission(
+async def test_annual_reset_persists_the_same_calendar_start_as_admission(  # test-quality-ok: the SQL write is the reset job's observable persistence contract
     today: str,
-) -> None:  # test-quality-ok: the SQL write is the reset job's observable persistence contract
+) -> None:
     client: Final = MagicMock(spec=PrismaClient)
     client.db = MagicMock()
     client.db.execute_raw = AsyncMock(return_value=1)

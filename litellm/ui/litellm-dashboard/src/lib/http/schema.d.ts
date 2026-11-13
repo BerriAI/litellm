@@ -29610,8 +29610,12 @@ export interface components {
         BudgetIncreaseRequestCreate: {
             /** Customer Member Id */
             customer_member_id: string;
-            /** Expires At */
-            expires_at?: string | null;
+            /**
+             * Expires At
+             * Format: date-time
+             * @description When the granted cap ends; a temporary increase always has one
+             */
+            expires_at: string;
             /** Reason */
             reason?: string | null;
             /** Requested Max Budget */

@@ -1,11 +1,11 @@
 """Temporary budget increases for paused customer members.
 
-Same request and approval shape as MCP server and skill submissions: anyone with a key files a request that waits
+Same request and approval shape as MCP server and skill submissions: a key acting for the member files a request that waits
 in ``pending_review``, a proxy admin approves or rejects it, and an approval lands as the member's budget override.
 """
 
 from datetime import datetime, timezone
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final, Literal, TypeAlias
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -42,10 +42,10 @@ router: Final = APIRouter(
     prefix=f"{MANAGEMENT_V1_PREFIX}/customer_budget_increase_requests", tags=["customer management"]
 )
 
-Hierarchy = Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)]
-Caller = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
-Admin = Annotated[str, Depends(customer_actor)]
-Cache = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
+Hierarchy: TypeAlias = Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)]
+Caller: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+Admin: TypeAlias = Annotated[str, Depends(customer_actor)]
+Cache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
 
 _REQUEST: Final = TypeAdapter(BudgetIncreaseRequest)
 _REQUESTS: Final = TypeAdapter(tuple[BudgetIncreaseRequest, ...])
@@ -59,10 +59,34 @@ def _allows_increase(member: CustomerMember) -> bool:
     return member.effective_budget.cap_policy == "pause_allow_increase"
 
 
-def _granted_override(member: CustomerMember, request: BudgetIncreaseRequest) -> Budget:
-    """The approved amount replaces only the member's cap, keeping the rest of an existing override."""
-    current: Final = member.budget_override if member.budget_override is not None else Budget()
-    return current.model_copy(update={"max_budget": request.requested_max_budget})
+def _active_override(member: CustomerMember, now: datetime) -> tuple[Budget, datetime | None]:
+    expires_at: Final = member.budget_override_expires_at
+    if member.budget_override is None or (expires_at is not None and expires_at <= now):
+        return Budget(), None
+    return member.budget_override, expires_at
+
+
+def _grant(member: CustomerMember, request: BudgetIncreaseRequest, now: datetime) -> MemberPatch:
+    """The approved cap rides on the member's active override and ends no later than that override already did,
+    so model and rate grants are never renewed or revived by a budget approval."""
+    current, current_expiry = _active_override(member, now)
+    requested_expiry: Final = request.expires_at if request.expires_at is not None else current_expiry
+    expiry: Final = (
+        requested_expiry
+        if current_expiry is None or requested_expiry is None
+        else min(current_expiry, requested_expiry)
+    )
+    return MemberPatch(
+        budget_override=Budget.model_validate({**current.model_dump(), "max_budget": request.requested_max_budget}),
+        budget_override_expires_at=expiry,
+    )
+
+
+def _check_key_scope(caller: UserAPIKeyAuth, member: CustomerMember) -> None:
+    """A key whose metadata pins ``customer_org_id`` may only file for members of that organization."""
+    key_customer_org_id: Final = (caller.metadata or {}).get("customer_org_id")
+    if key_customer_org_id is not None and key_customer_org_id != member.parent_org_id:
+        resolve(Failure(ErrorCode.KEY_NOT_IN_ORG))
 
 
 @router.post("", response_model=BudgetIncreaseRequest, status_code=201)
@@ -72,9 +96,16 @@ async def request_budget_increase(
 ) -> BudgetIncreaseRequest:
     """File a temporary increase for a member whose budget is set to pause_allow_increase. Waits for an admin."""
     member: Final = resolve(await hierarchy.get_member(data.customer_member_id))
+    _check_key_scope(caller, member)
     if not _allows_increase(member):
         resolve(Failure(ErrorCode.INCREASE_NOT_ALLOWED))
-    row: Final = await _requests_table(hierarchy).create(
+    now: Final = hierarchy.clock()
+    if data.expires_at <= now:
+        resolve(Failure(ErrorCode.EXPIRY_IN_PAST))
+    table: Final = _requests_table(hierarchy)
+    if await table.count(where={"customer_member_id": data.customer_member_id, "status": "pending_review"}) > 0:
+        resolve(Failure(ErrorCode.REQUEST_ALREADY_PENDING))
+    row: Final = await table.create(
         data={
             "request_id": str(uuid4()),
             "customer_member_id": data.customer_member_id,
@@ -82,8 +113,8 @@ async def request_budget_increase(
             "expires_at": data.expires_at,
             "reason": data.reason,
             "status": "pending_review",
-            "submitted_by": caller.user_id or caller.api_key or "unknown",
-            "submitted_at": datetime.now(timezone.utc),
+            "submitted_by": caller.user_id or caller.key_alias or "unknown",
+            "submitted_at": now,
         }
     )
     return _REQUEST.validate_python(row, from_attributes=True)
@@ -157,10 +188,9 @@ async def approve_budget_increase_request(
     """Grant the increase: the member's override takes the requested cap until the request's expiry. Proxy admins only."""
     pending: Final = await _pending(hierarchy, request_id)
     member: Final = resolve(await hierarchy.get_member(pending.customer_member_id))
-    patch: Final = MemberPatch(
-        budget_override=_granted_override(member, pending), budget_override_expires_at=pending.expires_at
+    resolve(
+        await hierarchy.update_member(pending.customer_member_id, _grant(member, pending, hierarchy.clock()), actor)
     )
-    resolve(await hierarchy.update_member(pending.customer_member_id, patch, actor))
     await forget_customer_hierarchies((pending.customer_member_id,), cache)
     return await _review(hierarchy, request_id, actor, "approved", None)
 

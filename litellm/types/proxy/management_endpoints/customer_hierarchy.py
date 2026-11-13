@@ -141,7 +141,7 @@ class BudgetIncreaseRequestCreate(BaseModel):
 
     customer_member_id: str = Field(max_length=256)
     requested_max_budget: float = Field(ge=0, allow_inf_nan=False)
-    expires_at: AwareDatetime | None = None
+    expires_at: AwareDatetime = Field(description="When the granted cap ends; a temporary increase always has one")
     reason: str | None = Field(default=None, max_length=1000)
 
 

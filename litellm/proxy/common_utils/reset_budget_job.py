@@ -149,8 +149,8 @@ class _CustomerMemberRow(_CustomerScopedRow, Protocol):
 
 
 _RowT = TypeVar("_RowT")
-_RowT_co = TypeVar("_RowT_co", covariant=True)
-_CustomerRowT = TypeVar("_CustomerRowT", bound=_CustomerScopedRow)
+_RowT_co: Final = TypeVar("_RowT_co", covariant=True)
+_CustomerRowT: Final = TypeVar("_CustomerRowT", bound=_CustomerScopedRow)
 
 
 class CustomerScopeTable(Protocol[_RowT_co]):
@@ -1107,7 +1107,7 @@ class ResetBudgetJob:
         where: Final = _customer_due_where(cascade.budget_ids, now)
         cursor: str | None = ""  # rebind-ok: keyset cursor advances one committed page at a time
         while cursor is not None:
-            rows: tuple[_CustomerRowT, ...] = tuple(  # rebind-ok: one page per loop turn
+            rows: tuple[_CustomerRowT, ...] = tuple(
                 await self._with_db_retry(
                     lambda: table.find_many(
                         where={**where, id_field: {"gt": cursor}},
@@ -1120,8 +1120,8 @@ class ResetBudgetJob:
             )
             if not rows:
                 return
-            ids = tuple(row_id(row) for row in rows)  # rebind-ok: one page per loop turn
-            ids_by_cap = _customer_ids_by_cap(rows, ids, now)  # rebind-ok: one page per loop turn
+            ids = tuple(row_id(row) for row in rows)
+            ids_by_cap = _customer_ids_by_cap(rows, ids, now)
             await self._with_db_write_retry(
                 lambda: self._commit_customer_page(batch_table, id_field, ids_by_cap),
                 reason=f"reset_budget_write_customer_{entity}s_failure",
