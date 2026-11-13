@@ -4339,13 +4339,16 @@ async def test_create_pass_through_route_custom_body_url_target():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_non_streaming_uses_content_for_state_raw_body():
+@pytest.mark.parametrize("body_type", [bytes, bytearray])
+async def test_pass_through_request_non_streaming_uses_content_for_state_raw_body(
+    body_type: type[bytes] | type[bytearray],
+) -> None:
     """
     Bedrock SigV4 path: exact signed bytes live on request.state; upstream must receive
     content=... even if pre_call_hook mutates the parsed dict (would change json=).
     """
     # Bytes that were signed (simulated); parsed body + hook will diverge on purpose.
-    raw_signed = b'{"retrievalQuery":{"text":"signed"},"sig":"intact"}'
+    raw_signed: Final = body_type(b'{"retrievalQuery":{"text":"signed"},"sig":"intact"}')
     parsed_from_wire = {"retrievalQuery": {"text": "signed"}, "sig": "intact"}
 
     mock_request = MagicMock(spec=Request)
@@ -6084,6 +6087,85 @@ async def test_pass_through_request_non_streaming_success_unchanged():
     # ...and the success handler must still fire exactly once for a 2xx,
     # proving the status_code gate doesn't also swallow real successes.
     mock_success_handler.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_failed_byte_stream_releases_reserved_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        get_reserved_counter_keys,
+        reconcile_budget_reservation,
+        release_unbound_budget_reservation,
+        reserve_budget_for_request,
+    )
+    from litellm.redis.stores.connection import connect
+    from litellm.redis.stores.spend_counters import SpendCounterStore
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import _relay_passthrough_response_bytes
+
+    store: Final = SpendCounterStore(connect(None).spend_counters())
+    monkeypatch.setattr(proxy_server, "spend_counter_store", store)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "reserved-byte-stream",
+                "litellm_params": {
+                    "model": "openai/gpt-6.1-sol",
+                    "api_key": "test-key",
+                    "input_cost_per_token": 0.01,
+                    "output_cost_per_token": 0.01,
+                },
+            }
+        ]
+    )
+    reservation: Final = await reserve_budget_for_request(
+        request_body={
+            "model": "reserved-byte-stream",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 1,
+        },
+        route="/v1/chat/completions",
+        llm_router=router,
+        valid_token=UserAPIKeyAuth(token="reserved-byte-stream-key", max_budget=100.0, spend=0.0),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=proxy_server.user_api_key_cache,
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+    )
+    assert reservation is not None
+    counter: Final = next(iter(get_reserved_counter_keys(budget_reservation=reservation)))
+    assert store.get_local(counter) == pytest.approx(reservation["reserved_cost"])
+    started: Final = datetime(2026, 1, 1)
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="reserved-byte-stream",
+        messages=[],
+        stream=True,
+        call_type="passthrough",
+        start_time=started,
+        litellm_call_id="reserved-byte-stream",
+        function_id="reserved-byte-stream",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {"user_api_key_budget_reservation": reservation}}, optional_params={}
+    )
+    upstream: Final = httpx.Response(
+        429, content=b"quota", request=httpx.Request("GET", "https://files.invalid/stream")
+    )
+    try:
+        async for _chunk in _relay_passthrough_response_bytes(
+            response=upstream,
+            request_body={},
+            url_route=str(upstream.url),
+            start_time=started,
+            logging_obj=logging_obj,
+            custom_llm_provider=None,
+            success_handler_kwargs={},
+        ):
+            pass
+        await release_unbound_budget_reservation(reservation)
+        assert store.get_local(counter) == pytest.approx(0.0)
+    finally:
+        await reconcile_budget_reservation(reservation, actual_cost=0.0)
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,7 @@ load_dotenv()
 
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
+from functools import reduce
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,7 +20,7 @@ import pytest, litellm
 
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 import httpx
-from fastapi import Request, status
+from fastapi import HTTPException, Request, status
 from prisma import Prisma
 from litellm._service_logger import ServiceTypes
 from litellm.proxy._types import LiteLLM_OrganizationTable, UserAPIKeyAuth
@@ -27,12 +28,14 @@ from litellm.proxy.auth.auth_checks import get_org_object, get_user_object
 from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.caching.caching import DualCache
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, team_membership_reservation_cache_key
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_BudgetTable,
     LiteLLM_UserTable,
     LiteLLM_TeamTable,
+    LiteLLM_TeamMembership,
+    LiteLLM_ProjectTableCachedObj,
     Litellm_EntityType,
     LitellmUserRoles,
     ProxyException,
@@ -42,6 +45,7 @@ import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_modul
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
+    check_opaque_inference_controls,
     delete_cache_key_objects,
     is_model_cost_zero,
     virtual_key_soft_budget_check,
@@ -51,6 +55,137 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging
 from litellm.proxy.utils import CallInfo
 from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
+
+
+@pytest.mark.parametrize("container", ["mapping", "list"])
+@pytest.mark.parametrize("at_limit", [False, True])
+def test_opaque_controls_reject_unchecked_nesting(container: str, at_limit: bool) -> None:
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+    def wrap(value: object, _: int) -> object:
+        return {"metadata": value} if container == "mapping" else [value]
+
+    depth: Final = DEFAULT_MAX_RECURSE_DEPTH if at_limit else DEFAULT_MAX_RECURSE_DEPTH - 1
+    controls: Final = reduce(wrap, range(depth), "unrestricted")
+    if not at_limit:
+        assert check_opaque_inference_controls(controls) is None
+        return
+    with pytest.raises(HTTPException) as denied:
+        check_opaque_inference_controls(controls)
+    assert denied.value.status_code == 403
+    assert "nesting" in denied.value.detail
+
+
+@pytest.mark.parametrize(
+    "control", [{"models": ["restricted-model"]}, {"guardrails": ["required-guardrail"]}, {"max_budget": 0}]
+)
+def test_opaque_controls_reject_restrictions_nested_in_lists_and_mappings(control: dict[str, object]) -> None:
+    with pytest.raises(HTTPException) as denied:
+        check_opaque_inference_controls({"metadata": [{"budget": control}]})
+    assert denied.value.status_code == 403
+    assert "cannot enforce" in denied.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope,expected",
+    [("project", "model restrictions"), ("user", "model restrictions"), ("member", "model restrictions"),
+     ("missing-user", "owner"), ("missing-project", "inherited policies"), ("personal-key", "personal-key"),
+     ("member-model-budget", "model_max_budget")],
+)
+async def test_cursor_opaque_admission_rejects_inherited_model_scopes(
+    monkeypatch: pytest.MonkeyPatch, scope: str, expected: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    cache: Final = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", scope == "personal-key")
+    membership: Final = LiteLLM_TeamMembership(
+        user_id="opaque-user",
+        team_id="opaque-team",
+        litellm_budget_table=LiteLLM_BudgetTable(budget_id="opaque-budget", allowed_models=["scoped-model"]),
+    )
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id="opaque-user", team_id="opaque-team"),
+        value=membership,
+        model_type=LiteLLM_TeamMembership,
+    )
+    route: Final = "/cursor-cli/agent.v1.AgentService/RunSSE"
+    request: Final = Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""})
+    project: Final = (
+        LiteLLM_ProjectTableCachedObj(project_id="opaque-project", models=["scoped-model"])
+        if scope == "project"
+        else None
+    )
+    user: Final = LiteLLM_UserTable(
+        user_id="opaque-user", models=["scoped-model"] if scope == "user" else [],
+        teams=["restricted-owner-team"] if scope == "personal-key" else [], user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    identity: Final = UserAPIKeyAuth(
+        user_id="opaque-user" if scope in {"member", "missing-user", "personal-key"} else None,
+        project_id="missing-project" if scope == "missing-project" else None,
+        team_member_model_max_budget={"restricted-model": {"max_budget": 10}}
+        if scope == "member-model-budget"
+        else None,
+    )
+    with pytest.raises(HTTPException) as denied:
+        await common_checks(
+            request_body={},
+            team_object=LiteLLM_TeamTable(team_id="opaque-team") if scope == "member" else None,
+            user_object=None if scope == "missing-user" else user,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+            valid_token=identity,
+            request=request,
+            skip_budget_checks=True,
+            project_object=project,
+        )
+    assert denied.value.status_code == 403
+    assert expected in denied.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup_error", [False, True])
+async def test_opaque_member_budget_lookup_fails_closed_when_budget_checks_are_skipped(
+    monkeypatch: pytest.MonkeyPatch, lookup_error: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    database: Final = MagicMock()
+    database.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=None, side_effect=ConnectionError("budget unavailable") if lookup_error else None
+    )
+    cache: Final = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id="member", team_id="team"),
+        value=LiteLLM_TeamMembership(user_id="member", team_id="team"),
+        model_type=LiteLLM_TeamMembership,
+    )
+    route: Final = "/cursor-cli/agent.v1.AgentService/RunSSE"
+    with pytest.raises(HTTPException) as denied:
+        await common_checks(
+            request_body={},
+            team_object=LiteLLM_TeamTable(team_id="team", metadata={"team_member_budget_id": "member-budget"}),
+            user_object=LiteLLM_UserTable(user_id="member", user_role=LitellmUserRoles.PROXY_ADMIN),
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+            valid_token=UserAPIKeyAuth(user_id="member", team_id="team"),
+            request=Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""}),
+            skip_budget_checks=True,
+        )
+    assert denied.value.status_code == 403
+    assert "member" in denied.value.detail
 
 
 async def _run_team_trace_id_check(
