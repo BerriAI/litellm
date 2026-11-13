@@ -2791,7 +2791,7 @@ class LiteLLMCompletionResponsesConfig:
             raw_arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
         if not raw_arguments and function_call.get("type") == "custom_tool_call":
             raw_input: Final = function_call.get("input") or ""
-            raw_arguments = json.dumps({"content": raw_input}) if raw_input else ""
+            raw_arguments = json.dumps({"content": raw_input})
         raw_name: Final = function_call.get("name") or ""
         namespace: Final = function_call.get("namespace") or ""
         deferred_top_level: Final = namespace == raw_name and raw_name not in self_named_namespace_members
@@ -3995,7 +3995,7 @@ class LiteLLMCompletionResponsesConfig:
             type="function",
             function=Function(
                 name=tool_call.get("name") or "",
-                arguments=serialize_tool_call_arguments(tool_call.get("arguments")),
+                arguments=serialize_tool_call_arguments(tool_call.get("arguments"), "{}"),
             ),
         )
 

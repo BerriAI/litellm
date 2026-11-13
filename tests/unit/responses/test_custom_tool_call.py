@@ -24,6 +24,7 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
     unwrap_custom_tool_arguments,
     build_tool_call_item_kwargs,
     convert_custom_tool_to_function_tool,
+    serialize_tool_call_arguments,
     _MAX_ARGUMENTS_LEN,
 )
 
@@ -216,6 +217,15 @@ class TestCustomToolUtilities:
         """Non-custom tools are not convertible; the caller keeps them as-is."""
         assert convert_custom_tool_to_function_tool({"type": "function"}) is None
 
+    def test_serialize_tool_call_arguments_default_stays_empty_string(self):
+        """The serializer default stays "" so non-terminal call sites
+        (streaming accumulation, fallbacks) are unaffected; only terminal
+        sites pass "{}" explicitly."""
+        assert serialize_tool_call_arguments(None) == ""
+        assert serialize_tool_call_arguments("") == ""
+        assert serialize_tool_call_arguments(None, "{}") == "{}"
+        assert serialize_tool_call_arguments("", "{}") == "{}"
+
 
 class TestTransformationCustomTools:
     """Test custom tool handling in transformation logic."""
@@ -284,6 +294,43 @@ class TestTransformationCustomTools:
             assert tool_call["function"]["arguments"] == json.dumps(
                 {"content": "*** Begin Patch\n+hello\n*** End Patch"}
             )
+
+    def test_bridge_output_tool_call_empty_arguments_serialize_to_json_object(self):
+        """Responses->chat bridge output must carry valid JSON arguments.
+
+        A strict OpenAI-compatible gateway rejects assistant tool calls whose
+        arguments are "" (see issue #40369); empty/missing/None arguments
+        must serialize to "{}".
+        """
+        for arguments in ("", None, "<missing>"):
+            tool_call = {"id": "call_x", "name": "get_weather"}
+            if arguments != "<missing>":
+                tool_call["arguments"] = arguments
+            out = LiteLLMCompletionResponsesConfig._transform_responses_output_tool_call_to_chat_completion_output_tool_call(
+                tool_call
+            )
+            assert out.function.arguments == "{}"
+            assert json.loads(out.function.arguments) == {}
+
+    def test_custom_tool_call_empty_input_serializes_to_content_envelope(self):
+        """An empty custom-tool input must become {"content": ""}, not "".
+
+        Otherwise the round trip degrades: "" serializes to "{}" at the
+        bridge and unwrap_custom_tool_arguments("{}") returns the literal
+        string "{}" instead of empty content (issue #40369, second point).
+        """
+        item = {
+            "type": "custom_tool_call",
+            "call_id": "call_1",
+            "name": "apply_patch",
+            "input": "",
+        }
+        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call=item
+        )
+        arguments = messages[0]["tool_calls"][0]["function"]["arguments"]
+        assert arguments == json.dumps({"content": ""})
+        assert unwrap_custom_tool_arguments(arguments) == ""
 
     def test_function_call_input_item_with_empty_arguments_keeps_them_empty(self):
         """A plain function_call input item with empty or missing `arguments`
