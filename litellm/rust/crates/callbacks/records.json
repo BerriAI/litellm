@@ -27,7 +27,8 @@
           "member"
         ]
       }
-    ]
+    ],
+    "model_preferences_error": "text"
   },
   "deployment": {
     "rejected": [

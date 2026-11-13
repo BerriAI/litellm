@@ -173,6 +173,7 @@ class KeyIdentity(Record):
     team_priority: Scalar | None = None
     key_priority: Scalar | None = None
     model_preferences: tuple[ModelPreference, ...] | None = None
+    model_preferences_error: str | None = None
 
 
 class LoggedKeyIdentity(Record):

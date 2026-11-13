@@ -33,6 +33,7 @@ pub struct KeyIdentity {
     pub team_priority: Option<Scalar>,
     pub key_priority: Option<Scalar>,
     pub model_preferences: Option<Vec<ModelPreference>>,
+    pub model_preferences_error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

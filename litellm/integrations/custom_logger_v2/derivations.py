@@ -67,17 +67,19 @@ def _text(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _model_preferences(team_metadata: object) -> object:
+def _model_preferences(team_metadata: object) -> tuple[object, str | None]:
     raw: Final = _metadata_value(team_metadata, "model_preferences")
     if raw is None:
-        return None
+        return None, None
     from litellm.proxy.hooks.dynamic_rate_limiter_v3 import MODEL_PREFERENCES
 
     try:
         parsed: Final = MODEL_PREFERENCES.validate_python(raw)
-    except ValidationError:
-        return None
-    return tuple(ModelPreference(model=preference.model, alternates=preference.alternates) for preference in parsed)
+    except ValidationError as error:
+        return None, str(error)
+    return tuple(
+        ModelPreference(model=preference.model, alternates=preference.alternates) for preference in parsed
+    ), None
 
 
 def key_identity(args: HookArgs) -> KeyIdentity | None:
@@ -85,6 +87,7 @@ def key_identity(args: HookArgs) -> KeyIdentity | None:
     if auth is None:
         return None
     team_metadata: Final = getattr(auth, "team_metadata", None)
+    preferences, preferences_error = _model_preferences(team_metadata)
     return coerce_record(
         KeyIdentity,
         {
@@ -105,8 +108,10 @@ def key_identity(args: HookArgs) -> KeyIdentity | None:
             "invoked_agent_id": getattr(auth, "invoked_agent_id", None),
             "team_priority": _metadata_value(team_metadata, "priority"),
             "key_priority": _metadata_value(getattr(auth, "metadata", None), "priority"),
-            "model_preferences": _model_preferences(team_metadata),
+            "model_preferences": preferences,
+            "model_preferences_error": preferences_error,
         },
+        rejected=() if preferences_error is None else ("model_preferences",),
     )
 
 
