@@ -664,6 +664,7 @@ async def _get_budget_counters(
         team_object=team_object,
         user_object=user_object,
         user_api_key_cache=user_api_key_cache,
+        prisma_client=prisma_client,
     )
     if team_member_counter is not None:
         counters.append(team_member_counter)
@@ -816,7 +817,10 @@ async def _get_team_member_budget_counter(
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
     user_api_key_cache: UserApiKeyCache,
+    prisma_client: PrismaClient | None = None,
 ) -> _BudgetCounter | None:
+    from litellm.proxy.auth.auth_checks import get_team_membership
+
     if team_object is None or team_object.team_id is None or user_object is None or valid_token.user_id is None:
         return None
 
@@ -826,11 +830,20 @@ async def _get_team_member_budget_counter(
     cached_team_membership: Final = _CACHED_VALUE.validate_python(
         await user_api_key_cache.async_get_cache(key=membership_cache_key)
     )
-    team_membership: LiteLLM_TeamMembership | None = None
-    if isinstance(cached_team_membership, LiteLLM_TeamMembership):
-        team_membership = cached_team_membership
-    elif isinstance(cached_team_membership, dict):
-        team_membership = LiteLLM_TeamMembership(**cached_team_membership)
+    team_membership: Final = (
+        await get_team_membership(
+            user_id=valid_token.user_id,
+            team_id=team_object.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+        if cached_team_membership is None and prisma_client is not None
+        else cached_team_membership
+        if isinstance(cached_team_membership, LiteLLM_TeamMembership)
+        else LiteLLM_TeamMembership(**cached_team_membership)
+        if isinstance(cached_team_membership, dict)
+        else None
+    )
 
     member_budget_row: Final = team_membership.litellm_budget_table if team_membership is not None else None
     now: Final = datetime.now(timezone.utc)
