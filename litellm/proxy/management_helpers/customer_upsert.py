@@ -43,14 +43,16 @@ async def organization_by_identity(
     store: CustomerHierarchyStore, customer_org_id: str | None, alias: str | None
 ) -> Organization | Failure:
     if customer_org_id is not None:
+        await store.lock_organization(customer_org_id)
         return await store.get_organization(customer_org_id)
-    rows: Final = await store.organizations.find_many(where={"alias": alias}, take=2, include={"budget": True})
+    rows: Final = await store.organizations.find_many(where={"alias": alias}, take=2)
     if len(rows) > 1:
         return Failure(ErrorCode.ALIAS_ALREADY_EXISTS)
     if not rows:
         return Failure(ErrorCode.NOT_FOUND)
-    organizations: Final = await store.organization_responses(rows)
-    return organizations[0]
+    organization: Final = Organization.model_validate(rows[0].model_dump())
+    await store.lock_organization(organization.customer_org_id)
+    return await store.get_organization(organization.customer_org_id)
 
 
 def template_budget(template: BudgetTemplate) -> Budget:
