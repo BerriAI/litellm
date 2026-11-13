@@ -309,6 +309,17 @@ def create(
                 model=model,
                 llm_provider=custom_llm_provider,
             )
+        if extra_body and (
+            ("agent" in extra_body and extra_body["agent"] != agent) or (agent and "model" in extra_body)
+        ):
+            raise litellm.BadRequestError(
+                message=(
+                    "extra_body cannot set a different agent or add a model to an agent interaction. "
+                    "Send the agent and model as top-level fields."
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
 
         interactions_api_config: Final = get_provider_interactions_api_config(
             provider=custom_llm_provider,

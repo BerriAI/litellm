@@ -98,6 +98,45 @@ def api_key():
     return "test-api-key"
 
 
+_GEMINI_INTERACTIONS_URL: Final = "https://generativelanguage.googleapis.com/v1beta/interactions"
+_AGENT: Final = "antigravity-preview-09-2026"
+_OTHER_AGENT: Final = "deep-research-preview-04-2026"
+
+_EXTRA_BODY_SELECTOR_OVERRIDES: Final = (
+    pytest.param(
+        {"model": f"gemini/{_AGENT}", "agent": _AGENT}, {"agent": _OTHER_AGENT}, id="matching-agent-nested-other-agent"
+    ),
+    pytest.param({"agent": _AGENT}, {"agent": None}, id="agent-nested-null-agent"),
+    pytest.param({"model": "gemini/gemini-4-argon"}, {"agent": _AGENT}, id="model-nested-agent"),
+    pytest.param({"agent": _AGENT}, {"model": "gemini-4-argon"}, id="agent-nested-model"),
+    pytest.param({"agent": _AGENT}, {"model": _AGENT}, id="agent-nested-model-named-like-the-agent"),
+)
+
+_EXTRA_BODY_PASS_THROUGH: Final = (
+    pytest.param(
+        {"agent": _AGENT},
+        {"agent": _AGENT, "store": False},
+        {"agent": _AGENT, "store": False},
+        id="same-agent-repeated",
+    ),
+    pytest.param(
+        {"agent": _AGENT}, {"custom_flag": 1}, {"agent": _AGENT, "custom_flag": 1}, id="agent-unrelated-extra"
+    ),
+    pytest.param(
+        {"model": "gemini/gemini-4-argon"},
+        {"custom_flag": 1},
+        {"model": "gemini-4-argon", "custom_flag": 1},
+        id="model-unrelated-extra",
+    ),
+    pytest.param(
+        {"model": "gemini/gemini-4-argon"},
+        {"model": "gemini-4-carbon"},
+        {"model": "gemini-4-carbon"},
+        id="model-only-nested-model",
+    ),
+)
+
+
 class TestGoogleInteractionsCreate:
     @pytest.mark.usefixtures("fake_provider_credentials")
     def test_missing_model_and_agent(self, api_key):
@@ -370,6 +409,33 @@ class TestGoogleInteractionsCreate:
 
         assert not respx_mock.calls
 
+    @pytest.mark.parametrize(("target", "extra_body"), _EXTRA_BODY_SELECTOR_OVERRIDES)
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_refuses_extra_body_that_changes_the_agent_or_model_before_any_http_call(
+        self, respx_mock: MockRouter, target: Mapping[str, str], extra_body: Mapping[str, object]
+    ) -> None:
+        with pytest.raises(litellm.BadRequestError, match="extra_body"):
+            interactions.create(**target, input="Say hi in one word.", extra_body=extra_body, api_key="gemini-offline")
+
+        assert not respx_mock.calls
+
+    @pytest.mark.parametrize(("target", "extra_body", "expected_target"), _EXTRA_BODY_PASS_THROUGH)
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_sends_extra_body_that_keeps_the_agent_and_model(
+        self,
+        respx_mock: MockRouter,
+        target: Mapping[str, str],
+        extra_body: Mapping[str, object],
+        expected_target: Mapping[str, object],
+    ) -> None:
+        route: Final = respx_mock.post(_GEMINI_INTERACTIONS_URL).mock(
+            return_value=httpx.Response(200, json={"id": "interaction-extra", "status": "completed"})
+        )
+
+        interactions.create(**target, input="Say hi in one word.", extra_body=extra_body, api_key="gemini-offline")
+
+        assert json.loads(route.calls.last.request.content) == {**expected_target, "input": "Say hi in one word."}
+
     @pytest.mark.usefixtures("fake_provider_credentials")
     def test_create_rejects_agent_config_a_bridged_provider_cannot_take(self, respx_mock: MockRouter) -> None:
         route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
@@ -516,6 +582,39 @@ class TestInteractionsAcreateOffline:
     @pytest.fixture(autouse=True)
     def _httpx_only_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+
+    @pytest.mark.parametrize(("target", "extra_body"), _EXTRA_BODY_SELECTOR_OVERRIDES)
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    @pytest.mark.asyncio
+    async def test_acreate_refuses_extra_body_that_changes_the_agent_or_model_before_any_http_call(
+        self, respx_mock: MockRouter, target: Mapping[str, str], extra_body: Mapping[str, object]
+    ) -> None:
+        with pytest.raises(litellm.BadRequestError, match="extra_body"):
+            await interactions.acreate(
+                **target, input="Say hi in one word.", extra_body=extra_body, api_key="gemini-offline"
+            )
+
+        assert not respx_mock.calls
+
+    @pytest.mark.parametrize(("target", "extra_body", "expected_target"), _EXTRA_BODY_PASS_THROUGH)
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    @pytest.mark.asyncio
+    async def test_acreate_sends_extra_body_that_keeps_the_agent_and_model(
+        self,
+        respx_mock: MockRouter,
+        target: Mapping[str, str],
+        extra_body: Mapping[str, object],
+        expected_target: Mapping[str, object],
+    ) -> None:
+        route: Final = respx_mock.post(_GEMINI_INTERACTIONS_URL).mock(
+            return_value=httpx.Response(200, json={"id": "interaction-extra", "status": "completed"})
+        )
+
+        await interactions.acreate(
+            **target, input="Say hi in one word.", extra_body=extra_body, api_key="gemini-offline"
+        )
+
+        assert json.loads(route.calls.last.request.content) == {**expected_target, "input": "Say hi in one word."}
 
     @pytest.mark.usefixtures("fake_provider_credentials")
     @pytest.mark.asyncio

@@ -497,6 +497,62 @@ def test_routed_create_with_an_agent_on_another_models_deployment_is_refused_bef
     assert not google_oauth.calls
 
 
+@pytest.mark.parametrize(
+    "create",
+    (
+        pytest.param(
+            {**_deep_research_create(_VERTEX_DEEP_RESEARCH_GROUP), "extra_body": {"agent": "other-agent"}},
+            id="nested-other-agent",
+        ),
+        pytest.param(
+            {**_deep_research_create(_VERTEX_DEEP_RESEARCH_GROUP), "extra_body": {"model": "gemini-4-argon"}},
+            id="nested-model-beside-the-agent",
+        ),
+        pytest.param(
+            {
+                "model": _VERTEX_GROUP,
+                "input": "Compare grid-scale storage options.",
+                "extra_body": {"agent": _DEEP_RESEARCH_AGENT},
+            },
+            id="nested-agent-on-a-model-deployment",
+        ),
+    ),
+)
+def test_routed_create_with_extra_body_that_changes_the_agent_or_model_is_refused_before_any_upstream_call(
+    interactions_proxy: TestClient,
+    respx_mock: respx.MockRouter,
+    google_oauth: responses.RequestsMock,
+    create: Mapping[str, object],
+) -> None:
+    response: Final = interactions_proxy.post("/v1beta/interactions", json=create)
+
+    assert response.status_code == 400, response.text
+    assert "extra_body" in response.text
+    assert not respx_mock.calls
+    assert not google_oauth.calls
+
+
+def test_routed_create_with_extra_body_repeating_the_agent_sends_it_once_with_the_other_extras(
+    interactions_proxy: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    upstream: Final = _completed_deep_research(respx_mock)
+
+    response: Final = interactions_proxy.post(
+        "/v1beta/interactions",
+        json={
+            **_deep_research_create(_VERTEX_DEEP_RESEARCH_GROUP),
+            "extra_body": {"agent": _DEEP_RESEARCH_AGENT, "custom_flag": 1},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls.last.request.content) == {
+        "agent": _DEEP_RESEARCH_AGENT,
+        "input": "Compare grid-scale storage options.",
+        "custom_flag": 1,
+    }
+
+
 def test_a_key_allowed_the_agent_deployment_runs_the_agent(
     interactions_proxy: TestClient, respx_mock: respx.MockRouter
 ) -> None:
