@@ -129,6 +129,7 @@ _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
     ("typesafe", "typesafe/jev-1.13", "https://api.typesafe.ai/v1/systemone", "jev-1.13"),
     ("nace", "nace/drex-v2.0", "https://console.nace.ai/v1/systemone", "drex-v2.0"),
     ("eu_jev", "eu_jev/eu-jeff-latest", "https://eu-jev.com/v1/systemone", "eu-jeff-latest"),
+    ("bineric", "bineric/zuse-27b", "https://api.bineric.com/v1/systemone", "zuse-27b"),
     (
         "openrouter",
         "openrouter/typesafe/jev-1.13",
@@ -1817,6 +1818,49 @@ async def test_openrouter_decisions_uses_provider_reported_cost_without_cost_map
 
     assert route.called
     assert get_response_cost_from_hidden_params(response.hidden_params) == cost
+
+
+def _bineric_zuse_route(respx_mock: respx.MockRouter, usage_extra: Mapping[str, object]) -> respx.Route:
+    return respx_mock.post("https://api.bineric.com/v1/systemone").respond(
+        json={
+            "model": "zuse-27b",
+            "answers": _RESPONSE["answers"],
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, **usage_extra},
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_bineric_zuse_bills_the_cost_bineric_reports(respx_mock: respx.MockRouter) -> None:
+    route: Final = _bineric_zuse_route(respx_mock, {"cost": 2.5e-4})
+
+    response: Final = await litellm.asystemone(
+        model="bineric/zuse-27b",
+        state="I was charged twice for order 4411.",
+        questions=_QUESTIONS,
+        api_key="caller-key",
+    )
+
+    assert route.called
+    assert get_response_cost_from_hidden_params(response.hidden_params) == 2.5e-4
+
+
+@pytest.mark.asyncio
+async def test_bineric_zuse_without_a_reported_cost_is_priced_from_the_cost_map(respx_mock: respx.MockRouter) -> None:
+    route: Final = _bineric_zuse_route(respx_mock, {})
+
+    response: Final = await litellm.asystemone(
+        model="bineric/zuse-27b",
+        state="I was charged twice for order 4411.",
+        questions=_QUESTIONS,
+        api_key="caller-key",
+    )
+
+    assert route.called
+    assert get_response_cost_from_hidden_params(response.hidden_params) is None
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        _INPUT_TOKENS * litellm.model_cost["bineric/zuse-27b"]["input_cost_per_token"]
+    )
 
 
 _SAFETY_IDENTIFIER: Final = "end-user-7"

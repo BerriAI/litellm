@@ -10268,6 +10268,7 @@ class ProviderConfigManager:
             LlmProviders.AZURE,
             LlmProviders.AZURE_AI,
             LlmProviders.EU_JEV,
+            LlmProviders.BINERIC,
             LlmProviders.PARALLEL_AI,
         ):
             configs: Final = {
@@ -10276,6 +10277,7 @@ class ProviderConfigManager:
                 LlmProviders.AZURE: litellm.AzureDecisionsConfig,
                 LlmProviders.AZURE_AI: litellm.AzureAIDecisionsConfig,
                 LlmProviders.EU_JEV: litellm.EuJevDecisionsConfig,
+                LlmProviders.BINERIC: litellm.BinericDecisionsConfig,
                 LlmProviders.PARALLEL_AI: litellm.ParallelAIDecisionsConfig,
             }
             return configs[provider]()

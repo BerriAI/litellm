@@ -101702,5 +101702,453 @@
     },
     "fal_ai/fal-ai/decart/lucy-5b/image-to-video": {
         "alias_of": "fal_ai/decart/lucy-5b/image-to-video"
+    },
+    "bineric/speech-to-text": {
+        "litellm_provider": "bineric",
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "metadata": {
+            "notes": "Priced per request at $0.18 USD; token rates do not apply"
+        },
+        "mode": "chat",
+        "source": "https://api.bineric.com/v1/models"
+    },
+    "bineric/qwen-3-coder-480b": {
+        "input_cost_per_token": 4.5e-07,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.8e-06,
+        "source": "https://api.bineric.com/v1/models"
+    },
+    "bineric/lynx-30b": {
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://api.bineric.com/v1/models"
+    },
+    "bineric/borealis-2": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 16384,
+        "max_output_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true
+    },
+    "bineric/claude-haiku-4-5": {
+        "input_cost_per_token": 1.1e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 5.5e-06,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/claude-haiku-5.5": {
+        "input_cost_per_token": 1.1e-07,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 100000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 5.5e-07,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/claude-opus-4-5": {
+        "input_cost_per_token": 5.5e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/claude-opus-4-6": {
+        "input_cost_per_token": 5.5e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/claude-opus-4-7": {
+        "input_cost_per_token": 5.5e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/claude-opus-4.8": {
+        "input_cost_per_token": 5.5e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/claude-opus-5": {
+        "input_cost_per_token": 5.5e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/claude-opus-5.5": {
+        "input_cost_per_token": 4.4e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/claude-sonnet-4-6": {
+        "input_cost_per_token": 3.3e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.65e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/claude-sonnet-5": {
+        "input_cost_per_token": 2.2e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.1e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/claude-sonnet-5.5": {
+        "input_cost_per_token": 2.2e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.1e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gemini-2.5-flash": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gemini-2.5-pro": {
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gemini-3.1-pro": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gemini-3.5-flash-lite": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gpt-4o": {
+        "input_cost_per_token": 2.75e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.1e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gpt-5.1": {
+        "input_cost_per_token": 1.375e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.1e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gpt-5.2": {
+        "input_cost_per_token": 1.75e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gpt-5.4": {
+        "input_cost_per_token": 2.75e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.65e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gpt-5.5": {
+        "input_cost_per_token": 5.5e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 3.3e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gpt-5.6-luna": {
+        "input_cost_per_token": 2.2e-07,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 127998,
+        "mode": "chat",
+        "output_cost_per_token": 1.32e-06,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gpt-5.6-sol": {
+        "input_cost_per_token": 4.4e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gpt-5.6-terra": {
+        "input_cost_per_token": 2.2e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 127999,
+        "mode": "chat",
+        "output_cost_per_token": 1.32e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gpt-5-mini": {
+        "input_cost_per_token": 2.75e-07,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-06,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/meta-llama-3.3-70b": {
+        "input_cost_per_token": 7.2e-07,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 7.2e-07,
+        "source": "https://api.bineric.com/v1/models"
+    },
+    "bineric/mistral_large_24_02": {
+        "input_cost_per_token": 4.3e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 32000,
+        "max_output_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1.3e-05,
+        "source": "https://api.bineric.com/v1/models"
+    },
+    "bineric/qwen-3-235b": {
+        "input_cost_per_token": 2.2e-07,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 8.8e-07,
+        "source": "https://api.bineric.com/v1/models"
+    },
+    "bineric/gpt-image-1": {
+        "input_cost_per_token": 1e-05,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 4e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_vision": true
+    },
+    "bineric/nano-banana-2": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 6e-05,
+        "source": "https://api.bineric.com/v1/models"
+    },
+    "bineric/stability-ai": {
+        "litellm_provider": "bineric",
+        "metadata": {
+            "notes": "Priced per request at $0.08 USD; token rates do not apply"
+        },
+        "mode": "chat",
+        "source": "https://api.bineric.com/v1/models"
+    },
+    "bineric/gpt-5": {
+        "input_cost_per_token": 1.375e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.1e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/gpt-oss-120b": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "source": "https://api.bineric.com/v1/models"
+    },
+    "bineric/gpt-oss-20b": {
+        "input_cost_per_token": 7e-08,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 3e-07,
+        "source": "https://api.bineric.com/v1/models"
+    },
+    "bineric/o1": {
+        "input_cost_per_token": 1.65e-05,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 6.6e-05,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/o3-mini": {
+        "input_cost_per_token": 1.21e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 4.84e-06,
+        "source": "https://api.bineric.com/v1/models",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "bineric/deep-research": {
+        "litellm_provider": "bineric",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "metadata": {
+            "notes": "Priced per request at $0.25 USD; token rates do not apply"
+        },
+        "mode": "chat",
+        "source": "https://api.bineric.com/v1/models"
+    },
+    "bineric/sonar-web-search": {
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1e-06,
+        "source": "https://api.bineric.com/v1/models"
+    },
+    "bineric/zuse-27b": {
+        "input_cost_per_token": 7.5e-07,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 8192,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.bineric.com/v1/models",
+        "supported_endpoints": [
+            "/v1/systemone"
+        ]
+    },
+    "bineric/zuse-9b": {
+        "input_cost_per_token": 1.2e-07,
+        "litellm_provider": "bineric",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.bineric.com/v1/models",
+        "supported_endpoints": [
+            "/v1/systemone"
+        ]
     }
 }
