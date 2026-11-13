@@ -66,7 +66,7 @@ export const customerHierarchyFields = (entity: CustomerHierarchyEntity): Custom
     tpm: asText(budget?.tpm_limit),
     rpm: asText(budget?.rpm_limit),
     allowedModels: budget?.allowed_models?.join("\n") ?? "",
-    templateId: entity.kind === "member" ? entity.record.budget_template_id ?? "" : "",
+    templateId: entity.kind === "member" ? entity.record.budget_id ?? "" : "",
     overrideExpiry: entity.kind === "member" ? localDateTime(entity.record.budget_override_expires_at) : "",
   };
 };
@@ -125,7 +125,7 @@ const memberPatch = (
   const initial = customerHierarchyFields({ kind: "member", record: member });
   if (!fields.templateId && !fields.budgetEnabled) return { ok: false, error: "budgetRequired" };
   const body: components["schemas"]["MemberPatch"] = aliasChanges(member.alias, fields.alias);
-  if (fields.templateId !== initial.templateId) body.budget_template_id = fields.templateId || null;
+  if (fields.templateId !== initial.templateId) body.budget_id = fields.templateId || null;
   if (changed) body.budget_override = budget;
   if (!fields.budgetEnabled && initial.budgetEnabled) body.budget_override_expires_at = null;
   if (fields.budgetEnabled && fields.overrideExpiry !== initial.overrideExpiry) {
