@@ -14979,9 +14979,7 @@ def _locally_counted_cost() -> float:
     from litellm.utils import token_counter
 
     prompt_tokens: Final = token_counter(model="gpt-5.4-nano", messages=list(_BUDGET_MESSAGES))
-    completion_tokens: Final = token_counter(
-        model="gpt-5.4-nano", text=_BUDGET_REPLY, count_response_tokens=True
-    )
+    completion_tokens: Final = token_counter(model="gpt-5.4-nano", text=_BUDGET_REPLY, count_response_tokens=True)
     assert prompt_tokens > 0 and completion_tokens > 0
     return prompt_tokens * _INPUT_RATE + completion_tokens * _OUTPUT_RATE
 
@@ -15030,9 +15028,7 @@ def _price_converted_reply(
         ],
         **({"usage": usage} if usage is not None else {}),
     }
-    response: Final = convert_to_model_response_object(
-        response_object=body, model_response_object=ModelResponse()
-    )
+    response: Final = convert_to_model_response_object(response_object=body, model_response_object=ModelResponse())
     assert isinstance(response, ModelResponse)
     return logging_obj.response_cost_calculator(result=response), response
 
@@ -15047,9 +15043,7 @@ def test_a_reply_without_usage_is_priced_from_locally_counted_tokens(caplog: pyt
 
 
 def test_a_reply_with_malformed_usage_is_priced_from_locally_counted_tokens() -> None:
-    cost, response = _price_converted_reply(
-        {"prompt_tokens": "oops", "completion_tokens": None, "total_tokens": 0}
-    )
+    cost, response = _price_converted_reply({"prompt_tokens": "oops", "completion_tokens": None, "total_tokens": 0})
 
     assert cost == pytest.approx(_locally_counted_cost())
     assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (0, 0)
