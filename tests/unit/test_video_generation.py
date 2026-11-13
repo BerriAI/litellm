@@ -86,9 +86,6 @@ _OFF_PEAK: Final = {"hours_utc": "00:00-00:00", "output_cost_per_second": 0.05}
             {"output_cost_per_video_per_second": 0.1, "id": "openai/test-flat-video-row"},
             id="video_per_second_key_on_the_catalog_key",
         ),
-        pytest.param(
-            {"output_cost_per_second_720p": 0.1, "off_peak_pricing": _OFF_PEAK}, id="resolution_rate_with_off_peak"
-        ),
     ],
 )
 def test_deployment_per_second_video_price_beats_the_catalog_rows_flat_price(model_info: dict[str, object]) -> None:
@@ -133,6 +130,21 @@ def test_deployment_per_second_video_price_beats_the_catalog_rows_flat_price(mod
             router_model_id=deployment.model_info.id,
         )
         assert cost == pytest.approx(0.5)
+    finally:
+        litellm.model_cost.pop(catalog_key, None)
+
+
+def test_resolution_only_per_second_price_keeps_the_flat_price_for_other_resolutions() -> None:
+    catalog_key: Final = "openai/test-flat-video-tiered"
+    litellm.register_model(
+        {catalog_key: {"litellm_provider": "openai", "mode": "video_generation", "output_cost_per_video": 0.91}}
+    )
+    try:
+        litellm.register_model({catalog_key: {"output_cost_per_second_720p": 0.1}})
+        cost: Final = default_video_cost_calculator(
+            catalog_key, 5.0, custom_llm_provider="openai", video_resolution="1080p"
+        )
+        assert cost == pytest.approx(0.91)
     finally:
         litellm.model_cost.pop(catalog_key, None)
 

@@ -4184,10 +4184,7 @@ def native_structured_output_support(model_info: Mapping[str, object]) -> bool |
 
 
 def _sets_video_price_per_second(value: Mapping[str, object]) -> bool:
-    return any(
-        price is not None and name.startswith(("output_cost_per_second", "output_cost_per_video_per_second"))
-        for name, price in value.items()
-    )
+    return any(value.get(name) is not None for name in ("output_cost_per_second", "output_cost_per_video_per_second"))
 
 
 def base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
