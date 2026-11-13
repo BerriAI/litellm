@@ -48,15 +48,27 @@ def test_is_restricted_virtual_key_request_admin_roles():
 
 
 def test_is_restricted_virtual_key_request_inference_scoped_admin_keys():
-    """An inference-scoped key associated with PROXY_ADMIN (e.g. allowed_routes=['llm_api_routes'])
-    reaches discovery endpoints via the route carve-out and MUST remain on the restricted
-    virtual key path so credentials are fully sanitized.
+    """An inference-scoped key associated with PROXY_ADMIN (e.g. allowed_routes=['llm_api_routes']
+    or ['llm_api_routes', '/v1/mcp/tools']) reaches discovery endpoints via the route carve-out
+    and MUST remain on the restricted virtual key path so credentials are fully sanitized.
     """
     inference_admin_key = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
         allowed_routes=["llm_api_routes"],
     )
     assert _is_restricted_virtual_key_request(inference_admin_key) is True
+
+    mcp_tools_admin_key = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        allowed_routes=["llm_api_routes", "/v1/mcp/tools"],
+    )
+    assert _is_restricted_virtual_key_request(mcp_tools_admin_key) is True
+
+    mcp_tools_only_admin_key = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        allowed_routes=["/v1/mcp/tools"],
+    )
+    assert _is_restricted_virtual_key_request(mcp_tools_only_admin_key) is True
 
     chat_admin_key = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,

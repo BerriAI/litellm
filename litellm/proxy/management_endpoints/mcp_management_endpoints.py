@@ -786,20 +786,19 @@ if MCP_AVAILABLE:
         return caller_user_id
 
     def _has_explicit_mcp_management_route(allowed_routes: list[str]) -> bool:
-        """Check if allowed_routes explicitly grants access to MCP management endpoints,
-        rather than relying on inference carve-outs (e.g. llm_api_routes).
+        """Check if allowed_routes explicitly grants access to MCP server management endpoints,
+        distinguishing server-management grants from inference routes (e.g. /v1/mcp/tools).
         """
-        mcp_mgmt_patterns: Final = {
+        mcp_server_mgmt_exact: Final = {
             "mcp_management_routes",
-            "mcp_routes",
             "management_routes",
             "/v1/mcp/server",
             "/v1/mcp/server/*",
             "/v1/mcp/server/{path:path}",
-            "/v1/mcp/*",
+            "/v1/mcp/sessions",
         }
         for r in allowed_routes:
-            if r in mcp_mgmt_patterns or r.startswith("/v1/mcp/server") or r.startswith("/v1/mcp/"):
+            if r in mcp_server_mgmt_exact or r == "/v1/mcp/server" or r.startswith("/v1/mcp/server/"):
                 return True
         return False
 
