@@ -94,6 +94,12 @@ def cleanup_mcp_global_state():
         yield
 
 
+def _listing_client() -> AsyncMock:
+    client: Final = AsyncMock()
+    client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
+    return client
+
+
 def _call_tool_params(name, arguments=None):
     from mcp.types import CallToolRequestParams
 
@@ -4190,6 +4196,29 @@ def test_jsonrpc_text_has_top_level_method_ignores_nested_method():
     assert _jsonrpc_text_has_top_level_method(truncated) is False
 
 
+@pytest.mark.parametrize(
+    ("text", "method"),
+    [
+        pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}', "tools/list", id="complete"),
+        pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"cursor":"' + "c" * 5000, "tools/list", id="cut-after-method"),
+        pytest.param('{"jsonrpc":"2.0","params":{"cursor":"' + "c" * 5000, None, id="cut-before-method"),
+        pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools/li', None, id="cut-inside-method"),
+        pytest.param('{"jsonrpc":"2.0","params":{"method":"tools/list"},"method":"ping"}', "ping", id="nested-method-first"),
+        pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools\\/list","params":{"cursor":"' + "c" * 5000, "tools/list", id="escaped-slash"),
+        pytest.param('{"jsonrpc":"2.0","id":1,"method":"\\u0074ools/list","params":{"cursor":"' + "c" * 5000, "tools/list", id="unicode-escape"),
+        pytest.param('{"jsonrpc":"2.0","id":1,"method":"bad\\x","params":{}}', None, id="invalid-escape"),
+        pytest.param('{"jsonrpc":"2.0","id":1,"method":7,"params":{}}', None, id="not-a-string"),
+        pytest.param('{"jsonrpc":"2.0","id":1,"result":{"method":"tools/list"}}', None, id="response"),
+    ],
+)
+def test_jsonrpc_text_method_reads_the_top_level_method_when_the_cut_leaves_it_whole(
+    text: str, method: str | None
+) -> None:
+    from litellm.proxy.mcp_server.server import _jsonrpc_text_method
+
+    assert _jsonrpc_text_method(text) == method
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("response_field", ("result", "error"))
 @pytest.mark.parametrize(("character", "bytes_before_cap"), (("", 0), ("x", 0), ("é", 1), ("中", 2), ("😀", 3)))
@@ -7957,13 +7986,13 @@ def _worker_that_never_listed(server: MCPServer, upstream_tools: tuple[str, ...]
         return CallToolResult(content=[TextContent(type="text", text="ok")], is_error=False)
 
     async def fake_fetch_tools(client, server_name):
-        return [MCPTool(name=tool_name, inputSchema={}) for tool_name in upstream_tools]
+        return ListToolsResult(tools=[MCPTool(name=tool_name, inputSchema={}) for tool_name in upstream_tools])
 
     with (
         patch.object(  # test-quality-ok: the upstream MCP session is the boundary; a real one needs an initialize handshake over a live server
             mcp_operations.global_mcp_server_manager,
             "create_mcp_client",
-            new=AsyncMock(return_value=MagicMock()),
+            new=AsyncMock(return_value=_listing_client()),
         ) as create_client,
         patch.object(  # test-quality-ok: same boundary, this is the tools/list answer the upstream would give
             mcp_operations.global_mcp_server_manager,
@@ -8809,7 +8838,7 @@ async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hoo
     server = _never_listed_passthrough_server()
     manager.registry[server.server_id] = server
     manager._listed_tools_by_server_id.pop(server.server_id, None)
-    upstream = AsyncMock()
+    upstream: Final = _listing_client()
     upstream.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
     proxy_logging = _mock_mcp_proxy_logging()
     proxy_logging.has_pre_call_guardrails.return_value = False
@@ -8819,7 +8848,9 @@ async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hoo
     proxy_logging.pre_call_hook = AsyncMock(return_value={})
     proxy_logging.during_call_hook = AsyncMock(return_value=None)
     fetch_tools = AsyncMock(
-        return_value=[MCPTool(name="add", description="Adds. FLAGWORD", inputSchema={"type": "object"})]
+        return_value=ListToolsResult(
+            tools=[MCPTool(name="add", description="Adds. FLAGWORD", inputSchema={"type": "object"})]
+        )
     )
 
     with (
@@ -8866,11 +8897,13 @@ async def test_fetch_pinnable_tool_catalog_records_no_listed_catalog_for_the_adm
     request.client.host = "10.1.2.3"
     request.headers = {"x-litellm-api-key": "sk-admin"}
     fetch_tools = AsyncMock(
-        return_value=[MCPTool(name="add", description="Upstream wording", inputSchema={"type": "object"})]
+        return_value=ListToolsResult(
+            tools=[MCPTool(name="add", description="Upstream wording", inputSchema={"type": "object"})]
+        )
     )
 
     with (
-        patch.object(manager, "create_mcp_client", new=AsyncMock(return_value=MagicMock())),
+        patch.object(manager, "create_mcp_client", new=AsyncMock(return_value=_listing_client())),
         patch.object(manager, "_fetch_tools_with_timeout", new=fetch_tools),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())),
     ):

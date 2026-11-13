@@ -4,16 +4,106 @@ import importlib
 import os
 import shutil
 import tempfile
-from collections.abc import Callable, Coroutine, Iterator
+from collections.abc import AsyncIterator, Callable, Container, Coroutine, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 import boto3
 import httpx
 import pytest
 from pytest_socket import enable_socket, socket_allow_hosts
+
+if TYPE_CHECKING:
+    from unittest.mock import MagicMock
+
+    from litellm.caching.redis_cache import RedisCache
+
+RouterRedis: TypeAlias = tuple["RedisCache", asyncio.Queue[tuple[tuple[object, ...], str | None, str | None]]]
+RedisWriteGate: TypeAlias = tuple[asyncio.Event, asyncio.Event, asyncio.Event]
+
+
+def redis_cache_double() -> "MagicMock":
+    """A `RedisCache` double for router tests. The native router stores connect from its settings, which name
+    a closed local port, so they serve their memory tier while the double answers the Python Redis calls."""
+    from unittest.mock import MagicMock
+
+    from litellm.caching.redis_cache import RedisCache
+    from litellm.redis.store_settings import RedisStoreSettings
+
+    redis: Final = MagicMock(spec=RedisCache)
+    redis.redis_kwargs = {"host": "127.0.0.1", "port": 1, "socket_timeout": 0.2}
+    redis.namespace = None
+    redis.store_settings = RedisStoreSettings(
+        redis_kwargs=redis.redis_kwargs, namespace=None, default_ttl=60, breaker=None
+    )
+    return redis
+
+
+@pytest.fixture
+def redis_write_gate() -> RedisWriteGate:
+    released: Final = asyncio.Event()
+    released.set()
+    return asyncio.Event(), released, asyncio.Event()
+
+
+@pytest.fixture
+async def router_redis(
+    redis_write_gate: RedisWriteGate,
+) -> AsyncIterator[RouterRedis]:
+    from unittest.mock import patch
+
+    from fakeredis import FakeRedis, FakeServer
+    from fakeredis.aioredis import FakeConnection
+    from opentelemetry import trace
+    from redis.asyncio import BlockingConnectionPool
+    from redis.exceptions import ConnectionError
+
+    from litellm._internal_context import current_service_target
+    from litellm.caching.redis_cache import RedisCache
+
+    commands: Final[asyncio.Queue[tuple[tuple[object, ...], str | None, str | None]]] = asyncio.Queue()
+    started, released, unavailable = redis_write_gate
+
+    class ObservedConnection(FakeConnection):
+        async def send_command(self, *args: object, **kwargs: object) -> None:  # kwargs-ok: Redis transport signature
+            commands.put_nowait((args, current_service_target(), getattr(trace.get_current_span(), "name", None)))
+            await super().send_command(*args, **kwargs)
+
+        async def send_packed_command(self, command: Iterable[bytes] | bytes | str, check_health: bool = True) -> None:
+            chunks: Final = (
+                (command.encode(),)
+                if isinstance(command, str)
+                else (command,)
+                if isinstance(command, bytes)
+                else command
+            )
+            wire: Final = b"".join(chunks)
+            if b"INCRBYFLOAT" in wire:
+                commands.put_nowait(
+                    ((wire,), current_service_target(), getattr(trace.get_current_span(), "name", None))
+                )
+                started.set()
+                await released.wait()
+                if unavailable.is_set():
+                    raise ConnectionError("scripted write outage")
+            await super().send_packed_command(command, check_health=check_health)
+
+    server: Final = FakeServer()
+    client: Final = FakeRedis(server=server)
+    pool: Final = BlockingConnectionPool(connection_class=ObservedConnection, server=server)
+    try:
+        with (
+            patch("redis.Redis.from_url", return_value=client),
+            patch("redis.asyncio.BlockingConnectionPool.from_url", return_value=pool),
+        ):
+            yield RedisCache(url="redis://router-unit.example:6379/0"), commands
+    finally:
+        released.set()
+        await pool.aclose()
+        client.close()
+
 
 HOST_ENVIRONMENT_ALLOWLIST: Final = frozenset(
     (
@@ -49,7 +139,11 @@ from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time depen
 from litellm.anthropic_beta_headers_manager import (
     reload_beta_headers_config,  # noqa: E402  # same import-time dependency
 )
+from litellm.litellm_core_utils.get_model_cost_map import (  # noqa: E402  # same import-time dependency
+    model_cost_inputs,
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER  # noqa: E402  # same import-time dependency
+from litellm.litellm_core_utils.model_cost_table import publish  # noqa: E402  # same import-time dependency
 from litellm.litellm_core_utils.prompt_templates import (
     factory as prompt_factory_module,  # noqa: E402  # same import-time dependency
 )
@@ -345,22 +439,21 @@ def isolate_litellm_globals() -> Iterator[None]:
     tool_registry_writer_module._tool_policy_registry = original_tool_policy_registry
 
 
+_IMPORTED_MODEL_COST_INPUTS: Final = model_cost_inputs.snapshot()
+
+
 @pytest.fixture(autouse=True)
 def isolate_router_model_cost_state() -> Iterator[None]:
     original_live_registries: Final = frozenset(live_router_registries)
-    original_runtime_registered_model_cost: Final = {
-        model_key: dict(model_value)
-        for model_key, model_value in litellm_utils_module._runtime_registered_model_cost.items()
-    }
-    litellm_utils_module._invalidate_model_cost_lowercase_map()
+    original_model_cost_inputs: Final = model_cost_inputs.snapshot()
+    model_cost_inputs.restore(_IMPORTED_MODEL_COST_INPUTS)
+    publish(litellm.model_cost)
     live_router_registries.clear()
-    litellm_utils_module._runtime_registered_model_cost.clear()
     yield
     live_router_registries.clear()
     live_router_registries.update(original_live_registries)
-    litellm_utils_module._runtime_registered_model_cost.clear()
-    litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
-    litellm_utils_module._invalidate_model_cost_lowercase_map()
+    model_cost_inputs.restore(original_model_cost_inputs)
+    publish(litellm.model_cost)
     litellm.get_model_info.cache_clear()
 
 
@@ -384,7 +477,7 @@ def isolate_model_catalog() -> Iterator[None]:
     for models, entries in provider_model_sets:
         models.clear()
         models.update(entries)
-    litellm_utils_module._invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     litellm.get_model_info.cache_clear()
 
 
@@ -411,7 +504,7 @@ def declare_mid_conversation_system(monkeypatch: pytest.MonkeyPatch) -> Callable
     return declare
 
 
-NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock"] | None
+NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock", "default"] | None
 
 
 @pytest.fixture
@@ -421,7 +514,8 @@ def set_native_structured_output(
     def set_flags(model_cost_key: str, native_key: NativeStructuredOutputKey) -> None:
         entry: Final = litellm.model_cost[model_cost_key]
         monkeypatch.setitem(entry, "supports_native_structured_output", native_key == "legacy")
-        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output", native_key == "bedrock")
+        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output", native_key in ("bedrock", "default"))
+        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output_by_default", native_key == "default")
         litellm.get_model_info.cache_clear()
 
     return set_flags
@@ -510,3 +604,9 @@ def pytest_sessionfinish() -> None:
         _close_handler_if_needed(getattr(litellm, name, None))
     _run_coroutine_if_needed(close_litellm_async_clients())
     enable_socket()
+
+
+def in_operator_error(value: Container[object]) -> str:
+    with pytest.raises(TypeError) as native:
+        _ = "key" in value
+    return str(native.value)

@@ -38,8 +38,7 @@ def _affinity_check(core: RouterCore) -> DeploymentAffinityCheck:
 
 async def _pinned(check: DeploymentAffinityCheck) -> object:
     key = DeploymentAffinityCheck.get_session_affinity_cache_key("g", _SESSION, _CALLER)
-    pinned: object = await check.cache.async_get_cache(key)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # DualCache's reads are untyped
-    return pinned  # pyright: ignore[reportUnknownVariableType]  # see above
+    return await check.pins.get(key)
 
 
 async def _complete(core: RouterCore) -> object:
@@ -62,7 +61,7 @@ async def test_a_failover_success_repins_the_session_only_with_repin_on_failover
     )
     check = _affinity_check(core)
     key = DeploymentAffinityCheck.get_session_affinity_cache_key("g", _SESSION, _CALLER)
-    await check.cache.async_set_cache(key, {"model_id": "a"})  # pyright: ignore[reportUnknownMemberType]
+    await check.pins.set(key, {"model_id": "a"}, 3600)
     host.answer("openai/a", rate_limit(), completion_response())
     host.answer("openai/b", completion_response())
 
@@ -73,7 +72,7 @@ async def test_a_failover_success_repins_the_session_only_with_repin_on_failover
     assert await _pinned(check) == {"model_id": "b" if repin else "a"}
 
     # Once the first deployment is healthy again, the session goes where it is pinned.
-    core.health().cooldowns.cooldown_store.flush_cache()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    core.health().cooldowns.cooldown_store.evict_local("a")
     await _complete(core)
 
     assert host.deployments_called("acompletion")[-1] == next_served_by
@@ -98,7 +97,7 @@ async def test_a_failover_stream_repins_the_session_when_it_ends(
     )
     check = _affinity_check(core)
     key = DeploymentAffinityCheck.get_session_affinity_cache_key("g", _SESSION, _CALLER)
-    await check.cache.async_set_cache(key, {"model_id": "a"})  # pyright: ignore[reportUnknownMemberType]
+    await check.pins.set(key, {"model_id": "a"}, 3600)
     host.answer("openai/a", rate_limit())
     host.answer(
         "openai/b",
