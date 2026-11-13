@@ -8,10 +8,22 @@ from typing import Final
 import pytest
 
 from litellm.proxy.agent_endpoints.external_agents.models import HookFailure, ObservedAgentEvent
-from litellm.proxy.agent_endpoints.external_agents.source import GrokBotHookSource
+from litellm.proxy.agent_endpoints.external_agents.source import GrokBotHookSource, verify_ingest
 
 SECRET: Final = "whsec_" + base64.b64encode(b"governance-test-signing-key").decode()
 NOW: Final = 1800000000
+
+
+@pytest.mark.parametrize("authorization", ("", "Bearer wrong", "Basic ingest", "Bearer ingest"))
+def test_ingest_authentication_requires_exact_bearer_key(authorization: str) -> None:
+    result: Final = verify_ingest(authorization, "ingest")
+    assert result == (
+        None if authorization == "Bearer ingest" else HookFailure(status=401, reason="Invalid ingest key")
+    )
+
+
+def test_missing_stored_ingest_key_fails_closed() -> None:
+    assert verify_ingest("Bearer ", None) == HookFailure(status=401, reason="Invalid ingest key")
 
 
 def signed_headers(body: bytes, secret: str = SECRET, timestamp: int = NOW) -> Mapping[str, str]:

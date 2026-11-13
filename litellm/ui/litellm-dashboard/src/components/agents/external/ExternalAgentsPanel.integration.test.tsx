@@ -11,7 +11,13 @@ vi.mock("@/components/networking", () => ({
   getRuntimeBackendBaseUrl: () => null,
 }));
 
-const source: Source = { source_id: "source-1", display_name: "Company bots", vendor: "grok_bot", mode: "shadow" };
+const source: Source = {
+  source_id: "source-1",
+  display_name: "Company bots",
+  vendor: "grok_bot",
+  mode: "shadow",
+  last_event_at: "2026-01-01T00:00:00Z",
+};
 const bots: Bot[] = ["Support bot", "Research bot"].map((name, index) => ({
   id: `bot-${index}`,
   source_id: source.source_id,
@@ -31,6 +37,7 @@ const summary = {
   unmapped_actors: 2,
   denied_24h: 0,
   last_event_at: null,
+  needs_attention: 2,
 };
 
 beforeEach(() => {
@@ -39,6 +46,8 @@ beforeEach(() => {
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
     if (path.endsWith("/sources")) return [source];
     if (path.endsWith("/summary")) return summary;
+    if (path.endsWith("/connection"))
+      return { ...source, ingest_key: "litellm_ingest_test", hook_path: "/grok_bot/inference_hook/source-1" };
     if (path.endsWith("/policies") || path.endsWith("/decisions")) return [];
     return bots;
   });
@@ -46,6 +55,24 @@ beforeEach(() => {
 });
 
 describe("external agent administration", () => {
+  it("saves the optional admin key and displays the automatic member sync result", async () => {
+    vi.mocked(apiClient.request).mockResolvedValue({
+      ...source,
+      sync_result: { matched: 2, unmatched: 1, already_mapped: 1 },
+    });
+    renderWithProviders(<ExternalAgentsPanel token="test-token" teams={[]} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Show setup" }));
+    fireEvent.click(screen.getByText("Auto-match members (recommended)"));
+    const form = screen.getByRole("form", { name: "Auto-match members (recommended)" });
+    fireEvent.change(within(form).getByLabelText("GrokBot Admin API key"), { target: { value: "admin-key" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Save", exact: true }));
+    expect(await screen.findByText("Matched 3 of 4 members")).toBeInTheDocument();
+    expect(apiClient.request).toHaveBeenCalledWith(
+      "PATCH",
+      "/v1/external_agents/sources/source-1",
+      expect.objectContaining({ body: { admin_api_key: "admin-key" } }),
+    );
+  });
   it("shows owner labels with user IDs as fallback", async () => {
     vi.mocked(apiClient.get).mockImplementation(async (path) => {
       if (path.endsWith("/sources")) return [source];
@@ -106,11 +133,12 @@ describe("external agent administration", () => {
     expect(screen.getByText("Shell")).toBeInTheDocument();
   });
 
-  it("connects in Shadow mode and shows the source hook URL and setup steps", async () => {
+  it("creates without input and shows endpoint and custom header setup", async () => {
     let connected = false;
     vi.mocked(apiClient.get).mockImplementation(async (path) => {
-      if (path.endsWith("/sources")) return connected ? [source] : [];
+      if (path.endsWith("/sources")) return connected ? [{ ...source, last_event_at: null }] : [];
       if (path.endsWith("/summary")) return summary;
+      if (path.endsWith("/connection")) return { ...source, ingest_key: "litellm_ingest_test" };
       return bots;
     });
     vi.mocked(apiClient.request).mockImplementation(async () => {
@@ -119,26 +147,24 @@ describe("external agent administration", () => {
     });
     renderWithProviders(<ExternalAgentsPanel token="test-token" teams={[]} />);
     expect(await screen.findByText("Govern every bot, without manual registration")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Connect GrokBot" }));
-    fireEvent.change(screen.getByLabelText("Display name"), { target: { value: "Company bots" } });
-    fireEvent.change(screen.getByLabelText("GrokBot signing secret"), { target: { value: "whsec_dGVzdA==" } });
-    fireEvent.click(screen.getByRole("button", { name: "Connect", exact: true }));
-    expect(await screen.findByLabelText("Hook URL")).toHaveValue(
+    fireEvent.click(screen.getByRole("button", { name: "Add GrokBot" }));
+    expect(await screen.findByLabelText("Endpoint URL")).toHaveValue(
       "https://proxy.example.test/grok_bot/inference_hook/source-1",
     );
-    expect(screen.getByText("Paste this URL in GrokBot > Inference Hooks.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Custom Header name")).toHaveValue("Authorization");
+    expect(screen.getByLabelText("Custom Header value")).toHaveValue("Bearer litellm_ingest_test");
     expect(apiClient.request).toHaveBeenCalledWith(
       "POST",
       "/v1/external_agents/sources",
       expect.objectContaining({
-        body: { display_name: "Company bots", signing_secret: "whsec_dGVzdA==", mode: "shadow" },
+        body: {},
       }),
     );
   });
 
   it("defaults to exceptions and sends exceptions_only when toggled off", async () => {
     renderWithProviders(<ExternalAgentsPanel token="test-token" teams={[]} />);
-    const toggle = await screen.findByRole("switch", { name: "Exceptions only" });
+    const toggle = await screen.findByRole("switch", { name: "Needs attention" });
     expect(toggle).toBeChecked();
     expect(apiClient.get).toHaveBeenCalledWith(
       "/v1/external_agents",
@@ -176,7 +202,9 @@ describe("external agent administration", () => {
   });
 
   it("maps CSV members to the selected source and rejects malformed rows before posting", async () => {
-    renderWithProviders(<ExternalAgentsPanel token="test-token" teams={[]} />);
+    renderWithProviders(<ExternalAgentsPanel token="test-token" teams={[]} />, {
+      searchParams: { external_tab: "policies" },
+    });
     fireEvent.click(await screen.findByRole("button", { name: "Map members" }));
     fireEvent.change(screen.getByLabelText("Member mappings"), { target: { value: "member-only" } });
     fireEvent.click(screen.getByRole("button", { name: "Save mappings" }));
@@ -195,14 +223,12 @@ describe("external agent administration", () => {
     );
   });
 
-  it("keeps the connection form open and displays a rejected secret error", async () => {
-    vi.mocked(apiClient.request).mockRejectedValue(new Error("Invalid signing secret"));
+  it("displays a source creation failure without asking for credentials", async () => {
+    vi.mocked(apiClient.get).mockResolvedValue([]);
+    vi.mocked(apiClient.request).mockRejectedValue(new Error("Connection unavailable"));
     renderWithProviders(<ExternalAgentsPanel token="test-token" teams={[]} />);
-    fireEvent.click(screen.getByRole("button", { name: "Connect GrokBot" }));
-    fireEvent.change(screen.getByLabelText("Display name"), { target: { value: "Company bots" } });
-    fireEvent.change(screen.getByLabelText("GrokBot signing secret"), { target: { value: "whsec_bad" } });
-    fireEvent.click(screen.getByRole("button", { name: "Connect", exact: true }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Invalid signing secret");
-    expect(screen.getByRole("dialog", { name: "Connect GrokBot" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Add GrokBot" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Connection unavailable");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

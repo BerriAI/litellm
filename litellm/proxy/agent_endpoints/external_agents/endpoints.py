@@ -4,6 +4,9 @@ from typing import Annotated, Final, Literal, TypeAlias, TypeVar
 from anyio import fail_after
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
+)
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.external_agents.cache import metadata
 from litellm.proxy.agent_endpoints.external_agents.database import Database, ProxyDatabase
@@ -16,18 +19,23 @@ from litellm.proxy.agent_endpoints.external_agents.models import (
     Decision,
     ExternalAgentSummary,
     HookFailure,
+    MemberSyncRequest,
+    MemberSyncResult,
     ObservedAgentEvent,
     Policy,
     PolicyPut,
     Source,
+    SourceConnection,
     SourceCreate,
     SourcePatch,
+    SourceSaved,
     Updated,
     Verdict,
 )
-from litellm.proxy.agent_endpoints.external_agents.source import GrokBotHookSource
+from litellm.proxy.agent_endpoints.external_agents.source import GrokBotHookSource, verify_ingest
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 router: Final = APIRouter(tags=["External agent governance"])
 T: Final = TypeVar("T")
@@ -57,6 +65,13 @@ Admin: TypeAlias = Annotated[UserAPIKeyAuth, Depends(admin)]
 DB: TypeAlias = Annotated[Database, Depends(database)]
 
 
+def management(db: DB) -> ExternalAgentManagement:
+    return ExternalAgentManagement(db, metadata, get_async_httpx_client(llm_provider=httpxSpecialProvider.A2A).client)
+
+
+Management: TypeAlias = Annotated[ExternalAgentManagement, Depends(management)]
+
+
 @router.post(
     "/grok_bot/inference_hook/{source_id}",
     response_model=Verdict,
@@ -70,25 +85,49 @@ async def inference_hook(source_id: str, request: Request, db: DB) -> Verdict:
         source: Final = await ExternalAgentStore(db, metadata).source(source_id)
         if source is None:
             return raise_public(HookFailure(status=404, reason="Unknown source"))
+        key: Final = decrypt_value_helper(source.ingest_key, "ingest_key") if source.ingest_key else None
+        authentication: Final = verify_ingest(request.headers.get("authorization", ""), key)
+        if authentication:
+            return raise_public(authentication)
         body: Final = await request.body()
-        current: Final = decrypt_value_helper(source.signing_secret, "signing_secret")
+        current: Final = (
+            decrypt_value_helper(source.signing_secret, "signing_secret") if source.signing_secret else None
+        )
         previous: Final = (
             decrypt_value_helper(source.previous_signing_secret, "previous_signing_secret")
             if source.previous_signing_secret
             else None
         )
         secrets: Final = tuple(secret for secret in (current, previous) if secret)
-        failure: Final = adapter.verify(body, request.headers, secrets, time.time())
+        failure: Final = adapter.verify(body, request.headers, secrets, time.time()) if source.signing_secret else None
         if failure:
             return raise_public(failure)
         event: Final[ObservedAgentEvent] = raise_public(adapter.parse(body, request.headers.get("webhook-id", "")))
+    if event.application == "config-test":
+        await db.execute_raw(
+            'UPDATE "LiteLLM_ExternalAgentSource" SET last_event_at=NOW() WHERE source_id=$1', source_id
+        )
     return adapter.format_verdict(raise_public(await ExternalAgentGovernance(db, metadata).evaluate(source, event)))
 
 
-@router.post("/v1/external_agents/sources", response_model=Source)
-async def create_source(data: SourceCreate, auth: Admin, db: DB) -> Source:
+@router.post("/v1/external_agents/sources", response_model=SourceConnection)
+async def create_source(auth: Admin, service: Management, data: SourceCreate | None = None) -> SourceConnection:
     """Register a signed hook source without exposing its signing secrets."""
-    return raise_public(await ExternalAgentManagement(db, metadata).create_source(data, auth.user_id or "proxy_admin"))
+    return raise_public(await service.create_source(data or SourceCreate(), auth.user_id or "proxy_admin"))
+
+
+@router.get("/v1/external_agents/sources/{id}/connection", response_model=SourceConnection)
+async def source_connection(id: str, auth: Admin, service: Management) -> SourceConnection:
+    """Show connection credentials to a proxy administrator."""
+    return raise_public(await service.connection(id))
+
+
+@router.post("/v1/external_agents/sources/{id}/sync_members", response_model=MemberSyncResult)
+async def sync_source_members(
+    id: str, auth: Admin, service: Management, data: MemberSyncRequest | None = None
+) -> MemberSyncResult:
+    """Match vendor members by email without replacing existing mappings."""
+    return raise_public(await service.sync_members(id))
 
 
 @router.get("/v1/external_agents/sources", response_model=tuple[Source, ...])
@@ -97,12 +136,10 @@ async def list_sources(auth: Admin, db: DB) -> tuple[Source, ...]:
     return await ExternalAgentManagement(db).sources()
 
 
-@router.patch("/v1/external_agents/sources/{id}", response_model=Source)
-async def patch_source(id: str, data: SourcePatch, auth: Admin, db: DB) -> Source:
+@router.patch("/v1/external_agents/sources/{id}", response_model=SourceSaved)
+async def patch_source(id: str, data: SourcePatch, auth: Admin, service: Management) -> SourceSaved:
     """Update a source and retain its previous secret during signing key rotation."""
-    return raise_public(
-        await ExternalAgentManagement(db, metadata).patch_source(id, data, auth.user_id or "proxy_admin")
-    )
+    return raise_public(await service.patch_source(id, data, auth.user_id or "proxy_admin"))
 
 
 @router.get("/v1/external_agents", response_model=tuple[Agent, ...], include_in_schema=False)

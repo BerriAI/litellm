@@ -21769,6 +21769,46 @@ export interface paths {
         patch: operations["patch_source_v1_external_agents_sources__id__patch"];
         trace?: never;
     };
+    "/v1/external_agents/sources/{id}/connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Source Connection
+         * @description Show connection credentials to a proxy administrator.
+         */
+        get: operations["source_connection_v1_external_agents_sources__id__connection_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/external_agents/sources/{id}/sync_members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync Source Members
+         * @description Match vendor members by email without replacing existing mappings.
+         */
+        post: operations["sync_source_members_v1_external_agents_sources__id__sync_members_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/external_agents/summary": {
         parameters: {
             query?: never;
@@ -34842,6 +34882,11 @@ export interface components {
             discovered: number;
             /** Last Event At */
             last_event_at: string | null;
+            /**
+             * Needs Attention
+             * @default 0
+             */
+            needs_attention: number;
             /** Needs Owner */
             needs_owner: number;
             /** Unmapped Actors */
@@ -41016,6 +41061,17 @@ export interface components {
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
+        };
+        /** MemberSyncRequest */
+        MemberSyncRequest: Record<string, never>;
+        /** MemberSyncResult */
+        MemberSyncResult: {
+            /** Already Mapped */
+            already_mapped: number;
+            /** Matched */
+            matched: number;
+            /** Unmatched */
+            unmatched: number;
         };
         /** MemoryCreateRequest */
         MemoryCreateRequest: {
@@ -49181,6 +49237,8 @@ export interface components {
             default_policy_id?: string | null;
             /** Display Name */
             display_name: string;
+            /** Last Event At */
+            last_event_at?: string | null;
             /**
              * Mode
              * @default shadow
@@ -49198,9 +49256,44 @@ export interface components {
              */
             vendor: "grok_bot";
         };
+        /** SourceConnection */
+        SourceConnection: {
+            /** Default Policy Id */
+            default_policy_id?: string | null;
+            /** Display Name */
+            display_name: string;
+            /** Hook Path */
+            hook_path: string;
+            /** Ingest Key */
+            ingest_key: string;
+            /** Last Event At */
+            last_event_at?: string | null;
+            /**
+             * Mode
+             * @default shadow
+             * @enum {string}
+             */
+            mode: "shadow" | "enforce";
+            /** Source Id */
+            source_id: string;
+            sync_result?: components["schemas"]["MemberSyncResult"] | null;
+            /** Tenant Id */
+            tenant_id?: string | null;
+            /**
+             * Vendor
+             * @default grok_bot
+             * @constant
+             */
+            vendor: "grok_bot";
+        };
         /** SourceCreate */
         SourceCreate: {
-            /** Display Name */
+            /** Admin Api Key */
+            admin_api_key?: string | null;
+            /**
+             * Display Name
+             * @default GrokBot
+             */
             display_name: string;
             /**
              * Mode
@@ -49208,20 +49301,45 @@ export interface components {
              * @enum {string}
              */
             mode: "shadow" | "enforce";
-            /**
-             * Signing Secret
-             * Format: password
-             */
-            signing_secret: string;
+            /** Signing Secret */
+            signing_secret?: string | null;
         };
         /** SourcePatch */
         SourcePatch: {
+            /** Admin Api Key */
+            admin_api_key?: string | null;
             /** Display Name */
             display_name?: string | null;
             /** Mode */
             mode?: ("shadow" | "enforce") | null;
             /** Signing Secret */
             signing_secret?: string | null;
+        };
+        /** SourceSaved */
+        SourceSaved: {
+            /** Default Policy Id */
+            default_policy_id?: string | null;
+            /** Display Name */
+            display_name: string;
+            /** Last Event At */
+            last_event_at?: string | null;
+            /**
+             * Mode
+             * @default shadow
+             * @enum {string}
+             */
+            mode: "shadow" | "enforce";
+            /** Source Id */
+            source_id: string;
+            sync_result?: components["schemas"]["MemberSyncResult"] | null;
+            /** Tenant Id */
+            tenant_id?: string | null;
+            /**
+             * Vendor
+             * @default grok_bot
+             * @constant
+             */
+            vendor: "grok_bot";
         };
         /** Span */
         Span: {
@@ -86189,9 +86307,9 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
-                "application/json": components["schemas"]["SourceCreate"];
+                "application/json": components["schemas"]["SourceCreate"] | null;
             };
         };
         responses: {
@@ -86201,7 +86319,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Source"];
+                    "application/json": components["schemas"]["SourceConnection"];
                 };
             };
             /** @description Validation Error */
@@ -86236,7 +86354,73 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Source"];
+                    "application/json": components["schemas"]["SourceSaved"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    source_connection_v1_external_agents_sources__id__connection_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceConnection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_source_members_v1_external_agents_sources__id__sync_members_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["MemberSyncRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberSyncResult"];
                 };
             };
             /** @description Validation Error */

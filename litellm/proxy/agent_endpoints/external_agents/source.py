@@ -56,6 +56,12 @@ def signing_key(secret: str) -> bytes | HookFailure:
         return HookFailure(status=400, reason="Invalid signing secret")
 
 
+def verify_ingest(authorization: str, key: str | None) -> HookFailure | None:
+    if key and hmac.compare_digest(authorization.encode(), f"Bearer {key}".encode()):
+        return None
+    return HookFailure(status=401, reason="Invalid ingest key")
+
+
 class ExternalAgentHookSource(ABC):
     @abstractmethod
     def verify(

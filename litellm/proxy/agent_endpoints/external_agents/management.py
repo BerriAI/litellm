@@ -1,3 +1,4 @@
+import secrets
 import uuid
 from typing import Final
 
@@ -5,6 +6,7 @@ from pydantic import TypeAdapter
 
 from litellm.proxy.agent_endpoints.external_agents.cache import GovernanceMetadata
 from litellm.proxy.agent_endpoints.external_agents.database import Database
+from litellm.proxy.agent_endpoints.external_agents.members import MemberHTTPClient, sync_members
 from litellm.proxy.agent_endpoints.external_agents.models import (
     ActorsPut,
     Agent,
@@ -12,43 +14,100 @@ from litellm.proxy.agent_endpoints.external_agents.models import (
     Decision,
     ExternalAgentSummary,
     HookFailure,
+    MemberSyncResult,
     Policy,
     PolicyPut,
     Source,
+    SourceConnection,
     SourceCreate,
     SourcePatch,
+    SourceSaved,
 )
 from litellm.proxy.agent_endpoints.external_agents.source import signing_key
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 
 
 class ExternalAgentManagement:
-    def __init__(self, db: Database, cache: GovernanceMetadata | None = None) -> None:
+    def __init__(
+        self, db: Database, cache: GovernanceMetadata | None = None, client: MemberHTTPClient | None = None
+    ) -> None:
         self.db = db
         self.cache = cache
+        self.client = client
 
     def invalidate(self) -> None:
         if self.cache is not None:
             self.cache.invalidate()
 
-    async def create_source(self, data: SourceCreate, user_id: str) -> Source | HookFailure:
-        secret: Final = data.signing_secret.get_secret_value()
-        valid: Final = signing_key(secret)
+    async def create_source(self, data: SourceCreate, user_id: str) -> SourceConnection | HookFailure:
+        secret: Final = data.signing_secret.get_secret_value() if data.signing_secret else None
+        valid: Final = signing_key(secret) if secret is not None else None
         if isinstance(valid, HookFailure):
             return valid
+        ingest: Final = "litellm_ingest_" + secrets.token_urlsafe(32)
+        policy_id: Final = str(uuid.uuid4())
         rows: Final = TypeAdapter(list[Source]).validate_python(
             await self.db.query_raw(
-                'INSERT INTO "LiteLLM_ExternalAgentSource" (source_id,display_name,signing_secret,mode,created_by,updated_by) '
-                "VALUES ($1,$2,$3,$4,$5,$5) RETURNING *",
+                'WITH source AS (INSERT INTO "LiteLLM_ExternalAgentSource" '
+                "(source_id,display_name,signing_secret,mode,created_by,updated_by,ingest_key,admin_api_key,default_policy_id) "
+                "VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8) RETURNING *), "
+                'policy AS (INSERT INTO "LiteLLM_ExternalAgentPolicy" '
+                "(policy_id,source_id,blocked_tools,allow_unmapped_actors,require_owner) "
+                "SELECT $8,source_id,ARRAY[]::text[],true,false FROM source) SELECT * FROM source",
                 str(uuid.uuid4()),
                 data.display_name,
-                encrypt_value_helper(secret),
+                encrypt_value_helper(secret) if secret else None,
                 data.mode,
                 user_id,
+                encrypt_value_helper(ingest),
+                encrypt_value_helper(data.admin_api_key.get_secret_value()) if data.admin_api_key else None,
+                policy_id,
             )
         )
         self.invalidate()
-        return rows[0]
+        synced: Final = await self.sync_members(rows[0].source_id) if data.admin_api_key else None
+        if isinstance(synced, HookFailure):
+            return synced
+        return SourceConnection.model_validate(
+            rows[0].model_dump()
+            | {
+                "ingest_key": ingest,
+                "hook_path": f"/grok_bot/inference_hook/{rows[0].source_id}",
+                "sync_result": synced,
+            }
+        )
+
+    async def connection(self, source_id: str) -> SourceConnection | HookFailure:
+        rows: Final = TypeAdapter(list[Source]).validate_python(
+            await self.db.query_raw(
+                'UPDATE "LiteLLM_ExternalAgentSource" SET ingest_key=COALESCE(ingest_key,$2) '
+                "WHERE source_id=$1 RETURNING *",
+                source_id,
+                encrypt_value_helper("litellm_ingest_" + secrets.token_urlsafe(32)),
+            )
+        )
+        if not rows:
+            return HookFailure(status=404, reason="Unknown source")
+        self.invalidate()
+        key: Final = decrypt_value_helper(rows[0].ingest_key, "ingest_key") if rows[0].ingest_key else None
+        if not key:
+            return HookFailure(status=503, reason="Connection credentials unavailable")
+        return SourceConnection.model_validate(
+            rows[0].model_dump() | {"ingest_key": key, "hook_path": f"/grok_bot/inference_hook/{source_id}"}
+        )
+
+    async def sync_members(self, source_id: str) -> MemberSyncResult | HookFailure:
+        rows: Final = TypeAdapter(list[Source]).validate_python(
+            await self.db.query_raw('SELECT * FROM "LiteLLM_ExternalAgentSource" WHERE source_id=$1', source_id)
+        )
+        if not rows:
+            return HookFailure(status=404, reason="Unknown source")
+        key: Final = decrypt_value_helper(rows[0].admin_api_key, "admin_api_key") if rows[0].admin_api_key else None
+        if not key or self.client is None:
+            return HookFailure(status=400, reason="Save a GrokBot Admin API key before syncing members")
+        result: Final = await sync_members(self.db, self.client, source_id, key)
+        self.invalidate()
+        return result
 
     async def sources(self) -> tuple[Source, ...]:
         return TypeAdapter(tuple[Source, ...]).validate_python(
@@ -57,7 +116,7 @@ class ExternalAgentManagement:
             )
         )
 
-    async def patch_source(self, source_id: str, data: SourcePatch, user_id: str) -> Source | HookFailure:
+    async def patch_source(self, source_id: str, data: SourcePatch, user_id: str) -> SourceSaved | HookFailure:
         secret: Final = data.signing_secret.get_secret_value() if data.signing_secret else None
         valid: Final = signing_key(secret) if secret is not None else None
         if isinstance(valid, HookFailure):
@@ -66,16 +125,23 @@ class ExternalAgentManagement:
             await self.db.query_raw(
                 'UPDATE "LiteLLM_ExternalAgentSource" SET display_name=COALESCE($2,display_name),mode=COALESCE($3,mode),'
                 "previous_signing_secret=CASE WHEN $4::text IS NULL THEN previous_signing_secret ELSE signing_secret END,"
-                "signing_secret=COALESCE($4,signing_secret),updated_by=$5,updated_at=NOW() WHERE source_id=$1 RETURNING *",
+                "signing_secret=COALESCE($4,signing_secret),updated_by=$5,updated_at=NOW(),"
+                "admin_api_key=COALESCE($6,admin_api_key) WHERE source_id=$1 RETURNING *",
                 source_id,
                 data.display_name,
                 data.mode,
                 encrypt_value_helper(secret) if secret else None,
                 user_id,
+                encrypt_value_helper(data.admin_api_key.get_secret_value()) if data.admin_api_key else None,
             )
         )
         self.invalidate()
-        return rows[0] if rows else HookFailure(status=404, reason="Unknown source")
+        if not rows:
+            return HookFailure(status=404, reason="Unknown source")
+        synced: Final = await self.sync_members(source_id) if data.admin_api_key else None
+        if isinstance(synced, HookFailure):
+            return synced
+        return SourceSaved.model_validate(rows[0].model_dump() | {"sync_result": synced})
 
     async def agents(
         self,
@@ -119,7 +185,14 @@ class ExternalAgentManagement:
             await self.db.query_raw(
                 "SELECT COUNT(*)::int AS discovered, "
                 'COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentPolicy" p '
-                "WHERE p.source_id=a.source_id AND p.team_id=a.team_id))::int AS covered_by_team_policy, "
+                "WHERE p.source_id=a.source_id AND (p.team_id=a.team_id OR p.team_id IS NULL)))::int "
+                "AS covered_by_team_policy, "
+                "COUNT(*) FILTER (WHERE a.team_id IS NULL OR a.owner_user_id IS NULL OR a.owner_inferred "
+                'OR NOT EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentActor" m JOIN "LiteLLM_UserTable" u '
+                "ON u.user_id=m.user_id WHERE m.source_id=a.source_id AND m.external_actor_id=a.last_actor_id) "
+                'OR EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentDecision" d WHERE d.source_id=a.source_id '
+                "AND d.external_agent_id=a.external_agent_id AND d.would_verdict='deny' "
+                "AND d.created_at >= NOW()-INTERVAL '24 hours'))::int AS needs_attention, "
                 "COUNT(*) FILTER (WHERE owner_user_id IS NULL OR owner_inferred)::int AS needs_owner, "
                 '(SELECT COUNT(DISTINCT d.actor_id)::int FROM "LiteLLM_ExternalAgentDecision" d '
                 'WHERE d.source_id=$1 AND NOT EXISTS (SELECT 1 FROM "LiteLLM_ExternalAgentActor" m '

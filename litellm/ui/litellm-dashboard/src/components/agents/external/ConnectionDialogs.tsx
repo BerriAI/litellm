@@ -2,11 +2,10 @@ import { useTranslation } from "react-i18next";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { hookUrl, Source, useExternalMutation } from "./useExternalAgents";
-const secretPattern = "whsec_.+";
+import { Connection, SyncResult, hookUrl, useExternalMutation, useExternalQuery } from "./useExternalAgents";
+
 const modes = ["shadow", "enforce"] as const;
+const secretPattern = "whsec_.+";
 
 export function ModeControl({
   value,
@@ -18,177 +17,150 @@ export function ModeControl({
   disabled?: boolean;
 }) {
   const { t } = useTranslation();
-
   return (
-    <div className="space-y-2">
-      <div
-        role="group"
-        aria-label={t("agents.external.governanceMode")}
-        className="inline-flex rounded-lg border p-1 gap-1"
-      >
-        {modes.map((mode) => (
-          <Button
-            key={mode}
-            type="button"
-            size="sm"
-            variant={mode === value ? "default" : "ghost"}
-            disabled={disabled}
-            aria-pressed={mode === value}
-            onClick={() => onChange(mode)}
-          >
-            {mode === "shadow" ? t("agents.external.shadow") : t("agents.external.enforce")}
-          </Button>
-        ))}
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {t("agents.external.shadowAllowsRequestsAndRecordsWhatWouldBeDenied")}
-      </p>
-      <p className="text-xs text-muted-foreground">{t("agents.external.enforceBlocksRequestsThatViolatePolicy")}</p>
+    <div
+      role="group"
+      aria-label={t("agents.external.governanceMode")}
+      className="inline-flex rounded-lg border p-1 gap-1"
+    >
+      {modes.map((mode) => (
+        <Button
+          key={mode}
+          size="sm"
+          variant={mode === value ? "default" : "ghost"}
+          disabled={disabled}
+          aria-pressed={mode === value}
+          onClick={() => onChange(mode)}
+        >
+          {mode === "shadow" ? t("agents.external.shadow") : t("agents.external.enforce")}
+        </Button>
+      ))}
     </div>
   );
 }
 
-export function ConnectionDialog({
-  token,
-  source,
-  onClose,
-  onConnected,
-}: {
-  token: string;
-  source?: Source;
-  onClose: () => void;
-  onConnected: (source: Source) => void;
-}) {
+function CopyField({ label, value, password = false }: { label: string; value: string; password?: boolean }) {
   const { t } = useTranslation();
-
-  const mutation = useExternalMutation(token);
-  const [name, setName] = useState("");
-  const [secret, setSecret] = useState("");
-  const [mode, setMode] = useState<"shadow" | "enforce">("shadow");
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState("");
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      <DialogContent showCloseButton={false}>
-        <DialogHeader>
-          <DialogTitle>{source ? t("agents.external.rotateSecret") : t("agents.external.connectGrokBot")}</DialogTitle>
-          <DialogDescription>
-            {source
-              ? t("agents.external.thePreviousSecretRemainsValidDuringRotationOtherWorkersRefreshWithin20Seconds")
-              : t("agents.external.connectOnceBotsAreDiscoveredAutomaticallyWithoutProxyingModelRequests")}
-          </DialogDescription>
-        </DialogHeader>
-        <form
-          className="space-y-5"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            try {
-              const result = await mutation.mutateAsync({
-                method: source ? "PATCH" : "POST",
-                path: source ? `/sources/${source.source_id}` : "/sources",
-                body: source ? { signing_secret: secret } : { display_name: name, signing_secret: secret, mode },
-              });
-              setSecret("");
-              onConnected(result as Source);
-            } catch {
-              return;
-            }
-          }}
-        >
-          {!source && (
-            <label className="grid gap-2">
-              {t("agents.external.displayName")}
-              <Input required value={name} maxLength={200} onChange={(e) => setName(e.target.value)} />
-            </label>
-          )}
-          <label className="grid gap-2">
-            {t("agents.external.grokBotSigningSecret")}
-            <Input
-              required
-              type="password"
-              autoComplete="new-password"
-              placeholder={t("agents.external.whsec")}
-              pattern={secretPattern}
-              value={secret}
-              onChange={(e) => setSecret(e.target.value)}
-            />
-          </label>
-          {!source && <ModeControl value={mode} onChange={setMode} />}
-          {mutation.error && (
-            <p role="alert" className="text-destructive">
-              {mutation.error.message}
-            </p>
-          )}
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={onClose}>
-              {t("agents.external.cancel")}
-            </Button>
-            <Button type="submit" disabled={mutation.isPending}>
-              {
-                <>
-                  {mutation.isPending && t("agents.external.saving")}
-                  {!mutation.isPending && (
-                    <>
-                      {source && t("agents.external.saveSecret")}
-                      {!source && t("agents.external.connect")}
-                    </>
-                  )}
-                </>
-              }
-            </Button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <div className="space-y-2">
+      <label className="grid gap-2 text-sm">
+        {label}
+        <Input readOnly type={password ? "password" : "text"} value={value} />
+      </label>
+      <Button
+        variant="outline"
+        size="sm"
+        aria-label={t("agents.external.copyField", { label })}
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(value);
+            setCopied(true);
+          } catch {
+            setError(t("agents.external.copyUnavailable"));
+          }
+        }}
+      >
+        {copied ? t("agents.external.copied") : t("agents.external.copy")}
+      </Button>
+      {error && <p role="alert">{error}</p>}
+    </div>
   );
 }
 
-export function HookUrlDialog({ source, onClose }: { source: Source; onClose: () => void }) {
+function OptionalCredential({ token, sourceId, memberKey }: { token: string; sourceId: string; memberKey: boolean }) {
   const { t } = useTranslation();
-
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState("");
-  const url = hookUrl(source.source_id);
+  const [value, setValue] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [sync, setSync] = useState<SyncResult | null>(null);
+  const mutation = useExternalMutation(token);
+  const title = memberKey ? t("agents.external.autoMatchMembers") : t("agents.external.optionalSigningSecret");
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      <DialogContent showCloseButton={false} className="sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>{t("agents.external.grokBotHookURL")}</DialogTitle>
-          <DialogDescription>{t("agents.external.oneConnectionGovernsEveryBotInYourTenant")}</DialogDescription>
-        </DialogHeader>
-        <label className="grid gap-2">
-          {t("agents.external.hookURL")}
-          <Textarea readOnly value={url} rows={3} className="resize-none font-mono text-xs" />
+    <details className="rounded-lg border p-4">
+      <summary className="cursor-pointer font-medium">{title}</summary>
+      <form
+        aria-label={title}
+        className="mt-4 space-y-3"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          try {
+            const body = memberKey ? { admin_api_key: value } : { signing_secret: value };
+            const result = await mutation.mutateAsync({ method: "PATCH", path: `/sources/${sourceId}`, body });
+            setSync((result as { sync_result?: SyncResult }).sync_result ?? null);
+            setValue("");
+            setSaved(true);
+          } catch {
+            setSaved(false);
+          }
+        }}
+      >
+        <label className="grid gap-2 text-sm">
+          {memberKey ? t("agents.external.adminApiKey") : t("agents.external.grokBotSigningSecret")}
+          <Input
+            required
+            type="password"
+            autoComplete="new-password"
+            value={value}
+            pattern={memberKey ? undefined : secretPattern}
+            onChange={(event) => setValue(event.target.value)}
+          />
         </label>
-        <Button
-          variant="outline"
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(url);
-              setCopied(true);
-            } catch {
-              setError(t("agents.external.copyUnavailableSelectAndCopyTheHookURLAbove"));
-            }
-          }}
-        >
-          {copied ? t("agents.external.copied") : t("agents.external.copyHookURL")}
+        <Button type="submit" disabled={mutation.isPending}>
+          {t("agents.external.save")}
         </Button>
-        {error && <p role="alert">{error}</p>}
-        <ol className="list-decimal space-y-3 pl-5 text-sm">
-          <li>{t("agents.external.pasteThisURLInGrokBotGtInferenceHooks")}</li>
-          <li>{t("agents.external.pasteTheSameGrokBotgeneratedSigningSecretUsedForThisConnection")}</li>
-          <li>{t("agents.external.runTestConnectionInGrokBotBotsAppearAfterTheirFirstRealEvent")}</li>
+        {saved && (
+          <p role="status">
+            {sync
+              ? t("agents.external.membersMatched", {
+                  matched: sync.matched + sync.already_mapped,
+                  total: sync.matched + sync.already_mapped + sync.unmatched,
+                })
+              : t("agents.external.saved")}
+          </p>
+        )}
+        {mutation.error && (
+          <p role="alert" className="text-destructive">
+            {mutation.error.message}
+          </p>
+        )}
+      </form>
+    </details>
+  );
+}
+
+export function SetupCard({ token, sourceId, status }: { token: string; sourceId: string; status: string }) {
+  const { t } = useTranslation();
+  const connection = useExternalQuery<Connection>(token, `/sources/${sourceId}/connection`);
+  return (
+    <div className="rounded-xl border bg-card p-6 space-y-5" aria-label={t("agents.external.setupGrokBot")}>
+      <h2 className="text-lg font-semibold">{t("agents.external.setupGrokBot")}</h2>
+      {connection.isPending && <p role="status">{t("agents.external.loadingConnections")}</p>}
+      {connection.error && <p role="alert">{connection.error.message}</p>}
+      {connection.data && (
+        <ol className="list-decimal space-y-5 pl-5">
+          <li>
+            <CopyField label={t("agents.external.endpointUrl")} value={hookUrl(sourceId)} />
+          </li>
+          <li className="space-y-3">
+            <CopyField label={t("agents.external.customHeaderName")} value="Authorization" />
+            <CopyField
+              label={t("agents.external.customHeaderValue")}
+              value={`Bearer ${connection.data.ingest_key}`}
+              password
+            />
+          </li>
+          <li className="text-sm">{t("agents.external.setupInstructions")}</li>
         </ol>
-        <Button onClick={onClose}>{t("agents.external.done")}</Button>
-      </DialogContent>
-    </Dialog>
+      )}
+      <p role="status" className="font-medium">
+        {status}
+      </p>
+      <p className="text-xs text-muted-foreground">
+        {t("agents.external.shadowAllowsRequestsAndRecordsWhatWouldBeDenied")}
+      </p>
+      <OptionalCredential token={token} sourceId={sourceId} memberKey />
+      <OptionalCredential token={token} sourceId={sourceId} memberKey={false} />
+    </div>
   );
 }

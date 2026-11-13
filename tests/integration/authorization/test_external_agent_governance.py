@@ -19,11 +19,61 @@ from tests.integration._support.database import write_rows
 OBJECTS: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 
 
+def test_zero_input_source_authentication_and_default_coverage(gateway: Gateway) -> None:
+    response: Final = gateway.request("POST", "/v1/external_agents/sources")
+    assert response.status_code == 200, response.text
+    source: Final = object_value(response.json())
+    identity: Final = string_value(source["source_id"])
+    key: Final = string_value(source["ingest_key"])
+    hook: Final = Hook(gateway, identity, "", key)
+    try:
+        assert source["display_name"] == "GrokBot" and source["mode"] == "shadow"
+        assert key.startswith("litellm_ingest_")
+        assert gateway.get(f"/v1/external_agents/sources/{identity}/connection")["ingest_key"] == key
+        policies_response: Final = gateway.request(
+            "GET", "/v1/external_agents/policies", params={"source_id": identity}
+        )
+        assert policies_response.status_code == 200, policies_response.text
+        policies: Final = OBJECTS.validate_json(policies_response.content)
+        assert len(policies) == 1
+        assert (
+            policies[0]["team_id"],
+            policies[0]["blocked_tools"],
+            policies[0]["allow_unmapped_actors"],
+            policies[0]["require_owner"],
+        ) == (None, [], True, False)
+        assert hook.send("ignored", application="config-test").status_code == 200
+        sources_response: Final = gateway.request("GET", "/v1/external_agents/sources")
+        assert sources_response.status_code == 200, sources_response.text
+        sources: Final = OBJECTS.validate_json(sources_response.content)
+        saved: Final = next(item for item in sources if item["source_id"] == identity)
+        assert saved["last_event_at"] is not None
+        assert not {"ingest_key", "signing_secret", "admin_api_key"}.intersection(saved)
+        assert hook.agents() == ()
+        assert hook.send("bot", authorization="").status_code == 401
+        assert hook.send("bot", authorization="Bearer wrong").status_code == 401
+        assert hook.send("bot").status_code == 200
+        summary: Final = gateway.get("/v1/external_agents/summary", {"source_id": identity})
+        assert summary["covered_by_team_policy"] == summary["discovered"] == 1
+        secret: Final = "whsec_" + base64.b64encode(b"test-hardening-key").decode()
+        patched: Final = gateway.request("PATCH", f"/v1/external_agents/sources/{identity}", {"signing_secret": secret})
+        assert patched.status_code == 200, patched.text
+        assert hook.send("bad-signature").status_code == 401
+        signed: Final = Hook(gateway, identity, secret, key).send("signed")
+        assert signed.status_code == 200, signed.text
+    finally:
+        for table in ("Decision", "Actor", "Policy", ""):
+            name: Final = "LiteLLM_ExternalAgent" + table
+            write_rows(f'DELETE FROM "{name}" WHERE source_id=%s', (identity,))
+        write_rows('DELETE FROM "LiteLLM_ExternalAgentSource" WHERE source_id=%s', (identity,))
+
+
 @dataclass(frozen=True, slots=True)
 class Hook:
     gateway: Gateway
     source_id: str
     secret: str = field(repr=False)
+    ingest_key: str = field(default="", repr=False)
 
     def send(
         self,
@@ -36,6 +86,7 @@ class Hook:
         application: str = "grok-bot",
         tenant: str = "tenant",
         signature_valid: bool = True,
+        authorization: str | None = None,
     ) -> httpx.Response:
         identity: Final = request_id or str(uuid.uuid4())
         body: Final = json.dumps(
@@ -78,6 +129,7 @@ class Hook:
                 "webhook-timestamp": timestamp,
                 "webhook-signature": "v1," + (base64.b64encode(digest).decode() if signature_valid else "invalid"),
                 "x-litellm-user-role": "proxy_admin",
+                "Authorization": authorization if authorization is not None else "Bearer " + self.ingest_key,
             },
         )
 
@@ -119,7 +171,7 @@ def hook(gateway: Gateway) -> Iterator[Hook]:
     )
     source_id: Final = string_value(source["source_id"])
     try:
-        yield Hook(gateway, source_id, secret)
+        yield Hook(gateway, source_id, secret, string_value(source["ingest_key"]))
     finally:
         write_rows('DELETE FROM "LiteLLM_ExternalAgentDecision" WHERE source_id=%s', (source_id,))
         write_rows('DELETE FROM "LiteLLM_ExternalAgentActor" WHERE source_id=%s', (source_id,))
@@ -173,7 +225,7 @@ def test_discovery_retry_team_inheritance_and_bulk_resolution(hook: Hook) -> Non
             for key in ("discovered", "covered_by_team_policy", "needs_owner", "unmapped_actors", "denied_24h")
         } == {
             "discovered": 2,
-            "covered_by_team_policy": 1,
+            "covered_by_team_policy": 2,
             "needs_owner": 2,
             "unmapped_actors": 0,
             "denied_24h": 0,
@@ -283,7 +335,7 @@ def test_secret_rotation_retains_previous_signatures_without_returning_secrets(h
     serialized: Final = object_value(response.json())
     assert "signing_secret" not in serialized and "previous_signing_secret" not in serialized
     old: Final = hook.send("old-secret-bot")
-    new: Final = Hook(hook.gateway, hook.source_id, new_secret).send("new-secret-bot")
+    new: Final = Hook(hook.gateway, hook.source_id, new_secret, hook.ingest_key).send("new-secret-bot")
     assert old.status_code == new.status_code == 200, (old.text, new.text)
     assert old.json() == new.json() == {"action": "allow"}
 

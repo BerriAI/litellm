@@ -4,6 +4,8 @@ import type { components } from "@/lib/http/schema";
 import type { QueryParams, HttpMethod } from "@/lib/http/client";
 
 export type Source = components["schemas"]["Source"];
+export type Connection = components["schemas"]["SourceConnection"];
+export type SyncResult = components["schemas"]["MemberSyncResult"];
 export type Bot = components["schemas"]["Agent"];
 export type Policy = components["schemas"]["Policy"];
 export type Decision = components["schemas"]["Decision"];
@@ -23,7 +25,7 @@ export function useExternalQuery<T>(token: string, path: string, query?: QueryPa
     queryFn: ({ signal }: { signal: AbortSignal }) =>
       apiClient.get<T>(root + path, { accessToken: token, query, signal }),
     enabled: Boolean(token) && enabled,
-    refetchInterval: 15000,
+    refetchInterval: 5000,
   };
   return useQuery<T>(options);
 }

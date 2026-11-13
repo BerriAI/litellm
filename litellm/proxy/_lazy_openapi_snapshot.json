@@ -16346,6 +16346,11 @@
               ],
               "title": "Last Event At"
             },
+            "needs_attention": {
+              "default": 0,
+              "title": "Needs Attention",
+              "type": "integer"
+            },
             "needs_owner": {
               "title": "Needs Owner",
               "type": "integer"
@@ -16377,6 +16382,34 @@
             }
           },
           "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "MemberSyncRequest": {
+          "properties": {},
+          "title": "MemberSyncRequest",
+          "type": "object"
+        },
+        "MemberSyncResult": {
+          "properties": {
+            "already_mapped": {
+              "title": "Already Mapped",
+              "type": "integer"
+            },
+            "matched": {
+              "title": "Matched",
+              "type": "integer"
+            },
+            "unmatched": {
+              "title": "Unmatched",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "matched",
+            "unmatched",
+            "already_mapped"
+          ],
+          "title": "MemberSyncResult",
           "type": "object"
         },
         "Policy": {
@@ -16486,6 +16519,18 @@
               "title": "Display Name",
               "type": "string"
             },
+            "last_event_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Event At"
+            },
             "mode": {
               "default": "shadow",
               "enum": [
@@ -16524,9 +16569,110 @@
           "title": "Source",
           "type": "object"
         },
+        "SourceConnection": {
+          "properties": {
+            "default_policy_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Default Policy Id"
+            },
+            "display_name": {
+              "title": "Display Name",
+              "type": "string"
+            },
+            "hook_path": {
+              "title": "Hook Path",
+              "type": "string"
+            },
+            "ingest_key": {
+              "title": "Ingest Key",
+              "type": "string"
+            },
+            "last_event_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Event At"
+            },
+            "mode": {
+              "default": "shadow",
+              "enum": [
+                "shadow",
+                "enforce"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "source_id": {
+              "title": "Source Id",
+              "type": "string"
+            },
+            "sync_result": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MemberSyncResult"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tenant_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            },
+            "vendor": {
+              "const": "grok_bot",
+              "default": "grok_bot",
+              "title": "Vendor",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source_id",
+            "display_name",
+            "ingest_key",
+            "hook_path"
+          ],
+          "title": "SourceConnection",
+          "type": "object"
+        },
         "SourceCreate": {
           "properties": {
+            "admin_api_key": {
+              "anyOf": [
+                {
+                  "format": "password",
+                  "type": "string",
+                  "writeOnly": true
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Admin Api Key"
+            },
             "display_name": {
+              "default": "GrokBot",
               "maxLength": 200,
               "minLength": 1,
               "title": "Display Name",
@@ -16542,21 +16688,37 @@
               "type": "string"
             },
             "signing_secret": {
-              "format": "password",
-              "title": "Signing Secret",
-              "type": "string",
-              "writeOnly": true
+              "anyOf": [
+                {
+                  "format": "password",
+                  "type": "string",
+                  "writeOnly": true
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Signing Secret"
             }
           },
-          "required": [
-            "display_name",
-            "signing_secret"
-          ],
           "title": "SourceCreate",
           "type": "object"
         },
         "SourcePatch": {
           "properties": {
+            "admin_api_key": {
+              "anyOf": [
+                {
+                  "format": "password",
+                  "type": "string",
+                  "writeOnly": true
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Admin Api Key"
+            },
             "display_name": {
               "anyOf": [
                 {
@@ -16600,6 +16762,83 @@
             }
           },
           "title": "SourcePatch",
+          "type": "object"
+        },
+        "SourceSaved": {
+          "properties": {
+            "default_policy_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Default Policy Id"
+            },
+            "display_name": {
+              "title": "Display Name",
+              "type": "string"
+            },
+            "last_event_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Event At"
+            },
+            "mode": {
+              "default": "shadow",
+              "enum": [
+                "shadow",
+                "enforce"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "source_id": {
+              "title": "Source Id",
+              "type": "string"
+            },
+            "sync_result": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MemberSyncResult"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tenant_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            },
+            "vendor": {
+              "const": "grok_bot",
+              "default": "grok_bot",
+              "title": "Vendor",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source_id",
+            "display_name"
+          ],
+          "title": "SourceSaved",
           "type": "object"
         },
         "Updated": {
@@ -17223,18 +17462,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SourceCreate"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SourceCreate"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Data"
                 }
               }
-            },
-            "required": true
+            }
           },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/Source"
+                    "$ref": "#/components/schemas/SourceConnection"
                   }
                 }
               },
@@ -17292,7 +17538,7 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/Source"
+                    "$ref": "#/components/schemas/SourceSaved"
                   }
                 }
               },
@@ -17315,6 +17561,119 @@
             }
           ],
           "summary": "Patch Source",
+          "tags": [
+            "external_agents"
+          ]
+        }
+      },
+      "/v1/external_agents/sources/{id}/connection": {
+        "get": {
+          "description": "Show connection credentials to a proxy administrator.",
+          "operationId": "source_connection_v1_external_agents_sources__id__connection_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "id",
+              "required": true,
+              "schema": {
+                "title": "Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SourceConnection"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Source Connection",
+          "tags": [
+            "external_agents"
+          ]
+        }
+      },
+      "/v1/external_agents/sources/{id}/sync_members": {
+        "post": {
+          "description": "Match vendor members by email without replacing existing mappings.",
+          "operationId": "sync_source_members_v1_external_agents_sources__id__sync_members_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "id",
+              "required": true,
+              "schema": {
+                "title": "Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MemberSyncRequest"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Data"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MemberSyncResult"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Sync Source Members",
           "tags": [
             "external_agents"
           ]

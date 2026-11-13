@@ -35,15 +35,21 @@ class Verdict(FrozenModel):
     reference_id: str | None = Field(default=None, max_length=50, pattern=r"^[A-Za-z0-9._:/-]+$")
 
 
-class Source(FrozenModel):
+class SourceDetails(FrozenModel):
     source_id: str
     vendor: Literal["grok_bot"] = "grok_bot"
     display_name: str
     tenant_id: str | None = None
-    signing_secret: str = Field(repr=False, exclude=True)
-    previous_signing_secret: str | None = Field(default=None, repr=False, exclude=True)
+    last_event_at: datetime | None = None
     mode: Literal["shadow", "enforce"] = "shadow"
     default_policy_id: str | None = None
+
+
+class Source(SourceDetails):
+    signing_secret: str | None = Field(default=None, repr=False, exclude=True)
+    ingest_key: str | None = Field(default=None, repr=False, exclude=True)
+    admin_api_key: str | None = Field(default=None, repr=False, exclude=True)
+    previous_signing_secret: str | None = Field(default=None, repr=False, exclude=True)
 
 
 class Agent(FrozenModel):
@@ -93,15 +99,36 @@ class Decision(FrozenModel):
 
 
 class SourceCreate(FrozenModel):
-    display_name: str = Field(min_length=1, max_length=200)
-    signing_secret: SecretStr
+    display_name: str = Field(default="GrokBot", min_length=1, max_length=200)
+    signing_secret: SecretStr | None = None
+    admin_api_key: SecretStr | None = None
     mode: Literal["shadow", "enforce"] = "shadow"
 
 
 class SourcePatch(FrozenModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     signing_secret: SecretStr | None = None
+    admin_api_key: SecretStr | None = None
     mode: Literal["shadow", "enforce"] | None = None
+
+
+class MemberSyncResult(FrozenModel):
+    matched: int
+    unmatched: int
+    already_mapped: int
+
+
+class MemberSyncRequest(FrozenModel):
+    pass
+
+
+class SourceSaved(SourceDetails):
+    sync_result: MemberSyncResult | None = None
+
+
+class SourceConnection(SourceSaved):
+    ingest_key: str = Field(repr=False)
+    hook_path: str
 
 
 class AgentPatch(FrozenModel):
@@ -137,6 +164,7 @@ class ExternalAgentSummary(FrozenModel):
     unmapped_actors: int
     denied_24h: int
     last_event_at: datetime | None
+    needs_attention: int = 0
 
 
 class Updated(FrozenModel):

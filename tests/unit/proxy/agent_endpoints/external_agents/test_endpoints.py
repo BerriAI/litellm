@@ -26,6 +26,8 @@ def test_source_response_never_serializes_current_or_previous_secret() -> None:
         display_name="Bots",
         signing_secret="encrypted-current",
         previous_signing_secret="encrypted-previous",
+        ingest_key="encrypted-ingest",
+        admin_api_key="encrypted-admin",
     )
     assert source.model_dump(mode="json") == {
         "source_id": "source",
@@ -34,4 +36,5 @@ def test_source_response_never_serializes_current_or_previous_secret() -> None:
         "tenant_id": None,
         "mode": "shadow",
         "default_policy_id": None,
+        "last_event_at": None,
     }
