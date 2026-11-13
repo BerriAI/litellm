@@ -1,4 +1,6 @@
-#[derive(veil::Redact, thiserror::Error)]
+use litellm_secret_value::Redacted;
+
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
     Connect(#[from] litellm_redis_client::ConnectError),
@@ -15,8 +17,7 @@ pub enum Error {
         stage: CredentialStage,
         http_status: Option<u16>,
         #[source]
-        #[redact(with = "[REDACTED]")]
-        cause: litellm_error::Source,
+        cause: Redacted<litellm_error::Source>,
     },
     #[error("credential acquisition exceeded {timeout:?}")]
     CredentialTimeout {
@@ -51,7 +52,7 @@ impl Error {
         move |cause| Self::Credential {
             stage,
             http_status: None,
-            cause: litellm_error::Source::new(cause),
+            cause: Redacted::new(litellm_error::Source::new(cause)),
         }
     }
 
@@ -62,7 +63,7 @@ impl Error {
         move |cause| Self::Credential {
             stage,
             http_status: Some(status),
-            cause: litellm_error::Source::new(cause),
+            cause: Redacted::new(litellm_error::Source::new(cause)),
         }
     }
 

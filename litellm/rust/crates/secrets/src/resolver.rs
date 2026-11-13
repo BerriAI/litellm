@@ -5,7 +5,7 @@ use litellm_core_utils::{serde_compat::parse_str_bool, settings::Lookup};
 
 use crate::state::{LookupTarget, normalize_secret_name};
 use crate::{Error, OidcResolver, Secret, SecretManagerState};
-use litellm_secret_value::SecretValue;
+use litellm_secret_value::{Redacted, SecretValue};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FailurePolicy {
@@ -136,10 +136,10 @@ impl SecretResolver {
         default_value: Option<bool>,
     ) -> Result<Option<bool>, Error> {
         match self
-            .get_secret(name, default_value.map(Secret::Bool))
+            .get_secret(name, default_value.map(|value| Secret::Bool(Redacted::new(value))))
             .await?
         {
-            Some(Secret::Bool(value)) => Ok(Some(value)),
+            Some(Secret::Bool(value)) => Ok(Some(value.into_inner())),
             Some(Secret::String(value)) => match parse_str_bool(value.expose()) {
                 Some(value) => Ok(Some(value)),
                 None if self.python_compatible => Ok(None),
@@ -169,7 +169,7 @@ impl SecretResolver {
         }
         Some(
             parse_str_bool(&value)
-                .map_or_else(|| Secret::String(SecretValue::new(value)), Secret::Bool),
+                .map_or_else(|| Secret::String(SecretValue::new(value)), |value| Secret::Bool(Redacted::new(value))),
         )
     }
 

@@ -6,7 +6,7 @@ use crate::{
     Error, KeyManagementSettings, KeyManagementSystem, Secret, SecretManager,
     get_secret_from_manager,
 };
-use litellm_secret_value::SecretValue;
+use litellm_secret_value::{Redacted, SecretValue};
 
 pub async fn get_secret_from_python_manager(
     manager: &SecretManager,
@@ -57,7 +57,7 @@ pub async fn get_secret_from_python_manager(
 
 pub(crate) fn python_manager_string(value: SecretValue) -> Secret {
     match literal_eval(value.expose()) {
-        Ok(Value::Bool(boolean)) => Secret::Bool(boolean),
+        Ok(Value::Bool(boolean)) => Secret::Bool(Redacted::new(boolean)),
         _ => Secret::String(value),
     }
 }

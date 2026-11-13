@@ -51,6 +51,7 @@ const AWS: &[(&str, Read)] = &[("aws_iam_region", Read::SecretStr)];
 pub(super) fn merged(configured: &ConfiguredRedis, lookup: &dyn Lookup) -> Result<Kwargs, Error> {
     let block: Kwargs = configured
         .fields
+        .expose()
         .iter()
         .map(|(key, value)| (key, environment_reference(value, lookup)))
         .filter(|(key, value)| !value.is_null() || keeps_null(configured.nulls, key))

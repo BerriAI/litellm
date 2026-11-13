@@ -26,7 +26,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util = "0.7"
-veil.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

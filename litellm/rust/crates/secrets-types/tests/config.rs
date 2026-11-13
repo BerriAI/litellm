@@ -65,11 +65,11 @@ fn access_mode_reports_readability(#[case] mode: AccessMode, #[case] expected: b
 
 #[rstest]
 #[case::string(json!("value"), Secret::String(SecretValue::new("value")))]
-#[case::boolean(json!(true), Secret::Bool(true))]
-#[case::number(json!(7), Secret::Json(json!(7)))]
-#[case::null(json!(null), Secret::Json(json!(null)))]
-#[case::array(json!(["value"]), Secret::Json(json!(["value"])))]
-#[case::object(json!({"key": "value"}), Secret::Json(json!({"key": "value"})))]
+#[case::boolean(json!(true), Secret::Bool(true.into()))]
+#[case::number(json!(7), Secret::Json(json!(7).into()))]
+#[case::null(json!(null), Secret::Json(json!(null).into()))]
+#[case::array(json!(["value"]), Secret::Json(json!(["value"]).into()))]
+#[case::object(json!({"key": "value"}), Secret::Json(json!({"key": "value"}).into()))]
 fn secret_conversion_preserves_json_types(
     #[case] value: serde_json::Value,
     #[case] expected: Secret,
@@ -79,8 +79,8 @@ fn secret_conversion_preserves_json_types(
 
 #[rstest]
 #[case::string(Secret::String(SecretValue::new("sensitive-value")), "sensitive-value")]
-#[case::boolean(Secret::Bool(true), "true")]
-#[case::json(Secret::Json(json!({"private": "value"})), "private")]
+#[case::boolean(Secret::Bool(true.into()), "true")]
+#[case::json(Secret::Json(json!({"private": "value"}).into()), "private")]
 fn secret_debug_never_exposes_values(#[case] secret: Secret, #[case] sensitive: &str) {
     assert!(!format!("{secret:?}").contains(sensitive));
 }

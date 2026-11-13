@@ -112,7 +112,7 @@ async fn environment_values_are_coerced_like_str_to_bool(
     let resolver = resolver(Some(input));
     assert_eq!(
         resolver.get_secret("key", None).await.unwrap(),
-        Some(boolean.map_or_else(|| Secret::String(SecretValue::new(input)), Secret::Bool))
+        Some(boolean.map_or_else(|| Secret::String(SecretValue::new(input)), |value| Secret::Bool(value.into())))
     );
     assert_eq!(
         resolver
@@ -134,7 +134,7 @@ async fn defaults_never_replace_an_absent_secret() {
     let missing = resolver(None);
     assert_eq!(
         missing
-            .get_secret("key", Some(Secret::Bool(false)))
+            .get_secret("key", Some(Secret::Bool(false.into())))
             .await
             .unwrap(),
         None
@@ -206,7 +206,7 @@ fn managed(reply: Result<Option<Secret>, ()>, environment: Option<&'static str>)
 async fn custom_manager_absence_uses_environment_instead_of_the_default() {
     assert_eq!(
         managed(Ok(None), Some("environment"))
-            .get_secret("key", Some(Secret::Bool(true)))
+            .get_secret("key", Some(Secret::Bool(true.into())))
             .await
             .unwrap(),
         Some(Secret::String(SecretValue::new("environment")))
@@ -214,8 +214,8 @@ async fn custom_manager_absence_uses_environment_instead_of_the_default() {
 }
 
 #[rstest::rstest]
-#[case::capitalized_true("True", Some(Secret::Bool(true)), Some(true))]
-#[case::parenthesized_false("(False)", Some(Secret::Bool(false)), Some(false))]
+#[case::capitalized_true("True", Some(Secret::Bool(true.into())), Some(true))]
+#[case::parenthesized_false("(False)", Some(Secret::Bool(false.into())), Some(false))]
 #[case::lowercase_true("true", None, Some(true))]
 #[case::number("1", None, None)]
 #[case::text("secret", None, None)]
@@ -250,7 +250,7 @@ async fn manager_strings_are_coerced_like_literal_eval(
 }
 
 #[rstest::rstest]
-#[case::boolean(Secret::Bool(false))]
+#[case::boolean(Secret::Bool(false.into()))]
 #[case::object(Secret::from_json(serde_json::json!({"key": 1})))]
 #[case::null(Secret::from_json(serde_json::Value::Null))]
 #[tokio::test]
@@ -262,7 +262,7 @@ async fn non_string_manager_values_resolve_to_none(#[case] value: Secret) {
 }
 
 #[rstest::rstest]
-#[case::capitalized_true(Some("True"), Some(Secret::Bool(true)))]
+#[case::capitalized_true(Some("True"), Some(Secret::Bool(true.into())))]
 #[case::lowercase_true(Some("true"), Some(Secret::String(SecretValue::new("true"))))]
 #[case::missing(None, None)]
 #[tokio::test]
@@ -272,7 +272,7 @@ async fn manager_failures_fall_back_to_the_environment_like_literal_eval(
 ) {
     assert_eq!(
         managed(Err(()), environment)
-            .get_secret("key", Some(Secret::Bool(false)))
+            .get_secret("key", Some(Secret::Bool(false.into())))
             .await
             .unwrap(),
         expected
@@ -353,7 +353,7 @@ async fn excluded_hosted_keys_keep_the_python_manager_conversion_path(
     assert_eq!(
         resolver.get_secret("KEY", None).await.unwrap(),
         Some(if boolean {
-            Secret::Bool(true)
+            Secret::Bool(true.into())
         } else {
             Secret::String(SecretValue::new(raw))
         })

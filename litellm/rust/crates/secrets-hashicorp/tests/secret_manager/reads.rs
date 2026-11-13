@@ -404,7 +404,7 @@ async fn unreachable_vault_reads_are_connect_failures_without_the_url() {
         .await
         .unwrap_err();
 
-    assert!(matches!(&error, Error::Transport(transport) if transport.is_connect()));
+    assert!(matches!(&error, Error::Transport(transport) if transport.expose().is_connect()));
     let report = litellm_error::Report::new(&error).to_string();
     assert!(
         report.starts_with("HashiCorp Vault request failed: "),

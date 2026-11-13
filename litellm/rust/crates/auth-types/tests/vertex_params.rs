@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use litellm_auth_types::VertexParams;
+use litellm_secret_value::SecretValue;
 use rstest::rstest;
 use serde_json::{Map, Value, json};
 
@@ -24,8 +25,8 @@ fn params_prefer_the_current_spelling_over_the_legacy_one(
 ) {
     assert_eq!(params.project().as_deref(), project);
     let mirrored = VertexParams {
-        vertex_credentials: params.vertex_project.clone(),
-        vertex_ai_credentials: params.vertex_ai_project.clone(),
+        vertex_credentials: params.vertex_project.clone().map(SecretValue::new),
+        vertex_ai_credentials: params.vertex_ai_project.clone().map(SecretValue::new),
         vertex_location: params.vertex_project.clone(),
         vertex_ai_location: params.vertex_ai_project.clone(),
         ..VertexParams::default()

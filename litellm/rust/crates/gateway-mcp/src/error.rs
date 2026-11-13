@@ -8,6 +8,7 @@ use axum::{
 };
 use http::header::{InvalidHeaderName, InvalidHeaderValue, ToStrError};
 use litellm_error::{Report, Source};
+use litellm_secret_value::Redacted;
 use rmcp::{
     model::{ErrorCode, ErrorData},
     service::{ClientInitializeError, ServiceError},
@@ -218,7 +219,7 @@ impl IntoResponse for Error {
     }
 }
 
-#[derive(thiserror::Error, veil::Redact)]
+#[derive(Debug, thiserror::Error)]
 pub enum ConnectError {
     #[error("MCP server {server} is misconfigured")]
     Configuration {
@@ -234,8 +235,7 @@ pub enum ConnectError {
     Initialize {
         server: String,
         #[source]
-        #[redact]
-        source: Box<ClientInitializeError>,
+        source: Redacted<Box<ClientInitializeError>>,
     },
     #[error("MCP upstream {0} initialization timed out")]
     Timeout(String),
@@ -303,7 +303,9 @@ mod tests {
     fn startup_diagnostics_do_not_expose_upstream_details() {
         let error = ConnectError::Initialize {
             server: "docs".into(),
-            source: Box::new(ClientInitializeError::ConnectionClosed(SECRET_URL.into())),
+            source: Redacted::new(Box::new(ClientInitializeError::ConnectionClosed(
+                SECRET_URL.into(),
+            ))),
         };
         let debug = format!("{error:?}");
         assert!(debug.contains("docs"));

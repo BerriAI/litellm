@@ -12,7 +12,6 @@ serde.workspace = true
 serde_yaml_ng = "0.10.0"
 strum.workspace = true
 thiserror.workspace = true
-veil.workspace = true
 
 [dev-dependencies]
 litellm-error.workspace = true

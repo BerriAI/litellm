@@ -3,7 +3,7 @@ use super::*;
 #[rstest]
 #[case::string_value("KEY", Some(Secret::String(SecretValue::new("value"))))]
 #[case::missing_value("missing", None)]
-#[case::non_string_value("BOOL", Some(Secret::Bool(true)))]
+#[case::non_string_value("BOOL", Some(Secret::Bool(true.into())))]
 #[tokio::test]
 async fn primary_lookup_preserves_read_semantics(
     default_settings: KeyManagementSettings,

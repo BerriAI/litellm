@@ -73,7 +73,7 @@ fn project_is_read_from_the_credentials_that_would_authenticate() {
         Some("inline-project")
     );
     let from_file = VertexConfig::from_params(&VertexParams {
-        vertex_credentials: Some(path.clone()),
+        vertex_credentials: Some(path.clone().into()),
         ..VertexParams::default()
     });
     assert_eq!(

@@ -1,15 +1,12 @@
 use hyper_util::client::proxy::matcher::Matcher;
 use litellm_core_utils::settings::Lookup;
-use veil::Redact;
+use litellm_secret_value::Redacted;
 
-#[derive(Clone, Redact, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct EnvironmentProxies {
-    #[redact]
-    all: String,
-    #[redact]
-    http: String,
-    #[redact]
-    https: String,
+    all: Redacted<String>,
+    http: Redacted<String>,
+    https: Redacted<String>,
     no: String,
 }
 
@@ -26,22 +23,22 @@ impl EnvironmentProxies {
         };
         let is_cgi = env.get("REQUEST_METHOD").is_some();
         Self {
-            all: lowercase_first(Some("ALL_PROXY"), "all_proxy"),
-            http: if is_cgi && names_ignore_case {
+            all: Redacted::new(lowercase_first(Some("ALL_PROXY"), "all_proxy")),
+            http: Redacted::new(if is_cgi && names_ignore_case {
                 String::new()
             } else {
                 lowercase_first((!is_cgi).then_some("HTTP_PROXY"), "http_proxy")
-            },
-            https: lowercase_first(Some("HTTPS_PROXY"), "https_proxy"),
+            }),
+            https: Redacted::new(lowercase_first(Some("HTTPS_PROXY"), "https_proxy")),
             no: lowercase_first(Some("NO_PROXY"), "no_proxy"),
         }
     }
 
     pub(crate) fn matcher(&self) -> impl Fn(&reqwest::Url) -> bool + Send + Sync + use<> {
         let matcher = Matcher::builder()
-            .all(self.all.clone())
-            .http(self.http.clone())
-            .https(self.https.clone())
+            .all(self.all.expose().clone())
+            .http(self.http.expose().clone())
+            .https(self.https.expose().clone())
             .no(self.no.clone())
             .build();
         move |url| {
@@ -54,9 +51,9 @@ impl EnvironmentProxies {
     pub(crate) fn reqwest_proxies(&self) -> Vec<reqwest::Proxy> {
         let no_proxy = reqwest::NoProxy::from_string(&self.no);
         [
-            reqwest::Proxy::http(self.http.as_str()),
-            reqwest::Proxy::https(self.https.as_str()),
-            reqwest::Proxy::all(self.all.as_str()),
+            reqwest::Proxy::http(self.http.expose().as_str()),
+            reqwest::Proxy::https(self.https.expose().as_str()),
+            reqwest::Proxy::all(self.all.expose().as_str()),
         ]
         .into_iter()
         .filter_map(Result::ok)

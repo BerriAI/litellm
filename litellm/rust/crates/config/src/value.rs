@@ -1,9 +1,10 @@
 use std::{collections::BTreeMap, fmt, ops::Deref};
 
+use litellm_secret_value::Redacted;
 use serde::{Deserialize, Deserializer};
 
 pub type Value = serde_yaml_ng::Value;
-pub type AdditionalFields = BTreeMap<String, Value>;
+pub type AdditionalFields = Redacted<BTreeMap<String, Value>>;
 
 #[derive(Clone, Default, Deserialize)]
 #[serde(transparent)]
@@ -47,11 +48,11 @@ impl fmt::Debug for Object {
 /// Python's callback shorthand: one entry or a list of them, kept as the values written.
 pub(crate) fn one_or_many<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<Option<Vec<Value>>, D::Error> {
-    Ok(
-        Option::<Value>::deserialize(deserializer)?.map(|value| match value {
+) -> Result<Option<Redacted<Vec<Value>>>, D::Error> {
+    Ok(Option::<Value>::deserialize(deserializer)?.map(|value| {
+        Redacted::new(match value {
             Value::Sequence(values) => values,
             one => vec![one],
-        }),
-    )
+        })
+    }))
 }

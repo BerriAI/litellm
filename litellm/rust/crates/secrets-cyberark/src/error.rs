@@ -1,13 +1,11 @@
-#[derive(thiserror::Error, veil::Redact)]
+use litellm_secret_value::Redacted;
+
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("CyberArk Conjur operation timed out")]
     Timeout,
     #[error("CyberArk Conjur HTTP request failed")]
-    Http(
-        #[from]
-        #[redact]
-        litellm_http::Error,
-    ),
+    Http(#[source] Redacted<litellm_http::Error>),
     #[error("CyberArk Conjur authentication returned HTTP {0}")]
     AuthStatus(u16),
     #[error("CyberArk Conjur returned HTTP {0}")]
@@ -17,17 +15,9 @@ pub enum Error {
     )]
     MissingCredentials,
     #[error("CyberArk client certificate could not be loaded")]
-    ClientCertificate(
-        #[source]
-        #[redact]
-        litellm_http::Error,
-    ),
+    ClientCertificate(#[source] Redacted<litellm_http::Error>),
     #[error("CyberArk Conjur HTTP client could not be built")]
-    Client(
-        #[source]
-        #[redact]
-        litellm_http::Error,
-    ),
+    Client(#[source] Redacted<litellm_http::Error>),
     #[error("invalid refresh interval")]
     RefreshInterval(#[source] std::num::ParseIntError),
     #[error("invalid CyberArk Conjur endpoint")]
@@ -56,12 +46,17 @@ impl Error {
     }
 }
 
-#[derive(thiserror::Error, veil::Redact)]
+impl From<litellm_http::Error> for Error {
+    fn from(error: litellm_http::Error) -> Self {
+        Self::Http(Redacted::new(error))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
 #[error("CyberArk Conjur write failed")]
 pub struct WriteFailure {
     pub source: Error,
-    #[redact]
-    pub request_url: Option<reqwest::Url>,
+    pub request_url: Option<Redacted<reqwest::Url>>,
     pub authentication: bool,
 }
 
@@ -77,7 +72,7 @@ impl WriteFailure {
     pub(crate) fn request(source: Error, url: reqwest::Url) -> Self {
         Self {
             source,
-            request_url: Some(url),
+            request_url: Some(Redacted::new(url)),
             authentication: false,
         }
     }

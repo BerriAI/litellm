@@ -1,21 +1,20 @@
 use std::collections::BTreeMap;
 
+use litellm_secret_value::Redacted;
 use serde::{Deserialize, Deserializer, de::Error as _};
-use veil::Redact;
 
 use crate::{Object, Value};
 
 /// A Redis section as `config.yaml` spells it, before any surface reads it.
-#[derive(Clone, Default, Deserialize, Redact)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(transparent)]
 pub struct RedisSettings {
-    #[redact(with = "[REDACTED]")]
-    fields: BTreeMap<String, Value>,
+    fields: Redacted<BTreeMap<String, Value>>,
 }
 
 impl RedisSettings {
     pub fn fields(&self) -> &BTreeMap<String, Value> {
-        &self.fields
+        self.fields.expose()
     }
 }
 

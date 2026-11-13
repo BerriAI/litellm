@@ -1,23 +1,21 @@
+use litellm_secret_value::SecretValue;
 use serde::{Deserialize, Deserializer, Serialize, de::Unexpected};
 use serde_json::Value;
-use veil::Redact;
 
 use super::{ParamKind, ParamSpec};
 
 /// The Vertex AI fields of Python's `GenericLiteLLMParams`, both the current names and the
 /// `vertex_ai_*` spellings `VertexBase.safe_get_vertex_ai_*` still read.
-#[derive(Redact, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VertexParams {
     #[serde(default, deserialize_with = "optional_credential_text")]
-    #[redact(with = "[REDACTED]")]
-    pub vertex_credentials: Option<String>,
+    pub vertex_credentials: Option<SecretValue>,
     #[serde(default)]
     pub vertex_project: Option<String>,
     #[serde(default)]
     pub vertex_location: Option<String>,
     #[serde(default, deserialize_with = "optional_credential_text")]
-    #[redact(with = "[REDACTED]")]
-    pub vertex_ai_credentials: Option<String>,
+    pub vertex_ai_credentials: Option<SecretValue>,
     #[serde(default)]
     pub vertex_ai_project: Option<String>,
     #[serde(default)]
@@ -94,13 +92,13 @@ impl VertexParams {
 /// accepted as the JSON text it spells, the way Python passes a dict through.
 fn optional_credential_text<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<Option<String>, D::Error> {
+) -> Result<Option<SecretValue>, D::Error> {
     match Option::<Value>::deserialize(deserializer)? {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::String(text)) => Ok(Some(text)),
+        Some(Value::String(text)) => Ok(Some(SecretValue::new(text))),
         Some(Value::Object(object)) if object.is_empty() => Ok(None),
         Some(Value::Object(object)) => serde_json::to_string(&object)
-            .map(Some)
+            .map(|text| Some(SecretValue::new(text)))
             .map_err(serde::de::Error::custom),
         Some(other) => Err(serde::de::Error::invalid_type(
             Unexpected::Other(value_kind(&other)),

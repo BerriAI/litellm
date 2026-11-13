@@ -7,6 +7,7 @@ repository.workspace = true
 description = "Shared error rendering and type-erased causes for litellm-rust boundaries"
 
 [dependencies]
+litellm-secret-value.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

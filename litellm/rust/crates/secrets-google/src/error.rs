@@ -1,33 +1,19 @@
-#[derive(thiserror::Error, veil::Redact)]
+use litellm_secret_value::Redacted;
+
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
     Operation(#[from] litellm_secrets_types::Error),
     #[error("secret manager operation timed out")]
     Timeout,
     #[error("Google KMS client configuration failed")]
-    Client(
-        #[from]
-        #[redact]
-        google_cloud_gax::client_builder::Error,
-    ),
+    Client(#[source] Redacted<google_cloud_gax::client_builder::Error>),
     #[error("Google authentication failed")]
-    Auth(
-        #[from]
-        #[redact]
-        litellm_auth_types::Error,
-    ),
+    Auth(#[source] Redacted<litellm_auth_types::Error>),
     #[error("Google KMS request failed")]
-    Kms(
-        #[from]
-        #[redact]
-        google_cloud_gax::error::Error,
-    ),
+    Kms(#[source] Redacted<google_cloud_gax::error::Error>),
     #[error("Google Secret Manager HTTP request failed")]
-    Http(
-        #[from]
-        #[redact]
-        litellm_http::Error,
-    ),
+    Http(#[source] Redacted<litellm_http::Error>),
     #[error("Google Secret Manager returned HTTP {0}")]
     Status(u16),
     #[error("Google Secret Manager returned no payload")]
@@ -37,11 +23,7 @@ pub enum Error {
     #[error("invalid refresh interval")]
     RefreshInterval(#[source] std::num::ParseIntError),
     #[error("payload is not valid base64")]
-    Base64(
-        #[from]
-        #[redact]
-        base64::DecodeError,
-    ),
+    Base64(#[source] Redacted<base64::DecodeError>),
     #[error("Google Secret Manager payload checksum mismatch")]
     Checksum(#[source] Option<std::num::ParseIntError>),
     #[error("decrypted value is not UTF-8")]
@@ -71,5 +53,35 @@ impl Error {
             | Self::Endpoint(_)
             | Self::EnterpriseRequired => false,
         }
+    }
+}
+
+impl From<google_cloud_gax::client_builder::Error> for Error {
+    fn from(error: google_cloud_gax::client_builder::Error) -> Self {
+        Self::Client(Redacted::new(error))
+    }
+}
+
+impl From<litellm_auth_types::Error> for Error {
+    fn from(error: litellm_auth_types::Error) -> Self {
+        Self::Auth(Redacted::new(error))
+    }
+}
+
+impl From<google_cloud_gax::error::Error> for Error {
+    fn from(error: google_cloud_gax::error::Error) -> Self {
+        Self::Kms(Redacted::new(error))
+    }
+}
+
+impl From<litellm_http::Error> for Error {
+    fn from(error: litellm_http::Error) -> Self {
+        Self::Http(Redacted::new(error))
+    }
+}
+
+impl From<base64::DecodeError> for Error {
+    fn from(error: base64::DecodeError) -> Self {
+        Self::Base64(Redacted::new(error))
     }
 }

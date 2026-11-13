@@ -1,5 +1,6 @@
 use super::*;
 use aws_sdk_secretsmanager::config::retry::RetryConfig;
+use litellm_secret_value::Redacted;
 use litellm_secrets_types::PythonSecretRead;
 
 #[derive(Clone, Copy)]
@@ -174,7 +175,7 @@ impl AwsSecretsManagerV2 {
                     aws_sdk_secretsmanager::error::SdkError::TimeoutError(_)
                 ) || matches!(&error, aws_sdk_secretsmanager::error::SdkError::DispatchFailure(failure) if failure.is_timeout()) =>
             {
-                Err(Error::Timeout(Box::new(error)))
+                Err(Error::Timeout(Redacted::new(Box::new(error))))
             }
             Err(error)
                 if error
@@ -183,7 +184,7 @@ impl AwsSecretsManagerV2 {
             {
                 Ok(None)
             }
-            Err(error) => Err(Error::Read(Box::new(error))),
+            Err(error) => Err(Error::Read(Redacted::new(Box::new(error)))),
         }
     }
 }
@@ -218,7 +219,7 @@ fn resolve_payload(payload: PythonSecretRead, name: &str) -> Result<Option<Secre
         PythonSecretRead::Value(value) => Ok(value),
         PythonSecretRead::PrimaryJson(document) => {
             let object: Value = serde_json::from_str(document.expose())
-                .map_err(|error| Error::PrimarySecret(Some(error)))?;
+                .map_err(|error| Error::PrimarySecret(Some(Redacted::new(error))))?;
             let object = object.as_object().ok_or(Error::PrimarySecret(None))?;
             Ok(object.get(name).cloned().map(Secret::from_json))
         }
