@@ -3723,7 +3723,7 @@
       {
         "key": "api_base",
         "label": "API Base",
-        "placeholder": "https://ai.topxea.com/v1",
+        "placeholder": "https://api.topxai.xyz/v1",
         "tooltip": null,
         "required": false,
         "field_type": "text",

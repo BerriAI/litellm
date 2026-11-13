@@ -316,7 +316,7 @@
     }
   },
   "topxai": {
-    "base_url": "https://ai.topxea.com/v1",
+    "base_url": "https://api.topxai.xyz/v1",
     "api_key_env": "TOPXAI_API_KEY",
     "api_base_env": "TOPXAI_API_BASE",
     "supported_endpoints": [

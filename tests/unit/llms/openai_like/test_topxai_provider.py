@@ -13,8 +13,8 @@ import litellm
 from litellm._internal_context import pinned_billing_time
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-# Provider endpoint: https://ai.topxea.com/docs (verified 2026-09-19)
-TOPXAI_BASE_URL: Final = "https://ai.topxea.com/v1"
+# Provider endpoint: https://api.topxai.xyz/docs (verified 2026-09-19)
+TOPXAI_BASE_URL: Final = "https://api.topxai.xyz/v1"
 
 
 class TestTopxAIProviderConfig:
@@ -190,7 +190,7 @@ class TestTopxAIProviderConfig:
 
 
 class TestTopxAIModelMetadata:
-    # Catalog and capabilities: https://ai.topxea.com/api/pricing (verified 2026-11-10)
+    # Catalog and capabilities: https://api.topxai.xyz/api/pricing (verified 2026-11-10)
     TOPXAI_MODELS: Final = (
         "topxai/claude-sonnet-5-5",
         "topxai/claude-opus-5-5",
@@ -219,10 +219,10 @@ class TestTopxAIModelMetadata:
     # The catalogue publishes no output limit for these
     NO_OUTPUT_LIMIT_MODELS: Final = ("topxai/grok-4.7",)
     # First premium token and output multiplier, verified 2026-09-30:
-    # https://ai.topxea.com/pricing/gpt-6.1-sol
-    # https://ai.topxea.com/pricing/gpt-6.1-terra (verified 2026-11-09)
-    # https://ai.topxea.com/pricing/gpt-6-astra
-    # https://ai.topxea.com/pricing/grok-4.7
+    # https://api.topxai.xyz/pricing/gpt-6.1-sol
+    # https://api.topxai.xyz/pricing/gpt-6.1-terra (verified 2026-11-09)
+    # https://api.topxai.xyz/pricing/gpt-6-astra
+    # https://api.topxai.xyz/pricing/grok-4.7
     TIERED_MODELS: Final = (
         ("topxai/gpt-6.1-sol", 272_001, 1.5),
         ("topxai/gpt-6.1-terra", 272_001, 1.5),
@@ -230,8 +230,8 @@ class TestTopxAIModelMetadata:
         ("topxai/grok-4.7", 200_000, 2.0),
     )
     # Fixed prices at all hours (2026-11-08):
-    # https://ai.topxea.com/pricing/deepseek-flash-abliterated
-    # https://ai.topxea.com/pricing/deepseek-flash-fast
+    # https://api.topxai.xyz/pricing/deepseek-flash-abliterated
+    # https://api.topxai.xyz/pricing/deepseek-flash-fast
     DEEPSEEK_MODELS: Final = ("topxai/deepseek-flash-Abliterated", "topxai/deepseek-flash-fast")
     DEEPSEEK_MOMENTS: Final = (
         pytest.param(datetime(2026, 10, 26, 1, 0, tzinfo=timezone.utc), id="monday-01:00"),
@@ -272,7 +272,7 @@ class TestTopxAIModelMetadata:
 
             assert ("max_output_tokens" in info) is (model not in self.NO_OUTPUT_LIMIT_MODELS)
             assert info["max_input_tokens"] >= 500_000
-            assert info["source"].startswith("https://ai.topxea.com/pricing/")
+            assert info["source"].startswith("https://api.topxai.xyz/pricing/")
 
     @pytest.mark.parametrize("model,first_premium_token,output_multiplier", TIERED_MODELS)
     @pytest.mark.parametrize("offset", (-1, 0, 1))
