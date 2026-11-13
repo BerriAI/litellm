@@ -5,7 +5,7 @@ import json
 import os
 import queue
 import unittest
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
@@ -4492,6 +4492,103 @@ def test_chunk_parser_remaps_tool_call_indices_sequentially():
         }
     )
     assert second_args.choices[0].delta.tool_calls[0].index == 1
+
+
+_PARALLEL_CALLS: Final = (("call_paris", '{"city": "Paris"}'), ("call_rome", '{"city": "Rome"}'))
+
+_ARGUMENT_EVENTS: Final = MappingProxyType(
+    {
+        "function_call": ("response.function_call_arguments", "arguments"),
+        "custom_tool_call": ("response.custom_tool_call_input", "input"),
+    }
+)
+
+
+def _tool_call_events(
+    item: Mapping[str, object], output_index: int, streams_deltas: bool
+) -> Iterator[Mapping[str, object]]:
+    event_prefix, field = _ARGUMENT_EVENTS[str(item["type"])]
+    yield {"type": "response.output_item.added", "output_index": output_index, "item": {**item, field: ""}}
+    if streams_deltas:
+        yield {
+            "type": f"{event_prefix}.delta",
+            "item_id": item["id"],
+            "output_index": output_index,
+            "delta": item[field],
+        }
+    yield {"type": f"{event_prefix}.done", "item_id": item["id"], "output_index": output_index, field: item[field]}
+    yield {"type": "response.output_item.done", "output_index": output_index, "item": item}
+
+
+def _parallel_tool_call_sse(item_type: str, streams_deltas: bool) -> str:
+    field: Final = _ARGUMENT_EVENTS[item_type][1]
+    reasoning: Final = {"type": "reasoning", "id": "rs_1", "summary": []}
+    message: Final = {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Checking both.", "annotations": []}],
+    }
+    calls: Final = tuple(
+        {"type": item_type, "id": f"fc_{call_id}", "call_id": call_id, "name": "get_weather", field: arguments}
+        for call_id, arguments in _PARALLEL_CALLS
+    )
+    response_body: Final = {
+        "id": "resp_parallel",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-5.6",
+        "output": [reasoning, message, *calls],
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+    }
+    events: Final = (
+        {"type": "response.created", "response": {**response_body, "status": "in_progress", "output": []}},
+        {"type": "response.output_item.added", "output_index": 0, "item": reasoning},
+        {"type": "response.output_item.done", "output_index": 0, "item": reasoning},
+        {"type": "response.output_item.added", "output_index": 1, "item": {**message, "content": []}},
+        {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 1, "delta": "Checking both."},
+        {"type": "response.output_item.done", "output_index": 1, "item": message},
+        *_tool_call_events(calls[0], 2, streams_deltas),
+        *_tool_call_events(calls[1], 3, streams_deltas),
+        {"type": "response.completed", "response": response_body},
+    )
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+@pytest.mark.parametrize("item_type", ["function_call", "custom_tool_call"])
+@pytest.mark.parametrize("streams_deltas", [True, False], ids=["delta-then-done", "done-only"])
+@pytest.mark.asyncio
+async def test_streamed_parallel_tool_calls_carry_their_arguments_once(
+    monkeypatch: pytest.MonkeyPatch, item_type: str, streams_deltas: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(
+                200,
+                text=_parallel_tool_call_sse(item_type, streams_deltas),
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        stream: Final = await litellm.acompletion(
+            model="openai/responses/gpt-5.6",
+            messages=[{"role": "user", "content": "Weather in Paris and Rome?"}],
+            tools=[_GET_WEATHER_TOOL],
+            api_key="sk-test",
+            cache={"no-cache": True},
+            stream=True,
+        )
+        assert isinstance(stream, CustomStreamWrapper)
+        chunks: Final = [chunk async for chunk in stream]
+
+    rebuilt: Final = litellm.stream_chunk_builder(chunks=chunks)
+    tool_calls: Final = rebuilt.choices[0].message.tool_calls
+    assert [(call.id, call.function.name, call.function.arguments) for call in tool_calls] == [
+        (call_id, "get_weather", arguments) for call_id, arguments in _PARALLEL_CALLS
+    ]
 
 
 def test_convert_response_output_custom_tool_call_to_tool_calls_choice():
