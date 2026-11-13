@@ -1563,6 +1563,30 @@ def test_team_override_caps_the_team_until_it_expires_and_is_released_when_clear
     }
 
 
+@pytest.mark.parametrize("budget", ({"max_budget": 50}, None))
+def test_deleting_a_team_removes_its_override_budget_with_or_without_an_overall_budget(
+    budget: dict[str, object] | None,
+) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    family(http)
+    before_budgets: Final = frozenset(database.litellm_budgettable.rows)
+    created: Final = http.post(
+        "/management/v1/customer_teams",
+        json={
+            "customer_team_id": "boosted",
+            "parent_org_id": "org",
+            "budget": budget,
+            "budget_override": {"max_budget": 500},
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["budget_override_id"] in database.litellm_budgettable.rows
+    deleted: Final = http.delete("/management/v1/customer_teams/boosted")
+    assert deleted.status_code == 204, deleted.text
+    assert frozenset(database.litellm_budgettable.rows) == before_budgets
+
+
 def test_member_carries_its_teams_organization_and_another_organization_is_refused() -> None:
     http: Final = client()
     family(http)
