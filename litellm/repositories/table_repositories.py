@@ -81,6 +81,14 @@ class CustomerOrganizationRepository(PrismaTableRepository["prisma_models.LiteLL
     table_name = "litellm_customerorganizationtable"
 
 
+class CustomerMemberRepository(PrismaTableRepository["prisma_models.LiteLLM_CustomerMemberTable"]):
+    table_name = "litellm_customermembertable"
+
+
+class CustomerTeamRepository(PrismaTableRepository["prisma_models.LiteLLM_CustomerTeamTable"]):
+    table_name = "litellm_customerteamtable"
+
+
 class PolicyRepository(PrismaTableRepository["prisma_models.LiteLLM_PolicyTable"]):
     table_name = "litellm_policytable"
 

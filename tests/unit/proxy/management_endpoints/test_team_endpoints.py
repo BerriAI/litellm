@@ -2525,7 +2525,7 @@ async def test_refresh_cached_team_broadcasts_team_and_alias_invalidations(
 async def test_refresh_cached_team_flushes_redis_set_before_broadcast(monkeypatch) -> None:
     from litellm.caching.redis_batch import request_redis_batch_scope
     from litellm.proxy.management_endpoints import team_endpoints
-    from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
+    from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
     from tests.unit.redis.stores.auth_cache_double import shared_cache
 
     natives: Final = FakeNatives()
@@ -12308,6 +12308,7 @@ class TestResolveTeamAccessGroupResources:
         row1.access_mcp_server_ids = ["mcp-1"]
         row1.access_agent_ids = []
         row1.access_skill_names = ["private-plugin", "shared-plugin"]
+        row1.access_vector_store_ids = ["store-a", "store-b"]
 
         row2 = MagicMock()
         row2.access_group_id = "ag-2"
@@ -12316,6 +12317,7 @@ class TestResolveTeamAccessGroupResources:
         row2.access_mcp_server_ids = []
         row2.access_agent_ids = ["agent-1"]
         row2.access_skill_names = ["shared-plugin"]
+        row2.access_vector_store_ids = ["store-b", "store-c"]
 
         fake_prisma = MagicMock()
         fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
@@ -12344,6 +12346,11 @@ class TestResolveTeamAccessGroupResources:
         ] == [
             ("ag-1", "shared-models", ("gpt-4", "claude-3"), ("mcp-1",), (), ("private-plugin", "shared-plugin")),
             ("ag-2", "extra-models", ("claude-3", "gemini"), (), ("agent-1",), ("shared-plugin",)),
+        ]
+        assert resolved.access_group_vector_store_ids == ("store-a", "store-b", "store-c")
+        assert [d.vector_store_ids for d in (resolved.access_group_details or [])] == [
+            ("store-a", "store-b"),
+            ("store-b", "store-c"),
         ]
 
     @pytest.mark.asyncio
@@ -12386,6 +12393,34 @@ class TestResolveTeamAccessGroupResources:
 
         assert resolved.access_group_details is None
         assert resolved.access_group_models is None
+        assert resolved.access_group_vector_store_ids is None
+
+    @pytest.mark.asyncio
+    async def test_groups_without_vector_stores_resolve_to_an_empty_list(self) -> None:
+        """Empty means the groups add no vector stores; None means no group was looked up."""
+        from litellm.proxy._types import TeamInfoResponseObjectTeamTable
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _resolve_team_access_group_resources,
+        )
+
+        row = MagicMock()
+        row.access_group_id = "ag-1"
+        row.access_group_name = "models-only"
+        row.access_model_names = ["gpt-4"]
+        row.access_mcp_server_ids = []
+        row.access_agent_ids = []
+        row.access_skill_names = []
+        row.access_vector_store_ids = None
+        fake_prisma = MagicMock()
+        fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[row])
+
+        with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+            resolved = await _resolve_team_access_group_resources(
+                TeamInfoResponseObjectTeamTable(team_id="team-1", access_group_ids=["ag-1"])
+            )
+
+        assert resolved.access_group_vector_store_ids == ()
+        assert [d.vector_store_ids for d in (resolved.access_group_details or [])] == [()]
 
 
 @pytest.mark.asyncio

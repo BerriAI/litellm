@@ -1,7 +1,8 @@
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, NonNegativeInt, field_validator
 
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 
@@ -15,6 +16,8 @@ class Budget(BaseModel):
     rpm_limit: int | None = Field(default=None, ge=0)
     allowed_models: tuple[str, ...] | None = None
     budget_duration: str | None = None
+    model_tpm_limit: Mapping[str, NonNegativeInt] | None = None
+    model_rpm_limit: Mapping[str, NonNegativeInt] | None = None
 
     @field_validator("budget_duration")
     @classmethod
@@ -67,8 +70,8 @@ class MemberPatch(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     alias: str | None = None
+    budget_id: str | None = None
     budget_override: Budget | None = None
-    budget_template_id: str | None = None
     budget_override_expires_at: AwareDatetime | None = None
 
 
@@ -90,6 +93,7 @@ class AuditFields(BaseModel):
 
 
 class Organization(AuditFields):
+    member_count: int = Field(default=0, ge=0, description="Current registered members across all customer teams")
     budget_id: str | None = None
     budget: Budget | None = None
     customer_org_id: str
@@ -108,7 +112,7 @@ class CustomerMember(AuditFields):
     customer_member_id: str
     parent_team_id: str
     budget_id: str | None = None
-    budget_template_id: str | None = None
+    budget_override_id: str | None = None
     budget_override: Budget | None = None
     budget_override_expires_at: datetime | None = None
     effective_budget: Budget

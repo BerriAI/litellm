@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use bytes::Bytes;
+
 use litellm_http::outbound::{json, json_bytes, signed};
 use litellm_llms::base_llm::auth::Authenticated;
 use serde_json::Value;
@@ -35,15 +37,20 @@ pub fn outbound_request(
     }
 }
 
-pub fn raw_leaf_outbound_request(
+pub fn raw_leaf_body(body: &Value) -> Result<Bytes, litellm_http::Error> {
+    litellm_host::raw_json::to_vec(body)
+        .map(Bytes::from)
+        .map_err(litellm_http::Error::request_body)
+}
+
+pub fn serialized_outbound_request(
     authenticated: Authenticated,
     url: &str,
-    body: &Value,
+    body: Bytes,
     timeout: Option<Duration>,
 ) -> Result<reqwest::Request, litellm_http::Error> {
     let Authenticated { headers, signer } = authenticated;
-    let bytes = litellm_host::raw_json::to_vec(body).map_err(litellm_http::Error::request_body)?;
-    let request = json_bytes(url, &headers, bytes, timeout)?;
+    let request = json_bytes(url, &headers, body, timeout)?;
     match signer {
         None => Ok(request),
         Some(signer) => signed(request, &signer),

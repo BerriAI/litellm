@@ -126,6 +126,7 @@ from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import DecisionsResponse, DecisionsUsage, OpenAIDecisionResponse, OpenAIDecisionUsage
 from litellm.types.extraction import ExtractionResponse, ExtractionUsage
+from litellm.types.interactions import InteractionsAPIResponse
 from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -1205,6 +1206,8 @@ def _get_response_model(completion_response: object) -> str | None:
     if completion_response is None:
         return None
 
+    if isinstance(completion_response, InteractionsAPIResponse):
+        return completion_response.model or completion_response.agent
     if isinstance(completion_response, BaseModel):
         return getattr(completion_response, "model", None)
     elif isinstance(completion_response, dict):
