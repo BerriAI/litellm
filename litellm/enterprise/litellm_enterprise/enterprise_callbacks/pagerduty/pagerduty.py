@@ -13,7 +13,7 @@ However, this is under the enterprise license
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Final
+from typing import Final, Literal
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -48,15 +48,22 @@ def _metadata_of(payload: StandardLoggingPayload) -> StandardLoggingMetadata:
     return payload["metadata"]
 
 
+_CustomerIdKey = Literal[
+    "user_api_key_customer_member_id", "user_api_key_customer_team_id", "user_api_key_customer_org_id"
+]
+
+
+def _customer_id(metadata: StandardLoggingMetadata, key: _CustomerIdKey) -> str | None:
+    return metadata[key] if key in metadata else None
+
+
 class PagerDutyAlerting(SlackAlerting):
     """
     Tracks failed requests and hanging requests separately.
     If threshold is crossed for either type, triggers a PagerDuty alert.
     """
 
-    def __init__(
-        self, alerting_args: AlertingConfig | dict | None = None, **kwargs
-    ):
+    def __init__(self, alerting_args: AlertingConfig | dict | None = None, **kwargs):
         super().__init__()
         _api_key = os.getenv("PAGERDUTY_API_KEY")
         if not _api_key:
@@ -65,9 +72,7 @@ class PagerDutyAlerting(SlackAlerting):
         self.api_key: str = _api_key
         alerting_args = alerting_args or {}
         self.pagerduty_alerting_args: AlertingConfig = AlertingConfig(
-            failure_threshold=alerting_args.get(
-                "failure_threshold", PAGERDUTY_DEFAULT_FAILURE_THRESHOLD
-            ),
+            failure_threshold=alerting_args.get("failure_threshold", PAGERDUTY_DEFAULT_FAILURE_THRESHOLD),
             failure_threshold_window_seconds=alerting_args.get(
                 "failure_threshold_window_seconds",
                 PAGERDUTY_DEFAULT_FAILURE_THRESHOLD_WINDOW_SECONDS,
@@ -95,13 +100,9 @@ class PagerDutyAlerting(SlackAlerting):
         if isinstance(kwargs.get("exception"), MissingMessageRoleError):
             return
         now = datetime.now(timezone.utc)
-        standard_logging_payload: StandardLoggingPayload | None = kwargs.get(
-            "standard_logging_object"
-        )
+        standard_logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
         if not standard_logging_payload:
-            raise ValueError(
-                "standard_logging_object is required for PagerDutyAlerting"
-            )
+            raise ValueError("standard_logging_object is required for PagerDutyAlerting")
 
         # Extract error details
         error_info: StandardLoggingPayloadErrorInformation | None = (
@@ -133,9 +134,9 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_user_id=_meta.get("user_api_key_user_id"),
                 user_api_key_team_alias=_meta.get("user_api_key_team_alias"),
                 user_api_key_end_user_id=_meta.get("user_api_key_end_user_id"),
-                user_api_key_customer_member_id=_meta.get("user_api_key_customer_member_id"),
-                user_api_key_customer_team_id=_meta.get("user_api_key_customer_team_id"),
-                user_api_key_customer_org_id=_meta.get("user_api_key_customer_org_id"),
+                user_api_key_customer_member_id=_customer_id(_meta, "user_api_key_customer_member_id"),
+                user_api_key_customer_team_id=_customer_id(_meta, "user_api_key_customer_team_id"),
+                user_api_key_customer_org_id=_customer_id(_meta, "user_api_key_customer_org_id"),
                 user_api_key_user_email=_meta.get("user_api_key_user_email"),
                 user_api_key_request_route=_meta.get("user_api_key_request_route"),
                 user_api_key_auth_metadata=_meta.get("user_api_key_auth_metadata"),
@@ -143,9 +144,7 @@ class PagerDutyAlerting(SlackAlerting):
         )
 
         # Prune + Possibly alert
-        window_seconds = self.pagerduty_alerting_args.get(
-            "failure_threshold_window_seconds", 60
-        )
+        window_seconds = self.pagerduty_alerting_args.get("failure_threshold_window_seconds", 60)
         threshold = self.pagerduty_alerting_args.get("failure_threshold", 1)
 
         # If threshold is crossed, send PD alert for failures
@@ -168,16 +167,10 @@ class PagerDutyAlerting(SlackAlerting):
         If the request didn't finish by then, we treat it as 'hanging'.
         """
         verbose_logger.info("Inside Proxy Logging Pre-call hook!")
-        asyncio.create_task(
-            self.hanging_response_handler(
-                request_data=data, user_api_key_dict=user_api_key_dict
-            )
-        )
+        asyncio.create_task(self.hanging_response_handler(request_data=data, user_api_key_dict=user_api_key_dict))
         return None
 
-    async def hanging_response_handler(
-        self, request_data: dict | None, user_api_key_dict: UserAPIKeyAuth
-    ):
+    async def hanging_response_handler(self, request_data: dict | None, user_api_key_dict: UserAPIKeyAuth):
         """
         Checks if request completed by the time 'hanging_threshold_seconds' elapses.
         If not, we classify it as a hanging request.
@@ -186,9 +179,7 @@ class PagerDutyAlerting(SlackAlerting):
             f"Inside Hanging Response Handler!..sleeping for {self.pagerduty_alerting_args.get('hanging_threshold_seconds', PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS)} seconds"
         )
         await asyncio.sleep(
-            self.pagerduty_alerting_args.get(
-                "hanging_threshold_seconds", PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS
-            )
+            self.pagerduty_alerting_args.get("hanging_threshold_seconds", PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS)
         )
 
         if await self._request_is_completed(request_data=request_data):
@@ -207,9 +198,7 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_spend=user_api_key_dict.spend,
                 user_api_key_max_budget=user_api_key_dict.max_budget,
                 user_api_key_budget_reset_at=(
-                    user_api_key_dict.budget_reset_at.isoformat()
-                    if user_api_key_dict.budget_reset_at
-                    else None
+                    user_api_key_dict.budget_reset_at.isoformat() if user_api_key_dict.budget_reset_at else None
                 ),
                 user_api_key_user_spend=user_api_key_dict.user_spend,
                 user_api_key_user_max_budget=user_api_key_dict.user_max_budget,
@@ -289,9 +278,7 @@ class PagerDutyAlerting(SlackAlerting):
         if len(events) >= threshold:
             # Build short summary of last N events
             error_summaries = self._build_error_summaries(events, max_errors=5)
-            alert_message = (
-                f"{alert_prefix}: {len(events)} in the last {window_seconds} seconds."
-            )
+            alert_message = f"{alert_prefix}: {len(events)} in the last {window_seconds} seconds."
             custom_details = {"recent_errors": error_summaries}
 
             await self.send_alert_to_pagerduty(
@@ -325,9 +312,7 @@ class PagerDutyAlerting(SlackAlerting):
         """
         try:
             verbose_logger.debug(f"Sending alert to PagerDuty: {alert_message}")
-            async_client: AsyncHTTPHandler = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.LoggingCallback
-            )
+            async_client: AsyncHTTPHandler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
             payload: PagerDutyRequestBody = PagerDutyRequestBody(
                 payload=PagerDutyPayload(
                     summary=alert_message,
