@@ -14,8 +14,10 @@ from typing import (
     Any,
     Final,
     Literal,
+    Protocol,
     TypeAlias,
     cast,  # noqa: TID251  # narrows untyped deployment and credential payloads
+    runtime_checkable,
 )
 
 from fastapi import HTTPException, Request, status
@@ -1430,11 +1432,14 @@ def _dynamically_disabled_backends(
     return frozenset(name.lower() for name in disabled if isinstance(name, str))
 
 
+@runtime_checkable
+class _HoldsV2Scope(Protocol):
+    v2_scope: RequestScope | None
+
+
 def bind_v2_request_scope(
     data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, request_headers: Mapping[str, str]
 ) -> RequestScope | None:
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
     if not CustomLoggerV2.declared_hooks:
         return None
     scope: Final = enter_request_scope(
@@ -1444,7 +1449,7 @@ def bind_v2_request_scope(
         )
     )
     logging_obj: Final = data.get("litellm_logging_obj")
-    if isinstance(logging_obj, Logging):
+    if isinstance(logging_obj, _HoldsV2Scope):
         logging_obj.v2_scope = scope
     return scope
 

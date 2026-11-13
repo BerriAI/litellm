@@ -1,11 +1,15 @@
 import contextvars
+import copy
 import json
 from collections.abc import Awaitable, Callable, Generator, Mapping
+from datetime import datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import pytest
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm.exceptions import BudgetExceededError
 from litellm.integrations.custom_logger import CustomLogger
@@ -57,6 +61,7 @@ from litellm.proxy.utils import raise_v2_abort
 RUST: Final = Path(__file__).parents[4] / "litellm/rust/crates"
 CONTRACT: Final = RUST / "callbacks/contract.json"
 EXAMPLE_MANIFEST: Final = RUST / "callbacks-python/tests/round_trip/manifest.json"
+_REQUEST: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 CALL: Final = CallFacts(
     ids=CallIds(call_id="call-1"),
     kind=CallKind(call_type="acompletion"),
@@ -108,7 +113,6 @@ class Handle:
 
 class Recorder(CustomLogger):
     def __init__(self, name: str, seen: list[str]) -> None:
-        super().__init__()
         self.name = name
         self.seen = seen
 
@@ -122,8 +126,8 @@ class Recorder(CustomLogger):
 def _binding(seen: list[str]) -> Callable[[object, object], Awaitable[None]]:
     def start(logger: object, data: object) -> Awaitable[None]:
         async def run() -> None:
-            if isinstance(logger, Recorder) and isinstance(data, dict):
-                seen.append(f"{logger.name} {data.get('model')}")
+            if isinstance(logger, Recorder):
+                seen.append(f"{logger.name} {_REQUEST.validate_python(data).get('model')}")
 
         return run()
 
@@ -189,6 +193,17 @@ async def test_a_native_abort_stops_the_line_and_becomes_the_proxy_http_error() 
         raise_v2_abort(result)
     assert raised.value.status_code == 403
     assert raised.value.detail == {"error": "blocked"}
+
+
+async def test_a_projection_hands_rust_a_port_chosen_view_of_a_field() -> None:
+    handle: Final = Handle()
+    callbacks: Final[list[object]] = [native_logger(handle, MappingProxyType({Field.model: lambda value: f"{value}!"}))]
+
+    _ = await run_subscribers(
+        hook_subscribers(Hook.pre_call, callbacks), KwargsFields({"model": "gpt"}, PROXY_REQUEST_KEYS), _binding([])
+    )
+
+    assert handle.calls[0][1] == {"model": "gpt!"}
 
 
 def test_an_abort_carrying_a_registered_error_kind_raises_that_exception() -> None:
@@ -278,7 +293,7 @@ def test_the_proxy_scope_is_bound_for_the_request_and_reaches_its_logging_object
         messages=[],
         stream=False,
         call_type="acompletion",
-        start_time=None,
+        start_time=datetime.now(),
         litellm_call_id="call-1",
         function_id="f",
     )
@@ -289,6 +304,7 @@ def test_the_proxy_scope_is_bound_for_the_request_and_reaches_its_logging_object
     assert scope is not None
     assert current is scope
     assert logging_obj.v2_scope is scope
+    assert copy.deepcopy({"litellm_logging_obj": logging_obj})["litellm_logging_obj"].v2_scope is scope
     facts: Final = logging_obj.v2_call_facts()
     assert facts is not None
     assert (facts.ids.call_id, facts.kind.call_type, facts.target.model) == ("call-1", "acompletion", "gpt")

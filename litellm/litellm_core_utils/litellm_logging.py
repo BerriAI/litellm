@@ -865,12 +865,12 @@ class Logging(LiteLLMLoggingBaseClass):
     def v2_call_facts(self) -> CallFacts | None:
         if self.v2_scope is None:
             return None
-        started: Final[object] = self.start_time
+        call_type: Final = str(self.call_type)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.call_type is untyped
         return CallFacts(
             ids=CallIds(call_id=str(self.litellm_call_id), trace_id=self.litellm_trace_id),
-            kind=CallKind(call_type=str(self.call_type), stream=self.stream is True),
+            kind=CallKind(call_type=call_type, stream=self.stream is True),
             target=CallTarget(model=str(self.model)),
-            timing=CallTiming(start=started.timestamp() if isinstance(started, datetime.datetime) else 0.0),
+            timing=CallTiming(start=self.start_time.timestamp()),
         )
 
     global \

@@ -1,7 +1,7 @@
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict
 from types import MappingProxyType
-from typing import Annotated, ClassVar, Final, Literal, Protocol
+from typing import Annotated, ClassVar, Final, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Discriminator, TypeAdapter
 
@@ -85,9 +85,9 @@ class _WireVerdict(_Wire):
     abort: WireAbort | None = None
 
 
-_VERDICT: Final = TypeAdapter(_WireVerdict | None)
+_VERDICT: Final[TypeAdapter[_WireVerdict | None]] = TypeAdapter(_WireVerdict | None)
 
-AbortErrorFactory = Callable[[WireAbort], Exception]
+AbortErrorFactory: TypeAlias = Callable[[WireAbort], Exception]
 
 ABORT_ERRORS: Final[dict[str, AbortErrorFactory]] = {}  # mutable-ok: each port registers its error kind at import
 
@@ -140,15 +140,21 @@ class NativeState:
         self.handle: Final = type(self).native.request_state()
 
 
+Projection: TypeAlias = Callable[[object], object]
+
+NO_PROJECTIONS: Final[Mapping[Field, Projection]] = MappingProxyType({})
+
+
 class NativeLogger(CustomLoggerV2):
-    def __init__(self, native: NativeHandle) -> None:
+    def __init__(self, native: NativeHandle, projections: Mapping[Field, Projection] = NO_PROJECTIONS) -> None:
         self.native: Final = native
+        self.projections: Final = projections
 
     async def run_native(
         self, hook: Hook, reads: frozenset[Field], view: object, ctx: CallContext[object]
     ) -> Patch | Abort | None:
         fields: Final = {
-            field.value: _plain(value)
+            field.value: self.projections.get(field, _plain)(value)
             for field in reads
             if (value := getattr(view, field.value, _ABSENT)) is not _ABSENT
         }
@@ -200,12 +206,10 @@ def _namespace(native: NativeHandle, manifest: WireManifest) -> dict[str, object
     }
 
 
-def native_logger(native: NativeHandle) -> NativeLogger:
+def native_logger(native: NativeHandle, projections: Mapping[Field, Projection] = NO_PROJECTIONS) -> NativeLogger:
     manifest: Final = WireManifest.model_validate_json(native.manifest())
     cls: Final = type(manifest.selection.name, (NativeLogger,), _namespace(native, manifest))
-    if not issubclass(cls, NativeLogger):
-        raise TypeError(f"{manifest.selection.name} did not build as a NativeLogger")
-    return cls(native)
+    return cls(native, projections)
 
 
 def contract_table() -> Mapping[str, object]:
@@ -233,6 +237,7 @@ __all__ = [
     "NativeHandle",
     "NativeLogger",
     "NativeState",
+    "Projection",
     "WireAbort",
     "contract_table",
     "native_logger",

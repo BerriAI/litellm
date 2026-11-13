@@ -195,6 +195,12 @@ class RequestScope:
     def __enter__(self) -> Self:
         return self
 
+    def __copy__(self) -> Self:
+        return self
+
+    def __deepcopy__(self, memo: dict[int, object]) -> Self:  # mutable-ok: copy.deepcopy's memo protocol
+        return self
+
     def __exit__(
         self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None
     ) -> None:
