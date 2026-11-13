@@ -568,6 +568,173 @@ def test_deleting_one_deployment_sharing_a_vertex_key_keeps_credentials():
         assert key in registered.deployment_key_to_vertex_credentials
 
 
+def test_deleting_shared_key_deployment_re_registers_survivor_credentials():
+    from litellm.router_api import ChangeSet
+
+    first_credentials = '{"type": "service_account", "client_email": "first@proj-shared.iam.gserviceaccount.com"}'
+    second_credentials = '{"type": "service_account", "client_email": "second@proj-shared.iam.gserviceaccount.com"}'
+    with _isolated_registered_vertex_credentials() as registered:
+        llm_router = litellm.Router(
+            model_list=[
+                _vertex_deployment(
+                    "gemini-flash",
+                    "vertex_ai/gemini-2.5-flash",
+                    vertex_project="proj-shared",
+                    vertex_location="global",
+                    vertex_credentials=first_credentials,
+                ),
+                _vertex_deployment(
+                    "gemini-live",
+                    "vertex_ai/gemini-live-2.5-flash",
+                    vertex_project="proj-shared",
+                    vertex_location="global",
+                    vertex_credentials=second_credentials,
+                ),
+            ]
+        )
+        key = "proj-shared-global"
+        assert registered.deployment_key_to_vertex_credentials[key].vertex_credentials == second_credentials
+
+        deployments = llm_router.registry().deployments()
+        assert deployments is not None
+        deployment_id = deployments[1]["model_info"]["id"]
+        assert deployment_id is not None
+        llm_router.apply(ChangeSet(delete=[deployment_id]))
+
+        assert key in registered.deployment_key_to_vertex_credentials
+        assert registered.deployment_key_to_vertex_credentials[key].vertex_credentials == first_credentials
+        assert registered.get_vertex_credentials(project_id="proj-shared", location="global") is not None
+
+
+def test_disabling_shared_key_deployment_re_registers_survivor_credentials():
+    from litellm.router_api import ChangeSet
+    from litellm.types.router import Deployment
+
+    first_credentials = '{"type": "service_account", "client_email": "first@proj-shared.iam.gserviceaccount.com"}'
+    second_credentials = '{"type": "service_account", "client_email": "second@proj-shared.iam.gserviceaccount.com"}'
+    with _isolated_registered_vertex_credentials() as registered:
+        llm_router = litellm.Router(
+            model_list=[
+                _vertex_deployment(
+                    "gemini-flash",
+                    "vertex_ai/gemini-2.5-flash",
+                    vertex_project="proj-shared",
+                    vertex_location="global",
+                    vertex_credentials=first_credentials,
+                ),
+                _vertex_deployment(
+                    "gemini-live",
+                    "vertex_ai/gemini-live-2.5-flash",
+                    vertex_project="proj-shared",
+                    vertex_location="global",
+                    vertex_credentials=second_credentials,
+                ),
+            ]
+        )
+        key = "proj-shared-global"
+        assert registered.deployment_key_to_vertex_credentials[key].vertex_credentials == second_credentials
+
+        deployments = llm_router.registry().deployments()
+        assert deployments is not None
+        disabled = Deployment(
+            **{
+                **deployments[1],
+                "litellm_params": {**deployments[1]["litellm_params"], "use_in_pass_through": False},
+            }
+        )
+        llm_router.apply(ChangeSet(upsert=[disabled]))
+
+        assert key in registered.deployment_key_to_vertex_credentials
+        assert registered.deployment_key_to_vertex_credentials[key].vertex_credentials == first_credentials
+
+
+def test_deleting_deployment_after_named_credential_deleted_unregisters_original_key(monkeypatch):
+    from litellm.router_api import ChangeSet
+
+    CredentialAccessor.upsert_credentials(
+        [
+            _vertex_credential(
+                "cred_gone",
+                {
+                    "vertex_project": "proj-db",
+                    "vertex_location": "global",
+                    "vertex_credentials": '{"type": "service_account"}',
+                },
+            )
+        ]
+    )
+    with _isolated_registered_vertex_credentials() as registered:
+        llm_router = litellm.Router(
+            model_list=[
+                _vertex_deployment(
+                    "gemini-live", "vertex_ai/gemini-live-2.5-flash", litellm_credential_name="cred_gone"
+                )
+            ]
+        )
+        key = "proj-db-global"
+        assert key in registered.deployment_key_to_vertex_credentials
+
+        monkeypatch.setattr(litellm, "credential_list", [])
+
+        deployments = llm_router.registry().deployments()
+        assert deployments is not None
+        deployment_id = deployments[0]["model_info"]["id"]
+        assert deployment_id is not None
+        llm_router.apply(ChangeSet(delete=[deployment_id]))
+
+        assert key not in registered.deployment_key_to_vertex_credentials
+        assert registered.get_vertex_credentials(project_id="proj-db", location="global") is None
+
+
+def test_deleting_deployment_after_named_credential_edited_unregisters_original_key():
+    from litellm.router_api import ChangeSet
+
+    CredentialAccessor.upsert_credentials(
+        [
+            _vertex_credential(
+                "cred_moved",
+                {
+                    "vertex_project": "proj-db",
+                    "vertex_location": "global",
+                    "vertex_credentials": '{"type": "service_account"}',
+                },
+            )
+        ]
+    )
+    with _isolated_registered_vertex_credentials() as registered:
+        llm_router = litellm.Router(
+            model_list=[
+                _vertex_deployment(
+                    "gemini-live", "vertex_ai/gemini-live-2.5-flash", litellm_credential_name="cred_moved"
+                )
+            ]
+        )
+        key = "proj-db-global"
+        assert key in registered.deployment_key_to_vertex_credentials
+
+        CredentialAccessor.upsert_credentials(
+            [
+                _vertex_credential(
+                    "cred_moved",
+                    {
+                        "vertex_project": "proj-elsewhere",
+                        "vertex_location": "global",
+                        "vertex_credentials": '{"type": "service_account"}',
+                    },
+                )
+            ]
+        )
+
+        deployments = llm_router.registry().deployments()
+        assert deployments is not None
+        deployment_id = deployments[0]["model_info"]["id"]
+        assert deployment_id is not None
+        llm_router.apply(ChangeSet(delete=[deployment_id]))
+
+        assert key not in registered.deployment_key_to_vertex_credentials
+        assert "proj-elsewhere-global" not in registered.deployment_key_to_vertex_credentials
+
+
 def _token_file(tmp_path, monkeypatch, value: str):
     monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
     token = tmp_path / "token"
