@@ -3,6 +3,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 from apscheduler.executors.asyncio import AsyncIOExecutor
@@ -14,6 +15,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from litellm.constants import PTU_ROLLUP_JOB_ID, PTU_ROLLUP_LOCK_TTL_SECONDS
 from litellm.proxy._types import ScheduledJobStaggerSettings
 from litellm.proxy.common_utils.scheduled_job_stagger import (
+    _OffsetTrigger,
     apply_scheduled_job_stagger,
     attach_job_timing_logger,
     offset_seconds,
@@ -309,3 +311,35 @@ def test_job_timing_is_logged_with_scheduled_and_actual_start(caplog):
     assert f"scheduled_run_time={scheduled.isoformat()}" in message
     assert "actual_start_time=" in message
     assert "delay=2." in message
+
+
+def test_offset_trigger_dst_fallback_does_not_loop():
+    """
+    Regression test for #48285 / #48286.
+    During DST fall-back (repeated hour, fold=1), naive timedelta arithmetic drops fold
+    and sends shifted_previous 1 hour back in time, causing Job._get_run_times to spin
+    infinitely and exhaust memory. UTC-safe shifting ensures monotonic progress.
+    """
+    tz = ZoneInfo("Europe/Paris")
+    base = IntervalTrigger(seconds=60, timezone=tz)
+    staggered = _OffsetTrigger(base, timedelta(seconds=30))
+
+    def count_advances(trigger, now: datetime, cap: int = 100) -> int:
+        nrt = datetime.fromtimestamp(now.timestamp() - 90, tz)
+        n = 0
+        while nrt and nrt.astimezone(timezone.utc) <= now.astimezone(timezone.utc):
+            n += 1
+            if n >= cap:
+                return cap
+            nrt = trigger.get_next_fire_time(nrt, now)
+        return n
+
+    for label, now in [
+        ("01:30 CEST", datetime(2026, 10, 25, 1, 30, tzinfo=tz)),
+        ("02:30 CET (repeated hour)", datetime(2026, 10, 25, 2, 30, fold=1, tzinfo=tz)),
+        ("03:30 CET", datetime(2026, 10, 25, 3, 30, tzinfo=tz)),
+    ]:
+        plain_count = count_advances(base, now)
+        staggered_count = count_advances(staggered, now)
+        assert staggered_count == plain_count == 2, f"Failed for {label}: staggered={staggered_count}, plain={plain_count}"
+
