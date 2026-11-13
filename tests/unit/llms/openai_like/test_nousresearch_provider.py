@@ -9,8 +9,10 @@ from openai import AsyncOpenAI
 
 import litellm
 from litellm.cost_calculator import cost_per_token
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap, install_model_cost_map
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
 BASE: Final = "https://inference-api.nousresearch.com/v1"
 MODEL: Final = "google/gemini-4-hydrogen"
@@ -44,14 +46,39 @@ def test_unlisted_model_forwards_tools() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("endpoint", ["responses", "messages"])
-async def test_chat_only_model_translates_native_requests(endpoint: str, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("prefixed", [True, False])
+@pytest.mark.parametrize("reload_catalog", [True, False])
+async def test_chat_only_model_translates_native_requests(
+    endpoint: str, prefixed: bool, reload_catalog: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    model: Final = "nousresearch/lit-test/chat-only"
+    bare_name: Final = f"lit-test/chat-only-{prefixed}-{reload_catalog}-{endpoint}"
+    model: Final = f"nousresearch/{bare_name}"
+    registered_name: Final = model if prefixed else model.removeprefix("nousresearch/")
     litellm.register_model(
-        {model: {"litellm_provider": "nousresearch", "mode": "chat", "supported_endpoints": ["/v1/chat/completions"]}}
+        {
+            registered_name: {
+                "litellm_provider": "nousresearch",
+                "mode": "chat",
+                "supported_endpoints": ["/v1/chat/completions"],
+            }
+        }
     )
-    with respx.mock() as upstream:
+    if reload_catalog:
+        install_model_cost_map(GetModelCostMap.read_local_model_cost_map_bytes())
+    with respx.mock(assert_all_called=False) as upstream:
         route: Final = upstream.post(f"{BASE}/chat/completions").respond(json=CHAT)
+        native_route: Final = upstream.post(f"{BASE}/messages").respond(
+            json={
+                "id": "msg-nous",
+                "type": "message",
+                "role": "assistant",
+                "model": bare_name,
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 4, "output_tokens": 3},
+            }
+        )
         if endpoint == "responses":
             response: Final = await litellm.aresponses(model=model, input="Hello", api_key="nous-key")
             assert response.output[0].content[0].text == "Hello"
@@ -60,7 +87,27 @@ async def test_chat_only_model_translates_native_requests(endpoint: str, monkeyp
                 model=model, messages=[{"role": "user", "content": "Hello"}], max_tokens=32, api_key="nous-key"
             )
             assert message["content"] == [{"type": "text", "text": "Hello"}]
-    assert json.loads(route.calls.last.request.content)["model"] == "lit-test/chat-only"
+    assert not native_route.called
+    assert json.loads(route.calls.last.request.content)["model"] == bare_name
+
+
+@pytest.mark.parametrize("endpoint", ["/v1/responses", "/v1/messages"])
+def test_bare_endpoint_restrictions_do_not_apply_to_other_providers(endpoint: str) -> None:
+    bare_name: Final = "lit-test/other-provider-chat-only"
+    litellm.register_model(
+        {
+            bare_name: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "supported_endpoints": ["/v1/chat/completions"],
+            }
+        }
+    )
+    provider: Final = JSONProviderRegistry.get("nousresearch")
+    assert provider is not None
+    assert JSONProviderRegistry.serves_endpoint("nousresearch", bare_name, endpoint) is (
+        endpoint in provider.supported_endpoints
+    )
 
 
 def test_bundled_model_listing_includes_chat_and_embedding_models() -> None:

@@ -341,18 +341,27 @@ def test_the_loaded_catalog_follows_installs_and_ignores_registrations():
 
 
 @pytest.mark.usefixtures("own_model_cost")
-def test_reload_keeps_registered_nous_models_discoverable() -> None:
+@pytest.mark.parametrize("discoverable", [True, False])
+def test_reload_keeps_registered_nous_models_discoverable(discoverable: bool) -> None:
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 
-    model: Final = "nousresearch/lit-test/registered-chat"
-    litellm.register_model({model: {"litellm_provider": "nousresearch", "mode": "chat"}})
-    assert model in litellm.get_valid_models(custom_llm_provider="nousresearch", check_provider_endpoint=False)
+    model: Final = f"nousresearch/lit-test/registered-chat-{discoverable}"
+    litellm.register_model(
+        {model: {"litellm_provider": "nousresearch", "mode": "chat"}},
+        add_to_provider_model_sets=discoverable,
+    )
+    assert (
+        model in litellm.get_valid_models(custom_llm_provider="nousresearch", check_provider_endpoint=False)
+    ) is discoverable
 
     result: Final = install_model_cost_map(_BUNDLED)
 
     assert isinstance(result, ModelCostMapReloaded)
-    assert model in litellm.get_valid_models(custom_llm_provider="nousresearch", check_provider_endpoint=False)
-    assert model in get_known_models_from_wildcard("nousresearch/*")
+    assert (
+        model in litellm.get_valid_models(custom_llm_provider="nousresearch", check_provider_endpoint=False)
+    ) is discoverable
+    assert (model in get_known_models_from_wildcard("nousresearch/*")) is discoverable
+    assert litellm.model_cost[model]["litellm_provider"] == "nousresearch"
 
 
 @pytest.mark.usefixtures("own_model_cost")

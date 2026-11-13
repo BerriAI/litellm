@@ -109,11 +109,13 @@ class JSONProviderRegistry:
         if provider is None:
             return False
         if model and provider.special_handling.get("use_model_supported_endpoints"):
-            catalog_endpoints: Final = (
-                catalog_with_runtime_registrations()
-                .get(f"{slug}/{model.removeprefix(f'{slug}/')}", {})
-                .get("supported_endpoints")
+            catalog: Final = catalog_with_runtime_registrations()
+            bare_name: Final = model.removeprefix(f"{slug}/")
+            bare_entry: Final = catalog.get(bare_name, {})
+            catalog_entry: Final = catalog.get(
+                f"{slug}/{bare_name}", bare_entry if bare_entry.get("litellm_provider") == slug else {}
             )
+            catalog_endpoints: Final = catalog_entry.get("supported_endpoints")
             if isinstance(catalog_endpoints, (list, tuple)):
                 return endpoint in catalog_endpoints
         model_endpoints: Final = (
