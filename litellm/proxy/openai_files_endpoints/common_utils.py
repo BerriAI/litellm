@@ -358,6 +358,16 @@ def canonical_provider_file_id(file_id: str) -> str:
     return bare or decoded
 
 
+_GEMINI_FILES_URL: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+
+
+def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:
+    """Every spelling an ownership row may hold for ``file_id``: as sent, unwrapped from a model-encoded id and
+    canonicalized, plus the ``files/`` and Gemini URL forms that upload rows stored before ids were canonicalized."""
+    canonical: Final = canonical_provider_file_id(get_original_file_id(file_id))
+    return tuple(dict.fromkeys((file_id, canonical, f"files/{canonical}", f"{_GEMINI_FILES_URL}{canonical}")))
+
+
 def is_model_embedded_id(file_id: str) -> bool:
     """
     Check if a file/batch ID has model routing information embedded.

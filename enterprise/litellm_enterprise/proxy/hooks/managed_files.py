@@ -84,6 +84,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
     normalize_mime_type_for_provider,
+    provider_file_id_spellings,
     resolve_managed_output_file_model_name,
     validate_file_list_limit,
     validate_file_list_purpose,
@@ -549,12 +550,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     ) -> None:
         verbose_logger.info(f"Storing LiteLLM Managed File object with id={file_id} in cache")
         storage_metadata: Final = _storage_metadata_of(file_object)
+        flat_model_file_ids: Final = [
+            canonical_provider_file_id(provider_file_id) for provider_file_id in model_mappings.values()
+        ]
         if file_object is not None:
             litellm_managed_file_object = LiteLLM_ManagedFileTable(
                 unified_file_id=file_id,
                 file_object=file_object,
                 model_mappings=model_mappings,
-                flat_model_file_ids=list(model_mappings.values()),
+                flat_model_file_ids=flat_model_file_ids,
                 created_by=resolve_resource_owner_id(user_api_key_dict),
                 team_id=user_api_key_dict.team_id,
                 updated_by=user_api_key_dict.user_id,
@@ -572,14 +576,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         db_data = {
             "unified_file_id": file_id,
             "model_mappings": json.dumps(model_mappings),
-            "flat_model_file_ids": list(model_mappings.values()),
+            "flat_model_file_ids": flat_model_file_ids,
             "created_by": resolve_resource_owner_id(user_api_key_dict),
             "team_id": user_api_key_dict.team_id,
             "updated_by": user_api_key_dict.user_id,
         }
         update_data = {
             "model_mappings": json.dumps(model_mappings),
-            "flat_model_file_ids": list(model_mappings.values()),
+            "flat_model_file_ids": flat_model_file_ids,
             "updated_by": user_api_key_dict.user_id,
         }
 
@@ -878,7 +882,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         if self.prisma_client is None:
             return
-        spellings: Final = list(dict.fromkeys((file_id, canonical_provider_file_id(file_id))))
+        spellings: Final = list(provider_file_id_spellings(file_id))
         managed_file = await _managed_file_table(self.prisma_client).find_first(
             where={"OR": [{"unified_file_id": {"in": spellings}}, {"flat_model_file_ids": {"hasSome": spellings}}]}
         )
