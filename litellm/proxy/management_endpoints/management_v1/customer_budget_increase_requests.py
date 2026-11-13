@@ -56,7 +56,7 @@ Caller: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 Admin: TypeAlias = Annotated[str, Depends(customer_actor)]
 Cache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
 
-T = TypeVar("T")
+T: Final = TypeVar("T")
 _REQUEST: Final = TypeAdapter(BudgetIncreaseRequest)
 _REQUESTS: Final = TypeAdapter(tuple[BudgetIncreaseRequest, ...])
 
@@ -173,33 +173,31 @@ async def list_budget_increase_requests(
     )
 
 
-async def _pending(hierarchy: CustomerHierarchy, request_id: str) -> BudgetIncreaseRequest:
-    row: Final = await _in_transaction(
-        hierarchy, lambda store: _requests_table(store).find_unique(where={"request_id": request_id})
-    )
-    if row is None:
-        resolve(Failure(ErrorCode.NOT_FOUND))
-    pending: Final = _REQUEST.validate_python(row, from_attributes=True)
-    if pending.status != "pending_review":
-        resolve(Failure(ErrorCode.REQUEST_NOT_PENDING))
-    return pending
-
-
-async def _review(
-    hierarchy: CustomerHierarchy,
+async def _claim(
+    store: CustomerHierarchyStore,
     request_id: str,
     actor: str,
     status: Literal["approved", "rejected"],
     notes: str | None,
 ) -> BudgetIncreaseRequest:
-    row: Final = await _in_transaction(
-        hierarchy,
-        lambda store: _requests_table(store).update(
-            where={"request_id": request_id},
-            data={"status": status, "reviewed_by": actor, "reviewed_at": store.now, "review_notes": notes},
-        ),
+    """Flip the request out of ``pending_review`` only if it is still there, so two reviewers cannot both win."""
+    claimed: Final = await _requests_table(store).update_many(
+        where={"request_id": request_id, "status": "pending_review"},
+        data={"status": status, "reviewed_by": actor, "reviewed_at": store.now, "review_notes": notes},
     )
+    row: Final = await _requests_table(store).find_unique(where={"request_id": request_id})
+    if row is None:
+        resolve(Failure(ErrorCode.NOT_FOUND))
+    if claimed != 1:
+        resolve(Failure(ErrorCode.REQUEST_NOT_PENDING))
     return _REQUEST.validate_python(row, from_attributes=True)
+
+
+async def _approve(store: CustomerHierarchyStore, request_id: str, actor: str) -> BudgetIncreaseRequest:
+    approved: Final = await _claim(store, request_id, actor, "approved", None)
+    member: Final = resolve(await store.get_member(approved.customer_member_id))
+    resolve(await store.update_member(approved.customer_member_id, _grant(member, approved, store.now), actor))
+    return approved
 
 
 @router.get("/{request_id}", response_model=BudgetIncreaseRequest)
@@ -219,14 +217,13 @@ async def get_budget_increase_request(request_id: str, actor: Admin, hierarchy: 
 async def approve_budget_increase_request(
     request_id: str, actor: Admin, hierarchy: Hierarchy, cache: Cache
 ) -> BudgetIncreaseRequest:
-    """Grant the increase: the member's override takes the requested cap until the request's expiry. Proxy admins only."""
-    pending: Final = await _pending(hierarchy, request_id)
-    member: Final = resolve(await hierarchy.get_member(pending.customer_member_id))
-    resolve(
-        await hierarchy.update_member(pending.customer_member_id, _grant(member, pending, hierarchy.clock()), actor)
-    )
-    await forget_customer_hierarchies((pending.customer_member_id,), cache)
-    return await _review(hierarchy, request_id, actor, "approved", None)
+    """Grant the increase: the member's override takes the requested cap until the request's expiry. Proxy admins only.
+
+    The claim and the override land in one transaction, so a racing reject sees ``request_not_pending`` instead of
+    leaving a rejected request with the cap still granted."""
+    approved: Final = await _in_transaction(hierarchy, lambda store: _approve(store, request_id, actor))
+    await forget_customer_hierarchies((approved.customer_member_id,), cache)
+    return approved
 
 
 @router.put("/{request_id}/reject", response_model=BudgetIncreaseRequest)
@@ -235,5 +232,5 @@ async def reject_budget_increase_request(
     request_id: str, actor: Admin, hierarchy: Hierarchy, body: BudgetIncreaseRejection | None = None
 ) -> BudgetIncreaseRequest:
     """Decline the increase and leave the member paused, with optional review notes. Proxy admins only."""
-    await _pending(hierarchy, request_id)
-    return await _review(hierarchy, request_id, actor, "rejected", None if body is None else body.review_notes)
+    notes: Final = None if body is None else body.review_notes
+    return await _in_transaction(hierarchy, lambda store: _claim(store, request_id, actor, "rejected", notes))

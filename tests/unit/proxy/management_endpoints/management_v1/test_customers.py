@@ -73,7 +73,8 @@ def family(http: TestClient) -> dict[str, object]:
     return org.json()
 
 
-def test_member_can_reuse_global_budget_but_not_an_owned_override() -> None:
+def test_member_budget_id_must_name_one_of_its_organizations_templates() -> None:
+    """An unowned `/budget/new` row and another member's override are both outside the organization (F4)."""
     database: Final = Database()
     asyncio.run(
         database.litellm_budgettable.create(
@@ -85,22 +86,20 @@ def test_member_can_reuse_global_budget_but_not_an_owned_override() -> None:
     )
     http: Final = client(database=database)
     family(http)
+    unowned: Final = http.post(
+        "/management/v1/customer_members",
+        json={"customer_member_id": "global-member", "parent_team_ids": ["team"], "budget_id": "global"},
+    )
+    assert unowned.status_code == 422, unowned.text
     created: Final = http.post(
         "/management/v1/customer_members",
         json={
-            "customer_member_id": "global-member",
+            "customer_member_id": "override-member",
             "parent_team_ids": ["team"],
-            "budget_id": "global",
             "budget_override": {"budget_limits": [{"budget_duration": "1mo", "max_budget": 100}]},
         },
     )
     assert created.status_code == 201, created.text
-    assert {
-        row["budget_duration"]: row["max_budget"] for row in created.json()["effective_budget"]["budget_limits"]
-    } == {
-        "1mo": 100,
-        "12mo": 1000,
-    }
     shared_override: Final = http.post(
         "/management/v1/customer_members",
         json={

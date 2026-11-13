@@ -234,3 +234,73 @@ def test_an_approval_does_not_revive_an_expired_override_or_outlive_an_active_on
     assert kept["budget_override"]["max_budget"] == 300
     assert kept["budget_override"]["allowed_models"] == ["gpt-5.1"]
     assert kept["budget_override_expires_at"] == "2026-01-15T00:00:00Z"
+
+
+def test_an_approved_increase_replaces_the_template_windows_as_the_members_cap() -> None:
+    http: Final = client()
+    org: Final = http.post(
+        "/management/v1/customer_organizations",
+        json={
+            "customer_org_id": "windowed",
+            "default_budgets": [
+                {
+                    "name": "monthly",
+                    "budget_limits": [{"budget_duration": "1mo", "max_budget": 100}],
+                    "is_default": True,
+                    "cap_policy": "pause_allow_increase",
+                }
+            ],
+        },
+    )
+    assert org.status_code == 201, org.text
+    assert (
+        http.post(
+            "/management/v1/customer_teams", json={"customer_team_id": "windowed-team", "parent_org_id": "windowed"}
+        ).status_code
+        == 201
+    )
+    member: Final = http.post(
+        "/management/v1/customer_members",
+        json={"customer_member_id": "windowed-member", "parent_team_ids": ["windowed-team"]},
+    )
+    assert member.status_code == 201, member.text
+    filed: Final = http.post(
+        REQUESTS, json={"customer_member_id": "windowed-member", "requested_max_budget": 250, "expires_at": EXPIRES}
+    )
+    assert filed.status_code == 201, filed.text
+    assert http.put(f"{REQUESTS}/{filed.json()['request_id']}/approve").status_code == 200
+    effective: Final = http.get("/management/v1/customer_members/windowed-member").json()["effective_budget"]
+    assert effective["max_budget"] == 250, effective
+    assert not effective["budget_limits"], effective
+
+
+def test_a_request_is_reviewed_exactly_once_and_a_late_reject_cannot_undo_an_approval() -> None:
+    http: Final = client()
+    member_id: Final = _paused_member(http, "pause_allow_increase")
+    filed: Final = http.post(
+        REQUESTS, json={"customer_member_id": member_id, "requested_max_budget": 250, "expires_at": EXPIRES}
+    )
+    assert filed.status_code == 201, filed.text
+    request_id: Final = filed.json()["request_id"]
+    assert http.put(f"{REQUESTS}/{request_id}/approve").status_code == 200
+    late_reject: Final = http.put(f"{REQUESTS}/{request_id}/reject")
+    assert late_reject.status_code == 409, late_reject.text
+    assert http.get(f"{REQUESTS}/{request_id}").json()["status"] == "approved"
+    assert http.get(f"/management/v1/customer_members/{member_id}").json()["effective_budget"]["max_budget"] == 250
+    second: Final = http.post(
+        REQUESTS, json={"customer_member_id": member_id, "requested_max_budget": 300, "expires_at": EXPIRES}
+    )
+    assert second.status_code == 201, second.text
+    assert http.put(f"{REQUESTS}/{second.json()['request_id']}/reject").status_code == 200
+    assert http.put(f"{REQUESTS}/{second.json()['request_id']}/approve").status_code == 409
+    assert http.get(f"/management/v1/customer_members/{member_id}").json()["effective_budget"]["max_budget"] == 250
+
+
+def test_plain_virtual_keys_may_reach_the_increase_request_route() -> None:
+    from litellm.proxy._types import LiteLLMRoutes
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    assert RouteChecks.check_route_access(route=REQUESTS, allowed_routes=LiteLLMRoutes.self_managed_routes.value)
+    assert not RouteChecks.check_route_access(
+        route="/management/v1/customer_members", allowed_routes=LiteLLMRoutes.self_managed_routes.value
+    )

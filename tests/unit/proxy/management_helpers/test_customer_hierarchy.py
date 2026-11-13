@@ -157,6 +157,12 @@ class Table:
         self.rows = {key: row for key, row in self.rows.items() if row not in matched}
         return len(matched)
 
+    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int:
+        matched: Final = await self.find_many(where=where)
+        values: Final = {key: value.data if isinstance(value, Json) else value for key, value in data.items()}
+        self.rows = {key: (row.model_copy(update=values) if row in matched else row) for key, row in self.rows.items()}
+        return len(matched)
+
 
 class Database:
     def __init__(self) -> None:

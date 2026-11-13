@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from itertools import chain
+from operator import attrgetter
 from types import MappingProxyType
 from typing import (
     Final,
@@ -1073,7 +1074,7 @@ class ResetBudgetJob:
             table=table,
             batch_table="litellm_customerteamtable",
             id_field="customer_team_id",
-            row_id=lambda row: row.customer_team_id,
+            row_id=attrgetter("customer_team_id"),
         )
 
     async def _reset_customer_member_spend(self, cascade: _BudgetCascade) -> None:
@@ -1084,7 +1085,7 @@ class ResetBudgetJob:
             table=table,
             batch_table="litellm_customermembertable",
             id_field="customer_member_id",
-            row_id=lambda row: row.customer_member_id,
+            row_id=attrgetter("customer_member_id"),
         )
 
     async def _reset_customer_scope_spend(

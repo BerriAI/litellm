@@ -304,8 +304,9 @@ def effective_member_budget(
         override.model_dump(exclude_none=True, exclude={"allowed_models", "budget_limits"})
     )
     models: Final[Mapping[str, object]] = {"allowed_models": override.allowed_models} if override.allowed_models else {}
+    inherited_windows: Final = () if override.max_budget is not None else inherited.budget_limits or ()
     windows: Final = {
-        **{limit.budget_duration: limit for limit in inherited.budget_limits or ()},
+        **{limit.budget_duration: limit for limit in inherited_windows},
         **{limit.budget_duration: limit for limit in override.budget_limits or ()},
     }
     return Budget.model_validate(
@@ -621,17 +622,7 @@ class CustomerHierarchyStore:
             return None
         if any(template.budget_id == selected for template in organization.default_budgets):
             return selected
-        if await self.budgets.find_unique(where={"budget_id": selected}) is None:
-            return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
-        if (
-            await self.members.count(where={"budget_override_id": selected})
-            or await self.teams.count(where={"budget_id": selected})
-            or await self.organizations.count(
-                where={"OR": ({"budget_id": selected}, {"budget_template_ids": {"has": selected}})}
-            )
-        ):
-            return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
-        return selected
+        return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
 
     async def create_team(self, payload: TeamCreate, actor: str) -> Team | Failure:
         parent: Final = await self.organizations.find_unique(where={"customer_org_id": payload.parent_org_id})

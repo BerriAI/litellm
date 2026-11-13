@@ -892,6 +892,7 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
+        "/management/v1/customer_budget_increase_requests",
         "/lens",
         "/lens/{path:path}",
         "/telemetry/ui_events",
