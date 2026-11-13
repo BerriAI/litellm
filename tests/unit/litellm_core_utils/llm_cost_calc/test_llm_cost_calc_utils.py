@@ -160,6 +160,155 @@ def test_generic_cost_per_token_reads_the_billing_time_in_utc(
     assert prompt_cost == pytest.approx(1000 * expected_input_rate)
 
 
+_TWO_TIERS: Final = (
+    {"range": [0, 128000], "input_cost_per_token": 4e-7, "output_cost_per_token": 1.6e-6},
+    {"range": [128000, 1000000], "input_cost_per_token": 1.2e-6, "output_cost_per_token": 4.8e-6},
+)
+
+
+def test_a_tier_only_row_bills_an_empty_prompt_nothing() -> None:
+    model_info: Final = cast(ModelInfo, {"tiered_pricing": list(_TWO_TIERS)})
+    usage: Final = Usage(prompt_tokens=0, completion_tokens=100, total_tokens=100)
+
+    assert generic_cost_per_token("tier-fixture", usage, "openai", model_info=model_info) == (0.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("prompt_tokens", "expected_input_rate"),
+    (
+        pytest.param(128_000, 4e-7, id="the-last-token-of-the-first-tier"),
+        pytest.param(128_001, 1.2e-6, id="the-first-token-of-a-tier-that-starts-one-past-the-last"),
+        pytest.param(500_000, 1.2e-6, id="inside-the-second-tier"),
+    ),
+)
+def test_a_tier_that_starts_one_token_past_the_previous_end_bills_from_that_token(
+    prompt_tokens: int, expected_input_rate: float
+) -> None:
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            "tiered_pricing": [
+                {"range": [0, 128000], "input_cost_per_token": 4e-7, "output_cost_per_token": 1.6e-6},
+                {"range": [128001, 1000000], "input_cost_per_token": 1.2e-6, "output_cost_per_token": 4.8e-6},
+            ]
+        },
+    )
+    usage: Final = Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+
+    assert _billed_rates(model_info, usage).input_cost_per_token == expected_input_rate
+
+
+def test_a_tiered_row_in_an_off_peak_window_borrows_the_tiers_standard_rates() -> None:
+    """Main resolves a tier's missing cache rates and reasoning rate from the tier before the
+    off-peak swap, so only the rates off_peak_pricing spells out change inside the window."""
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            "tiered_pricing": list(_TWO_TIERS),
+            "off_peak_pricing": {
+                "hours_utc": "00:00-00:00",
+                "input_cost_per_token": 1e-7,
+                "output_cost_per_token": 2e-7,
+            },
+        },
+    )
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=100,
+        total_tokens=1100,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=40),
+    )
+
+    rates: Final = _billed_rates(model_info, usage, current_time=datetime(2026, 1, 1, 12, tzinfo=timezone.utc))
+
+    assert (rates.input_cost_per_token, rates.output_cost_per_token) == (1e-7, 2e-7)
+    assert rates.cache_read_input_token_cost == 4e-7
+    assert rates.cache_creation_input_token_cost == 4e-7
+    assert rates.cache_creation_input_token_cost_by_ttl["1hr"] == 4e-7
+    assert rates.output_cost_per_reasoning_token == 1.6e-6
+
+
+def test_a_tiered_fireworks_row_reads_an_unpriced_cache_at_the_tiers_input_rate() -> None:
+    rates: Final = get_billed_token_rates(
+        model="tier-fixture",
+        custom_llm_provider="fireworks_ai",
+        usage=Usage(prompt_tokens=1000, completion_tokens=1, total_tokens=1001),
+        model_info=cast(ModelInfo, {"input_cost_per_token": 9e-7, "tiered_pricing": list(_TWO_TIERS)}),
+    )
+
+    assert rates is not None
+    assert rates.cache_read_input_token_cost == 4e-7
+
+
+@pytest.mark.parametrize(
+    ("off_peak_pricing", "current_time", "expected_input_rate"),
+    (
+        pytest.param(
+            {"hours_utc": ["bad", "13:00-16:00"]},
+            datetime(2026, 1, 1, 14, tzinfo=timezone.utc),
+            5e-7,
+            id="a-malformed-window-leaves-the-valid-one-open",
+        ),
+        pytest.param(
+            {"hours_utc": ["25:00-26:00", "13:00-16:00"]},
+            datetime(2026, 1, 1, 9, tzinfo=timezone.utc),
+            1e-6,
+            id="a-malformed-window-opens-nothing-itself",
+        ),
+        pytest.param(
+            {"windows": [{"hours_utc": 1630}, {"hours_utc": "00:00-00:00", "weekdays": [6]}]},
+            datetime(2026, 8, 29, 12, tzinfo=timezone.utc),
+            5e-7,
+            id="a-rule-with-malformed-hours-leaves-the-other-rules",
+        ),
+        pytest.param(
+            {"windows": ["00:00-00:00", {"hours_utc": "00:00-00:00", "weekdays": ["Sat", "sunday"]}]},
+            datetime(2026, 8, 29, 12, tzinfo=timezone.utc),
+            5e-7,
+            id="a-rule-that-is-not-a-mapping-leaves-the-other-rules",
+        ),
+        pytest.param(
+            {"windows": [{"hours_utc": "00:00-00:00", "weekdays": [0, 8, "noday", True, 6]}]},
+            datetime(2026, 8, 29, 12, tzinfo=timezone.utc),
+            5e-7,
+            id="malformed-weekdays-are-dropped-and-the-valid-one-counts",
+        ),
+        pytest.param(
+            {"windows": [{"hours_utc": "00:00-00:00", "weekdays": [0, 8, "noday", True]}]},
+            datetime(2026, 8, 29, 12, tzinfo=timezone.utc),
+            1e-6,
+            id="a-rule-with-only-malformed-weekdays-never-opens",
+        ),
+        pytest.param(
+            {"windows": [{"hours_utc": "00:00-00:00", "weekdays": "sat"}]},
+            datetime(2026, 8, 29, 12, tzinfo=timezone.utc),
+            1e-6,
+            id="weekdays-that-are-not-a-list-never-open",
+        ),
+        pytest.param(
+            {"windows": [{"weekdays": [6]}]},
+            datetime(2026, 8, 29, 12, tzinfo=timezone.utc),
+            1e-6,
+            id="a-rule-without-hours-never-opens",
+        ),
+    ),
+)
+def test_off_peak_reads_every_well_formed_window_and_skips_the_rest(
+    off_peak_pricing: Mapping[str, object], current_time: datetime, expected_input_rate: float
+) -> None:
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "off_peak_pricing": {**off_peak_pricing, "input_cost_per_token": 5e-7},
+        },
+    )
+    usage: Final = Usage(prompt_tokens=100, completion_tokens=1, total_tokens=101)
+
+    assert _billed_rates(model_info, usage, current_time=current_time).input_cost_per_token == expected_input_rate
+
+
 def test_realtime_cached_modality_breakdown_matches_prompt_cost(_local_model_cost_map):
     model: Final = "gpt-realtime-2.1-mini"
     rates: Final = litellm.model_cost[model]
@@ -1419,7 +1568,7 @@ def test_generic_cost_per_token_tiered_pricing_charges_cache_creation_at_tier_ra
 
 def test_generic_cost_per_token_tiered_pricing_is_all_or_nothing():
     """Tiered pricing bills the whole request at the tier picked from its input tokens,
-    for any provider, and an empty prompt bills at the first tier."""
+    for any provider, and falls back to flat pricing when no tier matches."""
     model = "litellm-test-tiered-all-or-nothing"
     custom_llm_provider = "openrouter"
     litellm.register_model(
@@ -1470,7 +1619,7 @@ def test_generic_cost_per_token_tiered_pricing_is_all_or_nothing():
             custom_llm_provider=custom_llm_provider,
         )
         assert empty_prompt_cost == 0.0
-        assert round(empty_completion_cost, 10) == round(100 * 2.3e-06, 10)
+        assert round(empty_completion_cost, 10) == round(100 * 2e-06, 10)
     finally:
         litellm.model_cost.pop(model, None)
 
@@ -1953,9 +2102,9 @@ def test_string_cost_values_edge_cases():
         )
 
     # Expected costs:
-    # Prompt: 1000 * 1e-6 + 100 * 1e-6 (an unparsable audio price is no price, so audio tokens bill at the input rate)
+    # Prompt: 1000 * 1e-6 + 100 * 0 (invalid string becomes 0)
     # Completion: 500 * 2e-6 + 50 * 2e-6 (audio tokens fall back to base cost when output_cost_per_audio_token is None)
-    expected_prompt_cost = 1000 * 1e-6 + 100 * 1e-6
+    expected_prompt_cost = 1000 * 1e-6
     expected_completion_cost = 500 * 2e-6 + 50 * 2e-6
 
     assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
