@@ -2,7 +2,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
 from litellm.llms.vertex_ai.common_utils import validate_vertex_location
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -22,9 +22,9 @@ class VertexInteractionsTarget:
 
     @property
     def collection_url(self) -> str:
-        return (
-            f"{self.base_url}/{VERTEX_INTERACTIONS_API_VERSION}"
-            f"/projects/{self.project_id}/locations/{self.location}/interactions"
+        return join_api_base(
+            self.base_url,
+            f"{VERTEX_INTERACTIONS_API_VERSION}/projects/{self.project_id}/locations/{self.location}/interactions",
         )
 
     def interaction_url(self, interaction_id: str) -> str:
@@ -146,4 +146,4 @@ class VertexAIInteractionsConfig(VertexBase, GoogleAIStudioInteractionsConfig):
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, str],
     ) -> tuple[str, dict]:  # mutable-ok: BaseInteractionsAPIConfig declares a plain-dict request body
-        return self._interaction_by_id_request(interaction_id, api_base, litellm_params, url_suffix=":cancel")
+        return self._interaction_by_id_request(interaction_id, api_base, litellm_params, url_suffix="/cancel")

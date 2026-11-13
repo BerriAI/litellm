@@ -17,7 +17,7 @@ import pytest
 import yaml
 from integration._support import claude_code as cc
 from integration._support import responses_vendor as rv
-from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
+from integration._support.client import Gateway, Scenario, gateway_from_environment, until_asserted
 from integration._support.process import owned_proxy
 from integration._support.prometheus_series import Sample, scrape
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -233,26 +233,27 @@ def test_a_project_key_call_on_every_endpoint_lands_in_the_request_latency_and_p
         assert _send(rig.gateway, call, owner.key) == 200
         forwarded: Final = rig.upstream.drain()
         assert [_forwarded(request) for request in forwarded] == [call.upstream], forwarded
-        samples: Final = eventually(
-            lambda: scrape(rig.gateway),
-            lambda found: (
-                _total(found, _LATENCY_COUNT, hashed_api_key=owner.hashed) == 1
-                and len(_project_gauges(found, owner.project)) == 4
-            ),
-            seconds=30,
-        )
-        requests: Final = _series(samples, _TOTAL_REQUESTS, hashed_api_key=owner.hashed)
-        assert [(sample.labels["route"], sample.labels["status_code"], sample.value) for sample in requests] == [
-            (call.route, "200", 1.0)
-        ], requests
-        assert [_shared_labels(sample) for sample in requests] == [(owner.alias, owner.team, call.model, "None")]
-        gauges: Final = _project_gauges(samples, owner.project)
-        assert {(sample.name, sample.labels["rate_limit_type"], int(sample.value)) for sample in gauges} >= {
-            (_ALLOWED, "requests", _RPM),
-            (_USED, "requests", 1),
-            (_ALLOWED, "tokens", _TPM),
-        }, gauges
-        assert {_shared_labels(sample) for sample in gauges} == {(owner.alias, owner.team, call.model, "None")}, gauges
+
+        def landed() -> None:
+            samples: Final = scrape(rig.gateway)
+            assert _total(samples, _LATENCY_COUNT, hashed_api_key=owner.hashed) == 1
+            requests: Final = _series(samples, _TOTAL_REQUESTS, hashed_api_key=owner.hashed)
+            assert [(sample.labels["route"], sample.labels["status_code"], sample.value) for sample in requests] == [
+                (call.route, "200", 1.0)
+            ], requests
+            assert [_shared_labels(sample) for sample in requests] == [(owner.alias, owner.team, call.model, "None")]
+            gauges: Final = _project_gauges(samples, owner.project)
+            assert len(gauges) == 4, gauges
+            assert {(sample.name, sample.labels["rate_limit_type"], int(sample.value)) for sample in gauges} >= {
+                (_ALLOWED, "requests", _RPM),
+                (_USED, "requests", 1),
+                (_ALLOWED, "tokens", _TPM),
+            }, gauges
+            assert {_shared_labels(sample) for sample in gauges} == {(owner.alias, owner.team, call.model, "None")}, (
+                gauges
+            )
+
+        until_asserted(landed, seconds=30)
 
 
 def test_a_failed_project_key_call_counts_as_one_failed_request_with_each_shared_label_once(rig: _Rig) -> None:
@@ -264,15 +265,19 @@ def test_a_failed_project_key_call_counts_as_one_failed_request_with_each_shared
         assert status >= 500, status
         forwarded: Final = rig.upstream.drain()
         assert len(forwarded) == 1, forwarded
-        samples: Final = eventually(
-            lambda: scrape(rig.gateway),
-            lambda found: _total(found, _FAILED_REQUESTS, hashed_api_key=owner.hashed) == 1,
-            seconds=30,
-        )
-        failed: Final = _series(samples, _FAILED_REQUESTS, hashed_api_key=owner.hashed)
-        assert [_shared_labels(sample) for sample in failed] == [("None", owner.team, _DOWN, "None")], failed
-        requests: Final = _series(samples, _TOTAL_REQUESTS, hashed_api_key=owner.hashed)
-        assert [(sample.labels["status_code"], sample.value) for sample in requests] == [(str(status), 1.0)], requests
+
+        def landed() -> None:
+            samples: Final = scrape(rig.gateway)
+            failed: Final = _series(samples, _FAILED_REQUESTS, hashed_api_key=owner.hashed)
+            assert [(_shared_labels(sample), sample.value) for sample in failed] == [
+                (("None", owner.team, _DOWN, "None"), 1.0)
+            ], failed
+            requests: Final = _series(samples, _TOTAL_REQUESTS, hashed_api_key=owner.hashed)
+            assert [(sample.labels["status_code"], sample.value) for sample in requests] == [(str(status), 1.0)], (
+                requests
+            )
+
+        until_asserted(landed, seconds=30)
 
 
 def test_request_metadata_fills_the_shared_labels_on_the_request_and_project_metrics(rig: _Rig) -> None:
@@ -288,19 +293,17 @@ def test_request_metadata_fills_the_shared_labels_on_the_request_and_project_met
         assert _send(rig.gateway, call, owner.key, metadata=metadata) == 200
         forwarded: Final = rig.upstream.drain()
         assert len(forwarded) == 1, forwarded
-        samples: Final = eventually(
-            lambda: scrape(rig.gateway),
-            lambda found: (
-                _total(found, _TOTAL_REQUESTS, hashed_api_key=owner.hashed) == 1
-                and len(_project_gauges(found, owner.project)) == 4
-            ),
-            seconds=30,
-        )
         expected: Final = ("caller-alias", "caller-team", _GPT, "eng")
-        requests: Final = _series(samples, _TOTAL_REQUESTS, hashed_api_key=owner.hashed)
-        assert [_shared_labels(sample) for sample in requests] == [expected], requests
-        gauges: Final = _project_gauges(samples, owner.project)
-        assert {_shared_labels(sample) for sample in gauges} == {expected}, gauges
+
+        def landed() -> None:
+            samples: Final = scrape(rig.gateway)
+            requests: Final = _series(samples, _TOTAL_REQUESTS, hashed_api_key=owner.hashed)
+            assert [(_shared_labels(sample), sample.value) for sample in requests] == [(expected, 1.0)], requests
+            gauges: Final = _project_gauges(samples, owner.project)
+            assert len(gauges) == 4, gauges
+            assert {_shared_labels(sample) for sample in gauges} == {expected}, gauges
+
+        until_asserted(landed, seconds=30)
 
 
 def test_a_key_outside_any_team_or_project_still_counts_its_request(rig: _Rig) -> None:
@@ -311,15 +314,16 @@ def test_a_key_outside_any_team_or_project_still_counts_its_request(rig: _Rig) -
         assert _send(rig.gateway, _Call("/v1/chat/completions", _GPT, stream=False), key) == 200
         forwarded: Final = rig.upstream.drain()
         assert len(forwarded) == 1, forwarded
-        samples: Final = eventually(
-            lambda: scrape(rig.gateway),
-            lambda found: _total(found, _LATENCY_COUNT, hashed_api_key=hashed) == 1,
-            seconds=30,
-        )
-        requests: Final = _series(samples, _TOTAL_REQUESTS, hashed_api_key=hashed)
-        assert [(_shared_labels(sample), sample.value) for sample in requests] == [
-            (("None", "None", _GPT, "None"), 1.0)
-        ], requests
+
+        def landed() -> None:
+            samples: Final = scrape(rig.gateway)
+            assert _total(samples, _LATENCY_COUNT, hashed_api_key=hashed) == 1
+            requests: Final = _series(samples, _TOTAL_REQUESTS, hashed_api_key=hashed)
+            assert [(_shared_labels(sample), sample.value) for sample in requests] == [
+                (("None", "None", _GPT, "None"), 1.0)
+            ], requests
+
+        until_asserted(landed, seconds=30)
 
 
 def test_a_mixed_burst_through_an_upstream_outage_counts_every_request_once_and_never_fails_the_callback(
@@ -346,24 +350,21 @@ def test_a_mixed_burst_through_an_upstream_outage_counts_every_request_once_and_
         assert all(status >= 500 for _, status in down), down
         rig.upstream.drain()
         observed: Final = Counter((route, str(status)) for route, status in healthy + down + recovered)
-        samples: Final = eventually(
-            lambda: scrape(rig.gateway),
-            lambda found: (
-                sum(sample.value for sample in _series(found, _TOTAL_REQUESTS, hashed_api_key=owner.hashed))
-                == len(calls) * 3
-            ),
-            seconds=60,
-        )
-        counted: Final = Counter(
-            {
-                (sample.labels["route"], sample.labels["status_code"]): int(sample.value)
-                for sample in _series(samples, _TOTAL_REQUESTS, hashed_api_key=owner.hashed)
-            }
-        )
-        assert counted == observed, (counted, observed)
-        assert _total(samples, _LATENCY_COUNT, hashed_api_key=owner.hashed) == len(healthy) + len(recovered)
-        assert _total(samples, _FAILED_REQUESTS, hashed_api_key=owner.hashed) == len(down)
-        assert _total(samples, _CALLBACK_FAILURES, callback_name="PrometheusLogger") == before
+
+        def landed() -> None:
+            samples: Final = scrape(rig.gateway)
+            counted: Final = Counter(
+                {
+                    (sample.labels["route"], sample.labels["status_code"]): int(sample.value)
+                    for sample in _series(samples, _TOTAL_REQUESTS, hashed_api_key=owner.hashed)
+                }
+            )
+            assert counted == observed, (counted, observed)
+            assert _total(samples, _LATENCY_COUNT, hashed_api_key=owner.hashed) == len(healthy) + len(recovered)
+            assert _total(samples, _FAILED_REQUESTS, hashed_api_key=owner.hashed) == len(down)
+            assert _total(samples, _CALLBACK_FAILURES, callback_name="PrometheusLogger") == before
+
+        until_asserted(landed, seconds=60)
 
 
 @pytest.mark.parametrize(
@@ -381,15 +382,14 @@ def test_a_project_key_call_under_other_label_configurations_keeps_one_project_a
         assert _send(owned.gateway, _Call("/v1/chat/completions", _GPT, stream=False), owner.key) == 200
         forwarded: Final = owned.upstream.drain()
         assert len(forwarded) == 1, forwarded
-        samples: Final = eventually(
-            lambda: scrape(owned.gateway),
-            lambda found: (
-                _total(found, _LATENCY_COUNT, hashed_api_key=owner.hashed) == 1
-                and len(_project_gauges(found, owner.project)) == 4
-            ),
-            seconds=30,
-        )
-        requests: Final = _series(samples, _TOTAL_REQUESTS, hashed_api_key=owner.hashed)
-        assert [(sample.labels["project_alias"], sample.value) for sample in requests] == [(owner.alias, 1.0)]
-        gauges: Final = _project_gauges(samples, owner.project)
-        assert {sample.labels["project_alias"] for sample in gauges} == {owner.alias}, gauges
+
+        def landed() -> None:
+            samples: Final = scrape(owned.gateway)
+            assert _total(samples, _LATENCY_COUNT, hashed_api_key=owner.hashed) == 1
+            requests: Final = _series(samples, _TOTAL_REQUESTS, hashed_api_key=owner.hashed)
+            assert [(sample.labels["project_alias"], sample.value) for sample in requests] == [(owner.alias, 1.0)]
+            gauges: Final = _project_gauges(samples, owner.project)
+            assert len(gauges) == 4, gauges
+            assert {sample.labels["project_alias"] for sample in gauges} == {owner.alias}, gauges
+
+        until_asserted(landed, seconds=30)

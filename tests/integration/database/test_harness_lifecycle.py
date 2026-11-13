@@ -44,6 +44,8 @@ from tests.integration._support.database_relay import (
 from tests.integration._support.runtime import configure_executor
 from tests.integration._support.sharding import ShardExecution, shard_errors
 from tests.integration._support.wire import Reply, wire_server
+from tests.integration._support.ports import allocate_port
+from tests.integration.run import _without_provider_api_keys
 
 
 class ExitRecord(TypedDict):
@@ -77,8 +79,7 @@ def _nested_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]
             "INTEGRATION_COVERAGE_FILE",
             "INTEGRATION_CASE_SHARDS",
             "INTEGRATION_CASE_SHARD_INDEX",
-            "CIRCLE_NODE_TOTAL",
-            "CIRCLE_NODE_INDEX",
+            "INTEGRATION_SHARD_FILES",
             "PYTEST_XDIST_WORKER",
             "PYTEST_XDIST_WORKER_COUNT",
             "PYTEST_XDIST_TESTRUNUID",
@@ -86,6 +87,98 @@ def _nested_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]
         )
     )
     return {name: value for name, value in environment.items() if name not in inherited_run_settings}
+
+
+def test_runner_environment_drops_inherited_provider_api_keys() -> None:
+    inherited: Final = {
+        "OPENAI_API_KEY": "ambient-openai",
+        "GEMINI_API_KEY": "ambient-gemini",
+        "OTHER_API_KEY": "ambient-other",
+        "LITELLM_MASTER_KEY": "sk-integration-master",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8190",
+    }
+    filtered: Final = _without_provider_api_keys(inherited)
+    assert filtered == {
+        "LITELLM_MASTER_KEY": "sk-integration-master",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8190",
+    }
+    assert inherited["OPENAI_API_KEY"] == "ambient-openai"
+
+
+@pytest.mark.parametrize("fails", (False, True), ids=("passing-test", "failing-test"))
+def test_sdk_teardown_delivers_logging_before_restoring_callbacks(tmp_path: Path, fails: bool) -> None:
+    root: Final = Path(__file__).resolve().parents[3]
+    events: Final = tmp_path / "callbacks.json"
+    probe: Final = tmp_path / "test_callback_teardown.py"
+    probe.write_text(
+        "import asyncio, json, litellm, pytest\n"
+        "from pathlib import Path\n"
+        "from litellm.integrations.custom_logger import CustomLogger\n"
+        f"EVENTS = Path({str(events)!r})\n"
+        "ORIGINAL = tuple(litellm.callbacks)\n"
+        "@pytest.fixture\n"
+        "def release():\n"
+        "    gate = asyncio.Event()\n"
+        "    yield gate\n"
+        "    gate.set()\n"
+        "async def test_request(release):\n"
+        "    started = asyncio.Event()\n"
+        "    request_loop = asyncio.get_running_loop()\n"
+        "    class Recorder(CustomLogger):\n"
+        "        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):\n"
+        "            started.set()\n"
+        "            await release.wait()\n"
+        "            EVENTS.write_text(json.dumps({\n"
+        "                'registered': self in litellm.callbacks,\n"
+        "                'same_loop': asyncio.get_running_loop() is request_loop,\n"
+        "                'call_id': kwargs['litellm_call_id'],\n"
+        "            }))\n"
+        "    litellm.callbacks.append(Recorder())\n"
+        "    response = await litellm.acompletion(model='gpt-4o-mini',\n"
+        "        messages=[{'role': 'user', 'content': 'teardown'}],\n"
+        "        mock_response='done', litellm_call_id='teardown-request')\n"
+        "    await asyncio.wait_for(started.wait(), timeout=5)\n"
+        "    assert response.choices[0].message.content == 'done'\n"
+        "    assert not EVENTS.exists()\n"
+        f"    assert not {fails}, 'intentional test failure'\n"
+        "def test_next():\n"
+        "    assert EVENTS.exists(), 'logging did not finish before the next test'\n"
+        "    assert json.loads(EVENTS.read_text()) == {\n"
+        "        'registered': True, 'same_loop': True, 'call_id': 'teardown-request'}\n"
+        "    assert tuple(litellm.callbacks) == ORIGINAL\n"
+    )
+    result: Final = subprocess.run(
+        (
+            sys.executable,
+            "-P",
+            "-m",
+            "pytest",
+            str(probe),
+            "--noconftest",
+            "-p",
+            "tests.integration.sdk.conftest",
+            "-o",
+            "addopts=",
+            "-o",
+            "asyncio_mode=auto",
+            "-o",
+            "asyncio_default_fixture_loop_scope=session",
+            f"--junitxml={tmp_path / 'junit.xml'}",
+            "-q",
+        ),
+        cwd=root,
+        env=_nested_pytest_environment(os.environ),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == (1 if fails else 0), result.stdout + result.stderr
+    cases: Final = ElementTree.parse(tmp_path / "junit.xml").findall(".//testcase")
+    assert tuple(case.attrib["name"] for case in cases) == ("test_request", "test_next")
+    assert all(case.find("error") is None for case in cases), result.stdout + result.stderr
+    assert (cases[0].find("failure") is not None) == fails, result.stdout + result.stderr
+    assert cases[1].find("failure") is None, result.stdout + result.stderr
 
 
 def test_owned_readiness_rejects_a_healthy_listener_from_another_process(
@@ -125,11 +218,55 @@ async def _unused_peer(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
     await reader.read()
 
 
+async def _echo_protocol(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    while chunk := await reader.read(65536):
+        writer.write(chunk)
+        await writer.drain()
+
+
+def _protocol_message(kind: bytes, payload: bytes) -> bytes:
+    return kind + (len(payload) + 4).to_bytes(4, "big") + payload
+
+
+@pytest.mark.parametrize("prepared_trigger", (False, True))
+def test_relay_holds_cached_statements_parsed_before_arming(prepared_trigger: bool) -> None:
+    upstream_port: Final = allocate_port()
+    upstream: Final = LoopbackServer(upstream_port, _echo_protocol)
+    relay: Final = HeldStatementRelay("127.0.0.1", upstream_port, b"trigger", after=b"snapshot", armed=False)
+    startup: Final = b"\x00\x00\x00\x08\x00\x03\x00\x00"
+    snapshot: Final = _protocol_message(b"P", b"s1\x00SELECT snapshot\x00\x00\x00")
+    trigger: Final = _protocol_message(b"P", b"s2\x00SELECT trigger\x00\x00\x00")
+    bind_snapshot: Final = _protocol_message(b"B", b"\x00s1\x00\x00\x00\x00\x00\x00\x00")
+    bind_trigger: Final = _protocol_message(b"B", b"\x00s2\x00\x00\x00\x00\x00\x00\x00")
+    upstream.start()
+    try:
+        relay.start()
+        with (
+            socket.create_connection(("127.0.0.1", relay.port), timeout=5) as client,
+            client.makefile("rb") as replies,
+        ):
+            before: Final = startup + snapshot + bind_snapshot + (trigger if prepared_trigger else b"")
+            client.sendall(before)
+            assert replies.read(len(before)) == before
+            relay.arm()
+            client.sendall(bind_snapshot)
+            assert replies.read(len(bind_snapshot)) == bind_snapshot
+            held: Final = bind_trigger if prepared_trigger else _protocol_message(b"Q", b"SELECT trigger\x00")
+            client.sendall(held)
+            assert relay.held.wait(timeout=5), "cached snapshot did not open the relay barrier"
+            relay.release()
+            assert replies.read(len(held)) == held
+    finally:
+        relay.stop()
+        upstream.stop()
+
+
 def test_relay_bind_failure_closes_its_loop_and_allows_repeated_cleanup() -> None:
+    port: Final = allocate_port()
     with socket.socket() as occupied:
-        occupied.bind(("127.0.0.1", 0))
+        occupied.bind(("127.0.0.1", port))
         occupied.listen()
-        relay: Final = LoopbackServer(occupied.getsockname()[1], _unused_peer)
+        relay: Final = LoopbackServer(port, _unused_peer)
         with pytest.raises(OSError, match=os.strerror(errno.EADDRINUSE).lower()):
             relay.start()
         relay.stop()
@@ -139,7 +276,7 @@ def test_relay_bind_failure_closes_its_loop_and_allows_repeated_cleanup() -> Non
 def test_upstream_readiness_failure_reaps_the_started_process(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(process_support, "_UPSTREAM_READY_SECONDS", 0)
     children_before: Final = frozenset(child.pid for child in psutil.Process().children(recursive=True))
-    slot: Final = process_support.UpstreamSlot(tmp_path, process_support._free_port(), process_support._harness_root())
+    slot: Final = process_support.UpstreamSlot(tmp_path, allocate_port(), process_support._harness_root())
     try:
         with pytest.raises(AssertionError, match="readiness deadline exceeded"):
             slot.start()
@@ -612,8 +749,6 @@ def test_direct_and_dependent_consumers_reuse_the_same_module_parameter(tmp_path
                 **os.environ,
                 "INTEGRATION_CASE_SHARDS": "2",
                 "INTEGRATION_CASE_SHARD_INDEX": "1",
-                "CIRCLE_NODE_TOTAL": "2",
-                "CIRCLE_NODE_INDEX": "1",
             }
         ),
         capture_output=True,
@@ -689,9 +824,16 @@ def test_worker_crash_keeps_the_original_junit_identity_and_an_incomplete_execut
         assert cases[0].find("error") is not None
 
 
-@pytest.mark.parametrize("assignment", ("absent", "missing", "foreign"))
+@pytest.mark.parametrize(
+    ("assignment", "exit_code"),
+    (
+        ("absent", pytest.ExitCode.USAGE_ERROR),
+        ("missing", pytest.ExitCode.USAGE_ERROR),
+        ("foreign", pytest.ExitCode.INTERRUPTED),
+    ),
+)
 def test_invalid_native_selections_fail_before_any_case_runs(
-    tmp_path: Path, assignment: Literal["absent", "missing", "foreign"]
+    tmp_path: Path, assignment: Literal["absent", "missing", "foreign"], exit_code: pytest.ExitCode
 ) -> None:
     root: Final = Path(__file__).resolve().parents[3]
     events: Final = tmp_path / "executed.txt"
@@ -728,7 +870,7 @@ def test_invalid_native_selections_fail_before_any_case_runs(
             timeout=15,
             check=False,
         )
-        assert result.returncode == pytest.ExitCode.USAGE_ERROR, result.stdout + result.stderr
+        assert result.returncode == exit_code, result.stdout + result.stderr
         assert not events.exists()
 
 

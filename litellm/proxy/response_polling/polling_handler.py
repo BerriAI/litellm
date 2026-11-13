@@ -3,9 +3,11 @@ Response Polling Handler for Background Responses with Cache
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final
+from typing import TYPE_CHECKING, Final
+
+from pydantic import TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -13,7 +15,19 @@ from litellm._uuid import uuid4
 from litellm.caching.redis_cache import RedisCache
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStatus
 
+if TYPE_CHECKING:
+    from litellm.router import Router
+
 _RESPONSE_POLLING_TARGET: Final = "response_polling"
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_LIST: Final = TypeAdapter(list[object])
+_CACHED_VALUE: Final = TypeAdapter(object)
+
+
+def _json_document(value: object) -> str | bytes | bytearray:
+    if isinstance(value, (str, bytes, bytearray)):
+        return value
+    raise TypeError(f"the JSON object must be str, bytes or bytearray, not {value.__class__.__name__}")
 
 
 class ResponsePollingHandler:
@@ -94,7 +108,7 @@ class ResponsePollingHandler:
         polling_id: str,
         status: ResponsesAPIStatus | None = None,
         usage: dict | None = None,
-        error: dict | None = None,
+        error: Mapping[str, object] | None = None,
         incomplete_details: dict | None = None,
         reasoning: dict | None = None,
         tool_choice: object | None = None,
@@ -112,6 +126,7 @@ class ResponsePollingHandler:
         parallel_tool_calls: bool | None = None,
         user: str | None = None,
         store: bool | None = None,
+        timing: Mapping[str, float] | None = None,
     ) -> None:
         """
         Update the polling state in Redis
@@ -140,6 +155,7 @@ class ResponsePollingHandler:
             parallel_tool_calls: Whether parallel tool calls are enabled
             user: User identifier
             store: Whether to store the response
+            timing: Server execution timings in milliseconds
         """
         if not self.redis_cache:
             return
@@ -147,13 +163,13 @@ class ResponsePollingHandler:
         cache_key: Final = self.get_cache_key(polling_id)
 
         # Get current state
-        cached_state: Final = await self.redis_cache.async_get_cache(cache_key)
+        cached_state: Final = _CACHED_VALUE.validate_python(await self.redis_cache.async_get_cache(cache_key))
         if not cached_state:
             verbose_proxy_logger.warning("No cached state found for polling_id: %s", polling_id)
             return
 
         # Parse existing ResponsesAPIResponse from cache
-        state: Final = json.loads(cached_state)
+        state: Final = _JSON_OBJECT.validate_python(json.loads(_json_document(cached_state)))
 
         # Update status (using OpenAI native status values)
         if status:
@@ -162,6 +178,9 @@ class ResponsePollingHandler:
         # Replace full output list if provided
         if output is not None:
             state["output"] = output
+
+        if timing is not None:
+            state["litellm_response_timing"] = timing
 
         # Update usage
         if usage:
@@ -215,7 +234,7 @@ class ResponsePollingHandler:
             ttl=self.ttl,
         )
 
-        output_count: Final = len(state.get("output", []))
+        output_count: Final = len(_JSON_LIST.validate_python(state.get("output", [])))
         verbose_proxy_logger.debug(
             "Updated polling state for %s: status=%s, output_items=%s", polling_id, state["status"], output_count
         )
@@ -227,10 +246,10 @@ class ResponsePollingHandler:
             return None
 
         cache_key: Final = self.get_cache_key(polling_id)
-        cached_state: Final = await self.redis_cache.async_get_cache(cache_key)
+        cached_state: Final = _CACHED_VALUE.validate_python(await self.redis_cache.async_get_cache(cache_key))
 
         if cached_state:
-            return json.loads(cached_state)
+            return _JSON_OBJECT.validate_python(json.loads(_json_document(cached_state)))
 
         return None
 
@@ -260,10 +279,10 @@ class ResponsePollingHandler:
 
 def should_use_polling_for_request(
     background_mode: bool,
-    polling_via_cache_enabled,  # Can be False, "all", or List[str]
-    redis_cache,  # RedisCache or None
+    polling_via_cache_enabled: bool | str | Sequence[str],
+    redis_cache: RedisCache | None,
     model: str,
-    llm_router,  # Router instance or None
+    llm_router: "Router | None",
     native_background_mode: list[str] | None = None,  # List of models that should use native background mode
 ) -> bool:
     """
@@ -304,10 +323,7 @@ def should_use_polling_for_request(
         # Otherwise, check ALL deployments for this model_name in router
         elif llm_router is not None:
             try:
-                # Get all deployment indices for this model name
-                indices: Final = llm_router.model_name_to_deployment_indices.get(model, [])
-                for idx in indices:
-                    deployment_dict = llm_router.model_list[idx]
+                for deployment_dict in llm_router.registry().deployments(model, source="named") or ():
                     litellm_params = deployment_dict.get("litellm_params", {})
 
                     # Check custom_llm_provider first

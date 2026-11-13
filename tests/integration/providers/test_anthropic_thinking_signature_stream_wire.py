@@ -394,7 +394,7 @@ def test_two_signed_blocks_each_keep_their_own_text_through_a_replay(gateway: Ga
         first: Final = _stream_chat(gateway, _chat_body(model, marker))
         assert first.status_code == 200, first.text
         deltas: Final = deltas_of(chunks_of(first.text))
-        assert signed_blocks(deltas) == (signature_only(SIGNATURE), signature_only(_SECOND_SIGNATURE)), deltas
+        assert signed_blocks(deltas) == (signature_only(SIGNATURE), signature_only(_SECOND_SIGNATURE, index=1)), deltas
         assert accumulate(deltas) == (
             thinking_block("one two", SIGNATURE),
             thinking_block("three four", _SECOND_SIGNATURE),
@@ -465,7 +465,7 @@ def test_signature_only_block_without_thinking_deltas_is_relayed_as_is(gateway: 
         assert response.status_code == 200, response.text
         deltas: Final = deltas_of(chunks_of(response.text))
         assert signed_blocks(deltas) == (signature_only(SIGNATURE),), deltas
-        assert accumulate(deltas) == (signature_only(SIGNATURE),), deltas
+        assert accumulate(deltas) == (thinking_block("", SIGNATURE),), deltas
         assert reasoning_text(deltas) == "", deltas
         assert content_text(deltas) == answer(marker), deltas
         assert len(wire.drain()) == 1

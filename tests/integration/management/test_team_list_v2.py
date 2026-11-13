@@ -1,8 +1,8 @@
-from typing import FrozenSet, Optional
+from typing import Final, FrozenSet, Optional
 
 import pytest
 
-from tests.integration._support.actors import Actor
+from tests.integration._support.actors import Actor, ActorSet, GatewayClient
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -139,3 +139,31 @@ async def test_team_list_v2_invalid_status_is_400(gateway_client, actors):
         headers={"Authorization": f"Bearer {actors.keys[Actor.PROXY_ADMIN].cleartext}"},
     )
     assert resp.status_code == 400, resp.text
+
+
+async def test_team_list_v2_returns_caller_membership_only_for_members(
+    gateway_client: GatewayClient,
+    actors: ActorSet,
+) -> None:
+    member: Final = actors.keys[Actor.TEAM_ADMIN]
+    member_response: Final = await gateway_client.get(
+        f"/v2/team/list?team_id={actors.team_alpha_id}&user_id={member.user_id}",
+        headers={"Authorization": f"Bearer {member.cleartext}"},
+    )
+
+    assert member_response.status_code == 200, member_response.text
+    member_team: Final = member_response.json()["teams"][0]
+    assert member_team["caller_membership"] == {
+        "spend": 0.0,
+        "max_budget": None,
+        "budget_reset_at": None,
+    }
+
+    admin: Final = actors.keys[Actor.PROXY_ADMIN]
+    admin_response: Final = await gateway_client.get(
+        f"/v2/team/list?team_id={actors.team_alpha_id}",
+        headers={"Authorization": f"Bearer {admin.cleartext}"},
+    )
+
+    assert admin_response.status_code == 200, admin_response.text
+    assert admin_response.json()["teams"][0]["caller_membership"] is None

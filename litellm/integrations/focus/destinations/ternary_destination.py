@@ -9,12 +9,14 @@ from urllib.parse import quote, urlparse
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPEventHooks
+from litellm.types.llms.custom_http import VerifyTypes
 
 from .base import FocusDestination, FocusTimeWindow
 
 if TYPE_CHECKING:
     import httpx
+    from aiohttp import ClientSession
 
 TERNARY_UPLOAD_TIMEOUT_SECONDS: Final = 120.0
 
@@ -57,10 +59,17 @@ class _NoRedirectHTTPHandler(AsyncHTTPHandler):
 
     def create_client(
         self,
-        *args: object,
-        **kwargs: object,  # kwargs-ok: passthrough to AsyncHTTPHandler.create_client
+        timeout: float | httpx.Timeout | None,
+        event_hooks: HTTPEventHooks | None,
+        ssl_verify: VerifyTypes | None = None,
+        shared_session: ClientSession | None = None,
     ) -> httpx.AsyncClient:
-        client: Final = super().create_client(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # passthrough
+        client: Final = super().create_client(
+            timeout=timeout,
+            event_hooks=event_hooks,
+            ssl_verify=ssl_verify,
+            shared_session=shared_session,
+        )
         client.follow_redirects = False
         return client
 

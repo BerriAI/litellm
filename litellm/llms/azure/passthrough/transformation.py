@@ -5,63 +5,23 @@ from typing import TYPE_CHECKING, Final, Optional
 
 import httpx
 from httpx import Response
-from pydantic import ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.passthrough.transformation import (
     BasePassthroughConfig,
-    RelayShape,
-    logged_relay_shape,
     replace_path_segment,
     strip_leading_model_segment,
 )
+from litellm.llms.openai_like.passthrough.transformation import logged_openai_like_response, logged_openai_like_stream
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse, ResponsesTerminalEvent
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CallTypes, EmbeddingResponse, ImageResponse
 
 if TYPE_CHECKING:
     from httpx import URL
 
     from litellm.llms.base_llm.passthrough.transformation import LoggedRelayResponse
-
-
-class RelayedChatRequest(LiteLLMBaseModel):
-    messages: Sequence[Mapping[str, object]] | None = None
-
-
-class RelayedCallDetails(LiteLLMBaseModel):
-    request_data: RelayedChatRequest | None = None
-
-
-def _relayed_messages(litellm_logging_obj: Logging) -> Sequence[Mapping[str, object]] | None:
-    try:
-        details: Final = RelayedCallDetails.model_validate(litellm_logging_obj.model_call_details)
-    except ValidationError:
-        return None
-    return details.request_data.messages if details.request_data else None
-
-
-RESPONSES_RELAY_SHAPE: Final = RelayShape("/responses", CallTypes.aresponses, ResponsesAPIResponse.model_validate)
-
-OPENAI_RELAY_SHAPES: Final = (
-    RelayShape("/embeddings", CallTypes.aembedding, EmbeddingResponse.model_validate),
-    RESPONSES_RELAY_SHAPE,
-    RelayShape("/images/generations", CallTypes.aimage_generation, ImageResponse.model_validate),
-)
-
-
-def logged_responses_stream(all_chunks: Sequence[str], logging_obj: Logging) -> ResponsesTerminalEvent | None:
-    """A streaming logging object assembles the logged response from the terminal event, not from its body."""
-    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-
-    terminal_event: Final = OpenAIResponsesAPIConfig.parse_terminal_event_from_stream_chunks(all_chunks=all_chunks)
-    if terminal_event is None:
-        return None
-    logging_obj.call_type = RESPONSES_RELAY_SHAPE.call_type.value
-    return terminal_event
 
 
 AZURE_DEPLOYMENT_SEGMENT: Final = re.compile(r"(?<![^/])openai/deployments/([^/]+)")
@@ -179,33 +139,11 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         model: str,
         custom_llm_provider: str,
         httpx_response: Response,
-        request_data: dict,
+        request_data: Mapping[str, object],
         logging_obj: Logging,
         endpoint: str,
     ) -> Optional["LoggedRelayResponse"]:
-        from litellm import encoding
-        from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-        from litellm.types.utils import ModelResponse
-
-        if "chat/completions" not in endpoint:
-            return logged_relay_shape(OPENAI_RELAY_SHAPES, httpx_response, logging_obj, endpoint)
-
-        openai_chat_config: Final = OpenAIGPTConfig()
-
-        litellm_model_response: Final[ModelResponse] = openai_chat_config.transform_response(
-            model=model,
-            messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
-            raw_response=httpx_response,
-            model_response=ModelResponse(),
-            logging_obj=logging_obj,
-            optional_params={},
-            litellm_params={},
-            api_key="",
-            request_data=request_data,
-            encoding=encoding,
-        )
-
-        return litellm_model_response
+        return logged_openai_like_response(model, httpx_response, request_data, logging_obj, endpoint)
 
     def handle_logging_collected_chunks(
         self,
@@ -215,18 +153,4 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         custom_llm_provider: str,
         endpoint: str,
     ) -> Optional["LoggedRelayResponse"]:
-        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler import (
-            OpenAIPassthroughLoggingHandler,
-        )
-
-        if f"/{endpoint.strip('/')}".endswith(RESPONSES_RELAY_SHAPE.path_suffix):
-            return logged_responses_stream(all_chunks, litellm_logging_obj)
-        if "chat/completions" not in endpoint:
-            return None
-
-        return OpenAIPassthroughLoggingHandler()._build_complete_streaming_response(  # pyright: ignore[reportPrivateUsage]  # the only OpenAI SSE-to-ModelResponse assembler; reimplementing it would fork the parser
-            all_chunks=all_chunks,
-            litellm_logging_obj=litellm_logging_obj,
-            model=model,
-            messages=_relayed_messages(litellm_logging_obj),
-        )
+        return logged_openai_like_stream(all_chunks, litellm_logging_obj, model, endpoint)

@@ -41,7 +41,7 @@ from pydantic import JsonValue
 
 from tests.integration.cost_calculation.cost_tracking_case import StoredResponse
 
-pytestmark: Final = pytest.mark.timeout(480)
+pytestmark: Final = [pytest.mark.timeout(480), pytest.mark.shares_worker_state]
 
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _MARKER_HEADER: Final = "x-litellm-spend-logs-metadata"
@@ -183,9 +183,7 @@ def _burst(chaos: _Chaos, phase: str) -> tuple[_Outcome, ...]:
 
 
 def _upstream_hits(slot: UpstreamSlot, markers: frozenset[str]) -> Mapping[str, int]:
-    upstream: Final = Upstream(slot.url)
-    upstream.drain()
-    bodies: Final = tuple(json.dumps(item.get("body")) for item in upstream.items)
+    bodies: Final = tuple(json.dumps(item.get("body")) for item in Upstream(slot.url).observed())
     return {marker: sum(marker in body for body in bodies) for marker in markers}
 
 

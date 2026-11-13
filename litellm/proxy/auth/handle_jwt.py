@@ -25,15 +25,18 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from fastapi import HTTPException, status
 from jwt.api_jwk import PyJWK
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import json_contains, subscript
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
     RBAC_ROLES,
+    IdJagRequestingApp,
     JWKKeyValue,
     JWTAuthBuilderResult,
     JWTIssuerConfig,
@@ -98,6 +101,10 @@ class NoMatchingJWTPublicKeyError(Exception):
     """Raised when a JWKS endpoint returns no key matching the requested ``kid``."""
 
 
+class IdJagIsNotABearerTokenError(Exception):
+    """Raised when bearer auth is handed an ID-JAG, which only the token endpoint may redeem."""
+
+
 class JWKSUnreachableError(Exception):
     """Raised when an IdP's JWKS / OIDC discovery endpoint is unreachable and no cached copy is left to fall back on."""
 
@@ -108,12 +115,27 @@ JWKS_UNREACHABLE_BACKOFF_SECONDS: Final = 30
 STALE_CACHE_KEY_PREFIX: Final = "litellm_stale_"
 STALE_WRITTEN_AT_CACHE_KEY_PREFIX: Final = "litellm_stale_written_at_"
 UNREACHABLE_CACHE_KEY_PREFIX: Final = "litellm_jwks_unreachable_"
+_CACHED_VALUE: Final = TypeAdapter(object)
 
 _CachedValueT = TypeVar("_CachedValueT", bound=JWKKeyValue | str)
 
 
+ID_JAG_TYP: Final = "oauth-id-jag+jwt"
+
+
+@dataclass(frozen=True, slots=True)
+class AssertionRejection:
+    """Why a JWT assertion failed verification. The reason is for the proxy log only, since
+    PyJWT's wording can quote the token's claims."""
+
+    reason: str
+
+
 class _JWTAuthSettings(Protocol):
     """The JWT auth settings block this handler reads back through ``getattr``, when one is configured."""
+
+    @property
+    def id_jag_requesting_apps(self) -> Sequence[IdJagRequestingApp] | None: ...
 
     @property
     def issuers(self) -> Sequence[JWTIssuerConfig] | None: ...
@@ -141,6 +163,10 @@ class _UserInfoResponse(Protocol):
     """The OIDC UserInfo endpoint's HTTP response, read for the identity document it carries."""
 
     def json(self) -> dict[str, object]: ...
+
+
+class _JWKSResponse(Protocol):
+    def json(self) -> object: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +223,10 @@ def _userinfo_document(response: _UserInfoResponse) -> dict[str, object]:
     return response.json()
 
 
+def _jwks_document(response: _JWKSResponse) -> object:
+    return response.json()
+
+
 def jwks_unavailable_exception(error: JWKSUnreachableError) -> ProxyException:
     return ProxyException(
         message=(
@@ -204,7 +234,7 @@ def jwks_unavailable_exception(error: JWKSUnreachableError) -> ProxyException:
             f"unreachable, so the JWT signature could not be verified. Please retry shortly. Error: {error}"
         ),
         type=ProxyErrorTypes.auth_provider_unavailable,
-        param="None",
+        param=None,
         code=status.HTTP_503_SERVICE_UNAVAILABLE,
     )
 
@@ -280,7 +310,7 @@ class JWTHandler:
         return is_jwt_token(token=token)
 
     @staticmethod
-    def get_unverified_claims(token: str) -> dict | None:
+    def get_unverified_claims(token: str) -> dict[str, object] | None:
         """
         Decode JWT claims without signature verification.
         Used for routing decisions before selecting validation path.
@@ -785,12 +815,12 @@ class JWTHandler:
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def _get_cached_value(self, cache_key: str) -> _CachedValueT | None:
-        cached: Final = await self.user_api_key_cache.async_get_cache(cache_key)
+        cached: Final = _CACHED_VALUE.validate_python(await self.user_api_key_cache.async_get_cache(cache_key))
         return cast("_CachedValueT | None", cached)  # cast-ok: cache reads are untyped
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def _get_cached_timestamp(self, cache_key: str) -> float | None:
-        cached: Final = await self.user_api_key_cache.async_get_cache(cache_key)
+        cached: Final = _CACHED_VALUE.validate_python(await self.user_api_key_cache.async_get_cache(cache_key))
         # A JSON round-trip through Redis hands a whole-number epoch back as an int.
         return float(cached) if isinstance(cached, (int, float)) else None
 
@@ -939,15 +969,15 @@ class JWTHandler:
             )
 
         try:
-            response_json: Final = response.json()
+            response_json: Final = _jwks_document(response)
         except Exception as e:
             verbose_proxy_logger.error("Error parsing response: %s. Original Response: %s", e, response.text)
             raise Exception(f"Error parsing response: {e}. Check server logs for original response.")
 
-        keys: Final = response_json["keys"] if "keys" in response_json else response_json
+        keys: Final = subscript(response_json, "keys") if json_contains(response_json, "keys") else response_json
         return cast(JWKKeyValue, keys)  # cast-ok: JWTKeyItem declares only `kid`, validating would drop key material
 
-    async def _get_public_key_from_jwks_url(self, jwks_url: str, kid: str | None) -> dict:
+    async def _get_public_key_from_jwks_url(self, jwks_url: str, kid: str | None) -> JWTKeyItem:
         resolved_jwks_url: Final = await self._resolve_jwks_url(jwks_url)
         keys: Final = await self._cached_with_stale_fallback(
             cache_key=f"litellm_jwt_auth_keys_{resolved_jwks_url}",
@@ -958,11 +988,11 @@ class JWTHandler:
 
         public_key: Final = self.parse_keys(keys=keys, kid=kid)
         if public_key is not None:
-            return cast(dict, public_key)
+            return public_key
 
         raise NoMatchingJWTPublicKeyError(f"No matching public key found. keys={resolved_jwks_url}, kid={kid}")
 
-    async def get_public_key(self, kid: str | None) -> dict:
+    async def get_public_key(self, kid: str | None) -> JWTKeyItem:
         keys_url: Final = os.getenv("JWT_PUBLIC_KEY_URL")
 
         if keys_url is None:
@@ -1149,7 +1179,7 @@ class JWTHandler:
         # its jwks_uri, matching JWTIssuerConfig.jwks_url's documented fallback.
         return f"{issuer_config.issuer.rstrip('/')}/.well-known/openid-configuration"
 
-    def _get_claim_value_for_issuer_mapping(self, token: dict, claim_field: str) -> object:
+    def _get_claim_value_for_issuer_mapping(self, token: Mapping[str, object], claim_field: str) -> object:
         """Resolve a mapped claim from ``token``.
 
         Returns ``None`` when the field is absent or empty so that mapped claims
@@ -1166,8 +1196,10 @@ class JWTHandler:
             return None
         return claim_value
 
-    def _apply_issuer_claim_mappings(self, token: dict, issuer_config: JWTIssuerConfig) -> dict:
-        normalized: Final[dict] = {k: v for k, v in token.items() if k not in self.LITELLM_INTERNAL_CLAIMS}
+    def _apply_issuer_claim_mappings(
+        self, token: Mapping[str, object], issuer_config: JWTIssuerConfig
+    ) -> dict[str, object]:
+        normalized: Final[dict[str, object]] = {k: v for k, v in token.items() if k not in self.LITELLM_INTERNAL_CLAIMS}
         normalized[self.LITELLM_JWT_ISSUER_CLAIM] = issuer_config.issuer
         claim_mappings: Final = [
             (issuer_config.user_id_jwt_field, self.LITELLM_USER_ID_CLAIM),
@@ -1190,8 +1222,8 @@ class JWTHandler:
 
         return normalized
 
-    def _get_jwk_from_public_key(self, public_key: dict) -> dict:
-        jwk: Final = {}
+    def _get_jwk_from_public_key(self, public_key: Mapping[str, object]) -> dict[str, object]:
+        jwk: Final[dict[str, object]] = {}
         for key in ["kty", "kid", "n", "e", "x", "y", "crv"]:
             if key in public_key:
                 jwk[key] = public_key[key]
@@ -1221,12 +1253,12 @@ class JWTHandler:
     def _decode_jwt_with_public_key(
         self,
         token: str,
-        public_key: dict | str,
+        public_key: JWTKeyItem | str,
         audience: str | list[str] | None,
         issuer: str | None = None,
         options: dict | None = None,
         disable_audience_validation: bool = False,
-    ) -> dict:
+    ) -> dict[str, object]:
         decode_options: Final = (
             options
             if options is not None
@@ -1296,10 +1328,63 @@ class JWTHandler:
             issuer_config=issuer_config,
         )
 
+    async def decode_trusted_assertion(
+        self, token: str, audience: Sequence[str], required_claims: Sequence[str]
+    ) -> Mapping[str, object] | AssertionRejection:
+        """Verify a JWT assertion handed to the gateway's token endpoint with the issuer plumbing
+        JWT auth already trusts, a matching ``issuers`` entry or ``JWT_ISSUER`` with
+        ``JWT_PUBLIC_KEY_URL``, but against the caller's audience instead of the API audience.
+        An assertion whose ``iss`` nothing trusts is refused rather than checked unscoped. A JWKS
+        outage propagates as the 503 ``ProxyException`` so the caller does not call the token bad."""
+        try:
+            header: Final = jwt.get_unverified_header(token)
+        except jwt.PyJWTError as malformed:
+            return AssertionRejection(reason=f"malformed assertion: {malformed}")
+        claims: Final = self.get_unverified_claims(token=token)
+        issuer_config: Final = self._get_configured_issuer(token=token)
+        trusted_issuer: Final = issuer_config.issuer if issuer_config is not None else os.getenv("JWT_ISSUER")
+        if not trusted_issuer or claims is None or claims.get("iss") != trusted_issuer:
+            return AssertionRejection(reason="iss is not an issuer this gateway trusts")
+        kid: Final = header.get("kid")
+        try:
+            public_key: Final = (
+                await self._get_public_key_from_jwks_url(self._get_jwks_url_for_issuer(issuer_config), kid)
+                if issuer_config is not None
+                else await self.get_public_key(kid=kid)
+            )
+        except JWKSUnreachableError as e:
+            raise jwks_unavailable_exception(e) from e
+        except Exception as no_key:  # noqa: BLE001  # the key lookups raise plain Exceptions for a missing key
+            return AssertionRejection(reason=f"no signing key for the assertion: {no_key}")
+        try:
+            payload: Final = self._decode_jwt_with_public_key(
+                token=token,
+                public_key=public_key,
+                audience=list(audience),
+                issuer=trusted_issuer,
+                options={"require": list(required_claims)},
+            )
+        except jwt.PyJWTError as invalid:
+            return AssertionRejection(reason=f"assertion failed verification: {invalid}")
+        verified: Final = (
+            payload
+            if issuer_config is None
+            else self._apply_issuer_claim_mappings(token=payload, issuer_config=issuer_config)
+        )
+        validate: Final = self.litellm_jwtauth.custom_validate
+        if validate is not None and not validate(dict(verified)):
+            return AssertionRejection(reason="custom_validate rejected the assertion's claims")
+        return verified
+
     async def auth_jwt(self, token: str) -> dict:
         header: Final = jwt.get_unverified_header(token)
 
         verbose_proxy_logger.debug("header: %s", header)
+
+        if header.get("typ") == ID_JAG_TYP:
+            raise IdJagIsNotABearerTokenError(
+                "an ID-JAG is an authorization grant, not a bearer token; redeem it at the token endpoint"
+            )
 
         kid: Final = header.get("kid", None)
 
@@ -1691,6 +1776,8 @@ class JWTAuthManager:
         from litellm.proxy.proxy_server import llm_router
 
         denied_pass_through_team: LiteLLM_TeamTable | None = None
+        route_denied_team_id: str | None = None  # rebind-ok: retain route-denied team while checking all claims
+        fallback_team: tuple[str, LiteLLM_TeamTable] | None = None  # rebind-ok: retain first route-allowed candidate
 
         if not team_ids:
             if (
@@ -1704,7 +1791,7 @@ class JWTAuthManager:
             return None, None
 
         any_claim_team_resolved = False
-        for team_id in team_ids:
+        for team_id in sorted(team_ids, key=str):
             try:
                 team_object = await get_team_object(
                     team_id=team_id,
@@ -1719,6 +1806,21 @@ class JWTAuthManager:
 
                 if team_object and team_object.models is not None:
                     team_models = team_object.models
+                    if (
+                        fallback_team is None
+                        and allowed_routes_check(
+                            user_role=LitellmUserRoles.TEAM,
+                            user_route=route,
+                            litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+                        )
+                        and JWTAuthManager._team_has_passthrough_route_access(
+                            team_object=team_object,
+                            route=route,
+                            request_method=request_method,
+                            team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes,
+                        )
+                    ):
+                        fallback_team = (team_id, team_object)
                     if isinstance(team_models, list) and (
                         not requested_model
                         or await can_team_access_model(
@@ -1733,7 +1835,9 @@ class JWTAuthManager:
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                         )
-                        if is_allowed and not JWTAuthManager._team_has_passthrough_route_access(
+                        if not is_allowed:
+                            route_denied_team_id = team_id
+                        elif not JWTAuthManager._team_has_passthrough_route_access(
                             team_object=team_object,
                             route=route,
                             request_method=request_method,
@@ -1749,6 +1853,9 @@ class JWTAuthManager:
             except Exception:
                 continue
 
+        if fallback_team is not None:
+            return fallback_team
+
         if denied_pass_through_team is not None:
             JWTAuthManager._raise_team_passthrough_route_denial(route=route, team_object=denied_pass_through_team)
 
@@ -1756,7 +1863,13 @@ class JWTAuthManager:
             # Claim resolved but no model access, or fallback disabled — deny.
             raise HTTPException(
                 status_code=403,
-                detail=f"No team has access to the requested model: {requested_model}. Checked teams={team_ids}. Check `/models` to see all available models.",
+                detail=(
+                    f"Team {route_denied_team_id} can access model {requested_model} but route {route} "
+                    "is not in litellm_jwtauth.team_allowed_routes"
+                    if route_denied_team_id is not None
+                    else f"No team has access to the requested model: {requested_model}. "
+                    f"Checked teams={team_ids}. Check `/models` to see all available models."
+                ),
             )
 
         # No claim team resolved and fallback enabled — defer to fallback.
@@ -1927,7 +2040,7 @@ class JWTAuthManager:
             status_code=403,
             detail=(
                 f"x-litellm-team-id '{header_value}' does not resolve to a team id or a unique team alias in your "
-                f"JWT's allowed teams. Allowed team ids: {sorted(allowed_team_ids)}"
+                f"JWT's allowed teams. Allowed team ids: {sorted(allowed_team_ids, key=str)}"
             ),
         )
 
@@ -2114,15 +2227,19 @@ class JWTAuthManager:
         # not mistaken for claimless and left with stale DB memberships the fallback
         # could later attribute. With the flag off, keep the upstream plural-only
         # reconciliation so existing deployments are unchanged.
-        jwt_team_ids: Final = set(
-            jwt_handler.get_all_jwt_team_ids(jwt_valid_token)
-            if jwt_handler.litellm_jwtauth.fallback_to_db_teams
-            else jwt_handler.get_team_ids_from_jwt(jwt_valid_token)
+        claim_team_ids: Final = tuple(
+            dict.fromkeys(
+                jwt_handler.get_all_jwt_team_ids(jwt_valid_token)
+                if jwt_handler.litellm_jwtauth.fallback_to_db_teams
+                else jwt_handler.get_team_ids_from_jwt(jwt_valid_token)
+            )
         )
-        existing_teams: Final = set(user_object.teams or [])
-        teams_to_add: Final = jwt_team_ids - existing_teams
+        jwt_team_ids: Final = frozenset(claim_team_ids)
+        existing_team_order: Final = tuple(dict.fromkeys(user_object.teams or []))
+        existing_teams: Final = frozenset(existing_team_order)
+        teams_to_add: Final = tuple(team_id for team_id in claim_team_ids if team_id not in existing_teams)
         preserve_db_teams_without_claims: Final = jwt_handler.litellm_jwtauth.fallback_to_db_teams and not jwt_team_ids
-        teams_to_remove: Final = set() if preserve_db_teams_without_claims else existing_teams - jwt_team_ids
+        teams_to_remove: Final = frozenset() if preserve_db_teams_without_claims else existing_teams - jwt_team_ids
         if teams_to_add or teams_to_remove:
             from litellm.proxy.management_endpoints.scim.scim_v2 import (
                 patch_team_membership,
@@ -2133,7 +2250,10 @@ class JWTAuthManager:
                 teams_ids_to_add_user_to=list(teams_to_add),
                 teams_ids_to_remove_user_from=list(teams_to_remove),
             )
-            user_object.teams = list(jwt_team_ids)
+            user_object.teams = [
+                *(team_id for team_id in existing_team_order if team_id not in teams_to_remove),
+                *teams_to_add,
+            ]
             if user_api_key_cache is not None:
                 await user_api_key_cache.async_set_cache(
                     key=user_object.user_id,
@@ -2288,6 +2408,7 @@ class JWTAuthManager:
             route=route, request_method=request_method, jwt_handler=jwt_handler
         )
         any_team_resolved = False
+        fallback_team: tuple[str, LiteLLM_TeamTable] | None = None  # rebind-ok: retain first route-allowed membership
         for candidate_team_id in user_team_ids:
             try:
                 team_object = await get_team_object(
@@ -2301,6 +2422,17 @@ class JWTAuthManager:
             except HTTPException:
                 continue
             any_team_resolved = True
+            if (
+                team_route_allowed
+                and fallback_team is None
+                and JWTAuthManager._team_has_passthrough_route_access(
+                    team_object=team_object,
+                    route=route,
+                    request_method=request_method,
+                    team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes,
+                )
+            ):
+                fallback_team = (candidate_team_id, team_object)
             if requested_model:
                 try:
                     await can_team_access_model(
@@ -2331,6 +2463,23 @@ class JWTAuthManager:
                     ),
                 )
             return candidate_team_id, team_object, None
+
+        if fallback_team is not None:
+            fallback_id, fallback_object = fallback_team
+            return (
+                fallback_id,
+                fallback_object,
+                await get_team_membership(
+                    user_id=user_id,
+                    team_id=fallback_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if user_id
+                else None,
+            )
 
         if enforce_team_based_model_access:
             if requested_model and any_team_resolved:

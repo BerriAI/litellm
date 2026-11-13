@@ -24,7 +24,7 @@ from integration._support.client import Gateway, eventually, held, list_value, o
 from integration._support.database import read_rows
 from integration._support.idle_gateway import MARKER, Arrival, Drop, IdleGateway, idle_gateway
 from integration._support.openai_wire import chat_reply, chat_stream, responses_reply
-from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_proxy_process
+from integration._support.process import OwnedProxy, OwnedState, WorkerHealthcheck, owned_proxy_process
 from integration._support.wire import Reply, Request
 from openai.types.chat import ChatCompletionChunk
 from openai.types.responses import ResponseCompletedEvent, ResponseTextDeltaEvent
@@ -294,11 +294,11 @@ def chat_httpx(target: ProxyTarget, model: str, marker: str) -> Answer:
     )
 
 
-def chat_with_guardrail(target: ProxyTarget, model: str, marker: str) -> Answer:
+def chat_with_guardrail(target: ProxyTarget, model: str, marker: str, guardrail: str = GUARDRAIL) -> Answer:
     return _post(
         target,
         "/v1/chat/completions",
-        {"model": model, "messages": [{"role": "user", "content": marker}], "guardrails": [GUARDRAIL]},
+        {"model": model, "messages": [{"role": "user", "content": marker}], "guardrails": [guardrail]},
         _chat_body,
     )
 
@@ -517,18 +517,21 @@ def pass_through_deployment(_model: str, url: str, _steady: str) -> ConfigPart:
     return ConfigPart(pass_through=({"path": PASS_THROUGH, "target": f"{url}/passthrough"},))
 
 
-def guardrail_deployment(model: str, url: str, steady: str) -> ConfigPart:
+def guardrail_deployment(
+    model: str, url: str, steady: str, guardrail: str = GUARDRAIL, num_retries: int | None = None
+) -> ConfigPart:
     return ConfigPart(
         models=openai_deployment(model, steady, steady).models,
         guardrails=(
             {
-                "guardrail_name": GUARDRAIL,
+                "guardrail_name": guardrail,
                 "litellm_params": {
                     "guardrail": "generic_guardrail_api",
                     "mode": "pre_call",
                     "default_on": False,
                     "api_base": url,
                     "api_key": PROVIDER_KEY,
+                    **({} if num_retries is None else {"num_retries": num_retries}),
                 },
             },
         ),
@@ -701,7 +704,13 @@ def proxy_for(
         directory, tuple(row.deploy(row.model, gateways[row.name].url, steady) for row in rows)
     )
     with owned_proxy_process(
-        gateway, directory, overrides, config=config, workers=2, healthcheck=WorkerHealthcheck.LENIENT
+        gateway,
+        directory,
+        overrides,
+        config=config,
+        workers=2,
+        healthcheck=WorkerHealthcheck.LENIENT,
+        state=OwnedState.SHARED_WITH_WORKER,
     ) as owned:
         yield UpstreamProxy(owned, two_workers(owned), MappingProxyType({row.name: row for row in rows}), gateways)
 

@@ -10,7 +10,6 @@ table: one lambda per mapping operation, applied against the typed span data.
 from collections.abc import Callable
 from typing import Final
 
-from litellm._internal_context import REDIS_FAMILIES_METADATA_KEY
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
     MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
@@ -91,6 +90,8 @@ class GenAIMapper:
         f"{LiteLLM.COST_PREFIX}margin_fixed_amount": lambda d: d.cost.margin_fixed_amount,
         f"{LiteLLM.COST_PREFIX}margin_percent": lambda d: d.cost.margin_percent,
         f"{LiteLLM.COST_PREFIX}margin_total_amount": lambda d: d.cost.margin_total_amount,
+        LiteLLM.CACHE_HIT: lambda d: d.cache_hit,
+        LiteLLM.SAVED_CACHE_COST: lambda d: d.saved_cache_cost,
         LiteLLM.REQUEST_STREAMING: lambda d: d.is_streaming,
         LiteLLM.REQUEST_ROUTE: lambda d: d.request_route,
         LiteLLM.REQUEST_PURPOSE: lambda d: d.request_purpose,
@@ -198,12 +199,5 @@ class GenAIMapper:
         # semconv naming the server it reached. Internal services (router, budget
         # jobs, …) have no db.system, so they get only the litellm.service.* keys.
         attrs.update(db_span_attributes(data.service_name, data.call_type, postgres_operation(data)))
-        attrs.update(
-            {
-                LiteLLM.REDIS_FAMILIES
-                if key == REDIS_FAMILIES_METADATA_KEY
-                else f"{LiteLLM.METADATA_PREFIX}{key}": value
-                for key, value in data.event_metadata.items()
-            }
-        )
+        attrs.update({f"{LiteLLM.METADATA_PREFIX}{key}": value for key, value in data.event_metadata.items()})
         return attrs

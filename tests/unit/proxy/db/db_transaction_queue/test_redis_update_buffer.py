@@ -1,13 +1,82 @@
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
+from litellm._logging import verbose_proxy_logger
+from litellm.constants import REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy._types import DailyTagSpendTransaction
+from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.proxy_server import ProxyStartupEvent
+
+
+def _daily_tag_spend_update_transactions() -> dict[str, DailyTagSpendTransaction]:
+    return {
+        "research_2025-01-15_api-key-123_gpt-4o_openai_/chat/completions": DailyTagSpendTransaction(
+            tag="research",
+            request_id="request-123",
+            date="2025-01-15",
+            api_key="api-key-123",
+            model="gpt-4o",
+            model_group=None,
+            mcp_namespaced_tool_name=None,
+            custom_llm_provider="openai",
+            endpoint="/chat/completions",
+            prompt_tokens=12,
+            completion_tokens=7,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+            compression_saved_tokens=0,
+            compression_savings_spend=0.0,
+            prompt_caching_savings_spend=0.0,
+            gateway_injected_caching_savings_spend=0.0,
+            spend=0.0042,
+            api_requests=1,
+            successful_requests=1,
+            failed_requests=0,
+        )
+    }
+
+
+@pytest.mark.asyncio
+async def test_daily_tag_spend_restored_to_in_memory_queue_on_rpush_failure(
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock
+):
+    mock_redis_cache.async_rpush = AsyncMock(side_effect=ConnectionError("redis went away"))
+    queue: Final = DailySpendUpdateQueue()
+    original_transactions: Final = _daily_tag_spend_update_transactions()
+    await queue.add_update(original_transactions)
+
+    await redis_update_buffer.store_in_memory_daily_tag_spend_updates_in_redis(queue)
+
+    assert await queue.flush_and_get_aggregated_daily_spend_update_transactions() == original_transactions
+
+
+@pytest.mark.asyncio
+async def test_daily_tag_spend_restored_after_rpush_failure_is_pushed_once_on_next_tick(
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock
+):
+    mock_redis_cache.async_rpush = AsyncMock(side_effect=ConnectionError("redis went away"))
+    queue: Final = DailySpendUpdateQueue()
+    original_transactions: Final = _daily_tag_spend_update_transactions()
+    await queue.add_update(original_transactions)
+
+    await redis_update_buffer.store_in_memory_daily_tag_spend_updates_in_redis(queue)
+    mock_redis_cache.async_rpush = AsyncMock(return_value=1)
+
+    await redis_update_buffer.store_in_memory_daily_tag_spend_updates_in_redis(queue)
+
+    mock_redis_cache.async_rpush.assert_called_once()
+    redis_key: Final = mock_redis_cache.async_rpush.call_args.kwargs["key"]
+    values: Final = mock_redis_cache.async_rpush.call_args.kwargs["values"]
+    assert redis_key == REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
+    assert json.loads(values[0]) == json.loads(safe_dumps(original_transactions))
+    assert await queue.flush_and_get_aggregated_daily_spend_update_transactions() == {}
 
 
 @pytest.fixture
@@ -64,6 +133,7 @@ async def test_store_in_memory_spend_updates_uses_pipeline(redis_update_buffer, 
         daily_org_spend_update_queue=daily_org_queue,
         daily_end_user_spend_update_queue=daily_end_user_queue,
         daily_agent_spend_update_queue=daily_agent_queue,
+        daily_customer_member_spend_update_queue=DailySpendUpdateQueue(),
     )
 
     # Should be called exactly once (pipeline)
@@ -131,6 +201,7 @@ async def test_store_in_memory_spend_updates_restores_on_rpush_failure(redis_upd
         daily_org_spend_update_queue=daily_org_queue,
         daily_end_user_spend_update_queue=daily_end_user_queue,
         daily_agent_spend_update_queue=daily_agent_queue,
+        daily_customer_member_spend_update_queue=DailySpendUpdateQueue(),
     )
 
     # After restore, the main spend queue should hold one item per
@@ -170,6 +241,7 @@ async def test_store_in_memory_spend_updates_all_empty_returns_early(redis_updat
         daily_org_spend_update_queue=empty_daily_queue,
         daily_end_user_spend_update_queue=empty_daily_queue,
         daily_agent_spend_update_queue=empty_daily_queue,
+        daily_customer_member_spend_update_queue=DailySpendUpdateQueue(),
     )
 
     mock_redis_cache.async_rpush_pipeline.assert_not_called()
@@ -223,7 +295,7 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
 
     result = await redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
 
-    assert len(result) == 7
+    assert len(result) == 8
     (
         db_spend,
         daily_user,
@@ -232,6 +304,7 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
         daily_end_user,
         daily_agent,
         window_spend,
+        customer_spend,
     ) = result
 
     # Budget window spend from two pods is summed per window, not overwritten.
@@ -306,6 +379,7 @@ async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_fail
         daily_org_spend_update_queue=DailySpendUpdateQueue(),
         daily_end_user_spend_update_queue=DailySpendUpdateQueue(),
         daily_agent_spend_update_queue=DailySpendUpdateQueue(),
+        daily_customer_member_spend_update_queue=DailySpendUpdateQueue(),
     )
 
     restored_spend: Final = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
@@ -313,11 +387,110 @@ async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_fail
 
 
 @pytest.mark.asyncio
+async def test_a_single_parked_batch_with_a_nan_spend_drains_as_zero(
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock
+):
+    mock_redis_cache.async_lpop = AsyncMock(
+        return_value=json.dumps({"key_list_transactions": {"nan-key": float("nan"), "ok-key": 0.5}}, allow_nan=True)
+    )
+
+    drained: Final = await redis_update_buffer.get_all_update_transactions_from_redis_buffer()
+
+    assert drained is not None
+    assert drained["key_list_transactions"] == {"nan-key": 0.0, "ok-key": 0.5}
+
+
+PARKED_DAILY_KEY: Final = "user-1_2025-01-15_api-key-123_gpt-4o_openai_/chat/completions"
+
+
+def _parked_daily_batch(spend: float) -> str:
+    return json.dumps(
+        {
+            PARKED_DAILY_KEY: {
+                "spend": spend,
+                "prompt_tokens": 12,
+                "completion_tokens": 7,
+                "api_requests": 1,
+                "successful_requests": 1,
+                "failed_requests": 0,
+            }
+        },
+        allow_nan=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_nan_spend_parked_by_an_older_version_drains_from_the_pipeline_as_zero(
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock
+):
+    entity_batch: Final = json.dumps({"key_list_transactions": {"hashed-key": float("nan")}}, allow_nan=True)
+    window_batches: Final = tuple(
+        json.dumps(
+            [
+                {
+                    "entity_type": "key",
+                    "entity_id": "hashed-key",
+                    "window_duration": "30d",
+                    "window_start": "2026-08-01T00:00:00.000000",
+                    "spend": spend,
+                    "started_at": None,
+                }
+            ],
+            allow_nan=True,
+        )
+        for spend in (float("nan"), 3.0)
+    )
+    mock_redis_cache.async_lpop_pipeline = AsyncMock(
+        return_value=[
+            [entity_batch],
+            [_parked_daily_batch(float("nan")), _parked_daily_batch(0.0042)],
+            None,
+            None,
+            None,
+            None,
+            list(window_batches),
+        ]
+    )
+
+    (
+        db_spend,
+        daily_user,
+        *_rest,
+        window_spend,
+        customer_spend,
+    ) = await redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
+
+    assert db_spend is not None
+    assert db_spend["key_list_transactions"] == {"hashed-key": 0}
+    assert daily_user is not None
+    assert daily_user[PARKED_DAILY_KEY]["spend"] == 0.0042
+    assert daily_user[PARKED_DAILY_KEY]["api_requests"] == 2
+    assert window_spend is not None
+    assert [transaction["spend"] for transaction in window_spend] == [3.0]
+
+
+@pytest.mark.asyncio
+async def test_a_nan_spend_parked_by_an_older_version_drains_from_a_daily_key_as_zero(
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock, caplog: pytest.LogCaptureFixture
+):
+    mock_redis_cache.async_lpop = AsyncMock(
+        return_value=[_parked_daily_batch(float("inf")), _parked_daily_batch(0.0042)]
+    )
+
+    with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+        daily_tag: Final = await redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+
+    assert daily_tag is not None
+    assert daily_tag[PARKED_DAILY_KEY]["spend"] == 0.0042
+    assert [record.getMessage() for record in caplog.records if "Infinity" in record.getMessage()] != []
+
+
+@pytest.mark.asyncio
 async def test_get_all_transactions_from_redis_buffer_pipeline_no_redis():
     """When redis_cache is None, should return all Nones"""
     buffer = RedisUpdateBuffer(redis_cache=None)
     result = await buffer.get_all_transactions_from_redis_buffer_pipeline()
-    assert result == (None, None, None, None, None, None, None)
+    assert result == (None, None, None, None, None, None, None, None)
 
 
 @pytest.mark.asyncio
@@ -555,6 +728,7 @@ async def test_store_in_memory_spend_updates_pushes_budget_window_spend(redis_up
         daily_end_user_spend_update_queue=empty_daily_queue,
         daily_agent_spend_update_queue=empty_daily_queue,
         window_spend_update_queue=window_queue,
+        daily_customer_member_spend_update_queue=DailySpendUpdateQueue(),
     )
 
     rpush_list = mock_redis_cache.async_rpush_pipeline.call_args.kwargs["rpush_list"]
@@ -646,6 +820,7 @@ async def test_store_in_memory_spend_updates_restores_budget_window_spend_on_rpu
         daily_end_user_spend_update_queue=empty_daily_queue,
         daily_agent_spend_update_queue=empty_daily_queue,
         window_spend_update_queue=window_queue,
+        daily_customer_member_spend_update_queue=DailySpendUpdateQueue(),
     )
 
     restored = await window_queue.flush_and_get_aggregated_window_spend_transactions()
@@ -656,6 +831,10 @@ async def test_store_in_memory_spend_updates_restores_budget_window_spend_on_rpu
 class _ListRedis:
     def __init__(self) -> None:
         self.rows: list[str] = []
+
+    async def async_rpush(self, key: str, values: list[str]) -> int:
+        self.rows.extend(values)
+        return len(self.rows)
 
     async def async_rpush_and_trim(self, key: str, values: list[str], max_len: int) -> int:
         self.rows.extend(values)
@@ -686,6 +865,32 @@ async def test_store_spend_logs_in_redis_drops_oldest_rows_past_the_cap():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("spend", [float("nan"), float("inf")])
+async def test_a_non_finite_daily_spend_buffered_in_redis_drains_as_zero(spend: float):
+    buffer: Final = RedisUpdateBuffer(redis_cache=_ListRedis())
+    queue: Final = DailySpendUpdateQueue()
+    await queue.add_update(json.loads(_parked_daily_batch(spend)))
+    await queue.add_update(json.loads(_parked_daily_batch(0.0042)))
+
+    await buffer.store_in_memory_daily_tag_spend_updates_in_redis(queue)
+    drained: Final = await buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+
+    assert drained is not None
+    assert drained[PARKED_DAILY_KEY]["spend"] == 0.0
+    assert drained[PARKED_DAILY_KEY]["api_requests"] == 2
+
+
+@pytest.mark.asyncio
+async def test_a_spend_log_row_parked_with_a_nan_spend_is_read_back_with_zero_spend():
+    buffer: Final = RedisUpdateBuffer(redis_cache=_ListRedis())
+    buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+
+    assert await buffer.store_spend_logs_in_redis([{"request_id": "nan-row", "spend": float("nan")}]) is True
+
+    assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == ({"request_id": "nan-row", "spend": 0.0},)
+
+
+@pytest.mark.asyncio
 async def test_store_spend_logs_in_redis_reports_failure_without_redis():
     buffer = RedisUpdateBuffer(redis_cache=None)
 
@@ -701,3 +906,18 @@ async def test_store_spend_logs_in_redis_is_off_unless_transaction_buffering_is_
 
     assert await buffer.store_spend_logs_in_redis([{"request_id": "a"}]) is False
     assert redis.rows == []
+
+
+@pytest.mark.asyncio
+async def test_tool_discoveries_go_back_on_the_queue_when_the_redis_push_fails():
+    from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import ToolDiscoveryQueue
+
+    redis_cache = MagicMock()
+    redis_cache.async_rpush_pipeline = AsyncMock(side_effect=ConnectionError("redis down"))
+    queue = ToolDiscoveryQueue()
+    queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+    queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+
+    await RedisUpdateBuffer(redis_cache=redis_cache).store_tool_discoveries_in_redis(queue)
+
+    assert queue.flush() == [{"tool_name": "get_weather", "origin": "user_defined", "call_count": 2}]

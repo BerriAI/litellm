@@ -29,21 +29,27 @@ Events:
   included only when content capture is enabled).
 """
 
+from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm.integrations.otel.mappers.utils import drop_none
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 if TYPE_CHECKING:
+    from opentelemetry._logs import SeverityNumber as _SeverityNumber
     from opentelemetry.trace import Span as _Span
+    from opentelemetry.trace import SpanContext
 
     from litellm.integrations.opentelemetry import OpenTelemetryConfig
 
-    Span = _Span | Any
+    Span = _Span
 else:
-    Span = Any
+
+    class Span(Protocol):
+        def set_attribute(self, key: str, value: object) -> None: ...
 
 
 # OTEL_SEMCONV_STABILITY_OPT_IN is a comma-separated list of category-specific
@@ -128,7 +134,7 @@ class OTELGenAISemconvMixin:
 
         def _to_ns(self, dt: datetime) -> int: ...
 
-        def _otel_log_types(self) -> tuple[Any, Any]: ...
+        def _otel_log_types(self) -> tuple[Callable[..., object], type[_SeverityNumber]]: ...
 
     @property
     def _gen_ai_semconv_latest_experimental(self) -> bool:
@@ -143,8 +149,11 @@ class OTELGenAISemconvMixin:
         """Map a LiteLLM ``call_type`` to spec ``gen_ai.operation.name``.
 
         Substring match (e.g. ``aembedding`` -> ``embeddings``); defaults to
-        ``chat``.
+        ``chat``. A pass-through call's operation, stored under ``PASSTHROUGH_OPERATION_KEY``, wins.
         """
+        passthrough_operation: Final = kwargs.get(PASSTHROUGH_OPERATION_KEY)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # kwargs is an untyped dict
+        if isinstance(passthrough_operation, GenAIOperation):
+            return passthrough_operation.value
         call_type: Final = kwargs.get("call_type", "") or ""
         match call_type:
             case s if "embedding" in s:
@@ -227,7 +236,7 @@ class OTELGenAISemconvMixin:
         response_obj: dict,
         provider: str | None,
         otel_logger,
-        parent_ctx,
+        parent_ctx: "SpanContext",
     ) -> None:
         """Emit the consolidated ``gen_ai.client.inference.operation.details``
         log event, correlated to the request span via ``parent_ctx``.

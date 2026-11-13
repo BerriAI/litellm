@@ -20,6 +20,8 @@ from litellm.integrations.gcs_pubsub.pub_sub import *
 from litellm.integrations.generic_api.generic_api_callback import LOG_FORMAT_TYPES, GenericAPILogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 from litellm.types.utils import StandardLoggingPayload
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -444,6 +446,42 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
 
 
 @pytest.mark.asyncio
+async def test_generic_api_callback_sends_queued_events_on_its_own(monkeypatch: pytest.MonkeyPatch):
+    mock_post = AsyncMock()
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.text = "OK"
+
+    test_endpoint = "https://example.com/api/logs"
+    test_headers = {"Authorization": "Bearer test_token"}
+    monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", test_endpoint)
+
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=0.05)
+    generic_logger.async_httpx_client.post = mock_post
+    monkeypatch.setattr(litellm, "callbacks", [generic_logger])
+
+    for i in range(3):
+        await litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+            mock_response="hi",
+            user="test_user",
+        )
+
+    async def _poll() -> None:
+        while sum(len(json.loads(call.kwargs["data"])) for call in mock_post.call_args_list) < 3:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_poll(), timeout=10)
+
+    posted_bodies: Final = [json.loads(call.kwargs["data"]) for call in mock_post.call_args_list]
+    for body in posted_bodies:
+        assert isinstance(body, list), "Each posted body should be a JSON array"
+    posted_items: Final = sum(posted_bodies, [])
+    contents: Final = sorted(item["messages"][0]["content"] for item in posted_items)
+    assert contents == [f"Hello, world! {i}" for i in range(3)]
+
+
+@pytest.mark.asyncio
 async def test_generic_api_callback_invalid_log_format():
     """
     Test that invalid log_format values raise a ValueError
@@ -759,3 +797,27 @@ async def test_generic_api_concurrent_flushes_deliver_each_event_once(log_format
             task.cancel()
         await asyncio.gather(*owned_tasks, return_exceptions=True)
         await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_v1_payload_of_a_chat_row_never_shows_the_committed_spend_auth_read() -> None:
+    counter_keys: Final = EntitySpendCounterKeys.of(
+        token="hashed-token", team_id="t1", user_id=None, org_id=None, end_user_id=None
+    )
+    auth: Final = UserAPIKeyAuth(
+        api_key="hashed-token",
+        team_id="t1",
+        committed_budget_spend=CommittedBudgetSpend(counter_keys=counter_keys, key=0.123456, team=0.654321),
+    )
+    generic_logger: Final = GenericAPILogger(endpoint="https://example.com/api/logs", flush_interval=3600)
+
+    payload: Final = generic_logger._get_v1_logging_payload(
+        kwargs={"litellm_params": {"metadata": {"user_api_key_auth": auth}}},
+        response_obj={"usage": {}},
+        start_time=None,
+        end_time=None,
+    )
+
+    assert "team_id='t1'" in payload["metadata"]
+    assert "0.123456" not in payload["metadata"]
+    assert str(counter_keys.team) not in payload["metadata"]

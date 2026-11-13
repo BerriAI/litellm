@@ -1,10 +1,16 @@
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Final
 
+import httpx
 import pytest
 from pydantic import TypeAdapter
 
-from litellm.llms.base_llm.decisions.transformation import ir_to_systemone_response, systemone_request_to_ir
+from litellm.llms.base_llm.decisions.transformation import (
+    DecisionsResponseValidationError,
+    ir_to_systemone_response,
+    systemone_request_to_ir,
+)
 from litellm.llms.openai.decisions.transformation import (
     OpenAIDecisionsConfig,
     ir_to_openai_request,
@@ -106,6 +112,35 @@ def test_an_openai_response_reaches_the_caller_unchanged() -> None:
     assert ir_to_openai_response(parsed, ir, "requested").model_dump(mode="json") == _OPENAI_RESPONSE
 
 
+@pytest.mark.parametrize("answer_type", ["choice", "score"])
+def test_a_choice_or_score_answer_without_confidence_stays_a_provider_error(answer_type: str) -> None:
+    answers: Final = [
+        {key: value for key, value in answer.items() if answer["type"] != answer_type or key != "confidence"}
+        for answer in _OPENAI_RESPONSE["answers"]
+    ]
+    with pytest.raises(DecisionsResponseValidationError) as raised:
+        OpenAIDecisionsConfig().transform_decisions_response(
+            "gpt-6-luna",
+            "openai",
+            httpx.Response(200, json={**_OPENAI_RESPONSE, "answers": answers}),
+            _openai_ir(_OPENAI_REQUEST),
+        )
+    assert raised.value.status_code == 500
+
+
+def test_provider_extras_stay_off_the_openai_response_unless_the_provider_names_them() -> None:
+    ir: Final = _openai_ir(_OPENAI_REQUEST)
+    parsed: Final = replace(
+        OpenAIDecisionsConfig().parse_response(_OPENAI_RESPONSE, ir), extra={"provider": "upstream", "citations": []}
+    )
+
+    assert ir_to_openai_response(parsed, ir, "requested").model_dump(mode="json") == _OPENAI_RESPONSE
+    assert ir_to_openai_response(parsed, ir, "requested", frozenset({"citations"})).model_dump(mode="json") == {
+        **_OPENAI_RESPONSE,
+        "citations": [],
+    }
+
+
 def test_answers_openai_did_not_return_are_refusals() -> None:
     ir: Final = _openai_ir(_OPENAI_REQUEST)
     payload: Final = {**_OPENAI_RESPONSE, "answers": [_PREDICATE_ANSWER]}
@@ -114,6 +149,25 @@ def test_answers_openai_did_not_return_are_refusals() -> None:
 
     assert [answer.type for answer in response.answers] == ["predicate", "refusal", "refusal", "refusal"]
     assert [answer.name for answer in response.answers] == ["damaged", None, "severity", "fraud"]
+
+
+def test_a_box_answer_from_openai_keeps_its_box_instead_of_becoming_a_refusal() -> None:
+    request: Final = {
+        "input": _OPENAI_REQUEST["input"],
+        "questions": [{"type": "box", "name": "crack", "instructions": "Where is the crack?"}],
+    }
+    box: Final = {"top": 0.1, "bottom": 0.4, "left": 0.2, "right": 0.6}
+    payload: Final = {**_OPENAI_RESPONSE, "answers": [{"type": "box", "name": "crack", "box": box, "confidence": 0.7}]}
+    ir: Final = _openai_ir(request)
+
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
+
+    assert response.answers[0].model_dump(mode="json") == {
+        "type": "box",
+        "name": "crack",
+        "box": box,
+        "confidence": 0.7,
+    }
 
 
 def test_a_systemone_request_becomes_an_openai_request_with_questions_named_by_their_keys() -> None:
@@ -280,3 +334,55 @@ def test_an_openai_response_becomes_systemone_answers_with_the_callers_score_lab
     }
     assert response.usage is not None
     assert (response.usage.cached_tokens, response.usage.cache_write_tokens) == (256, 64)
+
+
+@pytest.mark.parametrize(
+    ("choice_probabilities", "score_probabilities"),
+    (
+        ((), ()),
+        (
+            ({"value": True, "probability": 0.8},),
+            ({"value": 1, "label": "major", "probability": 0.8},),
+        ),
+        (
+            (
+                {"value": True, "probability": 0.0},
+                {"value": "escalate", "probability": 0.8},
+            ),
+            (
+                {"value": 0, "label": "minor", "probability": 0.0},
+                {"value": 1, "label": "major", "probability": 0.8},
+            ),
+        ),
+        (
+            ({"value": True, "probability": 0.0},),
+            ({"value": 1, "label": "major", "probability": 0.0},),
+        ),
+    ),
+    ids=("empty", "missing", "explicit_zero", "only_zero"),
+)
+def test_openai_probabilities_preserve_missing_entries_and_explicit_zeros(
+    choice_probabilities: tuple[Mapping[str, object], ...],
+    score_probabilities: tuple[Mapping[str, object], ...],
+) -> None:
+    ir: Final = _openai_ir(_OPENAI_REQUEST)
+    payload: Final = {
+        **_OPENAI_RESPONSE,
+        "answers": [
+            _PREDICATE_ANSWER,
+            {**_CHOICE_ANSWER, "probabilities": choice_probabilities},
+            {
+                "type": "score",
+                "name": "severity",
+                "score": 1,
+                "confidence": 0.8,
+                "probabilities": score_probabilities,
+            },
+            _REFUSAL_ANSWER,
+        ],
+    }
+
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
+
+    assert response.answers[1].model_dump(mode="json")["probabilities"] == list(choice_probabilities)
+    assert response.answers[2].model_dump(mode="json")["probabilities"] == list(score_probabilities)

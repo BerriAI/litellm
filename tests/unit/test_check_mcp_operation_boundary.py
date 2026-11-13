@@ -2,18 +2,18 @@ from pathlib import Path
 
 import pytest
 
-from scripts.check_mcp_operation_boundary import main, violations
+from litellm.scripts.check_mcp_operation_boundary import main, violations
 
 
 @pytest.mark.parametrize(
     "source",
     (
         "from mcp.server.auth.middleware.auth_context import auth_context_var as hidden",
-        "from litellm.proxy._experimental.mcp_server.mcp_context import _mcp_proxy_mode as mode",
+        "from litellm.proxy.mcp_server.mcp_context import _mcp_proxy_mode as mode",
         "caller = legacy.get_active_auth_context()",
         "owners = transport._stateful_session_owners",
         "from weakref import WeakKeyDictionary",
-        "from litellm.proxy._experimental.mcp_server.server import get_auth_context",
+        "from litellm.proxy.mcp_server.server import get_auth_context",
     ),
 )
 def test_shared_operation_boundary_rejects_ambient_state(source):
@@ -21,7 +21,7 @@ def test_shared_operation_boundary_rejects_ambient_state(source):
 
 
 def test_legacy_adapter_may_resolve_context_but_policy_must_receive_it():
-    source = "from litellm.proxy._experimental.mcp_server.mcp_context import _mcp_proxy_mode"
+    source = "from litellm.proxy.mcp_server.mcp_context import _mcp_proxy_mode"
     assert violations(Path("server.py"), source) == ()
     assert violations(Path("legacy_callbacks.py"), source) == ()
     assert violations(Path("operations.py"), "def execute(context):\n    return context.client_ip") == ()
@@ -32,11 +32,11 @@ def test_boundary_command_rejects_shared_state_and_accepts_explicit_context(tmp_
     import subprocess
     import sys
 
-    package = tmp_path / "litellm/proxy/_experimental/mcp_server"
+    package = tmp_path / "litellm/proxy/mcp_server"
     package.mkdir(parents=True)
     module = package / "operations.py"
     module.write_text("from mcp.server.auth.middleware.auth_context import auth_context_var as hidden\n")
-    command = [sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/check_mcp_operation_boundary.py")]
+    command = [sys.executable, str(Path(__file__).resolve().parents[2] / "litellm/scripts/check_mcp_operation_boundary.py")]
     monkeypatch.chdir(tmp_path)
     assert main() == 1
     assert "operations.py:1:" in capsys.readouterr().err

@@ -13,6 +13,7 @@
     "total_compression_savings_spend": 0.0,
     "total_failed_requests": 0,
     "total_flat_cost": 0.0,
+    "total_ptu_hours": 0.0,
     "total_gateway_injected_caching_savings_spend": 0.0,
     "total_pages": 1,
     "total_prompt_caching_savings_spend": 0.0,
@@ -25,7 +26,7 @@
   },
   "results": [
     {
-      "breakdown": {
+      "breakdown": {"guardrails": {}, 
         "api_keys": {
           "key-a": {
             "metadata": {
@@ -38,6 +39,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 1,
               "completion_tokens": 2,
@@ -45,6 +47,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 2,
@@ -66,6 +69,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 1,
               "completion_tokens": 2,
@@ -73,6 +77,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 3,
@@ -94,6 +99,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 1,
               "completion_tokens": 2,
@@ -101,6 +107,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 4,
@@ -122,6 +129,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 1,
               "completion_tokens": 2,
@@ -129,6 +137,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 1000,
@@ -150,6 +159,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 2,
               "completion_tokens": 2,
@@ -157,6 +167,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 5,
@@ -171,34 +182,6 @@
         "endpoints": {
           "/v1/chat/completions": {
             "api_key_breakdown": {
-              "__ptu_flat_cost__": {
-                "metadata": {
-                  "key_alias": null,
-                  "key_exists": false,
-                  "team_id": null,
-                  "user_email": null,
-                  "user_id": null
-                },
-                "metrics": {
-                  "api_requests": 0,
-                  "autorouter_savings_spend": 0.0,
-                  "cache_creation_input_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "completion_tokens": 0,
-                  "compression_saved_tokens": 0,
-                  "compression_savings_spend": 0.0,
-                  "failed_requests": 0,
-                  "flat_cost": 0.0,
-                  "gateway_injected_caching_savings_spend": 0.0,
-                  "prompt_caching_savings_spend": 0.0,
-                  "prompt_tokens": 0,
-                  "spend": 1000.0,
-                  "successful_requests": 0,
-                  "timed_requests": 0,
-                  "total_response_time_ms": 0,
-                  "total_tokens": 0
-                }
-              },
               "key-a": {
                 "metadata": {
                   "key_alias": "alias-a",
@@ -210,6 +193,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -217,6 +201,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 2,
@@ -238,6 +223,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -245,6 +231,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 3,
@@ -266,6 +253,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -273,6 +261,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 4,
@@ -294,6 +283,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -301,6 +291,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 1000,
@@ -322,6 +313,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 2,
                   "completion_tokens": 2,
@@ -329,6 +321,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 5,
@@ -344,6 +337,7 @@
             "metrics": {
               "api_requests": 5,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 6,
               "completion_tokens": 10,
@@ -351,6 +345,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 1014,
@@ -376,6 +371,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -383,6 +379,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 2,
@@ -404,6 +401,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -411,6 +409,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 3,
@@ -432,6 +431,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -439,6 +439,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 4,
@@ -460,6 +461,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -467,6 +469,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 1000,
@@ -488,6 +491,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 2,
                   "completion_tokens": 2,
@@ -495,6 +499,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 5,
@@ -512,6 +517,7 @@
             "metrics": {
               "api_requests": 5,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 6,
               "completion_tokens": 10,
@@ -519,6 +525,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 1014,
@@ -545,6 +552,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -552,6 +560,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 1000,
@@ -567,6 +576,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 1,
               "completion_tokens": 2,
@@ -574,6 +584,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 1000,
@@ -597,6 +608,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -604,6 +616,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 2,
@@ -625,6 +638,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -632,6 +646,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 3,
@@ -653,6 +668,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -660,6 +676,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 4,
@@ -675,6 +692,7 @@
             "metrics": {
               "api_requests": 3,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 3,
               "completion_tokens": 6,
@@ -682,6 +700,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 9,
@@ -698,6 +717,7 @@
             "metrics": {
               "api_requests": 0,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 0,
               "completion_tokens": 0,
@@ -705,6 +725,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 0,
@@ -728,6 +749,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 2,
                   "completion_tokens": 2,
@@ -735,6 +757,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 5,
@@ -750,6 +773,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 2,
               "completion_tokens": 2,
@@ -757,6 +781,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 5,
@@ -782,6 +807,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -789,6 +815,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 1000,
@@ -804,6 +831,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 1,
               "completion_tokens": 2,
@@ -811,6 +839,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 1000,
@@ -834,6 +863,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -841,6 +871,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 2,
@@ -862,6 +893,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -869,6 +901,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 3,
@@ -890,6 +923,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -897,6 +931,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 4,
@@ -912,6 +947,7 @@
             "metrics": {
               "api_requests": 3,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 3,
               "completion_tokens": 6,
@@ -919,6 +955,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 9,
@@ -935,6 +972,7 @@
             "metrics": {
               "api_requests": 0,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 0,
               "completion_tokens": 0,
@@ -942,6 +980,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 0,
@@ -965,6 +1004,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 2,
                   "completion_tokens": 2,
@@ -972,6 +1012,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 5,
@@ -987,6 +1028,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 2,
               "completion_tokens": 2,
@@ -994,6 +1036,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 5,
@@ -1019,6 +1062,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -1026,6 +1070,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 2,
@@ -1047,6 +1092,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -1054,6 +1100,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 3,
@@ -1075,6 +1122,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -1082,6 +1130,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 4,
@@ -1103,6 +1152,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -1110,6 +1160,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 1000,
@@ -1131,6 +1182,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 2,
                   "completion_tokens": 2,
@@ -1138,6 +1190,7 @@
                   "compression_savings_spend": 0.0,
                   "failed_requests": 0,
                   "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
                   "gateway_injected_caching_savings_spend": 0.0,
                   "prompt_caching_savings_spend": 0.0,
                   "prompt_tokens": 5,
@@ -1153,6 +1206,7 @@
             "metrics": {
               "api_requests": 5,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 6,
               "completion_tokens": 10,
@@ -1160,6 +1214,7 @@
               "compression_savings_spend": 0.0,
               "failed_requests": 0,
               "flat_cost": 0.0,
+              "ptu_hours": 0.0,
               "gateway_injected_caching_savings_spend": 0.0,
               "prompt_caching_savings_spend": 0.0,
               "prompt_tokens": 1014,
@@ -1176,6 +1231,7 @@
       "metrics": {
         "api_requests": 5,
         "autorouter_savings_spend": 0.0,
+        "guardrail_spend": 0.0,
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 6,
         "completion_tokens": 10,
@@ -1183,6 +1239,7 @@
         "compression_savings_spend": 0.0,
         "failed_requests": 0,
         "flat_cost": 0.0,
+        "ptu_hours": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "prompt_caching_savings_spend": 0.0,
         "prompt_tokens": 1014,

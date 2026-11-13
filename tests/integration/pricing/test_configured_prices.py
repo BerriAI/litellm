@@ -20,6 +20,8 @@ from tests.integration._support.upstream import delete_scenario, register_scenar
 from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
 from tests.integration.pricing.test_realtime_cached_audio_pricing import one_realtime_turn
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 REALTIME_MODEL: Final = "gpt-realtime-2"
 REALTIME_INPUT_TEXT_TOKENS: Final = 10
 REALTIME_INPUT_AUDIO_TOKENS: Final = 20
@@ -422,7 +424,7 @@ def test_block_requests_for_models_without_pricing_refuses_unpriced_deployments(
         assert unpriced_model_info["input_cost_per_token"] is None, unpriced_model_info
         assert unpriced_model_info["output_cost_per_token"] is None, unpriced_model_info
 
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         blocked: Final = _bounded_chat(gateway, unpriced, key, f"unpriced {uuid.uuid4().hex}")
         assert blocked.status_code == 403, blocked.text
         assert blocked.json() == {
@@ -452,7 +454,7 @@ def test_block_requests_for_models_without_pricing_refuses_unpriced_deployments(
         )
         disabled_settings: Final = object_value(settings_rows[0]["param_value"])
         assert disabled_settings["block_requests_for_models_without_pricing"] is False, disabled_settings
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         unpriced_content: Final = f"unpriced {uuid.uuid4().hex}"
         now_served: Final = _bounded_chat(gateway, unpriced, key, unpriced_content)
         assert now_served.status_code == 200, now_served.text

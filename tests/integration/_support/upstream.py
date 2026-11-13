@@ -9,9 +9,9 @@ import struct
 import uuid
 import zlib
 from collections import deque
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-from queue import SimpleQueue
+from types import MappingProxyType
 from typing import Final, cast
 
 import httpx
@@ -24,7 +24,7 @@ from _fake_openai_endpoint_server import (
     moderations,
     triton_embeddings,
 )
-from integration.cost_calculation.cost_map import COST_MAP_ENTRIES
+from integration.cost_calculation.cost_map import COST_MAP_ENTRIES, FALLBACK_GENERALIZATIONS
 from integration.cost_calculation.cost_tracking_case import (
     BinaryResponse,
     EventStreamEvent,
@@ -42,7 +42,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route, WebSocketRoute
-from starlette.websockets import WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 INTERNAL_FIELDS: Final = frozenset(
@@ -81,6 +81,25 @@ class Observation:
     api_key: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class _RealtimeConnection:
+    websocket: WebSocket
+    response: RealtimeResponse
+    session: dict[str, JsonValue]
+    scenario_id: str
+    authorization: str
+    api_key: str
+    events: Iterator[dict[str, JsonValue]]
+    typed_turn_detection: deque[JsonValue]
+
+    def auto_answers(self) -> bool:
+        return (
+            self.response.dialect == "xai"
+            and len(self.typed_turn_detection) > 0
+            and _is_typed_server_vad(self.typed_turn_detection[-1])
+        )
+
+
 class InteractionState(BaseModel):
     """What the scripted Interactions API answers for one interaction id until a DELETE drops it."""
 
@@ -90,6 +109,12 @@ class InteractionState(BaseModel):
     usage: dict[str, JsonValue] | None = None
     get_status: int = 200
     delay_seconds: float = 0
+
+
+class _ReceivedFrame(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: str
+    text: str | None = None
 
 
 class _ScenarioRegistration(BaseModel):
@@ -158,9 +183,23 @@ class ScenarioStore:
         return self._scenarios.get(scenario_id)
 
 
+class ObservationLog:
+    def __init__(self) -> None:
+        self._entries: list[Observation] = []
+
+    def put(self, observation: Observation) -> None:
+        self._entries.append(observation)
+
+    def snapshot(self) -> tuple[Observation, ...]:
+        return tuple(self._entries)
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
 @dataclass(frozen=True, slots=True)
 class Provider:
-    observations: SimpleQueue[Observation] = field(default_factory=SimpleQueue)
+    observations: ObservationLog = field(default_factory=ObservationLog)
     scripts: dict[str, deque[int]] = field(default_factory=dict)
     scenario_store: ScenarioStore = field(default_factory=ScenarioStore)
     interactions: dict[str, InteractionState] = field(default_factory=dict)
@@ -245,7 +284,10 @@ class Provider:
         return JSONResponse({"configured": len(statuses)})
 
     async def observed(self, request: Request) -> Response:
-        values: Final = tuple(self.observations.get() for _ in range(self.observations.qsize()))
+        if request.method == "DELETE":
+            self.observations.clear()
+            return Response(status_code=204)
+        values: Final = self.observations.snapshot()
         return JSONResponse(
             {
                 "requests": [
@@ -275,7 +317,7 @@ class Provider:
         return JSONResponse({"deleted": deleted}, status_code=200 if deleted else 404)
 
     async def cost_map(self, _request: Request) -> Response:
-        return JSONResponse(COST_MAP_ENTRIES)
+        return JSONResponse({**COST_MAP_ENTRIES, "fallback_generalizations": FALLBACK_GENERALIZATIONS})
 
     async def oauth_token(self, _request: Request) -> Response:
         return JSONResponse(
@@ -415,23 +457,47 @@ class Provider:
     ) -> None:
         await websocket.accept()
         session: Final = _realtime_session(response, scenario_id, websocket.query_params.get("model", ""))
+        frames: Final = _received_texts(websocket)
+        held: Final = await anext(frames, None) if response.created_after_first_frame else None
         for _ in range(response.created_repeats):
             await websocket.send_json({"type": response.created_event, "event_id": _event_id(), "session": session})
-        event_index: Final = iter(response.events)
-        async for message in websocket.iter_json():
-            payload: Final = JSON_OBJECT.validate_python(message)
-            self.observations.put(Observation(websocket.url.path, authorization, payload, "WEBSOCKET_FRAME", api_key))
-            if payload.get("type") == "session.update":
-                await websocket.send_json(
-                    _realtime_update_reply(payload.get("session"), session, response.session_type)
+        connection: Final = _RealtimeConnection(
+            websocket, response, session, scenario_id, authorization, api_key, iter(response.events), deque(maxlen=1)
+        )
+        if held is not None:
+            await self._realtime_frame(connection, held)
+        async for message in frames:
+            await self._realtime_frame(connection, message)
+
+    async def _realtime_frame(self, connection: _RealtimeConnection, message: str) -> None:
+        websocket: Final = connection.websocket
+        response: Final = connection.response
+        payload: Final = JSON_OBJECT.validate_json(message)
+        self.observations.put(
+            Observation(websocket.url.path, connection.authorization, payload, "WEBSOCKET_FRAME", connection.api_key)
+        )
+        frame_type: Final = payload.get("type")
+        if frame_type == "session.update":
+            reply: Final = _realtime_update_reply(
+                payload.get("session"), connection.session, response.session_type, response.dialect
+            )
+            if reply["type"] == "session.updated":
+                connection.typed_turn_detection.extend(
+                    filter(_declares_a_type, _declared_turn_detection(payload.get("session")))
                 )
-                continue
-            if payload.get("type") not in _REALTIME_TRIGGERS:
-                continue
-            event: Final = next(event_index, None)
-            if event is None:
-                continue
-            await websocket.send_json(_rendered_realtime_event(event, scenario_id))
+            await _reply_while_open(websocket, reply)
+            return
+        if frame_type == "response.cancel":
+            await _reply_while_open(websocket, _cancel_not_active(payload.get("event_id"), response.dialect))
+            return
+        if frame_type not in _REALTIME_TRIGGERS:
+            return
+        event: Final = next(connection.events, None)
+        if event is None:
+            return
+        await _reply_while_open(websocket, _rendered_realtime_event(event, connection.scenario_id))
+        if frame_type == "input_audio_buffer.commit" and connection.auto_answers():
+            await _reply_while_open(websocket, _rendered_realtime_event(dict(_AUTO_ANSWER), connection.scenario_id))
 
     async def muse_realtime(self, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -454,8 +520,23 @@ class Provider:
                 await websocket.send_json(_rendered_realtime_event(pending.popleft(), scenario_id))
 
     async def gemini_live(self, websocket: WebSocket) -> None:
-        authorization: Final = websocket.headers.get("authorization", "")
-        scenario_id: Final = websocket.headers.get("x-goog-user-project", "")
+        await self._gemini_live_session(
+            websocket,
+            websocket.headers.get("x-goog-user-project", ""),
+            websocket.headers.get("authorization", ""),
+            _accepts_every_setup,
+        )
+
+    async def gemini_ai_studio_live(self, websocket: WebSocket) -> None:
+        await self._gemini_live_session(websocket, websocket.query_params.get("key", ""), "", _ai_studio_setup_refusal)
+
+    async def _gemini_live_session(
+        self,
+        websocket: WebSocket,
+        scenario_id: str,
+        authorization: str,
+        setup_refusal: Callable[[Mapping[str, JsonValue]], str | None],
+    ) -> None:
         self.observations.put(
             Observation(
                 websocket.url.path,
@@ -477,6 +558,9 @@ class Provider:
                 Observation(websocket.url.path, authorization, payload, "WEBSOCKET_FRAME", scenario_id)
             )
             if "setup" in payload:
+                if (refusal := setup_refusal(payload)) is not None:
+                    await websocket.close(code=_INVALID_ARGUMENT_CLOSE, reason=refusal[:_CLOSE_REASON_BYTES])
+                    return
                 await websocket.send_json({"setupComplete": {}})
                 continue
             if not _GEMINI_LIVE_TRIGGERS.intersection(payload):
@@ -554,7 +638,7 @@ class Provider:
         return Starlette(
             routes=[
                 Route("/health", health),
-                Route("/__observations", self.observed),
+                Route("/__observations", self.observed, methods=["GET", "DELETE"]),
                 Route("/__scripts/{model}", self.script, methods=["POST", "DELETE", "GET"]),
                 Route("/__scenarios", self.register_scenario, methods=["POST"]),
                 Route("/__scenarios/{scenario_id}", self.delete_scenario, methods=["DELETE"]),
@@ -567,10 +651,10 @@ class Provider:
                 Route("/triton/embeddings", triton_embeddings, methods=["POST"]),
                 Route("/vector_stores/{vector_store_id}/search", self.vector_store_search, methods=["POST"]),
                 Route("/__interactions/{interaction_id}", self.interaction_state, methods=["PUT", "DELETE"]),
-                Route("/v1beta/interactions/{interaction_id}:cancel", self.cancel_interaction, methods=["POST"]),
+                Route("/v1beta/interactions/{interaction_id}/cancel", self.cancel_interaction, methods=["POST"]),
                 Route("/v1beta/interactions/{interaction_id}", self.interaction, methods=["GET", "DELETE"]),
                 Route(
-                    "/{prefix:path}/v1beta/interactions/{interaction_id}:cancel",
+                    "/{prefix:path}/v1beta/interactions/{interaction_id}/cancel",
                     self.cancel_interaction,
                     methods=["POST"],
                 ),
@@ -587,6 +671,7 @@ class Provider:
                 WebSocketRoute("/openai/realtime", self.realtime),
                 WebSocketRoute("/v1/asr/realtime", self.muse_realtime),
                 WebSocketRoute(GEMINI_LIVE_PATH, self.gemini_live),
+                WebSocketRoute(GEMINI_AI_STUDIO_LIVE_PATH, self.gemini_ai_studio_live),
             ]
         )
 
@@ -612,6 +697,19 @@ def _interaction_body(interaction_id: str, state: InteractionState) -> dict[str,
 _REALTIME_TRIGGERS: Final = frozenset({"response.create", "input_audio_buffer.commit"})
 _GEMINI_LIVE_TRIGGERS: Final = frozenset({"clientContent", "realtimeInput"})
 GEMINI_LIVE_PATH: Final = "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+GEMINI_AI_STUDIO_LIVE_PATH: Final = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+_INVALID_ARGUMENT_CLOSE: Final = 1007
+_CLOSE_REASON_BYTES: Final = 123
+_AI_STUDIO_TUNING_FIELDS: Final = MappingProxyType(
+    {"prefixPaddingMs": "prefix_padding_ms", "silenceDurationMs": "silence_duration_ms"}
+)
+_AUTO_ANSWER: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "type": "response.done",
+        "event_id": "evt_$UNIQUE_ID",
+        "response": {"id": "resp_auto_$UNIQUE_ID", "object": "realtime.response", "status": "completed", "output": []},
+    }
+)
 _TRANSCRIPTION_UPDATE_REFUSED: Final = "Passing a realtime session update to a transcription session is not allowed."
 _REALTIME_UPDATE_REFUSED: Final = "Passing a transcription session update to a realtime session is not allowed."
 _NESTED_TURN_DETECTION_TYPE: Final = "session.audio.input.turn_detection.type"
@@ -651,11 +749,11 @@ def _missing_turn_detection_type(session: Mapping[str, JsonValue]) -> str | None
 
 
 def _realtime_update_reply(
-    session: JsonValue, created: Mapping[str, JsonValue], session_type: str | None
+    session: JsonValue, created: Mapping[str, JsonValue], session_type: str | None, dialect: str
 ) -> dict[str, JsonValue]:
     if not isinstance(session, dict):
         return _realtime_error("invalid_value", "Invalid value for 'session': expected an object.", "session")
-    missing: Final = _missing_turn_detection_type(session)
+    missing: Final = None if dialect == "xai" else _missing_turn_detection_type(session)
     if missing is not None:
         return _realtime_error("missing_required_parameter", f"Missing required parameter: '{missing}'.", missing)
     declared: Final = session.get("type")
@@ -664,6 +762,82 @@ def _realtime_update_reply(
     if session_type != "transcription" and declared == "transcription":
         return _realtime_error("invalid_parameter", _REALTIME_UPDATE_REFUSED, "")
     return {"type": "session.updated", "event_id": _event_id(), "session": {**created, **session}}
+
+
+async def _received_texts(websocket: WebSocket) -> AsyncIterator[str]:
+    while (frame := _ReceivedFrame.model_validate(await websocket.receive())).type == "websocket.receive":
+        if frame.text is not None:
+            yield frame.text
+
+
+async def _reply_while_open(websocket: WebSocket, frame: Mapping[str, JsonValue]) -> None:
+    if websocket.application_state is not WebSocketState.CONNECTED:
+        return
+    try:
+        await websocket.send_json(frame)
+    except WebSocketDisconnect:
+        return
+
+
+def _cancel_not_active(cancel_event_id: JsonValue, dialect: str) -> dict[str, JsonValue]:
+    message: Final = "Cancellation failed: no active response found"
+    if dialect == "xai":
+        own_id: Final = _event_id()
+        return {
+            "type": "error",
+            "event_id": own_id,
+            "error": {
+                "message": message,
+                "type": "invalid_request_error",
+                "code": "invalid_request_error",
+                "event_id": own_id,
+            },
+        }
+    return {
+        "type": "error",
+        "event_id": _event_id(),
+        "error": {
+            "type": "invalid_request_error",
+            "code": "response_cancel_not_active",
+            "message": message,
+            "param": None,
+            "event_id": cancel_event_id,
+        },
+    }
+
+
+def _declared_turn_detection(session: JsonValue) -> tuple[JsonValue, ...]:
+    if not isinstance(session, dict):
+        return ()
+    audio: Final = session.get("audio")
+    audio_input: Final = audio.get("input") if isinstance(audio, dict) else None
+    if isinstance(audio_input, dict) and "turn_detection" in audio_input:
+        return (audio_input["turn_detection"],)
+    return (session["turn_detection"],) if "turn_detection" in session else ()
+
+
+def _declares_a_type(turn_detection: JsonValue) -> bool:
+    return isinstance(turn_detection, dict) and "type" in turn_detection
+
+
+def _is_typed_server_vad(turn_detection: JsonValue) -> bool:
+    return isinstance(turn_detection, dict) and turn_detection.get("type") == "server_vad"
+
+
+def _accepts_every_setup(_payload: Mapping[str, JsonValue]) -> str | None:
+    return None
+
+
+def _ai_studio_setup_refusal(payload: Mapping[str, JsonValue]) -> str | None:
+    setup: Final = payload.get("setup")
+    config: Final = setup.get("realtimeInputConfig") if isinstance(setup, dict) else None
+    detection: Final = config.get("automaticActivityDetection") if isinstance(config, dict) else None
+    if not isinstance(detection, dict) or detection.get("disabled") is not True:
+        return None
+    tuning: Final = tuple(name for key, name in _AI_STUDIO_TUNING_FIELDS.items() if key in detection)
+    if not tuning:
+        return None
+    return f"automatic_activity_detection.disabled is true, but the following fields were also set: {', '.join(tuning)}"
 
 
 def _rendered_realtime_event(event: Mapping[str, JsonValue], scenario_id: str) -> dict[str, JsonValue]:

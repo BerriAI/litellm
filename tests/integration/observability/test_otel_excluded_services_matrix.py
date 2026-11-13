@@ -346,8 +346,11 @@ def _db_systems(spans: tuple[Span, ...]) -> set[str]:
 
 
 def _post_auth_datastore_spans(spans: tuple[Span, ...]) -> tuple[Span, ...]:
-    auth_ids: Final = frozenset(span["span_id"] for span in spans if span["name"].startswith("auth "))
-    return tuple(span for span in spans if _db_systems((span,)) and span["parent_span_id"] not in auth_ids)
+    return tuple(
+        span
+        for span in spans
+        if _db_systems((span,)) and span["attributes"].get("litellm.team.id") is not None
+    )
 
 
 def _names(spans: tuple[Span, ...]) -> list[str]:
@@ -356,6 +359,10 @@ def _names(spans: tuple[Span, ...]) -> list[str]:
 
 def _has_root(spans: tuple[Span, ...]) -> bool:
     return any(span["kind"] == SERVER for span in spans)
+
+
+def _has_model_span(spans: tuple[Span, ...]) -> bool:
+    return any("gen_ai.operation.name" in span["attributes"] for span in spans)
 
 
 def _trace_of_call(sink: str, call_id: str, since: int) -> tuple[Span, ...]:
@@ -367,7 +374,7 @@ def _trace_of_call(sink: str, call_id: str, since: int) -> tuple[Span, ...]:
 def _operator_trace(rig: Rig, sent: Sent, cursors: Cursors) -> tuple[Span, ...]:
     trace: Final = eventually(
         lambda: _trace_of_call(rig.sinks.operator, sent.call_id, cursors.operator),
-        lambda spans: _has_root(spans) and "redis" in _db_systems(spans),
+        lambda spans: _has_root(spans) and "redis" in _db_systems(spans) and _has_model_span(spans),
         seconds=40,
     )
     assert len({span["trace_id"] for span in trace}) == 1, _names(trace)
@@ -405,7 +412,7 @@ def _assert_tenant_mirrors(rig: Rig, operator: tuple[Span, ...], cursors: Cursor
 
 def _assert_withheld(rig: Rig, sent: Sent, cursors: Cursors) -> tuple[Span, ...]:
     tenant: Final = _assert_tenant_mirrors(rig, _operator_trace(rig, sent, cursors), cursors)
-    assert any("gen_ai.operation.name" in span["attributes"] for span in tenant), _names(tenant)
+    assert _has_model_span(tenant), _names(tenant)
     return tenant
 
 
@@ -719,7 +726,7 @@ def _assert_tenant_kept(
         return (
             sum(1 for span in spans if span["kind"] == SERVER) == 1
             and "redis" in _db_systems(spans)
-            and (not needs_model_span or any("gen_ai.operation.name" in span["attributes"] for span in spans))
+            and (not needs_model_span or _has_model_span(spans))
         )
 
     tenant: Final = eventually(
@@ -730,7 +737,7 @@ def _assert_tenant_kept(
     )
     assert sum(1 for span in tenant if span["kind"] == SERVER) == 1, _names(tenant)
     assert "redis" in _db_systems(tenant), f"redis spans missing at the tenant: {_names(tenant)}"
-    assert not needs_model_span or any("gen_ai.operation.name" in span["attributes"] for span in tenant), _names(tenant)
+    assert not needs_model_span or _has_model_span(tenant), _names(tenant)
     return tenant
 
 

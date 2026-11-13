@@ -4,9 +4,13 @@ from typing import Final
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
+import pytest
+
 import litellm.litellm_core_utils.duration_parser as duration_parser
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
+    duration_in_seconds_from,
+    get_annual_budget_window_start,
     get_budget_window_start,
     get_next_standardized_reset_time,
 )
@@ -192,6 +196,79 @@ class TestStandardizedResetTime(unittest.TestCase):
         self.assertEqual(result, expected)
 
 
+@pytest.mark.parametrize(
+    "now, zone, reset_time, expected",
+    [
+        (
+            datetime(2026, 11, 12, tzinfo=timezone.utc),
+            "UTC",
+            time(0),
+            datetime(2027, 1, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2028, 2, 29, tzinfo=timezone.utc),
+            "UTC",
+            time(0),
+            datetime(2029, 1, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, tzinfo=timezone.utc),
+            "UTC",
+            time(0),
+            datetime(2028, 1, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, 8, tzinfo=timezone.utc),
+            "UTC",
+            time(12),
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
+            "UTC",
+            time(12),
+            datetime(2028, 1, 1, 12, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, 2, tzinfo=timezone.utc),
+            "America/New_York",
+            time(0),
+            datetime(2027, 1, 1, tzinfo=ZoneInfo("America/New_York")),
+        ),
+    ],
+)
+def test_annual_reset_and_window_start(
+    now: datetime, zone: str, reset_time: time, expected: datetime
+) -> None:
+    reset: Final = get_next_standardized_reset_time("12mo", now, zone, reset_time)
+    assert reset == expected
+    assert get_budget_window_start("12mo", reset) == expected.replace(year=expected.year - 1)
+
+
+@pytest.mark.parametrize(
+    "zone,reset_at,expected",
+    (
+        ("UTC", "2029-01-01T00:00:00+00:00", "2028-01-01T00:00:00+00:00"),
+        ("UTC", "2101-01-01T00:00:00+00:00", "2100-01-01T00:00:00+00:00"),
+        ("America/New_York", "2029-01-01T00:00:00-05:00", "2028-01-01T05:00:00+00:00"),
+        ("Asia/Kathmandu", "2029-01-01T12:30:00+05:45", "2028-01-01T06:45:00+00:00"),
+        ("Pacific/Apia", "2012-01-01T00:00:00+14:00", "2011-01-01T10:00:00+00:00"),
+    ),
+)
+@pytest.mark.parametrize("storage", ("offset", "utc", "naive_utc"))
+def test_annual_window_survives_timestamp_storage(
+    zone: str, reset_at: str, expected: str, storage: str
+) -> None:
+    reset: Final = datetime.fromisoformat(reset_at)
+    stored: Final = {
+        "offset": reset,
+        "utc": reset.astimezone(timezone.utc),
+        "naive_utc": reset.astimezone(timezone.utc).replace(tzinfo=None),
+    }[storage]
+
+    assert get_annual_budget_window_start(stored, zone) == datetime.fromisoformat(expected)
+
+
 class TestResetTimeOfDay(unittest.TestCase):
     """A configurable reset_time_of_day shifts day/week/month resets off midnight."""
 
@@ -371,6 +448,35 @@ class TestGetBudgetWindowStart(unittest.TestCase):
             get_budget_window_start("1hr", datetime(2024, 1, 16, tzinfo=timezone.utc)),
             datetime(2024, 1, 15, tzinfo=timezone.utc),
         )
+
+
+@pytest.mark.parametrize(
+    "start,duration,days",
+    [
+        (datetime(2026, 1, 15, 12, tzinfo=timezone.utc), "1mo", 31),
+        (datetime(2026, 2, 10, 12, tzinfo=timezone.utc), "1mo", 28),
+        (datetime(2026, 1, 31, 12, tzinfo=timezone.utc), "1mo", 28),
+        (datetime(2028, 1, 31, 12, tzinfo=timezone.utc), "1mo", 29),
+        (datetime(2026, 12, 15, 12, tzinfo=timezone.utc), "1mo", 31),
+        (datetime(2026, 1, 15, 12, tzinfo=timezone.utc), "2mo", 59),
+    ],
+    ids=["january", "february", "clamped_to_february", "leap_february", "across_new_year", "two_months"],
+)
+def test_a_month_lasts_as_long_as_the_month_it_starts_in(start, duration, days):
+    assert duration_in_seconds_from(start, duration) == days * 86400
+
+
+@pytest.mark.parametrize("duration", ["45s", "30m", "1h", "1d", "7d", "2w", "30d", "daily", "monthly"])
+def test_fixed_length_units_do_not_depend_on_the_start(duration):
+    assert duration_in_seconds_from(datetime(2026, 2, 10, 12, tzinfo=timezone.utc), duration) == duration_in_seconds(
+        duration
+    )
+
+
+def test_a_month_starting_now_matches_duration_in_seconds():
+    now: Final = datetime(2026, 1, 31, 9, 30, 0, 250000, tzinfo=timezone.utc).astimezone()
+    with patch.object(duration_parser.time_module, "time", return_value=now.timestamp()):
+        assert duration_in_seconds("1mo") == duration_in_seconds_from(now, "1mo")
 
 
 if __name__ == "__main__":

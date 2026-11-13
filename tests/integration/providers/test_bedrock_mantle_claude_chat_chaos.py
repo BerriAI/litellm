@@ -21,6 +21,8 @@ from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _BACKEND: Final = "anthropic.claude-haiku-4-5"
 _API_KEY: Final = "synthetic-mantle-bearer"
 _CONFIG_MODEL: Final = "bedrock-mantle-claude-chat-chaos"
@@ -259,7 +261,7 @@ async def test_slow_native_streams_reach_every_caller_whole_and_are_logged_once(
         assert len(served) == 10
         for item in served:
             _assert_answered_with_its_own_marker(item)
-            assert item.text.rstrip().endswith("data: [DONE]"), item.text
+            assert item.text.rstrip().endswith("data: [DONE]") == (item.call.endpoint == "chat"), item.text
         _assert_native_requests_for(wire.drain(), calls)
         assert _spend_status_by_call(served) == {item.call_id: "success" for item in served}
 

@@ -9,7 +9,7 @@ import httpx
 import openai
 import pytest
 import websockets
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
@@ -63,7 +63,8 @@ _RESPONSES_EVENTS: Final = (
 )
 
 
-def _anthropic_model(gateway: Gateway, *, stream: bool) -> str:
+def _anthropic_model(scenario: Scenario, *, stream: bool) -> str:
+    gateway: Final = scenario.gateway
     scenario_id: Final = "audit-anthropic-stream" if stream else "audit-anthropic"
     if stream:
         _register_scenario(gateway, scenario_id, {"content_type": "text/event-stream", "frames": _ANTHROPIC_EVENTS})
@@ -76,23 +77,13 @@ def _anthropic_model(gateway: Gateway, *, stream: bool) -> str:
                 "routes": {"POST /v1/messages": {"content_type": "application/json", "body": _ANTHROPIC_MESSAGE}},
             },
         )
-    name: Final = f"integration-{uuid.uuid4().hex}"
-    created: Final = gateway.post(
-        "/model/new",
-        {
-            "model_name": name,
-            "litellm_params": {
-                "model": "anthropic/claude-3-5-sonnet-20241022",
-                "api_key": "integration-provider-key",
-                "api_base": f"{gateway.upstream_url}/{scenario_id}",
-            },
-        },
+    return scenario.model(
+        model="anthropic/claude-3-5-sonnet-20241022", api_base=f"{gateway.upstream_url}/{scenario_id}"
     )
-    assert isinstance(created["model_info"], dict) and created["model_info"]["id"], created
-    return name
 
 
-def _responses_model(gateway: Gateway, *, stream: bool) -> str:
+def _responses_model(scenario: Scenario, *, stream: bool) -> str:
+    gateway: Final = scenario.gateway
     scenario_id: Final = "audit-resp-stream" if stream else "audit-resp"
     if stream:
         _register_scenario(gateway, scenario_id, {"content_type": "text/event-stream", "frames": _RESPONSES_EVENTS})
@@ -105,20 +96,7 @@ def _responses_model(gateway: Gateway, *, stream: bool) -> str:
                 "routes": {"POST /responses": {"content_type": "application/json", "body": _RESPONSES_BODY}},
             },
         )
-    name: Final = f"integration-{uuid.uuid4().hex}"
-    created: Final = gateway.post(
-        "/model/new",
-        {
-            "model_name": name,
-            "litellm_params": {
-                "model": "openai/gpt-4o-mini",
-                "api_key": "integration-provider-key",
-                "api_base": f"{gateway.upstream_url}/{scenario_id}",
-            },
-        },
-    )
-    assert isinstance(created["model_info"], dict) and created["model_info"]["id"], created
-    return name
+    return scenario.model(api_base=f"{gateway.upstream_url}/{scenario_id}")
 
 
 def _openai_client(gateway: Gateway, key: str) -> openai.OpenAI:
@@ -219,8 +197,8 @@ def test_allowed_key_chat_completions_restamps_alias(
 @pytest.mark.parametrize("client_kind", ("httpx", "anthropic", "anthropic_async"))
 @pytest.mark.parametrize("stream", (False, True))
 def test_allowed_key_messages(gateway: Gateway, client_kind: str, stream: bool) -> None:
-    model: Final = _anthropic_model(gateway, stream=stream)
     with gateway.scenario() as scenario:
+        model: Final = _anthropic_model(scenario, stream=stream)
         key: Final = scenario.key(models=[model])
         body: Final = {
             "model": model,
@@ -264,8 +242,8 @@ def test_allowed_key_messages(gateway: Gateway, client_kind: str, stream: bool) 
 @pytest.mark.parametrize("client_kind", ("httpx", "openai", "openai_async"))
 @pytest.mark.parametrize("stream", (False, True))
 def test_allowed_key_responses(gateway: Gateway, client_kind: str, stream: bool) -> None:
-    model: Final = _responses_model(gateway, stream=stream)
     with gateway.scenario() as scenario:
+        model: Final = _responses_model(scenario, stream=stream)
         key: Final = scenario.key(models=[model])
         body: Final = {
             "model": model,
@@ -334,20 +312,10 @@ async def test_realtime_websocket_allowed_and_denied(gateway: Gateway) -> None:
             ),
         },
     )
-    name: Final = f"integration-{uuid.uuid4().hex}"
-    created: Final = gateway.post(
-        "/model/new",
-        {
-            "model_name": name,
-            "litellm_params": {
-                "model": "openai/gpt-4o-realtime-preview",
-                "api_key": rt_scenario,
-                "api_base": gateway.upstream_url,
-            },
-        },
-    )
-    assert isinstance(created["model_info"], dict) and created["model_info"]["id"], created
     with gateway.scenario() as scenario:
+        name: Final = scenario.model(
+            model="openai/gpt-4o-realtime-preview", api_key=rt_scenario, api_base=gateway.upstream_url
+        )
         key: Final = scenario.key(models=[name])
         other_model: Final = scenario.model()
         denied_key: Final = scenario.key(models=[other_model])

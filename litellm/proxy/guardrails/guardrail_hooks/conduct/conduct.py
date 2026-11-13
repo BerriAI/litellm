@@ -125,6 +125,9 @@ else:
         def get_config_model() -> type[ConductGuardrailConfigModel]:
             return ConductGuardrailConfigModel
 
+        def supports_structured_messages(self) -> bool:
+            return False
+
         @log_guardrail_information
         async def apply_guardrail(
             self,

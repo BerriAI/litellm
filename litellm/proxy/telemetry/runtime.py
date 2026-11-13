@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final
 
 import httpx
 
@@ -32,8 +32,6 @@ from litellm.telemetry.records import InstanceInfo, TelemetryGroup
 from litellm.telemetry.report import Report
 from litellm.telemetry.sink import Exporter, ExportOutcome
 from litellm.types.llms.custom_http import httpxSpecialProvider
-
-StoredConsent: TypeAlias = Callable[[], Awaitable[TelemetryConsent | None]]
 
 
 @dataclass(frozen=True, slots=True)

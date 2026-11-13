@@ -8,6 +8,7 @@ import pytest
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 MANTLE_COUNT_URL: Final = "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages/count_tokens"
 LITELLM_PARAMS: Final = {
@@ -74,6 +75,34 @@ async def test_counts_on_mantle_with_the_base_model_and_the_deployment_credentia
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resolved_model",
+    ["anthropic.claude-opus-4-8", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"],
+)
+async def test_counts_tools_the_way_mantle_messages_sends_them(resolved_model: str) -> None:
+    mantle: Final = _MantleEndpoint(200, {"input_tokens": 11})
+    schema: Final = {"type": "object", "properties": {}}
+
+    await BedrockMantleCountTokensHandler().handle_count_tokens_request(
+        request_data={
+            **REQUEST,
+            "tools": [
+                {"name": "eager", "input_schema": schema, "custom": {"eager_input_streaming": True}},
+                {"name": "deferred", "input_schema": schema, "custom": {"defer_loading": True}},
+            ],
+        },
+        litellm_params=dict(LITELLM_PARAMS),
+        resolved_model=resolved_model,
+        client=_client(mantle),
+    )
+
+    assert json.loads(mantle.only_request().content)["tools"] == [
+        {"name": "eager", "input_schema": schema},
+        {"name": "deferred", "input_schema": schema, "defer_loading": True},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_bedrock_mantle_api_base_env_names_the_host(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BEDROCK_MANTLE_API_BASE", "https://vpce-abc.bedrock-mantle.us-east-1.vpce.api.aws")
     mantle: Final = _MantleEndpoint(200, {"input_tokens": 3})
@@ -107,3 +136,22 @@ async def test_non_200_answers_raise_bedrock_error_with_mantle_status() -> None:
 
     assert raised.value.status_code == 404
     assert "does not exist" in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_region_and_endpoint_lookups_leave_the_event_loop_free(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    vault: Final = host_in_loop_probing_vault(monkeypatch, "AWS_REGION_NAME", "BEDROCK_MANTLE_API_BASE")
+    mantle: Final = _MantleEndpoint(200, {"input_tokens": 2177})
+
+    result = await BedrockMantleCountTokensHandler().handle_count_tokens_request(
+        request_data={**REQUEST, "model": "global.anthropic.claude-opus-5-5"},
+        litellm_params={key: value for key, value in LITELLM_PARAMS.items() if key != "aws_region_name"},
+        resolved_model="anthropic.claude-opus-5-5",
+        client=_client(mantle),
+    )
+
+    assert vault.read.is_set()
+    assert not vault.read_on_loop.is_set()
+    assert result == {"input_tokens": 2177}
+    assert str(mantle.only_request().url) == MANTLE_COUNT_URL

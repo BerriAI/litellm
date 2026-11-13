@@ -1,19 +1,26 @@
 import json
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import chain
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from openai.lib.streaming.chat import ChatCompletionStreamState
+from openai.types.chat import ChatCompletionChunk
 
 import litellm
 from litellm._uuid import uuid
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import NON_LLM_CONNECTION_TIMEOUT, RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
-from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call, make_sync_call
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 from litellm.llms.base_llm.base_utils import response_format_schema, unwrap_response_format_envelope
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
@@ -21,27 +28,44 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.responses.main import OutputCodeInterpreterCall
-from litellm.types.utils import ChatCompletionDeltaToolCall, ModelResponseStream
+from litellm.types.utils import ChatCompletionDeltaToolCall, ChatCompletionMessageToolCall, Choices, ModelResponseStream
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
+
+
+def _text_delta_stream(text: str) -> bytes:
+    events: Final = (
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        ),
+    )
+    return "".join(
+        f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n" for name, payload in events
+    ).encode()
+
+
+def _streamed_text(chunks: list[object]) -> str:
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks if isinstance(chunk, ModelResponseStream))
 
 
 @pytest.mark.asyncio
 async def test_make_call_passes_logging_obj_to_client_post():
     """make_call must pass logging_obj to client.post so track_llm_api_timing can set llm_api_duration_ms for litellm_overhead_time_ms."""
     mock_client = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.aiter_lines = MagicMock(
-        return_value=iter([b'data: {"type":"message_start"}\n', b'data: {"type":"message_delta"}\n'])
-    )
-    mock_client.post.return_value = mock_response
+    mock_client.post.return_value = httpx.Response(200, stream=httpx.ByteStream(_text_delta_stream("Hi there")))
 
     logging_obj = MagicMock()
 
-    await make_call(
+    completion_stream, _ = await make_call(
         client=mock_client,
         api_base="https://api.anthropic.com/v1/messages",
         headers={},
         data="{}",
-        model="claude-3-5-haiku",
+        model="claude-haiku-5-5",
         messages=[{"role": "user", "content": "Hi"}],
         logging_obj=logging_obj,
         timeout=60.0,
@@ -51,6 +75,39 @@ async def test_make_call_passes_logging_obj_to_client_post():
     mock_client.post.assert_called_once()
     call_kwargs = mock_client.post.call_args[1]
     assert call_kwargs.get("logging_obj") is logging_obj
+    assert _streamed_text([chunk async for chunk in completion_stream]) == "Hi there"
+
+
+_LINE_SEPARATED_TEXT: Final = "before\u2028between\u2029after"
+
+
+async def _streamed_chunks(sync_stream: bool, text: str) -> list[object]:
+    transport: Final = httpx.MockTransport(
+        lambda request: httpx.Response(200, stream=httpx.ByteStream(_text_delta_stream(text)))
+    )
+    call_args: Final = {
+        "api_base": "https://api.anthropic.com/v1/messages",
+        "headers": {},
+        "data": "{}",
+        "model": "claude-haiku-5-5",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "logging_obj": MagicMock(),
+        "timeout": 60.0,
+        "json_mode": False,
+    }
+    if sync_stream:
+        sync_iterator, _ = make_sync_call(client=HTTPHandler(client=httpx.Client(transport=transport)), **call_args)
+        return list(sync_iterator)
+    async_iterator, _ = await make_call(client=AsyncHTTPHandler(transport=transport), **call_args)
+    return [chunk async for chunk in async_iterator]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_stream", [True, False])
+async def test_streamed_text_keeps_unicode_line_separators(sync_stream: bool) -> None:
+    chunks: Final = await _streamed_chunks(sync_stream, _LINE_SEPARATED_TEXT)
+
+    assert _streamed_text(chunks) == _LINE_SEPARATED_TEXT
 
 
 def test_anthropic_completion_does_not_send_deployment_default_limits():
@@ -207,6 +264,7 @@ def test_anthropic_tool_call_error_is_mapped_from_the_provider_response():
 async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop(async_only_image_fetch):
     http_image_url = f"http://img.example/{uuid.uuid4()}.png"
     https_image_url = f"https://img.example/{uuid.uuid4()}.png"
+    https_pdf_link = f"https://img.example/{uuid.uuid4()}/page.pdf?w=600"
     captured = {}
 
     def handle(request):
@@ -236,6 +294,7 @@ async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop
                     {"type": "text", "text": "What colour is this?"},
                     {"type": "image_url", "image_url": {"url": http_image_url}},
                     {"type": "image_url", "image_url": {"url": https_image_url}},
+                    {"type": "image_url", "image_url": {"url": https_pdf_link}},
                 ],
             }
         ],
@@ -244,11 +303,195 @@ async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop
     )
 
     assert response.choices[0].message.content == "Green"
-    assert async_only_image_fetch.fetched == [http_image_url]
+    assert async_only_image_fetch.fetched == [http_image_url, https_pdf_link]
     sources = [part["source"] for part in captured["body"]["messages"][0]["content"] if part["type"] == "image"]
     assert sources == [
         {"type": "base64", "media_type": "image/png", "data": async_only_image_fetch.base64_png},
         {"type": "url", "url": https_image_url},
+        {"type": "url", "url": https_pdf_link},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("download_limit_mb", (0, 50), ids=("downloads-disabled", "link-unreachable"))
+async def test_anthropic_async_completion_sends_a_pdf_path_link_it_cannot_download_as_a_link(
+    monkeypatch: pytest.MonkeyPatch, download_limit_mb: int
+) -> None:
+    pdf_link: Final = f"https://img.example/{uuid.uuid4()}/page.pdf?fm=png"
+    captured: Final[dict[str, object]] = {}
+
+    async def unreachable(client: object, url: str, **kwargs: object) -> httpx.Response:
+        return httpx.Response(404, request=httpx.Request("GET", url))
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "A chart"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    monkeypatch.setattr(image_handling, "async_safe_get", unreachable)
+    monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", download_limit_mb)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response: Final = await litellm.acompletion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": pdf_link}}]}],
+        client=client,
+        api_key="sk-ant-unit-test",
+    )
+
+    assert response.choices[0].message.content == "A chart"
+    assert captured["body"]["messages"][0]["content"] == [{"type": "image", "source": {"type": "url", "url": pdf_link}}]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_async_completion_gives_up_on_a_pdf_link_within_the_non_llm_connection_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_link: Final = f"https://unreachable.example/{uuid.uuid4()}/report.pdf"
+    fetch_timeouts: Final[list[object]] = []
+    captured: Final[dict[str, object]] = {}
+
+    async def unreachable(client: object, url: str, **kwargs: object) -> httpx.Response:
+        fetch_timeouts.append(kwargs.get("timeout"))
+        raise httpx.ConnectTimeout("no route to host")
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "A chart"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    monkeypatch.setattr(image_handling, "async_safe_get", unreachable)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    await litellm.acompletion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": pdf_link}}]}],
+        client=client,
+        api_key="sk-ant-unit-test",
+    )
+
+    assert captured["body"]["messages"][0]["content"] == [{"type": "image", "source": {"type": "url", "url": pdf_link}}]
+    assert fetch_timeouts == [NON_LLM_CONNECTION_TIMEOUT]
+
+
+def _anthropic_reply(captured: dict[str, object]) -> Callable[[httpx.Request], httpx.Response]:
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "A report"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    return handle
+
+
+def _served_pdf_slice(url: str) -> httpx.Response:
+    return httpx.Response(
+        206, content=b"%PDF-1.7\n", headers={"content-type": "binary/octet-stream"}, request=httpx.Request("GET", url)
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_async_completion_sends_a_link_that_serves_a_pdf_as_a_url_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_link: Final = f"https://files.example/{uuid.uuid4()}/download?file=report.pdf"
+    probes: Final[list[object]] = []
+    captured: Final[dict[str, object]] = {}
+
+    async def serve_pdf_slice(client: object, url: str, **kwargs: object) -> httpx.Response:
+        probes.append(kwargs.get("headers"))
+        return _served_pdf_slice(url)
+
+    monkeypatch.setattr(image_handling, "async_safe_get", serve_pdf_slice)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(_anthropic_reply(captured)))
+
+    await litellm.acompletion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": pdf_link}, "cache_control": {"type": "ephemeral"}}
+                ],
+            }
+        ],
+        client=client,
+        api_key="sk-ant-unit-test",
+    )
+
+    assert captured["body"]["messages"][0]["content"] == [
+        {"type": "document", "source": {"type": "url", "url": pdf_link}, "cache_control": {"type": "ephemeral"}}
+    ]
+    assert probes == [{"Range": "bytes=0-1023"}]
+
+
+def test_anthropic_sync_completion_sends_a_link_that_serves_a_pdf_as_a_url_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_link: Final = f"https://files.example/{uuid.uuid4()}/report.pdf"
+    png_at_pdf_link: Final = f"https://files.example/{uuid.uuid4()}/page.pdf?fm=png"
+    captured: Final[dict[str, object]] = {}
+
+    def serve(client: object, url: str, **kwargs: object) -> httpx.Response:
+        if url == pdf_link:
+            return _served_pdf_slice(url)
+        return httpx.Response(
+            200, content=b"\x89PNG", headers={"content-type": "image/png"}, request=httpx.Request("GET", url)
+        )
+
+    monkeypatch.setattr(image_handling, "safe_get", serve)
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_anthropic_reply(captured))))
+
+    litellm.completion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": pdf_link}},
+                    {"type": "image_url", "image_url": {"url": png_at_pdf_link}},
+                ],
+            }
+        ],
+        client=client,
+        api_key="sk-ant-unit-test",
+    )
+
+    assert captured["body"]["messages"][0]["content"] == [
+        {"type": "document", "source": {"type": "url", "url": pdf_link}},
+        {"type": "image", "source": {"type": "url", "url": png_at_pdf_link}},
     ]
 
 
@@ -308,10 +551,10 @@ def test_streaming_thinking_blocks_are_replayable_after_signature_delta():
         block for chunk in parsed_chunks for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
     )
     expected_delta_blocks = (
-        {"type": "thinking", "thinking": "Step 1. "},
-        {"type": "thinking", "thinking": "Step 2."},
+        {"type": "thinking", "thinking": "Step 1. ", "index": 0},
+        {"type": "thinking", "thinking": "Step 2.", "index": 0},
     )
-    expected_signature_block = {"type": "thinking", "thinking": "", "signature": "sig-final"}
+    expected_signature_block = {"type": "thinking", "thinking": "", "signature": "sig-final", "index": 0}
 
     assert reasoning_content == "Step 1. Step 2."
     assert thinking_blocks == (*expected_delta_blocks, expected_signature_block)
@@ -421,8 +664,8 @@ def test_streaming_unsigned_thinking_deltas_keep_reasoning_content():
 
     assert reasoning_content == "Step 1. Step 2."
     assert thinking_blocks == (
-        {"type": "thinking", "thinking": "Step 1. "},
-        {"type": "thinking", "thinking": "Step 2."},
+        {"type": "thinking", "thinking": "Step 1. ", "index": 0},
+        {"type": "thinking", "thinking": "Step 2.", "index": 0},
     )
 
 
@@ -456,9 +699,80 @@ def test_streaming_truncated_thinking_deltas_keep_reasoning_content():
 
     assert reasoning_content == "Step 1. Step 2."
     assert thinking_blocks == (
-        {"type": "thinking", "thinking": "Step 1. "},
-        {"type": "thinking", "thinking": "Step 2."},
+        {"type": "thinking", "thinking": "Step 1. ", "index": 0},
+        {"type": "thinking", "thinking": "Step 2.", "index": 0},
     )
+
+
+def test_streamed_thinking_blocks_accumulate_in_the_openai_sdk_and_replay_without_index():
+    """`client.chat.completions.stream()` feeds every delta through the OpenAI SDK's `ChatCompletionStreamState`,
+    which requires each dict inside a list to carry a list-position `index`. Unindexed `thinking_blocks` crashed it
+    with `RuntimeError: Expected list delta entry to have an \`index\` key` on the second thinking chunk"""
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_two_blocks",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 20, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Step 1. "}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Step 2."}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig-a"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "Paris"}},
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "thinking", "thinking": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "thinking_delta", "thinking": "Step 3."}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "signature_delta", "signature": "sig-b"}},
+        {"type": "content_block_stop", "index": 2},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 9},
+        },
+        {"type": "message_stop"},
+    )
+
+    state: Final = ChatCompletionStreamState()
+    for event in events:
+        state.handle_chunk(ChatCompletionChunk.model_validate(iterator.chunk_parser(chunk=event).model_dump()))
+    message: Final = state.get_final_completion().choices[0].message.model_dump()
+
+    assert message["content"] == "Paris"
+    assert message["thinking_blocks"] == [
+        {"type": "thinking", "thinking": "Step 1. Step 2.", "signature": "sig-a", "index": 0},
+        {"type": "thinking", "thinking": "Step 3.", "signature": "sig-b", "index": 1},
+    ]
+
+    next_turn: Final = {
+        "role": "assistant",
+        "content": message["content"],
+        "thinking_blocks": message["thinking_blocks"],
+    }
+    replayed: Final = anthropic_messages_pt(
+        messages=[
+            {"role": "user", "content": "Capital of France?"},
+            next_turn,
+            {"role": "user", "content": "And Spain?"},
+        ],
+        model="claude-haiku-4-5",
+        llm_provider="anthropic",
+    )
+
+    assert replayed[1]["content"] == [
+        {"type": "thinking", "thinking": "Step 1. Step 2.", "signature": "sig-a"},
+        {"type": "thinking", "thinking": "Step 3.", "signature": "sig-b"},
+        {"type": "text", "text": "Paris"},
+    ]
 
 
 def test_handle_json_mode_chunk_response_format_tool():
@@ -1362,6 +1676,24 @@ def test_multiple_tools_streaming_has_index_zero():
             assert parsed.choices[0].index == 0, f"Expected index=0, got {parsed.choices[0].index}"
 
 
+def test_streamed_tool_search_tool_result_is_kept_in_tool_results():
+    search_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+        },
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+
+    parsed: Final = iterator.chunk_parser(
+        chunk={"type": "content_block_start", "index": 1, "content_block": search_result}
+    )
+
+    assert parsed.choices[0].delta.provider_specific_fields == {"tool_results": [search_result]}
+
+
 def test_streaming_chunks_have_stable_ids():
     iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=False, json_mode=False)
     first_chunk = {
@@ -1645,19 +1977,113 @@ def test_web_search_tool_result_no_extra_tool_calls():
             for tc in parsed.choices[0].delta.tool_calls:
                 tool_calls_emitted.append(tc)
 
-    # Should have exactly 2 tool calls:
-    # 1. From content_block_start (server_tool_use) with id and name
-    # 2. From content_block_delta with the actual query
-    assert len(tool_calls_emitted) == 2, f"Expected 2 tool calls, got {len(tool_calls_emitted)}"
+    assert tool_calls_emitted == []
 
-    # First tool call should have the id and name
-    assert tool_calls_emitted[0]["id"] == "srvtoolu_01ABC123"
-    assert tool_calls_emitted[0]["function"]["name"] == "web_search"
 
-    # Second tool call should have the query arguments
-    assert tool_calls_emitted[1]["function"]["arguments"] == '{"query": "test"}'
+def _server_tool_input_delta(fragment: str) -> dict[str, object]:
+    return {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": fragment}}
 
-    # The {} chunks from web_search_tool_result should NOT have been emitted as tool calls
+
+def _server_search_then_answer(*partial_json: str) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "type": "message_start",
+            "message": {"id": "msg_01", "model": "claude-opus-5-5", "usage": {"input_tokens": 9}},
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "server_tool_use", "id": "srvtoolu_01Web", "name": "web_search", "input": {}},
+        },
+        *(_server_tool_input_delta(fragment) for fragment in partial_json),
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01Web", "content": []},
+        },
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "Paris is in France."}},
+        {"type": "content_block_stop", "index": 2},
+    )
+
+
+_SERVER_SEARCH_THEN_ANSWER: Final = _server_search_then_answer('{"query": "Paris"}')
+_CLIENT_TOOL_CALL: Final[tuple[dict[str, object], ...]] = (
+    {
+        "type": "content_block_start",
+        "index": 3,
+        "content_block": {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {}},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 3,
+        "delta": {"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},
+    },
+    {"type": "content_block_stop", "index": 3},
+)
+
+
+def _message_delta(stop_reason: str) -> dict[str, object]:
+    return {"type": "message_delta", "delta": {"stop_reason": stop_reason}, "usage": {"output_tokens": 20}}
+
+
+_PARIS_SEARCH: Final = ("srvtoolu_01Web", "web_search", '{"query": "Paris"}')
+
+
+@pytest.mark.parametrize(
+    ("events", "expected_tool_calls", "expected_finish_reason", "expected_server_tool_call"),
+    [
+        pytest.param(
+            (*_SERVER_SEARCH_THEN_ANSWER, _message_delta("end_turn")), [], "stop", _PARIS_SEARCH, id="server_tool_only"
+        ),
+        pytest.param(
+            (*_SERVER_SEARCH_THEN_ANSWER, *_CLIENT_TOOL_CALL, _message_delta("tool_use")),
+            [("toolu_01Weather", "get_weather", '{"city": "Paris"}')],
+            "tool_calls",
+            _PARIS_SEARCH,
+            id="server_tool_then_client_tool",
+        ),
+        pytest.param(
+            (*_server_search_then_answer('{"que', 'ry": "Pa', 'ris"}'), _message_delta("end_turn")),
+            [],
+            "stop",
+            _PARIS_SEARCH,
+            id="server_tool_input_split_across_deltas",
+        ),
+        pytest.param(
+            (*_server_search_then_answer(), _message_delta("end_turn")),
+            [],
+            "stop",
+            ("srvtoolu_01Web", "web_search", "{}"),
+            id="server_tool_with_empty_input",
+        ),
+    ],
+)
+def test_streamed_server_tool_use_is_not_returned_as_a_client_tool_call(
+    events: tuple[dict[str, object], ...],
+    expected_tool_calls: list[tuple[str, str, str]],
+    expected_finish_reason: str,
+    expected_server_tool_call: tuple[str, str, str],
+):
+    choice: Final = _assemble_stream(events).choices[0]
+    assert isinstance(choice, Choices)
+
+    assert (choice.message.tool_calls is None) == (not expected_tool_calls)
+    assert [
+        (call.id, call.function.name, call.function.arguments)
+        for call in choice.message.tool_calls or ()
+        if isinstance(call, ChatCompletionMessageToolCall)
+    ] == expected_tool_calls
+    assert choice.finish_reason == expected_finish_reason
+    assert choice.message.content == "Paris is in France."
+    assert [
+        (call["id"], call["function"].get("name"), call["function"].get("arguments"))
+        for call in anthropic_server_tool_call_params(choice.message)
+    ] == [expected_server_tool_call]
+    web_search_results: Final = message_field(choice.message.provider_specific_fields, "web_search_results")
+    assert [message_field(result, "tool_use_id") for result in parts_of(web_search_results)] == ["srvtoolu_01Web"]
 
 
 def test_current_content_block_type_tracking():
@@ -2793,6 +3219,81 @@ def _streamed_json_mode_contents(
     return tuple(chunk.choices[0].delta.content or "" for chunk in chunks)
 
 
+def _schemaless_streamed_json_mode_contents(fragments: tuple[str, ...]) -> str:
+    iterator: Final = ModelResponseIterator(streaming_response=iter(()), sync_stream=True, json_mode=True)
+    chunks: Final = tuple(iterator.chunk_parser(event) for event in _json_tool_events(fragments))
+    assert all(chunk.choices[0].delta.tool_calls is None for chunk in chunks)
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+@pytest.mark.parametrize(
+    "fragments",
+    [
+        ('{"summary":"', "48420083852775e76508", '"}'),
+        ('{"summary":"', "1e5", '"}'),
+        ('{"outer":', '{"values": [3, 5]}', "}"),
+    ],
+)
+def test_streamed_json_mode_without_schema_preserves_argument_fragments(fragments: tuple[str, ...]) -> None:
+    assert _schemaless_streamed_json_mode_contents(fragments) == "".join(fragments)
+
+
+_DIGITS_PAST_THE_INT_LIMIT: Final = "1" * (sys.get_int_max_str_digits() + 1)
+
+
+@pytest.mark.parametrize(
+    ("fragments", "expected"),
+    [
+        (('{"values": [3, 5]}',), "[3, 5]"),
+        ((" ", '{"values": [3, 5]}', " "), " [3, 5] "),
+        (('{"count": 1e400}',), '{"count": 1e400}'),
+        (('{"values": [1e400]}',), "[1e400]"),
+        pytest.param(
+            ('{"values": [' + _DIGITS_PAST_THE_INT_LIMIT + "]}",),
+            "[" + _DIGITS_PAST_THE_INT_LIMIT + "]",
+            id="values-int-over-digit-limit",
+        ),
+        pytest.param(
+            ('{"n": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",),
+            '{"n": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="int-over-digit-limit",
+        ),
+        (('{"n": 1e5}',), '{"n": 1e5}'),
+        (('{"values": false}',), "false"),
+        (('{"values": null}',), '{"values": null}'),
+        (("[1, 2]",), "[1, 2]"),
+        (('"x"',), '"x"'),
+        (("5",), "5"),
+        pytest.param(
+            ('{"values": ' + "[" * 300 + "]" * 300 + "}",),
+            "[" * 300 + "]" * 300,
+            id="values-nested-300-levels",
+        ),
+        pytest.param(
+            ('{"values": ' + "[" * 100000 + "]" * 100000 + "}",),
+            '{"values": ' + "[" * 100000 + "]" * 100000 + "}",
+            id="nesting-over-recursion-limit",
+        ),
+    ],
+)
+def test_streamed_json_mode_without_schema_unwraps_values_only_from_a_one_piece_input(
+    fragments: tuple[str, ...], expected: str
+) -> None:
+    assert _schemaless_streamed_json_mode_contents(fragments) == expected
+
+
+def test_streamed_json_mode_without_schema_unwraps_each_json_tool_blocks_one_piece_input() -> None:
+    json_tool_block: Final = {"type": "tool_use", "id": "toolu_1", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {}}
+    events: Final = _message_events(
+        (json_tool_block, ({"type": "input_json_delta", "partial_json": '{"values": [1]}'},)),
+        ({**json_tool_block, "id": "toolu_2"}, ({"type": "input_json_delta", "partial_json": '{"values": [2]}'},)),
+    )
+    iterator: Final = ModelResponseIterator(streaming_response=iter(()), sync_stream=True, json_mode=True)
+    chunks: Final = tuple(iterator.chunk_parser(event) for event in events)
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "[1][2]"
+
+
 def test_streamed_json_mode_envelope_is_unwrapped_when_the_block_ends():
     envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_RISK_OBJECT})
     fragments = (envelope[:9], envelope[9:40], envelope[40:])
@@ -2810,15 +3311,125 @@ def test_streamed_json_mode_schema_object_streams_as_it_arrives():
     contents = _streamed_json_mode_contents(fragments)
 
     assert "".join(contents) == answer
-    assert contents[3] == answer[:12]
-    assert contents[4] == answer[12:]
-    assert contents[5] == ""
+    assert contents[3:] == (answer[:12], answer[12:-1], "", "}")
 
 
 def test_streamed_json_mode_truncated_output_is_passed_through_untouched():
     contents = _streamed_json_mode_contents(('{"na', 'me": "json_tool_call", "parameters": {"tier": 3'))
 
     assert "".join(contents) == '{"name": "json_tool_call", "parameters": {"tier": 3'
+
+
+def _block_events(
+    index: int, block: dict[str, object], deltas: tuple[dict[str, object], ...]
+) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "content_block_start", "index": index, "content_block": block},
+        *({"type": "content_block_delta", "index": index, "delta": delta} for delta in deltas),
+        {"type": "content_block_stop", "index": index},
+    )
+
+
+def _message_events(*blocks: tuple[dict[str, object], tuple[dict[str, object], ...]]) -> tuple[dict[str, object], ...]:
+    starts_and_deltas: Final = tuple(
+        chain.from_iterable(_block_events(index, block, deltas) for index, (block, deltas) in enumerate(blocks))
+    )
+    return (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        *starts_and_deltas,
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 40},
+        },
+    )
+
+
+_THINKING_BLOCK: Final = (
+    {"type": "thinking", "thinking": "", "signature": ""},
+    ({"type": "thinking_delta", "thinking": "7 * 142 = 994"}, {"type": "signature_delta", "signature": "sig"}),
+)
+_PREAMBLE_BLOCK: Final = (
+    {"type": "text", "text": ""},
+    ({"type": "text_delta", "text": "**Working it out:** "}, {"type": "text_delta", "text": "the count is **120**"}),
+)
+
+
+def _json_tool_block(answer: dict[str, object]) -> tuple[dict[str, object], tuple[dict[str, object], ...]]:
+    encoded: Final = json.dumps(answer)
+    return (
+        {"type": "tool_use", "id": "toolu_1", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {}},
+        tuple({"type": "input_json_delta", "partial_json": part} for part in (encoded[:5], encoded[5:])),
+    )
+
+
+def _parse_stream(
+    events: tuple[dict[str, object], ...], schema: dict[str, object] | None = _STREAMED_PERSON_SCHEMA
+) -> tuple[ModelResponseStream, ...]:
+    iterator: Final = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        json_mode=True,
+        response_format_schema=None if schema is None else response_format_schema(schema),
+    )
+    return tuple(iterator.chunk_parser(event) for event in events)
+
+
+def _joined_content(chunks: tuple[ModelResponseStream, ...]) -> str:
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+def test_streamed_json_mode_drops_prose_written_before_the_json_tool():
+    chunks: Final = _parse_stream(_message_events(_THINKING_BLOCK, _PREAMBLE_BLOCK, _json_tool_block(_STREAMED_PERSON)))
+
+    assert json.loads(_joined_content(chunks)) == _STREAMED_PERSON
+    assert "".join(getattr(chunk.choices[0].delta, "reasoning_content", None) or "" for chunk in chunks) == (
+        "7 * 142 = 994"
+    )
+    assert all(chunk.choices[0].delta.tool_calls is None for chunk in chunks)
+
+
+def test_streamed_json_mode_returns_prose_when_claude_skips_the_json_tool():
+    chunks: Final = _parse_stream(_message_events(_THINKING_BLOCK, _PREAMBLE_BLOCK))
+
+    assert _joined_content(chunks) == "**Working it out:** the count is **120**"
+
+
+def test_streamed_json_mode_sends_prose_ahead_of_a_caller_tool_call():
+    caller_tool: Final = (
+        {"type": "tool_use", "id": "toolu_2", "name": "get_weather", "input": {}},
+        ({"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},),
+    )
+
+    chunks: Final = _parse_stream(_message_events(_PREAMBLE_BLOCK, caller_tool))
+    tool_chunk_index: Final = next(i for i, chunk in enumerate(chunks) if chunk.choices[0].delta.tool_calls)
+
+    assert _joined_content(chunks[: tool_chunk_index + 1]) == "**Working it out:** the count is **120**"
+    assert chunks[tool_chunk_index].choices[0].delta.tool_calls[0].function.name == "get_weather"
+
+
+def test_streamed_native_output_text_is_not_held_back():
+    answer: Final = json.dumps(_STREAMED_PERSON)
+    text_block: Final = (
+        {"type": "text", "text": ""},
+        tuple({"type": "text_delta", "text": part} for part in (answer[:6], answer[6:])),
+    )
+
+    chunks: Final = _parse_stream(_message_events(text_block), schema=None)
+
+    assert tuple(chunk.choices[0].delta.content for chunk in chunks[2:4]) == (answer[:6], answer[6:])
 
 
 def test_streamed_json_mode_tool_name_envelope_is_unwrapped_when_name_is_a_schema_property():
@@ -2836,9 +3447,7 @@ def test_streamed_json_mode_name_property_answer_streams_once_its_name_value_is_
     contents = _streamed_json_mode_contents((answer[:6], answer[6:24], answer[24:]), _STREAMED_CONTACT_SCHEMA)
 
     assert "".join(contents) == answer
-    assert contents[2] == ""
-    assert contents[3] == answer[:24]
-    assert contents[4] == answer[24:]
+    assert contents[2:] == ("", answer[:24], answer[24:-1], "", "}")
 
 
 def test_streamed_json_mode_partial_name_value_waits_for_the_value_to_close():
@@ -2847,8 +3456,7 @@ def test_streamed_json_mode_partial_name_value_waits_for_the_value_to_close():
     contents = _streamed_json_mode_contents((answer[:11], answer[11:]), _STREAMED_CONTACT_SCHEMA)
 
     assert "".join(contents) == answer
-    assert contents[2] == ""
-    assert contents[3] == answer
+    assert contents[2:] == ("", answer[:-1], "", "}")
 
 
 @pytest.mark.parametrize(
@@ -2865,12 +3473,11 @@ def test_streamed_json_mode_partial_name_value_waits_for_the_value_to_close():
             id="undeclared_first_key_holding_a_number",
         ),
         pytest.param(
-            {"type": "object", "properties": {"score": {"type": "integer"}}},
-            {"note": "read-only window", "meta": {"score": 7}},
-            id="string_first_key_on_a_schema_without_required_keys",
-        ),
-        pytest.param(
-            {"type": "object", "properties": {"summary": {"type": "string"}}, "additionalProperties": {"type": "object"}},
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "additionalProperties": {"type": "object"},
+            },
             {"user_1": {"summary": "likes tea", "visits": 3}},
             id="undeclared_key_the_schema_allows",
         ),
@@ -2884,7 +3491,61 @@ def test_streamed_json_mode_answer_that_cannot_be_an_envelope_streams_as_it_arri
     contents = _streamed_json_mode_contents((encoded[:12], encoded[12:24], encoded[24:]), schema)
 
     assert "".join(contents) == encoded
-    assert contents[2:5] == (encoded[:12], encoded[12:24], encoded[24:])
+    assert contents[2:] == (encoded[:12], encoded[12:24], encoded[24:-1], "}", "")
+
+
+def test_streamed_json_mode_text_label_then_an_object_streams_once_the_object_opens():
+    encoded = json.dumps({"note": "read-only window", "meta": {"score": 7}})
+    object_opens = encoded.index('{"score"') + 1
+
+    contents = _streamed_json_mode_contents(
+        (encoded[:12], encoded[12:object_opens], encoded[object_opens:]),
+        {"type": "object", "properties": {"score": {"type": "integer"}}},
+    )
+
+    assert contents[2:] == ("", encoded[:object_opens], encoded[object_opens:-1], "}", "")
+
+
+@pytest.mark.parametrize(
+    "schema, values",
+    [
+        pytest.param(
+            {"type": "object", "additionalProperties": True}, {"alpha": 1, "beta": 2}, id="schema_without_properties"
+        ),
+        pytest.param(
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "additionalProperties": {"type": "object"},
+            },
+            {"user_1": {"summary": "likes tea"}},
+            id="undeclared_key_the_schema_allows",
+        ),
+        pytest.param(_STREAMED_RISK_SCHEMA, [3, 5, 8], id="values_holding_a_list"),
+    ],
+)
+def test_streamed_json_mode_values_wrapper_is_unwrapped_like_the_non_stream_answer(
+    schema: dict[str, object], values: object
+):
+    wrapped = {"values": values}
+    encoded = json.dumps(wrapped)
+
+    contents = _streamed_json_mode_contents((encoded[:6], encoded[6:14], encoded[14:]), schema)
+
+    assert json.loads("".join(contents)) == values
+    assert json.loads("".join(contents)) == unwrap_response_format_envelope(
+        wrapped, response_format_schema(schema), RESPONSE_FORMAT_TOOL_NAME
+    )
+
+
+def test_streamed_json_mode_declared_values_key_streams_as_it_arrives():
+    schema = {"type": "object", "properties": {"values": {"type": "array"}}, "required": ["values"]}
+    answer = json.dumps({"values": [3, 5, 8]})
+
+    contents = _streamed_json_mode_contents((answer[:6], answer[6:14], answer[14:]), schema)
+
+    assert "".join(contents) == answer
+    assert contents[3:] == (answer[:14], answer[14:-1], "", "}")
 
 
 def test_streamed_json_mode_string_label_answer_streams_once_the_next_key_is_declared():
@@ -2893,9 +3554,7 @@ def test_streamed_json_mode_string_label_answer_streams_once_the_next_key_is_dec
     contents = _streamed_json_mode_contents((answer[:12], answer[12:40], answer[40:]))
 
     assert "".join(contents) == answer
-    assert contents[2] == ""
-    assert contents[3] == answer[:40]
-    assert contents[4] == answer[40:]
+    assert contents[2:] == ("", answer[:40], answer[40:-1], "}", "")
 
 
 @pytest.mark.parametrize(
@@ -2957,6 +3616,36 @@ def test_streamed_json_mode_held_answer_without_an_envelope_keeps_the_model_text
     assert contents[:-2] == ("",) * (len(contents) - 2)
 
 
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        pytest.param(
+            '{"name":"json_tool_call","parameters":{"tier":1e400,"summary":"x"}}',
+            '{"tier": 1e400, "summary": "x"}',
+            id="number_past_a_float",
+        ),
+        pytest.param(
+            '{"name":"json_tool_call","parameters":{"tier":-' + _DIGITS_PAST_THE_INT_LIMIT + ',"summary":"x"}}',
+            '{"tier": -' + _DIGITS_PAST_THE_INT_LIMIT + ', "summary": "x"}',
+            id="negative_integer_past_the_digit_limit",
+        ),
+        pytest.param('{"values":[1e400, 2.5]}', "[1e400, 2.5]", id="values_number_past_a_float"),
+        pytest.param(
+            '{"name":"json_tool_call","parameters":{"tier":1e-400,"summary":"x"}}',
+            '{"tier": 1e-400, "summary": "x"}',
+            id="number_below_a_float",
+        ),
+        pytest.param(
+            '{"values":[1e400, 1e-400, 0.0e5]}', "[1e400, 1e-400, 0.0]", id="values_numbers_past_a_float_both_ways"
+        ),
+    ],
+)
+def test_streamed_json_mode_held_answer_keeps_out_of_range_numbers_as_the_model_wrote_them(answer: str, expected: str):
+    contents = _streamed_json_mode_contents((answer[:9], answer[9:30], answer[30:]))
+
+    assert "".join(contents) == expected
+
+
 def test_envelope_verdict_holds_a_prefix_that_stays_undecided_past_the_limit():
     schema = response_format_schema(_STREAMED_RISK_SCHEMA)
     assert schema is not None
@@ -2976,6 +3665,371 @@ def test_streamed_json_mode_answer_with_a_foreign_name_matches_the_non_streamed_
 
     assert "".join(contents) == encoded
     assert unwrap_response_format_envelope(answer, schema, RESPONSE_FORMAT_TOOL_NAME) == answer
+
+
+def test_streamed_json_mode_tool_name_envelope_around_an_input_wrapper_is_unwrapped_to_the_answer():
+    envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": {"input": _STREAMED_RISK_OBJECT}})
+
+    contents = _streamed_json_mode_contents((envelope[:9], envelope[9:40], envelope[40:]))
+
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
+
+
+def test_streamed_json_mode_unwrapped_answer_keeps_non_ascii_text():
+    answer = {"tier": 3, "summary": "Hôtel Lutetia, 東京"}
+    envelope = json.dumps({"input": answer}, ensure_ascii=False)
+
+    contents = _streamed_json_mode_contents((envelope[:9], envelope[9:30], envelope[30:]))
+
+    assert "Hôtel Lutetia, 東京" in "".join(contents)
+    assert json.loads("".join(contents)) == answer
+
+
+def test_streamed_json_mode_unwrapped_answer_with_a_lone_surrogate_stays_utf8_encodable():
+    answer = {"tier": 3, "summary": "smile \ud83d end"}
+    envelope = json.dumps({"input": answer})
+
+    contents = _streamed_json_mode_contents((envelope[:9], envelope[9:30], envelope[30:]))
+
+    assert json.loads("".join(contents).encode("utf-8")) == answer
+
+
+_CUT_STREAM_FRAGMENTS: Final = (
+    pytest.param(
+        json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_RISK_OBJECT})[:-1],
+        id="held_envelope",
+    ),
+    pytest.param(json.dumps(_STREAMED_RISK_OBJECT), id="streamed_answer"),
+)
+
+
+def _cut_stream_lines(sent: str) -> tuple[bytes, ...]:
+    events: Final = _json_tool_events((sent[:9], sent[9:30], sent[30:]))
+    return tuple(f"data: {json.dumps(event)}\n".encode() for event in events[:-2])
+
+
+def _cut_stream_iterator(sync_stream: bool, streaming_response: object) -> ModelResponseIterator:
+    return ModelResponseIterator(
+        streaming_response=streaming_response,
+        sync_stream=sync_stream,
+        json_mode=True,
+        response_format_schema=response_format_schema(_STREAMED_RISK_SCHEMA),
+    )
+
+
+@pytest.mark.parametrize("sent", _CUT_STREAM_FRAGMENTS)
+def test_streamed_json_mode_text_is_delivered_when_the_stream_ends_before_the_block_stops(sent: str):
+    iterator = _cut_stream_iterator(True, iter(_cut_stream_lines(sent)))
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in iterator) == sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sent", _CUT_STREAM_FRAGMENTS)
+async def test_async_streamed_json_mode_text_is_delivered_when_the_stream_ends_before_the_block_stops(sent: str):
+    async def lines():
+        for line in _cut_stream_lines(sent):
+            yield line
+
+    iterator = _cut_stream_iterator(False, lines())
+
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in iterator]) == sent
+
+
+def test_streamed_json_mode_complete_envelope_is_unwrapped_when_the_stream_ends_before_the_block_stops():
+    envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_RISK_OBJECT})
+
+    iterator = _cut_stream_iterator(True, iter(_cut_stream_lines(envelope)))
+
+    assert json.loads("".join(chunk.choices[0].delta.content or "" for chunk in iterator)) == _STREAMED_RISK_OBJECT
+
+
+def test_streamed_json_mode_answer_keyed_by_a_required_only_name_is_kept_whole():
+    required_only_schema = {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["payload"]}
+    encoded = json.dumps({"payload": {"id": "abc", "rows": 3}})
+
+    contents = _streamed_json_mode_contents((encoded[:12], encoded[12:24], encoded[24:]), required_only_schema)
+
+    assert "".join(contents) == encoded
+
+
+def _json_tool_block_events(index: int, encoded: str) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {
+                "type": "tool_use",
+                "id": f"toolu_{index}",
+                "name": RESPONSE_FORMAT_TOOL_NAME,
+                "input": {},
+            },
+        },
+        *(
+            {"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": part}}
+            for part in (encoded[:7], encoded[7:])
+        ),
+        {"type": "content_block_stop", "index": index},
+    )
+
+
+def _streamed_json_tool_blocks(
+    blocks: tuple[str, ...], schema: dict[str, object] = _STREAMED_RISK_SCHEMA
+) -> tuple[str, ...]:
+    message_start, *_, message_delta = _json_tool_events(())
+    events = (
+        message_start,
+        *chain.from_iterable(_json_tool_block_events(index, encoded) for index, encoded in enumerate(blocks)),
+        message_delta,
+    )
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        json_mode=True,
+        response_format_schema=response_format_schema(schema),
+    )
+    chunks = tuple(iterator.chunk_parser(event) for event in events)
+    assert all(chunk.choices[0].delta.tool_calls is None for chunk in chunks)
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    return tuple(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+_STREAMED_TIER_FIELD: Final = json.dumps(
+    {"$FUNCTION_NAME": "RiskAssessment", "$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": _STREAMED_RISK_OBJECT["tier"]}
+)
+_STREAMED_SUMMARY_FIELD: Final = json.dumps(
+    {
+        "$FUNCTION_NAME": "RiskAssessment",
+        "$PARAMETER_NAME": "summary",
+        "$PARAMETER_VALUE": _STREAMED_RISK_OBJECT["summary"],
+    }
+)
+
+
+def test_streamed_json_mode_answer_split_into_one_block_per_field_arrives_as_one_object():
+    contents = _streamed_json_tool_blocks((_STREAMED_TIER_FIELD, _STREAMED_SUMMARY_FIELD))
+
+    assert json.loads(contents[-1]) == _STREAMED_RISK_OBJECT
+    assert contents[:-1] == ("",) * (len(contents) - 1)
+
+
+def test_streamed_json_mode_field_block_alone_keeps_the_model_text():
+    contents = _streamed_json_tool_blocks((_STREAMED_TIER_FIELD,))
+
+    assert "".join(contents) == _STREAMED_TIER_FIELD
+
+
+def test_streamed_json_mode_whole_answer_after_a_field_block_keeps_the_order_the_model_sent():
+    whole_answer = json.dumps(_STREAMED_RISK_OBJECT)
+
+    contents = _streamed_json_tool_blocks((_STREAMED_TIER_FIELD, whole_answer))
+
+    assert "".join(contents) == _STREAMED_TIER_FIELD + whole_answer
+
+
+@pytest.mark.parametrize(
+    "schema, answer",
+    [
+        pytest.param(_STREAMED_RISK_SCHEMA, _STREAMED_RISK_OBJECT, id="schema_with_a_required_list"),
+        pytest.param(
+            _STREAMED_CONTACT_SCHEMA, {"name": "unknown", "email": "unknown"}, id="every_field_holds_the_same_string"
+        ),
+    ],
+)
+def test_streamed_json_mode_answer_split_into_one_partial_object_per_field_arrives_as_one_object(
+    schema: dict[str, object], answer: dict[str, object]
+):
+    blocks = tuple(json.dumps({name: value}) for name, value in answer.items())
+
+    contents = _streamed_json_tool_blocks(blocks, schema)
+
+    assert json.loads("".join(contents)) == answer
+    assert contents[3] == blocks[0][:-1]
+
+
+@pytest.mark.parametrize(
+    ("blocks", "expected"),
+    [
+        pytest.param(
+            ('{"tier": 1e400}', '{"summary": "x"}'), '{"tier": 1e400, "summary": "x"}', id="number_past_a_float_first"
+        ),
+        pytest.param(
+            ('{"summary": "x"}', '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}"),
+            '{"summary": "x", "tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="integer_past_the_digit_limit_last",
+        ),
+        pytest.param(
+            (
+                '{"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 1e400}',
+                '{"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": "x"}',
+            ),
+            '{"tier": 1e400, "summary": "x"}',
+            id="named_field_number_past_a_float_first",
+        ),
+        pytest.param(
+            (
+                ' {"$PARAMETER_NAME":"summary","$PARAMETER_VALUE":"Jos\u00e9"} ',
+                '{"$PARAMETER_NAME":"tier","$PARAMETER_VALUE":' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            ),
+            '{"summary": "Jos\u00e9", "tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="compact_named_field_integer_past_the_digit_limit_last",
+        ),
+    ],
+)
+def test_streamed_json_mode_split_fields_keep_out_of_range_numbers_as_the_model_wrote_them(
+    blocks: tuple[str, ...], expected: str
+):
+    assert "".join(_streamed_json_tool_blocks(blocks)) == expected
+
+
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        pytest.param((_STREAMED_TIER_FIELD, _STREAMED_SUMMARY_FIELD), id="one_block_per_field"),
+        pytest.param(
+            tuple(json.dumps({name: value}) for name, value in _STREAMED_RISK_OBJECT.items()),
+            id="one_partial_object_per_field",
+        ),
+    ],
+)
+def test_streamed_json_mode_split_answer_arrives_as_one_object_when_the_stream_ends_in_its_last_block(
+    blocks: tuple[str, ...],
+):
+    message_start, *_ = _json_tool_events(())
+    events = (
+        message_start,
+        *chain.from_iterable(_json_tool_block_events(index, encoded) for index, encoded in enumerate(blocks)),
+    )[:-1]
+
+    iterator = _cut_stream_iterator(True, iter(tuple(f"data: {json.dumps(event)}\n".encode() for event in events)))
+
+    assert json.loads("".join(chunk.choices[0].delta.content or "" for chunk in iterator)) == _STREAMED_RISK_OBJECT
+
+
+def test_streamed_json_mode_empty_object_then_field_blocks_arrives_as_one_object():
+    blocks = ("{}", *(json.dumps({name: value}) for name, value in _STREAMED_RISK_OBJECT.items()))
+
+    contents = _streamed_json_tool_blocks(blocks)
+
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
+
+
+def test_streamed_json_mode_partial_objects_that_repeat_a_field_keep_the_order_the_model_sent():
+    blocks = (json.dumps({"tier": 3}), json.dumps({"tier": 4}))
+
+    contents = _streamed_json_tool_blocks(blocks)
+
+    assert "".join(contents) == "".join(blocks)
+
+
+def test_streamed_json_mode_text_after_the_answer_is_dropped_like_the_non_streamed_reply():
+    answer = json.dumps(_STREAMED_RISK_OBJECT)
+    message_start, *_, message_delta = _json_tool_events(())
+    text_block = (
+        {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": " Done."}},
+        {"type": "content_block_stop", "index": 1},
+    )
+
+    chunks = _json_mode_stream_chunks((message_start, *_json_tool_block_events(0, answer), *text_block, message_delta))
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == answer
+
+
+def test_streamed_json_mode_envelope_whose_label_is_a_property_name_is_still_unwrapped():
+    envelope = json.dumps({"$FUNCTION_NAME": "summary", "PARAMETER_VALUE": _STREAMED_RISK_OBJECT})
+
+    contents = _streamed_json_tool_blocks((envelope,))
+
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
+
+
+_STREAMED_OPTIONAL_RISK_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"tier": {"type": "integer"}, "summary": {"type": "string"}},
+}
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        pytest.param(_STREAMED_OPTIONAL_RISK_SCHEMA, id="no_required_keys"),
+        pytest.param(
+            {**_STREAMED_OPTIONAL_RISK_SCHEMA, "additionalProperties": True}, id="no_required_keys_and_open_to_others"
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "leading_label",
+    [
+        pytest.param({}, id="field_name_label_first"),
+        pytest.param({"$FUNCTION_NAME": RESPONSE_FORMAT_TOOL_NAME}, id="tool_name_label_first"),
+        pytest.param({"$FUNCTION_NAME": "RiskAssessment"}, id="schema_name_label_first"),
+        pytest.param({"$FUNCTION_NAME": "RiskAssessment", "$CALL": "first"}, id="two_text_labels_first"),
+    ],
+)
+def test_streamed_json_mode_split_answer_arrives_as_one_object_when_the_schema_requires_no_key(
+    schema: dict[str, object], leading_label: dict[str, str]
+):
+    blocks = tuple(
+        json.dumps({**leading_label, "$PARAMETER_NAME": name, "$PARAMETER_VALUE": value})
+        for name, value in _STREAMED_RISK_OBJECT.items()
+    )
+
+    contents = _streamed_json_tool_blocks(blocks, schema)
+
+    assert json.loads(contents[-1]) == _STREAMED_RISK_OBJECT
+    assert contents[:-1] == ("",) * (len(contents) - 1)
+
+
+def _json_mode_stream_chunks(events: tuple[dict[str, object], ...]) -> tuple[ModelResponseStream, ...]:
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        json_mode=True,
+        response_format_schema=response_format_schema(_STREAMED_RISK_SCHEMA),
+    )
+    return tuple(iterator.chunk_parser(event) for event in events)
+
+
+def test_streamed_json_mode_answer_beside_a_client_tool_call_keeps_that_call_usable():
+    answer = json.dumps(_STREAMED_RISK_OBJECT)
+    message_start, *_, message_delta = _json_tool_events(())
+    weather_call = (
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "tool_use", "id": "toolu_weather", "name": "get_weather", "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},
+        },
+        {"type": "content_block_stop", "index": 1},
+    )
+
+    chunks = _json_mode_stream_chunks(
+        (message_start, *_json_tool_block_events(0, answer), *weather_call, message_delta)
+    )
+
+    tool_calls = tuple(chain.from_iterable(chunk.choices[0].delta.tool_calls or () for chunk in chunks))
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == answer
+    assert {call.index for call in tool_calls} == {0}
+    assert tool_calls[0].function.name == "get_weather"
+    assert "".join(call.function.arguments or "" for call in tool_calls) == '{"city": "Paris"}'
+    assert chunks[-1].choices[0].finish_reason == "tool_calls"
+
+
+def test_streamed_json_mode_answer_cut_at_max_tokens_ends_with_length():
+    cut_answer = '{"tier": 3, "summ'
+    *events, message_delta = _json_tool_events((cut_answer,))
+    cut_message_delta = {**message_delta, "delta": {"stop_reason": "max_tokens", "stop_sequence": None}}
+
+    chunks = _json_mode_stream_chunks((*events, cut_message_delta))
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == cut_answer
+    assert chunks[-1].choices[0].finish_reason == "length"
 
 
 @respx.mock
@@ -3100,3 +4154,278 @@ def test_anthropic_streaming_invalid_key_maps_to_authentication_error() -> None:
     assert exc_info.value.status_code == 401
     assert exc_info.value.llm_provider == "anthropic"
     assert route.calls.last.request.headers["x-api-key"] == "bad-anthropic-key"
+
+
+def _message_stream_events(stop_reason: str, stop_details: dict | None) -> tuple[dict, ...]:
+    return (
+        {
+            "type": "message_start",
+            "message": {
+                "id": ANTHROPIC_DOCS_REFUSAL_MESSAGE["id"],
+                "type": "message",
+                "role": "assistant",
+                "model": ANTHROPIC_DOCS_REFUSAL_MESSAGE["model"],
+                "content": [],
+                "usage": {"input_tokens": 412, "output_tokens": 0},
+            },
+        },
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason, "stop_sequence": None, "stop_details": stop_details},
+            "usage": {"output_tokens": 0},
+        },
+        {"type": "message_stop"},
+    )
+
+
+def _assemble_stream(events: tuple[dict, ...]) -> litellm.ModelResponse:
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+    chunks: Final = [iterator.chunk_parser(event) for event in events]
+    return litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+
+def test_streamed_refusal_stop_details_reach_the_assembled_message():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    assembled: Final = _assemble_stream(_message_stream_events("refusal", stop_details))
+
+    assert assembled.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = assembled.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"] == stop_details
+
+
+def test_streamed_refusal_explanation_reaches_the_client_as_the_message_refusal():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    assembled: Final = _assemble_stream(_message_stream_events("refusal", stop_details))
+
+    assert assembled.choices[0].message.refusal == stop_details["explanation"]
+
+
+def test_streamed_refusal_without_an_explanation_sets_no_message_refusal():
+    assembled: Final = _assemble_stream(
+        _message_stream_events("refusal", {"type": "refusal", "category": "cyber", "explanation": None})
+    )
+
+    assert assembled.choices[0].message.get("refusal") is None
+
+
+def _paused_search_stream_events() -> tuple[dict, ...]:
+    message_start, message_delta, message_stop = _message_stream_events("pause_turn", None)
+    return (
+        message_start,
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "server_tool_use", "id": "srvtoolu_pending", "name": "web_search", "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"query": "next city"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {**message_delta, "delta": {"stop_reason": "pause_turn", "stop_sequence": None}},
+        message_stop,
+    )
+
+
+def test_streamed_pause_turn_is_an_unfinished_turn_listing_the_query_it_will_run():
+    assembled: Final = _assemble_stream(_paused_search_stream_events())
+
+    assert assembled.choices[0].finish_reason == "length"
+    provider_fields: Final = assembled.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "pause_turn"
+    pending: Final = provider_fields["web_search_calls"]["srvtoolu_pending"]
+    assert (pending.status, pending.action.query) == ("in_progress", "next city")
+
+
+def test_streamed_end_turn_carries_no_stop_details():
+    assembled: Final = _assemble_stream(_message_stream_events("end_turn", None))
+
+    assert assembled.choices[0].finish_reason == "stop"
+    provider_fields: Final = assembled.choices[0].message.provider_specific_fields or {}
+    assert "stop_details" not in provider_fields
+    assert "stop_reason" not in provider_fields
+
+
+def test_message_start_surfaces_input_transformations_on_the_first_chunk() -> None:
+    input_transformations: Final = [{"type": "thinking_block_binding", "count": 2}]
+    chunk: Final = {
+        "type": "message_start",
+        "message": {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-6",
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+            "input_transformations": input_transformations,
+        },
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+
+    first_chunk: Final = iterator.chunk_parser(chunk=chunk)
+
+    assert first_chunk.choices[0].delta.provider_specific_fields == {"input_transformations": input_transformations}
+    assert first_chunk.model == "claude-sonnet-4-6"
+
+
+def test_message_start_without_input_transformations_has_no_provider_specific_fields() -> None:
+    chunk: Final = {
+        "type": "message_start",
+        "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-6", "content": []},
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+
+    assert iterator.chunk_parser(chunk=chunk).choices[0].delta.provider_specific_fields is None
+
+
+def _anthropic_chat_request_for_bound_thinking(
+    extra_headers: dict[str, str] | None, drop_params: bool | None = None
+) -> httpx.Request:
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_bound",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4-8",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    thinking: Final = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            thinking=thinking,
+            extra_headers=extra_headers,
+            drop_params=drop_params,
+        )
+    finally:
+        client.close()
+    assert thinking == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+    return captured_requests[0]
+
+
+def _anthropic_chat_body_for_bound_thinking(
+    extra_headers: dict[str, str] | None, drop_params: bool | None = None
+) -> dict[str, object]:
+    return json.loads(_anthropic_chat_request_for_bound_thinking(extra_headers, drop_params).content)
+
+
+def test_anthropic_chat_keeps_block_binding_when_the_final_header_carries_the_binding_beta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    body: Final = _anthropic_chat_body_for_bound_thinking(
+        {"anthropic-beta": "thinking-binding-controls-2026-08-01"}, drop_params=True
+    )
+    assert body["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+
+
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_anthropic_chat_adds_the_binding_beta_so_block_binding_is_kept(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _anthropic_chat_request_for_bound_thinking(None, drop_params=drop_params)
+    assert json.loads(request.content)["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+    }
+    assert "thinking-binding-controls-2026-08-01" in request.headers["anthropic-beta"].split(",")
+
+
+def test_anthropic_chat_sends_block_binding_as_is_without_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    body: Final = _anthropic_chat_body_for_bound_thinking(None)
+    assert body["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+
+
+class _AnthropicChatUpstream:
+    def __init__(self) -> None:
+        self.anthropic_beta: tuple[str, ...] = ()
+
+    def respond(self, request: httpx.Request) -> httpx.Response:
+        self.anthropic_beta = tuple(request.headers.get_list("anthropic-beta"))
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_beta_row",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+
+_BETAS_FOUNDRY_REJECTS_AND_ACCEPTS: Final = "advisor-tool-2026-03-01,thinking-binding-controls-2026-08-01"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "forwarded_betas"),
+    [
+        pytest.param(
+            "https://res.services.ai.azure.com/anthropic",
+            frozenset({"thinking-binding-controls-2026-08-01"}),
+            id="foundry",
+        ),
+        pytest.param(
+            "https://res.cognitiveservices.azure.com/anthropic",
+            frozenset({"thinking-binding-controls-2026-08-01"}),
+            id="foundry-cognitiveservices",
+        ),
+        pytest.param(
+            "https://res.openai.azure.com/anthropic",
+            frozenset({"thinking-binding-controls-2026-08-01"}),
+            id="foundry-openai",
+        ),
+        pytest.param(
+            "https://api.anthropic.com",
+            frozenset(_BETAS_FOUNDRY_REJECTS_AND_ACCEPTS.split(",")),
+            id="anthropic",
+        ),
+    ],
+)
+def test_anthropic_chat_completion_picks_the_beta_row_by_api_base(
+    monkeypatch: pytest.MonkeyPatch, api_base: str, forwarded_betas: frozenset[str]
+) -> None:
+    from litellm import anthropic_beta_headers_manager
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    upstream: Final = _AnthropicChatUpstream()
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream.respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Say ok"}],
+            api_base=api_base,
+            api_key="test-key",
+            extra_headers={"anthropic-beta": _BETAS_FOUNDRY_REJECTS_AND_ACCEPTS},
+            client=client,
+        )
+    finally:
+        client.close()
+
+    assert frozenset(",".join(upstream.anthropic_beta).split(",")) == forwarded_betas

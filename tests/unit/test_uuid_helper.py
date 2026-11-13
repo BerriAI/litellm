@@ -1,14 +1,20 @@
-import importlib
+from typing import Final
+from uuid import NAMESPACE_DNS, UUID, uuid5 as stdlib_uuid5
+
+from litellm._uuid import uuid, uuid4
 
 
-def test_uses_fastuuid_and_uuid4_works():
-    mod = importlib.import_module("litellm._uuid")
-    fastuuid_mod = importlib.import_module("fastuuid")
-    assert hasattr(mod, "uuid4")
-    assert hasattr(mod, "uuid")
-    assert mod.uuid is fastuuid_mod
+def test_uuid4_returns_canonical_random_uuid() -> None:
+    for value in (uuid4(), uuid.uuid4()):
+        encoded: Final = str(value)
+        parsed: Final = UUID(encoded)
+        assert parsed.version == 4
+        assert encoded == str(parsed)
+        assert value.bytes == parsed.bytes
 
-    # Ensure uuid4 returns something that looks like a UUID string
-    val = str(mod.uuid4())
-    assert isinstance(val, str)
-    assert len(val) >= 8
+
+def test_uuid5_accepts_byte_names_for_stable_ids() -> None:
+    namespace: Final = uuid.UUID(str(NAMESPACE_DNS))
+    name: Final = "guardrail-\u00e9"
+    generated: Final = uuid.uuid5(namespace, name.encode("utf-8"))
+    assert str(generated) == str(stdlib_uuid5(NAMESPACE_DNS, name))
