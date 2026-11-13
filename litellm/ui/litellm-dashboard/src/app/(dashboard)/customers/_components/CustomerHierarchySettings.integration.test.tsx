@@ -35,7 +35,7 @@ const member: Member = {
   customer_member_id: "member-1",
   parent_team_id: "team-1",
   alias: "Member One",
-  budget_template_id: "template-1",
+  budget_id: "template-1",
   budget_override: { max_budget: 20 },
   effective_budget: { max_budget: 20 },
   budget_override_expires_at: "2026-12-01T12:00:00Z",
@@ -116,13 +116,31 @@ describe("CustomerHierarchySettings", () => {
     expect(template).toHaveTextContent("Pro");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
-    expect(await lastRequest().clone().json()).toEqual({ budget_template_id: "template-2" });
+    expect(new URL(lastRequest().url).pathname).toBe("/management/v1/customer_members/member-1");
+    expect(await lastRequest().clone().json()).toEqual({ budget_id: "template-2" });
+  });
+
+  it("should clear the template without changing the existing override", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue(json({ ...member, budget_id: null }));
+    render(
+      <CustomerHierarchySettings
+        entity={{ kind: "member", record: member }}
+        organization={organization}
+        onSaved={onSaved}
+        onDeleted={onDeleted}
+      />,
+    );
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Budget template" }), "No template");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    expect(await lastRequest().clone().json()).toEqual({ budget_id: null });
   });
 
   it("should identify an unavailable stored template instead of displaying No template", () => {
     render(
       <CustomerHierarchySettings
-        entity={{ kind: "member", record: { ...member, budget_template_id: "retired-template" } }}
+        entity={{ kind: "member", record: { ...member, budget_id: "retired-template" } }}
         organization={organization}
         onSaved={onSaved}
         onDeleted={onDeleted}
