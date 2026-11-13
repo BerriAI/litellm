@@ -1,6 +1,6 @@
 from asyncio import Future
 from collections.abc import Callable, Mapping, Sequence
-from typing import Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
+from typing import Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final, overload
 
 import httpx
 from pydantic import JsonValue
@@ -29,9 +29,17 @@ class NativeCostMapSource:
     def fetch(
         self, policy: NativeFetchPolicy, if_none_match: str | None = None
     ) -> Future[NativeFetched | NativeNotModified | NativeFetchFailed]: ...
+    @overload
     def fetch_blocking(
         self, policy: NativeFetchPolicy, resume_from: NativeFetchFailed | None = None
     ) -> NativeFetched | NativeFetchFailed: ...
+    @overload
+    def fetch_blocking(
+        self, policy: NativeFetchPolicy, resume_from: NativeFetchFailed | None = None, *, if_none_match: str | None
+    ) -> NativeFetched | NativeNotModified | NativeFetchFailed: ...
+    def cached(self) -> NativeFetched | None: ...
+    def store(self, body: bytes, etag: str | None = None) -> None: ...
+    def revalidated(self) -> None: ...
 
 @final
 class NativeFetchPolicy:
