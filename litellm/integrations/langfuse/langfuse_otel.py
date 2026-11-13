@@ -2,11 +2,14 @@ import base64
 import json
 import os
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checkable
 
 from opentelemetry import trace
+from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from pydantic import TypeAdapter
 
 import litellm
@@ -65,6 +68,11 @@ _ERROR_ATTRIBUTES: Final = frozenset(
 @runtime_checkable
 class _Gettable(Protocol):
     def get(self, key: str, default: object = None) -> object: ...
+
+
+class _DiscardingSpanExporter(SpanExporter):
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        return SpanExportResult.SUCCESS
 
 
 def _as_gettable(value: object) -> _Gettable | None:
@@ -408,8 +416,20 @@ class LangfuseOtelLogger(OpenTelemetry):
         secret_key: Final = os.environ.get("LANGFUSE_SECRET_KEY", None)
 
         if not public_key or not secret_key:
-            # If no keys, return default from env (likely logging to console or something else)
-            return OpenTelemetryConfig.from_env()
+            config: Final = OpenTelemetryConfig.from_env()
+            if any(
+                name in os.environ
+                for name in (
+                    "OTEL_EXPORTER",
+                    "OTEL_EXPORTER_OTLP_PROTOCOL",
+                    "OTEL_EXPORTER_OTLP_ENDPOINT",
+                    "OTEL_ENDPOINT",
+                    "OTEL_EXPORTER_OTLP_HEADERS",
+                    "OTEL_HEADERS",
+                )
+            ):
+                return config
+            return replace(config, exporter=_DiscardingSpanExporter())
 
         return LangfuseOtelLogger._build_langfuse_otel_config(
             public_key=public_key,
