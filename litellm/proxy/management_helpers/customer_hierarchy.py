@@ -16,6 +16,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_time,
 )
 from litellm.proxy.db.db_span import db_span
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.list_api.common import escape_like
 from litellm.proxy.management_helpers.customer_budget_usage import customer_budget_usage
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
@@ -1128,7 +1129,7 @@ class CustomerHierarchy:
         *,
         operation_type: TransactionOperation = TransactionOperation.READ_WRITE,
     ) -> T | Failure:
-        from prisma.errors import ForeignKeyViolationError, RawQueryError, RecordNotFoundError, UniqueViolationError
+        from prisma.errors import DataError, ForeignKeyViolationError, RecordNotFoundError, UniqueViolationError
 
         try:
             async with self.db.tx() as tx:
@@ -1137,15 +1138,14 @@ class CustomerHierarchy:
             return Failure(ErrorCode.ALREADY_EXISTS)
         except RecordNotFoundError:
             return Failure(ErrorCode.NOT_FOUND)
-        except RawQueryError as error:
-            metadata: Final = TypeAdapter(Mapping[str, object]).validate_python(error.meta or {})
-            if metadata.get("code") == "55P03":
-                return Failure(ErrorCode.CAPACITY_BUSY)
-            raise
         except ForeignKeyViolationError:
             return Failure(
                 ErrorCode.HAS_CHILDREN if operation_type is TransactionOperation.DELETE else ErrorCode.PARENT_NOT_FOUND
             )
+        except DataError as error:
+            if PrismaDBExceptionHandler.is_lock_timeout_error(error):
+                return Failure(ErrorCode.CAPACITY_BUSY)
+            raise
 
     async def create_organization(self, payload: OrganizationCreate, actor: str) -> Organization | Failure:
         return await self.transaction(lambda store: store.create_organization(payload, actor))

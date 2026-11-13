@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Final, cast
 
 import pytest
 from prisma import Json
-from prisma.errors import RawQueryError
+from prisma.errors import DataError, RawQueryError
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.models.budget import BudgetLimit, LiteLLM_BudgetTable
@@ -89,9 +89,10 @@ def matches_where(row: Mapping[str, object], where: Mapping[str, object]) -> boo
 
 
 class Table:
-    def __init__(self, id_field: str, database: "Database") -> None:
+    def __init__(self, id_field: str, database: "Database", *, create_error: DataError | None = None) -> None:
         self.id_field = id_field
         self.database = database
+        self.create_error = create_error
         self.rows: Mapping[str, Record] = {}
 
     async def include(self, row: Record, include: Mapping[str, object] | None) -> Record:
@@ -114,6 +115,8 @@ class Table:
     async def create(self, data: Mapping[str, object], include: Mapping[str, object] | None = None) -> Record:
         from prisma.errors import UniqueViolationError
 
+        if self.create_error is not None:
+            raise self.create_error
         if str(data[self.id_field]) in self.rows:
             raise UniqueViolationError({})
         row: Final = Record.model_validate(
@@ -270,12 +273,20 @@ class PausedCreateTable(Table):
 
 
 class Database:
-    def __init__(self, advisory_locks: AdvisoryLocks | None = None, source: "Database | None" = None) -> None:
+    def __init__(
+        self,
+        advisory_locks: AdvisoryLocks | None = None,
+        source: "Database | None" = None,
+        *,
+        team_create_error: DataError | None = None,
+    ) -> None:
         self.litellm_customerorganizationtable = (
             Table("customer_org_id", self) if source is None else source.litellm_customerorganizationtable
         )
         self.litellm_customerteamtable = (
-            Table("customer_team_id", self) if source is None else source.litellm_customerteamtable
+            Table("customer_team_id", self, create_error=team_create_error)
+            if source is None
+            else source.litellm_customerteamtable
         )
         self.litellm_customermembertable = (
             Table("customer_member_id", self) if source is None else source.litellm_customermembertable
