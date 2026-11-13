@@ -19,6 +19,9 @@ RENAMED_UNRELEASED_FIELDS: Final = frozenset(
         ("LiteLLM_CustomerMemberTable", "budget_template_id"),
         ("LiteLLM_CustomerMemberTable", "budget_template"),
         ("LiteLLM_BudgetTable", "customer_member_templates"),
+        ("LiteLLM_CustomerOrganizationTable", "budget_reset_at"),
+        ("LiteLLM_CustomerTeamTable", "budget_reset_at"),
+        ("LiteLLM_CustomerMemberTable", "budget_reset_at"),
     }
 )
 
