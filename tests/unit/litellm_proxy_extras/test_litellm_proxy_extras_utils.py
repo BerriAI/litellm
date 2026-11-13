@@ -818,6 +818,34 @@ class TestLensRenamePendingCheck:
         assert executed[0][1] == ("public",)
 
 
+class TestCustomerMemberBudgetRenamePendingCheck:
+    _DATABASE_URL: Final = "postgresql://litellm:hunter2@localhost:5432/litellm?schema=tenant_a"
+
+    def test_a_leftover_budget_template_id_column_refuses_the_push(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
+        executed: Final[list[tuple[str, tuple[str]]]] = []
+
+        def legacy_column_present(conninfo: str, *, connect_timeout: int, autocommit: bool) -> _FakePsycopgConn:
+            return _FakePsycopgConn(executed)
+
+        with pytest.raises(RuntimeError) as err:
+            ProxyExtrasDBManager.raise_if_customer_member_budget_rename_pending(connect=legacy_column_present)
+        assert "20261112120000_rename_customer_member_budget_columns" in str(err.value)
+        assert executed[0][1] == ("tenant_a",)
+
+    def test_an_unreachable_database_refuses_the_push(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import psycopg
+
+        monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
+
+        def refuse(conninfo: str, *, connect_timeout: int, autocommit: bool) -> NoReturn:
+            raise psycopg.OperationalError("FATAL:  sorry, too many clients already")
+
+        with pytest.raises(RuntimeError) as err:
+            ProxyExtrasDBManager.raise_if_customer_member_budget_rename_pending(connect=refuse)
+        assert "FATAL:  sorry, too many clients already" in str(err.value)
+
+
 class TestSpendLogsPartitionDetectionSchemaScope:
     """A same-named LiteLLM_SpendLogs in another schema must not trip the
     detector: the catalog lookup has to be scoped to Prisma's target schema."""
@@ -1886,9 +1914,26 @@ class TestV1MigrationFailuresLogAtError:
         deploy_timeout: bool = False,
         diff_stderr: Optional[str] = None,
         database_url: Optional[str] = None,
+        member_budget_rename_pending: bool = False,
     ) -> tuple[bool, list[list[str]], list[int]]:
         import litellm_proxy_extras.utils as utils_module
 
+        class _MemberColumnCheck:
+            def __enter__(self) -> "_MemberColumnCheck":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def execute(self, query: str, params: tuple[str]) -> "_MemberColumnCheck":
+                return self
+
+            def fetchone(self) -> tuple[int] | None:
+                return (1,) if member_budget_rename_pending else None
+
+        monkeypatch.setattr(
+            "psycopg.connect", lambda conninfo, *, connect_timeout, autocommit: _MemberColumnCheck()
+        )
         calls: Final[list[list[str]]] = []
         killed_pids: Final[list[int]] = []
 
@@ -2095,6 +2140,19 @@ class TestV1MigrationFailuresLogAtError:
         assert succeeded is True
         assert tuple(calls[0][-2:]) == ("migrate", "deploy")
         assert self._error_messages(caplog) == []
+
+    def test_a_baseline_refuses_while_the_member_budget_rename_is_pending(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        with pytest.raises(RuntimeError) as err:
+            self._run_v1_migrations(
+                monkeypatch,
+                tmp_path,
+                deploy_stderr=_P3005_STDERR,
+                database_url="postgresql://user:pass@db:5432/litellm",
+                member_budget_rename_pending=True,
+            )
+        assert "20261112120000_rename_customer_member_budget_columns" in str(err.value)
 
     def test_a_failed_baseline_recovery_logs_its_stderr_at_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
