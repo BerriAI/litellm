@@ -4,7 +4,7 @@ use litellm_auth_azure::{
     AzureAuthInputs, AzureTokenRetry, ConfigValue, DEFAULT_AZURE_SCOPE, TokenTransport,
 };
 use litellm_host::interceptors::RetriedRequest;
-use litellm_http::request::has_header;
+use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
@@ -145,7 +145,8 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     /// `api-key` stops it, otherwise the Azure key is added as `api-key` or, without one, an
     /// Entra ID token as `Authorization`, beside or over the caller's headers as that dict would
     /// hold them. `api-key` is then renamed to `x-api-key` unless `x-api-key` is already there, and
-    /// the client joins names that differ only in case.
+    /// the client joins names that differ only in case. Without a key or a Python host, main's
+    /// key-only check stands: a caller `x-api-key` or bearer is forwarded, else the key is missing.
     fn validate_environment(
         &self,
         headers: Headers,
@@ -184,9 +185,14 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
                 entra: Box::new(entra_id_auth(litellm_params, env_lookup, &|name| {
                     std::env::var(name).ok()
                 })),
-                missing: litellm_auth::Error::MissingApiKey {
-                    provider: "Azure",
-                    environment_variable: AZURE_API_KEY_ENV,
+                unhosted: match has_header(&headers, API_KEY_PLACEMENT.header_name())
+                    || has_bearer_auth(&headers)
+                {
+                    true => Ok(()),
+                    false => Err(litellm_auth::Error::MissingApiKey {
+                        provider: "Azure",
+                        environment_variable: AZURE_API_KEY_ENV,
+                    }),
                 },
             },
         };

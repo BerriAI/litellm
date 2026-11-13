@@ -38,6 +38,13 @@ use super::*;
     ("authorization", "Bearer entra-token"),
     &["x-api-key"]
 )]
+#[case::caller_x_api_key_without_key(
+    "azure_ai",
+    None,
+    &[("X-Api-Key", "caller")],
+    ("x-api-key", "caller"),
+    &["authorization"]
+)]
 #[case::empty_bearer_falls_back_to_key(
     "azure_ai",
     Some("sk-azure"),

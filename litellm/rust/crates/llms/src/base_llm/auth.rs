@@ -42,11 +42,11 @@ pub enum AuthScheme {
     /// answer without a token leaves the call unauthenticated.
     HostAzureAdToken,
     /// Entra ID auth for a call without a key, which only a call with a Python host runs
-    /// ([`AzureAdTokenHosts::host`]). Without one the call fails with `missing`, as it does when
-    /// the config takes only a key.
+    /// ([`AzureAdTokenHosts::host`]). Without one the call is what it was when the config took
+    /// only a key: `Ok` forwards the caller's own credential, `Err` is the missing key.
     PythonHostedAzureAdToken {
         entra: Box<AuthScheme>,
-        missing: litellm_auth::Error,
+        unhosted: Result<(), litellm_auth::Error>,
     },
     /// A Google access token for the Vertex AI project the config names, acquired when the
     /// request is sent through the shared GCP token cache.
@@ -80,8 +80,8 @@ impl ValidatedEnvironment {
     /// Hands an Entra ID scheme the token source it names. Other schemes never read them.
     pub fn with_azure_ad_token_hosts(self, hosts: AzureAdTokenHosts) -> Result<Self, crate::Error> {
         let auth = match (self.auth, &hosts.host) {
-            (AuthScheme::PythonHostedAzureAdToken { missing, .. }, None) => {
-                return Err(missing.into());
+            (AuthScheme::PythonHostedAzureAdToken { unhosted, .. }, None) => {
+                unhosted.map(|()| AuthScheme::Forwarded)?
             }
             (AuthScheme::PythonHostedAzureAdToken { entra, .. }, Some(_)) => *entra,
             (auth, _) => auth,
@@ -171,7 +171,10 @@ pub async fn resolve_auth(
             headers: with_entra_bearer(headers, secret.expose()),
             signer: None,
         }),
-        AuthScheme::PythonHostedAzureAdToken { missing, .. } => Err(missing),
+        AuthScheme::PythonHostedAzureAdToken { unhosted, .. } => unhosted.map(|()| Authenticated {
+            headers,
+            signer: None,
+        }),
         AuthScheme::HostAzureAdToken => Err(litellm_auth::Error::CredentialAcquisition(
             litellm_auth::ErrorDetail::Unresolved {
                 subject: "Azure AD token without a Python host",
