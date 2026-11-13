@@ -86164,6 +86164,336 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "keln/deepseek-ai/deepseek-v4-pro-0813": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1.32e-06,
+        "litellm_provider": "keln",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3.96e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://api.keln.ai/v1/models",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": false
+    },
+    "keln/deepseek-ai/deepseek-v4.1-flash": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "keln",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://api.keln.ai/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "keln/deepseek-ai/deepseek-v4.1-flash-1017": {
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "keln",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://api.keln.ai/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "keln/google/gemma-4-31b-it": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "keln",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4.6e-07,
+        "source": "https://api.keln.ai/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": false,
+        "supports_vision": true
+    },
+    "keln/minimaxai/minimax-m3.1-flash": {
+        "cache_read_input_token_cost": 1.8e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "keln",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high",
+            "max"
+        ],
+        "source": "https://api.keln.ai/v1/models",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": false
+    },
+    "keln/moonshotai/kimi-k3": {
+        "cache_read_input_token_cost": 3.8e-07,
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "keln",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "reasoning_effort_levels": [
+            "none",
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://api.keln.ai/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "keln/moonshotai/kimi-k3.1-pro": {
+        "cache_read_input_token_cost": 2.4e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "keln",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://api.keln.ai/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "keln/nvidia/nemotron-3-ultra-550b-a55b": {
+        "cache_read_input_token_cost": 1.4e-07,
+        "input_cost_per_token": 8e-07,
+        "litellm_provider": "keln",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "medium",
+            "high"
+        ],
+        "source": "https://api.keln.ai/v1/models",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": false
+    },
+    "keln/openai/gpt-oss-120b": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "keln",
+        "max_input_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high"
+        ],
+        "source": "https://api.keln.ai/v1/models",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": false
+    },
+    "keln/qwen/qwen3.8-2.4t-a95b": {
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "keln",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 6.25e-06,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "xhigh"
+        ],
+        "source": "https://api.keln.ai/v1/models",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": false
+    },
+    "keln/qwen/qwen3.8-27b": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "keln",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 3.2e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "low",
+            "medium",
+            "xhigh"
+        ],
+        "source": "https://api.keln.ai/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "keln/zai-org/glm-5.2": {
+        "cache_read_input_token_cost": 2.8e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "keln",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high",
+            "max"
+        ],
+        "source": "https://api.keln.ai/v1/models",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": false
+    },
+    "keln/zai-org/glm-5.3": {
+        "cache_read_input_token_cost": 2.9e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "keln",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://api.keln.ai/v1/models",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": false
+    },
+    "keln/zai-org/glm-5.3-flash": {
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "keln",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://api.keln.ai/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
     "together_ai/moonshotai/Kimi-K3.1-Pro": {
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 2e-06,
