@@ -18,8 +18,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.litellm_core_utils.duration_parser import get_budget_window_start as calendar_budget_window_start
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds_from
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
     Litellm_EntityType,
@@ -31,6 +30,11 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import get_model_from_request
 from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.timezone_utils import (
+    BudgetResetSettings,
+    compute_budget_window_start,
+    get_budget_reset_settings,
+)
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     UserApiKeyCache,
@@ -1288,20 +1292,22 @@ def fixed_budget_window(window: object) -> tuple[str, datetime] | None:
     return duration, start
 
 
-def get_budget_window_start(window: object) -> datetime | None:
+def get_budget_window_start(window: object, reset_settings: BudgetResetSettings | None = None) -> datetime | None:
     window_dict: Final = _coerce_window(window)
     budget_duration: Final = window_dict.get("budget_duration")
     if budget_duration is None:
         return None
     reset_at: Final = _coerce_datetime(window_dict.get("reset_at"))
+    boundary: Final = reset_at or datetime.now(timezone.utc)
     try:
-        duration_seconds: Final = duration_in_seconds(str(budget_duration))
+        duration_seconds: Final = duration_in_seconds_from(boundary, str(budget_duration))
         if reset_at is not None:
-            boundary: Final = reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)
-            return calendar_budget_window_start(str(budget_duration), boundary)
+            return compute_budget_window_start(
+                str(budget_duration), boundary, reset_settings or get_budget_reset_settings()
+            )
     except Exception:
         return None
-    return datetime.now(timezone.utc) - timedelta(seconds=duration_seconds)
+    return boundary - timedelta(seconds=duration_seconds)
 
 
 def _coerce_datetime(value: object) -> datetime | None:

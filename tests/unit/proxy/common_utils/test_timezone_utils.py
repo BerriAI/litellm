@@ -1,4 +1,5 @@
 from datetime import datetime, time, timezone
+from typing import Final
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -8,11 +9,42 @@ import litellm
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     compute_budget_reset_at,
+    compute_budget_window_start,
     get_budget_reset_settings,
     get_budget_reset_time,
     get_budget_reset_timezone,
     parse_budget_reset_time,
 )
+
+
+@pytest.mark.parametrize(
+    "duration,zone,reset_at,expected",
+    (
+        ("12mo", "UTC", "2029-01-01T00:00:00Z", "2028-01-01T00:00:00Z"),
+        ("12mo", "UTC", "2101-01-01T00:00:00Z", "2100-01-01T00:00:00Z"),
+        ("1mo", "America/New_York", "2026-12-01T00:00:00-05:00", "2026-11-01T04:00:00Z"),
+        ("30d", "America/New_York", "2026-04-01T00:00:00-04:00", "2026-03-01T05:00:00Z"),
+        ("1mo", "Australia/Sydney", "2026-11-01T00:00:00+11:00", "2026-09-30T14:00:00Z"),
+        ("1mo", "Australia/Lord_Howe", "2026-05-01T00:00:00+10:30", "2026-03-31T13:00:00Z"),
+        ("12mo", "Asia/Kathmandu", "2029-01-01T12:30:00+05:45", "2028-01-01T06:45:00Z"),
+        ("1mo", "America/New_York", "2026-12-01T12:30:00-05:00", "2026-11-01T17:30:00Z"),
+    ),
+)
+@pytest.mark.parametrize("storage", ("offset", "utc", "naive_utc"))
+def test_calendar_window_survives_timestamp_storage(
+    duration: str, zone: str, reset_at: str, expected: str, storage: str
+) -> None:
+    reset: Final = datetime.fromisoformat(reset_at.replace("Z", "+00:00"))
+    stored: Final = {
+        "offset": reset,
+        "utc": reset.astimezone(timezone.utc),
+        "naive_utc": reset.astimezone(timezone.utc).replace(tzinfo=None),
+    }[storage]
+    settings: Final = BudgetResetSettings(timezone=zone, reset_time_of_day=reset.time())
+    start: Final = compute_budget_window_start(duration, stored, settings)
+
+    assert start == datetime.fromisoformat(expected.replace("Z", "+00:00"))
+    assert compute_budget_reset_at(duration, settings, now=start) == reset
 
 
 def _restore_attr(obj, name, original):

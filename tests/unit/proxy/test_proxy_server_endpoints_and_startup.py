@@ -13936,7 +13936,7 @@ async def _drain(queue):
 async def test_key_window_spend_row_is_enqueued_with_the_actual_cost():
     from litellm.proxy.proxy_server import increment_spend_counters
 
-    reset_at = datetime.now(timezone.utc) + timedelta(days=10)
+    reset_at: Final = datetime(2028, 3, 1, tzinfo=timezone.utc)
     key_obj = MagicMock()
     key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
 
@@ -13949,9 +13949,7 @@ async def test_key_window_spend_row_is_enqueued_with_the_actual_cost():
     assert enqueued[0]["entity_id"] == "hashed-token"
     assert enqueued[0]["window_duration"] == "30d"
     assert enqueued[0]["spend"] == pytest.approx(0.25)
-    assert enqueued[0]["window_start"] == (reset_at - timedelta(days=30)).astimezone(timezone.utc).replace(
-        tzinfo=None
-    ).isoformat(timespec="microseconds")
+    assert enqueued[0]["window_start"] == "2028-02-01T00:00:00.000000"
 
 
 @pytest.mark.asyncio
@@ -16356,7 +16354,7 @@ def _accounting_window_env(cached: Mapping[str, object], client: MagicMock) -> I
 
 @pytest.mark.asyncio
 async def test_accounting_window_keys_cover_the_stored_key_and_the_cached_team():
-    key_reset: Final = datetime(2026, 11, 13, tzinfo=timezone.utc)
+    key_reset: Final = datetime(2026, 11, 1, tzinfo=timezone.utc)
     team_reset: Final = datetime(2026, 11, 6, tzinfo=timezone.utc)
     key_row: Final = _StoredRow(
         budget_limits=[{"budget_duration": "30d", "max_budget": 100.0, "reset_at": key_reset.isoformat()}]
@@ -16372,7 +16370,7 @@ async def test_accounting_window_keys_cover_the_stored_key_and_the_cached_team()
             "entity_type": "key",
             "entity_id": "hashed-key",
             "window_duration": "30d",
-            "window_start": (key_reset - timedelta(days=30)).isoformat(),
+            "window_start": "2026-10-01T00:00:00+00:00",
         },
         {
             "entity_type": "team",

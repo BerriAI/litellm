@@ -30,7 +30,6 @@ from litellm.constants import (
     RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN,
     RESET_BUDGET_JOB_NAME,
 )
-from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
     LiteLLM_BudgetTableFull,
@@ -42,6 +41,7 @@ from litellm.proxy._types import (
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     compute_budget_reset_at,
+    compute_budget_window_start,
     get_budget_reset_settings,
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -371,7 +371,7 @@ _NO_PROGRESS: Final = _ChunkOutcome(fetched=0, advanced=0)
 
 
 def _as_utc(moment: datetime) -> datetime:
-    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc) if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
 
 
 def _count_advanced(reset_ats: Iterable[object], cutoff: datetime) -> int:
@@ -1514,8 +1514,8 @@ class ResetBudgetJob:
         reset_at_str: Final = window.get("reset_at")
         if not reset_at_str:
             return False
-        reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(tzinfo=None)
-        if reset_at > now:
+        reset_at: Final = _as_utc(datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")))
+        if reset_at > _as_utc(now):
             return False
         new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_store)
         try:
@@ -1523,7 +1523,9 @@ class ResetBudgetJob:
         except Exception as redis_err:
             verbose_proxy_logger.warning("Failed to reset Redis counter %s: %s", counter_key, redis_err)
         budget_duration: Final = window["budget_duration"]
-        next_reset_at: Final = compute_budget_reset_at(budget_duration=budget_duration, settings=reset_settings)
+        next_reset_at: Final = compute_budget_reset_at(
+            budget_duration=budget_duration, settings=reset_settings, now=_as_utc(now)
+        )
         window["reset_at"] = next_reset_at.isoformat()
         await ResetBudgetJob._roll_window_spend_row(
             prisma_client=prisma_client,
@@ -1531,6 +1533,7 @@ class ResetBudgetJob:
             entity_id=entity_id,
             budget_duration=budget_duration,
             next_reset_at=next_reset_at,
+            reset_settings=reset_settings,
         )
         return True
 
@@ -1541,6 +1544,7 @@ class ResetBudgetJob:
         entity_id: str,
         budget_duration: str,
         next_reset_at: datetime,
+        reset_settings: BudgetResetSettings,
     ) -> None:
         """Move this window's LiteLLM_BudgetWindowSpend row onto the window
         that just started, so the maintained total the read path uses starts
@@ -1551,7 +1555,7 @@ class ResetBudgetJob:
         windows from having their counters reset.
         """
         try:
-            window_start: Final = get_budget_window_start(budget_duration, next_reset_at)
+            window_start: Final = compute_budget_window_start(budget_duration, next_reset_at, reset_settings)
         except Exception as e:  # noqa: BLE001  # malformed persisted durations must not stop other resets
             verbose_proxy_logger.warning("Unparseable budget_duration %s: %s", budget_duration, e)
             return
@@ -1708,7 +1712,7 @@ class ResetBudgetJob:
             item.spend = _carried_spend(item.spend, _rollover_cap(item.max_budget)) if _rollover_enabled() else 0.0
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
                 item.budget_reset_at = compute_budget_reset_at(
-                    budget_duration=item.budget_duration, settings=reset_settings
+                    budget_duration=item.budget_duration, settings=reset_settings, now=current_time
                 )
             return item
         except Exception as e:

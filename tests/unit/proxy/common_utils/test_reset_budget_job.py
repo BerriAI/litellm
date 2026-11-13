@@ -35,6 +35,36 @@ from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reset_at,now",
+    (
+        ("2026-12-01T00:00:00-05:00", "2026-12-01T04:59:59+00:00"),
+        ("2026-12-01T00:00:00+05:45", "2026-11-30T18:14:59+00:00"),
+    ),
+)
+async def test_window_reset_waits_for_the_saved_instant(reset_at: str, now: str) -> None:
+    store: Final = FakeSpendCounters().store()
+    counter: Final = "spend:key:offset-budget:window:1mo"
+    await store.set(counter, 10.0)
+    window: Final = {"budget_duration": "1mo", "reset_at": reset_at, "max_budget": 10.0}
+    client: Final = MagicMock(spec=PrismaClient)
+    changed: Final = await ResetBudgetJob._reset_expired_window(
+        window,
+        counter,
+        store,
+        datetime.fromisoformat(now),
+        BudgetResetSettings(timezone="America/New_York"),
+        client,
+        reset_budget_job_module.Litellm_EntityType.KEY,
+        "offset-budget",
+    )
+
+    assert changed is False
+    assert (await store.read(counter))[0] == 10.0
+    assert window["reset_at"] == reset_at
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("today", ["2028-03-01", "2029-03-01"])
 async def test_annual_reset_persists_the_same_calendar_start_as_admission(today: str) -> None:  # test-quality-ok: the SQL write is the reset job's observable persistence contract
     client: Final = MagicMock(spec=PrismaClient)
@@ -48,6 +78,7 @@ async def test_annual_reset_persists_the_same_calendar_start_as_admission(today:
             entity_id="annual-key",
             budget_duration="12mo",
             next_reset_at=datetime(2029, 1, 1, tzinfo=timezone.utc),
+            reset_settings=BudgetResetSettings(),
         )
 
     assert client.db.execute_raw.await_count == 1

@@ -6839,9 +6839,8 @@ async def _virtual_key_multi_budget_check(
     Using budget_duration (not list index) keeps counters stable when windows are reordered
     or removed during a key update.
 
-    Note: counters are not seeded from DB on Redis cold-start. After a Redis flush,
-    per-window spend resets to zero within the current window period. This is an acceptable
-    trade-off: the DB stores reset_at timestamps but not per-window accumulated spend.
+    Cold counters reload maintained window totals, falling back to spend logs
+    only when the corresponding window row is missing or stale.
     """
     if not valid_token.budget_limits:
         return
