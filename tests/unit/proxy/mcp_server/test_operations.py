@@ -62,7 +62,17 @@ async def _served_catalog_tool() -> str:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "case",
-    ["unique", "ambiguous", "missing", "failure", "slow_failure", "blocked_stdio", "scoped_bearer", "rate_limited"],
+    [
+        "unique",
+        "ambiguous",
+        "missing",
+        "failure",
+        "slow_failure",
+        "blocked_stdio",
+        "scoped_bearer",
+        "legacy_delegates",
+        "rate_limited",
+    ],
 )
 async def test_resource_read_requires_unique_owner_from_complete_listings(
     monkeypatch: pytest.MonkeyPatch, case: str
@@ -70,6 +80,7 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
     uri: Final = "ui://widget/view.html"
     caller_bearer: Final = "Bearer caller-upstream-token"
     reads: Final[asyncio.Queue[tuple[str, str | None]]] = asyncio.Queue()
+    listing_authorizations: Final[asyncio.Queue[str | None]] = asyncio.Queue()
     slow_listing_cancelled: Final = asyncio.Event()
     message: Final = TypeAdapter(JSONRPCMessage)
 
@@ -105,6 +116,7 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
                 },
             )
         assert payload.method == "resources/list"
+        listing_authorizations.put_nowait(request.headers.get("authorization"))
         if case == "failure" and request.url.host == "other.example":
             return httpx2.Response(503, text="private upstream diagnostic")
         if case == "slow_failure" and request.url.host == "owner.example":
@@ -151,7 +163,10 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
             name=name,
             url=f"https://{name}.example/mcp",
             transport=MCPTransport.http,
-            auth_type=MCPAuth.true_passthrough if forwarding[name] else None,
+            auth_type=MCPAuth.oauth2
+            if case == "legacy_delegates"
+            else (MCPAuth.true_passthrough if forwarding[name] else None),
+            delegate_auth_to_upstream=case == "legacy_delegates",
             allow_all_keys=True,
             rpm=1,
         )
@@ -186,7 +201,7 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
             raw_headers={"authorization": caller_bearer, "x-litellm-api-key": "sk-resource-read"},
         )
 
-    if case in ("unique", "blocked_stdio", "scoped_bearer"):
+    if case in ("unique", "blocked_stdio", "scoped_bearer", "legacy_delegates"):
         result: Final = await read()
         assert result == ReadResourceResult(contents=[TextResourceContents(uri=uri, text="owner.example")])
         assert reads.qsize() == 1
@@ -194,6 +209,11 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
         assert host == "owner.example"
         assert (authorization == caller_bearer) == (case == "blocked_stdio"), (
             "the caller bearer reaches the owner only when no other listable server also consumes it"
+        )
+        listed_with: Final = tuple(listing_authorizations.get_nowait() for _ in range(listing_authorizations.qsize()))
+        assert listed_with
+        assert (caller_bearer in listed_with) == (case == "blocked_stdio"), (
+            "owner lookups must not replay the caller bearer to servers that also consume it"
         )
         return
     if case == "rate_limited":

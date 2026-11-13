@@ -284,6 +284,18 @@ _ResourceOwnerFailure: TypeAlias = (
 )
 
 
+def _withhold_fanned_out_caller_authorization(
+    server: MCPServer, extra_headers: dict[str, str] | None, scope_servers: Sequence[MCPServer]
+) -> dict[str, str] | None:
+    """Drop the caller's request-wide Authorization from a gateway-selected read when another server in
+    scope also consumes it. ``_prepare_mcp_server_headers`` already withholds it from client-forwarded
+    servers, but legacy oauth2 delegates and OAuth pass-through servers still carry it, and an aggregate
+    read must not replay one caller token to servers the gateway picked."""
+    if extra_headers and caller_authorization_fans_out(server, scope_servers):
+        return without_header(extra_headers, DEFAULT_CREDENTIAL_HEADER)
+    return extra_headers
+
+
 def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl) -> NoReturn:
     match failure:
         case _ResourceOwnerRateLimited(error=error):
@@ -3192,7 +3204,7 @@ async def mcp_read_resource(
             server=candidate,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=candidate_auth,
-            extra_headers=candidate_headers,
+            extra_headers=_withhold_fanned_out_caller_authorization(candidate, candidate_headers, candidates),
             add_prefix=False,
             raw_headers=raw_headers,
             client_ip=client_ip,
@@ -3244,7 +3256,7 @@ async def mcp_read_resource(
         user_api_key_auth=user_api_key_auth,
         url=url,
         mcp_auth_header=server_auth_header,
-        extra_headers=extra_headers,
+        extra_headers=_withhold_fanned_out_caller_authorization(server, extra_headers, candidates),
         raw_headers=raw_headers,
         client_ip=client_ip,
         input_responses=input_responses,
