@@ -3,7 +3,7 @@
 - This module decides when to fetch and install. Fetching, parsing, integrity checks and alias expansion run in Rust
 - The install order is publish, `add_known_models`, router replay, then `model_cost_inputs.reapply`
   - Registrations land by lookup in the published table, so they are written after publishing
-  - Refresh discovery after replay with `add_known_models({})`, without adding registrations that opted out of provider sets
+  - Call `refresh_model_discovery` after replay without folding replayed registrations into provider sets
 - Startup and `register_model(url)` fetch with `use_http_settings=False`, which reads env vars only like main's bare httpx. Reload passes `use_http_settings=True`, so Rust layers the configured HTTP settings on top
 - Startup falls back to the bundled map on any failure. Reload never falls back and keeps the current map
 - `register_model(url)` makes one attempt and registers nothing on failure

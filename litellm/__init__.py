@@ -1061,6 +1061,10 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
     The refresh updates the dict in place, so references captured before a reload stay live.
     """
     _populate_provider_model_sets(model_cost_map if model_cost_map is not None else model_cost)
+    refresh_model_discovery()
+
+
+def refresh_model_discovery() -> None:
     models_by_provider.update(_build_models_by_provider())
 
 

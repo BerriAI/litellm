@@ -15,7 +15,6 @@ from litellm.types.utils import ProviderSpecificModelInfo
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
 _SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, bool])
 _MODEL_ENDPOINTS_ADAPTER: Final = TypeAdapter(Mapping[str, tuple[str, ...]])
-_ENDPOINTS_ADAPTER: Final = TypeAdapter(tuple[str, ...] | None)
 
 
 class SimpleProviderConfig:
@@ -104,16 +103,18 @@ class JSONProviderRegistry:
 
     @classmethod
     def serves_endpoint(cls, slug: str, model: str | None, endpoint: str) -> bool:
-        import litellm
+        from litellm.utils import catalog_with_runtime_registrations
 
         provider: Final = cls._providers.get(slug)
         if provider is None:
             return False
         if model and provider.special_handling.get("use_model_supported_endpoints"):
-            catalog_endpoints: Final = _ENDPOINTS_ADAPTER.validate_python(
-                litellm.model_cost.get(f"{slug}/{model.removeprefix(f'{slug}/')}", {}).get("supported_endpoints")
+            catalog_endpoints: Final = (
+                catalog_with_runtime_registrations()
+                .get(f"{slug}/{model.removeprefix(f'{slug}/')}", {})
+                .get("supported_endpoints")
             )
-            if catalog_endpoints is not None:
+            if isinstance(catalog_endpoints, (list, tuple)):
                 return endpoint in catalog_endpoints
         model_endpoints: Final = (
             provider.model_supported_endpoints.get(model.removeprefix(f"{slug}/"), ()) if model else ()
