@@ -50,10 +50,12 @@ class FakeRedisCache(RedisCache):
 
 @dataclass
 class FakeNativeRequest:
-    """Stands in for ``NativeRequestRedis``: records each flush in ``events`` next to what the test's pendings log."""
+    """Stands in for ``NativeRequestRedis``: records each flush in ``events`` next to what the test's pendings log.
+    ``tracked_writes_settled`` answers what the test sets, since the native request owns that rule."""
 
     post_call_deadline: float
     events: list[str] = field(default_factory=list)
+    tracked_writes_settled: bool = False
 
     async def flush_pre(self) -> None:
         self.events.append("flush_pre")

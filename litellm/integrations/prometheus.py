@@ -424,8 +424,8 @@ def _own_charge() -> OwnCharge:
     batches: Final = active_request_redis_batches()
     if batches is None or not spend_counter_store.has_redis:
         return "unknown"
-    settlements: Final = batches.post_call_settlements
-    return "counted" if settlements and all(settlement.settled for settlement in settlements) else "pending"
+    native: Final = batches.existing_native()
+    return "counted" if native is not None and native.tracked_writes_settled else "pending"
 
 
 def _committed_spend_before_request(

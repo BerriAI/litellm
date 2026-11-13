@@ -7,7 +7,7 @@ import pytest
 
 from litellm import Router
 from litellm._internal_context import current_service_target
-from litellm.caching.redis_batch import drain_post_call_redis_batches, request_redis_batch_scope
+from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_usage import CounterIncrement, RouterUsageStore, UsageCounter
@@ -158,9 +158,9 @@ async def test_inside_a_request_deployment_increments_go_out_on_their_own_trip_l
     natives: Final = FakeNatives()
 
     await store.increment_deployment("dep", "model", "12-34", 7.5, 1)
-    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         await store.increment_deployment("dep", "model", "12-34", 2, 1)
-    await drain_post_call_redis_batches()
+        await request.flush_post_call()
 
     assert [call[0] for call in handle.calls] == ["deployment", "deployment"]
     assert all(not native.events for native in natives.built)

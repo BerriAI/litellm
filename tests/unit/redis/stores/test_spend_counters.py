@@ -29,7 +29,7 @@ from litellm.redis.store_settings import RedisStoreSettings
 from litellm.rust_bridge._native import NativeRedisClient, NativeRedisStoreError, NativeSpendCounters, SpendRead
 from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
 
-from .spend_counters_double import FakeSettlement, FakeSpendCounters
+from .spend_counters_double import FakeSpendCounters
 
 _KEYS: Final = (
     (
@@ -169,7 +169,7 @@ async def test_post_call_increments_go_on_the_requests_native_post_call_batch_un
     targets: Final[list[str | None]] = []
 
     class Recording(FakeSpendCounters):
-        def increment_many_post_call(self, request: object, increments: object) -> FakeSettlement | None:
+        def increment_many_post_call(self, request: object, increments: object) -> bool:
             targets.append(current_service_target())
             return super().increment_many_post_call(request, increments)  # pyright: ignore[reportArgumentType]  # recorded as given
 
@@ -181,8 +181,8 @@ async def test_post_call_increments_go_on_the_requests_native_post_call_batch_un
         inside: Final = store.increment_many_post_call((("spend:key:k", 1.0),))
         empty: Final = store.increment_many_post_call(())
 
-    assert (outside, empty) == (None, None)
-    assert spend.post_call == [(natives.built[0], (("spend:key:k", 1.0),), inside)]
+    assert (outside, inside, empty) == (False, True, False)
+    assert spend.post_call == [(natives.built[0], (("spend:key:k", 1.0),))]
     assert targets == [SPEND_COUNTERS_TARGET]
 
 
