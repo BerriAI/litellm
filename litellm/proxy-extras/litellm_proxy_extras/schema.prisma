@@ -1035,6 +1035,45 @@ model LiteLLM_DailyOrganizationSpend {
 }
 
 // Track daily end user (customer) spend metrics per model and key
+model LiteLLM_DailyCustomerMemberSpend {
+  id                  String   @id
+  date                String
+  customer_org_id     String
+  customer_team_id    String   @default("")
+  customer_member_id  String   @default("")
+  model               String   @default("")
+  model_group         String   @default("")
+  custom_llm_provider String   @default("")
+  mcp_namespaced_tool_name String @default("")
+  endpoint            String   @default("")
+  api_key             String   @default("")
+  spend               Float    @default(0.0)
+  prompt_tokens       BigInt   @default(0)
+  completion_tokens   BigInt   @default(0)
+  cache_read_input_tokens BigInt @default(0)
+  cache_creation_input_tokens BigInt @default(0)
+  compression_saved_tokens BigInt @default(0)
+  compression_savings_spend Float @default(0.0)
+  prompt_caching_savings_spend Float @default(0.0)
+  gateway_injected_caching_savings_spend Float @default(0.0)
+  autorouter_savings_spend Float @default(0.0)
+  guardrail_spend Float @default(0.0)
+  api_requests        BigInt   @default(0)
+  successful_requests BigInt   @default(0)
+  failed_requests     BigInt   @default(0)
+  total_response_time_ms BigInt @default(0)
+  timed_requests      BigInt   @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@index([date])
+  @@index([customer_org_id, date])
+  @@index([customer_team_id, date])
+  @@index([customer_member_id, date])
+  @@index([api_key])
+  @@index([model])
+}
+
 model LiteLLM_DailyEndUserSpend {
   id                  String   @id @default(uuid())
   end_user_id         String?

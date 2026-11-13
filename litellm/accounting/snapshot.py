@@ -31,6 +31,7 @@ _METADATA_FIELDS: Final = frozenset(
         "compression_savings",
         "internal_call_origin",
         "billed_retry_attempt",
+        "user_api_key_customer_usage",
     }
 )
 

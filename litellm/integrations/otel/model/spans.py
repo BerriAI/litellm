@@ -308,6 +308,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_DailyUserSpend",
         "LiteLLM_DailyGlobalSpend",
         "LiteLLM_DailyOrganizationSpend",
+        "LiteLLM_DailyCustomerMemberSpend",
         "LiteLLM_DailyEndUserSpend",
         "LiteLLM_DailyAgentSpend",
         "LiteLLM_DailyTeamSpend",

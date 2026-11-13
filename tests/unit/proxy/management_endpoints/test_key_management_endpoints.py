@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import UUID, uuid4
 
@@ -24618,3 +24618,89 @@ def test_user_new_without_a_key_does_not_check_guardrail_names(spend_permission_
 
     assert response.status_code == 200, response.text
     find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("customer_org_id", "customer_team_id", "customer_member_id"))
+async def test_customer_binding_requires_admin_on_key_creation(field: str) -> None:
+    with pytest.raises(HTTPException) as rejected:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(metadata={field: "customer-id"}),
+            user_api_key_dict=UserAPIKeyAuth(user_id="member", user_role=LitellmUserRoles.INTERNAL_USER),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert rejected.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_type", ("key", "user"))
+async def test_direct_key_mint_cannot_bypass_customer_binding_authorization(request_type: Literal["key", "user"]) -> None:
+    with pytest.raises(HTTPException) as rejected:
+        await generate_key_helper_fn(request_type=request_type, metadata={"customer_org_id": "another-customer"})
+    assert rejected.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("update", "regenerate"))
+@pytest.mark.parametrize("field", ("customer_org_id", "customer_team_id", "customer_member_id"))
+@pytest.mark.parametrize("requested", ("another-customer-id", None))
+async def test_customer_binding_cannot_be_reassigned_or_cleared_by_key_holder(
+    operation: Literal["update", "regenerate"], field: str, requested: str | None
+) -> None:
+    existing: Final = LiteLLM_VerificationToken(token="hashed-key", metadata={field: "customer-id"})
+    data: Final = (
+        UpdateKeyRequest(key="hashed-key", metadata={field: requested})
+        if operation == "update"
+        else RegenerateKeyRequest(metadata={field: requested})
+    )
+    with pytest.raises(HTTPException) as rejected:
+        await prepare_key_update_data(
+            data=data,
+            existing_key_row=existing,
+            user_api_key_dict=UserAPIKeyAuth(user_id="member", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+    assert rejected.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("update", "regenerate"))
+@pytest.mark.parametrize("metadata", ({"application": "support"}, {}, None))
+async def test_unrelated_key_metadata_changes_preserve_existing_customer_binding(
+    operation: Literal["update", "regenerate"], metadata: dict[str, object] | None
+) -> None:
+    bindings: Final = {"customer_org_id": "org-id", "customer_team_id": "team-id", "customer_member_id": "member-id"}
+    existing: Final = LiteLLM_VerificationToken(token="hashed-key", metadata={**bindings, "old": "discard"})
+    data: Final = (
+        UpdateKeyRequest(key="hashed-key", metadata=metadata)
+        if operation == "update"
+        else RegenerateKeyRequest(metadata=metadata)
+    )
+    actual: Final = await prepare_key_update_data(
+        data=data,
+        existing_key_row=existing,
+        user_api_key_dict=UserAPIKeyAuth(user_id="member", user_role=LitellmUserRoles.INTERNAL_USER),
+    )
+    assert actual["metadata"] == {**(metadata or {}), **bindings}
+    assert existing.metadata == {**bindings, "old": "discard"}
+    assert data.metadata == metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("update", "regenerate"))
+@pytest.mark.parametrize("metadata", ({"customer_org_id": "another-org"}, {}, None))
+async def test_proxy_admin_can_replace_or_clear_customer_key_binding(
+    operation: Literal["update", "regenerate"], metadata: dict[str, object] | None
+) -> None:
+    existing: Final = LiteLLM_VerificationToken(token="hashed-key", metadata={"customer_org_id": "org-id"})
+    data: Final = (
+        UpdateKeyRequest(key="hashed-key", metadata=metadata)
+        if operation == "update"
+        else RegenerateKeyRequest(metadata=metadata)
+    )
+    actual: Final = await prepare_key_update_data(
+        data=data,
+        existing_key_row=existing,
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    assert actual["metadata"] == metadata

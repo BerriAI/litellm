@@ -59,6 +59,7 @@ from litellm.litellm_core_utils.core_helpers import (
     iter_items,
     keyword_arguments,
     normalize_drop_params,
+    require_attributes,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -92,6 +93,16 @@ from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
     key_logging_entries,
     strip_callback_config,
+)
+from litellm.proxy.common_utils.customer_usage import (
+    CUSTOMER_USAGE_METADATA_KEY,
+    CustomerUsageDatabase,
+    CustomerUsageFailure,
+    customer_usage_fields,
+    customer_usage_http_status,
+    customer_usage_key_fields,
+    customer_usage_requested,
+    resolve_customer_usage,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -2716,7 +2727,7 @@ async def add_litellm_data_to_request(
 
     """
 
-    from litellm.proxy.proxy_server import llm_router, premium_user
+    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
     from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 
     # Strip internal-only keys from user input before the proxy sets its own.
@@ -2992,6 +3003,33 @@ async def add_litellm_data_to_request(
             )
     if _metadata_variable_name == "metadata":
         data.pop("litellm_metadata", None)
+
+    _customer_metadata: Final = customer_usage_fields(_REQUEST_FIELDS.validate_python(data)[_metadata_variable_name])
+    _customer_key_metadata: Final = customer_usage_key_fields(user_api_key_dict)
+    _customer_usage: Final = await resolve_customer_usage(
+        metadata=_customer_metadata,
+        key_metadata=_customer_key_metadata,
+        administrator=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+        database=require_attributes(
+            prisma_client.db,
+            CustomerUsageDatabase,
+            "litellm_customerorganizationtable",
+            "litellm_customerteamtable",
+            "litellm_customermembertable",
+        )
+        if prisma_client is not None and customer_usage_requested(_customer_metadata, _customer_key_metadata)
+        else None,
+        ledger_enabled=general_settings_view is None
+        or general_settings_view.get("use_spend_logs_ledger", True) is not False,
+    )
+    if isinstance(_customer_usage, CustomerUsageFailure):
+        raise HTTPException(
+            status_code=customer_usage_http_status(_customer_usage.error), detail=_customer_usage.error.value
+        )
+    if _customer_usage is not None:
+        data[_metadata_variable_name][CUSTOMER_USAGE_METADATA_KEY] = (  # rebind-ok: data is an out-param
+            _customer_usage.model_dump_json()
+        )
 
     data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=data,
