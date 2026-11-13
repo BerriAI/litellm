@@ -45,7 +45,7 @@ from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPExceptio
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.request_error_tracking import RequestErrorAccumulator
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, dequeue_spend_logs
 from litellm.responses.streaming_iterator import drain_logging_tasks
 
 
@@ -1147,15 +1147,6 @@ def _marked_malformed_key_error() -> HTTPException:
     return error
 
 
-def _spend_log_database() -> MagicMock:
-    prisma: Final = MagicMock()
-    prisma.spend_log_transactions = []
-    prisma._spend_log_transactions_lock = asyncio.Lock()
-    prisma.tool_usage_transactions = []
-    prisma._tool_usage_transactions_lock = asyncio.Lock()
-    return prisma
-
-
 async def _reject_and_read_failure_row(
     monkeypatch: pytest.MonkeyPatch,
     error: Exception,
@@ -1167,10 +1158,11 @@ async def _reject_and_read_failure_row(
     from litellm.proxy import proxy_server
     from litellm.proxy.db import db_spend_update_writer as writer_module
 
-    database: Final = _spend_log_database()
+    database: Final = PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_server.proxy_logging_obj)
+    monkeypatch.setattr(database, "spend_log_transactions", [])
+    monkeypatch.setattr(database, "_spend_log_transactions_lock", asyncio.Lock())
     spend_writer: Final = DBSpendUpdateWriter()
     monkeypatch.setattr(writer_module, "request_error_accumulator", RequestErrorAccumulator())
-    monkeypatch.setattr(PrismaClient, "spend_log_queue_bytes", 0)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
     monkeypatch.setattr(
@@ -1186,7 +1178,8 @@ async def _reject_and_read_failure_row(
             )
     finally:
         await drain_logging_tasks()
-    (row,) = database.spend_log_transactions
+        rows: Final = await dequeue_spend_logs(database, len(database.spend_log_transactions))
+    (row,) = rows
     row_metadata: Final = json.loads(row["metadata"])
     assert isinstance(row_metadata, dict)
     return exc_info.value, row_metadata
