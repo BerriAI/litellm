@@ -16,8 +16,10 @@ use pyo3::prelude::*;
 use super::NativeCall;
 
 fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
-    let (arguments, hooks) =
+    let (arguments, logging) =
         crate::routes::call_hooks(py, LoggingOperation::Messages, &call, asynchronous)?;
+    let host_client = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let hooks = logging.with_host_client(std::sync::Arc::clone(&host_client));
     let hooked_request = agentic::HookedRequest::default();
     let hooks = litellm_host_python::HookChain::new()
         .with(agentic::AgenticLoop::new(
@@ -70,6 +72,7 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
                       interceptors,
                       observers| async move {
                     secrets.seed(transport.read);
+                    host_client.store(transport.hosted, std::sync::atomic::Ordering::Release);
                     let route = if transport.hosted {
                         route.with_transport(std::sync::Arc::new(transport::PythonTransport::new(
                             services.clone(),

@@ -5228,6 +5228,45 @@ async def test_both_lanes_time_the_provider_exchange_as_one_llm_service_event(
     assert [event["call_type"] for event in python] == ["post <- track_llm_api_timing"]
 
 
+_THROUGH_PYTHON_S_CLIENT: Final = frozenset(
+    {
+        "azure_ai_base_trailing_spaces_after_anthropic",
+        "azure_ai_padded_environment_base",
+        "azure_ai_base_empty_host",
+        "azure_ai_base_non_numeric_port",
+    }
+)
+
+
+async def _service_events(
+    case: Case, server: RecordingServer, probe: FallbackProbe | None
+) -> tuple[Mapping[str, object], ...]:
+    recorder: Final = _ServiceRecorder()
+    with rebound(logging_utils, "_service_logger", recorder):
+        await _leg(case, server, probe)
+        await asyncio.sleep(0)
+    return tuple(recorder.events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(case, id=case.name)
+        for case in (*AZURE_URL_CASES, *MALFORMED_BASE_CASES)
+        if case.name in _THROUGH_PYTHON_S_CLIENT
+    ],
+)
+async def test_both_lanes_time_an_azure_ai_exchange_through_python_s_client_once(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _service_events(case, parity_server, None)
+    native: Final = await _service_events(case, parity_server, native_messages)
+
+    assert native == python
+    assert [event["call_type"] for event in python] == ["post <- track_llm_api_timing"]
+
+
 class _AttemptRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes untyped kwargs

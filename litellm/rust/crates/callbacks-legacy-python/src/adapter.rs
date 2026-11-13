@@ -17,6 +17,10 @@ use pyo3::{
     types::{PyDateTime, PyDict, PyList, PyString},
 };
 use serde_json::Value;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use crate::{
     DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger, SentRequest,
@@ -65,10 +69,17 @@ pub struct LegacyLogging {
     /// does. Only `azure_ai`: by the owner's ruling `anthropic` keeps main's billing of an
     /// unread stream.
     stream_starts_on_first_read: bool,
+    /// Set once the route sends through the host's own client, whose timed `post` already
+    /// reports the exchange.
+    host_client: Arc<AtomicBool>,
 }
 
 /// The one provider whose unread Messages stream bills nothing, as Python's does.
 const STREAM_STARTS_ON_FIRST_READ_PROVIDER: &str = "azure_ai";
+
+/// The one provider whose exchange through the host's client is timed only by that client, as
+/// Python's is. By the owner's ruling `anthropic` keeps main's second report.
+const HOST_CLIENT_TIMED_PROVIDER: &str = "azure_ai";
 
 fn retry_reason(reason: &RetryReason) -> Value {
     match reason {
@@ -110,6 +121,16 @@ impl LegacyLogging {
             api_started: None,
             host_answered: false,
             stream_starts_on_first_read: false,
+            host_client: Arc::default(),
+        }
+    }
+
+    /// Shares the flag the route host sets when the call sends through its own client.
+    #[must_use]
+    pub fn with_host_client(self, host_client: Arc<AtomicBool>) -> Self {
+        Self {
+            host_client,
+            ..self
         }
     }
 
@@ -654,6 +675,8 @@ impl LegacyLogging {
         )?;
         if self.operation == LoggingOperation::Messages
             && self.asynchronous
+            && !(context.custom_llm_provider == HOST_CLIENT_TIMED_PROVIDER
+                && self.host_client.load(Ordering::Acquire))
             && self.times_provider_exchange(py)?
         {
             self.api_started = Some(epoch_seconds());
