@@ -89,13 +89,45 @@ async fn credentials_become_exactly_one_auth_header(
 }
 
 #[rstest]
-#[case::caller_api_key_replaces_the_operator_key(
+#[case::a06_caller_x_api_key_beside_the_operator_api_key(
+    Some("sk-operator"),
+    &[("x-api-key", "caller")],
+    json!({}),
+    None,
+    &[],
+    &[("x-api-key", "caller"), ("api-key", "sk-operator")],
+)]
+#[case::a07_other_casing_x_api_key_joined_with_the_operator_key(
+    Some("sk-operator"),
+    &[("X-Api-Key", "caller")],
+    json!({}),
+    None,
+    &[],
+    &[("x-api-key", "caller, sk-operator")],
+)]
+#[case::a08_caller_bearer_beside_the_operator_key(
+    Some("sk-operator"),
+    &[("Authorization", "Bearer caller")],
+    json!({}),
+    None,
+    &[],
+    &[("x-api-key", "sk-operator"), ("authorization", "Bearer caller")],
+)]
+#[case::a09_exact_caller_api_key_replaces_the_operator_key(
+    Some("sk-operator"),
+    &[("api-key", "caller")],
+    json!({}),
+    None,
+    &[],
+    &[("x-api-key", "caller")],
+)]
+#[case::a09b_title_case_api_key_beside_the_operator_key(
     Some("sk-operator"),
     &[("Api-Key", "caller")],
     json!({}),
     None,
     &[],
-    &[("x-api-key", "caller")],
+    &[("x-api-key", "sk-operator"), ("api-key", "caller")],
 )]
 #[case::module_key_after_an_empty_call_key(Some(""), &[], json!({}), Some("sk-module"), &[], &[("x-api-key", "sk-module")])]
 #[case::call_key_over_the_module_key(Some("sk-call"), &[], json!({}), Some("sk-module"), &[], &[("x-api-key", "sk-call")])]
@@ -147,53 +179,45 @@ async fn credentials_become_exactly_one_auth_header(
     &[("AZURE_USERNAME", "u"), ("AZURE_PASSWORD", "p")],
     &[],
 )]
-#[case::a_caller_bearer_replaces_an_entra_only_deployment(
+#[case::a10_entra_token_overwrites_the_caller_bearer(
     None,
     &[("Authorization", "Bearer caller")],
     json!({"azure_ad_token": "entra-token"}),
     None,
     &[],
-    &[("authorization", "Bearer caller")],
+    &[("authorization", "Bearer entra-token")],
 )]
-#[case::a_caller_bearer_skips_the_python_only_entra_flow(
-    None,
-    &[("Authorization", "Bearer caller")],
-    json!({"azure_username": "u", "azure_password": "p", "client_id": "c"}),
-    None,
-    &[],
-    &[("authorization", "Bearer caller")],
-)]
-#[case::a_lowercase_caller_authorization_is_not_joined_with_entra(
+#[case::a10b_lowercase_caller_authorization_joined_with_entra(
     None,
     &[("authorization", "Bearer caller")],
     json!({"azure_ad_token": "entra-token"}),
     None,
     &[],
-    &[("authorization", "Bearer caller")],
+    &[("authorization", "Bearer caller, Bearer entra-token")],
 )]
-#[case::a_caller_x_api_key_skips_entra(
+#[case::a10c_caller_x_api_key_beside_entra(
     None,
     &[("x-api-key", "caller")],
     json!({"azure_ad_token": "entra-token"}),
     None,
     &[],
-    &[("x-api-key", "caller")],
+    &[("x-api-key", "caller"), ("authorization", "Bearer entra-token")],
 )]
-#[case::a_mixed_case_caller_api_key_replaces_the_operator_key(
+#[case::a09b_upper_case_api_key_beside_the_operator_key(
     Some("sk-operator"),
     &[("API-Key", "caller")],
     json!({}),
     None,
     &[],
-    &[("x-api-key", "caller")],
+    &[("x-api-key", "sk-operator"), ("api-key", "caller")],
 )]
-#[case::a_caller_basic_authorization_replaces_the_operator_key(
+#[case::caller_basic_authorization_beside_the_operator_key(
     Some("sk-operator"),
     &[("Authorization", "Basic caller")],
     json!({}),
     None,
     &[],
-    &[("authorization", "Basic caller")],
+    &[("x-api-key", "sk-operator"), ("authorization", "Basic caller")],
 )]
 #[case::a_key_outranks_an_entra_token(
     Some("sk-call"),

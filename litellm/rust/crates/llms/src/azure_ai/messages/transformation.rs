@@ -1,8 +1,8 @@
 use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
-use litellm_auth::{CredentialPlacement, InputSource, Sourced};
+use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{AzureAuthInputs, AzureTokenRetry, ConfigValue, DEFAULT_AZURE_SCOPE};
 use litellm_host::interceptors::RetriedRequest;
-use litellm_http::request::{has_bearer_auth, has_header};
+use litellm_http::request::has_header;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
@@ -43,8 +43,6 @@ const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
 const SCHEME_SEPARATOR: &str = "://";
 const AZURE_API_KEY_HEADER: &str = "api-key";
 const OIDC_PREFIX: &str = "oidc/";
-const AUTHORIZATION_HEADER: &str = "authorization";
-const BEARER_SCHEME: &str = "bearer";
 const ENVIRONMENT_REFERENCE_PREFIX: &str = "os.environ/";
 
 pub struct AzureAnthropicMessagesConfig;
@@ -110,8 +108,9 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     }
 
     /// `AZURE_AD_TOKEN`, which Python reads through `get_secret_str` only when there is no key,
-    /// no caller credential and no `azure_ad_token` param, and `AZURE_API_BASE`, which it reads
-    /// only when the call's base is empty (`api_base or get_secret_str("AZURE_API_BASE")`).
+    /// no exact caller `api-key` and no `azure_ad_token` param, and `AZURE_API_BASE`, which it
+    /// reads only when the call's base is empty
+    /// (`api_base or get_secret_str("AZURE_API_BASE")`).
     fn deferred_secret_names(
         &self,
         headers: &Headers,
@@ -125,7 +124,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
             .get("azure_ad_token")
             .and_then(Value::as_str)
             .is_some_and(|token| !token.is_empty());
-        let reads_token = !(has_caller_credential(headers)
+        let reads_token = !(has_exact_header(headers, AZURE_API_KEY_HEADER)
             || resolve_azure_api_key(api_key, env_lookup).is_some()
             || token_param);
         let reads_base = api_base.is_none_or(str::is_empty);
@@ -137,12 +136,11 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         }
     }
 
-    /// A forwarded `x-api-key`, `api-key` or `Authorization` other than a blank bearer is the only
-    /// credential sent: no deployment key and no Entra ID token. A caller `api-key` goes out as
-    /// `x-api-key` in any casing when it replaces a deployment key, and as Python sends it when
-    /// there is none.
-    /// Otherwise the Azure key goes in `x-api-key`. Without one, a call with a Python host mints an
-    /// Entra ID token as Python's `get_azure_ad_token` does, and any other call is a missing key.
+    /// Python's `_base_validate_azure_environment` over a dict keyed by exact name: a caller
+    /// `api-key` stops it, otherwise the Azure key is added as `api-key` or, without one, an
+    /// Entra ID token as `Authorization`, beside or over the caller's headers as that dict would
+    /// hold them. `api-key` is then renamed to `x-api-key` unless `x-api-key` is already there, and
+    /// the client joins names that differ only in case.
     fn validate_environment(
         &self,
         headers: Headers,
@@ -152,22 +150,27 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        if has_header(&headers, API_KEY_PLACEMENT.header_name())
-            || has_caller_authorization(&headers)
-        {
-            return Ok(ValidatedEnvironment {
+        let forwarded = |headers: Headers| {
+            Ok(ValidatedEnvironment {
                 headers,
                 auth: AuthScheme::Forwarded,
-            });
+            })
+        };
+        if has_exact_header(&headers, AZURE_API_KEY_HEADER) {
+            return forwarded(with_api_key_as_x_api_key(headers));
         }
-        let azure_key = resolve_azure_api_key(api_key, env_lookup);
-        if has_header(&headers, AZURE_API_KEY_HEADER) {
-            return Ok(ValidatedEnvironment {
-                headers: with_azure_key_as_x_api_key(headers, azure_key.is_some()),
-                auth: AuthScheme::Forwarded,
-            });
-        }
-        let auth = match azure_key {
+        let auth = match resolve_azure_api_key(api_key, env_lookup) {
+            Some(key)
+                if has_header(&headers, AZURE_API_KEY_HEADER)
+                    || has_header(&headers, API_KEY_PLACEMENT.header_name()) =>
+            {
+                return forwarded(with_api_key_as_x_api_key(
+                    headers
+                        .into_iter()
+                        .chain([(AZURE_API_KEY_HEADER.to_string(), key)])
+                        .collect(),
+                ));
+            }
             Some(key) => AuthScheme::Credential {
                 placement: API_KEY_PLACEMENT,
                 secret: SecretValue::new(key),
@@ -232,41 +235,29 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     }
 }
 
-fn has_caller_credential(headers: &Headers) -> bool {
-    has_header(headers, API_KEY_PLACEMENT.header_name())
-        || has_header(headers, AZURE_API_KEY_HEADER)
-        || has_caller_authorization(headers)
+fn has_exact_header(headers: &Headers, name: &str) -> bool {
+    headers.iter().any(|(key, _)| key == name)
 }
 
-/// Any `Authorization` the caller sends is their credential, except a bearer with no token.
-fn has_caller_authorization(headers: &Headers) -> bool {
-    has_bearer_auth(headers)
-        || headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case(AUTHORIZATION_HEADER)
-                && !value.trim().is_empty()
-                && !value
-                    .trim()
-                    .get(..BEARER_SCHEME.len())
-                    .is_some_and(|scheme| scheme.eq_ignore_ascii_case(BEARER_SCHEME))
-        })
-}
-
-/// A caller `api-key` that replaces a deployment key is renamed in any casing. Without one it is
-/// renamed only when spelled exactly `api-key`, as Python's `AzureAnthropicMessagesConfig` does.
-fn with_azure_key_as_x_api_key(headers: Headers, replaces_a_deployment_key: bool) -> Headers {
-    headers
-        .into_iter()
-        .map(|(name, value)| {
-            let renamed = match replaces_a_deployment_key {
-                true => name.eq_ignore_ascii_case(AZURE_API_KEY_HEADER),
-                false => name == AZURE_API_KEY_HEADER,
-            };
-            match renamed {
-                true => (API_KEY_PLACEMENT.header_name().to_string(), value),
-                false => (name, value),
-            }
-        })
-        .collect()
+/// Python's `headers["x-api-key"] = headers.pop("api-key")`, run only when `x-api-key` is not
+/// already a key: the exact `api-key` moves to the end as `x-api-key`.
+fn with_api_key_as_x_api_key(headers: Headers) -> Headers {
+    let x_api_key = API_KEY_PLACEMENT.header_name();
+    match has_exact_header(&headers, x_api_key) {
+        true => headers,
+        false => {
+            let (api_key, rest): (Headers, Headers) = headers
+                .into_iter()
+                .partition(|(name, _)| name == AZURE_API_KEY_HEADER);
+            rest.into_iter()
+                .chain(
+                    api_key
+                        .into_iter()
+                        .map(|(_, value)| (x_api_key.to_string(), value)),
+                )
+                .collect()
+        }
+    }
 }
 
 /// Python's `get_azure_ad_token` order, with each setting read from the call and then where
@@ -358,8 +349,7 @@ fn entra_id_auth(
         };
     }
     match token {
-        Some(token) => AuthScheme::Credential {
-            placement: CredentialPlacement::Bearer,
+        Some(token) => AuthScheme::AzureAdTokenValue {
             secret: SecretValue::new(token),
         },
         None => AuthScheme::Forwarded,
@@ -608,38 +598,80 @@ mod tests {
         .expect("valid params")
     }
 
-    #[rstest]
-    #[case::lowercase(&[("api-key", "caller"), ("x-trace", "1")])]
-    #[case::any_casing(&[("Api-Key", "caller"), ("x-trace", "1")])]
-    fn a_caller_api_key_replaces_the_azure_key_as_x_api_key(#[case] forwarded: &[(&str, &str)]) {
-        let environment = validated(forwarded, Some("sk-azure"));
-        assert!(matches!(environment.auth, AuthScheme::Forwarded));
-        assert_eq!(
-            environment.headers,
-            vec![
-                ("x-api-key".to_string(), "caller".to_string()),
-                ("x-trace".to_string(), "1".to_string()),
-            ]
-        );
+    fn pairs_of(headers: &[(&str, &str)]) -> Headers {
+        headers
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
     }
 
     #[rstest]
-    #[case::lowercase(&[("api-key", "caller"), ("x-trace", "1")], "x-api-key")]
-    #[case::mixed_case(&[("API-Key", "caller"), ("x-trace", "1")], "API-Key")]
-    #[case::title_case(&[("Api-Key", "caller"), ("x-trace", "1")], "Api-Key")]
+    #[case::a06_x_api_key_beside_the_operator_api_key(
+        &[("x-api-key", "caller"), ("x-trace", "1")],
+        &[("x-api-key", "caller"), ("x-trace", "1"), ("api-key", "sk-azure")]
+    )]
+    #[case::a07_other_casing_x_api_key_beside_the_operator_x_api_key(
+        &[("X-Api-Key", "caller")],
+        &[("X-Api-Key", "caller"), ("x-api-key", "sk-azure")]
+    )]
+    #[case::a08_bearer_beside_the_operator_x_api_key(
+        &[("Authorization", "Bearer caller")],
+        &[("Authorization", "Bearer caller"), ("x-api-key", "sk-azure")]
+    )]
+    #[case::a09_exact_api_key_replaces_the_operator_key(
+        &[("api-key", "caller"), ("x-trace", "1")],
+        &[("x-trace", "1"), ("x-api-key", "caller")]
+    )]
+    #[case::a09b_other_casing_api_key_beside_the_operator_x_api_key(
+        &[("Api-Key", "caller"), ("x-trace", "1")],
+        &[("Api-Key", "caller"), ("x-trace", "1"), ("x-api-key", "sk-azure")]
+    )]
+    #[case::non_bearer_authorization_beside_the_operator_x_api_key(
+        &[("Authorization", "Basic caller")],
+        &[("Authorization", "Basic caller"), ("x-api-key", "sk-azure")]
+    )]
+    #[case::exact_api_key_and_x_api_key_are_both_kept(
+        &[("api-key", "caller"), ("x-api-key", "other")],
+        &[("api-key", "caller"), ("x-api-key", "other")]
+    )]
+    fn caller_and_operator_keys_are_sent_as_python_sends_them(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] sent: &[(&str, &str)],
+    ) {
+        let environment = validated(forwarded, Some("sk-azure"));
+        let headers = match environment.auth {
+            AuthScheme::Forwarded => environment.headers,
+            AuthScheme::Credential { placement, secret } => [
+                environment.headers,
+                vec![(
+                    placement.header_name().to_string(),
+                    secret.expose().to_string(),
+                )],
+            ]
+            .concat(),
+            other => panic!("unexpected auth {other:?}"),
+        };
+        assert_eq!(headers, pairs_of(sent));
+    }
+
+    #[rstest]
+    #[case::lowercase_moves_to_the_end_as_x_api_key(
+        &[("api-key", "caller"), ("x-trace", "1")],
+        &[("x-trace", "1"), ("x-api-key", "caller")]
+    )]
+    #[case::mixed_case(&[("API-Key", "caller"), ("x-trace", "1")], &[("API-Key", "caller"), ("x-trace", "1")])]
+    #[case::title_case(&[("Api-Key", "caller"), ("x-trace", "1")], &[("Api-Key", "caller"), ("x-trace", "1")])]
     fn a_caller_api_key_without_an_azure_key_is_sent_as_python_sends_it(
         #[case] forwarded: &[(&str, &str)],
-        #[case] sent_as: &str,
+        #[case] sent: &[(&str, &str)],
     ) {
         let environment = validated(forwarded, None);
-        assert!(matches!(environment.auth, AuthScheme::Forwarded));
-        assert_eq!(
-            environment.headers,
-            vec![
-                (sent_as.to_string(), "caller".to_string()),
-                ("x-trace".to_string(), "1".to_string()),
-            ]
-        );
+        let credential = match environment.auth {
+            AuthScheme::PythonHostedAzureAdToken { entra, .. } => *entra,
+            auth => auth,
+        };
+        assert!(matches!(credential, AuthScheme::Forwarded));
+        assert_eq!(environment.headers, pairs_of(sent));
     }
 
     fn lookup_in<'a>(pairs: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<String> + 'a {
@@ -679,10 +711,7 @@ mod tests {
                 ),
                 None => "caller".to_string(),
             },
-            AuthScheme::Credential {
-                placement: CredentialPlacement::Bearer,
-                secret,
-            } => format!("bearer:{}", secret.expose()),
+            AuthScheme::AzureAdTokenValue { secret } => format!("bearer:{}", secret.expose()),
             AuthScheme::Forwarded => "unauthenticated".to_string(),
             other => panic!("unexpected scheme {other:?}"),
         }
@@ -847,43 +876,47 @@ mod tests {
     }
 
     #[rstest]
-    #[case::x_api_key(&[("X-Api-Key", "caller")])]
-    #[case::entra_id_bearer(&[("Authorization", "Bearer eyJ-token")])]
-    fn a_forwarded_key_or_bearer_is_the_credential(#[case] forwarded: &[(&str, &str)]) {
-        assert!(matches!(
-            validated(forwarded, Some("sk-azure")).auth,
-            AuthScheme::Forwarded
-        ));
-    }
-
-    #[rstest]
-    #[case::bearer_on_an_entra_only_deployment(
-        &[("Authorization", "Bearer caller")],
-        json!({"azure_ad_token": "entra"})
-    )]
-    #[case::lowercase_authorization_with_entra_settings(
+    #[case::a10b_other_casing_bearer_is_joined_with_the_entra_bearer(
         &[("authorization", "Bearer caller")],
-        json!({"tenant_id": "t", "client_id": "c", "client_secret": "s"})
+        &[("authorization", "Bearer caller"), ("Authorization", "Bearer entra")]
     )]
-    #[case::bearer_with_python_only_entra_settings(
-        &[("Authorization", "Bearer caller")],
-        json!({"azure_username": "u", "azure_password": "p", "client_id": "c"})
+    #[case::a10c_x_api_key_beside_the_entra_bearer(
+        &[("x-api-key", "caller")],
+        &[("x-api-key", "caller"), ("Authorization", "Bearer entra")]
     )]
-    #[case::x_api_key_with_entra_settings(&[("x-api-key", "caller")], json!({"azure_ad_token": "entra"}))]
-    #[case::mixed_case_api_key_with_entra_settings(&[("API-Key", "caller")], json!({"azure_ad_token": "entra"}))]
-    #[case::non_bearer_authorization(&[("Authorization", "Basic caller")], json!({"azure_ad_token": "entra"}))]
-    fn a_caller_credential_skips_the_deployment_key_and_entra(
+    #[case::other_casing_api_key_beside_the_entra_bearer(
+        &[("API-Key", "caller")],
+        &[("API-Key", "caller"), ("Authorization", "Bearer entra")]
+    )]
+    #[case::a10_exact_bearer_is_overwritten_by_the_entra_bearer(
+        &[("Authorization", "Bearer caller"), ("x-trace", "1")],
+        &[("x-trace", "1"), ("Authorization", "Bearer entra")]
+    )]
+    #[case::other_casing_basic_is_joined_with_the_entra_bearer(
+        &[("authorization", "Basic caller")],
+        &[("authorization", "Basic caller"), ("Authorization", "Bearer entra")]
+    )]
+    #[tokio::test]
+    async fn caller_credentials_are_sent_beside_the_entra_token_as_python_sends_them(
         #[case] forwarded: &[(&str, &str)],
-        #[case] params: serde_json::Value,
+        #[case] sent: &[(&str, &str)],
     ) {
-        assert!(matches!(
-            validated_with(forwarded, Some("sk-azure"), params.clone()).auth,
-            AuthScheme::Forwarded
-        ));
-        assert!(matches!(
-            validated_with(forwarded, None, params).auth,
-            AuthScheme::Forwarded
-        ));
+        let ValidatedEnvironment { headers, auth } =
+            validated_with(forwarded, None, json!({"azure_ad_token": "entra"}));
+        let AuthScheme::PythonHostedAzureAdToken { entra, .. } = auth else {
+            panic!("a call without a key runs Entra ID with a Python host, got {auth:?}")
+        };
+        let authenticated = crate::base_llm::auth::resolve_auth(
+            &litellm_auth::AuthServices::default(),
+            ValidatedEnvironment {
+                headers,
+                auth: *entra,
+            },
+            &|_| None,
+        )
+        .await
+        .expect("a static token resolves");
+        assert_eq!(authenticated.headers, pairs_of(sent));
     }
 
     #[test]
@@ -1404,10 +1437,12 @@ mod tests {
     #[case::a_key(&[], Some("sk-azure"), json!({}), &[])]
     #[case::an_azure_ad_token_param(&[], None, json!({"azure_ad_token": "tok"}), &[])]
     #[case::an_empty_azure_ad_token_param(&[], None, json!({"azure_ad_token": ""}), &["AZURE_AD_TOKEN"])]
-    #[case::a_caller_x_api_key(&[("X-Api-Key", "caller")], None, json!({}), &[])]
-    #[case::a_caller_api_key(&[("API-Key", "caller")], None, json!({}), &[])]
-    #[case::a_caller_bearer(&[("authorization", "Bearer caller")], None, json!({}), &[])]
-    #[case::a_caller_basic_authorization(&[("Authorization", "Basic caller")], None, json!({}), &[])]
+    #[case::a_caller_x_api_key(&[("X-Api-Key", "caller")], None, json!({}), &["AZURE_AD_TOKEN"])]
+    #[case::a_caller_other_casing_api_key(&[("API-Key", "caller")], None, json!({}), &["AZURE_AD_TOKEN"])]
+    #[case::a_caller_exact_api_key(&[("api-key", "caller")], None, json!({}), &[])]
+    #[case::a_caller_other_casing_bearer(&[("authorization", "Bearer caller")], None, json!({}), &["AZURE_AD_TOKEN"])]
+    #[case::a_caller_exact_bearer(&[("Authorization", "Bearer caller")], None, json!({}), &["AZURE_AD_TOKEN"])]
+    #[case::a_caller_basic_authorization(&[("Authorization", "Basic caller")], None, json!({}), &["AZURE_AD_TOKEN"])]
     #[case::a_blank_caller_bearer(&[("Authorization", "Bearer ")], None, json!({}), &["AZURE_AD_TOKEN"])]
     fn the_azure_ad_token_secret_is_read_only_where_python_reads_it(
         #[case] forwarded: &[(&str, &str)],

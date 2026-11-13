@@ -225,9 +225,10 @@ async fn azure_without_a_base_anywhere_fails_before_sending(call: MessagesCall) 
 
 #[rstest]
 #[case::a_keyed_call(Some("sk-azure"), &[], false)]
-#[case::a_caller_x_api_key(None, &[("x-api-key", "caller")], false)]
-#[case::a_caller_bearer(None, &[("Authorization", "Bearer caller")], false)]
-#[case::a_caller_api_key(None, &[("Api-Key", "caller")], false)]
+#[case::an_exact_caller_api_key(None, &[("api-key", "caller")], false)]
+#[case::a_caller_x_api_key(None, &[("x-api-key", "caller")], true)]
+#[case::a_caller_bearer(None, &[("Authorization", "Bearer caller")], true)]
+#[case::a_title_case_caller_api_key(None, &[("Api-Key", "caller")], true)]
 #[case::no_key_and_no_caller_credential(None, &[], true)]
 #[tokio::test]
 async fn azure_ad_token_is_looked_up_only_where_python_looks_it_up(

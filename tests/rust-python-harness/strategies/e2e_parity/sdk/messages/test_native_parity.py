@@ -3375,27 +3375,6 @@ def _unlisted_entra_provider() -> str:
 
 
 AZURE_CLAUDE: Final = "azure_ai/claude-sonnet-4-5"
-A06_A08_CALLER_CREDENTIAL: Final = (
-    "A06-A08 (approved by design): a caller x-api-key or bearer replaces the azure_ai operator key on Rust, "
-    "Python sends both"
-)
-A09_MIXED_CASE_API_KEY: Final = (
-    "A09 (approved security fix): a caller Api-Key in any casing replaces the azure_ai operator key as x-api-key "
-    "on Rust, Python only matches a lowercase api-key and sends both"
-)
-CALLER_CREDENTIAL_SKIPS_ENTRA: Final = (
-    "Approved by the owner, same class as A06-A08: a caller credential header is the only credential Rust sends "
-    "and no Entra ID token is minted, Python adds the Entra token (joined into one Authorization or beside x-api-key)"
-)
-NON_BEARER_CALLER_AUTHORIZATION: Final = (
-    "Approved by the owner, same class as A06-A08: a caller Authorization other than a bearer (Basic) replaces the "
-    "azure_ai operator key on Rust, Python sends the operator key beside it"
-)
-A10_CALLER_BEARER_ON_ENTRA: Final = (
-    "A10 (approved by the owner): a caller bearer on an Entra-only azure_ai deployment is sent as is on Rust, "
-    "Python overwrites it with the deployment's Entra token"
-)
-
 AZURE_AUTH_CASES: Final = (
     Case("azure_ai_api_key", model=AZURE_CLAUDE),
     Case(
@@ -3509,31 +3488,26 @@ AZURE_AUTH_CASES: Final = (
         "azure_ai_caller_bearer_on_entra_deployment",
         _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"Authorization": "Bearer caller-token"}),
         model=AZURE_CLAUDE,
-        gaps=_gaps(request=A10_CALLER_BEARER_ON_ENTRA),
     ),
     Case(
         "azure_ai_caller_lowercase_authorization_with_entra",
         _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"authorization": "Bearer caller-token"}),
         model=AZURE_CLAUDE,
-        gaps=_gaps(request=CALLER_CREDENTIAL_SKIPS_ENTRA),
     ),
     Case(
         "azure_ai_caller_x_api_key_with_entra",
         _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"x-api-key": "sk-caller"}),
         model=AZURE_CLAUDE,
-        gaps=_gaps(request=CALLER_CREDENTIAL_SKIPS_ENTRA),
     ),
     Case(
         "azure_ai_caller_upper_case_api_key",
         _kw(extra_headers={"API-KEY": "sk-caller"}),
         model=AZURE_CLAUDE,
-        gaps=_gaps(request=A09_MIXED_CASE_API_KEY),
     ),
     Case(
         "azure_ai_caller_basic_authorization",
         _kw(extra_headers={"Authorization": "Basic Y2FsbGVyOnNlY3JldA=="}),
         model=AZURE_CLAUDE,
-        gaps=_gaps(request=NON_BEARER_CALLER_AUTHORIZATION),
     ),
     Case(
         "azure_ai_no_credential",
@@ -3546,19 +3520,16 @@ AZURE_AUTH_CASES: Final = (
         "azure_ai_caller_mixed_case_api_key",
         _kw(extra_headers={"Api-Key": "sk-caller"}),
         model=AZURE_CLAUDE,
-        gaps=_gaps(request=A09_MIXED_CASE_API_KEY),
     ),
     Case(
         "azure_ai_caller_x_api_key",
         _kw(extra_headers={"x-api-key": "sk-caller"}),
         model=AZURE_CLAUDE,
-        gaps=_gaps(request=A06_A08_CALLER_CREDENTIAL),
     ),
     Case(
         "azure_ai_caller_bearer",
         _kw(extra_headers={"Authorization": "Bearer caller-token"}),
         model=AZURE_CLAUDE,
-        gaps=_gaps(request=A06_A08_CALLER_CREDENTIAL),
     ),
 )
 

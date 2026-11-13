@@ -15,6 +15,8 @@ use litellm_http::request::with_header;
 
 pub type Headers = Vec<(String, String)>;
 
+const ENTRA_AUTHORIZATION_HEADER: &str = "Authorization";
+
 #[derive(Clone, Debug)]
 pub enum AuthScheme {
     /// The caller's own credential is already in the headers and is sent as is.
@@ -32,6 +34,9 @@ pub enum AuthScheme {
     /// Python's `get_azure_ad_token` does. Inputs that yield no token leave the call
     /// unauthenticated.
     AzureAdToken { inputs: Box<AzureAuthInputs> },
+    /// A configured Entra ID token (`azure_ad_token`), set under Python's `Authorization` key
+    /// as an Entra ID token minted at send time is.
+    AzureAdTokenValue { secret: SecretValue },
     /// An Entra ID token only Python's `get_azure_ad_token` can mint (username and password,
     /// OIDC references, token refresh), asked of the host when the request is sent. A host
     /// answer without a token leaves the call unauthenticated.
@@ -156,16 +161,16 @@ pub async fn resolve_auth(
                 })?;
             Ok(Authenticated {
                 headers: match token {
-                    Some(token) => with_credential(
-                        headers,
-                        CredentialPlacement::Bearer,
-                        token.value().secret().expose(),
-                    ),
+                    Some(token) => with_entra_bearer(headers, token.value().secret().expose()),
                     None => headers,
                 },
                 signer: None,
             })
         }
+        AuthScheme::AzureAdTokenValue { secret } => Ok(Authenticated {
+            headers: with_entra_bearer(headers, secret.expose()),
+            signer: None,
+        }),
         AuthScheme::PythonHostedAzureAdToken { missing, .. } => Err(missing),
         AuthScheme::HostAzureAdToken => Err(litellm_auth::Error::CredentialAcquisition(
             litellm_auth::ErrorDetail::Unresolved {
@@ -191,6 +196,19 @@ pub async fn resolve_auth(
             ),
         }),
     }
+}
+
+/// Python's `_base_validate_azure_environment` sets `headers["Authorization"]`: only that exact
+/// key is replaced, and a caller `authorization` in another casing is joined with it on the wire.
+fn with_entra_bearer(headers: Headers, token: &str) -> Headers {
+    headers
+        .into_iter()
+        .filter(|(name, _)| name != ENTRA_AUTHORIZATION_HEADER)
+        .chain([(
+            ENTRA_AUTHORIZATION_HEADER.to_string(),
+            format!("Bearer {token}"),
+        )])
+        .collect()
 }
 
 fn with_credential(headers: Headers, placement: CredentialPlacement, credential: &str) -> Headers {
@@ -317,11 +335,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case::a_configured_token_is_sent_as_a_bearer(Some("entra"), None, &[("authorization", "Bearer entra")])]
+    #[case::a_configured_token_is_sent_as_a_bearer(Some("entra"), None, &[("Authorization", "Bearer entra")])]
     #[case::the_caller_provider_outranks_a_configured_token(
         Some("entra"),
         Some("from-provider"),
-        &[("authorization", "Bearer from-provider")]
+        &[("Authorization", "Bearer from-provider")]
     )]
     #[case::an_empty_provider_token_sends_no_credential(None, Some(""), &[])]
     #[case::no_entra_input_sends_no_credential(None, None, &[])]
@@ -347,7 +365,31 @@ mod tests {
     }
 
     #[rstest]
-    #[case::the_host_token_is_sent_as_a_bearer(Some("from-python"), &[("authorization", "Bearer from-python")])]
+    #[case::pythons_exact_key_is_replaced(
+        &[("Authorization", "Bearer caller"), ("x-trace", "1")],
+        &[("x-trace", "1"), ("Authorization", "Bearer entra")]
+    )]
+    #[case::another_casing_stays_beside_it(
+        &[("authorization", "Bearer caller"), ("x-api-key", "caller")],
+        &[("authorization", "Bearer caller"), ("x-api-key", "caller"), ("Authorization", "Bearer entra")]
+    )]
+    #[tokio::test]
+    async fn an_entra_token_is_set_under_pythons_authorization_key(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let authenticated = resolve(
+            headers(forwarded),
+            AuthScheme::AzureAdToken {
+                inputs: Box::new(entra_inputs(Some("entra"))),
+            },
+        )
+        .await;
+        assert_eq!(authenticated.headers, headers(expected));
+    }
+
+    #[rstest]
+    #[case::the_host_token_is_sent_as_a_bearer(Some("from-python"), &[("Authorization", "Bearer from-python")])]
     #[case::no_host_token_sends_no_credential(Some(""), &[])]
     #[tokio::test]
     async fn a_host_entra_scheme_sends_the_token_python_minted(
