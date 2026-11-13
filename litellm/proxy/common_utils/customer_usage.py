@@ -41,6 +41,12 @@ class _Member(BaseModel):
     parent_team_id: str
 
 
+class _KeyMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    metadata: object = None
+
+
 class CustomerUsageDatabase(Protocol):
     @property
     def litellm_customerorganizationtable(self) -> TableActions[object]: ...
@@ -167,6 +173,10 @@ def customer_usage_requested(metadata: Mapping[str, object], key_metadata: Mappi
 
 def customer_usage_fields(value: object) -> Mapping[str, object]:
     return _FIELDS.validate_python(value) if isinstance(value, Mapping) else {}
+
+
+def customer_usage_key_fields(key: object) -> Mapping[str, object]:
+    return customer_usage_fields(_KeyMetadata.model_validate(key).metadata)
 
 
 def customer_usage_http_status(error: CustomerUsageError) -> int:

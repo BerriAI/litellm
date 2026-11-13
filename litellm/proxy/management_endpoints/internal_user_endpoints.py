@@ -79,6 +79,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
 from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
     _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_permissions_caller_permission,
+    customer_key_actor,
     generate_key_helper_fn,
     prepare_metadata_fields,
     raise_on_logging_credential_change,
@@ -561,8 +562,9 @@ async def new_user(
      }'
     ```
     """
-    if data.auto_create_key and isinstance(user_api_key_dict, UserAPIKeyAuth):
-        validated_customer_key_metadata(data.metadata, None, user_api_key_dict)
+    actor: Final = customer_key_actor(user_api_key_dict)
+    if data.auto_create_key and actor is not None:
+        validated_customer_key_metadata(data.metadata, None, actor)
     try:
         from litellm.proxy.proxy_server import _license_check, prisma_client
 
@@ -631,7 +633,7 @@ async def new_user(
             request_type="user",
             **data_json,
             llm_router=None,
-            actor=user_api_key_dict if isinstance(user_api_key_dict, UserAPIKeyAuth) else None,
+            actor=actor,
         )
         created_user_id: Final = cast(str | None, response.get("user_id", None))
         if created_user_id is not None:

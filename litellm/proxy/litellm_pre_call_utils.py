@@ -100,6 +100,7 @@ from litellm.proxy.common_utils.customer_usage import (
     CustomerUsageFailure,
     customer_usage_fields,
     customer_usage_http_status,
+    customer_usage_key_fields,
     customer_usage_requested,
     resolve_customer_usage,
 )
@@ -2999,8 +3000,8 @@ async def add_litellm_data_to_request(
     if _metadata_variable_name == "metadata":
         data.pop("litellm_metadata", None)
 
-    _customer_metadata: Final = customer_usage_fields(data[_metadata_variable_name])
-    _customer_key_metadata: Final = customer_usage_fields(user_api_key_dict.metadata)
+    _customer_metadata: Final = customer_usage_fields(_REQUEST_FIELDS.validate_python(data)[_metadata_variable_name])
+    _customer_key_metadata: Final = customer_usage_key_fields(user_api_key_dict)
     _customer_usage: Final = await resolve_customer_usage(
         metadata=_customer_metadata,
         key_metadata=_customer_key_metadata,

@@ -1500,6 +1500,10 @@ def validated_customer_key_metadata(
     return binding
 
 
+def customer_key_actor(value: object) -> UserAPIKeyAuth | None:
+    return value if isinstance(value, UserAPIKeyAuth) else None
+
+
 async def _common_key_generation_helper(
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -3106,7 +3110,9 @@ async def prepare_key_update_data(
     data_json: Final[dict] = data.model_dump(exclude_unset=True)
     if "metadata" in data_json:
         customer_binding: Final = validated_customer_key_metadata(
-            data.metadata, existing_key_row.metadata, user_api_key_dict
+            data.metadata,
+            _StoredKeyMetadata.model_validate(existing_key_row, from_attributes=True).metadata,
+            user_api_key_dict,
         )
         data_json["metadata"] = dict(customer_binding) if customer_binding is not None else None
     data_json.pop("key", None)
@@ -5423,7 +5429,7 @@ async def generate_key_helper_fn(
     llm_router: Router | None = None,
     actor: UserAPIKeyAuth | None = None,
 ):
-    validated_customer_key_metadata(metadata, None, actor)
+    customer_metadata: Final = validated_customer_key_metadata(_DECODED_JSON.validate_python(metadata), None, actor)
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
     if prisma_client is None:
@@ -5475,7 +5481,7 @@ async def generate_key_helper_fn(
     router_settings_json: Final = safe_dumps(router_settings) if router_settings is not None else safe_dumps({})
 
     metadata_json: Final = metadata_json_with_limits(
-        metadata,
+        customer_metadata,
         model_rpm_limit=model_rpm_limit,
         model_tpm_limit=model_tpm_limit,
         mcp_rpm_limit=mcp_rpm_limit,
