@@ -11907,3 +11907,34 @@ async def test_pre_call_deployment_hook_hands_responses_compact_its_call_type(mo
     await async_pre_call_deployment_hook({"model": "gpt-5.4-mini"}, "acompact_responses")
 
     assert hook.seen_call_types == (CallTypes.acompact_responses,)
+
+
+def test_remove_strict_from_schema_preserves_property_named_strict():
+    schema = {
+        "type": "object",
+        "strict": True,
+        "properties": {
+            "strict": {"type": "boolean"},
+            "field": {"type": "string", "strict": True},
+        },
+        "patternProperties": {
+            "strict": {"type": "number", "strict": True},
+        },
+        "$defs": {
+            "strict": {"type": "object", "strict": True},
+        },
+        "definitions": {
+            "strict": {"type": "integer", "strict": True},
+        },
+        "required": ["strict", "field"],
+    }
+
+    result = litellm.utils._remove_strict_from_schema(schema)
+
+    assert "strict" not in result
+    assert result["properties"]["strict"] == {"type": "boolean"}
+    assert result["properties"]["field"] == {"type": "string"}
+    assert result["patternProperties"]["strict"] == {"type": "number"}
+    assert result["$defs"]["strict"] == {"type": "object"}
+    assert result["definitions"]["strict"] == {"type": "integer"}
+    assert result["required"] == ["strict", "field"]

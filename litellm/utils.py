@@ -5090,14 +5090,18 @@ def remove_strict_from_schema(schema: _SchemaT) -> _SchemaT:
     """
     Relevant Issues: https://github.com/BerriAI/litellm/issues/6136, https://github.com/BerriAI/litellm/issues/6088
     """
+    schema_map_keys: Final = {"properties", "patternProperties", "$defs", "definitions"}
     if isinstance(schema, dict):
         # Remove the 'additionalProperties' key if it exists and is set to False
         if "strict" in schema:
             del schema["strict"]
 
-        # Recursively process all dictionary values
         for key, value in schema.items():
-            remove_strict_from_schema(value)
+            if key in schema_map_keys and isinstance(value, dict):
+                for prop_schema in value.values():
+                    remove_strict_from_schema(prop_schema)
+            else:
+                remove_strict_from_schema(value)
 
     elif isinstance(schema, list):
         # Recursively process all items in the list
