@@ -23,7 +23,7 @@ use pyo3::{
 #[cfg(feature = "tiktoken")]
 use pyo3::{
     exceptions::{PyKeyError, PyRuntimeError},
-    types::PyBytes,
+    types::{PyBytes, PyInt},
 };
 
 #[cfg(not(all(feature = "tiktoken", feature = "huggingface")))]
@@ -270,7 +270,7 @@ impl Tokenizer {
     ) -> PyResult<(Vec<u32>, Vec<Vec<u32>>)> {
         enter_native()?;
         let tokenizer = self.tiktoken()?;
-        let text = self.text(text)?;
+        let text = text.to_cow()?;
         Ok(release_gil(py, || {
             tokenizer.encode_with_unstable(&text, &allowed)
         }))
@@ -292,8 +292,11 @@ impl Tokenizer {
     }
 
     #[cfg(feature = "tiktoken")]
-    fn is_special_token(&self, token: u32) -> PyResult<bool> {
-        Ok(self.vocabulary()?.is_special_token(token))
+    fn is_special_token(&self, token: &Bound<'_, PyInt>) -> PyResult<bool> {
+        let vocabulary = self.vocabulary()?;
+        Ok(token
+            .extract::<u32>()
+            .is_ok_and(|token| vocabulary.is_special_token(token)))
     }
 
     /// Every mergeable token's bytes, sorted bytewise like tiktoken's `token_byte_values`.
