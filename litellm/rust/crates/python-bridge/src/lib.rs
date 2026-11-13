@@ -26,7 +26,7 @@ mod _native {
     use pyo3::{prelude::*, types::PyModule};
 
     #[pymodule_export]
-    use crate::db::NativeDatabase;
+    use crate::db::{NativeDatabase, NativeDatabaseFailure};
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -180,6 +180,7 @@ mod tests {
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
                 "NativeDatabase",
+                "NativeDatabaseFailure",
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",

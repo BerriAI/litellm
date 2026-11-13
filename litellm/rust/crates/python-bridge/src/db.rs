@@ -50,8 +50,26 @@ pub(crate) struct NativeDatabase {
     events: Arc<dyn Observer>,
 }
 
+pyo3::create_exception!(
+    _native,
+    NativeDatabaseFailure,
+    pyo3::exceptions::PyException,
+    "A native database operation failed. The kind attribute is litellm-db's ErrorKind, and unavailable and requeue_safe are the error's is_unavailable and is_requeue_safe."
+);
+
 fn map_error(error: litellm_db::Error) -> PyErr {
-    PyValueError::new_err(litellm_error::Report::new(&error).to_string())
+    let kind: &'static str = error.kind().into();
+    let failure = NativeDatabaseFailure::new_err(litellm_error::Report::new(&error).to_string());
+    let decided = Python::attach(|py| {
+        let value = failure.value(py);
+        value.setattr("kind", kind)?;
+        value.setattr("unavailable", error.is_unavailable())?;
+        value.setattr("requeue_safe", error.is_requeue_safe())
+    });
+    match decided {
+        Ok(()) => failure,
+        Err(error) => error,
+    }
 }
 
 #[pymethods]

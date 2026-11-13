@@ -14,6 +14,7 @@ from cryptography.x509.oid import NameOID
 from pydantic import TypeAdapter
 
 from litellm._service_logger import ServiceLogging, ServiceTypes
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, db_write_failure_is_requeue_safe
 from litellm.proxy.db.native_database import (
     ServiceLoggingEvents,
     TokenRotation,
@@ -26,7 +27,7 @@ from litellm.proxy.db.native_database import (
 )
 from litellm.proxy.db.pgbouncer import PGBOUNCER_POOLED_ENV_VAR
 from litellm.proxy.db.token_auth import IAMEndpoint, RdsIamTokenAuth
-from litellm.rust_bridge._native import NativeDatabase
+from litellm.rust_bridge._native import NativeDatabase, NativeDatabaseFailure
 from litellm.rust_bridge.database import NativeDatabaseEndpoint, NativePoolLimits
 
 NOW: Final = datetime(2026, 11, 3, 12, 0, 0)
@@ -467,7 +468,7 @@ async def test_native_health_check_failure_reports_a_db_event() -> None:
         ).endpoint,
     )
 
-    with pytest.raises(ValueError, match="database query failed"):
+    with pytest.raises(NativeDatabaseFailure, match="database query failed"):
         await native.health_check()
     await asyncio.wait_for(logging.arrived.wait(), timeout=5)
     await native.close()
@@ -477,3 +478,49 @@ async def test_native_health_check_failure_reports_a_db_event() -> None:
     assert (service, call_type, metadata) == ("postgres", "health_check", {})
     assert duration >= 0.9
     assert failure is not None and "database query failed" in failure
+
+
+async def _native_failure(url: str) -> NativeDatabaseFailure:
+    native: Final = await NativeDatabase.connect(
+        ServiceLoggingEvents(loop=asyncio.get_running_loop(), service_logging=lambda: None),
+        native_endpoint(url, tls_offered=True, max_connections=2).endpoint,
+    )
+    try:
+        with pytest.raises(NativeDatabaseFailure) as raised:
+            await native.health_check()
+    finally:
+        await native.close()
+    return raised.value
+
+
+async def _drop_connection(_: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    writer.close()
+
+
+@pytest.mark.asyncio
+async def test_native_outage_passes_the_db_unavailable_gate_and_is_requeue_safe() -> None:
+    error: Final = await _native_failure("postgresql://litellm:secret@127.0.0.1:1/proxy?pool_timeout=1")
+
+    assert (error.kind, str(error)) == (
+        "capacity",
+        "database query failed: pool timed out while waiting for an open connection",
+    )
+    assert PrismaDBExceptionHandler.is_database_connection_error(error)
+    assert db_write_failure_is_requeue_safe(error)
+
+
+@pytest.mark.asyncio
+async def test_native_dropped_connection_is_unavailable_but_not_requeue_safe() -> None:
+    server: Final = await asyncio.start_server(_drop_connection, "127.0.0.1", 0)
+    _, port = _ADDRESS.validate_python(server.sockets[0].getsockname())
+    try:
+        error: Final = await _native_failure(
+            f"postgresql://litellm:secret@127.0.0.1:{port}/proxy?pool_timeout=5&sslmode=disable"
+        )
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert error.kind == "unreachable"
+    assert PrismaDBExceptionHandler.is_database_connection_error(error)
+    assert not db_write_failure_is_requeue_safe(error)

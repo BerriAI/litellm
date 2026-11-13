@@ -16,7 +16,7 @@ from litellm.proxy.db.native_database import (
     resolve_native_endpoint,
     writer_token_rotation,
 )
-from litellm.rust_bridge._native import NativeDatabase
+from litellm.rust_bridge._native import NativeDatabase, NativeDatabaseFailure
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -43,7 +43,7 @@ def _log_ignored_options(env_var: str, settings: NativeEndpointSettings) -> None
 async def _warn_if_unreachable(native: NativeDatabase) -> None:
     try:
         await native.health_check()
-    except ValueError as error:
+    except NativeDatabaseFailure as error:
         verbose_proxy_logger.warning(
             "Native database pool cannot reach the database, so operations ported to it will fail until it"
             " connects. Prisma is checked separately. Cause: %s",

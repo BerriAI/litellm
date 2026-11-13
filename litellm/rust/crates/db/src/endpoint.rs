@@ -105,13 +105,18 @@ impl Endpoint {
         }
     }
 
-    pub fn pool(&self) -> Result<PgPool, Error> {
+    pub fn pool_options(&self) -> Result<PgPoolOptions, Error> {
         let limits = self.pool;
         Ok(PgPoolOptions::new()
             .min_connections(0)
             .max_connections(limits.max_connections)
             .acquire_timeout(seconds(limits.acquire_timeout_seconds)?.unwrap_or(WAIT_FOREVER))
-            .idle_timeout(seconds(limits.idle_timeout_seconds)?)
+            .idle_timeout(seconds(limits.idle_timeout_seconds)?))
+    }
+
+    pub fn pool(&self) -> Result<PgPool, Error> {
+        Ok(self
+            .pool_options()?
             .connect_lazy_with(self.connect_options()))
     }
 

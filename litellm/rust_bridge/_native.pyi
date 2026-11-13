@@ -20,6 +20,11 @@ class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
 class NativeRedisStoreError(Exception): ...
 
+class NativeDatabaseFailure(Exception):
+    kind: str
+    unavailable: bool
+    requeue_safe: bool
+
 def trace_encode_error(message: str) -> bytes: ...
 def bundled_model_cost_map() -> bytes: ...
 def native_redis_breaker_states() -> list[str]: ...
@@ -763,6 +768,7 @@ __all__ = [
     "NativeClickHouseSpendStorage",
     "NativeCostMapSource",
     "NativeDatabase",
+    "NativeDatabaseFailure",
     "NativeDeploymentHealth",
     "NativeDiagnosticProcessor",
     "NativeFetchFailed",
