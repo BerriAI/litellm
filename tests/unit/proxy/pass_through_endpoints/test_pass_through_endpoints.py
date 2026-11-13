@@ -11632,11 +11632,7 @@ async def _send_through_proxy(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "path",
-    ["/cfg-rpc", "/cfg-sub/deeper", "/db-rpc", "/cfg-guarded"],
-    ids=["config", "config-subpath", "db", "config-with-pre-call-guardrail"],
-)
+@pytest.mark.parametrize("path", ["/cfg-rpc", "/cfg-sub/deeper", "/db-rpc"], ids=["config", "config-subpath", "db"])
 @pytest.mark.parametrize(
     "body",
     [
@@ -11657,12 +11653,6 @@ async def test_configured_pass_through_forwards_the_client_body_unchanged(tmp_pa
                 "auth": False,
                 "include_subpath": True,
             },
-            {
-                "path": "/cfg-guarded",
-                "target": "http://upstream.test/guarded",
-                "auth": False,
-                "guardrails": {"route-guard": {}},
-            },
         ],
         db_pass_through_endpoints=[
             {
@@ -11674,16 +11664,55 @@ async def test_configured_pass_through_forwards_the_client_body_unchanged(tmp_pa
         ],
     )
     await _run_db_sync_cycle(proxy)
+
+    response, upstream_requests = await _send_through_proxy(path, {}, body=body)
+
+    assert response.status_code == 200
+    assert [json.loads(request.content) for request in upstream_requests] == [body]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body, forwarded_body",
+    [
+        (
+            {"jsonrpc": "2.0", "id": 7, "method": "skills/list", "params": {}},
+            {"jsonrpc": "2.0", "id": 7, "method": "skills/list", "params": {}},
+        ),
+        (
+            {"id": "rec-1", "tags": ["a"], "metadata": {"note": "x"}, "litellm_metadata": {"note": "y"}},
+            {"id": "rec-1", "tags": ["a"]},
+        ),
+    ],
+    ids=["json-rpc", "metadata-the-guardrail-does-not-scan"],
+)
+async def test_configured_pass_through_with_a_pre_call_guardrail_forwards_only_client_fields_it_scans(
+    tmp_path, monkeypatch, body, forwarded_body
+):
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {
+                "path": "/cfg-guarded",
+                "target": "http://upstream.test/guarded",
+                "auth": False,
+                "guardrails": {"route-guard": {}},
+            },
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
     monkeypatch.setattr(
         litellm,
         "callbacks",
         [CustomGuardrail(guardrail_name="route-guard", default_on=False, event_hook=GuardrailEventHooks.pre_call)],
     )
 
-    response, upstream_requests = await _send_through_proxy(path, {}, body=body)
+    response, upstream_requests = await _send_through_proxy("/cfg-guarded", {}, body=body)
 
     assert response.status_code == 200
-    assert [json.loads(request.content) for request in upstream_requests] == [body]
+    assert [json.loads(request.content) for request in upstream_requests] == [forwarded_body]
 
 
 @pytest.mark.asyncio

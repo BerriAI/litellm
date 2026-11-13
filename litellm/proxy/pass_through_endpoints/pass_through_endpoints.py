@@ -89,6 +89,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
 from litellm.llms.oss_decision import validate_oss_request
+from litellm.llms.pass_through.guardrail_translation.handler import FIELDS_SKIPPED_BY_FULL_PAYLOAD_SCAN
 from litellm.llms.vertex_ai.common_utils import get_vertex_model_id_from_url
 from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._lazy_features import lazy_owned_routes
@@ -1255,12 +1256,27 @@ def _client_litellm_fields(
     )
 
 
+def _client_fields_pre_call_guardrails_scanned(
+    client_fields: Mapping[str, object],
+    body: Mapping[str, object],
+    has_pre_call_guardrails: Callable[[Mapping[str, object]], bool],
+) -> Mapping[str, object]:
+    if client_fields.keys().isdisjoint(FIELDS_SKIPPED_BY_FULL_PAYLOAD_SCAN) or not has_pre_call_guardrails(body):
+        return client_fields
+    return {k: v for k, v in client_fields.items() if k not in FIELDS_SKIPPED_BY_FULL_PAYLOAD_SCAN}
+
+
 def _with_client_litellm_fields(
-    body: Mapping[str, object] | None, client_fields: Mapping[str, object] | None
+    body: Mapping[str, object] | None,
+    client_fields: Mapping[str, object] | None,
+    has_pre_call_guardrails: Callable[[Mapping[str, object]], bool],
 ) -> Mapping[str, object] | None:
     if body is None or client_fields is None:
         return body
-    return {**{k: v for k, v in body.items() if k not in types_utils.all_litellm_params}, **client_fields}
+    return {
+        **{k: v for k, v in body.items() if k not in types_utils.all_litellm_params},
+        **_client_fields_pre_call_guardrails_scanned(client_fields, body, has_pre_call_guardrails),
+    }
 
 
 def _eu_jev_client_body(custom_llm_provider: str | None, body: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -1673,7 +1689,11 @@ async def pass_through_request(
 
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
         upstream_body: Final = _with_anthropic_user_id(
-            _with_client_litellm_fields(outgoing_body, client_litellm_fields), client_user_id, str(url)
+            _with_client_litellm_fields(
+                outgoing_body, client_litellm_fields, proxy_logging_obj.request_has_pre_call_guardrails
+            ),
+            client_user_id,
+            str(url),
         )
         logging_obj.pre_call(
             input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
