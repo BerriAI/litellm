@@ -22,6 +22,8 @@ export type CustomerRequestFailure = Readonly<{ status: number | null; message: 
 const record = (value: unknown): Readonly<Record<string, unknown>> | null =>
   value !== null && typeof value === "object" ? (value as Readonly<Record<string, unknown>>) : null;
 
+const stringValue = (value: unknown): string | null => (typeof value === "string" ? value : null);
+
 export const customerRequestFailure = (error: unknown): CustomerRequestFailure | null => {
   if (error === null || error === undefined) return null;
   const status =
@@ -29,10 +31,8 @@ export const customerRequestFailure = (error: unknown): CustomerRequestFailure |
   const envelope = record(error);
   const body = record(envelope?.body) ?? record(envelope?.error);
   const detail = record(body?.error) ?? body;
-  const message = typeof detail?.message === "string" ? detail.message : extractProxyErrorMessage(error);
-  const fallbackCode = typeof detail?.code === "string" ? detail.code : null;
-  const typeCode = typeof detail?.type === "string" ? detail.type : null;
-  const code = typeof detail?.litellm_error_type === "string" ? detail.litellm_error_type : (typeCode ?? fallbackCode);
+  const message = stringValue(detail?.message) ?? extractProxyErrorMessage(error);
+  const code = stringValue(detail?.litellm_error_type) ?? stringValue(detail?.type) ?? stringValue(detail?.code);
   return { status, message: code && !message.includes(code) ? `${code}: ${message}` : message };
 };
 

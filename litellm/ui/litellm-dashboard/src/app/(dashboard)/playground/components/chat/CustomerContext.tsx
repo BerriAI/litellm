@@ -142,7 +142,9 @@ export function CustomerBudgetStrip({
             <div key={scope.label} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-end gap-x-4 gap-y-1">
               <div className="min-w-0">
                 <p className="truncate text-muted-foreground">{scope.label}</p>
-                <p className="truncate font-medium" title={scope.id}>{scope.id}</p>
+                <p className="truncate font-medium" title={scope.id}>
+                  {scope.id}
+                </p>
                 {usage !== null && (
                   <div
                     className="mt-1 h-1 w-full overflow-hidden rounded-full bg-muted"

@@ -231,8 +231,14 @@ export function PlaygroundChat({
   };
 
   const code = (sdk: CodeSdk): string => {
-    if (supportsCustomerEndpoint(settings.endpoint))
-      return generatePlaygroundCode({
+    if (supportsCustomerEndpoint(settings.endpoint)) {
+      const metadata = {
+        tags: settings.tags,
+        vector_stores: settings.vectorStores,
+        guardrails: settings.guardrails,
+        policies: settings.policies,
+      };
+      const customerSnippet = {
         endpoint: settings.endpoint,
         sdk,
         model: settings.model ?? "your-model-name",
@@ -248,15 +254,10 @@ export function PlaygroundChat({
           proxySettings?.LITELLM_UI_API_DOC_BASE_URL ||
           proxySettings?.PROXY_BASE_URL ||
           window.location.origin,
-        metadata: Object.fromEntries(
-          Object.entries({
-            tags: settings.tags,
-            vector_stores: settings.vectorStores,
-            guardrails: settings.guardrails,
-            policies: settings.policies,
-          }).filter(([, values]) => values.length > 0),
-        ),
-      });
+        metadata: Object.fromEntries(Object.entries(metadata).filter(([, values]) => values.length > 0)),
+      };
+      return generatePlaygroundCode(customerSnippet);
+    }
     const snippet: Parameters<typeof generateCodeSnippet>[0] = {
       apiKeySource: "custom",
       accessToken: null,

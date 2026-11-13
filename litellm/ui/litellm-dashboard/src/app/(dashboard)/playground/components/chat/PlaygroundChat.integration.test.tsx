@@ -215,14 +215,15 @@ describe("PlaygroundChat", () => {
     const user = userEvent.setup();
     chatRequest.mockImplementation(replyWith("Hi there"));
     vi.mocked(fetchMCPServers).mockResolvedValue([{ server_id: "srv-1", alias: "docs" }]);
-    preload({
+    const savedSettings = {
       selectedModel: "gpt-fast",
       selectedTags: JSON.stringify(["team-a"]),
       selectedVectorStores: JSON.stringify(["vs-1"]),
       selectedPolicies: JSON.stringify(["strict"]),
       selectedMCPServers: JSON.stringify(["srv-1"]),
       streamingEnabled: "false",
-    });
+    };
+    preload(savedSettings);
     setSecureItem("customHeaders", JSON.stringify([["x-team", "blue"]]));
     renderChat();
 

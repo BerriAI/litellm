@@ -65,7 +65,7 @@ describe("Playground customer snippets", () => {
     } as const;
     const code = generatePlaygroundCode(options);
 
-    expect(code).toContain('  -H \'x-litellm-customer-org-alias: customer-alias\' \\\n');
-    expect(code).toContain('  -H \'x-litellm-customer-member-id: customer-member\' \\\n');
+    expect(code).toContain("  -H 'x-litellm-customer-org-alias: customer-alias' \\\n");
+    expect(code).toContain("  -H 'x-litellm-customer-member-id: customer-member' \\\n");
   });
 });
