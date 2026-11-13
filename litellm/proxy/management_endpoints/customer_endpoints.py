@@ -42,6 +42,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     handle_update_object_permission_common,
     set_object_permission,
 )
+from litellm.proxy.management_helpers.utils import validate_scalar_budget_attachment
 from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.redis.stores.spend_counters import end_user_counter
@@ -466,6 +467,7 @@ async def new_end_user(
 
             new_end_user_obj["budget_id"] = budget_record.budget_id
         elif data.budget_id is not None:
+            await validate_scalar_budget_attachment(prisma_client, data.budget_id)
             new_end_user_obj["budget_id"] = data.budget_id
 
         _user_data: Final = _STR_OBJECT_DICT.validate_python(data.dict(exclude_none=True))
@@ -679,6 +681,7 @@ async def update_end_user(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
+        await validate_scalar_budget_attachment(prisma_client, data.budget_id)
         sent_fields: Final = data.fields_set()
         non_default_values: Final[dict[str, object]] = {
             k: v for k, v in data_json.items() if _should_update_field(k, v, sent_fields)

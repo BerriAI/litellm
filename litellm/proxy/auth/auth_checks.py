@@ -385,6 +385,9 @@ class _PrismaMaxBudgetRow(Protocol):
     @property
     def max_budget(self) -> float | None: ...
 
+    @property
+    def budget_limits(self) -> object: ...
+
 
 class _PrismaModelAccessGroupBudgetRow(Protocol):
     access_group_name: str
@@ -1812,6 +1815,9 @@ async def get_default_end_user_budget(
             )
             return None
 
+        from litellm.proxy.management_helpers.utils import reject_budget_windows
+
+        reject_budget_windows(budget_record.dict())
         _budget_obj: Final = LiteLLM_BudgetTable.model_validate(budget_record.dict())
         # Cache the budget for 60 seconds
         await user_api_key_cache.async_set_cache(
@@ -1823,6 +1829,8 @@ async def get_default_end_user_budget(
 
         return _budget_obj
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error("Error fetching default end user budget: %s", e)
         return None
@@ -1877,6 +1885,9 @@ async def get_team_member_default_budget(
         verbose_proxy_logger.warning("Team-default member budget not found in database: %s", budget_id)
         return None
 
+    from litellm.proxy.management_helpers.utils import reject_budget_windows
+
+    reject_budget_windows(budget_record.dict())
     budget: Final = LiteLLM_BudgetTable.model_validate(budget_record.dict())
     await user_api_key_cache.async_set_cache(
         key=cache_key,
@@ -2508,6 +2519,8 @@ async def _fetch_uncached_model_access_group_budgets(
                 model_type=ModelAccessGroupBudget,
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001  # fail-safe: a budget fetch error must yield "no budget rows", never break auth
         verbose_proxy_logger.debug("Error batch fetching model access group budgets from database: %s", e)
         return ()
@@ -2516,7 +2529,11 @@ async def _fetch_uncached_model_access_group_budgets(
 
 
 def _model_access_group_budget(row: _PrismaModelAccessGroupBudgetRow) -> ModelAccessGroupBudget:
+    from litellm.proxy.management_helpers.utils import reject_budget_windows
+
     budget_table: Final = row.litellm_budget_table
+    if budget_table is not None:
+        reject_budget_windows({"budget_limits": budget_table.budget_limits})
     return ModelAccessGroupBudget(
         access_group_name=row.access_group_name,
         spend=row.spend or 0.0,

@@ -103,7 +103,7 @@ const descendants = async (scope: ResolvedScope, request: CustomerUsageRequest) 
     ? [[scope.member]]
     : await batches(teams, async (team) => {
         const members = await listAll<Member>("customer_members", { parent_team_id: team.customer_team_id }, request);
-        if (members.some((member) => member.parent_team_id !== team.customer_team_id))
+        if (members.some((member) => !member.parent_team_ids.includes(team.customer_team_id)))
           throw new Error(i18n.t("customerPortal.analytics.scopeMismatch"));
         return members;
       });

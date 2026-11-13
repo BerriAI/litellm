@@ -89,6 +89,12 @@ class CustomerTeamRepository(PrismaTableRepository["prisma_models.LiteLLM_Custom
     table_name = "litellm_customerteamtable"
 
 
+class CustomerBudgetIncreaseRequestRepository(
+    PrismaTableRepository["prisma_models.LiteLLM_CustomerBudgetIncreaseRequest"]
+):
+    table_name = "litellm_customerbudgetincreaserequest"
+
+
 class PolicyRepository(PrismaTableRepository["prisma_models.LiteLLM_PolicyTable"]):
     table_name = "litellm_policytable"
 

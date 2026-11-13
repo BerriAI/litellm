@@ -47,7 +47,7 @@ async def ensure_customer_member(
     if isinstance(team, Failure):
         return team
     created: Final = await hierarchy.create_member(
-        MemberCreate(customer_member_id=customer_member_id, parent_team_id=team.customer_team_id), AUTO_CREATE_ACTOR
+        MemberCreate(customer_member_id=customer_member_id, parent_team_ids=(team.customer_team_id,)), AUTO_CREATE_ACTOR
     )
     if isinstance(created, Failure) and created.code is ErrorCode.ALREADY_EXISTS:
         return await hierarchy.get_member(customer_member_id)
