@@ -1464,9 +1464,9 @@ async def exchange_token_with_server(
             if managed_code is not None
             else (bridge_identity.requested_scope if bridge_identity is not None else None)
         )
-        requested_scope: Final = scope if scope is not None else granted_scope
+        exchange_scope: Final = scope if scope is not None else granted_scope
         authorization_scope: Final = (
-            requested_scope if requested_scope is not None else " ".join(resolved_server.scopes or ())
+            exchange_scope if exchange_scope is not None else " ".join(resolved_server.scopes or ())
         )
         token_data = {
             "grant_type": "authorization_code",
