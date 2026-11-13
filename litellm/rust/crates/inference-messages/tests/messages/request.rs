@@ -5,6 +5,7 @@ use litellm_llms_types::{
     providers::anthropic::{AnthropicBeta, BetaSet},
 };
 use litellm_router_types::LitellmParams;
+use litellm_secret_value::SecretValue;
 use rstest::rstest;
 
 use super::*;
@@ -88,8 +89,102 @@ async fn credentials_become_exactly_one_auth_header(
 }
 
 #[rstest]
+#[case::module_key_after_an_empty_call_key(Some(""), &[], json!({}), Some("sk-module"), &[], &[("x-api-key", "sk-module")])]
+#[case::call_key_over_the_module_key(Some("sk-call"), &[], json!({}), Some("sk-module"), &[], &[("x-api-key", "sk-call")])]
+#[case::azure_openai_key_before_azure_key(
+    None,
+    &[],
+    json!({}),
+    None,
+    &[("AZURE_OPENAI_API_KEY", "sk-openai"), ("AZURE_API_KEY", "sk-azure")],
+    &[("x-api-key", "sk-openai")],
+)]
+#[case::blank_call_key_is_sent_instead_of_the_environment_key(
+    Some(" "),
+    &[],
+    json!({}),
+    None,
+    &[("AZURE_API_KEY", "sk-azure")],
+    &[("x-api-key", "")],
+)]
+#[case::entra_token_without_a_key(
+    None,
+    &[],
+    json!({"azure_ad_token": "entra-token"}),
+    None,
+    &[],
+    &[("authorization", "Bearer entra-token")],
+)]
+#[case::a_key_outranks_an_entra_token(
+    Some("sk-call"),
+    &[],
+    json!({"azure_ad_token": "entra-token"}),
+    None,
+    &[],
+    &[("x-api-key", "sk-call")],
+)]
+#[case::no_credential_is_sent_unauthenticated(None, &[], json!({}), None, &[], &[])]
+#[tokio::test]
+async fn azure_credentials_resolve_in_pythons_order(
+    call: MessagesCall,
+    #[case] api_key: Option<&str>,
+    #[case] extra_headers: &[(&str, &str)],
+    #[case] params: Value,
+    #[case] module_api_key: Option<&str>,
+    #[case] secrets: &[(&str, &str)],
+    #[case] expected: &[(&str, &str)],
+) {
+    let upstream = upstream([message_response()]).await;
+    let Value::Object(params) = params else {
+        panic!("case params are an object")
+    };
+
+    run_with(
+        Arc::new(RecordingSecrets::new(secrets.iter().copied())),
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: litellm_inference_messages::litellm_params(
+                [("model".to_string(), json!(MODEL))]
+                    .into_iter()
+                    .chain(params)
+                    .collect(),
+            )
+            .expect("valid params"),
+            api_key: api_key.map(Into::into),
+            api_base: Some(upstream.uri()),
+            extra_headers: headers(extra_headers.iter().copied()),
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    module_api_key: module_api_key.map(SecretValue::new),
+                    ..MessagesSettings::default()
+                },
+                ..MessagesShaping::default()
+            },
+            ..call
+        },
+    )
+    .await
+    .expect("messages call succeeds");
+
+    let request = only_request(&upstream).await;
+    let sent: Vec<(String, String)> = ["x-api-key", "api-key", "authorization"]
+        .into_iter()
+        .flat_map(|name| {
+            request
+                .header_values(name)
+                .into_iter()
+                .map(move |value| (name.to_string(), value.to_string()))
+        })
+        .collect();
+    let expected: Vec<(String, String)> = expected
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+    assert_eq!(sent, expected);
+}
+
+#[rstest]
 #[case::anthropic("anthropic")]
-#[case::azure_ai("azure_ai")]
 #[case::deepseek("deepseek")]
 #[case::minimax("minimax")]
 #[tokio::test]

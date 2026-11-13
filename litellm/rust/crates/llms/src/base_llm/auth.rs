@@ -6,6 +6,7 @@
 //! as an [`AuthScheme`], and [`resolve_auth`] turns the scheme into headers and a signer.
 
 use litellm_auth::{AuthServices, CredentialPlacement, TokenProviderHandle};
+use litellm_auth_azure::AzureAuthInputs;
 use litellm_secret_value::SecretValue;
 
 use litellm_auth_aws::{AwsCredentialSource, SigV4Signer};
@@ -27,6 +28,10 @@ pub enum AuthScheme {
     /// A bearer acquired when the request is sent, from a token source such as a cloud SDK
     /// or a caller-supplied callable.
     Token { provider: TokenProviderHandle },
+    /// An Entra ID token minted from the config's Azure inputs when the request is sent, as
+    /// Python's `get_azure_ad_token` does. Inputs that yield no token leave the call
+    /// unauthenticated.
+    AzureAdToken { inputs: Box<AzureAuthInputs> },
     /// A Google access token for the Vertex AI project the config names, acquired when the
     /// request is sent through the shared GCP token cache.
     GcpAccessToken { config: Box<VertexConfig> },
@@ -45,6 +50,29 @@ pub enum AuthScheme {
 pub struct ValidatedEnvironment {
     pub headers: Headers,
     pub auth: AuthScheme,
+}
+
+impl ValidatedEnvironment {
+    /// Hands the caller's `azure_ad_token_provider` to an Entra ID scheme, which consults it
+    /// before minting a token of its own. Other schemes never read it.
+    #[must_use]
+    pub fn with_azure_ad_token_provider(self, provider: Option<TokenProviderHandle>) -> Self {
+        match (self.auth, provider) {
+            (AuthScheme::AzureAdToken { inputs }, Some(provider)) => Self {
+                auth: AuthScheme::AzureAdToken {
+                    inputs: Box::new(AzureAuthInputs {
+                        azure_ad_token_provider: Some(provider),
+                        ..*inputs
+                    }),
+                },
+                headers: self.headers,
+            },
+            (auth, _) => Self {
+                auth,
+                headers: self.headers,
+            },
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -76,6 +104,27 @@ pub async fn resolve_auth(
                     CredentialPlacement::Bearer,
                     token.secret().expose(),
                 ),
+                signer: None,
+            })
+        }
+        AuthScheme::AzureAdToken { inputs } => {
+            let token = services
+                .azure
+                .get_azure_ad_token(&inputs, env_lookup)
+                .await
+                .or_else(|error| match error {
+                    litellm_auth::Error::EmptyCallerCredential { .. } => Ok(None),
+                    other => Err(other),
+                })?;
+            Ok(Authenticated {
+                headers: match token {
+                    Some(token) => with_credential(
+                        headers,
+                        CredentialPlacement::Bearer,
+                        token.value().secret().expose(),
+                    ),
+                    None => headers,
+                },
                 signer: None,
             })
         }
@@ -209,6 +258,46 @@ mod tests {
             authenticated.headers,
             headers(&[("authorization", "Bearer fresh")])
         );
+    }
+
+    fn entra_inputs(token: Option<&str>) -> AzureAuthInputs {
+        AzureAuthInputs {
+            azure_ad_token: token.map_or(litellm_auth_azure::ConfigValue::Absent, |token| {
+                litellm_auth_azure::ConfigValue::Value(litellm_auth::Sourced::new(
+                    SecretValue::new(token),
+                    litellm_auth::InputSource::Deployment,
+                ))
+            }),
+            ..AzureAuthInputs::default()
+        }
+    }
+
+    #[rstest]
+    #[case::a_configured_token_is_sent_as_a_bearer(Some("entra"), None, &[("authorization", "Bearer entra")])]
+    #[case::the_caller_provider_outranks_a_configured_token(
+        Some("entra"),
+        Some("from-provider"),
+        &[("authorization", "Bearer from-provider")]
+    )]
+    #[case::an_empty_provider_token_sends_no_credential(None, Some(""), &[])]
+    #[case::no_entra_input_sends_no_credential(None, None, &[])]
+    #[tokio::test]
+    async fn an_entra_scheme_sends_the_token_python_would_mint(
+        #[case] token: Option<&'static str>,
+        #[case] provider: Option<&'static str>,
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let validated = ValidatedEnvironment {
+            headers: Vec::new(),
+            auth: AuthScheme::AzureAdToken {
+                inputs: Box::new(entra_inputs(token)),
+            },
+        }
+        .with_azure_ad_token_provider(
+            provider.map(|token| TokenProviderHandle::new(Arc::new(StaticToken(token)))),
+        );
+        let authenticated = resolve(validated.headers, validated.auth).await;
+        assert_eq!(authenticated.headers, headers(expected));
     }
 
     #[tokio::test]

@@ -16,7 +16,7 @@ use super::*;
     "AZURE_API_KEY",
     "AZURE_API_BASE",
     "/anthropic/v1/messages",
-    &["AZURE_API_KEY", "AZURE_API_BASE"]
+    &["AZURE_OPENAI_API_KEY", "AZURE_API_KEY", "AZURE_API_BASE"]
 )]
 #[case::deepseek(
     "deepseek",

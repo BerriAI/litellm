@@ -16,15 +16,18 @@ use litellm_inference_messages::{
     litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
 };
-use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
+use litellm_llms::{
+    azure_ai::common_utils::ENTRA_ID_PARAMS, base_llm::messages::context::MessagesModelCapabilities,
+};
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use litellm_router_types::LitellmParams;
+use litellm_secret_value::SecretValue;
 use pyo3::{
     exceptions::{PyException, PyUnicodeEncodeError},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     sync::PyOnceLock,
-    types::{PyBytes, PyDict, PyList, PyMapping, PyString, PyTuple},
+    types::{PyBool, PyBytes, PyDict, PyList, PyMapping, PyString, PyTuple},
 };
 use serde_json::{Map, Value};
 
@@ -129,6 +132,8 @@ fn merge_headers(
 }
 
 const FEDERATING_PROVIDER: &str = "anthropic";
+const AZURE_AI_PROVIDER: &str = "azure_ai";
+const ENABLE_TOKEN_REFRESH: &str = "enable_azure_ad_token_refresh";
 
 fn workload_identity_fields(py: Python<'_>) -> PyResult<&'static [String]> {
     static FIELDS: PyOnceLock<Vec<String>> = PyOnceLock::new();
@@ -152,6 +157,7 @@ fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py,
 /// leaves out falls back to the module global it names, which stays the host's concern.
 fn project_litellm_params<'a, 'py>(
     names: impl IntoIterator<Item = &'a str>,
+    settled: Map<String, Value>,
     argument: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
     global: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
 ) -> PyResult<Result<LitellmParams, Error>> {
@@ -165,7 +171,37 @@ fn project_litellm_params<'a, 'py>(
         .filter(|spec| !spec.wire.iter().any(|name| fields.contains_key(*name)))
         .filter_map(|spec| spec.module_global);
     let folded = project_optional_fields(globals, &global)?;
-    Ok(litellm_params(fields.into_iter().chain(folded).collect()))
+    Ok(litellm_params(
+        fields.into_iter().chain(folded).chain(settled).collect(),
+    ))
+}
+
+/// What Python's Azure config reads from `litellm` itself: `litellm.api_key or litellm.azure_key`
+/// after the call's own key, and `litellm.enable_azure_ad_token_refresh is True`, which Python
+/// reads instead of the call's param of that name.
+struct AzureModuleSettings {
+    api_key: Option<SecretValue>,
+    token_refresh: bool,
+}
+
+fn azure_module_settings<'py>(
+    global: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
+) -> PyResult<AzureModuleSettings> {
+    let key = |name: &str| -> PyResult<Option<String>> {
+        Ok(global(name)?
+            .and_then(|value| value.extract::<String>().ok())
+            .filter(|key| !key.is_empty()))
+    };
+    let api_key = match key("api_key")? {
+        Some(key) => Some(key),
+        None => key("azure_key")?,
+    };
+    let token_refresh =
+        global(ENABLE_TOKEN_REFRESH)?.is_some_and(|value| value.is(PyBool::new(value.py(), true)));
+    Ok(AzureModuleSettings {
+        api_key: api_key.map(SecretValue::new),
+        token_refresh,
+    })
 }
 
 pub(super) struct MessagesHosted;
@@ -471,6 +507,10 @@ impl MessagesPythonHost {
             custom_llm_provider.as_deref(),
             &mut unencodable_request_header,
         )?;
+        let azure = match custom_llm_provider.as_deref() {
+            Some(AZURE_AI_PROVIDER) => Some(azure_module_settings(|name| module_global(py, name))?),
+            _ => None,
+        };
         let shaping = MessagesShaping {
             capabilities: self.capabilities(py, &model, custom_llm_provider.as_deref())?,
             settings: MessagesSettings {
@@ -478,18 +518,30 @@ impl MessagesPythonHost {
                 presanitized,
                 intercepted: self.may_intercept(py)?,
                 unencodable_request_header,
+                module_api_key: azure.as_ref().and_then(|azure| azure.api_key.clone()),
                 ..settings.settings
             },
         };
-        let federation_fields: &[String] = match custom_llm_provider.as_deref() {
-            Some(FEDERATING_PROVIDER) => workload_identity_fields(py)?,
-            _ => &[],
+        let provider_fields: Vec<&str> = match custom_llm_provider.as_deref() {
+            Some(FEDERATING_PROVIDER) => workload_identity_fields(py)?
+                .iter()
+                .map(String::as_str)
+                .collect(),
+            Some(AZURE_AI_PROVIDER) => ENTRA_ID_PARAMS.to_vec(),
+            _ => Vec::new(),
         };
-        let litellm_params = project_litellm_params(
-            federation_fields.iter().map(String::as_str),
-            argument,
-            |name| module_global(py, name),
-        )?;
+        let settled = azure
+            .map(|azure| {
+                (
+                    ENABLE_TOKEN_REFRESH.to_string(),
+                    Value::Bool(azure.token_refresh),
+                )
+            })
+            .into_iter()
+            .collect();
+        let litellm_params = project_litellm_params(provider_fields, settled, argument, |name| {
+            module_global(py, name)
+        })?;
         Ok(messages_body(body).and_then(|body| {
             Ok(MessagesCall {
                 body,
@@ -563,11 +615,13 @@ impl MessagesPythonHost {
     fn provider(&self, py: Python<'_>) -> String {
         self.view
             .request(py)
-            .and_then(|request| request.get_item("custom_llm_provider"))
-            .ok()
-            .flatten()
-            .and_then(|value| value.extract::<Option<String>>().ok().flatten())
-            .unwrap_or_else(|| "anthropic".into())
+            .and_then(|request| {
+                py.import(ROUTE_HOST_MODULE)?
+                    .getattr("failure_provider")?
+                    .call1((request,))?
+                    .extract::<String>()
+            })
+            .unwrap_or_else(|_| "anthropic".into())
     }
 
     fn map_transport_failure(&self, py: Python<'_>, error: PyErr) -> PyResult<PyErr> {
@@ -1034,6 +1088,37 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::api_key_before_azure_key(json!({"api_key": "module", "azure_key": "azure"}), Some("module"), false)]
+    #[case::empty_api_key_falls_to_azure_key(json!({"api_key": "", "azure_key": "azure"}), Some("azure"), false)]
+    #[case::neither(json!({}), None, false)]
+    #[case::token_refresh_only_when_exactly_true(
+        json!({"enable_azure_ad_token_refresh": true}),
+        None,
+        true
+    )]
+    #[case::a_truthy_token_refresh_is_not_true(json!({"enable_azure_ad_token_refresh": 1}), None, false)]
+    fn azure_reads_the_module_settings_python_reads(
+        #[case] globals: Value,
+        #[case] api_key: Option<&str>,
+        #[case] token_refresh: bool,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let globals = to_py(py, &globals)
+                .unwrap()
+                .into_bound(py)
+                .cast_into::<PyDict>()
+                .unwrap();
+            let settings = azure_module_settings(|name| {
+                Ok(globals.get_item(name)?.filter(|value| !value.is_none()))
+            })
+            .unwrap();
+            assert_eq!(settings.api_key.as_ref().map(SecretValue::expose), api_key);
+            assert_eq!(settings.token_refresh, token_refresh);
+        });
+    }
+
     fn assert_projection(kwargs: Value, globals: Value, expected: Result<Value, ()>) {
         assert_projection_of(&[], kwargs, globals, expected);
     }
@@ -1058,6 +1143,7 @@ mod tests {
             let bound = PyDict::new(py);
             let projected = project_litellm_params(
                 names.iter().copied(),
+                Map::new(),
                 |name| present(&kwargs, &bound, name),
                 |name| present(&globals, &bound, name),
             )

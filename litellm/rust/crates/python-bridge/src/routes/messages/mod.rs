@@ -32,6 +32,7 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
         arguments,
         move |py, arguments, request| {
             let hooked = pre_request::runs_pre_request_hooks(py)?;
+            let context = litellm_host_python::PythonContext::capture(py)?;
             let route = litellm_inference_messages::MessagesRoute::new(
                 crate::http::messages_client(py, arguments, asynchronous)?
                     .map_err(crate::http::client_error)?,
@@ -39,10 +40,14 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
                 crate::secrets::source(py)?,
             )
             .with_workload_identity(std::sync::Arc::new(
-                workload_identity::PythonWorkloadIdentity::new(
-                    litellm_host_python::PythonContext::capture(py)?,
-                ),
+                workload_identity::PythonWorkloadIdentity::new(context.clone()),
             ));
+            let route = match crate::credentials::azure_ad_token_provider(arguments)? {
+                Some(provider) => route.with_azure_ad_token_provider(
+                    workload_identity::azure_ad_token_provider(context, provider),
+                ),
+                None => route,
+            };
             Ok(litellm_host::call::hosted_call(
                 request,
                 None,

@@ -212,6 +212,20 @@ _ADAPTIVE_OPUS: Final = "anthropic/claude-opus-4-7"
 
 
 @pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        pytest.param({"model": "azure_ai/claude-sonnet-4-5"}, "azure_ai", id="model_prefix"),
+        pytest.param(
+            {"model": "claude-sonnet-4-5", "custom_llm_provider": "azure_ai"}, "azure_ai", id="explicit_provider"
+        ),
+        pytest.param({"model": "not-a-known-model"}, "anthropic", id="unresolved"),
+    ],
+)
+def test_failure_provider_is_the_provider_python_maps_errors_for(call: dict[str, object], expected: str) -> None:
+    assert messages_host.failure_provider(call) == expected
+
+
+@pytest.mark.parametrize(
     ("model", "expected"),
     [("claude-sonnet-4-5", "anthropic"), ("gpt-4o", "openai"), ("not-a-known-model", None)],
 )

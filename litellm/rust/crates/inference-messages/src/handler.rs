@@ -179,8 +179,11 @@ pub(super) async fn execute(
 ) -> Result<MessagesCallResponse, Error> {
     let caller_keyed = caller_keyed(route).is_some();
     let request = provider_call(
-        &route.auth,
-        route.workload_identity.as_deref(),
+        CallerCredentials {
+            auth: &route.auth,
+            workload_identity: route.workload_identity.as_deref(),
+            azure_ad_token_provider: route.azure_ad_token_provider.clone(),
+        },
         provider,
         model,
         call,
@@ -245,9 +248,16 @@ fn execution_facts(
     }
 }
 
+/// What a provider call may authenticate with beyond its config: the shared token caches, a
+/// workload identity federation host and the caller's Azure AD token provider.
+struct CallerCredentials<'a> {
+    auth: &'a AuthServices,
+    workload_identity: Option<&'a dyn WorkloadIdentity>,
+    azure_ad_token_provider: Option<litellm_auth::TokenProviderHandle>,
+}
+
 async fn provider_call(
-    auth: &AuthServices,
-    workload_identity: Option<&dyn WorkloadIdentity>,
+    credentials: CallerCredentials<'_>,
     provider: MessagesProvider,
     model: String,
     call: MessagesCall,
@@ -293,9 +303,14 @@ async fn provider_call(
         extra_headers.unwrap_or_default(),
         scoped,
     ])))?;
+    let configured_key = api_key.as_deref().filter(|key| !key.is_empty()).or(shaping
+        .settings
+        .module_api_key
+        .as_ref()
+        .map(SecretValue::expose));
     let validated = match config.validate_federated_environment(
         forwarded,
-        api_key.as_deref(),
+        configured_key,
         &trimmed.model,
         &trimmed.params,
         &connection_params,
@@ -306,7 +321,7 @@ async fn provider_call(
             headers,
             missing,
             federate,
-        } => match workload_identity {
+        } => match credentials.workload_identity {
             Some(identity) => match identity
                 .token(&connection_params, api_base.as_deref())
                 .await?
@@ -316,7 +331,8 @@ async fn provider_call(
             },
             None => return Err(missing.into()),
         },
-    };
+    }
+    .with_azure_ad_token_provider(credentials.azure_ad_token_provider);
 
     let tool_custom_field = config.tool_custom_field(&trimmed.model);
     let requested_output_format = trimmed.params.output_format.clone();
@@ -353,7 +369,10 @@ async fn provider_call(
         secret_fields: Vec::new(),
         api_key: api_key.map(SecretValue::new),
     };
-    let authenticated = resolve_auth(auth, environment, &|key| std::env::var(key).ok()).await?;
+    let authenticated = resolve_auth(credentials.auth, environment, &|key| {
+        std::env::var(key).ok()
+    })
+    .await?;
     let identity = ProviderIdentity {
         model: request_context.model.clone(),
         provider: request_context.custom_llm_provider.clone(),
@@ -1091,8 +1110,11 @@ mod tests {
         let interceptors = ();
         let context = CallContext::new(&interceptors, litellm_inference::CallOptions::default());
         provider_call(
-            &AuthServices::default(),
-            workload_identity,
+            CallerCredentials {
+                auth: &AuthServices::default(),
+                workload_identity,
+                azure_ad_token_provider: None,
+            },
             config,
             model,
             call,

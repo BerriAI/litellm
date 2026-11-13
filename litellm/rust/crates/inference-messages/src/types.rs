@@ -11,6 +11,7 @@ use litellm_llms_types::{
     headers::ProviderSpecificHeaders,
 };
 use litellm_router_types::LitellmParams;
+use litellm_secret_value::SecretValue;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -96,6 +97,11 @@ pub struct MessagesSettings {
     /// encode fails the call before the send.
     #[serde(default)]
     pub ascii_request_headers: bool,
+    /// The module-level key Python's config for this provider reads after the call's own, such
+    /// as `litellm.api_key or litellm.azure_key` for `azure_ai`. A host projects it, never Python's
+    /// settings dict.
+    #[serde(skip)]
+    pub module_api_key: Option<SecretValue>,
 }
 
 impl MessagesSettings {

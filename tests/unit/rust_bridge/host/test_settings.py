@@ -228,9 +228,13 @@ def test_provider_defaults_read_the_litellm_globals(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(litellm, "vertex_project", "configured-project")
     monkeypatch.setattr(litellm, "vertex_location", "europe-west4")
     monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", True)
+    monkeypatch.setattr(litellm, "api_key", "module-key")
+    monkeypatch.setattr(litellm, "azure_key", "azure-module-key")
 
     assert settings.provider_defaults() == settings.ProviderDefaults(
         vertex_project="configured-project",
         vertex_location="europe-west4",
         enable_azure_ad_token_refresh=True,
+        api_key="module-key",
+        azure_key="azure-module-key",
     )

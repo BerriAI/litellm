@@ -473,6 +473,7 @@ class Case:
     nones: tuple[str, ...] = ()
     busy_before_reading: float = 0
     warned: bool = False
+    rust_providers: frozenset[str] = frozenset()
 
     def aspects(self) -> tuple[str, ...]:
         return (
@@ -544,6 +545,7 @@ KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
                 "int_temperature_on_adaptive_model",
                 "int_top_p_on_adaptive_model",
                 "int_speed_on_model_without_speed",
+                "azure_ai_entra_token_provider_raises",
             )
         },
     }
@@ -3318,6 +3320,112 @@ HOOKED_STREAM_AND_CACHE_CASES: Final = (
     ),
 )
 
+
+def _entra_token() -> str:
+    return "entra-from-provider"
+
+
+def _failing_entra_provider() -> str:
+    raise ValueError("token service unavailable")
+
+
+AZURE_CLAUDE: Final = "azure_ai/claude-sonnet-4-5"
+A06_A08_CALLER_CREDENTIAL: Final = (
+    "A06-A08 (approved by design): a caller x-api-key or bearer replaces the azure_ai operator key on Rust, "
+    "Python sends both"
+)
+AZURE_AI: Final = frozenset({"azure_ai"})
+
+AZURE_AUTH_CASES: Final = tuple(
+    replace(case, rust_providers=AZURE_AI)
+    for case in (
+        Case("azure_ai_api_key", model=AZURE_CLAUDE),
+        Case(
+            "azure_ai_module_api_key",
+            _kw(api_key=None),
+            model=AZURE_CLAUDE,
+            settings=MappingProxyType({"api_key": "sk-module"}),
+        ),
+        Case(
+            "azure_ai_module_azure_key",
+            _kw(api_key=None),
+            model=AZURE_CLAUDE,
+            settings=MappingProxyType({"azure_key": "sk-azure-module"}),
+        ),
+        Case(
+            "azure_ai_module_api_key_before_azure_key",
+            _kw(api_key=None),
+            model=AZURE_CLAUDE,
+            settings=MappingProxyType({"api_key": "sk-module", "azure_key": "sk-azure-module"}),
+        ),
+        Case(
+            "azure_ai_module_key_before_environment",
+            _kw(api_key=None),
+            model=AZURE_CLAUDE,
+            settings=MappingProxyType({"azure_key": "sk-azure-module"}),
+            env=MappingProxyType({"AZURE_OPENAI_API_KEY": "sk-openai-env"}),
+        ),
+        Case(
+            "azure_ai_openai_key_env_before_azure_key_env",
+            _kw(api_key=None),
+            model=AZURE_CLAUDE,
+            env=MappingProxyType({"AZURE_OPENAI_API_KEY": "sk-openai-env", "AZURE_API_KEY": "sk-azure-env"}),
+        ),
+        Case(
+            "azure_ai_empty_api_key_falls_to_environment",
+            _kw(api_key=""),
+            model=AZURE_CLAUDE,
+            env=MappingProxyType({"AZURE_API_KEY": "sk-azure-env"}),
+        ),
+        Case(
+            "azure_ai_blank_api_key",
+            _kw(api_key="  "),
+            model=AZURE_CLAUDE,
+            env=MappingProxyType({"AZURE_API_KEY": "sk-azure-env"}),
+        ),
+        Case("azure_ai_entra_token", _kw(api_key=None, azure_ad_token="entra-token"), model=AZURE_CLAUDE),
+        Case(
+            "azure_ai_entra_token_from_environment",
+            _kw(api_key=None),
+            model=AZURE_CLAUDE,
+            env=MappingProxyType({"AZURE_AD_TOKEN": "entra-env-token"}),
+        ),
+        Case("azure_ai_key_outranks_entra_token", _kw(azure_ad_token="entra-token"), model=AZURE_CLAUDE),
+        Case(
+            "azure_ai_entra_token_provider", _kw(api_key=None, azure_ad_token_provider=_entra_token), model=AZURE_CLAUDE
+        ),
+        Case(
+            "azure_ai_entra_token_provider_outranks_token",
+            _kw(api_key=None, azure_ad_token="entra-token", azure_ad_token_provider=_entra_token),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_entra_token_provider_raises",
+            _kw(api_key=None, azure_ad_token_provider=_failing_entra_provider),
+            model=AZURE_CLAUDE,
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_no_credential",
+            _kw(api_key=None),
+            model=AZURE_CLAUDE,
+            upstream=(_failure(401, "authentication_error", "missing credentials"),),
+        ),
+        Case(
+            "azure_ai_caller_x_api_key",
+            _kw(extra_headers={"x-api-key": "sk-caller"}),
+            model=AZURE_CLAUDE,
+            gaps=_gaps(request=A06_A08_CALLER_CREDENTIAL),
+        ),
+        Case(
+            "azure_ai_caller_bearer",
+            _kw(extra_headers={"Authorization": "Bearer caller-token"}),
+            model=AZURE_CLAUDE,
+            gaps=_gaps(request=A06_A08_CALLER_CREDENTIAL),
+        ),
+    )
+)
+
 CASES: Final = (
     *REQUEST_CASES,
     *INPUT_VALUE_CASES,
@@ -3343,6 +3451,7 @@ CASES: Final = (
     *MCP_CASES,
     *DEPLOYMENT_HOOK_CASES,
     *HOOKED_STREAM_AND_CACHE_CASES,
+    *AZURE_AUTH_CASES,
 )
 
 
@@ -3406,12 +3515,38 @@ def _environment(env: Mapping[str, str]) -> Generator[None]:
         "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS",
         "LITELLM_REASONING_AUTO_SUMMARY",
         "LITELLM_RUST",
+        "AZURE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_API_BASE",
+        "AZURE_AD_TOKEN",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_USERNAME",
+        "AZURE_PASSWORD",
+        "AZURE_SCOPE",
+        "AZURE_CREDENTIAL",
+        "AZURE_FEDERATED_TOKEN_FILE",
     )
     with pytest.MonkeyPatch.context() as patch:
         for name in names:
             patch.delenv(name, raising=False)
         for name, value in env.items():
             patch.setenv(name, value)
+        yield
+
+
+@contextmanager
+def _served_natively(providers: frozenset[str]) -> Generator[None]:
+    """Serves a provider the shipped rules keep on Python natively, ahead of every other rule."""
+    if not providers:
+        yield
+        return
+    with rebound(
+        catalog,
+        "RULES",
+        (catalog.RouteRule(catalog.Route.MESSAGES, Rollout.RUST_REQUIRED, providers=providers), *catalog.RULES),
+    ):
         yield
 
 
@@ -3777,6 +3912,7 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
         isolated_callback_registries(),
         _environment(case.env),
         _settings(case.settings),
+        _served_natively(case.rust_providers),
         _cache(case.cache),
         _classifier(case.classifier, classified),
         _interceptor(case.interceptor),

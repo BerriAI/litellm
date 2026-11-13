@@ -1,4 +1,7 @@
 use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
+use std::collections::BTreeMap;
+
+use litellm_auth_azure::AzureAuthInputs;
 use litellm_host::interceptors::RetriedRequest;
 use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_llms_types::{
@@ -19,7 +22,8 @@ use crate::{
         },
     },
     azure_ai::common_utils::{
-        AZURE_API_BASE_ENV, AZURE_API_KEY_ENV, resolve_azure_api_base, resolve_azure_api_key,
+        AZURE_API_BASE_ENV, AZURE_API_KEY_ENV, AZURE_OPENAI_API_KEY_ENV, ENTRA_ID_PARAMS,
+        resolve_azure_api_base, resolve_azure_api_key,
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
@@ -32,6 +36,7 @@ use crate::{
 };
 
 const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
+const ENABLE_TOKEN_REFRESH_PARAM: &str = "enable_azure_ad_token_refresh";
 
 pub struct AzureAnthropicMessagesConfig;
 
@@ -92,18 +97,22 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
-        &[AZURE_API_KEY_ENV, AZURE_API_BASE_ENV]
+        &[
+            AZURE_OPENAI_API_KEY_ENV,
+            AZURE_API_KEY_ENV,
+            AZURE_API_BASE_ENV,
+        ]
     }
 
-    /// A forwarded `x-api-key` or a non-blank bearer (an Entra ID token) is the credential;
-    /// otherwise the Azure key goes in `x-api-key`.
+    /// A forwarded `x-api-key` or non-blank bearer is the credential, replacing the deployment's. Otherwise the Azure key goes in `x-api-key`, and
+    /// without one an Entra ID token is minted as Python's `get_azure_ad_token` does.
     fn validate_environment(
         &self,
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
         _optional_params: &MessagesOptionalParams,
-        _litellm_params: &LitellmParams,
+        litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         if has_header(&headers, API_KEY_PLACEMENT.header_name()) || has_bearer_auth(&headers) {
@@ -112,9 +121,14 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
                 auth: AuthScheme::Forwarded,
             });
         }
-        let auth = AuthScheme::Credential {
-            placement: API_KEY_PLACEMENT,
-            secret: SecretValue::new(resolve_azure_api_key(api_key, env_lookup)?),
+        let auth = match resolve_azure_api_key(api_key, env_lookup) {
+            Some(key) => AuthScheme::Credential {
+                placement: API_KEY_PLACEMENT,
+                secret: SecretValue::new(key),
+            },
+            None => AuthScheme::AzureAdToken {
+                inputs: Box::new(entra_id_inputs(litellm_params)?),
+            },
         };
         Ok(ValidatedEnvironment { headers, auth })
     }
@@ -126,6 +140,23 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_safeguards_beta(headers, request, BetaProvider::AzureAi)
     }
+}
+
+fn entra_id_inputs(litellm_params: &LitellmParams) -> Result<AzureAuthInputs, Error> {
+    let params = ENTRA_ID_PARAMS
+        .iter()
+        .chain(&[ENABLE_TOKEN_REFRESH_PARAM])
+        .filter_map(|name| {
+            litellm_params
+                .extra
+                .get(*name)
+                .map(|value| (name.to_string(), value.clone()))
+        })
+        .collect();
+    Ok(AzureAuthInputs::from_sourced_optional_params(
+        &params,
+        &BTreeMap::new(),
+    )?)
 }
 
 pub fn complete_azure_anthropic_url(
@@ -231,24 +262,43 @@ mod tests {
         assert!(matches!(err, Error::Auth(_)));
     }
 
-    #[test]
-    fn resolve_api_key_prefers_param_then_env() {
-        assert_eq!(
-            resolve_azure_api_key(Some("sk-param"), &|_| None).unwrap(),
-            "sk-param"
-        );
-        let with_env = |key: &str| (key == AZURE_API_KEY_ENV).then(|| "sk-env".to_string());
-        assert_eq!(
-            resolve_azure_api_key(Some("  "), &with_env).unwrap(),
-            "sk-env"
-        );
-        assert!(matches!(
-            resolve_azure_api_key(None, &|_| None).expect_err("missing key"),
-            Error::Auth(_)
-        ));
+    #[rstest]
+    #[case::param_wins(Some("sk-param"), &[("AZURE_OPENAI_API_KEY", "sk-openai")], Some("sk-param"))]
+    #[case::empty_param_falls_through(Some(""), &[("AZURE_API_KEY", "sk-env")], Some("sk-env"))]
+    #[case::blank_param_is_kept_as_sent(Some("  "), &[("AZURE_API_KEY", "sk-env")], Some("  "))]
+    #[case::azure_openai_key_before_azure_key(
+        None,
+        &[("AZURE_OPENAI_API_KEY", "sk-openai"), ("AZURE_API_KEY", "sk-env")],
+        Some("sk-openai")
+    )]
+    #[case::empty_azure_openai_key_falls_through(
+        None,
+        &[("AZURE_OPENAI_API_KEY", ""), ("AZURE_API_KEY", "sk-env")],
+        Some("sk-env")
+    )]
+    #[case::nothing(None, &[], None)]
+    fn api_key_resolves_like_python(
+        #[case] api_key: Option<&str>,
+        #[case] env: &[(&str, &str)],
+        #[case] expected: Option<&str>,
+    ) {
+        let lookup = |name: &str| {
+            env.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        };
+        assert_eq!(resolve_azure_api_key(api_key, &lookup).as_deref(), expected);
     }
 
     fn validated(forwarded: &[(&str, &str)], api_key: Option<&str>) -> ValidatedEnvironment {
+        validated_with(forwarded, api_key, json!({}))
+    }
+
+    fn validated_with(
+        forwarded: &[(&str, &str)],
+        api_key: Option<&str>,
+        params: serde_json::Value,
+    ) -> ValidatedEnvironment {
         AZURE_ANTHROPIC_MESSAGES_CONFIG
             .validate_environment(
                 forwarded
@@ -258,10 +308,57 @@ mod tests {
                 api_key,
                 "claude",
                 &MessagesOptionalParams::default(),
-                &LitellmParams::default(),
+                &litellm_params(params),
                 &|_| None,
             )
             .unwrap()
+    }
+
+    fn litellm_params(params: serde_json::Value) -> LitellmParams {
+        let serde_json::Value::Object(params) = params else {
+            panic!("case params are an object")
+        };
+        serde_json::from_value(serde_json::Value::Object(
+            params
+                .into_iter()
+                .chain([("model".to_string(), json!("claude"))])
+                .collect(),
+        ))
+        .expect("valid params")
+    }
+
+    #[rstest]
+    #[case::without_entra_params(json!({}), None)]
+    #[case::with_an_entra_token(json!({"azure_ad_token": "entra-token"}), Some("entra-token"))]
+    fn without_a_key_an_entra_token_is_minted_from_the_call(
+        #[case] params: serde_json::Value,
+        #[case] token: Option<&str>,
+    ) {
+        let AuthScheme::AzureAdToken { inputs } = validated_with(&[], None, params).auth else {
+            panic!("an Entra ID scheme")
+        };
+        assert_eq!(
+            inputs
+                .azure_ad_token
+                .as_value()
+                .map(|token| token.value().expose().to_string())
+                .as_deref(),
+            token
+        );
+    }
+
+    #[rstest]
+    #[case::global_on(json!({"enable_azure_ad_token_refresh": true}), true)]
+    #[case::global_off(json!({"enable_azure_ad_token_refresh": false}), false)]
+    #[case::unset(json!({}), false)]
+    fn token_refresh_follows_the_projected_setting(
+        #[case] params: serde_json::Value,
+        #[case] enabled: bool,
+    ) {
+        let AuthScheme::AzureAdToken { inputs } = validated_with(&[], None, params).auth else {
+            panic!("an Entra ID scheme")
+        };
+        assert_eq!(*inputs.enable_azure_ad_token_refresh.value(), enabled);
     }
 
     #[test]

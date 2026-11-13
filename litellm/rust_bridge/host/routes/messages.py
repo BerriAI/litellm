@@ -857,6 +857,10 @@ def _resolved_provider(request: Mapping[str, object]) -> str | None:
     )
 
 
+def failure_provider(request: Mapping[str, object]) -> str:
+    return _resolved_provider(request) or "anthropic"
+
+
 def _scope_provider_specific_header(request: Mapping[str, object]) -> None:
     scoped: Final = request.get("provider_specific_header")
     if scoped is None:

@@ -1,11 +1,16 @@
 use std::fmt;
 
+use std::sync::Arc;
+
 use futures_util::future::BoxFuture;
+use litellm_auth::TokenProviderHandle;
 use litellm_host_python::{PythonContext, attach_blocking, to_py};
 use litellm_inference_messages::WorkloadIdentity;
 use litellm_router_types::{ExtraParams, LitellmParams};
 use litellm_secret_value::SecretValue;
 use pyo3::{exceptions::PyBaseException, prelude::*};
+
+use crate::credentials::CallerTokenProvider;
 
 const MODULE: &str = "litellm.rust_bridge.host.routes.messages";
 
@@ -38,6 +43,27 @@ impl WorkloadIdentity for PythonWorkloadIdentity {
             .map(|token| token.map(SecretValue::new))
         })
     }
+}
+
+/// The caller's `azure_ad_token_provider`, called on the blocking pool when the Entra ID
+/// scheme asks for a token, its exception reaching the caller as Python raised it.
+pub(super) fn azure_ad_token_provider(
+    context: PythonContext,
+    provider: CallerTokenProvider,
+) -> TokenProviderHandle {
+    let provider = Arc::new(provider);
+    TokenProviderHandle::from_callback(move || {
+        let context = context.clone();
+        let provider = Arc::clone(&provider);
+        async move {
+            attach_blocking(context, move |py| {
+                provider.acquire(py).map_err(|error| raised(py, error))
+            })
+            .await
+            .map_err(|error| Python::attach(|py| raised(py, error)))
+            .and_then(|acquired| acquired)
+        }
+    })
 }
 
 fn mint(
