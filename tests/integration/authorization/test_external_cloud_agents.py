@@ -238,6 +238,32 @@ def test_concurrent_first_frames_bind_one_tenant(connected: Connected) -> None:
     assert connected.agents().data[0].external_id == winner
 
 
+def test_hook_retries_count_each_frame_once_across_concurrent_deliveries(connected: Connected) -> None:
+    body: Final = {**frame(), "request_id": "request-one"}
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        responses: Final = tuple(executor.map(lambda _: connected.hook(body), range(20)))
+    assert tuple(response.status_code for response in responses) == (200,) * 20
+    assert connected.agents().data[0].request_count == 1
+    distinct: Final = connected.hook({**body, "request_id": "request-two", "type": "tool_call"})
+    assert distinct.status_code == 200, distinct.text
+    assert connected.agents().data[0].request_count == 2
+    other: Final = connected.hook({**body, "session_id": "other-bot"})
+    assert other.status_code == 200, other.text
+    assert connected.agents(search="other-bot").data[0].request_count == 1
+
+
+def test_hook_retry_window_evicts_old_ids_and_accepts_frames_without_ids(connected: Connected) -> None:
+    for index in range(257):
+        response: Final = connected.hook({**frame(), "request_id": f"request-{index}"})
+        assert response.status_code == 200, response.text
+    replay: Final = connected.hook({**frame(), "request_id": "request-0"})
+    assert replay.status_code == 200, replay.text
+    assert connected.agents().data[0].request_count == 258
+    legacy: Final = connected.hook(frame())
+    assert legacy.status_code == 200, legacy.text
+    assert connected.agents().data[0].request_count == 259
+
+
 def seed_spend(gateway: Gateway, source_id: str, vendor_id: str, email: str, cost: str, day: str) -> None:
     write_rows(
         'INSERT INTO "LiteLLM_ExternalCloudAgentSpend" '

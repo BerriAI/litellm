@@ -34,6 +34,7 @@ model LiteLLM_ExternalCloudAgent {
   last_actor_id      String?
   last_model         String?
   tools              String[] @default([])
+  recent_request_ids String[] @default([])
   source             LiteLLM_ExternalCloudAgentSource @relation(fields: [source_id], references: [id], onDelete: Cascade)
 
   @@id([source_id, external_id])

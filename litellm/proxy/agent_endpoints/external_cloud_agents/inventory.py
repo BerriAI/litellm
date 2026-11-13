@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from itertools import chain
 from typing import Final
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 
 from litellm.proxy.agent_endpoints.external_cloud_agents.database import Database
 from litellm.proxy.agent_endpoints.external_cloud_agents.models import Failure, FrozenModel, SourceRecord
@@ -36,6 +36,7 @@ class Application(FrozenModel):
 
 
 class Frame(FrozenModel):
+    request_id: str | None = Field(default=None, max_length=256)
     session_id: str = ""
     tenant_id: str | None = None
     type: str = ""
@@ -149,14 +150,19 @@ class Inventory:
         tools: Final = ToolCollector().collect(chain.from_iterable(map(message_tools, frame.messages)))
         await self.db.execute_raw(
             'INSERT INTO "LiteLLM_ExternalCloudAgent" AS a '
-            "(source_id,external_id,last_actor_id,last_model,tools) VALUES ($1,$2,$3,$4,$5::text[]) "
+            "(source_id,external_id,last_actor_id,last_model,recent_request_ids,tools) "
+            "VALUES ($1,$2,$3,$4,array_remove(ARRAY[$5::text],NULL),$6::text[]) "
             "ON CONFLICT (source_id,external_id) DO UPDATE SET request_count=a.request_count+1,last_seen_at=NOW(),"
             "last_actor_id=EXCLUDED.last_actor_id,last_model=EXCLUDED.last_model,"
-            "tools=ARRAY(SELECT DISTINCT t FROM unnest(a.tools || EXCLUDED.tools) AS t ORDER BY t LIMIT 50)",
+            "recent_request_ids=(a.recent_request_ids || EXCLUDED.recent_request_ids)"
+            "[GREATEST(1,cardinality(a.recent_request_ids || EXCLUDED.recent_request_ids)-255):],"
+            "tools=ARRAY(SELECT DISTINCT t FROM unnest(a.tools || EXCLUDED.tools) AS t ORDER BY t LIMIT 50) "
+            "WHERE $5::text IS NULL OR NOT ($5=ANY(a.recent_request_ids))",
             source.source_id,
             frame.session_id,
             frame.actor.id if frame.actor else None,
             frame.model,
+            frame.request_id or None,
             list(tools),
         )
         return None

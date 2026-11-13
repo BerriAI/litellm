@@ -66305,6 +66305,8 @@ export interface operations {
                     }[];
                     /** Model */
                     model?: string | null;
+                    /** Request Id */
+                    request_id?: string | null;
                     /**
                      * Session Id
                      * @default

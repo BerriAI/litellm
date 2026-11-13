@@ -16602,6 +16602,18 @@
                       ],
                       "title": "Model"
                     },
+                    "request_id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 256,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Request Id"
+                    },
                     "session_id": {
                       "default": "",
                       "title": "Session Id",
