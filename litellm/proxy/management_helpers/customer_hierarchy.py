@@ -316,11 +316,13 @@ def team_response(row: PrismaRecord, now: datetime) -> Team:
 
 
 def override_expiry(
-    current: datetime | None, payload: TeamPatch | MemberPatch, override_id: str | None
+    row: Team | CustomerMember | None, payload: TeamPatch | MemberPatch, override_id: str | None
 ) -> datetime | None:
+    if override_id is None:
+        return None
     if "budget_override_expires_at" in payload.model_fields_set:
         return payload.budget_override_expires_at
-    return current if override_id is not None else None
+    return row.budget_override_expires_at if row is not None and row.budget_override_id is not None else None
 
 
 def utc_now() -> datetime:
@@ -727,7 +729,7 @@ class CustomerHierarchyStore:
                 "parent_org_id": payload.parent_org_id,
                 "budget_id": budget_id,
                 "budget_override_id": override_id,
-                "budget_override_expires_at": payload.budget_override_expires_at,
+                "budget_override_expires_at": override_expiry(None, payload, override_id),
                 "created_by": actor,
                 "updated_by": actor,
             }
@@ -746,7 +748,7 @@ class CustomerHierarchyStore:
                 **alias_patch(payload),
                 "budget_id": budget_id,
                 "budget_override_id": override_id,
-                "budget_override_expires_at": override_expiry(team.budget_override_expires_at, payload, override_id),
+                "budget_override_expires_at": override_expiry(team, payload, override_id),
                 "updated_by": actor,
             },
         )
@@ -788,7 +790,7 @@ class CustomerHierarchyStore:
                 "parent_team_ids": tuple(dict.fromkeys(payload.parent_team_ids)),
                 "budget_id": template_id,
                 "budget_override_id": override_id,
-                "budget_override_expires_at": payload.budget_override_expires_at,
+                "budget_override_expires_at": override_expiry(None, payload, override_id),
                 "created_by": actor,
                 "updated_by": actor,
             }
@@ -831,9 +833,7 @@ class CustomerHierarchyStore:
                 **(
                     {
                         "budget_override_id": override_id,
-                        "budget_override_expires_at": override_expiry(
-                            member.budget_override_expires_at, payload, override_id
-                        ),
+                        "budget_override_expires_at": override_expiry(member, payload, override_id),
                     }
                     if payload.model_fields_set & {"budget_override", "budget_override_expires_at"}
                     else {}
