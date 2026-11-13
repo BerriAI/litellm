@@ -20,6 +20,7 @@ from functools import partial
 from re import Pattern
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, TypeVar, cast
 
+import openai
 import yaml
 from fastapi import HTTPException
 from pydantic import TypeAdapter
@@ -2340,6 +2341,13 @@ class ContentFilterGuardrail(CustomGuardrail):
                 yield item
         except HTTPException:
             status = "guardrail_intervened"
+            raise
+        except openai.OpenAIError as e:
+            # Upstream provider/stream error propagating through the iterator.
+            # The guardrail never evaluated content, so it must not be recorded
+            # as a guardrail failure. "not_run" is the canonical status here.
+            status = "not_run"
+            exception_str = str(e)
             raise
         except Exception as e:
             status = "guardrail_failed_to_respond"
