@@ -112,9 +112,11 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     /// `AZURE_AD_TOKEN`, which Python reads through `get_secret_str` only when there is no key,
     /// no exact caller `api-key` and no `azure_ad_token` param, and `AZURE_API_BASE`, which it
     /// reads only when the call's base is empty
-    /// (`api_base or get_secret_str("AZURE_API_BASE")`).
+    /// (`api_base or get_secret_str("AZURE_API_BASE")`). Without a Python host the call never
+    /// reaches Entra ID auth, so the token is not read, as on main.
     fn deferred_secret_names(
         &self,
+        python_host: bool,
         headers: &Headers,
         api_key: Option<&str>,
         api_base: Option<&str>,
@@ -126,9 +128,10 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
             .get("azure_ad_token")
             .and_then(Value::as_str)
             .is_some_and(|token| !token.is_empty());
-        let reads_token = !(has_exact_header(headers, AZURE_API_KEY_HEADER)
-            || resolve_azure_api_key(api_key, env_lookup).is_some()
-            || token_param);
+        let reads_token = python_host
+            && !(has_exact_header(headers, AZURE_API_KEY_HEADER)
+                || resolve_azure_api_key(api_key, env_lookup).is_some()
+                || token_param);
         let reads_base = api_base.is_none_or(str::is_empty);
         match (reads_token, reads_base) {
             (false, false) => &[],
@@ -1419,6 +1422,7 @@ mod tests {
         let requested = requested.into_inner();
         assert!(!requested.is_empty());
         let deferred = AZURE_ANTHROPIC_MESSAGES_CONFIG.deferred_secret_names(
+            true,
             &Vec::new(),
             None,
             None,
@@ -1461,6 +1465,7 @@ mod tests {
             .collect();
         assert_eq!(
             AZURE_ANTHROPIC_MESSAGES_CONFIG.deferred_secret_names(
+                true,
                 &headers,
                 api_key,
                 Some("https://call.example"),
@@ -1482,6 +1487,7 @@ mod tests {
     ) {
         assert_eq!(
             AZURE_ANTHROPIC_MESSAGES_CONFIG.deferred_secret_names(
+                true,
                 &Vec::new(),
                 Some("sk-azure"),
                 api_base,
@@ -1496,6 +1502,7 @@ mod tests {
     fn without_a_key_or_a_call_base_both_deferred_secrets_are_read() {
         assert_eq!(
             AZURE_ANTHROPIC_MESSAGES_CONFIG.deferred_secret_names(
+                true,
                 &Vec::new(),
                 None,
                 None,

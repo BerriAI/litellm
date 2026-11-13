@@ -314,6 +314,7 @@ async fn provider_call(
     let deferred = match (
         credentials.deferred_secrets,
         config.deferred_secret_names(
+            credentials.azure_ad_token_hosts.host.is_some(),
             &forwarded,
             configured_key,
             api_base.as_deref(),

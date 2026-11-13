@@ -264,6 +264,34 @@ async fn azure_ad_token_is_looked_up_only_where_python_looks_it_up(
     );
 }
 
+#[rstest]
+#[tokio::test]
+async fn azure_ad_token_is_not_looked_up_without_a_python_host(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let secrets = Arc::new(RecordingSecrets::empty());
+
+    run_with(
+        secrets.clone(),
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: Default::default(),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+    )
+    .await
+    .expect_err("no key and no Python host");
+
+    assert_eq!(
+        secrets
+            .requested()
+            .iter()
+            .filter(|name| name.as_str() == "AZURE_AD_TOKEN")
+            .count(),
+        0
+    );
+}
+
 #[derive(Clone, Copy, Debug)]
 enum CallBase {
     Upstream,

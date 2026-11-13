@@ -73,9 +73,11 @@ pub trait BaseMessagesConfig: Sync {
     fn secret_names(&self) -> &'static [&'static str];
 
     /// Secrets read only on some paths, as Python's lazy `get_secret_str` calls are: resolved
-    /// just before `validate_environment`, and only when this call names them.
+    /// just before `validate_environment`, and only when this call names them. `python_host` is
+    /// whether the route has a Python host for flows only Python runs.
     fn deferred_secret_names(
         &self,
+        _python_host: bool,
         _headers: &Headers,
         _api_key: Option<&str>,
         _api_base: Option<&str>,
