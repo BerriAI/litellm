@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, TypeAlias
 
-from fastapi import status
+from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
@@ -29,18 +29,21 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_m
 from litellm.proxy.management_helpers.customer_hierarchy import (
     Failure,
     PrismaRecord,
+    customer_row_reset_at,
     effective_member_budget,
     related_budget,
     utc_now,
 )
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import CustomerTeamRepository
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
+    CustomerHierarchyIds,
     CustomerRequestIdentity,
     CustomerScopeAuth,
     CustomerScopeKey,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget, CustomerMember
+from litellm.types.proxy.management_endpoints.customer_hierarchy import INCREASE_REQUEST_ROUTE, Budget, CustomerMember
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -48,13 +51,13 @@ if TYPE_CHECKING:
 
 CUSTOMER_MEMBER_ID_HEADER: Final = "x-litellm-customer-member-id"
 CUSTOMER_ORG_ALIAS_HEADER: Final = "x-litellm-customer-org-alias"
+CUSTOMER_TEAM_ID_HEADER: Final = "x-litellm-customer-team-id"
 _ORGANIZATION_INCLUDE: Final = {"budget": True}
-_MEMBER_INCLUDE: Final = {
-    "budget": True,
-    "budget_override": True,
-    "parent_team": {"include": {"budget": True, "parent_org": {"include": {"budget": True}}}},
-}
+_TEAM_INCLUDE: Final = {"budget": True, "budget_override": True}
+_MEMBER_INCLUDE: Final = {"budget": True, "budget_override": True, "parent_org": {"include": {"budget": True}}}
 _EXPIRY: Final[TypeAdapter[datetime | None]] = TypeAdapter(datetime | None)
+_TEAM_IDS: Final = TypeAdapter(tuple[str, ...])
+_SPEND: Final = TypeAdapter(float)
 
 
 class _OrganizationRow(BaseModel):
@@ -62,7 +65,6 @@ class _OrganizationRow(BaseModel):
 
     customer_org_id: str
     spend: float = 0.0
-    budget_reset_at: datetime | None = None
     budget: Mapping[str, object] | None = None
 
 
@@ -71,9 +73,9 @@ class _TeamRow(BaseModel):
 
     customer_team_id: str
     spend: float = 0.0
-    budget_reset_at: datetime | None = None
     budget: Mapping[str, object] | None = None
-    parent_org: _OrganizationRow
+    budget_override: Mapping[str, object] | None = None
+    budget_override_expires_at: datetime | None = None
 
 
 class _MemberRow(BaseModel):
@@ -81,11 +83,12 @@ class _MemberRow(BaseModel):
 
     customer_member_id: str
     spend: float = 0.0
-    budget_reset_at: datetime | None = None
     budget: Mapping[str, object] | None = None
     budget_override: Mapping[str, object] | None = None
     budget_override_expires_at: datetime | None = None
-    parent_team: _TeamRow
+    parent_org: _OrganizationRow
+    parent_team_ids: tuple[str, ...] = ()
+    teams: tuple[_TeamRow, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,11 +125,16 @@ def customer_org_alias_from_headers(headers: Mapping[str, object] | None) -> str
     return _header_value(headers, CUSTOMER_ORG_ALIAS_HEADER)
 
 
+def customer_team_id_from_headers(headers: Mapping[str, object] | None) -> str | None:
+    return _header_value(headers, CUSTOMER_TEAM_ID_HEADER)
+
+
 def customer_identity_from_headers(headers: Mapping[str, object] | None) -> CustomerRequestIdentity | None:
     """The customer the request named, or None when it carried neither customer header."""
     identity: Final = CustomerRequestIdentity(
         customer_member_id=customer_member_id_from_headers(headers),
         customer_org_alias=customer_org_alias_from_headers(headers),
+        customer_team_id=customer_team_id_from_headers(headers),
     )
     if identity.customer_member_id is None and identity.customer_org_alias is None:
         return None
@@ -144,25 +152,43 @@ def _scope(
         spend=spend,
         budget_reset_at=budget_reset_at,
         max_budget=budget.max_budget,
+        budget_limits=budget.budget_limits or (),
         tpm_limit=budget.tpm_limit,
         rpm_limit=budget.rpm_limit,
         allowed_models=budget.allowed_models or None,
         model_tpm_limit=budget.model_tpm_limit,
         model_rpm_limit=budget.model_rpm_limit,
+        cap_policy=budget.cap_policy,
+    )
+
+
+def _team_scope(team: _TeamRow, now: datetime) -> CustomerScopeAuth:
+    budget: Final = related_budget(team.budget, now)
+    override: Final = related_budget(team.budget_override, now, budget.max_budget if budget is not None else None)
+    return _scope(
+        "customer_team",
+        team.customer_team_id,
+        team.spend,
+        effective_member_budget(budget, override, team.budget_override_expires_at, now),
+        customer_row_reset_at(team, now),
     )
 
 
 def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime) -> CustomerHierarchyAuth:
-    """The org, team and member scopes of one member row loaded with ``_MEMBER_INCLUDE``. The member's limits are
-    its effective budget: the selected organization template under any unexpired override."""
+    """The org, team and member scopes of one member row loaded with ``_MEMBER_INCLUDE`` plus its ``teams`` rows.
+    The member's limits are its effective budget: the selected organization template under any unexpired override.
+    ``scopes`` charges the first team in ``parent_team_ids``; ``select_customer_team`` swaps in another."""
     member: Final = _MemberRow.model_validate(row)
-    team: Final = member.parent_team
-    organization: Final = team.parent_org
+    organization: Final = member.parent_org
     template: Final = related_budget(member.budget, now)
     override: Final = related_budget(member.budget_override, now, template.max_budget if template is not None else None)
+    teams_by_id: Final = {team.customer_team_id: team for team in member.teams}
+    team_scopes: Final = tuple(
+        _team_scope(teams_by_id[team_id], now) for team_id in member.parent_team_ids if team_id in teams_by_id
+    )
     return CustomerHierarchyAuth(
         customer_member_id=member.customer_member_id,
-        customer_team_id=team.customer_team_id,
+        customer_team_id=team_scopes[0].entity_id if team_scopes else None,
         customer_org_id=organization.customer_org_id,
         scopes=(
             _scope(
@@ -170,23 +196,31 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
                 organization.customer_org_id,
                 organization.spend,
                 related_budget(organization.budget, now),
-                organization.budget_reset_at,
+                customer_row_reset_at(organization, now),
             ),
-            _scope(
-                "customer_team",
-                team.customer_team_id,
-                team.spend,
-                related_budget(team.budget, now),
-                team.budget_reset_at,
-            ),
+            *team_scopes[:1],
             _scope(
                 "customer_member",
                 member.customer_member_id,
                 member.spend,
                 effective_member_budget(template, override, member.budget_override_expires_at, now),
-                member.budget_reset_at,
+                customer_row_reset_at(member, now),
             ),
         ),
+        team_scopes=team_scopes,
+    )
+
+
+def select_customer_team(hierarchy: CustomerHierarchyAuth, customer_team_id: str) -> CustomerHierarchyAuth | None:
+    """The same hierarchy charged to ``customer_team_id``, or None when the member is not in that team."""
+    selected: Final = next((scope for scope in hierarchy.team_scopes if scope.entity_id == customer_team_id), None)
+    if selected is None:
+        return None
+    return hierarchy.model_copy(
+        update={
+            "customer_team_id": customer_team_id,
+            "scopes": tuple(selected if scope.key == "customer_team" else scope for scope in hierarchy.scopes),
+        }
     )
 
 
@@ -201,7 +235,7 @@ def customer_hierarchy_from_organization_row(row: Mapping[str, object], now: dat
                 organization.customer_org_id,
                 organization.spend,
                 related_budget(organization.budget, now),
-                organization.budget_reset_at,
+                customer_row_reset_at(organization, now),
             ),
         ),
     )
@@ -209,6 +243,10 @@ def customer_hierarchy_from_organization_row(row: Mapping[str, object], now: dat
 
 def _member_table(prisma_client: "PrismaClient") -> TableActions[PrismaRecord]:
     return prisma_client.db.litellm_customermembertable  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportAny]  # prisma tables are generated at build time
+
+
+def _team_table(prisma_client: "PrismaClient") -> TableActions[PrismaRecord]:
+    return prisma_client.db.litellm_customerteamtable  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportAny]  # generated client
 
 
 def _organization_table(prisma_client: "PrismaClient") -> TableActions[PrismaRecord]:
@@ -232,7 +270,17 @@ async def get_customer_hierarchy(
     if row is None:
         return None
     loaded_at: Final = now if now is not None else utc_now()
-    row_values: Final = row.model_dump()
+    team_ids: Final = _TEAM_IDS.validate_python(row.model_dump().get("parent_team_ids") or ())
+    teams: Final = (
+        await _team_table(prisma_client).find_many(
+            # bounded-ok: team_ids is one member's parent_team_ids, a handful of teams written by the management API
+            where={"customer_team_id": {"in": list(team_ids)}},
+            include=_TEAM_INCLUDE,
+        )
+        if team_ids
+        else ()
+    )
+    row_values: Final = {**row.model_dump(), "teams": tuple(team.model_dump() for team in teams)}
     hierarchy: Final = customer_hierarchy_from_member_row(row_values, loaded_at)
     await user_api_key_cache.async_set_cache(
         key=cache_key,
@@ -240,6 +288,58 @@ async def get_customer_hierarchy(
         ttl=_cache_ttl(row_values, loaded_at, get_management_object_ttl(user_api_key_cache)),
     )
     return hierarchy
+
+
+async def get_customer_scopes_for_accounting(
+    ids: CustomerHierarchyIds,
+    prisma_client: "PrismaClient",
+    user_api_key_cache: UserApiKeyCache,
+) -> tuple[CustomerScopeAuth, ...]:
+    """Resolve policies for the stamped charge identities without running admission checks."""
+    now: Final = utc_now()
+    hierarchy: Final = (
+        await get_customer_hierarchy(ids.customer_member_id, prisma_client, user_api_key_cache, now)
+        if ids.customer_member_id is not None
+        else None
+    )
+    known: Final = () if hierarchy is None else hierarchy.scopes
+    identities: Final[tuple[tuple[CustomerScopeKey, str | None], ...]] = (
+        ("customer_org", ids.customer_org_id),
+        ("customer_team", ids.customer_team_id),
+        ("customer_member", ids.customer_member_id),
+    )
+    scopes: Final = tuple(
+        [
+            await _accounting_scope(key, entity_id, known, prisma_client, now)
+            for key, entity_id in identities
+            if entity_id is not None
+        ]
+    )
+    return tuple(scope for scope in scopes if scope is not None)
+
+
+async def _accounting_scope(
+    key: CustomerScopeKey,
+    entity_id: str,
+    known: tuple[CustomerScopeAuth, ...],
+    prisma_client: "PrismaClient",
+    now: datetime,
+) -> CustomerScopeAuth | None:
+    cached: Final = next((scope for scope in known if scope.key == key and scope.entity_id == entity_id), None)
+    if cached is not None or key == "customer_member":
+        return cached
+    # Organization-only requests and a member moved since admission still charge
+    # the original team/organization, never the member's new parents.
+    table: Final[TableActions[PrismaRecord]] = (
+        _organization_table(prisma_client) if key == "customer_org" else CustomerTeamRepository(prisma_client).table
+    )
+    row: Final = await table.find_unique(where={f"{key}_id": entity_id}, include=_ORGANIZATION_INCLUDE)
+    if row is None:
+        return None
+    values: Final = row.model_dump()
+    return _scope(
+        key, entity_id, _SPEND.validate_python(values.get("spend", 0)), related_budget(values.get("budget"), now)
+    )
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
@@ -271,12 +371,30 @@ async def get_customer_organization_hierarchy(
 
 
 def _cache_ttl(row: Mapping[str, object], now: datetime, default_ttl: float) -> float:
-    """A cached hierarchy may not outlive the member's budget override, or an expired override would keep
-    granting its limits until the management-object TTL ran out."""
-    expires_at: Final = _MemberRow.model_validate(row).budget_override_expires_at
-    if expires_at is None or expires_at <= now:
+    """A cached hierarchy may not outlive the member's or any of its teams' budget override, or an expired
+    override would keep granting its limits until the management-object TTL ran out."""
+    member: Final = _MemberRow.model_validate(row)
+    expiries: Final = tuple(
+        expires_at
+        for expires_at in (
+            member.budget_override_expires_at,
+            *(team.budget_override_expires_at for team in member.teams),
+        )
+        if expires_at is not None and expires_at > now
+    )
+    if not expiries:
         return default_ttl
-    return max(1.0, min(default_ttl, (expires_at - now).total_seconds()))
+    return max(1.0, min(default_ttl, (min(expiries) - now).total_seconds()))
+
+
+def cap_policy_hint(hierarchy: CustomerHierarchyAuth, key: str, entity_id: str) -> str:
+    """What the paused caller can do, from the budget of the level that blocked it."""
+    policy: Final = next(
+        (scope.cap_policy for scope in hierarchy.scopes if scope.key == key and scope.entity_id == entity_id), None
+    )
+    if policy == "pause_allow_increase":
+        return f" Request a temporary increase through POST {INCREASE_REQUEST_ROUTE}."
+    return " Spend resumes when the budget window resets."
 
 
 def check_customer_hierarchy_budget(hierarchy: CustomerHierarchyAuth) -> None:
@@ -288,11 +406,70 @@ def check_customer_hierarchy_budget(hierarchy: CustomerHierarchyAuth) -> None:
                 max_budget=scope.max_budget,
                 message=(
                     f"ExceededBudget: {scope.key}={scope.entity_id} over budget. "
-                    f"Spend={scope.spend}, Budget={scope.max_budget}"
+                    f"Spend={scope.spend}, Budget={scope.max_budget}."
+                    f"{cap_policy_hint(hierarchy, scope.key, scope.entity_id)}"
                 ),
                 entity_type=scope.key,
                 entity_id=scope.entity_id,
             )
+
+
+async def check_customer_hierarchy_windows(
+    hierarchy: CustomerHierarchyAuth,
+    now: datetime | None = None,
+) -> None:
+    from itertools import chain
+
+    from litellm.proxy.proxy_server import get_current_spend, spend_counter_store
+    from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
+    from litellm.proxy.spend_tracking.spend_counter_batch import spend_counter_batch_scope
+
+    counters: Final = tuple(
+        chain.from_iterable(
+            customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now)
+            for scope in hierarchy.scopes
+        )
+    )
+    with spend_counter_batch_scope(
+        spend_counter_store, counter_keys=frozenset(counter.counter_key for counter in counters)
+    ):
+        for counter in counters:
+            if counter.window_start is None:
+                raise ProxyException(
+                    message="Customer budget window is unavailable.",
+                    type=ProxyErrorTypes.internal_server_error,
+                    param="budget_limits",
+                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            try:
+                spend = await get_current_spend(
+                    counter_key=counter.counter_key,
+                    fallback_spend=0.0,
+                    max_budget=counter.max_budget,
+                    window_entity_type=counter.entity_type,
+                    window_entity_id=counter.entity_id,
+                    window_duration=counter.window_duration,
+                    window_start=counter.window_start,
+                    require_authoritative_window=True,
+                )
+            except HTTPException as error:
+                raise ProxyException(
+                    message="Customer budget window spend is unavailable.",
+                    type=ProxyErrorTypes.internal_server_error,
+                    param="budget_limits",
+                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                ) from error
+            if spend >= counter.max_budget:
+                raise litellm.BudgetExceededError(
+                    current_cost=spend,
+                    max_budget=counter.max_budget,
+                    message=(
+                        f"ExceededBudget: {counter.entity_type}={counter.entity_id} over {counter.window_duration} budget."
+                        f"{cap_policy_hint(hierarchy, counter.entity_type, counter.entity_id)}"
+                    ),
+                    entity_type=counter.entity_type,
+                    entity_id=counter.entity_id,
+                )
 
 
 def check_customer_hierarchy_model_access(
@@ -400,21 +577,31 @@ async def load_customer_hierarchy(
     if identity.customer_member_id is None:
         if organization is None:
             raise _not_found("request named no customer member or organization", CUSTOMER_MEMBER_ID_HEADER)
+        if identity.customer_team_id is not None:
+            raise _forbidden("a customer team header needs a customer member header", CUSTOMER_TEAM_ID_HEADER)
         return organization
     hierarchy: Final = await _hierarchy_named_by_member(
         identity.customer_member_id, organization, prisma_client, user_api_key_cache, register
     )
     if organization is not None and organization.customer_org_id != hierarchy.customer_org_id:
-        raise ProxyException(
-            message=(
-                f"Customer member {identity.customer_member_id} does not belong to the organization "
-                f"aliased {identity.customer_org_alias}"
-            ),
-            type=ProxyErrorTypes.auth_error,
-            param=CUSTOMER_ORG_ALIAS_HEADER,
-            code=status.HTTP_403_FORBIDDEN,
+        raise _forbidden(
+            f"Customer member {identity.customer_member_id} does not belong to the organization "
+            f"aliased {identity.customer_org_alias}",
+            CUSTOMER_ORG_ALIAS_HEADER,
         )
-    return hierarchy
+    if identity.customer_team_id is None:
+        return hierarchy
+    selected: Final = select_customer_team(hierarchy, identity.customer_team_id)
+    if selected is None:
+        raise _forbidden(
+            f"Customer member {identity.customer_member_id} is not in customer team {identity.customer_team_id}",
+            CUSTOMER_TEAM_ID_HEADER,
+        )
+    return selected
+
+
+def _forbidden(message: str, param: str) -> ProxyException:
+    return ProxyException(message=message, type=ProxyErrorTypes.auth_error, param=param, code=status.HTTP_403_FORBIDDEN)
 
 
 async def resolve_customer_hierarchy(
@@ -436,6 +623,8 @@ async def resolve_customer_hierarchy(
     check_customer_hierarchy_key_scope(hierarchy, key_metadata or {})
     if not RouteChecks.is_info_route(route):
         check_customer_hierarchy_budget(hierarchy)
+        if any(scope.budget_limits for scope in hierarchy.scopes):
+            await check_customer_hierarchy_windows(hierarchy)
     requested: Final = (request_model,) if isinstance(request_model, str) else tuple(request_model or ())
     for model in requested:
         if model:

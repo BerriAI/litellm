@@ -165,70 +165,6 @@ class TeamSpendResetWrites:
         )
 
 
-CustomerSpendEntity: TypeAlias = Literal["member", "team", "org"]
-
-_CUSTOMER_RESET_QUERIES: Final = {
-    "member": 'UPDATE "LiteLLM_CustomerMemberTable"'
-    + _SPEND_RESET_SET
-    + " WHERE customer_member_id = $1"
-    + _SPEND_RESET_WHERE,
-    "team": 'UPDATE "LiteLLM_CustomerTeamTable"'
-    + _SPEND_RESET_SET
-    + " WHERE customer_team_id = $1"
-    + _SPEND_RESET_WHERE,
-    "org": 'UPDATE "LiteLLM_CustomerOrganizationTable"'
-    + _SPEND_RESET_SET
-    + " WHERE customer_org_id = $1"
-    + _SPEND_RESET_WHERE,
-}
-
-
-@dataclass(frozen=True, slots=True)
-class CustomerSpendResetWrites:
-    entity: CustomerSpendEntity
-    table: BatchTable
-    batch: PrismaBatch
-
-    def queue_spend_reset(
-        self,
-        identity: str,
-        budget_reset_at: datetime | None,
-        spend_decrement: float,
-        expected_reset_at: datetime | None,
-        spend_after_reset: float = 0.0,
-    ) -> None:
-        if _queue_guarded_spend_reset(
-            self.batch,
-            _CUSTOMER_RESET_QUERIES[self.entity],
-            identity,
-            budget_reset_at,
-            spend_decrement,
-            expected_reset_at,
-            spend_after_reset,
-        ):
-            return
-        self.table.update_many(
-            where={f"customer_{self.entity}_id": identity, "budget_reset_at": expected_reset_at},
-            data=_spend_reset_data(budget_reset_at, spend_decrement),
-        )
-
-
-@asynccontextmanager
-async def customer_spend_reset_unit_of_work(
-    new_batch: Callable[[], PrismaBatch], entity: CustomerSpendEntity
-) -> AsyncGenerator[CustomerSpendResetWrites, None]:
-    batch: Final = new_batch()
-    table: Final = (
-        batch.litellm_customermembertable
-        if entity == "member"
-        else batch.litellm_customerteamtable
-        if entity == "team"
-        else batch.litellm_customerorganizationtable
-    )
-    yield CustomerSpendResetWrites(entity=entity, table=table, batch=batch)
-    await batch.commit()
-
-
 @runtime_checkable
 class SpendResetWrites(Protocol):
     def queue_spend_zero(self, where: Mapping[str, object]) -> None: ...
@@ -300,6 +236,10 @@ _LOCK_BUDGET_ACCESS_GROUPS_SQL: Final = (
     'SELECT 1 AS locked FROM "LiteLLM_ModelAccessGroupBudgetTable" WHERE budget_id = ANY($1::text[]) '
     'ORDER BY access_group_name COLLATE "C" FOR UPDATE'
 )
+_LOCK_BUDGET_CUSTOMER_ORGS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_CustomerOrganizationTable" WHERE budget_id = ANY($1::text[]) '
+    'ORDER BY customer_org_id COLLATE "C" FOR UPDATE'
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +254,7 @@ class BudgetLinkedRowLocks:
         self.batch.execute_raw(_LOCK_BUDGET_PROJECTS_SQL, list(budget_ids))
         self.batch.execute_raw(_LOCK_BUDGET_TAGS_SQL, list(budget_ids))
         self.batch.execute_raw(_LOCK_BUDGET_ACCESS_GROUPS_SQL, list(budget_ids))
+        self.batch.execute_raw(_LOCK_BUDGET_CUSTOMER_ORGS_SQL, list(budget_ids))
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,6 +292,7 @@ class BudgetCascadeUnitOfWork:
     tags: LinkedSpendResetWrites
     model_access_groups: LinkedSpendResetWrites
     projects: LinkedSpendResetWrites
+    customer_organizations: LinkedSpendResetWrites
     budgets: BudgetWindowWrites
 
 
@@ -380,8 +322,23 @@ async def budget_cascade_unit_of_work(
         tags=LinkedSpendResetWrites(table=batch.litellm_tagtable),
         model_access_groups=LinkedSpendResetWrites(table=batch.litellm_modelaccessgroupbudgettable),
         projects=LinkedSpendResetWrites(table=batch.litellm_projecttable),
+        customer_organizations=LinkedSpendResetWrites(table=batch.litellm_customerorganizationtable),
         budgets=BudgetWindowWrites(table=batch.litellm_budgettable),
     )
+    await batch.commit()
+
+
+CustomerSpendTable: TypeAlias = Literal["litellm_customerteamtable", "litellm_customermembertable"]
+
+
+@asynccontextmanager
+async def customer_spend_reset_unit_of_work(
+    new_batch: Callable[[], PrismaBatch], table: CustomerSpendTable
+) -> AsyncGenerator[LinkedSpendResetWrites, None]:
+    """One page of customer team or member spend resets, committed on its own like end users: an aliased request
+    can register a member, so the rows a template governs are unbounded."""
+    batch: Final = new_batch()
+    yield LinkedSpendResetWrites(table=getattr(batch, table))
     await batch.commit()
 
 

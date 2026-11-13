@@ -53,7 +53,9 @@ WINDOW_START = datetime(2026, 8, 1, tzinfo=timezone.utc)
 async def test_customer_counter_reseed_reads_only_the_matching_budget_period(
     family, table_name, id_field, period, reset_at, expected
 ):
-    table: Final = _FakeFindUniqueTable(SimpleNamespace(spend=4.5, budget_reset_at=reset_at))
+    table: Final = _FakeFindUniqueTable(
+        SimpleNamespace(spend=4.5, budget=SimpleNamespace(budget_duration="1mo", budget_reset_at=reset_at))
+    )
     prisma: Final = SimpleNamespace(db=SimpleNamespace(**{table_name: table}))
     actual: Final = await SpendCounterReseed.from_db(prisma, f"spend:{family}:id:with:colons:{period}")
     assert actual == expected
@@ -75,7 +77,7 @@ class _FakeFindUniqueTable:
         self._error = error
         self.where_clauses: list[dict] = []
 
-    async def find_unique(self, where: dict):
+    async def find_unique(self, where: dict, include: dict | None = None):
         self.where_clauses.append(where)
         if self._error is not None:
             raise self._error
