@@ -211,6 +211,7 @@ async def test_during_hook_seeds_and_bridges_onto_request_logger():
     await _bare_manager()._create_during_hook_task(
         name="t",
         arguments={},
+        server=mock.MagicMock(pinned_tools=None),
         server_name_from_prefix="s",
         user_api_key_auth=None,
         proxy_logging_obj=plo,
@@ -233,6 +234,7 @@ async def test_during_hook_bridges_even_when_hook_raises():
     task = _bare_manager()._create_during_hook_task(
         name="t",
         arguments={},
+        server=mock.MagicMock(pinned_tools=None),
         server_name_from_prefix="s",
         user_api_key_auth=None,
         proxy_logging_obj=plo,
