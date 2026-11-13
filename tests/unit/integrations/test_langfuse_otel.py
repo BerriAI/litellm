@@ -731,31 +731,32 @@ class TestLangfuseOtelKeyDynamicConfig:
         ],
         ids=["v2-refused", "v2-allowlisted", "v1-unchecked"],
     )
-    def test_key_langfuse_host_refused_by_otel_v2_gets_no_exporter(
-        self, monkeypatch, otel_v2: str, allowed_hosts: list[str], exports_to_key_host: bool
+    def test_key_langfuse_host_refused_by_otel_v2_gets_no_exporter_or_credentials(
+        self, monkeypatch: pytest.MonkeyPatch, otel_v2: str, allowed_hosts: list[str], exports_to_key_host: bool
     ) -> None:
+        import base64
+
         from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
+        params: Final = self._dynamic_params()
         monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", allowed_hosts)
         with self._clean_env(), patch.dict(os.environ, {"LITELLM_OTEL_V2": otel_v2}):
             is_otel_v2_enabled.cache_clear()
             try:
                 logger: Final = LangfuseOtelLogger()
-                tracer: Final = logger.get_tracer_to_use_for_request(
-                    {"standard_callback_dynamic_params": self._dynamic_params()}
-                )
+                config: Final = logger.construct_dynamic_otel_config(params)
+                headers: Final = logger.construct_dynamic_otel_headers(params)
             finally:
                 is_otel_v2_enabled.cache_clear()
 
-        exported_endpoints: Final = tuple(
-            endpoint
-            for cached in logger._tracer_provider_cache.values()
-            for processor in cached.provider._active_span_processor._span_processors
-            for endpoint, _ in _exported_auth_headers(processor.span_exporter)
+        expected_auth: Final = base64.b64encode(b"key_public:key_secret").decode()
+        assert (config.endpoint if config else None) == (
+            "https://langfuse.example.com/api/public/otel" if exports_to_key_host else None
         )
-        assert (tracer is not logger.tracer) is exports_to_key_host
-        assert exported_endpoints == (
-            ("https://langfuse.example.com/api/public/otel/v1/traces",) if exports_to_key_host else ()
+        assert headers == (
+            {"Authorization": f"Basic {expected_auth}", "x-langfuse-ingestion-version": "4"}
+            if exports_to_key_host
+            else {}
         )
 
     def test_key_dynamic_params_reuse_cached_provider(self):
