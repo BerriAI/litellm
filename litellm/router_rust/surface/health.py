@@ -11,7 +11,6 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.router_utils.service_tier_fallback import FlexTierFallback
 
 if TYPE_CHECKING:
     from litellm.router_rust.steps.callbacks import OptionalChecks
@@ -384,8 +383,7 @@ class RustHealthCallbacks:
         self._sync_allowed_fails()
         exception_status: Final[object] = getattr(exception, "status_code", "")
         if (
-            FlexTierFallback.suppress_failure(kwargs, exception)
-            or is_advisor_orchestration_failure(exception)
+            is_advisor_orchestration_failure(exception)
             or is_stream_stall(exception)
             or (generic and cast_exception_status_to_int(exception_status) in _REQUEST_SCOPED_STATUS_CODES)  # pyright: ignore[reportArgumentType]  # the status as raised
             or is_caller_timeout_408(model_call_details, exception_status, ended=datetime.now())  # pyright: ignore[reportArgumentType]  # noqa: DTZ005  # see logged_call
@@ -467,7 +465,7 @@ class RustHealthCallbacks:
         model_info: Final = litellm_params.get("model_info", {})
         info: Final = as_str_mapping(model_info)
         deployment_id: Final = info.get("id") if info is not None else None
-        if deployment_id is None or FlexTierFallback.suppress_failure(kwargs, exception):
+        if deployment_id is None:
             return None
         exits: Final = self.failure_exits(exception, kwargs, deployment_id)
         if exits["outside_deployment"] and not counts_request:

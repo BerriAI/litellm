@@ -1697,6 +1697,7 @@ class RustCore(
         self._handle_default_ids = default_ids
         static: Final = {
             **self._resolved.static_document(model_list),
+            "service_tier_fallbacks": self._plain.get("service_tier_fallbacks", True),
             **{name: value for name, value in failover_document(self._plain).items() if value is not None},
             **({"provider_default_deployment_ids": list(default_ids)} if default_ids else {}),
         }
@@ -2229,8 +2230,12 @@ class RustCore(
     def _store_plain(self, plain: Mapping[str, object]) -> None:
         """Settings the Python core keeps as plain attributes, read from the next call on."""
         flags_before: Final = failover_document(self._plain)
+        tier_before: Final = self._plain.get("service_tier_fallbacks", True)
         self._plain.update(plain)
-        if failover_document(self._plain) != flags_before:
+        if (
+            failover_document(self._plain) != flags_before
+            or self._plain.get("service_tier_fallbacks", True) != tier_before
+        ):
             self._rebuild()
         policies: Final = {name: plain[name] for name in _RETRY_POLICY_SETTINGS if name in plain}
         if policies:
@@ -2802,6 +2807,7 @@ class RustCore(
     ) -> Mapping[str, object]:
         """The document router-core starts a call from: what it routes on, then what this call changes."""
         fields: dict[str, object] = {"model": model}  # mutable-ok: built up below, later keys win  # rebind-ok: same
+        fields["body"] = {key: prepared[key] for key in ("service_tier", "timeout_by_service_tier") if key in prepared}
         fields.update(self._routing_fields(prepared, plan.pick_input(prepared)[0]))
         fields.update(pinned_video_deployment(plan, request))
         fields.update(pinned_vector_store_file_deployment(plan, request))
@@ -4439,6 +4445,7 @@ class _Driver:
         self._last_error: BaseException | None = None
         self._invoke_stage = "idle"
         self._active_stream: StreamAttempt | None = None
+        self._pending_first_chunk_failure: tuple[StreamAttempt, BaseException] | None = None
         # The level the call raises from: a fallback walk re-entered from a failed stream starts at
         # the level that stream served, on the failure ``async_function_with_fallbacks_common_utils``
         # was handed, which is what it raises when no fallback answers.
@@ -4793,6 +4800,12 @@ class _Driver:
             event = as_str_mapping(raw_event)
             if event is None:
                 continue
+            if event.get("kind") == "service_tier_downgraded":
+                self._pending_first_chunk_failure = None
+                continue
+            if event.get("kind") == "attempt_failed":
+                self._report_first_chunk_failure()
+                continue
             if event.get("kind") == "pick_started":
                 self.close_route_phase()
                 self.open_route_phase(event.get("model"))
@@ -4918,6 +4931,12 @@ class _Driver:
                 error.max_retries = event.get("max")  # pyright: ignore[reportAttributeAccessIssue]  # Python's router stamps the same attributes
                 error.num_retries = event.get("attempted")  # pyright: ignore[reportAttributeAccessIssue]  # same
 
+    def _report_first_chunk_failure(self) -> None:
+        first_chunk: Final = self._pending_first_chunk_failure
+        self._pending_first_chunk_failure = None
+        if first_chunk is not None:
+            first_chunk[0].report_first_chunk_failure(first_chunk[1])
+
     def _call(self, step: Mapping[str, object]) -> "tuple[Mapping[str, object], AttemptCall]":
         name: Final = step.get("model")
         requested: Final = str(name) if name is not None else str(self._request.get("model"))
@@ -4928,16 +4947,16 @@ class _Driver:
             else for_requested_model(typed_deployment(as_str_mapping(step.get("deployment")) or {}), requested)
         )
         # The values its JSON record carries as text (an Exception `mock_response`) called as configured.
-        deployment = _with_live_params(self._core, deployment)
+        deployment = self._core._handle.attempt_deployment(_with_live_params(self._core, deployment), step)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
         self._attempts += 1
         self._attempt_started = datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline's api_call_start_time
         level: Final = step.get("fallback_level")
         # The request params the walk's dict targets merged in (`kwargs.update(target)`).
-        params: Final = as_str_mapping(step.get("params"))
+        request: Final = self._core._handle.attempt_kwargs(self._request, step)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
         call: Final = attempt_call(
             self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             self._plan,
-            self._request if params is None else {**self._request, **params},
+            request,
             deployment,
             group=requested,
             requested=requested,
@@ -5265,7 +5284,6 @@ class _Driver:
             return {**self._failed(step, self._default_copy(step), None, refused_call), "recorded": True}
         try:
             deployment, call = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
-            flex: Final = self._prepare_flex(call)
             enforce_total_timeout_scope(call.kwargs)
             if call.refused is not None:
                 await log_refused_call(call, call.refused)
@@ -5297,9 +5315,10 @@ class _Driver:
                 logs_failure = first_to_log  # rebind-ok: the stream's own failure logging, for its first chunk
                 in_call = True  # rebind-ok: see above
                 reading_stream = initial_stream  # rebind-ok: None until the attempt opens a stream
-                completed_call, response, stream = await self._invoke_with_flex(
-                    step, deployment, call, compacted, initial_stream, flex
-                )
+                completed_call: Final = call
+                opened: Final = await self._invoke_attempt(step, call, compacted, initial_stream)
+                response: Final = FlexTierFallback.add_header(opened) if step.get("service_tier_downgraded") else opened
+                stream: Final = initial_stream
                 logs_failure = False  # rebind-ok: see above
                 in_call = False  # rebind-ok: see above
                 # `self.success_calls[model_name] += 1`, inside the try: a counter replaced with a
@@ -5327,8 +5346,7 @@ class _Driver:
                     "recorded": not failure_logs
                     and not self._records_blocked(failed, failed_call, error, failure_in_call),
                 }
-            # `_dispatch_stream_failure`: the stream logs its failure in a task of its own.
-            failed_stream.report_first_chunk_failure(error)
+            self._pending_first_chunk_failure = (failed_stream, error)
             return {**failed, "recorded": True}
         served: Final = self._succeeded(completed_call, response, completed_call.host_op, stream)
         # The session re-pin the Python core's success callback runs; a wrapped stream runs it when it ends.
@@ -5341,16 +5359,6 @@ class _Driver:
             await self._core.count_realtime_session_success(session_deployment)
         return served
 
-    def _prepare_flex(self, call: AttemptCall) -> bool:
-        return self._plan.endpoint in (
-            "acompletion",
-            "aresponses",
-            "completion",
-        ) and FlexTierFallback.applies(
-            call.kwargs,
-            self._core._plain.get("service_tier_fallbacks") is True,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-        )
-
     def _invocation_failure(
         self, call: AttemptCall | None, stream: StreamAttempt | None, logs: bool, in_call: bool
     ) -> tuple[AttemptCall | None, StreamAttempt | None, bool, bool]:
@@ -5362,83 +5370,6 @@ class _Driver:
             logs and self._invoke_stage != "check",
             in_call and self._invoke_stage != "check",
         )
-
-    def _downgrade_call(self, step: Mapping[str, object], deployment: Mapping[str, object]) -> AttemptCall:
-        params: Final = as_str_mapping(step.get("params")) or {}
-        request: Final = FlexTierFallback.downgraded({**self._request, **params}, self._plan.metadata_field)
-        data: Final = as_str_mapping(deployment.get("litellm_params")) or {}
-        default_deployment: Final = {
-            **deployment,
-            "litellm_params": {key: value for key, value in data.items() if key != "service_tier"},
-        }
-        group: Final = str(step.get("model", self._request.get("model")))
-        level: Final = step.get("fallback_level")
-        rebuilt: Final = attempt_call(
-            self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-            self._plan,
-            request,
-            default_deployment,
-            group=group,
-            requested=group,
-            fallback_level=level if isinstance(level, int) else 0,
-        )
-        rebuilt.kwargs = FlexTierFallback.downgraded(rebuilt.kwargs, self._plan.metadata_field)
-        self._latest_call = (deployment, rebuilt)
-        self._served = (group, rebuilt.served)
-        return rebuilt
-
-    async def _invoke_with_flex(
-        self,
-        step: Mapping[str, object],
-        deployment: Mapping[str, object],
-        call: AttemptCall,
-        kwargs: Mapping[str, object],
-        stream: StreamAttempt,
-        flex: bool,
-    ) -> tuple[AttemptCall, object, StreamAttempt]:
-        sent: Final = FlexTierFallback.pending(kwargs, self._plan.metadata_field) if flex else kwargs
-        prepared: Final = dataclasses.replace(call, kwargs=sent) if flex else call
-        active_stream: Final = self._stream_attempt(step, sent, stream.slot) if flex else stream
-        self._latest_call = (deployment, prepared)
-        try:
-            response: Final = await self._invoke_attempt(step, prepared, sent, active_stream)
-        except Exception as error:
-            if not (flex and FlexTierFallback.is_trigger(error)):
-                raise
-        else:
-            if flex:
-                FlexTierFallback.finish(sent, self._plan.metadata_field)
-            return prepared, response, active_stream
-        default_call: Final = self._downgrade_call(step, deployment)
-        default_stream: Final = self._stream_attempt(step, default_call.kwargs, stream.slot)
-        default_response: Final = await self._invoke_attempt(step, default_call, default_call.kwargs, default_stream)
-        return default_call, FlexTierFallback.add_header(default_response), default_stream
-
-    def _invoke_with_flex_sync(
-        self,
-        step: Mapping[str, object],
-        deployment: Mapping[str, object],
-        call: AttemptCall,
-        stream: StreamAttempt,
-        flex: bool,
-    ) -> tuple[AttemptCall, object, StreamAttempt]:
-        sent: Final = FlexTierFallback.pending(call.kwargs, self._plan.metadata_field) if flex else call.kwargs
-        prepared: Final = dataclasses.replace(call, kwargs=sent) if flex else call
-        active_stream: Final = self._stream_attempt(step, sent) if flex else stream
-        self._latest_call = (deployment, prepared)
-        try:
-            response: Final = self._invoke_attempt_sync(prepared, active_stream)
-        except Exception as error:
-            if not (flex and FlexTierFallback.is_trigger(error)):
-                raise
-        else:
-            if flex:
-                FlexTierFallback.finish(sent, self._plan.metadata_field)
-            return prepared, response, active_stream
-        default_call: Final = self._downgrade_call(step, deployment)
-        default_stream: Final = self._stream_attempt(step, default_call.kwargs)
-        default_response: Final = self._invoke_attempt_sync(default_call, default_stream)
-        return default_call, FlexTierFallback.add_header(default_response), default_stream
 
     async def _invoke_attempt(
         self, step: Mapping[str, object], call: AttemptCall, kwargs: Mapping[str, object], stream: StreamAttempt
@@ -5485,7 +5416,6 @@ class _Driver:
             return {**self._failed(step, self._default_copy(step), None, refused_call), "recorded": True}
         try:
             deployment, call = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
-            flex: Final = self._prepare_flex(call)
             if call.refused is not None:
                 log_refused_call_sync(call, call.refused)
                 raise call.refused
@@ -5500,7 +5430,10 @@ class _Driver:
             initial_stream: Final = self._stream_attempt(step, call.kwargs)
             logs_failure = first_to_log  # rebind-ok: see attempt
             in_call = True  # rebind-ok: see attempt
-            completed_call, response, stream = self._invoke_with_flex_sync(step, deployment, call, initial_stream, flex)
+            completed_call: Final = call
+            opened: Final = self._invoke_attempt_sync(call, initial_stream)
+            response: Final = FlexTierFallback.add_header(opened) if step.get("service_tier_downgraded") else opened
+            stream: Final = initial_stream
             self._reading_first_chunk = False
             logs_failure = False  # rebind-ok: see attempt
             in_call = False  # rebind-ok: see attempt

@@ -71,7 +71,6 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     spend_log_row_with_retained_metadata,
 )
 from litellm.proxy.utils import hash_token
-from litellm.router_utils.service_tier_fallback import FlexTierFallback
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
@@ -94,9 +93,9 @@ from litellm.types.utils import (
 @pytest.mark.parametrize("downgraded", (False, True))
 def test_flex_downgrade_marker_survives_spend_log_metadata_filter(downgraded: bool) -> None:
     request: Final[Mapping[str, object]] = (
-        FlexTierFallback.downgraded({"service_tier": "flex"}, "metadata") if downgraded else {}
+        {"litellm_metadata": {"service_tier_fallback": {"from": "flex", "to": "default"}}} if downgraded else {}
     )
-    metadata: Final = as_str_mapping(request.get("metadata"))
+    metadata: Final = as_str_mapping(request.get("litellm_metadata"))
     standard: Final = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
     stored: Final = _get_spend_logs_metadata(dict(standard))
     assert stored.get("service_tier_fallback") == ({"from": "flex", "to": "default"} if downgraded else None)

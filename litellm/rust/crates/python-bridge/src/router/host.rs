@@ -236,6 +236,8 @@ pub(crate) struct DictTargets(#[redact(with = "[REDACTED]")] pub(crate) Vec<Map<
 pub(crate) enum HostCall {
     Attempt {
         deployment_id: String,
+        service_tier_downgraded: bool,
+        removed_params: Vec<String>,
         /// The picked deployment as configured: `model_name`, `litellm_params`, `model_info`
         /// (with its `id`). The host builds the request from it; it never looks the deployment up
         /// in a Python router.
@@ -837,6 +839,12 @@ impl Host for StepHost {
     async fn invoke(&self, attempt: &Attempt) -> Result<Output, AttemptError> {
         let call = HostCall::Attempt {
             deployment_id: attempt.deployment.id.clone(),
+            service_tier_downgraded: attempt.service_tier_downgraded,
+            removed_params: attempt
+                .removed_params()
+                .iter()
+                .map(|key| (*key).to_owned())
+                .collect(),
             deployment: deployment_record(&attempt.deployment),
             model: attempt.name.clone(),
             model_group: attempt.model_group.clone(),
@@ -1081,6 +1089,8 @@ impl Host for StepHost {
                 | RouterEvent::CooldownSet { .. }
                 | RouterEvent::Selected { .. }
                 | RouterEvent::PickStarted { .. }
+                | RouterEvent::ServiceTierDowngraded { .. }
+                | RouterEvent::AttemptFailed { .. }
         ) {
             return;
         }

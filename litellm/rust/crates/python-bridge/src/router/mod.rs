@@ -169,6 +169,80 @@ pub(crate) struct RouterCoreHandle {
 
 #[pymethods]
 impl RouterCoreHandle {
+    #[staticmethod]
+    fn attempt_deployment<'py>(
+        py: Python<'py>,
+        deployment: Bound<'py, PyAny>,
+        step: Bound<'py, PyDict>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let Some(removed) = step.get_item("removed_params")? else {
+            return Ok(deployment);
+        };
+        if removed.len()? == 0 {
+            return Ok(deployment);
+        }
+        let control = PyDict::new(py);
+        control.set_item("removed_params", removed)?;
+        let params = Self::attempt_kwargs(py, deployment.get_item("litellm_params")?, control)?;
+        let result = PyDict::new(py);
+        result.call_method1("update", (deployment,))?;
+        result.set_item("litellm_params", params)?;
+        Ok(result.into_any())
+    }
+
+    #[staticmethod]
+    fn attempt_kwargs<'py>(
+        py: Python<'py>,
+        request: Bound<'py, PyAny>,
+        step: Bound<'py, PyDict>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let removed = step
+            .get_item("removed_params")?
+            .map(|value| value.extract::<Vec<String>>())
+            .transpose()?
+            .unwrap_or_default();
+        let params = step.get_item("params")?.filter(|value| !value.is_none());
+        let merge_metadata = !removed.is_empty();
+        if removed.is_empty() && params.is_none() {
+            return Ok(request);
+        }
+        let result = PyDict::new(py);
+        result.call_method1("update", (request,))?;
+        for key in removed {
+            if let Some((outer, inner)) = key.split_once('.') {
+                if let Some(value) = result.get_item(outer)?
+                    && value.hasattr("keys")?
+                {
+                    let nested = PyDict::new(py);
+                    nested.call_method1("update", (value,))?;
+                    if nested.contains(inner)? {
+                        nested.del_item(inner)?;
+                    }
+                    result.set_item(outer, nested)?;
+                }
+            } else if result.contains(&key)? {
+                result.del_item(key)?;
+            }
+        }
+        if let Some(params) = params {
+            for (key, value) in params.cast::<PyDict>()?.iter() {
+                if merge_metadata && key.extract::<String>()? == "litellm_metadata" {
+                    let metadata = PyDict::new(py);
+                    if let Some(existing) = result.get_item(&key)?.filter(|value| !value.is_none())
+                        && existing.hasattr("keys")?
+                    {
+                        metadata.call_method1("update", (existing,))?;
+                    }
+                    metadata.call_method1("update", (value,))?;
+                    result.set_item(key, metadata)?;
+                } else {
+                    result.set_item(key, value)?;
+                }
+            }
+        }
+        Ok(result.into_any())
+    }
+
     #[new]
     fn new(config: &Bound<'_, PyAny>, dynamic: &Bound<'_, PyAny>) -> PyResult<Self> {
         let (config, dynamic) = (document(config)?, document(dynamic)?);
@@ -1657,6 +1731,14 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
                 dict.set_item("kind", "pick_started")?;
                 dict.set_item("model", model)?;
             }
+            RouterEvent::ServiceTierDowngraded { deployment_id } => {
+                dict.set_item("kind", "service_tier_downgraded")?;
+                dict.set_item("deployment_id", deployment_id)?;
+            }
+            RouterEvent::AttemptFailed { deployment_id, .. } => {
+                dict.set_item("kind", "attempt_failed")?;
+                dict.set_item("deployment_id", deployment_id)?;
+            }
             RouterEvent::Selected {
                 deployment_id,
                 pick,
@@ -1702,6 +1784,8 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
     match call {
         HostCall::Attempt {
             deployment_id,
+            service_tier_downgraded,
+            removed_params,
             deployment,
             model,
             model_group,
@@ -1722,6 +1806,8 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
             dict.set_item("max_retries", max_retries)?;
             dict.set_item("model_group_size", model_group_size)?;
             dict.set_item("deployment_id", deployment_id)?;
+            dict.set_item("service_tier_downgraded", service_tier_downgraded)?;
+            dict.set_item("removed_params", PyList::new(py, removed_params)?)?;
             dict.set_item("deployment", to_py(py, &deployment)?)?;
             dict.set_item("model", model)?;
             dict.set_item("model_group", model_group)?;

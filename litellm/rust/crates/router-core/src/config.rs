@@ -191,6 +191,7 @@ pub struct RouterConfig {
     /// Router default `cooldown_time`; `None` is `DEFAULT_COOLDOWN_TIME_SECONDS`.
     pub cooldown_time: Option<f64>,
     pub disable_cooldowns: bool,
+    pub service_tier_fallbacks: Option<bool>,
     pub allowed_fails_policy: Option<AllowedFailsPolicy>,
     pub retry_policy: Option<RetryPolicy>,
     /// `model_group_retry_policy`: a group's own policy, which wins over `retry_policy`.

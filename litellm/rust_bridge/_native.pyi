@@ -4,7 +4,7 @@ from typing import Generic, Literal, Never, NotRequired, Protocol, TypedDict, Ty
 
 import httpx
 from pydantic import JsonValue
-from typing_extensions import disjoint_base
+from typing_extensions import ReadOnly, disjoint_base
 
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.redis.stores.router_session_pins.keys import PinKey
@@ -23,6 +23,7 @@ def trace_encode_error(message: str) -> bytes: ...
 def bundled_model_cost_map() -> bytes: ...
 def native_redis_breaker_states() -> list[str]: ...
 def unsupported_tls_settings(ssl_security_level: str | None = None, ssl_ecdh_curve: str | None = None) -> list[str]: ...
+
 @final
 class NativeCostMapSource:
     def __new__(cls, url: str, *, use_http_settings: bool) -> NativeCostMapSource: ...
@@ -901,6 +902,8 @@ class _Step(TypedDict):
 
 class _AttemptStep(_Step):
     kind: Literal["attempt"]
+    service_tier_downgraded: ReadOnly[bool]
+    removed_params: ReadOnly[list[str]]
     deployment_id: str
     # The deployment as a `model_list` entry, with its id in `model_info`.
     deployment: dict[str, JsonValue]
@@ -1224,6 +1227,10 @@ _Document = Mapping[str, object] | str
 
 @final
 class RouterCoreHandle:
+    @staticmethod
+    def attempt_deployment(deployment: Mapping[str, object], step: Mapping[str, object]) -> Mapping[str, object]: ...
+    @staticmethod
+    def attempt_kwargs(request: Mapping[str, object], step: Mapping[str, object]) -> Mapping[str, object]: ...
     def __new__(cls, config: _Document, dynamic: _Document) -> RouterCoreHandle: ...
     def start(self, op: str, request: _Document) -> RouterCall[_CallSteps]: ...
     # Driven like `start`; its `done` step is a `_SelectedStep`.

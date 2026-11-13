@@ -1288,6 +1288,7 @@ impl Core {
                 Ok(None)
             );
         let attempt = Attempt {
+            service_tier_downgraded: false,
             op: op.clone(),
             request: request.clone(),
             deployment: deployment.clone(),
@@ -1313,7 +1314,19 @@ impl Core {
         // request's `OutcomeCallbacks` reach, except a deferred stream's: its request counts now
         // (`increment_deployment_usage_for_response`), its success or failure when the host reports
         // the stream's end.
-        match self.host.invoke(&attempt).await {
+        let result = match self.host.invoke(&attempt).await {
+            Err(failure)
+                if snapshot.settings.service_tier_fallbacks && attempt.can_downgrade(&failure) =>
+            {
+                self.host.observe(&RouterEvent::ServiceTierDowngraded {
+                    deployment_id: deployment.id.clone(),
+                });
+                let default_attempt = attempt.downgraded();
+                self.host.invoke(&default_attempt).await
+            }
+            result => result,
+        };
+        match result {
             Ok(output) => {
                 // `_should_raise_content_policy_error`: a blocked response is raised only when
                 // a content-policy fallback would serve it, and counts as no failure.
@@ -1390,6 +1403,12 @@ impl Core {
                 if !failure.recorded {
                     self.record_failure(snapshot, request, &candidates, &deployment, &failure)
                         .await;
+                } else {
+                    self.host.observe(&RouterEvent::AttemptFailed {
+                        deployment_id: deployment.id.clone(),
+                        kind: failure.kind,
+                        status: failure.status,
+                    });
                 }
                 Err(Failed {
                     error: Box::new(Error::Attempt(failure)),
@@ -1478,6 +1497,7 @@ impl Core {
         let deployment =
             Arc::new(crate::registry::Deployment::unrouted(&target.group).map_err(Error::from)?);
         let attempt = Attempt {
+            service_tier_downgraded: false,
             op: op.clone(),
             request: request.clone(),
             deployment,
