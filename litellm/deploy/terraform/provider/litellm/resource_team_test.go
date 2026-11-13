@@ -707,3 +707,55 @@ func TestTeamReadWithoutMemberBudgetTableLeavesFieldEmpty(t *testing.T) {
 		t.Errorf("team_member_model_max_budget = %q, want empty", got)
 	}
 }
+
+func TestTeamUpdateKeepsServerMetadataTerraformDoesNotOwn(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"team-1","team_info":{"team_id":"team-1","team_alias":"insights","metadata":{
+		"department":"eng",
+		"retired":"yes",
+		"logging":[{"callback_name":"langfuse","callback_type":"success","callback_vars":{"langfuse_secret_key":"litellm_enc::abc"}}],
+		"callback_settings":{"callbacks":["langsmith"]},
+		"soft_budget_alerting_emails":["ops@example.com"],
+		"guardrails":["pii-mask"],
+		"team_member_budget_id":"budget-1"
+	}},"keys":[],"team_memberships":[]}`)
+	defer srv.Close()
+
+	res := ResourceLiteLLMTeam()
+	priorData := schema.TestResourceDataRaw(t, res.Schema, map[string]interface{}{
+		"team_alias":                  "insights",
+		"max_budget":                  100.0,
+		"guardrails":                  []interface{}{"pii-mask"},
+		"soft_budget_alerting_emails": []interface{}{"ops@example.com"},
+		"metadata":                    map[string]interface{}{"department": "eng", "retired": "yes"},
+	})
+	priorData.SetId("team-1")
+	prior := priorData.State()
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"team_alias": "insights",
+		"max_budget": 200.0,
+		"metadata":   map[string]interface{}{"department": "eng"},
+	})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	d, err := schema.InternalMap(res.Schema).Data(prior, diff)
+	if err != nil {
+		t.Fatalf("data failed: %v", err)
+	}
+
+	if err := resourceLiteLLMTeamUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	want := map[string]interface{}{
+		"department":            "eng",
+		"logging":               []interface{}{map[string]interface{}{"callback_name": "langfuse", "callback_type": "success", "callback_vars": map[string]interface{}{"langfuse_secret_key": "litellm_enc::abc"}}},
+		"callback_settings":     map[string]interface{}{"callbacks": []interface{}{"langsmith"}},
+		"team_member_budget_id": "budget-1",
+	}
+	if got := captured["metadata"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("payload metadata = %v, want %v", got, want)
+	}
+}
