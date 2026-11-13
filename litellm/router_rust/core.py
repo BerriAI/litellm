@@ -5219,16 +5219,15 @@ class _Driver:
         """What a failed or cancelled attempt still holds, whatever its logging object (shared across
         attempts, it logs only the first failure). Tokens a provider already spent are kept counted."""
         core: Final = self._core
-        with request_parent_otel_span(get_parent_otel_span_from_kwargs(call.kwargs)):
-            releases: Final = (
-                release_started_attempt(core._selectors.reservations, core._cache, attempt.attempt_id),  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-                release_io_token_reservation(
-                    core._usage,  # pyright: ignore[reportPrivateUsage]  # see above
-                    call.kwargs,  # pyright: ignore[reportArgumentType]  # the call's kwargs dict
-                )
-                if refund_io_tokens
-                else None,
+        releases: Final = (
+            release_started_attempt(core._selectors.reservations, core._cache, attempt.attempt_id),  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+            release_io_token_reservation(
+                core._usage,  # pyright: ignore[reportPrivateUsage]  # see above
+                call.kwargs,  # pyright: ignore[reportArgumentType]  # the call's kwargs dict
             )
+            if refund_io_tokens
+            else None,
+        )
         return tuple(release for release in releases if release is not None)
 
     async def _routed_attempt(self, step: Mapping[str, object], attempt: RoutedAttempt) -> Mapping[str, object]:
