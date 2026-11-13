@@ -5,6 +5,7 @@ import re
 import sys
 import time
 from collections.abc import Awaitable, Iterator, Mapping
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -107,7 +108,7 @@ from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from tests._master_key import MASTER_KEY
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
-from tests.unit.redis.stores.auth_cache_double import shared_cache
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
@@ -3959,6 +3960,50 @@ async def test_tag_registry_load_is_single_flighted_across_concurrent_requests()
     )
 
     assert all(list(result) == ["registered-tag"] for result in results)
+    assert len(_registry_calls(mock_prisma.db.litellm_tagtable.find_many)) == 1
+
+
+@dataclass
+class _HoldsItsFirstRegistryRead(FakeAuthCache):
+    """Answers the first read of ``held_key`` only once ``release`` is set, with what it read before waiting, so that
+    reader resumes holding a miss that went stale while it waited."""
+
+    held_key: str = ""
+    reading: asyncio.Event = field(default_factory=asyncio.Event)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def get(self, key: str, *rest: object) -> object:
+        value: Final = await super().get(key, *rest)
+        if key == self.held_key and not self.reading.is_set():
+            self.reading.set()
+            await self.release.wait()
+        return value
+
+
+@pytest.mark.asyncio
+async def test_a_registry_reader_whose_miss_went_stale_during_another_load_does_not_scan_again():
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+
+    async def fake_find_many(**kwargs):
+        if "where" not in kwargs:
+            return [_tag_registry_row("registered-tag")]
+        return [_tag_db_row(name) for name in kwargs["where"]["tag_name"]["in"]]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+    fake = _HoldsItsFirstRegistryRead(held_key=tag_registry_cache_key())
+    cache, _ = shared_cache(fake)
+
+    def lookup() -> Awaitable[Mapping[str, object]]:
+        return get_tag_objects_batch(tag_names=["registered-tag"], prisma_client=mock_prisma, user_api_key_cache=cache)
+
+    stale_reader = asyncio.create_task(lookup())
+    await fake.reading.wait()
+    loaded = await lookup()
+    fake.release.set()
+    late = await stale_reader
+
+    assert list(loaded) == list(late) == ["registered-tag"]
     assert len(_registry_calls(mock_prisma.db.litellm_tagtable.find_many)) == 1
 
 
