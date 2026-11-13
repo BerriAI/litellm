@@ -303,8 +303,8 @@ class TTL(TypedDict, total=False):
 
 
 class PromptTokensDetails(TypedDict):
-    modality: str
-    tokenCount: int
+    modality: ReadOnly[str]
+    tokenCount: ReadOnly[int]
 
 
 class UsageMetadata(TypedDict, total=False):
