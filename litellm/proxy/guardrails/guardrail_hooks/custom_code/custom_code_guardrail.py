@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 DEFAULT_EXECUTION_TIMEOUT_SECONDS: Final = 30.0
+_MCP_SERVER_IDENTITY_KEYS: Final = ("mcp_server_name", "mcp_server_url")
 
 
 def _metadata_bucket(request_data: Mapping[str, object], key: str) -> Mapping[str, object]:
@@ -364,6 +365,7 @@ class CustomCodeGuardrail(CustomGuardrail):
             "team_id": metadata.get("user_api_key_team_id"),
             "end_user_id": metadata.get("user_api_key_end_user_id"),
             "metadata": metadata,
+            **{key: request_data[key] for key in _MCP_SERVER_IDENTITY_KEYS if key in request_data},
         }
 
     def _process_result(

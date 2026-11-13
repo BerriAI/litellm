@@ -317,6 +317,50 @@ async def test_custom_code_sandbox_ignores_top_level_identity_fields():
     assert entry["guardrail_response"]["metadata"]["ids"] == "[None, None, None]"
 
 
+REQUEST_KEYS_ECHO_CODE = (
+    "def apply_guardrail(inputs, request_data, input_type):\n"
+    "    return flag('keys', metadata={'keys': sorted(request_data.keys())})\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_custom_code_sandbox_sees_the_mcp_server_identity_of_a_tool_call():
+    """LIT-9648: a pre_mcp_call / during_mcp_call policy must know which MCP server the tool call routes
+    to, since two servers can expose the same tool name. The URL arrives already reduced to its origin."""
+    code = (
+        "def apply_guardrail(inputs, request_data, input_type):\n"
+        "    return flag('server', metadata={\n"
+        "        'server': [request_data['mcp_server_name'], request_data['mcp_server_url']],\n"
+        "    })\n"
+    )
+    guardrail = _compile(code)
+    request_data = {
+        "model": "mcp-tool-call",
+        "mcp_server_name": "crypto-prices",
+        "mcp_server_url": "https://mcp.example.com:8443",
+        "metadata": dict(CALLER_IDENTITY),
+    }
+
+    await guardrail.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+
+    entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
+    assert entry["guardrail_response"]["metadata"] == {"server": ["crypto-prices", "https://mcp.example.com:8443"]}
+
+
+@pytest.mark.asyncio
+async def test_custom_code_sandbox_gets_no_mcp_keys_on_an_llm_request():
+    """A chat completion carries no MCP server, so the sandbox payload keeps its pre-LIT-9648 shape."""
+    guardrail = _compile(REQUEST_KEYS_ECHO_CODE)
+    request_data = {"model": "m", "messages": [{"role": "user", "content": "hi"}], "metadata": dict(CALLER_IDENTITY)}
+
+    await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data=request_data, input_type="request")
+
+    entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
+    assert entry["guardrail_response"]["metadata"] == {
+        "keys": ["end_user_id", "metadata", "model", "team_id", "user_id"]
+    }
+
+
 @pytest.mark.asyncio
 async def test_custom_code_allow_still_records_success_not_flagged():
     code = "def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n"
@@ -567,9 +611,7 @@ async def test_caller_headers_pass_through_untouched_when_url_validation_is_disa
 @pytest.mark.parametrize(("method", "body"), [("PUT", "put"), ("DELETE", "deleted"), ("PATCH", "patched")])
 async def test_http_request_other_methods_reach_an_allowlisted_host(local_server, monkeypatch, method, body):
     monkeypatch.setattr(litellm, "user_url_allowed_hosts", [f"127.0.0.1:{local_server.port}"])
-    guardrail = _reporting_guardrail(
-        f'http_request("http://127.0.0.1:{local_server.port}/marker", method="{method}")'
-    )
+    guardrail = _reporting_guardrail(f'http_request("http://127.0.0.1:{local_server.port}/marker", method="{method}")')
 
     reason = await _block_reason(guardrail)
 

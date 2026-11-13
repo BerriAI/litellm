@@ -2271,6 +2271,7 @@ class ProxyLogging:
             if request_obj.tool_input_schema is not None
             else kwargs.get("mcp_input_schema")
         )
+        mcp_server_url: Final = kwargs.get("mcp_server_url")
         listing_description: Final = kwargs.get("mcp_tool_description")
         description_line: Final = f"\nDescription: {listing_description}" if listing_description else ""
         tool_call_content: Final = (
@@ -2305,6 +2306,7 @@ class ProxyLogging:
             # synthetic call_mcp_tool payload (otherwise a key with
             # mcp_rpm_limit could exceed it via the MCP path).
             "mcp_server_name": kwargs.get("mcp_rate_limit_server_name"),
+            **({"mcp_server_url": mcp_server_url} if mcp_server_url else {}),
             # Raw Bearer token from the original HTTP request — allows guardrails
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
