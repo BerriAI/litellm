@@ -102271,8 +102271,8 @@
     "nousresearch/minimax/minimax-m3.1-flash": {
         "max_input_tokens": 1048576,
         "max_output_tokens": 512000,
-        "input_cost_per_token": 1.5e-07,
-        "output_cost_per_token": 6e-07,
+        "input_cost_per_token": 7.5e-08,
+        "output_cost_per_token": 3e-07,
         "litellm_provider": "nousresearch",
         "mode": "chat",
         "source": "https://inference-api.nousresearch.com/v1/models",
@@ -102295,7 +102295,7 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.5e-08,
+        "cache_read_input_token_cost": 7.5e-09,
         "supports_prompt_caching": true
     },
     "nousresearch/elorian/glimpse": {
@@ -105269,8 +105269,8 @@
     "nousresearch/~moonshotai/kimi-latest": {
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
-        "input_cost_per_token": 1.9e-07,
-        "output_cost_per_token": 1.06066e-05,
+        "input_cost_per_token": 1.824e-07,
+        "output_cost_per_token": 1.10055e-05,
         "litellm_provider": "nousresearch",
         "mode": "chat",
         "source": "https://inference-api.nousresearch.com/v1/models",
@@ -105293,7 +105293,7 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.9e-07,
+        "cache_read_input_token_cost": 1.8e-07,
         "supports_prompt_caching": true
     },
     "nousresearch/~google/gemini-flash-latest": {
@@ -106198,8 +106198,8 @@
     "nousresearch/qwen/qwen3.5-9b": {
         "max_input_tokens": 262144,
         "max_output_tokens": 40960,
-        "input_cost_per_token": 5.4e-08,
-        "output_cost_per_token": 8e-08,
+        "input_cost_per_token": 4.9e-08,
+        "output_cost_per_token": 7.3e-08,
         "litellm_provider": "nousresearch",
         "mode": "chat",
         "source": "https://inference-api.nousresearch.com/v1/models",
@@ -106222,7 +106222,7 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 4.9e-08,
+        "cache_read_input_token_cost": 4.5e-08,
         "supports_prompt_caching": true
     },
     "nousresearch/openai/gpt-5.4-pro": {
