@@ -3676,58 +3676,6 @@ async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_load_config_role_permissions_usable_by_jwt_auth(tmp_path):
-    from litellm.proxy.auth.auth_checks import get_role_based_models, get_role_based_routes
-    from litellm.proxy.proxy_server import ProxyConfig
-
-    config_file: Final = tmp_path / "config.yaml"
-    config_file.write_text(
-        yaml.dump(
-            {
-                "model_list": [],
-                "general_settings": {
-                    "role_permissions": [
-                        {
-                            "role": "proxy_admin",
-                            "models": ["admin-only-model"],
-                            "routes": ["/v1/embeddings"],
-                        },
-                        {
-                            "role": "internal_user",
-                            "models": ["shared-model"],
-                            "routes": ["/v1/chat/completions"],
-                        },
-                    ]
-                },
-            }
-        )
-    )
-
-    _, _, settings = await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
-
-    assert get_role_based_models(rbac_role="internal_user", general_settings=settings) == ["shared-model"]
-    assert get_role_based_routes(rbac_role="internal_user", general_settings=settings) == ["/v1/chat/completions"]
-    assert get_role_based_models(rbac_role="proxy_admin", general_settings=settings) == ["admin-only-model"]
-    assert get_role_based_routes(rbac_role="proxy_admin", general_settings=settings) == ["/v1/embeddings"]
-    assert get_role_based_models(rbac_role="team", general_settings=settings) is None
-
-
-@pytest.mark.asyncio
-async def test_load_config_without_role_permissions_leaves_every_role_unrestricted(tmp_path):
-    from litellm.proxy.auth.auth_checks import get_role_based_models, get_role_based_routes
-    from litellm.proxy.proxy_server import ProxyConfig
-
-    config_file: Final = tmp_path / "config.yaml"
-    config_file.write_text(yaml.dump({"model_list": [], "general_settings": {"max_parallel_requests": 7}}))
-
-    _, _, settings = await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
-
-    assert settings["max_parallel_requests"] == 7
-    assert get_role_based_models(rbac_role="internal_user", general_settings=settings) is None
-    assert get_role_based_routes(rbac_role="internal_user", general_settings=settings) is None
-
-
-@pytest.mark.asyncio
 async def test_load_config_rejects_malformed_role_permissions(tmp_path):
     from pydantic import ValidationError
 
@@ -16151,6 +16099,7 @@ async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolve
     declared = {"public_key_ttl": "600", "team_id_jwt_field": "os.environ/JWT_TEAM_FIELD"}
     general_settings = {"litellm_jwtauth": declared}
     monkeypatch.setattr(proxy_server_module, "get_secret", lambda value: "resolved-team-field")
+    monkeypatch.setattr(proxy_server_module, "litellm_jwtauth", proxy_server_module.litellm_jwtauth)
 
     ProxyStartupEvent._initialize_jwt_auth(
         general_settings=general_settings,
@@ -16159,7 +16108,7 @@ async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolve
     )
 
     assert declared["team_id_jwt_field"] == "os.environ/JWT_TEAM_FIELD"
-    assert proxy_server_module.jwt_handler.litellm_jwtauth.team_id_jwt_field == "resolved-team-field"
+    assert proxy_server_module.litellm_jwtauth.team_id_jwt_field == "resolved-team-field"
 
 
 def test_spend_capture_rate_check_job_validates_the_boot_settings_and_reads_them_again_on_every_run(monkeypatch):

@@ -1651,6 +1651,10 @@ class TeamDeleteBody(BaseModel):
     team_ids: list[str]
 
 
+class TeamBlockBody(BaseModel):
+    team_id: str
+
+
 class ProjectCreateBody(BaseModel):
     team_id: str
     project_alias: str

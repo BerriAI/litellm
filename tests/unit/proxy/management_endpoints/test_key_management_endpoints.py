@@ -9105,12 +9105,8 @@ async def test_reset_key_spend_success_team_admin(monkeypatch):
         return team_table
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
     monkeypatch.setattr(
         "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
         mock_get_team_object,
@@ -13279,13 +13275,9 @@ def test_enforce_upperbound_allows_within_limit_on_update(monkeypatch):
     monkeypatch.setattr(
         litellm,
         "upperbound_key_generate_params",
-        LiteLLM_UpperboundKeyGenerateParams(
-                    tpm_limit=1000, rpm_limit=100, max_budget=10.0
-                ),
+        LiteLLM_UpperboundKeyGenerateParams(tpm_limit=1000, rpm_limit=100, max_budget=10.0),
     )
-    data = UpdateKeyRequest(
-        key="sk-test", tpm_limit=500, rpm_limit=50, max_budget=5.0
-    )
+    data = UpdateKeyRequest(key="sk-test", tpm_limit=500, rpm_limit=50, max_budget=5.0)
     _enforce_upperbound_key_params(data, fill_defaults=False)
     # Should not raise
     assert data.tpm_limit == 500
@@ -14557,7 +14549,7 @@ async def test_enforce_custom_key_policy_never_builds_the_request_without_a_hook
 
 
 @pytest.mark.asyncio
-async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new_token():
+async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new_token(monkeypatch):
     """
     LIT-5379: /key/regenerate rewrites the JWT mapping row to the new token (FK
     cascade) but left the jwt_key_mapping cache entry pointing at the old hash,
@@ -14565,12 +14557,16 @@ async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new
     Regenerate must evict the entry locally, broadcast the eviction to other
     workers, and the very next JWT resolve must return the rotated token.
     """
-    from litellm.caching.caching import DualCache
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth import core
+    from litellm.proxy.auth import jwt as proxy_jwt
     from litellm.proxy.auth.auth_method import AuthMethod
     from litellm.proxy.auth.resolvers.models import CredentialRef
     from litellm.proxy.auth.resolvers.store import IdentityStore
-    from litellm.proxy.auth.user_api_key_auth import _resolve_jwt_to_virtual_key
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _execute_virtual_key_regeneration,
     )
@@ -14584,7 +14580,7 @@ async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new
     mock_prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(
         return_value=MagicMock(token="new-hashed-token")
     )
-    user_api_key_cache = DualCache()
+    user_api_key_cache = proxy_server.user_api_key_cache
     await user_api_key_cache.async_set_cache(key=stale_cache_key, value="abc123")
 
     publish_mock = AsyncMock()
@@ -14638,23 +14634,28 @@ async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new
         assert hashed_token == "new-hashed-token", f"JWT resolved stale token {hashed_token!r} after regenerate"
         return rotated_principal
 
-    jwt_handler = MagicMock()
-    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
-        virtual_key_claim_field="sub", virtual_key_mapping_cache_ttl=300
+    jwks_url = "https://idp.example/jwks"
+    signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk = jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key(), as_dict=True)
+    await user_api_key_cache.async_set_cache(
+        key=f"litellm_jwt_auth_keys_{jwks_url}", value=[{**public_jwk, "kid": "k1"}]
     )
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    monkeypatch.setattr(
+        proxy_server,
+        "litellm_jwtauth",
+        LiteLLM_JWTAuth(virtual_key_claim_field="sub", virtual_key_mapping_cache_ttl=300),
+    )
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma_client)
+    token = jwt.encode({"sub": "user1", "exp": 4102444800}, signing_key, algorithm="RS256", headers={"kid": "k1"})
     with patch(  # test-quality-ok: DB-backed resolve; fake asserts it receives the rotated hash
         "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
         new_callable=AsyncMock,
         side_effect=fake_resolve,
     ):
-        resolved = await _resolve_jwt_to_virtual_key(
-            jwt_claims={"sub": "user1"},
-            jwt_handler=jwt_handler,
-            prisma_client=mock_prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=None,
-            proxy_logging_obj=MagicMock(),
-        )
+        resolved = await proxy_jwt.resolve_mapping(core.proxy_settings(), token)
     assert isinstance(resolved, UserAPIKeyAuth)
     assert resolved.token == "new-hashed-token"
 
@@ -15449,13 +15450,9 @@ async def test_execute_virtual_key_regeneration_cache_invalidation_with_token_ha
             return iter(self._data.items())
 
     mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
-        return_value=DictLikeResult(
-            {"token": "new-hashed-token", "key_name": "sk-...ab12", "user_id": "user-1"}
-        )
+        return_value=DictLikeResult({"token": "new-hashed-token", "key_name": "sk-...ab12", "user_id": "user-1"})
     )
-    mock_prisma_client.db.litellm_verificationtoken.create = AsyncMock(
-        return_value=None
-    )
+    mock_prisma_client.db.litellm_verificationtoken.create = AsyncMock(return_value=None)
     mock_prisma_client.jsonify_object = MagicMock(side_effect=lambda data: data)
 
     mock_user_api_key_cache = MagicMock()
@@ -21047,23 +21044,14 @@ async def test_update_key_syncs_many_access_groups_in_one_statement_per_directio
             }
             for group_id in dropped
         },
-        **{
-            group_id: {"assigned_key_ids": [], "access_model_names": [f"{group_id}-model"]}
-            for group_id in added
-        },
+        **{group_id: {"assigned_key_ids": [], "access_model_names": [f"{group_id}-model"]} for group_id in added},
     }
 
     mock_prisma_client = AsyncMock()
-    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
-        return_value=key_in_db
-    )
-    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
-        return_value=None
-    )
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_in_db)
+    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(return_value=None)
     mock_prisma_client.update_data = AsyncMock(return_value={"data": {}})
-    raw_mock = _access_group_table_mocks(
-        monkeypatch, mock_prisma_client, access_groups
-    )
+    raw_mock = _access_group_table_mocks(monkeypatch, mock_prisma_client, access_groups)
     _setup_update_key_mocks(monkeypatch, mock_prisma_client)
 
     with (

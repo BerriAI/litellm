@@ -88,6 +88,7 @@ from litellm.llms.vllm.common_utils import endpoint_under_api_base
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
 from litellm.passthrough.utils import BasePassthroughUtils
 from litellm.proxy._types import *
+from litellm.proxy.auth import jwt as proxy_jwt
 from litellm.proxy.auth.auth_checks import (
     can_agent_call_model,
     can_key_call_resolved_model,
@@ -95,7 +96,6 @@ from litellm.proxy.auth.auth_checks import (
     team_model_aliases_for_auth_check,
 )
 from litellm.proxy.auth.auth_utils import deployment_clientside_auth_params
-from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
     _get_bearer_token,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -3138,18 +3138,6 @@ def _operator_configured_caller_key_header_names() -> tuple[str, ...]:
     return override + pass_through
 
 
-def _is_authenticated_caller_jwt(value: str, jwt_claims: Mapping[str, object]) -> bool:
-    """Whether a header value is the JWT whose claims ``user_api_key_auth`` stored as ``jwt_claims``."""
-    presented_claims: Final = JWTHandler.get_unverified_claims(value)
-    if presented_claims is None:
-        return False
-    return all(
-        presented_claims.get(name) == claim
-        for name, claim in jwt_claims.items()
-        if name not in JWTHandler.LITELLM_INTERNAL_CLAIMS
-    )
-
-
 def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
     """Whether a header value is the master key, the JWT that authenticated, or the key stored as ``api_key``.
 
@@ -3161,7 +3149,7 @@ def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAut
     if master_key is not None and hmac.compare_digest(normalized.encode(), master_key.encode()):
         return True
     jwt_claims: Final = user_api_key_dict.jwt_claims
-    if jwt_claims and _is_authenticated_caller_jwt(normalized, jwt_claims):
+    if jwt_claims and proxy_jwt.presents_claims(normalized, jwt_claims):
         return True
     if is_no_auth_dev_mode(master_key, general_settings) and user_custom_auth is None:
         return False

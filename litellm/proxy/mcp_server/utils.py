@@ -978,7 +978,7 @@ def _identity_header_names() -> frozenset[str]:
     attribution on the MCP paths that leave ``end_user_id`` unset at connect time.
 
     ``user_header_mappings`` is accepted as a bare mapping as well as a list of them, matching
-    ``get_internal_user_header_from_mapping`` and ``get_customer_user_header_from_mapping``.
+    ``get_internal_user_header_from_mapping`` and the native end-user resolver.
     Iterating the bare form without normalizing yields its keys, which would silently exempt
     nothing."""
     try:

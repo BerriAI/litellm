@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError
 
 import litellm
+import litellm.proxy.auth.user_api_key_auth
 import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.fips import enforce_fips_mode
@@ -173,7 +174,7 @@ def setup_and_teardown():
 
     What is NOT reset:
       - Class instances without flush_cache() (e.g. ProxyLogging,
-        JWTHandler, FastAPI routers, loggers). If a test mutates such an
+        LiteLLM_JWTAuth, FastAPI routers, loggers). If a test mutates such an
         instance in-place (setattr on the instance, appending to one of
         its internal lists, etc.), the mutation will leak into later tests.
         Use pytest's monkeypatch.setattr() or a local fixture for those
