@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 from litellm.proxy._types import (
+    LiteLLM_JWTAuth,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_UserTable,
     LiteLLMRoutes,
@@ -1481,15 +1482,6 @@ _AUTH_ENFORCED_MODEL_HOST_ROUTES: Final = {
 }
 
 
-def _jwt_handler_with_team_allowed_routes(team_allowed_routes: list[str]):
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
-
-    jwt_handler: Final = JWTHandler()
-    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes)
-    return jwt_handler
-
-
 def _check_model_host_route_as(valid_token: UserAPIKeyAuth, team_allowed_routes: list[str]) -> None:
     with (
         patch(
@@ -1498,8 +1490,8 @@ def _check_model_host_route_as(valid_token: UserAPIKeyAuth, team_allowed_routes:
         ),
         patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
         patch(
-            "litellm.proxy.proxy_server.jwt_handler",
-            _jwt_handler_with_team_allowed_routes(team_allowed_routes),
+            "litellm.proxy.proxy_server.litellm_jwtauth",
+            LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes),
         ),
     ):
         RouteChecks.non_proxy_admin_allowed_routes_check(

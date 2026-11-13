@@ -11,15 +11,19 @@ use std::{fmt, path::Path};
 
 use serde::Deserialize;
 
-pub use auth::{JwtAuthSettings, JwtRoutingOverride, OneOrMany, RoutingPath};
+pub use auth::{
+    ClaimPath, JwtAuthSettings, JwtIssuerConfig, JwtLitellmRoleMap, JwtRoutingOverride,
+    LitellmRole, OneOrMany, RbacRole, RoleMapping, RolePermissions, RoutingPath, ScopeMapping,
+    UnregisteredJwtClientBehavior,
+};
 pub use error::Error;
 pub use litellm_router_types::{LitellmParams, Spelled};
 pub use mcp::{McpAuth, McpServer, McpTransport};
 pub use model::Model;
 pub use redis::{CacheSettings, RedisSettings};
 pub use settings::{
-    ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, RouterSettings, TracingSettings,
-    TracingStoreSettings,
+    ClickHouseStoreSettings, GeneralSettings, LenientFlag, LiteLlmSettings, RouterSettings,
+    TracingSettings, TracingStoreSettings, UserHeaderMapping,
 };
 pub use value::{AdditionalFields, Object, Value};
 

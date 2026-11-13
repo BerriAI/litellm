@@ -15,6 +15,7 @@ pub enum RouteGroup {
 }
 
 pub(crate) const METRICS: &str = "/metrics";
+pub(crate) const USER_AUTH: &str = "/user/auth";
 
 pub(crate) fn is_lens_route(route: &str) -> bool {
     route == "/lens" || route.starts_with("/lens/")

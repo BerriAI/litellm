@@ -1084,7 +1084,7 @@ def _validate_caller_can_change_key_ownership(
     """
     Non-admin callers must not rebind a key's ``user_id`` to a different
     user. The ``user_id`` on a verification token is what
-    ``_return_user_api_key_auth_obj`` resolves against ``litellm_usertable``
+    ``return_user_api_key_auth_obj`` resolves against ``litellm_usertable``
     to derive the request's role; a non-admin rebinding their own key's
     ``user_id`` to a ``PROXY_ADMIN`` row promotes themselves.
 

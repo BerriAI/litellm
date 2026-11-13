@@ -121,7 +121,7 @@ async def test_database_lifespan_disconnects_prisma_after_proxy_shutdown(monkeyp
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -156,7 +156,7 @@ async def test_proxy_shutdown_flushes_every_langfuse_export_channel(monkeypatch)
     flushed = MagicMock(return_value=True)
     monkeypatch.setattr(langfuse_sdk, "flush_langfuse_tracing", flushed)
     monkeypatch.setattr(ps, "prisma_client", None, raising=False)
-    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", MagicMock(close=AsyncMock()), raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -186,7 +186,7 @@ async def test_proxy_shutdown_flushes_langfuse_off_the_event_loop_and_logs_a_tim
 
     monkeypatch.setattr(langfuse_sdk, "flush_langfuse_tracing", flushed)
     monkeypatch.setattr(ps, "prisma_client", None, raising=False)
-    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", MagicMock(close=AsyncMock()), raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -229,7 +229,7 @@ async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monke
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -270,7 +270,7 @@ async def test_proxy_shutdown_drains_audit_writes_beside_the_gateway_flush_befor
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -294,7 +294,7 @@ async def test_proxy_shutdown_skips_gateway_flush_without_a_database(monkeypatch
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -317,7 +317,7 @@ async def test_proxy_shutdown_without_a_database_drains_audit_callbacks_before_t
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -344,7 +344,7 @@ async def test_database_lifespan_logs_disconnect_error_after_shutdown_instead_of
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
 
     import litellm
 

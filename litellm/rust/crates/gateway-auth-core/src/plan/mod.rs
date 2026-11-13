@@ -17,7 +17,7 @@ pub struct Settings {
     jwt_auth: bool,
     /// [`litellm_jwtauth.custom_validate`](litellm_config::JwtAuthSettings::custom_validate) is set
     jwt_operator_code: bool,
-    /// An enterprise license (`HostFacts::premium`), which JWT auth and
+    /// An enterprise license ([`HostFacts::premium`](crate::HostFacts::premium)), which JWT auth and
     /// OAuth2 introspection need.
     premium: bool,
 }
@@ -62,7 +62,7 @@ pub enum Plan {
     OAuth2Introspection,
     OAuth2Proxy,
     /// A JWT the operator's `custom_validate` also judges. Only a host with
-    /// `OperatorHooks` authenticates it, and any other hands the request
+    /// [`OperatorHooks`](crate::OperatorHooks) authenticates it, and any other hands the request
     /// to one before authenticating.
     JwtWithOperatorCode,
     Jwt,
@@ -110,7 +110,7 @@ fn bearer_token<'a>(request: &Request<'a>, settings: &Settings) -> BearerToken<'
     }
 }
 
-pub fn oauth2_introspection_applies(request: &Request<'_>, settings: &Settings) -> bool {
+pub(crate) fn oauth2_introspection_applies(request: &Request<'_>, settings: &Settings) -> bool {
     settings
         .introspection
         .applies(request, bearer_token(request, settings))
