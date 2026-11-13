@@ -56810,9 +56810,8 @@
         "supported_output_modalities": [
             "video"
         ],
-        "metadata": {
-            "comment": "Output: 20/30/68 credits per second at 480p/720p/1080p @ $0.01 per credit; input video billed additionally at 10/15/34 credits per input second and the 80 credit minimum per task are not modeled"
-        }
+        "metadata": {"comment":"Output: 20/30/68/110 credits per second at 480p/720p/1080p/4K @ $0.01 per credit; input video billed additionally at 10/15/34/57 credits per input second and the 80 credit minimum per task are not modeled"},
+        "output_cost_per_second_4k": 1.1
     },
     "runwayml/seedance-latest": {
         "alias_of": "runwayml/seedance2_5"
