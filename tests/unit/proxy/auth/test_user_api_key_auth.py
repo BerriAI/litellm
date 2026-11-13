@@ -2692,3 +2692,52 @@ async def test_customer_hierarchy_survives_virtual_key_auth_without_legacy_end_u
     assert identity.customer_hierarchy == hierarchy
     assert identity.end_user_id is None
     assert resolve.await_args is not None and resolve.await_args.kwargs["customer_member_id"] == "m1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key_org,allowed", (("o1", True), ("o2", False), (None, True)))
+async def test_a_key_pinned_to_a_customer_org_only_serves_that_orgs_members(
+    monkeypatch: pytest.MonkeyPatch, key_org: str | None, allowed: bool
+) -> None:
+    from litellm.proxy.auth import user_api_key_auth as auth_module
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
+
+    server: Final = litellm.proxy.proxy_server
+    key: Final = "sk-hierarchy-scoped"
+    metadata: Final = {"customer_org_id": key_org} if key_org is not None else {}
+    stored: Final = UserAPIKeyAuth(token=server.hash_token(key), metadata=metadata)
+    hierarchy: Final = CustomerHierarchyAuth(
+        customer_member_id="m1",
+        customer_team_id="t1",
+        customer_org_id="o1",
+        scopes=(CustomerScopeAuth(key="customer_member", entity_id="m1"),),
+    )
+    monkeypatch.setattr(auth_module, "resolve_customer_hierarchy", AsyncMock(return_value=hierarchy))
+    monkeypatch.setattr(server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(server, "general_settings", {})
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=stored)))
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    request: Final = StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/chat/completions",
+            "headers": [(b"x-litellm-customer-member-id", b"m1")],
+        },
+        receive=AsyncMock(
+            return_value={
+                "type": "http.request",
+                "body": json.dumps({"model": "gpt-4o-mini", "messages": []}).encode(),
+                "more_body": False,
+            }
+        ),
+    )
+    if allowed:
+        identity: Final = await user_api_key_auth(request=request, api_key=f"Bearer {key}")
+        assert identity.customer_hierarchy == hierarchy
+    else:
+        with pytest.raises(ProxyException) as denied:
+            await user_api_key_auth(request=request, api_key=f"Bearer {key}")
+        assert denied.value.code == "403"

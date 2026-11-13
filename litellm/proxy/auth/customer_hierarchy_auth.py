@@ -189,11 +189,9 @@ async def resolve_customer_hierarchy(
     llm_router: "Router | None",
     request_model: object,
     route: str,
-    key_metadata: Mapping[str, object] | None = None,
 ) -> CustomerHierarchyAuth:
     """Load the hierarchy the header names and admit the request against it. An unknown member is refused
-    rather than treated as unrestricted: the caller asked for a budgeted identity that does not exist. A key
-    whose metadata pins ``customer_org_id`` may only act for members of that organization."""
+    rather than treated as unrestricted: the caller asked for a budgeted identity that does not exist."""
     hierarchy: Final = (
         await get_customer_hierarchy(customer_member_id, prisma_client, user_api_key_cache)
         if prisma_client is not None
@@ -206,16 +204,21 @@ async def resolve_customer_hierarchy(
             param=CUSTOMER_MEMBER_ID_HEADER,
             code=status.HTTP_401_UNAUTHORIZED,
         )
-    key_customer_org_id: Final = key_metadata.get("customer_org_id") if key_metadata is not None else None
-    if key_customer_org_id is not None and key_customer_org_id != hierarchy.customer_org_id:
-        raise ProxyException(
-            message="API key is not allowed to act for this customer member's organization",
-            type=ProxyErrorTypes.auth_error,
-            param=CUSTOMER_MEMBER_ID_HEADER,
-            code=status.HTTP_403_FORBIDDEN,
-        )
     if not RouteChecks.is_info_route(route):
         check_customer_hierarchy_budget(hierarchy)
     if isinstance(request_model, str) and request_model:
         check_customer_hierarchy_model_access(hierarchy, request_model, llm_router)
     return hierarchy
+
+
+def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_metadata: Mapping[str, object]) -> None:
+    """A key whose metadata pins ``customer_org_id`` may only act for members of that organization."""
+    key_customer_org_id: Final = key_metadata.get("customer_org_id")
+    if key_customer_org_id is None or key_customer_org_id == hierarchy.customer_org_id:
+        return
+    raise ProxyException(
+        message="API key is not allowed to act for this customer member's organization",
+        type=ProxyErrorTypes.auth_error,
+        param=CUSTOMER_MEMBER_ID_HEADER,
+        code=status.HTTP_403_FORBIDDEN,
+    )

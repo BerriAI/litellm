@@ -129,6 +129,7 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.customer_hierarchy_auth import (
+    check_customer_hierarchy_key_scope,
     customer_member_id_from_headers,
     resolve_customer_hierarchy,
 )
@@ -219,6 +220,7 @@ from litellm.router_api import (
     request_fallback_chain,
 )
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 from litellm.types.services import ServiceTypes
 
 try:
@@ -303,6 +305,7 @@ _CLAUDE_MODEL_ROUTES: Final = frozenset(
 )
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_KEY_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 async def _normalize_claude_model(
@@ -2937,7 +2940,6 @@ async def user_api_key_auth_builder(
                     llm_router=llm_router,
                     request_model=request_data.get("model"),
                     route=route,
-                    key_metadata=valid_token.metadata,
                 )
 
         ### CHECK IF ADMIN ###
@@ -3578,8 +3580,12 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
 
         if _end_user_object is not None or litellm.max_end_user_budget_id is not None:
             valid_token_dict.update(end_user_params)
-        if "customer_hierarchy" in end_user_params:
-            valid_token_dict["customer_hierarchy"] = end_user_params["customer_hierarchy"]
+        customer_hierarchy: Final = end_user_params.get("customer_hierarchy")
+        if isinstance(customer_hierarchy, CustomerHierarchyAuth):
+            check_customer_hierarchy_key_scope(
+                customer_hierarchy, _KEY_METADATA_ADAPTER.validate_python(valid_token_dict.get("metadata") or {})
+            )
+            valid_token_dict["customer_hierarchy"] = customer_hierarchy
         if _end_user_object is not None:
             valid_token_dict["end_user_object_permission"] = _end_user_object.object_permission
 

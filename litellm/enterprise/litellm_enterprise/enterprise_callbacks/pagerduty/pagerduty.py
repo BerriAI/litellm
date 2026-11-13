@@ -33,6 +33,7 @@ from litellm.types.integrations.pagerduty import (
 )
 from litellm.types.utils import (
     CallTypesLiteral,
+    StandardLoggingMetadata,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
@@ -102,7 +103,7 @@ class PagerDutyAlerting(SlackAlerting):
         error_info: Optional[StandardLoggingPayloadErrorInformation] = (
             standard_logging_payload.get("error_information") or {}
         )
-        _meta: Final = standard_logging_payload["metadata"]
+        _meta: Final[StandardLoggingMetadata] = standard_logging_payload["metadata"]
 
         self._failure_events.append(
             PagerDutyInternalEvent(
