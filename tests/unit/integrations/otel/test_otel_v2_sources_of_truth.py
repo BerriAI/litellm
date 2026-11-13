@@ -539,6 +539,27 @@ def test_llm_call_adapter_extracts_all_fields():
     assert data.identity.key_hash == "hsh"
 
 
+@pytest.mark.parametrize(
+    ("model_group", "response_model", "expected"),
+    [
+        ("auto-router", "auto-router", ("gpt-4o-group", "gpt-4o-group")),
+        ("smart", "smart", ("gpt-4o-group", "gpt-4o-group")),
+        ("auto-router", "gpt-4o-2024", ("gpt-4o-group", "gpt-4o-2024")),
+        (None, None, ("gpt-4o", None)),
+    ],
+    ids=["restamped-to-router", "restamped-to-alias", "provider-model", "no-group-no-response"],
+)
+def test_llm_call_adapter_names_the_routed_model_for_an_auto_router_call(model_group, response_model, expected):
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(
+            model_group=model_group,
+            response={"id": "resp_1", "model": response_model, "choices": [{"finish_reason": "stop"}]},
+            metadata={"routing_decision": {"routed_model": "gpt-4o-group"}},
+        )
+    )
+    assert (data.request_model, data.response_model) == expected
+
+
 def test_llm_call_adapter_extracts_cache_tokens_from_usage_object():
     payload = _sample_payload()
     payload["metadata"] = {

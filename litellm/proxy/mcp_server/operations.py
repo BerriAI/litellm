@@ -49,7 +49,7 @@ from mcp.types import (
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, ConfigDict, Field, JsonValue, SecretStr, TypeAdapter
-from typing_extensions import ReadOnly, TypedDict, assert_never
+from typing_extensions import ReadOnly, TypedDict, Unpack, assert_never
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -562,6 +562,7 @@ async def _dispatch_virtual_mcp_tool(
             is_error=True,
         )
 
+    assert user_api_key_auth is not None  # guaranteed by the flag check above
     args: Final = arguments or {}
     if name == MCP_TOOL_SEARCH_TOOL_NAME:
         return await handle_mcp_tool_search(
@@ -576,7 +577,6 @@ async def _dispatch_virtual_mcp_tool(
             raw_headers=raw_headers,
         )
 
-    assert user_api_key_auth is not None  # guaranteed by the flag check above
     if name == AGENT_SEARCH_TOOL_NAME:
         return await handle_agent_search(
             query=str(args.get("query", "")),
@@ -1080,7 +1080,7 @@ def _prepare_mcp_server_headers(
         )
 
         for header in server.extra_headers:
-            if not isinstance(header, str) or header.lower() == "x-litellm-api-key":
+            if not isinstance(header, str):
                 continue
             if header.lower() == "authorization" and (strip_caller_authorization or withhold_forwarded_authorization):
                 continue
@@ -1218,6 +1218,7 @@ async def find_mcp_proxy_tool(
             context=context,
             allowed_mcp_servers=allowed_mcp_servers,
             prefetched_oauth_creds=prefetched_oauth_creds,
+            use_tool_list_cache=False,
         )
         return next((tool for tool in page.tools if mcp_proxy_tool_id(tool) == tool_id), None)
 
@@ -1255,6 +1256,7 @@ async def _get_tools_from_mcp_servers(
     record_listing: bool = False,
     request_trace_id: str | None = None,
     enforce_rate_limits: bool = True,
+    use_tool_list_cache: bool = True,
 ) -> AggregateToolListing:
     """
     Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -1384,6 +1386,7 @@ async def _get_tools_from_mcp_servers(
                 allowed_mcp_servers=allowed_mcp_servers,
                 prefetched_oauth_creds=_prefetched_oauth_creds,
                 record_listing=record_listing,
+                use_tool_list_cache=use_tool_list_cache,
             )
             return page.tools, outcome
 
@@ -1419,6 +1422,7 @@ async def _get_tools_from_mcp_servers(
                 _prefetched_oauth_creds,
                 record_listing=record_listing,
                 enforce_rate_limits=enforce_rate_limits,
+                use_tool_list_cache=use_tool_list_cache,
             )
         all_tools: Final = aggregated.tools
         server_outcomes: Final = aggregated.outcomes
@@ -1710,6 +1714,7 @@ async def _list_mcp_tools(
     protocol_version: str | None = None,
     *,
     record_listing: bool = False,
+    use_tool_list_cache: bool = True,
 ) -> AggregateToolListing:
     """
     List all available MCP tools.
@@ -1745,6 +1750,7 @@ async def _list_mcp_tools(
             record_listing=record_listing,
             params=params,
             protocol_version=protocol_version,
+            use_tool_list_cache=use_tool_list_cache,
         )
         verbose_logger.debug("Successfully fetched %s tools from managed MCP servers", len(listing.tools))
         return listing
@@ -2073,6 +2079,7 @@ async def _list_tools_before_first_call(
             client_ip=client_ip,
             record_listing=False,
             enforce_rate_limits=False,
+            use_tool_list_cache=False,
         )
     except Exception as e:  # noqa: BLE001  # best effort: resolution below answers as it did before
         verbose_logger.debug("MCP tools/call: listing %s before its first call failed: %s", server.name, e)
@@ -2080,7 +2087,7 @@ async def _list_tools_before_first_call(
 
 async def execute_mcp_tool(
     name: str,
-    arguments: dict[str, object],
+    arguments: Mapping[str, object],
     allowed_mcp_servers: list[MCPServer],
     start_time: datetime,
     user_api_key_auth: UserAPIKeyAuth | None = None,
@@ -2926,6 +2933,10 @@ async def resolve_scoped_mcp_server(
     return _single_scoped_server(mcp_servers, allowed_mcp_servers)
 
 
+class _CallMcpToolOptions(TypedDict, total=False, extra_items=object):
+    litellm_logging_obj: ReadOnly[LiteLLMLoggingObj | None]
+
+
 @client
 @catalog_operation(lambda: global_mcp_server_manager)
 async def call_mcp_tool(
@@ -2943,7 +2954,7 @@ async def call_mcp_tool(
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
     guardrail_auth: UserAPIKeyAuth | None = None,
-    **kwargs: Any,
+    **kwargs: Unpack[_CallMcpToolOptions],
 ) -> CallToolResult | InputRequiredResult:
     """
     Call a specific tool with the provided arguments (handles prefixed tool names).

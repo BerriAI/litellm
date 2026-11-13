@@ -101,7 +101,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
 )
 from litellm.types.utils import CallTypes, CredentialItem, Usage
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
@@ -387,11 +387,7 @@ async def test_encrypted_content_affinity_takes_priority_over_user_key_affinity(
             model_group=model_group,
             user_key=user_api_key_hash,
         )
-        await deployment_callback.cache.async_set_cache(
-            key=cache_key,
-            value={"model_id": "deployment-a"},
-            ttl=60,
-        )
+        await deployment_callback.pins.set(cache_key, {"model_id": "deployment-a"}, 60)
         encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-b", "rs_test")
         request_kwargs = {
             "input": [{"type": "reasoning", "id": encoded_id}],
@@ -1887,6 +1883,281 @@ def test_model_group_info_cost_none_for_unpriced_deployment_but_zero_when_declar
     assert priced is not None
     assert priced.input_cost_per_token is not None and priced.input_cost_per_token > 0
     assert priced.output_cost_per_token is not None and priced.output_cost_per_token > 0
+
+
+_HUB_PRICES: Final = MappingProxyType(
+    {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 4e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_creation_input_token_cost": 1.25e-06,
+        "input_cost_per_token_above_200k_tokens": 2e-06,
+        "output_cost_per_token_above_200k_tokens": 8e-06,
+        "input_cost_per_token_priority": 3e-06,
+        "input_cost_per_token_flex": 5e-07,
+        "input_cost_per_token_batches": 5e-07,
+    }
+)
+
+
+def _cost_map_model(key: str, entry: Mapping[str, object]) -> str:
+    litellm.register_model(
+        {key: {"litellm_provider": "openai", "mode": "chat", **entry}},
+        persist_across_reloads=False,
+        add_to_provider_model_sets=False,
+    )
+    return f"openai/{key}"
+
+
+def test_model_group_info_lists_every_cost_map_price_of_a_deployment(local_model_cost_map: None) -> None:
+    model: Final = _cost_map_model("hub-pricing-model", {**_HUB_PRICES, "max_input_tokens": 400000})
+    router: Final = litellm.Router(model_list=[{"model_name": "hub", "litellm_params": {"model": model}}])
+
+    group: Final = router.registry().group("hub")
+
+    assert group is not None
+    assert [(p.provider, dict(p.costs), p.tiered_pricing) for p in group.deployment_pricing] == [
+        ("openai", dict(_HUB_PRICES), ())
+    ]
+
+
+def test_model_group_info_lists_each_deployments_price_once_next_to_the_unchanged_max(
+    local_model_cost_map: None,
+) -> None:
+    model: Final = _cost_map_model("hub-pricing-model", _HUB_PRICES)
+    override: Final = 3 * _HUB_PRICES["input_cost_per_token"]
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "hub", "litellm_params": {"model": model, "api_base": "https://a.example"}},
+            {"model_name": "hub", "litellm_params": {"model": model, "api_base": "https://b.example"}},
+            {"model_name": "hub", "litellm_params": {"model": model, "input_cost_per_token": override}},
+        ]
+    )
+
+    group: Final = router.registry().group("hub")
+
+    assert group is not None
+    assert [p.costs["input_cost_per_token"] for p in group.deployment_pricing] == [
+        _HUB_PRICES["input_cost_per_token"],
+        override,
+    ]
+    assert group.input_cost_per_token == override
+    assert group.output_cost_per_token == _HUB_PRICES["output_cost_per_token"]
+
+
+def _usage_billed_at(cost_key: str, prompt_tokens: int = 1000) -> tuple[Usage, str | None]:
+    match cost_key:
+        case "input_cost_per_token":
+            return Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens), None
+        case "output_cost_per_token":
+            return Usage(prompt_tokens=0, completion_tokens=1000, total_tokens=1000), None
+        case "cache_read_input_token_cost":
+            return Usage(
+                prompt_tokens=1000,
+                completion_tokens=0,
+                total_tokens=1000,
+                prompt_tokens_details={"cached_tokens": 1000},
+            ), None
+        case "cache_creation_input_token_cost":
+            return Usage(
+                prompt_tokens=1000, completion_tokens=0, total_tokens=1000, cache_creation_input_tokens=1000
+            ), None
+        case "input_cost_per_token_priority":
+            return Usage(prompt_tokens=1000, completion_tokens=0, total_tokens=1000), "priority"
+        case "input_cost_per_token_flex":
+            return Usage(prompt_tokens=1000, completion_tokens=0, total_tokens=1000), "flex"
+        case _:
+            raise AssertionError(f"no billing scenario for {cost_key}")
+
+
+def _billed_rate(model: str, deployment_id: str, usage: Usage, service_tier: str | None) -> float:
+    cost: Final = litellm.completion_cost(
+        completion_response=litellm.ModelResponse(usage=usage),
+        model=model,
+        custom_llm_provider="openai",
+        custom_pricing=True,
+        router_model_id=deployment_id,
+        service_tier=service_tier,
+    )
+    return cost / max(usage.prompt_tokens, usage.completion_tokens)
+
+
+def test_model_group_info_shows_an_overridden_deployment_only_the_prices_billing_charges(
+    local_model_cost_map: None,
+) -> None:
+    model: Final = _cost_map_model("hub-pricing-model", _HUB_PRICES)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "hub",
+                "litellm_params": {
+                    "model": model,
+                    "input_cost_per_token": 3 * _HUB_PRICES["input_cost_per_token"],
+                    "output_cost_per_token": 3 * _HUB_PRICES["output_cost_per_token"],
+                },
+                "model_info": {"id": "hub-override"},
+            }
+        ]
+    )
+
+    group: Final = router.registry().group("hub")
+
+    assert group is not None
+    costs: Final = group.deployment_pricing[0].costs
+    assert {key: _billed_rate(model, "hub-override", *_usage_billed_at(key)) for key in costs} == pytest.approx(
+        dict(costs)
+    )
+    long_prompt: Final = _usage_billed_at("input_cost_per_token", prompt_tokens=250_000)
+    assert _billed_rate(model, "hub-override", *long_prompt) == pytest.approx(costs["input_cost_per_token"])
+    shadowed: Final = {
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens",
+        "input_cost_per_token_batches",
+    }
+    assert shadowed.isdisjoint(costs), dict(costs)
+
+
+@pytest.mark.parametrize("vertex_location", ["us-east5", "global"])
+def test_model_group_info_shows_a_vertex_deployment_the_token_prices_billing_charges_at_its_location(
+    local_model_cost_map: None, vertex_location: str
+) -> None:
+    model: Final = "vertex_ai/hub-vertex-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "vertex_ai-language-models",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 4e-06,
+                "cache_read_input_token_cost": 1e-07,
+                "regional_endpoint_uplift_multiplier": 1.1,
+            }
+        },
+        persist_across_reloads=False,
+        add_to_provider_model_sets=False,
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "hub",
+                "litellm_params": {"model": model, "vertex_project": "p", "vertex_location": vertex_location},
+                "model_info": {"id": "hub-vertex"},
+            }
+        ]
+    )
+
+    group: Final = router.registry().group("hub")
+
+    assert group is not None
+    costs: Final = group.deployment_pricing[0].costs
+
+    def billed(cost_key: str) -> float:
+        usage, _ = _usage_billed_at(cost_key)
+        cost: Final = litellm.completion_cost(
+            completion_response=litellm.ModelResponse(usage=usage),
+            model=model,
+            custom_llm_provider="vertex_ai",
+            router_model_id="hub-vertex",
+            vertex_location=vertex_location,
+        )
+        return cost / max(usage.prompt_tokens, usage.completion_tokens)
+
+    shown: Final = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+    assert {key: costs[key] for key in shown} == pytest.approx({key: billed(key) for key in shown})
+
+
+def test_model_group_info_lists_tiered_pricing_ranges(local_model_cost_map: None) -> None:
+    tiers: Final = (
+        {"range": [0, 256000], "input_cost_per_token": 5e-08, "output_cost_per_token": 4e-07},
+        {"range": [256000, 1000000], "input_cost_per_token": 2.5e-07, "output_cost_per_token": 2e-06},
+    )
+    model: Final = _cost_map_model("hub-tiered-model", {"tiered_pricing": list(tiers)})
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "tiered", "litellm_params": {"model": model}},
+            {
+                "model_name": "tiered",
+                "litellm_params": {"model": model, "input_cost_per_token": 1e-06, "output_cost_per_token": 4e-06},
+            },
+        ]
+    )
+
+    group: Final = router.registry().group("tiered")
+
+    assert group is not None
+    assert [
+        [(tier.range, dict(tier.costs)) for tier in pricing.tiered_pricing] for pricing in group.deployment_pricing
+    ] == [
+        [
+            ((0.0, 256000.0), {"input_cost_per_token": 5e-08, "output_cost_per_token": 4e-07}),
+            ((256000.0, 1000000.0), {"input_cost_per_token": 2.5e-07, "output_cost_per_token": 2e-06}),
+        ],
+        [],
+    ]
+
+
+def test_model_group_info_reads_prices_written_as_text_the_way_billing_does(local_model_cost_map: None) -> None:
+    tier: Final = {"range": [0, 256000], "input_cost_per_token": "5e-08", "output_cost_per_token": "4e-07"}
+    model: Final = _cost_map_model(
+        "hub-text-priced-model", {"tiered_pricing": [tier], "cache_read_input_token_cost": "N/A"}
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "tiered", "litellm_params": {"model": model}},
+            {
+                "model_name": "flat",
+                "litellm_params": {"model": model, "input_cost_per_token": "3e-7", "output_cost_per_token": "1.2e-6"},
+                "model_info": {"id": "hub-text-override"},
+            },
+        ]
+    )
+
+    tiered: Final = router.registry().group("tiered")
+    flat: Final = router.registry().group("flat")
+
+    assert tiered is not None
+    assert flat is not None
+    assert [dict(t.costs) for t in tiered.deployment_pricing[0].tiered_pricing] == [
+        {"input_cost_per_token": 5e-08, "output_cost_per_token": 4e-07}
+    ]
+    assert "cache_read_input_token_cost" not in tiered.deployment_pricing[0].costs
+    flat_costs: Final = flat.deployment_pricing[0].costs
+    shown: Final = ("input_cost_per_token", "output_cost_per_token")
+    assert {key: flat_costs[key] for key in shown} == pytest.approx(
+        {key: _billed_rate(model, "hub-text-override", *_usage_billed_at(key)) for key in shown}
+    )
+
+
+def test_model_group_info_lists_custom_prices_of_an_unmapped_deployment_and_skips_an_unpriced_one() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "self-hosted",
+                "litellm_params": {"model": "openai/hub-unpriced", "api_base": "http://localhost:8000/v1"},
+                "model_info": {"cost_tracking_exempt": True},
+            },
+            {
+                "model_name": "self-hosted",
+                "litellm_params": {
+                    "model": "openai/hub-priced",
+                    "api_base": "http://localhost:8001/v1",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                },
+                "model_info": {"cache_read_input_token_cost": 1e-07},
+            },
+        ]
+    )
+
+    group: Final = router.registry().group("self-hosted")
+
+    assert group is not None
+    assert [(p.provider, dict(p.costs)) for p in group.deployment_pricing] == [
+        (
+            "openai",
+            {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06, "cache_read_input_token_cost": 1e-07},
+        )
+    ]
 
 
 def test_model_group_info_description_from_model_info():
@@ -4121,6 +4392,48 @@ def test_context_window_pre_call_check_counts_an_embedding_image_as_text_on_a_te
         )
 
 
+@pytest.mark.parametrize(
+    ("backend", "fits"),
+    [
+        pytest.param("vertex_ai/gemini-embedding-2", True, id="image-backend-without-an-openai-tokenizer"),
+        pytest.param("text-embedding-3-small", False, id="text-only-backend-counts-the-image"),
+    ],
+)
+def test_context_window_pre_call_check_on_a_caption_next_to_an_embedding_image(backend: str, fits: bool, caplog):
+    caption: Final = "word " * 40
+    router: Final = _embedding_context_router(backend, window=20)
+    deployments: Final = router.registry().deployments("embedder")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Router"):
+        if fits:
+            kept: Final = router._pre_call_checks(
+                model="embedder", healthy_deployments=deployments, input=[caption, _EMBEDDING_IMAGE_INPUT]
+            )
+            assert len(kept) == 1
+        else:
+            with pytest.raises(litellm.ContextWindowExceededError):
+                router._pre_call_checks(
+                    model="embedder", healthy_deployments=deployments, input=[caption, _EMBEDDING_IMAGE_INPUT]
+                )
+
+    assert "failed to count tokens" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_an_async_pre_call_check_reads_embedding_media_off_the_event_loop():
+    from tests.unit.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
+
+    router: Final = _embedding_context_router("vertex_ai/gemini-embedding-2", window=20)
+    caption_and_images: Final = ["a red square", *[_EMBEDDING_IMAGE_INPUT] * 400]
+
+    deployment, took, lags = await timed_with_loop_lags(
+        lambda: router.select("embedder", {}, input=caption_and_images)
+    )
+
+    assert deployment["litellm_params"]["model"] == "vertex_ai/gemini-embedding-2"
+    assert_loop_stayed_free(took, lags)
+
+
 async def test_a_wildcard_route_checks_the_context_window_with_the_requested_openai_models_tokenizer():
     limit: Final = (
         litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT)
@@ -4270,6 +4583,173 @@ async def test_aresponses_enforces_context_window_pre_call_check():
             model="small-ctx",
             input="this responses input is definitely much longer than five tokens for sure",
         )
+
+
+def _embedding_router(max_input_tokens: int) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "sk-test",
+                    "mock_response": [0.1, 0.2],
+                },
+                "model_info": {"max_input_tokens": max_input_tokens},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "embedding_input",
+    [
+        pytest.param(["one two three four five six"] * 3, id="texts"),
+        pytest.param([list(range(6))] * 3, id="token-id-lists"),
+        pytest.param(list(range(10)), id="token-ids-at-the-limit"),
+    ],
+)
+async def test_aembedding_accepts_a_batch_whose_inputs_each_fit_the_context_window(embedding_input, caplog):
+    router: Final = _embedding_router(max_input_tokens=10)
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Router"):
+        response: Final = await router.aembedding(model="embed", input=embedding_input)
+
+    assert response.data
+    assert "failed to count tokens" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "embedding_input",
+    [
+        pytest.param(["one", " ".join(["word"] * 20)], id="texts"),
+        pytest.param(list(range(11)), id="token-ids"),
+        pytest.param([[1], list(range(11))], id="token-id-lists"),
+    ],
+)
+async def test_aembedding_rejects_a_batch_with_one_input_over_the_context_window(embedding_input):
+    router: Final = _embedding_router(max_input_tokens=10)
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aembedding(model="embed", input=embedding_input)
+
+
+def test_embedding_rejects_a_batch_with_one_input_over_the_context_window():
+    router: Final = _embedding_router(max_input_tokens=10)
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router.embedding(model="embed", input=["one", " ".join(["word"] * 20)])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "embedding_input",
+    [
+        pytest.param(["one", " ".join(["word"] * 20)], id="texts"),
+        pytest.param(list(range(11)), id="token-ids"),
+        pytest.param([[1], list(range(11))], id="token-id-lists"),
+    ],
+)
+async def test_aembedding_skips_the_context_window_check_when_token_counting_is_disabled(embedding_input, monkeypatch):
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    router: Final = _embedding_router(max_input_tokens=10)
+
+    response: Final = await router.aembedding(model="embed", input=embedding_input)
+
+    assert response.data
+
+
+async def _until_every_count_slot_is_taken() -> None:
+    from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+    from litellm.litellm_core_utils.token_counter import _count_offload_limiter_for_this_loop
+
+    while _count_offload_limiter_for_this_loop().borrowed_tokens < TOKEN_COUNTER_MAX_CONCURRENT_COUNTS:
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_a_chat_pre_call_count_does_not_wait_behind_long_embedding_batches():
+    from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+
+    window: Final = {"max_input_tokens": 10000}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "sk-test",
+                    "mock_response": [0.1],
+                },
+                "model_info": window,
+            },
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "mock_response": "hi"},
+                "model_info": window,
+            },
+        ],
+        enable_pre_call_checks=True,
+    )
+    batch: Final = ["word " * 2100] * 76
+    batches: Final = tuple(
+        asyncio.create_task(router.aembedding(model="embed", input=batch))
+        for _ in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+    )
+    await asyncio.wait_for(_until_every_count_slot_is_taken(), timeout=30)
+    chat: Final = asyncio.create_task(router.acompletion(model="chat", messages=[{"role": "user", "content": "hi"}]))
+
+    first_done, _ = await asyncio.wait((chat, *batches), return_when=asyncio.FIRST_COMPLETED)
+    await asyncio.gather(chat, *batches)
+
+    assert first_done == {chat}
+
+
+def test_a_routing_plugin_counts_an_embedding_text_batch_by_its_longest_text():
+    long_text: Final = "word " * 4000
+    context: Final = RouterContext(_embedding_router(max_input_tokens=10))
+
+    assert context.count_pre_call_check_tokens(None, ["one", long_text]) == litellm.token_counter(text=long_text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map", "isolate_router_model_cost_state")
+@pytest.mark.parametrize(
+    "prompt_kwargs",
+    [
+        pytest.param({"instructions": "you are a helpful assistant. " * 20}, id="instructions"),
+        pytest.param(
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "lookup",
+                        "description": "look up a record by its identifier. " * 20,
+                        "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+                    }
+                ]
+            },
+            id="tools",
+        ),
+    ],
+)
+async def test_aresponses_with_empty_input_still_counts_its_other_prompt_content(prompt_kwargs):
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "small-ctx",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+                "model_info": {"max_input_tokens": 50},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aresponses(model="small-ctx", input=[], **prompt_kwargs)
 
 
 def test_get_deployment_model_info_base_model_flow():
@@ -7484,6 +7964,172 @@ async def test_acreate_batch_on_a_mixed_group_only_reaches_batch_deployments(
     assert batch_route.call_count == 20
 
 
+def _ordered(deployment: dict[str, object], order: int) -> dict[str, object]:
+    return {**deployment, "litellm_params": {**deployment["litellm_params"], "order": order}}
+
+
+_AZURE_FILE_CREATED: Final = {
+    "id": "file-batch-input",
+    "object": "file",
+    "bytes": 1,
+    "created_at": 0,
+    "filename": "input.jsonl",
+    "purpose": "batch",
+    "status": "processed",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("purpose", "uploaded_to"), [("batch", "batch-deployment"), ("fine-tune", "chat-deployment")])
+async def test_batch_file_upload_reaches_the_batch_deployment_when_the_chat_deployment_has_a_lower_order(
+    monkeypatch: pytest.MonkeyPatch, purpose: str, uploaded_to: str
+):
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=0,
+    )
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        routes: Final = {
+            deployment_id: respx_mock.post(host=f"{sku_host}.openai.azure.com").mock(
+                return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+            )
+            for deployment_id, sku_host in (("chat-deployment", "chat-sku"), ("batch-deployment", "batch-sku"))
+        }
+        uploaded: Final = await router.acreate_file(
+            model="gpt-mixed", purpose=purpose, file=BytesIO(json.dumps(batch_row).encode())
+        )
+
+    assert {deployment_id: route.call_count for deployment_id, route in routes.items()} == {
+        "chat-deployment": int(uploaded_to == "chat-deployment"),
+        "batch-deployment": int(uploaded_to == "batch-deployment"),
+    }
+    assert uploaded._hidden_params["model_file_id_mapping"] == {uploaded_to: "file-batch-input"}
+
+
+_AZURE_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "gpt-mixed",
+    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "raised"), [(429, openai.RateLimitError), (500, openai.InternalServerError)])
+async def test_a_failed_batch_file_upload_tries_the_batch_deployment_once_and_leaves_chat_serving(
+    monkeypatch: pytest.MonkeyPatch, status: int, raised: type[Exception]
+):
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=0,
+    )
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        batch_upload: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(status, json={"error": {"code": str(status), "message": "upload refused"}})
+        )
+        chat_completions: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
+        )
+        with pytest.raises(raised):
+            await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
+        for _ in range(3):
+            await router.acompletion(model="gpt-mixed", messages=[{"role": "user", "content": "hi"}])
+
+    assert batch_upload.call_count == 1
+    assert chat_completions.call_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "raised"), [(429, openai.RateLimitError), (401, openai.AuthenticationError)])
+async def test_a_batch_file_upload_the_batch_deployment_refuses_stays_off_chat_and_leaves_chat_serving(
+    monkeypatch: pytest.MonkeyPatch, status: int, raised: type[Exception]
+):
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=2,
+    )
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        batch_upload: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(status, json={"error": {"code": str(status), "message": "upload refused"}})
+        )
+        chat_upload: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/files").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+        )
+        chat_completions: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/chat/completions").mock(
+            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
+        )
+        with pytest.raises(raised, match="upload refused"):
+            await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
+        await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
+        for _ in range(3):
+            await router.acompletion(model="gpt-mixed", messages=[{"role": "user", "content": "hi"}])
+
+    assert (batch_upload.call_count, chat_upload.call_count, chat_completions.call_count) == (1, 0, 3)
+
+
+@pytest.mark.asyncio
+async def test_a_batch_file_upload_whose_batch_deployment_cools_down_after_the_pick_stays_off_chat(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=0,
+    )
+
+    class _ConcurrentBatchFailure(CustomLogger):
+        async def async_pre_call_check(self, deployment, parent_otel_span):
+            _cool_down(router, "batch-deployment")
+
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with (
+        patch.object(litellm, "callbacks", [_ConcurrentBatchFailure()]),  # test-quality-ok: router reads this global
+        respx.mock(assert_all_called=False) as respx_mock,
+    ):
+        batch_upload: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+        )
+        chat_upload: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+        )
+        with pytest.raises(RouterRateLimitError, match="No deployments available"):
+            await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
+
+    assert (batch_upload.call_count, chat_upload.call_count) == (0, 0)
+
+
 def _azure_wildcard_deployment(sku_host: str, mode: str) -> dict[str, object]:
     return {
         "model_name": "mixed-wild/*",
@@ -8522,7 +9168,7 @@ class TestConsumedRequestTagsStamp:
             self.rewrite_to = rewrite_to
 
         async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False, call_type=None
         ):
             from litellm.types.router import PreRoutingHookResponse
 
@@ -8613,7 +9259,7 @@ class TestClaudeCodeSubagentSessionRouterBinding:
             self.routed_model = routed_model
 
         async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False, call_type=None
         ):
             from litellm.types.router import PreRoutingHookResponse
 
@@ -9667,7 +10313,7 @@ class TestModelGroupAliasReachesPreRoutingStrategies:
 
     class _RewriteStrategy:
         async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False, call_type=None
         ):
             from litellm.types.router import PreRoutingHookResponse
 
@@ -9784,7 +10430,7 @@ class TestTeamPublicNameReachesPreRoutingStrategies:
             self.rewrite_to = rewrite_to
 
         async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False, call_type=None
         ):
             from litellm.types.router import PreRoutingHookResponse
 
@@ -10021,7 +10667,7 @@ class TestAutoRouterCompressionDecoupling:
             self.received_messages: list[dict] | None = None
 
         async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False, call_type=None
         ):
             from litellm.types.router import PreRoutingHookResponse
 
@@ -13778,7 +14424,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -19454,11 +20100,13 @@ def test_router_sends_an_image_to_the_text_only_leg_when_the_vision_leg_is_cooli
 async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, surface: str, credential_kind: str
 ) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.types.router import AllowedFailsPolicy
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr("time.time", lambda: 1767225600.0)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
 
     def upstream(request: httpx.Request) -> httpx.Response:
         credential: Final = request.headers.get("authorization", request.headers.get("x-api-key", ""))
@@ -19847,3 +20495,22 @@ def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog
 
     assert "Deployment 'embed-from-config' sets enforce_supported_endpoints without" in caplog.text
     assert "Deployment 'embed-from-api' sets enforce_supported_endpoints without" in caplog.text
+
+
+def test_registry_finds_a_team_deployment_by_public_and_internal_name_for_its_team_only() -> None:
+    internal_name: Final = "model_name_team-a_row"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "x"},
+                "model_info": {"id": "team-row", "team_id": "team-a", "team_public_model_name": "public-chat"},
+            }
+        ]
+    )
+    registry: Final = router.registry()
+
+    assert [row["model_info"]["id"] for row in registry.deployments("public-chat", team_id="team-a")] == ["team-row"]
+    assert [row["model_info"]["id"] for row in registry.deployments(internal_name, team_id="team-a")] == ["team-row"]
+    assert list(registry.deployments("public-chat", team_id="team-b")) == []
+    assert list(registry.deployments("public-chat")) == []
