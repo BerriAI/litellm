@@ -312,6 +312,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
             ref={credentialsFileRef}
             id={control.id}
             type="file"
+            aria-label={field.label}
             accept={field.key === "github_copilot_app_private_key" ? ".pem" : ".json"}
             className="sr-only"
             onBlur={control.onBlur}
@@ -353,6 +354,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
     return (
       <Input
         id={control.id}
+        aria-label={field.label}
         value={(control.value as string | undefined) ?? field.defaultValue ?? ""}
         onBlur={control.onBlur}
         placeholder={field.placeholder}

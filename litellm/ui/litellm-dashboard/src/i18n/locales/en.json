@@ -8715,6 +8715,7 @@
     }
   },
   "shared": {
+    "fieldInformation": "{{label}} information",
     "resourceActivity": {
       "title": "Activity",
       "ownUsage": "Showing your usage only.",

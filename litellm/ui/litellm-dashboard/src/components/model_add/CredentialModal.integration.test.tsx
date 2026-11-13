@@ -614,6 +614,8 @@ describe("CredentialModal with GitHub Copilot auth types", () => {
     const onSubmit = renderModal({ initialProvider: "GITHUB_COPILOT" });
     await screen.findByRole("combobox", { name: "Auth Type:" });
     await chooseOption(user, /^Auth Type:/, "GitHub App");
+    expect(screen.getByRole("button", { name: "GitHub host information" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "GitHub host", exact: true })).toBeInTheDocument();
     fill("Credential Name:", "copilot-upload");
     fill("App client ID", "test-client");
     fill("Installation ID", "123");
