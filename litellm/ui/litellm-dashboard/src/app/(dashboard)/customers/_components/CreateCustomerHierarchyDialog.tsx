@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { fetchClient } from "@/lib/http/api";
@@ -45,6 +46,7 @@ const createEntity = async (create: CustomerHierarchyCreate): Promise<CreatedCus
 };
 
 function CreateForm(props: Props & { pending: boolean; onPendingChange: (pending: boolean) => void }) {
+  const queryClient = useQueryClient();
   const { t } = useTranslation();
   const [fields, setFields] = useState(() => newCustomerHierarchyFields(props));
   const [identifier, setIdentifier] = useState("");
@@ -87,6 +89,7 @@ function CreateForm(props: Props & { pending: boolean; onPendingChange: (pending
     } catch (cause) {
       setError(extractProxyErrorMessage(cause));
     } finally {
+      void queryClient.invalidateQueries({ queryKey: ["get", "/management/v1/customer_portal/limits"] });
       setPending(false);
     }
   };

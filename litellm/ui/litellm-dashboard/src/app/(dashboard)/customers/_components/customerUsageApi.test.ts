@@ -99,6 +99,10 @@ const request = {
   accessToken: "test-session",
   startDate: "2026-11-01",
   endDate: "2026-11-03",
+  monthStartDate: "2026-11-01",
+  monthEndDate: "2026-11-03",
+  yearStartDate: "2026-01-01",
+  yearEndDate: "2026-11-03",
 };
 const list = <T>(data: T[], page = 1, totalPages = 1) => ({
   data,
@@ -167,6 +171,37 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("customerHierarchyUsageCall", () => {
+  it("should preserve scalar and concurrent effective caps without treating recorded spend as window spend", async () => {
+    const budget = {
+      max_budget: 25,
+      budget_duration: "1mo",
+      budget_limits: [
+        { budget_duration: "1mo", max_budget: 0, reset_at: "2026-12-01T00:00:00Z" },
+        { budget_duration: "12mo", max_budget: 100, reset_at: "2027-01-01T00:00:00Z" },
+      ],
+    };
+    fetchMock.mockImplementation((input) =>
+      Promise.resolve(
+        requestUrl(input).pathname.endsWith("/customer_members/member-a")
+          ? json({ ...members[0], effective_budget: budget })
+          : serve(input),
+      ),
+    );
+    const result = await customerHierarchyUsageCall({
+      ...request,
+      scope: { org: "org-1", team: null, member: "member-a" },
+    });
+    const expected = {
+      spend: 40,
+      budgetLimit: 25,
+      budgetDuration: "1mo",
+      budgetLimits: budget.budget_limits,
+    };
+    expect(result.member).toMatchObject(expected);
+    expect(result.memberBudgets[0]).toEqual(result.member);
+    expect(result.organization.budgetLimits).toEqual([]);
+  });
+
   it("should read exact daily activity routes, all pages, and scoped descendant lists", async () => {
     fetchMock.mockImplementation((input) => {
       const url = requestUrl(input);
@@ -202,9 +237,14 @@ describe("customerHierarchyUsageCall", () => {
     expect(result.memberResults).toHaveLength(1);
     expect(result.memberResults[0].breakdown.entities["member-b"].metrics.total_tokens).toBe(500);
     expect(result.memberBudgets[0]).toMatchObject({ id: "member-a", spend: 40, budgetLimit: 10 });
+    expect(result.yearlyMembers.map((member) => member.spend)).toEqual([3, 1]);
     for (const url of dailyUrls()) {
       expect(url.pathname).toMatch(/^\/management\/v1\/customer_(organizations|teams|members)\/daily\/activity$/);
-      expect(url.searchParams.get("start_date")).toBe(request.startDate);
+      expect(url.searchParams.get("start_date")).toBe(
+        url.pathname.includes("customer_members") && url.searchParams.get("start_date") === request.yearStartDate
+          ? request.yearStartDate
+          : request.startDate,
+      );
       expect(url.searchParams.get("end_date")).toBe(request.endDate);
       expect(url.searchParams.get("page_size")).toBe("100");
       expect([...url.searchParams.keys()].filter((name) => name.endsWith("_ids"))).toHaveLength(1);
@@ -252,9 +292,33 @@ describe("customerHierarchyUsageCall", () => {
     expect(Object.keys(result.teamResults[0].breakdown.entities)).toEqual(["team-a"]);
     expect(result.teamResults[0].breakdown.entities["team-a"].metrics.spend).toBe(3);
     expect(result.memberResults[0].breakdown.entities["member-a"].metrics.total_tokens).toBe(100);
-    expect(dailyUrls()).toHaveLength(1);
-    expect(dailyUrls()[0].searchParams.get("customer_member_ids")).toBe("member-a");
+    const memberReads = dailyUrls().filter((url) => url.searchParams.has("customer_member_ids"));
+    expect(memberReads.map((url) => url.searchParams.get("start_date"))).toEqual([
+      request.startDate,
+      request.yearStartDate,
+    ]);
+    expect(memberReads[0].searchParams.get("customer_member_ids")).toBe("member-a");
+    expect(result.monthlyOrganizationSpend).toBe(4);
+    expect(result.monthlyMembers.find((member) => member.id === "member-a")?.spend).toBe(3);
+    expect(result.yearlyMembers.find((member) => member.id === "member-a")?.spend).toBe(3);
     expect(urls().some((url) => url.pathname === "/management/v1/customer_members")).toBe(false);
+  });
+
+  it("should retain both periods when the selected chart range is the current year", async () => {
+    const yearRequest = {
+      ...request,
+      scope: { org: "org-1", team: null, member: "member-a" },
+      startDate: request.yearStartDate,
+      endDate: request.yearEndDate,
+    };
+    const result = await customerHierarchyUsageCall(yearRequest);
+    expect(result.yearlyMembers).toEqual(result.members);
+    expect(result.monthlyMembers.find((member) => member.id === "member-a")?.spend).toBe(3);
+    expect(
+      dailyUrls()
+        .filter((url) => url.searchParams.has("customer_member_ids"))
+        .map((url) => url.searchParams.get("start_date")),
+    ).toEqual([request.yearStartDate, request.monthStartDate]);
   });
 
   it("should reject mismatched ancestry before requesting any usage", async () => {
@@ -269,6 +333,29 @@ describe("customerHierarchyUsageCall", () => {
       customerHierarchyUsageCall({ ...request, scope: { org: "org-1", team: "team-a", member: null } }),
     ).rejects.toThrow("does not belong");
     expect(dailyUrls()).toHaveLength(0);
+  });
+
+  it("should read monthly member totals and the whole organization independently of a team's selected chart dates", async () => {
+    fetchMock.mockImplementation((input) => {
+      const url = requestUrl(input);
+      if (url.pathname.endsWith("/daily/activity") && url.searchParams.get("start_date") === "2026-10-01")
+        return Promise.resolve(json({ results: [], metadata: EMPTY_DAILY_ACTIVITY_METADATA }));
+      return Promise.resolve(serve(input));
+    });
+    const teamRequest = {
+      ...request,
+      scope: { org: "org-1", team: "team-a", member: null },
+      startDate: "2026-10-01",
+      endDate: "2026-10-31",
+    };
+    const result = await customerHierarchyUsageCall(teamRequest);
+    expect(result.metadata.total_spend).toBe(0);
+    expect(result.monthlyOrganizationSpend).toBe(4);
+    expect(result.monthlyMembers.find((member) => member.id === "member-a")?.spend).toBe(3);
+    expect(result.yearlyMembers.find((member) => member.id === "member-a")?.spend).toBe(3);
+    const organizationReads = dailyUrls().filter((url) => url.searchParams.has("customer_org_ids"));
+    expect(organizationReads.map((url) => url.searchParams.get("page"))).toEqual(["1", "2"]);
+    expect(organizationReads.every((url) => url.searchParams.get("start_date") === request.monthStartDate)).toBe(true);
   });
 
   it("should never send an empty descendant filter and should retain unassigned usage", async () => {
