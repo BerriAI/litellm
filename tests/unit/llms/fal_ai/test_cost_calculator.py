@@ -38,6 +38,41 @@ def test_passthrough_video_clip_pricing(body: dict[str, object], expected: float
 
 
 @pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"duration": "5", "resolution": "360p"}, 0.17),
+        ({"resolution": "360p"}, None),
+        ({"duration": "8", "resolution": "360p"}, None),
+    ],
+)
+def test_router_preserves_passthrough_clip_pricing_without_a_billable_unit_rate(
+    body: dict[str, object], expected: float | None
+) -> None:
+    prices: Final = {"5s": {"360p": 0.17}}
+    litellm.register_model(
+        {
+            "fal_ai/fal-ai/router-clip": {
+                "litellm_provider": "fal_ai",
+                "mode": "video_generation",
+                "output_cost_per_video_clip": prices,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    _router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "configured-clip",
+                "litellm_params": {"model": "fal_ai/fal-ai/router-clip", "api_key": "test-key"},
+                "model_info": {"mode": "video_generation", "output_cost_per_video_clip": prices},
+            }
+        ],
+        num_retries=0,
+    )
+    assert fal_ai_passthrough_cost("fal-ai/router-clip", body) == expected
+
+
+@pytest.mark.parametrize(
     ("fallback", "expected"),
     [
         ({}, None),
