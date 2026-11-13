@@ -26,6 +26,7 @@
 - Messages for provider `anthropic` is `RUST_REQUIRED` and has no Python path
   - a call the rules would send to Python (a `MESSAGES_PYTHON_FEATURES` feature or a raising detector) raises `UnsupportedParamsError` from the Python fallback in `litellm/messages/dispatch.py`, which names the detected features
   - other Messages providers keep the Python fallback
+- A Messages call targets `MESSAGES` only when its provider's own Messages config serves it. A deployment with no such config that lists `/v1/messages` in `model_info.supported_endpoints`, like a non-Claude `azure_ai` model, targets `MESSAGES_PASSTHROUGH`, which Python's OpenAI-compatible config forwards untranslated and which stays on Python
 - `catalog.RULES` is rollout policy with no tests of its own. Tests pass the rules they need, so check these invariants by review whenever `RULES` changes
 
 # Public entries

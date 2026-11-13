@@ -28,6 +28,8 @@ class Route(str, Enum):
 class Target(str, Enum):
     CHAT_COMPLETIONS = "chat_completions"
     MESSAGES = "messages"
+    MESSAGES_PASSTHROUGH = "messages_passthrough"
+    """A deployment's own /v1/messages, which Python's OpenAI-compatible config forwards untranslated."""
     RESPONSES = "responses"
 
 
@@ -193,7 +195,11 @@ RULES: Final[Rules] = (
     RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
     RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
-    RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, targets=frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES})),
+    RouteRule(
+        Route.MESSAGES,
+        Rollout.PYTHON_ONLY,
+        targets=frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES, Target.MESSAGES_PASSTHROUGH}),
+    ),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=MESSAGES_PYTHON_FEATURES),
     RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, providers=frozenset({"anthropic"})),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),

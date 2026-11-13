@@ -2124,6 +2124,13 @@ class _ModelHook(CustomLogger):
         return {**kwargs, "model": OPUS_ADAPTIVE}
 
 
+class _NonClaudeModelHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "model": "azure_ai/Phi-4"}
+
+
 class _CredentialHook(CustomLogger):
     async def async_pre_request_hook(
         self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
@@ -3842,6 +3849,29 @@ AZURE_SHAPING_CASES: Final = tuple(
         Case("azure_ai_extra_body", _kw(extra_body={"parity_extra": 1}), model=AZURE_CLAUDE),
         Case("azure_ai_unknown_top_level_param", _kw(parity_unknown_param="x"), model=AZURE_CLAUDE),
         Case("azure_ai_latest_alias", model="azure_ai/claude-sonnet-latest"),
+        Case(
+            "azure_ai_pre_request_hook_names_a_non_claude_model",
+            callbacks=(_NonClaudeModelHook,),
+            model=AZURE_CLAUDE,
+            upstream=(),
+        ),
+    )
+)
+
+AZURE_NON_CLAUDE: Final = "azure_ai/Phi-4"
+MESSAGES_PASSTHROUGH: Final = MappingProxyType({"supported_endpoints": ["/v1/messages"]})
+
+# H01: Python forwards a non-Claude deployment that opted into /v1/messages untranslated through its
+# OpenAI-compatible config, which Rust does not have, so the call stays on Python.
+AZURE_PASSTHROUGH_CASES: Final = tuple(
+    replace(case, model=AZURE_NON_CLAUDE, rust_providers=AZURE_AI)
+    for case in (
+        Case("azure_ai_non_claude_messages_passthrough", _kw(model_info=dict(MESSAGES_PASSTHROUGH))),
+        Case(
+            "azure_ai_non_claude_messages_passthrough_stream",
+            _kw(model_info=dict(MESSAGES_PASSTHROUGH), stream=True),
+            upstream=(_stream(TEXT_STREAM),),
+        ),
     )
 )
 
@@ -3962,14 +3992,23 @@ def _environment(env: Mapping[str, str]) -> Generator[None]:
 
 @contextmanager
 def _served_natively(providers: frozenset[str]) -> Generator[None]:
-    """Serves a provider the shipped rules keep on Python natively, ahead of every other rule."""
+    """Serves a provider the shipped rules keep on Python natively, ahead of every other rule, wherever its
+    Messages config serves the call."""
     if not providers:
         yield
         return
     with rebound(
         catalog,
         "RULES",
-        (catalog.RouteRule(catalog.Route.MESSAGES, Rollout.RUST_REQUIRED, providers=providers), *catalog.RULES),
+        (
+            catalog.RouteRule(
+                catalog.Route.MESSAGES,
+                Rollout.RUST_REQUIRED,
+                providers=providers,
+                targets=frozenset({catalog.Target.MESSAGES}),
+            ),
+            *catalog.RULES,
+        ),
     ):
         yield
 
@@ -4985,6 +5024,18 @@ async def test_both_lanes_send_the_azure_ai_deployment_or_caller_beta_alike(
 
     assert native_messages.calls == 0
     assert native == python == (sent,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in AZURE_PASSTHROUGH_CASES])
+async def test_both_lanes_send_a_non_claude_azure_ai_passthrough_through_python(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _leg(case, parity_server, probe=None)
+    native: Final = await _leg(case, parity_server, probe=native_messages)
+
+    assert native.fell_back
+    assert (_comparable(native.requests), native.outcome) == (_comparable(python.requests), python.outcome)
 
 
 async def _abandoned_stream(
