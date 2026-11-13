@@ -312,7 +312,13 @@ async fn provider_call(
         .map(SecretValue::expose));
     let deferred = match (
         credentials.deferred_secrets,
-        config.deferred_secret_names(&forwarded, configured_key, &connection_params, &env_lookup),
+        config.deferred_secret_names(
+            &forwarded,
+            configured_key,
+            api_base.as_deref(),
+            &connection_params,
+            &env_lookup,
+        ),
     ) {
         (Some(source), names) if !names.is_empty() => Some(source.resolve(names).await?),
         _ => None,

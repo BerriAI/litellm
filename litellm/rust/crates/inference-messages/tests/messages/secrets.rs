@@ -262,3 +262,55 @@ async fn azure_ad_token_is_looked_up_only_where_python_looks_it_up(
         usize::from(looked_up)
     );
 }
+
+#[derive(Clone, Copy, Debug)]
+enum CallBase {
+    Upstream,
+    Empty,
+    Absent,
+}
+
+#[rstest]
+#[case::a_call_base(CallBase::Upstream, 0)]
+#[case::an_empty_call_base(CallBase::Empty, 1)]
+#[case::no_call_base(CallBase::Absent, 1)]
+#[tokio::test]
+async fn azure_api_base_is_looked_up_only_where_python_looks_it_up(
+    call: MessagesCall,
+    #[case] call_base: CallBase,
+    #[case] lookups: usize,
+) {
+    let upstream = upstream([message_response()]).await;
+    let base = upstream.uri();
+    let secrets = Arc::new(RecordingSecrets::new([("AZURE_API_BASE", base.as_str())]));
+
+    run_with(
+        secrets.clone(),
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: Default::default(),
+            api_key: Some("sk-azure".into()),
+            api_base: match call_base {
+                CallBase::Upstream => Some(base.clone()),
+                CallBase::Empty => Some(String::new()),
+                CallBase::Absent => None,
+            },
+            ..call
+        },
+    )
+    .await
+    .expect("messages call succeeds");
+
+    assert_eq!(
+        only_request(&upstream).await.url.path(),
+        "/anthropic/v1/messages"
+    );
+    assert_eq!(
+        secrets
+            .requested()
+            .iter()
+            .filter(|name| name.as_str() == "AZURE_API_BASE")
+            .count(),
+        lookups
+    );
+}

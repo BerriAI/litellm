@@ -104,19 +104,17 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
-        &[
-            AZURE_OPENAI_API_KEY_ENV,
-            AZURE_API_KEY_ENV,
-            AZURE_API_BASE_ENV,
-        ]
+        &[AZURE_OPENAI_API_KEY_ENV, AZURE_API_KEY_ENV]
     }
 
     /// `AZURE_AD_TOKEN`, which Python reads through `get_secret_str` only when there is no key,
-    /// no caller credential and no `azure_ad_token` param.
+    /// no caller credential and no `azure_ad_token` param, and `AZURE_API_BASE`, which it reads
+    /// only when the call's base is empty (`api_base or get_secret_str("AZURE_API_BASE")`).
     fn deferred_secret_names(
         &self,
         headers: &Headers,
         api_key: Option<&str>,
+        api_base: Option<&str>,
         litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> &'static [&'static str] {
@@ -125,12 +123,15 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
             .get("azure_ad_token")
             .and_then(Value::as_str)
             .is_some_and(|token| !token.is_empty());
-        match has_caller_credential(headers)
+        let reads_token = !(has_caller_credential(headers)
             || resolve_azure_api_key(api_key, env_lookup).is_some()
-            || token_param
-        {
-            true => &[],
-            false => &[AZURE_AD_TOKEN_ENV],
+            || token_param);
+        let reads_base = api_base.is_none_or(str::is_empty);
+        match (reads_token, reads_base) {
+            (false, false) => &[],
+            (true, false) => &[AZURE_AD_TOKEN_ENV],
+            (false, true) => &[AZURE_API_BASE_ENV],
+            (true, true) => &[AZURE_AD_TOKEN_ENV, AZURE_API_BASE_ENV],
         }
     }
 
@@ -1173,6 +1174,7 @@ mod tests {
         let deferred = AZURE_ANTHROPIC_MESSAGES_CONFIG.deferred_secret_names(
             &Vec::new(),
             None,
+            None,
             &LitellmParams::default(),
             &|_| None,
         );
@@ -1212,10 +1214,46 @@ mod tests {
             AZURE_ANTHROPIC_MESSAGES_CONFIG.deferred_secret_names(
                 &headers,
                 api_key,
+                Some("https://call.example"),
                 &litellm_params(params),
                 &|_| None
             ),
             expected
+        );
+    }
+
+    #[rstest]
+    #[case::a_call_base(Some("https://call.example"), &[])]
+    #[case::a_blank_call_base(Some("   "), &[])]
+    #[case::an_empty_call_base(Some(""), &["AZURE_API_BASE"])]
+    #[case::no_call_base(None, &["AZURE_API_BASE"])]
+    fn the_azure_api_base_secret_is_read_only_where_python_reads_it(
+        #[case] api_base: Option<&str>,
+        #[case] expected: &[&str],
+    ) {
+        assert_eq!(
+            AZURE_ANTHROPIC_MESSAGES_CONFIG.deferred_secret_names(
+                &Vec::new(),
+                Some("sk-azure"),
+                api_base,
+                &LitellmParams::default(),
+                &|_| None
+            ),
+            expected
+        );
+    }
+
+    #[test]
+    fn without_a_key_or_a_call_base_both_deferred_secrets_are_read() {
+        assert_eq!(
+            AZURE_ANTHROPIC_MESSAGES_CONFIG.deferred_secret_names(
+                &Vec::new(),
+                None,
+                None,
+                &LitellmParams::default(),
+                &|_| None
+            ),
+            ["AZURE_AD_TOKEN", "AZURE_API_BASE"]
         );
     }
 }

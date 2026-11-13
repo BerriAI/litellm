@@ -73,6 +73,7 @@ pub trait BaseMessagesConfig: Sync {
         &self,
         _headers: &Headers,
         _api_key: Option<&str>,
+        _api_base: Option<&str>,
         _litellm_params: &LitellmParams,
         _env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> &'static [&'static str] {
