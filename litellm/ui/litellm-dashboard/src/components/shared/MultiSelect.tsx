@@ -26,6 +26,7 @@ export interface MultiSelectOption {
 
 interface MultiSelectProps {
   id?: string;
+  "aria-describedby"?: string;
   options: MultiSelectOption[];
   value?: string[];
   onValueChange: (value: string[]) => void;
@@ -56,6 +57,7 @@ const matchesQuery = (option: MultiSelectOption, query: string): boolean => {
 
 export function MultiSelect({
   id,
+  "aria-describedby": describedBy,
   options,
   value = [],
   onValueChange,
@@ -124,6 +126,7 @@ export function MultiSelect({
               ))}
               <ComboboxChipsInput
                 id={id}
+                aria-describedby={describedBy}
                 placeholder={loading ? t("shared.multiSelect.loading") : placeholder}
                 className="min-w-24"
                 aria-label={placeholder || undefined}

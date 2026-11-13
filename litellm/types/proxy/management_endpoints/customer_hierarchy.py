@@ -40,28 +40,31 @@ class Budget(BaseModel):
 
 class BudgetTemplate(Budget):
     name: str = Field(min_length=1)
-    is_default: bool = False
 
 
 class TemplatePatch(Budget):
     name: str | None = Field(default=None, min_length=1)
-    is_default: bool | None = None
 
 
 class OrganizationBudget(BudgetTemplate):
     budget_id: str
 
 
-class OrganizationPatch(BaseModel):
+class OrganizationFields(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     alias: str | None = None
     budget: Budget | None = None
 
 
-class OrganizationCreate(OrganizationPatch):
+class OrganizationPatch(OrganizationFields):
+    default_budget_template_id: str | None = None
+
+
+class OrganizationCreate(OrganizationFields):
     customer_org_id: str | None = None
     default_budgets: tuple[BudgetTemplate, ...] = ()
+    default_budget_template: str | None = Field(default=None, min_length=1)
 
 
 class TeamPatch(BaseModel):

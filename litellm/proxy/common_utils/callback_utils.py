@@ -159,6 +159,18 @@ def initialize_callbacks_on_proxy(
     if isinstance(value, list):
         imported_list: Final[list[Any]] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
+            if callback == "customer_budget_webhook":
+                from litellm.integrations.customer_budget_webhook import CustomerBudgetWebhook
+
+                imported_list.append(
+                    CustomerBudgetWebhook.from_config(
+                        string_keyed(_LOADED_CALLBACK.validate_python(callback_specific_params)).get(
+                            "customer_budget_webhook"
+                        )
+                    )
+                )
+                continue
+
             if isinstance(callback, str) and callback == "compression_interception":
                 from litellm.integrations.compression_interception.handler import (
                     CompressionInterceptionLogger,

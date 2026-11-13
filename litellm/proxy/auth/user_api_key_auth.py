@@ -251,6 +251,13 @@ def _route_requires_auth_despite_public(route: str, general_settings: dict | Non
     return False
 
 
+def _is_unauthenticated_public_route(route: str) -> bool:
+    """A route the builder serves without credentials, so nothing on the request may create or charge anything."""
+    return not _route_requires_auth_despite_public(route=route, general_settings=None) and (
+        route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(current_route=route)
+    )
+
+
 custom_litellm_key_header: Final = APIKeyHeader(
     name=SpecialHeaders.custom_litellm_api_key.value,
     auto_error=False,
@@ -2613,9 +2620,7 @@ async def user_api_key_auth_builder(
         """
 
         ######## Route Checks Before Reading DB / Cache for "token" ################
-        if not _route_requires_auth_despite_public(route=route, general_settings=general_settings) and (
-            route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(current_route=route)
-        ):
+        if _is_unauthenticated_public_route(route):
             # check if public endpoint
             return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
 
@@ -4550,7 +4555,7 @@ async def _authorize_authenticated_request(
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
         user_api_key_auth_obj.customer_identity_assertion = None  # rebind-ok: request-owned customer assertion
-        if customer_identity is not None:
+        if customer_identity is not None and not _is_unauthenticated_public_route(route):
             with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
                 try:
                     user_api_key_auth_obj.customer_hierarchy = await resolve_customer_hierarchy(  # rebind-ok: the gate updates the request-owned auth object in place
