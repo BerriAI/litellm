@@ -238,9 +238,25 @@ def _stored_user_email(metadata: Mapping[str, object]) -> str | None:
 _CUSTOMER_METADATA_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 
 
-def _stored_customer_identity_field(metadata: Mapping[object, object], key: str) -> str | None:
-    value: Final = metadata.get(key)
-    return value if isinstance(value, str) and value.strip() else None
+class _CustomerIdentityMetadata(TypedDict, total=False):
+    user_api_key_customer_org_id: ReadOnly[str]
+    user_api_key_customer_org_alias: ReadOnly[str]
+    user_api_key_customer_team_id: ReadOnly[str]
+    user_api_key_customer_team_alias: ReadOnly[str]
+    user_api_key_customer_member_id: ReadOnly[str]
+    user_api_key_customer_member_alias: ReadOnly[str]
+
+
+_CUSTOMER_IDENTITY_ADAPTER: Final[TypeAdapter[_CustomerIdentityMetadata]] = TypeAdapter(_CustomerIdentityMetadata)
+
+
+def _stored_customer_identity(metadata: Mapping[object, object]) -> _CustomerIdentityMetadata:
+    values: Final = {
+        key: value
+        for key in _CustomerIdentityMetadata.__annotations__
+        if isinstance(value := metadata.get(key), str) and value.strip()
+    }
+    return _CUSTOMER_IDENTITY_ADAPTER.validate_python(values)
 
 
 def _get_spend_logs_metadata(
@@ -331,22 +347,7 @@ def _get_spend_logs_metadata(
         **MappingProxyType(
             {key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key not in _STAMPED_METADATA_KEYS}
         ),
-        user_api_key_customer_org_id=_stored_customer_identity_field(customer_metadata, "user_api_key_customer_org_id"),
-        user_api_key_customer_org_alias=_stored_customer_identity_field(
-            customer_metadata, "user_api_key_customer_org_alias"
-        ),
-        user_api_key_customer_team_id=_stored_customer_identity_field(
-            customer_metadata, "user_api_key_customer_team_id"
-        ),
-        user_api_key_customer_team_alias=_stored_customer_identity_field(
-            customer_metadata, "user_api_key_customer_team_alias"
-        ),
-        user_api_key_customer_member_id=_stored_customer_identity_field(
-            customer_metadata, "user_api_key_customer_member_id"
-        ),
-        user_api_key_customer_member_alias=_stored_customer_identity_field(
-            customer_metadata, "user_api_key_customer_member_alias"
-        ),
+        **_stored_customer_identity(customer_metadata),
         **upstream_provider_metadata,
         autorouter_savings=autorouter_savings,
         autorouter_savings_estimate=autorouter_savings_estimate,

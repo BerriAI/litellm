@@ -146,6 +146,21 @@ def test_spend_log_omits_invalid_customer_identity(value: object) -> None:
     assert stored.get("user_api_key_customer_org_id") is None
 
 
+@pytest.mark.parametrize("metadata", (None, {}, {"user_api_key_user_id": "user"}))
+def test_spend_log_without_customer_identity_preserves_legacy_metadata(metadata: dict[str, str] | None) -> None:
+    fields: Final = frozenset(
+        (
+            "user_api_key_customer_org_id",
+            "user_api_key_customer_org_alias",
+            "user_api_key_customer_team_id",
+            "user_api_key_customer_team_alias",
+            "user_api_key_customer_member_id",
+            "user_api_key_customer_member_alias",
+        )
+    )
+    assert fields.isdisjoint(_get_spend_logs_metadata(metadata))
+
+
 def _get_additional_usage_values_for_usage(usage: litellm.Usage) -> dict:
     payload = get_logging_payload(
         kwargs={
@@ -7626,6 +7641,12 @@ def test_spend_logs_payload(model_id: str | None):
     expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {
         "is_silent_experiment",
         "upstream_provider",
+        "user_api_key_customer_org_id",
+        "user_api_key_customer_org_alias",
+        "user_api_key_customer_team_id",
+        "user_api_key_customer_team_alias",
+        "user_api_key_customer_member_id",
+        "user_api_key_customer_member_alias",
     }
 
     assert "metadata" in payload
