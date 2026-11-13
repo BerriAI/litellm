@@ -2222,6 +2222,37 @@ def test_bedrock_nova_embedding_sends_extra_body_fields_in_the_request_body(resp
 
 
 @pytest.mark.parametrize(
+    ("model_id", "extra_body", "mapped_field"),
+    [
+        ("amazon.nova-2-multimodal-embeddings-v1:0", {"segmentationConfig": {"durationSeconds": 10}}, "taskType"),
+        ("twelvelabs.marengo-embed-2-7-v1:0", {"minClipSec": 4}, "inputText"),
+    ],
+)
+def test_bedrock_async_invoke_embedding_sends_extra_body_fields_inside_model_input(
+    respx_mock: respx.MockRouter, model_id: str, extra_body: dict[str, object], mapped_field: str
+) -> None:
+    route = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke").mock(
+        return_value=httpx.Response(
+            200, json={"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"}
+        )
+    )
+
+    litellm.embedding(
+        model=f"bedrock/async_invoke/{model_id}",
+        input=[test_input],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        output_s3_uri="s3://my-bucket/out/",
+        extra_body={**extra_body, mapped_field: "from extra_body"},
+    )
+
+    body = json.loads(route.calls.last.request.read())
+    assert body.keys() == {"modelId", "modelInput", "outputDataConfig"}
+    assert extra_body.items() <= body["modelInput"].items()
+    assert body["modelInput"][mapped_field] != "from extra_body"
+
+
+@pytest.mark.parametrize(
     ("extra_body", "field", "expected"),
     [
         ({"dimensions": 512}, "dimensions", 256),
