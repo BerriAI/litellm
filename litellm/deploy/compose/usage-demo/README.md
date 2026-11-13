@@ -27,7 +27,7 @@ To confirm both workers are serving, `docker compose logs litellm | grep "Starte
 
 ## What the synthetic data contains
 
-Twelve calendar months ending today in UTC, so the current month is partial. A partial month only means the range stops inside it. It says nothing about whether every day in it is fully aggregated. Eleven model groups across OpenAI, Anthropic, Bedrock, Gemini, Azure, Vertex AI and a subscription provider, which is more than the eight leaders the charts name, so the rest fall into Other. `demo-coding-assistant` starts in the fourth month and grows fast while `demo-legacy-completion` declines and stops after the eighth, which shows the model mix shifting. Prompt tokens include cache reads and writes as a subset. `demo-image-gen` has per-request spend with zero tokens and `demo-subscription-chat` has tokens with zero metered spend. The fifth month has no traffic at all, so it shows up as an empty month rather than disappearing.
+Twelve calendar months ending today in UTC, so the current month is partial. A partial month only means the range stops inside it. It says nothing about whether every day in it is fully aggregated. Eleven model groups across OpenAI, Anthropic, Bedrock, Gemini, Azure, Vertex AI and a subscription provider, which is more than the eight leaders the charts name, so the rest fall into Other. `demo-coding-assistant` starts in the fourth month and grows fast while `demo-legacy-completion` declines and stops after the eighth, which shows the model mix shifting. Prompt tokens include cache reads and writes as a subset. `demo-image-gen` has per-request spend with zero tokens and `demo-subscription-chat` has tokens with zero recorded spend. The fifth month has no traffic at all, so it shows up as an empty month rather than disappearing.
 
 ## Manual QA checklist
 
@@ -38,7 +38,7 @@ Pick Last 12 months in the date picker (shortcut `12M`) unless a step says other
 3. The current month's tick reads like `Nov 1–12` and the note under the charts lists it as a partial period. The fifth month shows a zero total instead of being skipped.
 4. Hover or focus the long `demo-eu-regional-assistant-...` legend entry. The full name appears. In the Contribution by model table it wraps instead of being cut off.
 5. The table lists every model group, including the ones grouped as Other, each tagged In Other with the grey swatch. The Total row's tokens and spend match the sums of the bars in the charts.
-6. `demo-image-gen` shows "Spend without tokens" in the Observed $ / 1M tokens column, and `demo-subscription-chat` shows "No metered spend". No row shows Infinity or NaN.
+6. `demo-image-gen` shows "Spend without tokens" in the Observed $ / 1M tokens column, and `demo-subscription-chat` shows "No recorded spend". No row shows Infinity or NaN.
 7. With Last 3 months selected, the Spend, Total Tokens and Avg cost / request tiles each show a change line such as `+18.4% vs Jun 1 – Aug 12`, which compares against the three months before with the same number of elapsed days in the last month. Month to date compares against the same elapsed days of last month, and Last 7 days against the 8 days before it. With 12M the previous twelve months hold no seeded data, so the tiles read New, the expected wording for a zero baseline.
 8. Switch to Weekly and Daily. Bars and totals regroup, colors and model order stay the same, and totals above bars disappear once there are too many bars to label.
 9. Switch Chart view to Requests. One stacked requests chart replaces the pair, with the same models and colors.
@@ -46,7 +46,7 @@ Pick Last 12 months in the date picker (shortcut `12M`) unless a step says other
 11. Narrow the window to phone width. Controls wrap, charts keep full width and the table scrolls horizontally.
 12. Export data from the Overview tab still downloads the same range and scope as the page shows.
 13. Pick a user from the user filter (for example `usage-demo-user-b`). Stats, charts and table only show that user's five models from the research and coding keys, and the comparison follows the same filter.
-14. Open the Claude Code client (client picker in the header, or its row under Top agents) with the all-users scope and 12M. The panel shows the same paired Tokens over Spend monthly charts and contribution table for `demo-coding-assistant` and `demo-subscription-chat`, whose totals match the panel's summary tiles. The subscription model contributes tokens with no metered spend.
+14. Open the Claude Code client (client picker in the header, or its row under Top agents) with the all-users scope and 12M. The panel shows the same paired Tokens over Spend monthly charts and contribution table for `demo-coding-assistant` and `demo-subscription-chat`, whose totals match the panel's summary tiles. The subscription model contributes tokens with no recorded spend.
 15. In that panel, a person or team scope reads individual spend logs, which this demo does not seed, so it shows no Claude Code usage. That is expected here and not a regression.
 16. Open the Models, Keys and Endpoints tabs. They behave as before and fire no previous-period request.
 

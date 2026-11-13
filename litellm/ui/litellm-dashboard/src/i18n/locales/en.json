@@ -15456,8 +15456,8 @@
         "percent": "{{value}}%",
         "notApplicable": "n/a",
         "spendWithoutTokens": "Spend without tokens",
-        "noMeteredSpend": "No metered spend",
-        "rateNote": "Observed $ / 1M tokens is recorded spend divided by total tokens in this range, including cache, per-request and flat charges. It is not a list price. Models outside the top 8 share the Other color in the charts."
+        "noMeteredSpend": "No recorded spend",
+        "rateNote": "Observed $ / 1M tokens is recorded spend divided by total tokens in this range, with cached tokens counted once inside total tokens. It is not a provider list price and does not add separately reported costs. Models outside the top 8 share the Other color in the charts."
       }
     },
     "breakdownChart": {
