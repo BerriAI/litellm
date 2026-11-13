@@ -102,6 +102,11 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         path_prefixes=("/policies/resolve", "/policies/attachments/estimate-impact"),
     ),
     LazyFeature(
+        name="external_agents",
+        module_path="litellm.proxy.agent_endpoints.external_agents.endpoints",
+        path_prefixes=("/v1/external_agents", "/grok_bot/inference_hook/"),
+    ),
+    LazyFeature(
         name="agents",
         module_path="litellm.proxy.agent_endpoints.endpoints",
         path_prefixes=("/v1/agents", "/agents", "/agent/"),

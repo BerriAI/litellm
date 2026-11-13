@@ -737,6 +737,16 @@ class LiteLLMRoutes(enum.Enum):
             "/management/v1/customer_members/{customer_member_id}",
             "/management/v1/customer_members/daily/activity",
         ]
+        + [
+            "/v1/external_agents/",
+            "/v1/external_agents/sources",
+            "/v1/external_agents/sources/{id}",
+            "/v1/external_agents/summary",
+            "/v1/external_agents/bulk",
+            "/v1/external_agents/policies",
+            "/v1/external_agents/actors/bulk",
+            "/v1/external_agents/decisions",
+        ]
         + key_management_routes
         + mcp_management_routes
         + list(agent_management_routes)
@@ -803,6 +813,7 @@ class LiteLLMRoutes(enum.Enum):
             "/public/skill_hub",
             "/public/litellm_model_cost_map",
             "/moyai/connect/exchange",
+            "/grok_bot/inference_hook/{source_id}",
         )
     )
 

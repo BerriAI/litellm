@@ -6960,6 +6960,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/grok_bot/inference_hook/{source_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Inference Hook
+         * @description Authenticate a signed GrokBot frame and return a content-free governance verdict.
+         */
+        post: operations["inference_hook_grok_bot_inference_hook__source_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/guardrails": {
         parameters: {
             query?: never;
@@ -21512,6 +21532,174 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/external_agents/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Agents
+         * @description List discovered bots, optionally restricting results to governance exceptions.
+         */
+        get: operations["list_agents_v1_external_agents__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/external_agents/actors/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Actors
+         * @description Map source-scoped external actor ids to existing LiteLLM users.
+         */
+        post: operations["bulk_actors_v1_external_agents_actors_bulk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/external_agents/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Bulk Agents
+         * @description Assign bot teams, confirm ownership, and update status in bulk.
+         */
+        patch: operations["bulk_agents_v1_external_agents_bulk_patch"];
+        trace?: never;
+    };
+    "/v1/external_agents/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Decisions
+         * @description List content-free governance decisions with stable pagination ordering.
+         */
+        get: operations["list_decisions_v1_external_agents_decisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/external_agents/policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Policies
+         * @description List the source default and team policies.
+         */
+        get: operations["get_policies_v1_external_agents_policies_get"];
+        /**
+         * Put Policy
+         * @description Upsert the team policy or source-wide default when team_id is null.
+         */
+        put: operations["put_policy_v1_external_agents_policies_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/external_agents/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Sources
+         * @description List registered sources with secrets redacted.
+         */
+        get: operations["list_sources_v1_external_agents_sources_get"];
+        put?: never;
+        /**
+         * Create Source
+         * @description Register a signed hook source without exposing its signing secrets.
+         */
+        post: operations["create_source_v1_external_agents_sources_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/external_agents/sources/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Source
+         * @description Update a source and retain its previous secret during signing key rotation.
+         */
+        patch: operations["patch_source_v1_external_agents_sources__id__patch"];
+        trace?: never;
+    };
+    "/v1/external_agents/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Summary
+         * @description Summarize discovered bots and unresolved governance exceptions.
+         */
+        get: operations["summary_v1_external_agents_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/extraction": {
         parameters: {
             query?: never;
@@ -26979,6 +27167,20 @@ export interface components {
             /** Results */
             results: components["schemas"]["TagActiveUsersResponse"][];
         };
+        /** ActorMapping */
+        ActorMapping: {
+            /** External Actor Id */
+            external_actor_id: string;
+            /** User Id */
+            user_id: string;
+        };
+        /** ActorsPut */
+        ActorsPut: {
+            /** Mappings */
+            mappings: components["schemas"]["ActorMapping"][];
+            /** Source Id */
+            source_id: string;
+        };
         /** AdaptiveRouterWeights */
         AdaptiveRouterWeights: {
             /**
@@ -27032,6 +27234,48 @@ export interface components {
             action_allowed?: boolean | null;
             /** Tools */
             tools: string[];
+        };
+        /** Agent */
+        Agent: {
+            /** Display Name */
+            display_name?: string | null;
+            /** External Agent Id */
+            external_agent_id: string;
+            /**
+             * First Seen At
+             * Format: date-time
+             */
+            first_seen_at: string;
+            /** Id */
+            id: string;
+            /** Last Actor Id */
+            last_actor_id?: string | null;
+            /** Last Model */
+            last_model?: string | null;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+            /**
+             * Owner Inferred
+             * @default false
+             */
+            owner_inferred: boolean;
+            /** Owner User Id */
+            owner_user_id?: string | null;
+            /** Request Count */
+            request_count: number;
+            /** Source Id */
+            source_id: string;
+            /**
+             * Status
+             * @default active
+             * @enum {string}
+             */
+            status: "active" | "blocked";
+            /** Team Id */
+            team_id?: string | null;
         };
         /**
          * AgentCapabilities
@@ -27396,6 +27640,19 @@ export interface components {
             mcp_toolsets?: string[] | null;
             /** Models */
             models?: string[] | null;
+        };
+        /** AgentPatch */
+        AgentPatch: {
+            /** Agent Ids */
+            agent_ids: string[];
+            /** Display Name */
+            display_name?: string | null;
+            /** Owner User Id */
+            owner_user_id?: string | null;
+            /** Status */
+            status?: ("active" | "blocked") | null;
+            /** Team Id */
+            team_id?: string | null;
         };
         /**
          * AgentProvider
@@ -33474,6 +33731,49 @@ export interface components {
              * @default 0
              */
             total_tokens: number;
+        };
+        /** Decision */
+        Decision: {
+            /** Actor Id */
+            actor_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Enforced */
+            enforced: boolean;
+            /** External Agent Id */
+            external_agent_id: string;
+            /** Frame Type */
+            frame_type: string;
+            /** Policy Id */
+            policy_id?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Request Id */
+            request_id: string;
+            /** Source Id */
+            source_id: string;
+            /** Team Id */
+            team_id?: string | null;
+            /**
+             * Tool Names
+             * @default []
+             */
+            tool_names: string[];
+            /** User Id */
+            user_id?: string | null;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "allow" | "deny";
+            /**
+             * Would Verdict
+             * @enum {string}
+             */
+            would_verdict: "allow" | "deny";
         };
         /**
          * DecisionModelCheck
@@ -43443,6 +43743,30 @@ export interface components {
              */
             version?: string | null;
         };
+        /** Policy */
+        Policy: {
+            /**
+             * Allow Unmapped Actors
+             * @default true
+             */
+            allow_unmapped_actors: boolean;
+            /**
+             * Blocked Tools
+             * @default []
+             */
+            blocked_tools: string[];
+            /** Policy Id */
+            policy_id: string;
+            /**
+             * Require Owner
+             * @default false
+             */
+            require_owner: boolean;
+            /** Source Id */
+            source_id: string;
+            /** Team Id */
+            team_id?: string | null;
+        };
         /**
          * PolicyAttachmentCreateRequest
          * @description Request body for creating a policy attachment.
@@ -43850,6 +44174,28 @@ export interface components {
              * @description Name of the matched policy.
              */
             policy_name: string;
+        };
+        /** PolicyPut */
+        PolicyPut: {
+            /**
+             * Allow Unmapped Actors
+             * @default true
+             */
+            allow_unmapped_actors: boolean;
+            /**
+             * Blocked Tools
+             * @default []
+             */
+            blocked_tools: string[];
+            /**
+             * Require Owner
+             * @default false
+             */
+            require_owner: boolean;
+            /** Source Id */
+            source_id: string;
+            /** Team Id */
+            team_id?: string | null;
         };
         /**
          * PolicyResolveRequest
@@ -48599,6 +48945,54 @@ export interface components {
              */
             use_llm: boolean;
         };
+        /** Source */
+        Source: {
+            /** Default Policy Id */
+            default_policy_id?: string | null;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Mode
+             * @default shadow
+             * @enum {string}
+             */
+            mode: "shadow" | "enforce";
+            /** Source Id */
+            source_id: string;
+            /** Tenant Id */
+            tenant_id?: string | null;
+            /**
+             * Vendor
+             * @default grok_bot
+             * @constant
+             */
+            vendor: "grok_bot";
+        };
+        /** SourceCreate */
+        SourceCreate: {
+            /** Display Name */
+            display_name: string;
+            /**
+             * Mode
+             * @default shadow
+             * @enum {string}
+             */
+            mode: "shadow" | "enforce";
+            /**
+             * Signing Secret
+             * Format: password
+             */
+            signing_secret: string;
+        };
+        /** SourcePatch */
+        SourcePatch: {
+            /** Display Name */
+            display_name?: string | null;
+            /** Mode */
+            mode?: ("shadow" | "enforce") | null;
+            /** Signing Secret */
+            signing_secret?: string | null;
+        };
         /** Span */
         Span: {
             /** Agent */
@@ -52303,6 +52697,11 @@ export interface components {
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
+        /** Updated */
+        Updated: {
+            /** Updated */
+            updated: number;
+        };
         /** UploadPluginRequest */
         UploadPluginRequest: {
             /** @description Plugin author */
@@ -53331,6 +53730,18 @@ export interface components {
             } | null;
             /** Vector Store Name */
             vector_store_name?: string | null;
+        };
+        /** Verdict */
+        Verdict: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "allow" | "deny";
+            /** Deny Reason */
+            deny_reason?: string | null;
+            /** Reference Id */
+            reference_id?: string | null;
         };
         /**
          * Wait
@@ -65319,6 +65730,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    inference_hook_grok_bot_inference_hook__source_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Verdict"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -85091,6 +85537,326 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agents_v1_external_agents__get: {
+        parameters: {
+            query?: {
+                source_id?: string | null;
+                team_id?: string | null;
+                exceptions_only?: boolean;
+                search?: string | null;
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Agent"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_actors_v1_external_agents_actors_bulk_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActorsPut"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Updated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_agents_v1_external_agents_bulk_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Updated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_decisions_v1_external_agents_decisions_get: {
+        parameters: {
+            query?: {
+                source_id?: string | null;
+                external_agent_id?: string | null;
+                verdict?: ("allow" | "deny") | null;
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Decision"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_policies_v1_external_agents_policies_get: {
+        parameters: {
+            query: {
+                source_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Policy"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_policy_v1_external_agents_policies_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyPut"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Policy"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sources_v1_external_agents_sources_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Source"][];
+                };
+            };
+        };
+    };
+    create_source_v1_external_agents_sources_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Source"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_source_v1_external_agents_sources__id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourcePatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Source"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    summary_v1_external_agents_summary_get: {
+        parameters: {
+            query: {
+                source_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Summary"];
                 };
             };
             /** @description Validation Error */

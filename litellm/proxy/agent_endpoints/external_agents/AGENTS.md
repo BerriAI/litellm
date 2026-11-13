@@ -1,0 +1,1 @@
+External agent hooks govern requests executed outside LiteLLM. Adapters authenticate and normalize vendor frames. Governance owns discovery, policy evaluation and content-free decisions. The public hook route is the single call site for governance evaluation. Never persist messages or return signing secrets.

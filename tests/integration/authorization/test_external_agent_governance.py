@@ -1,0 +1,251 @@
+import base64
+import hashlib
+import hmac
+import json
+import time
+import uuid
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
+from typing import Final, Literal
+
+import httpx
+import pytest
+from pydantic import JsonValue, TypeAdapter
+
+from tests.integration._support.client import Gateway, object_value, string_value
+from tests.integration._support.database import write_rows
+
+OBJECTS: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
+
+
+@dataclass(frozen=True, slots=True)
+class Hook:
+    gateway: Gateway
+    source_id: str
+    secret: str = field(repr=False)
+
+    def send(
+        self,
+        bot: str,
+        actor: str = "member",
+        *,
+        request_id: str | None = None,
+        tool: str | None = None,
+        toolset: str | None = None,
+        application: str = "grok-bot",
+        tenant: str = "tenant",
+        signature_valid: bool = True,
+    ) -> httpx.Response:
+        identity: Final = request_id or str(uuid.uuid4())
+        body: Final = json.dumps(
+            {
+                "request_id": identity,
+                "type": "tool_call" if tool else "prompt",
+                "session_id": bot,
+                "tenant_id": tenant,
+                "actor": {"type": "user", "id": actor, "email_address": None},
+                "source": {"application": application},
+                "model": "external-model",
+                "metadata": {},
+                "messages": [
+                    {
+                        "role": "assistant" if tool else "user",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "tool_name": tool,
+                                "input": {"text": "PRIVATE-CONTENT-MARKER"},
+                                "tool_info": {"type": "mcp", "toolset_name": toolset},
+                            }
+                            if tool
+                            else {"type": "text", "text": "PRIVATE-CONTENT-MARKER"},
+                        ],
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        ).encode()
+        timestamp: Final = str(int(time.time()))
+        signed: Final = f"{identity}.{timestamp}.".encode() + body
+        digest: Final = hmac.new(base64.b64decode(self.secret[6:]), signed, hashlib.sha256).digest()
+        return self.gateway.client.post(
+            "/grok_bot/inference_hook/" + self.source_id,
+            content=body,
+            headers={
+                "Content-Type": "application/json",
+                "webhook-id": identity,
+                "webhook-timestamp": timestamp,
+                "webhook-signature": "v1," + (base64.b64encode(digest).decode() if signature_valid else "invalid"),
+                "x-litellm-user-role": "proxy_admin",
+            },
+        )
+
+    def agents(self, exceptions_only: bool = False) -> tuple[Mapping[str, JsonValue], ...]:
+        response: Final = self.gateway.request(
+            "GET",
+            "/v1/external_agents/",
+            params={
+                "source_id": self.source_id,
+                "exceptions_only": str(exceptions_only).lower(),
+            },
+        )
+        assert response.status_code == 200, response.text
+        return OBJECTS.validate_json(response.content)
+
+    def policy(self, team_id: str | None = None, blocked_tools: tuple[str, ...] = ()) -> None:
+        response: Final = self.gateway.request(
+            "PUT",
+            "/v1/external_agents/policies",
+            {
+                "source_id": self.source_id,
+                "team_id": team_id,
+                "blocked_tools": list(blocked_tools),
+            },
+        )
+        assert response.status_code == 200, response.text
+
+
+@pytest.fixture
+def hook(gateway: Gateway) -> Iterator[Hook]:
+    secret: Final = "whsec_" + base64.b64encode(uuid.uuid4().bytes + uuid.uuid4().bytes).decode()
+    source: Final = gateway.post(
+        "/v1/external_agents/sources",
+        {
+            "display_name": "Integration hook",
+            "signing_secret": secret,
+            "mode": "enforce",
+        },
+    )
+    source_id: Final = string_value(source["source_id"])
+    try:
+        yield Hook(gateway, source_id, secret)
+    finally:
+        write_rows('DELETE FROM "ExternalAgentDecision" WHERE source_id=%s', (source_id,))
+        write_rows('DELETE FROM "ExternalAgentActor" WHERE source_id=%s', (source_id,))
+        write_rows('DELETE FROM "ExternalAgentPolicy" WHERE source_id=%s', (source_id,))
+        write_rows('DELETE FROM "ExternalAgent" WHERE source_id=%s', (source_id,))
+        write_rows('DELETE FROM "ExternalAgentSource" WHERE source_id=%s', (source_id,))
+        assert gateway.rows('SELECT source_id FROM "ExternalAgentSource" WHERE source_id=%s', (source_id,)) == []
+
+
+def test_discovery_retry_team_inheritance_and_bulk_resolution(hook: Hook) -> None:
+    with hook.gateway.scenario() as scenario:
+        team: Final = scenario.team()
+        other_team: Final = scenario.team()
+        single: Final = scenario.user(teams=[team])
+        multiple: Final = scenario.user(teams=[team, other_team])
+        hook.gateway.post(
+            "/v1/external_agents/actors/bulk",
+            {
+                "source_id": hook.source_id,
+                "mappings": [
+                    {"external_actor_id": "single", "user_id": single},
+                    {"external_actor_id": "multiple", "user_id": multiple},
+                ],
+            },
+        )
+        request_id: Final = str(uuid.uuid4())
+        first: Final = hook.send("shared-bot", "single", request_id=request_id)
+        retry: Final = hook.send("shared-bot", "single", request_id=request_id)
+        assert first.status_code == retry.status_code == 200, (first.text, retry.text)
+        assert first.json() == retry.json() == {"action": "allow"}
+        discovered: Final = hook.agents()[0]
+        assert (
+            discovered["team_id"],
+            discovered["owner_user_id"],
+            discovered["owner_inferred"],
+            discovered["request_count"],
+        ) == (team, single, True, 1)
+        multi: Final = hook.send("multi-team-bot", "multiple")
+        assert multi.status_code == 200 and multi.json() == {"action": "allow"}, multi.text
+        multi_agent: Final = next(agent for agent in hook.agents() if agent["external_agent_id"] == "multi-team-bot")
+        assert multi_agent["team_id"] is None
+        assert multi_agent["owner_user_id"] == multiple
+        hook.policy(team, ("Shell",))
+        before: Final = hook.gateway.get("/v1/external_agents/summary", {"source_id": hook.source_id})
+        assert {
+            key: before[key]
+            for key in ("discovered", "covered_by_team_policy", "needs_owner", "unmapped_actors", "denied_24h")
+        } == {
+            "discovered": 2,
+            "covered_by_team_policy": 1,
+            "needs_owner": 2,
+            "unmapped_actors": 0,
+            "denied_24h": 0,
+        }
+        assert len(hook.agents(exceptions_only=True)) == 2
+        assigned: Final = hook.gateway.request(
+            "PATCH",
+            "/v1/external_agents/bulk",
+            {
+                "agent_ids": [agent["id"] for agent in hook.agents()],
+                "team_id": other_team,
+                "owner_user_id": multiple,
+            },
+        )
+        assert assigned.status_code == 200 and assigned.json() == {"updated": 2}, assigned.text
+        following: Final = hook.send("shared-bot", "single")
+        assert following.status_code == 200, following.text
+        preserved: Final = next(agent for agent in hook.agents() if agent["external_agent_id"] == "shared-bot")
+        assert (preserved["team_id"], preserved["owner_user_id"], preserved["owner_inferred"]) == (
+            other_team,
+            multiple,
+            False,
+        )
+        assert hook.agents(exceptions_only=True) == ()
+        rows: Final = hook.gateway.rows(
+            'SELECT to_jsonb(d) AS decision FROM "ExternalAgentDecision" d WHERE source_id=%s AND request_id=%s',
+            (hook.source_id, request_id),
+        )
+        assert len(rows) == 1
+        assert "PRIVATE-CONTENT-MARKER" not in json.dumps(rows)
+
+
+def test_config_test_is_not_discovered_and_tenant_or_signature_mismatch_is_rejected(hook: Hook) -> None:
+    test: Final = hook.send("test-bot", application="config-test", tenant="config-tenant")
+    assert test.status_code == 200 and test.json() == {"action": "allow"}, test.text
+    assert hook.agents() == ()
+    assert (
+        hook.gateway.rows('SELECT request_id FROM "ExternalAgentDecision" WHERE source_id=%s', (hook.source_id,)) == []
+    )
+    real: Final = hook.send("real-bot")
+    wrong_tenant: Final = hook.send("other-bot", tenant="other-tenant")
+    forged: Final = hook.send("forged-bot", signature_valid=False)
+    assert real.status_code == 200, real.text
+    assert wrong_tenant.status_code == 401, wrong_tenant.text
+    assert forged.status_code == 401, forged.text
+    assert tuple(agent["external_agent_id"] for agent in hook.agents()) == ("real-bot",)
+
+
+@pytest.mark.parametrize("mode,action", [("enforce", "deny"), ("shadow", "allow")])
+def test_blocked_mcp_toolset_is_logged_and_shadow_mode_allows(
+    hook: Hook, mode: Literal["enforce", "shadow"], action: str
+) -> None:
+    response: Final = hook.gateway.request("PATCH", "/v1/external_agents/sources/" + hook.source_id, {"mode": mode})
+    assert response.status_code == 200, response.text
+    hook.policy(blocked_tools=("restricted-server",))
+    request_id: Final = str(uuid.uuid4())
+    verdict: Final = hook.send("mcp-bot", tool="CallMcpTool", toolset="RESTRICTED-SERVER", request_id=request_id)
+    assert verdict.status_code == 200 and verdict.json()["action"] == action, verdict.text
+    decisions: Final = hook.gateway.rows(
+        'SELECT verdict,would_verdict,enforced FROM "ExternalAgentDecision" WHERE request_id=%s',
+        (request_id,),
+    )
+    assert decisions == [{"verdict": action, "would_verdict": "deny", "enforced": mode == "enforce"}]
+    summary: Final = hook.gateway.get("/v1/external_agents/summary", {"source_id": hook.source_id})
+    assert (summary["discovered"], summary["denied_24h"], summary["unmapped_actors"]) == (1, 1, 1)
+    assert len(hook.agents(exceptions_only=True)) == 1
+
+
+def test_secret_rotation_retains_previous_signatures_without_returning_secrets(hook: Hook) -> None:
+    new_secret: Final = "whsec_" + base64.b64encode(uuid.uuid4().bytes).decode()
+    response: Final = hook.gateway.request(
+        "PATCH", "/v1/external_agents/sources/" + hook.source_id, {"signing_secret": new_secret}
+    )
+    assert response.status_code == 200, response.text
+    serialized: Final = object_value(response.json())
+    assert "signing_secret" not in serialized and "previous_signing_secret" not in serialized
+    old: Final = hook.send("old-secret-bot")
+    new: Final = Hook(hook.gateway, hook.source_id, new_secret).send("new-secret-bot")
+    assert old.status_code == new.status_code == 200, (old.text, new.text)
+    assert old.json() == new.json() == {"action": "allow"}

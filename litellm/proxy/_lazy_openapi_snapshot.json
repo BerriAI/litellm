@@ -15931,6 +15931,1397 @@
       }
     }
   },
+  "external_agents": {
+    "components": {
+      "schemas": {
+        "ActorMapping": {
+          "properties": {
+            "external_actor_id": {
+              "minLength": 1,
+              "title": "External Actor Id",
+              "type": "string"
+            },
+            "user_id": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "external_actor_id",
+            "user_id"
+          ],
+          "title": "ActorMapping",
+          "type": "object"
+        },
+        "ActorsPut": {
+          "properties": {
+            "mappings": {
+              "items": {
+                "$ref": "#/components/schemas/ActorMapping"
+              },
+              "maxItems": 1000,
+              "minItems": 1,
+              "title": "Mappings",
+              "type": "array"
+            },
+            "source_id": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source_id",
+            "mappings"
+          ],
+          "title": "ActorsPut",
+          "type": "object"
+        },
+        "Agent": {
+          "properties": {
+            "display_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Display Name"
+            },
+            "external_agent_id": {
+              "title": "External Agent Id",
+              "type": "string"
+            },
+            "first_seen_at": {
+              "format": "date-time",
+              "title": "First Seen At",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "last_actor_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Actor Id"
+            },
+            "last_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Model"
+            },
+            "last_seen_at": {
+              "format": "date-time",
+              "title": "Last Seen At",
+              "type": "string"
+            },
+            "owner_inferred": {
+              "default": false,
+              "title": "Owner Inferred",
+              "type": "boolean"
+            },
+            "owner_user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner User Id"
+            },
+            "request_count": {
+              "title": "Request Count",
+              "type": "integer"
+            },
+            "source_id": {
+              "title": "Source Id",
+              "type": "string"
+            },
+            "status": {
+              "default": "active",
+              "enum": [
+                "active",
+                "blocked"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            }
+          },
+          "required": [
+            "id",
+            "source_id",
+            "external_agent_id",
+            "first_seen_at",
+            "last_seen_at",
+            "request_count"
+          ],
+          "title": "Agent",
+          "type": "object"
+        },
+        "AgentPatch": {
+          "properties": {
+            "agent_ids": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 1000,
+              "minItems": 1,
+              "title": "Agent Ids",
+              "type": "array"
+            },
+            "display_name": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Display Name"
+            },
+            "owner_user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner User Id"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "active",
+                    "blocked"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            }
+          },
+          "required": [
+            "agent_ids"
+          ],
+          "title": "AgentPatch",
+          "type": "object"
+        },
+        "Decision": {
+          "properties": {
+            "actor_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor Id"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "enforced": {
+              "title": "Enforced",
+              "type": "boolean"
+            },
+            "external_agent_id": {
+              "title": "External Agent Id",
+              "type": "string"
+            },
+            "frame_type": {
+              "title": "Frame Type",
+              "type": "string"
+            },
+            "policy_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Policy Id"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Reason"
+            },
+            "request_id": {
+              "title": "Request Id",
+              "type": "string"
+            },
+            "source_id": {
+              "title": "Source Id",
+              "type": "string"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            },
+            "tool_names": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Tool Names",
+              "type": "array"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            },
+            "verdict": {
+              "enum": [
+                "allow",
+                "deny"
+              ],
+              "title": "Verdict",
+              "type": "string"
+            },
+            "would_verdict": {
+              "enum": [
+                "allow",
+                "deny"
+              ],
+              "title": "Would Verdict",
+              "type": "string"
+            }
+          },
+          "required": [
+            "request_id",
+            "source_id",
+            "external_agent_id",
+            "frame_type",
+            "verdict",
+            "would_verdict",
+            "enforced",
+            "created_at"
+          ],
+          "title": "Decision",
+          "type": "object"
+        },
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "Policy": {
+          "properties": {
+            "allow_unmapped_actors": {
+              "default": true,
+              "title": "Allow Unmapped Actors",
+              "type": "boolean"
+            },
+            "blocked_tools": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Blocked Tools",
+              "type": "array"
+            },
+            "policy_id": {
+              "title": "Policy Id",
+              "type": "string"
+            },
+            "require_owner": {
+              "default": false,
+              "title": "Require Owner",
+              "type": "boolean"
+            },
+            "source_id": {
+              "title": "Source Id",
+              "type": "string"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            }
+          },
+          "required": [
+            "policy_id",
+            "source_id"
+          ],
+          "title": "Policy",
+          "type": "object"
+        },
+        "PolicyPut": {
+          "properties": {
+            "allow_unmapped_actors": {
+              "default": true,
+              "title": "Allow Unmapped Actors",
+              "type": "boolean"
+            },
+            "blocked_tools": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 1000,
+              "title": "Blocked Tools",
+              "type": "array"
+            },
+            "require_owner": {
+              "default": false,
+              "title": "Require Owner",
+              "type": "boolean"
+            },
+            "source_id": {
+              "title": "Source Id",
+              "type": "string"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            }
+          },
+          "required": [
+            "source_id"
+          ],
+          "title": "PolicyPut",
+          "type": "object"
+        },
+        "Source": {
+          "properties": {
+            "default_policy_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Default Policy Id"
+            },
+            "display_name": {
+              "title": "Display Name",
+              "type": "string"
+            },
+            "mode": {
+              "default": "shadow",
+              "enum": [
+                "shadow",
+                "enforce"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "source_id": {
+              "title": "Source Id",
+              "type": "string"
+            },
+            "tenant_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            },
+            "vendor": {
+              "const": "grok_bot",
+              "default": "grok_bot",
+              "title": "Vendor",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source_id",
+            "display_name"
+          ],
+          "title": "Source",
+          "type": "object"
+        },
+        "SourceCreate": {
+          "properties": {
+            "display_name": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Display Name",
+              "type": "string"
+            },
+            "mode": {
+              "default": "shadow",
+              "enum": [
+                "shadow",
+                "enforce"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "signing_secret": {
+              "format": "password",
+              "title": "Signing Secret",
+              "type": "string",
+              "writeOnly": true
+            }
+          },
+          "required": [
+            "display_name",
+            "signing_secret"
+          ],
+          "title": "SourceCreate",
+          "type": "object"
+        },
+        "SourcePatch": {
+          "properties": {
+            "display_name": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Display Name"
+            },
+            "mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "shadow",
+                    "enforce"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mode"
+            },
+            "signing_secret": {
+              "anyOf": [
+                {
+                  "format": "password",
+                  "type": "string",
+                  "writeOnly": true
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Signing Secret"
+            }
+          },
+          "title": "SourcePatch",
+          "type": "object"
+        },
+        "Summary": {
+          "properties": {
+            "covered_by_team_policy": {
+              "title": "Covered By Team Policy",
+              "type": "integer"
+            },
+            "denied_24h": {
+              "title": "Denied 24H",
+              "type": "integer"
+            },
+            "discovered": {
+              "title": "Discovered",
+              "type": "integer"
+            },
+            "last_event_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Event At"
+            },
+            "needs_owner": {
+              "title": "Needs Owner",
+              "type": "integer"
+            },
+            "unmapped_actors": {
+              "title": "Unmapped Actors",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "discovered",
+            "covered_by_team_policy",
+            "needs_owner",
+            "unmapped_actors",
+            "denied_24h",
+            "last_event_at"
+          ],
+          "title": "Summary",
+          "type": "object"
+        },
+        "Updated": {
+          "properties": {
+            "updated": {
+              "title": "Updated",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "updated"
+          ],
+          "title": "Updated",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        },
+        "Verdict": {
+          "properties": {
+            "action": {
+              "enum": [
+                "allow",
+                "deny"
+              ],
+              "title": "Action",
+              "type": "string"
+            },
+            "deny_reason": {
+              "anyOf": [
+                {
+                  "maxLength": 500,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Deny Reason"
+            },
+            "reference_id": {
+              "anyOf": [
+                {
+                  "maxLength": 50,
+                  "pattern": "^[A-Za-z0-9._:/-]+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Reference Id"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "title": "Verdict",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/grok_bot/inference_hook/{source_id}": {
+        "post": {
+          "description": "Authenticate a signed GrokBot frame and return a content-free governance verdict.",
+          "operationId": "inference_hook_grok_bot_inference_hook__source_id__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Verdict"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Inference Hook",
+          "tags": [
+            "external_agents"
+          ]
+        }
+      },
+      "/v1/external_agents/": {
+        "get": {
+          "description": "List discovered bots, optionally restricting results to governance exceptions.",
+          "operationId": "list_agents_v1_external_agents__get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "source_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Source Id"
+              }
+            },
+            {
+              "in": "query",
+              "name": "team_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Team Id"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exceptions_only",
+              "required": false,
+              "schema": {
+                "default": false,
+                "title": "Exceptions Only",
+                "type": "boolean"
+              }
+            },
+            {
+              "in": "query",
+              "name": "search",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Search"
+              }
+            },
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 100,
+                "maximum": 1000,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/Agent"
+                    },
+                    "title": "Response List Agents V1 External Agents  Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Agents",
+          "tags": [
+            "external_agents"
+          ]
+        }
+      },
+      "/v1/external_agents/actors/bulk": {
+        "post": {
+          "description": "Map source-scoped external actor ids to existing LiteLLM users.",
+          "operationId": "bulk_actors_v1_external_agents_actors_bulk_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActorsPut"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Updated"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Bulk Actors",
+          "tags": [
+            "external_agents"
+          ]
+        }
+      },
+      "/v1/external_agents/bulk": {
+        "patch": {
+          "description": "Assign bot teams, confirm ownership, and update status in bulk.",
+          "operationId": "bulk_agents_v1_external_agents_bulk_patch",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPatch"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Updated"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Bulk Agents",
+          "tags": [
+            "external_agents"
+          ]
+        }
+      },
+      "/v1/external_agents/decisions": {
+        "get": {
+          "description": "List content-free governance decisions with stable pagination ordering.",
+          "operationId": "list_decisions_v1_external_agents_decisions_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "source_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Source Id"
+              }
+            },
+            {
+              "in": "query",
+              "name": "external_agent_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "External Agent Id"
+              }
+            },
+            {
+              "in": "query",
+              "name": "verdict",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "allow",
+                      "deny"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Verdict"
+              }
+            },
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 100,
+                "maximum": 1000,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/Decision"
+                    },
+                    "title": "Response List Decisions V1 External Agents Decisions Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Decisions",
+          "tags": [
+            "external_agents"
+          ]
+        }
+      },
+      "/v1/external_agents/policies": {
+        "get": {
+          "description": "List the source default and team policies.",
+          "operationId": "get_policies_v1_external_agents_policies_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/Policy"
+                    },
+                    "title": "Response Get Policies V1 External Agents Policies Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Policies",
+          "tags": [
+            "external_agents"
+          ]
+        },
+        "put": {
+          "description": "Upsert the team policy or source-wide default when team_id is null.",
+          "operationId": "put_policy_v1_external_agents_policies_put",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyPut"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Policy"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Put Policy",
+          "tags": [
+            "external_agents"
+          ]
+        }
+      },
+      "/v1/external_agents/sources": {
+        "get": {
+          "description": "List registered sources with secrets redacted.",
+          "operationId": "list_sources_v1_external_agents_sources_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/Source"
+                    },
+                    "title": "Response List Sources V1 External Agents Sources Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Sources",
+          "tags": [
+            "external_agents"
+          ]
+        },
+        "post": {
+          "description": "Register a signed hook source without exposing its signing secrets.",
+          "operationId": "create_source_v1_external_agents_sources_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceCreate"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Source"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Source",
+          "tags": [
+            "external_agents"
+          ]
+        }
+      },
+      "/v1/external_agents/sources/{id}": {
+        "patch": {
+          "description": "Update a source and retain its previous secret during signing key rotation.",
+          "operationId": "patch_source_v1_external_agents_sources__id__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "id",
+              "required": true,
+              "schema": {
+                "title": "Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcePatch"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Source"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Patch Source",
+          "tags": [
+            "external_agents"
+          ]
+        }
+      },
+      "/v1/external_agents/summary": {
+        "get": {
+          "description": "Summarize discovered bots and unresolved governance exceptions.",
+          "operationId": "summary_v1_external_agents_summary_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Summary"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Summary",
+          "tags": [
+            "external_agents"
+          ]
+        }
+      }
+    }
+  },
   "gemini_agents": {
     "components": {
       "schemas": {

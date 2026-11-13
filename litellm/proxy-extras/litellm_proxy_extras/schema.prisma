@@ -1,3 +1,73 @@
+model ExternalAgentSource {
+  source_id String @id @default(uuid())
+  vendor String @default("grok_bot")
+  display_name String
+  tenant_id String?
+  signing_secret String
+  previous_signing_secret String?
+  mode String @default("shadow")
+  default_policy_id String?
+  created_by String
+  updated_by String
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
+}
+
+model ExternalAgent {
+  id String @id @default(uuid())
+  source_id String
+  external_agent_id String
+  display_name String?
+  team_id String?
+  owner_user_id String?
+  owner_inferred Boolean @default(false)
+  status String @default("active")
+  first_seen_at DateTime @default(now())
+  last_seen_at DateTime @default(now())
+  request_count Int @default(0)
+  last_actor_id String?
+  last_model String?
+  @@unique([source_id, external_agent_id])
+  @@index([source_id, team_id])
+}
+
+model ExternalAgentActor {
+  id String @id @default(uuid())
+  source_id String
+  external_actor_id String
+  user_id String
+  @@unique([source_id, external_actor_id])
+}
+
+model ExternalAgentPolicy {
+  policy_id String @id @default(uuid())
+  source_id String
+  team_id String?
+  blocked_tools String[] @default([])
+  allow_unmapped_actors Boolean @default(true)
+  require_owner Boolean @default(false)
+  @@unique([source_id, team_id])
+}
+
+model ExternalAgentDecision {
+  request_id String @id
+  source_id String
+  external_agent_id String
+  actor_id String?
+  user_id String?
+  team_id String?
+  frame_type String
+  tool_names String[] @default([])
+  verdict String
+  would_verdict String
+  reason String?
+  enforced Boolean
+  policy_id String?
+  created_at DateTime @default(now())
+  @@index([source_id, created_at])
+  @@index([source_id, external_agent_id, created_at])
+}
+
 datasource client {
   provider = "postgresql"
   url      = env("DATABASE_URL")
