@@ -4,7 +4,8 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import reduce
-from typing import Final
+from itertools import chain
+from typing import TYPE_CHECKING, Final, cast
 
 import pytest
 from prisma import Json
@@ -13,11 +14,23 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from litellm.models.budget import BudgetLimit, LiteLLM_BudgetTable
 from litellm.proxy._types import BudgetWriteRequest
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    CustomerHierarchy,
+    ErrorCode,
+    Failure,
     budget_row_values,
     effective_member_budget,
     related_budget,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
+from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    Budget,
+    MemberCreate,
+    MemberPatch,
+    OrganizationCreate,
+    TeamCreate,
+)
+
+if TYPE_CHECKING:
+    from prisma import Prisma
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -244,6 +257,8 @@ class Database:
         return any(row.model_dump().get(field) == budget_id for row in table.rows.values())
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if "pg_advisory_xact_lock" in query:
+            return ({"locked": 1},)
         if "SELECT EXISTS" in query:
             return ({"referenced": False},)
         if "FOR UPDATE" in query:
@@ -254,12 +269,23 @@ class Database:
             connection.executescript(
                 'CREATE TABLE "LiteLLM_CustomerTeamTable" (customer_team_id TEXT, parent_org_id TEXT);'
                 'CREATE TABLE "LiteLLM_CustomerMemberTable" (customer_member_id TEXT, parent_org_id TEXT);'
+                "CREATE TABLE member_teams (team_id TEXT);"
             )
             connection.executemany(
                 'INSERT INTO "LiteLLM_CustomerTeamTable" VALUES (?, ?)',
                 tuple(
                     (row.model_dump()["customer_team_id"], row.model_dump()["parent_org_id"])
                     for row in self.litellm_customerteamtable.rows.values()
+                ),
+            )
+            connection.executemany(
+                "INSERT INTO member_teams VALUES (?)",
+                tuple(
+                    (team_id,)
+                    for team_id in chain.from_iterable(
+                        TypeAdapter(tuple[str, ...]).validate_python(row.model_dump()["parent_team_ids"])
+                        for row in self.litellm_customermembertable.rows.values()
+                    )
                 ),
             )
             connection.executemany(
@@ -272,8 +298,13 @@ class Database:
             return tuple(
                 dict(row)
                 for row in connection.execute(
-                    query.replace("= ANY($1::text[])", "IN (SELECT value FROM json_each($1))"),
-                    tuple(json.dumps(arg) for arg in args),
+                    query.replace("= ANY($1::text[])", "IN (SELECT value FROM json_each($1))").replace(
+                        '"LiteLLM_CustomerMemberTable", unnest(parent_team_ids) AS team_id', "member_teams"
+                    ),
+                    {
+                        str(index): json.dumps(arg) if not isinstance(arg, int) else arg
+                        for index, arg in enumerate(args, 1)
+                    },
                 )
             )
 
@@ -294,6 +325,82 @@ class Database:
             for table, rows in zip(tables, snapshots):
                 table.rows = rows
             raise
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("premium", (False, True))
+async def test_customer_portal_capacity_caps_every_parent_and_member_team_addition(premium: bool) -> None:
+    database: Final = Database()
+    hierarchy: Final = CustomerHierarchy(
+        cast("Prisma", database), premium_user=premium, clock=lambda: NOW
+    )  # cast-ok: in-memory Prisma edge
+    for index in range(5):
+        assert not isinstance(
+            await hierarchy.create_organization(OrganizationCreate(customer_org_id=f"org-{index}"), "admin"), Failure
+        )
+    sixth_org: Final = await hierarchy.create_organization(OrganizationCreate(customer_org_id="sixth"), "admin")
+    assert isinstance(sixth_org, Failure) is not premium
+    if not premium:
+        assert sixth_org == Failure(ErrorCode.FREE_TIER_LIMIT)
+    for index in range(5):
+        assert not isinstance(
+            await hierarchy.create_team(TeamCreate(customer_team_id=f"team-{index}", parent_org_id="org-0"), "admin"),
+            Failure,
+        )
+    sixth_team: Final = await hierarchy.create_team(
+        TeamCreate(customer_team_id="sixth", parent_org_id="org-0"), "admin"
+    )
+    assert isinstance(sixth_team, Failure) is not premium
+    if not premium:
+        assert sixth_team == Failure(ErrorCode.FREE_TIER_LIMIT)
+    for index in range(5):
+        assert not isinstance(
+            await hierarchy.create_member(
+                MemberCreate(
+                    customer_member_id=f"member-{index}",
+                    parent_team_ids=("team-0", "team-1"),
+                    budget_override=Budget(max_budget=10),
+                ),
+                "admin",
+            ),
+            Failure,
+        )
+    sixth_member: Final = await hierarchy.create_member(
+        MemberCreate(customer_member_id="sixth", parent_team_ids=("team-1",), budget_override=Budget(max_budget=10)),
+        "admin",
+    )
+    assert isinstance(sixth_member, Failure) is not premium
+    if not premium:
+        assert sixth_member == Failure(ErrorCode.FREE_TIER_LIMIT)
+    assert not isinstance(
+        await hierarchy.create_member(
+            MemberCreate(
+                customer_member_id="moving", parent_team_ids=("team-2",), budget_override=Budget(max_budget=10)
+            ),
+            "admin",
+        ),
+        Failure,
+    )
+    updated: Final = await hierarchy.update_member("moving", MemberPatch(parent_team_ids=("team-2", "team-1")), "admin")
+    if premium:
+        assert not isinstance(updated, Failure) and updated.parent_team_ids == ("team-2", "team-1")
+    else:
+        assert updated == Failure(ErrorCode.FREE_TIER_LIMIT)
+    unchanged: Final = await hierarchy.update_member("member-0", MemberPatch(parent_team_ids=("team-1",)), "admin")
+    assert not isinstance(unchanged, Failure) and unchanged.parent_team_ids == ("team-1",)
+    invalid: Final = await hierarchy.update_member("moving", MemberPatch(parent_team_ids=("unknown",)), "admin")
+    assert invalid == Failure(ErrorCode.PARENT_NOT_FOUND)
+    under_capacity: Final = await hierarchy.update_member(
+        "moving", MemberPatch(parent_team_ids=("team-2", "team-3")), "admin"
+    )
+    assert not isinstance(under_capacity, Failure) and under_capacity.parent_team_ids == ("team-2", "team-3")
+    assert not isinstance(
+        await hierarchy.create_team(TeamCreate(customer_team_id="other-org", parent_org_id="org-1"), "admin"), Failure
+    )
+    cross_organization: Final = await hierarchy.update_member(
+        "moving", MemberPatch(parent_team_ids=("other-org",)), "admin"
+    )
+    assert cross_organization == Failure(ErrorCode.PARENT_NOT_FOUND)
 
 
 @pytest.mark.parametrize("expires_at", (None, datetime(2027, 1, 1, tzinfo=timezone.utc)))

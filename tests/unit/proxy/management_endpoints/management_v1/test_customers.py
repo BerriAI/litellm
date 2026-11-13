@@ -31,6 +31,7 @@ def client(
     role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN,
     cache: UserApiKeyCache | None = None,
     database: Database | None = None,
+    premium_user: bool = True,
 ) -> TestClient:
     app: Final = FastAPI()
     app.include_router(router)
@@ -41,12 +42,68 @@ def client(
 
     auth: Final = UserAPIKeyAuth(user_id="admin", user_role=role)
     hierarchy: Final = CustomerHierarchy(
-        cast("Prisma", database if database is not None else Database()), clock=lambda: NOW
+        cast("Prisma", database if database is not None else Database()), premium_user=premium_user, clock=lambda: NOW
     )  # cast-ok: in-memory Prisma edge
     app.dependency_overrides[user_api_key_auth] = lambda: auth
     app.dependency_overrides[get_customer_hierarchy] = lambda: hierarchy
     app.dependency_overrides[get_user_api_key_cache] = lambda: cache if cache is not None else UserApiKeyCache()
     return TestClient(app)
+
+
+@pytest.mark.parametrize("premium", (False, True))
+def test_customer_portal_limits_and_free_tier_problem(premium: bool) -> None:
+    http: Final = client(premium_user=premium)
+    empty: Final = http.get("/management/v1/customer_portal/limits")
+    assert empty.status_code == 200, empty.text
+    assert empty.json() == {
+        "limits_apply": not premium,
+        "organization_limit": 5,
+        "teams_per_organization_limit": 5,
+        "members_per_team_limit": 5,
+        "organization_count": 0,
+        "any_limit_reached": False,
+    }
+    for index in range(5):
+        response: Final = http.post("/management/v1/customer_organizations", json={"customer_org_id": f"org-{index}"})
+        assert response.status_code == 201, response.text
+    full: Final = http.get("/management/v1/customer_portal/limits")
+    assert full.status_code == 200, full.text
+    assert full.json() == {**empty.json(), "organization_count": 5, "any_limit_reached": not premium}
+    sixth: Final = http.post("/management/v1/customer_organizations", json={"customer_org_id": "sixth"})
+    assert sixth.status_code == (201 if premium else 403), sixth.text
+    if not premium:
+        assert sixth.json()["detail"] == (
+            "Free customer portal limit reached: up to 5 customer organizations, 5 teams per organization and "
+            "5 members per team without a LiteLLM Enterprise license. Upgrade to Enterprise to remove the limits: "
+            "https://www.litellm.ai/enterprise"
+        )
+
+
+@pytest.mark.parametrize("level", ("teams", "members"))
+def test_customer_portal_limits_detect_full_children_before_organization_cap(level: str) -> None:
+    http: Final = client(premium_user=False)
+    family(http)
+    for index in range(5):
+        if level == "teams":
+            response: Final = http.post(
+                "/management/v1/customer_teams", json={"parent_org_id": "org", "customer_team_id": f"extra-{index}"}
+            )
+            assert response.status_code == (201 if index < 4 else 403), response.text
+        else:
+            member: Final = http.post(
+                "/management/v1/customer_members",
+                json={"customer_member_id": f"member-{index}", "parent_team_ids": ["team"]},
+            )
+            assert member.status_code == 201, member.text
+    limits: Final = http.get("/management/v1/customer_portal/limits")
+    assert limits.status_code == 200, limits.text
+    assert limits.json()["organization_count"] == 1
+    assert limits.json()["any_limit_reached"] is True
+
+
+def test_customer_portal_limits_require_admin() -> None:
+    response: Final = client(role=LitellmUserRoles.INTERNAL_USER).get("/management/v1/customer_portal/limits")
+    assert response.status_code == 403, response.text
 
 
 def family(http: TestClient) -> dict[str, object]:

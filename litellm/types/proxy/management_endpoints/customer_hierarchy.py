@@ -81,7 +81,7 @@ class TeamCreate(TeamPatch):
     parent_org_id: str
 
 
-class MemberPatch(BaseModel):
+class _MemberFields(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     alias: str | None = None
@@ -90,7 +90,11 @@ class MemberPatch(BaseModel):
     budget_override_expires_at: AwareDatetime | None = None
 
 
-class MemberCreate(MemberPatch):
+class MemberPatch(_MemberFields):
+    parent_team_ids: tuple[str, ...] | None = Field(default=None, min_length=1)
+
+
+class MemberCreate(_MemberFields):
     customer_member_id: str | None = None
     parent_org_id: str | None = Field(default=None, description="Must match the parent teams' organization when set")
     parent_team_ids: tuple[str, ...] = Field(min_length=1, description="Teams the member belongs to, first is default")

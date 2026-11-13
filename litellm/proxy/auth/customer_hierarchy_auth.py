@@ -29,6 +29,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_
 from litellm.proxy.common_utils.customer_usage import CustomerIdentifier
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    ErrorCode,
     Failure,
     PrismaRecord,
     customer_row_reset_at,
@@ -550,6 +551,13 @@ async def _register_organization(
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
     registered: Final = await register(customer_org_alias, prisma_client)
     if isinstance(registered, Failure):
+        if registered.code is ErrorCode.FREE_TIER_LIMIT:
+            verbose_proxy_logger.warning(
+                "CUSTOMER TRACKING OFF for organization %s because the free customer portal limit was reached. "
+                "Upgrade to Enterprise to remove the limits: https://www.litellm.ai/enterprise",
+                customer_org_alias,
+            )
+            return None
         verbose_proxy_logger.warning(
             "Could not register customer organization %s: %s", customer_org_alias, registered.code.value
         )
@@ -607,6 +615,13 @@ async def _register_member(
         return None
     registered: Final = await register(organization.customer_org_id, customer_member_id, prisma_client)
     if isinstance(registered, Failure):
+        if registered.code is ErrorCode.FREE_TIER_LIMIT:
+            verbose_proxy_logger.warning(
+                "CUSTOMER TRACKING OFF for member %s because the free customer portal limit was reached. "
+                "Upgrade to Enterprise to remove the limits: https://www.litellm.ai/enterprise",
+                customer_member_id,
+            )
+            return None
         verbose_proxy_logger.warning(
             "Could not register customer member %s in organization %s: %s",
             customer_member_id,
