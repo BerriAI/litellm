@@ -79,9 +79,11 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
 from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
     _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_permissions_caller_permission,
+    customer_key_actor,
     generate_key_helper_fn,
     prepare_metadata_fields,
     raise_on_logging_credential_change,
+    validated_customer_key_metadata,
 )
 from litellm.proxy.management_helpers.bulk_user_deletion import delete_users_from_current_teams
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
@@ -560,17 +562,15 @@ async def new_user(
      }'
     ```
     """
+    actor: Final = customer_key_actor(user_api_key_dict)
+    if data.auto_create_key and actor is not None:
+        validated_customer_key_metadata(data.metadata, None, actor)
     try:
         from litellm.proxy.proxy_server import _license_check, prisma_client
 
         if prisma_client is None:
             raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
 
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=500,
-                detail=CommonProxyErrors.db_not_connected_error.value,
-            )
         validate_budget_duration(data.budget_duration)
 
         # Check for duplicate user_id or email
@@ -629,7 +629,12 @@ async def new_user(
             teams = check_if_default_team_set()
         organization_ids: Final = cast(list[str] | None, data_json.pop("organizations", None))
 
-        response: Final = await generate_key_helper_fn(request_type="user", **data_json, llm_router=None)
+        response: Final = await generate_key_helper_fn(
+            request_type="user",
+            **data_json,
+            llm_router=None,
+            actor=actor,
+        )
         created_user_id: Final = cast(str | None, response.get("user_id", None))
         if created_user_id is not None:
             forget_missing_user(created_user_id)
