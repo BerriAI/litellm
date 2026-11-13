@@ -3499,3 +3499,18 @@ def test_aggregate_metadata_advertises_basic_client_auth_only_with_the_grant_tha
     assert isinstance(methods, list)
     assert ("client_secret_basic" in methods) is jwt_bearer_available
     assert "none" in methods and "client_secret_post" in methods
+
+
+def test_an_oauth_error_response_is_logged_with_its_code_and_description(caplog):
+    import logging
+
+    from litellm.proxy.mcp_server.gateway_dcr_flow import _oauth_error
+
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    response = _oauth_error(400, "invalid_grant", "the refresh token was already used")
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_grant",
+        "error_description": "the refresh token was already used",
+    }
+    assert "400 invalid_grant: the refresh token was already used" in caplog.text
