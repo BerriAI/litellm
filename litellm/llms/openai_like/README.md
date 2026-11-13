@@ -106,52 +106,6 @@ response = litellm.completion(
 )
 ```
 
-### Nous Research Portal
-
-Use the `nousresearch/` prefix followed by the model ID from the
-[Nous Portal model catalog](https://portal.nousresearch.com/models).
-Set `NOUSRESEARCH_API_KEY` to a Portal API key.
-
-```python
-import litellm
-
-response = litellm.completion(
-    model="nousresearch/google/gemini-4-hydrogen",
-    messages=[{"role": "user", "content": "Hello"}],
-)
-
-vectors = litellm.embedding(
-    model="nousresearch/cohere/embed-5-fast",
-    input=["Hello"],
-)
-```
-
-The default API base is `https://inference-api.nousresearch.com/v1`.
-Override it with `NOUSRESEARCH_API_BASE` or the `api_base` argument.
-The `api_key` argument overrides the environment key.
-Chat completions support synchronous, asynchronous, and streaming calls.
-Text completions, embeddings, Responses, and Anthropic Messages use the
-corresponding upstream endpoints. Availability and capabilities depend on the model.
-`max_completion_tokens` maps to `max_tokens` for chat completions.
-
-For the proxy, use the same prefix in its model configuration.
-
-```yaml
-model_list:
-  - model_name: nous-chat
-    litellm_params:
-      model: nousresearch/google/gemini-4-hydrogen
-      api_key: os.environ/NOUSRESEARCH_API_KEY
-```
-
-Bundled token rates and capabilities were retrieved on November 13, 2026 from
-the [public inference catalog](https://inference-api.nousresearch.com/v1/models)
-and checked against the Portal model page. Rates are USD per token, including
-published cache read and write rates. Promotional prices can change and the
-bundled snapshot does not update automatically. Models added upstream can be
-called without a catalog entry, but require custom pricing for cost tracking.
-See the [API reference](https://portal.nousresearch.com/api-docs) for upstream details.
-
 ## Responses API Support
 
 Providers that support the OpenAI Responses API (`/v1/responses`) can declare it via `supported_endpoints`:
