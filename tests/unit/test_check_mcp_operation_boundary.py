@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.check_mcp_operation_boundary import main, violations
+from litellm.scripts.check_mcp_operation_boundary import main, violations
 
 
 @pytest.mark.parametrize(
@@ -36,7 +36,7 @@ def test_boundary_command_rejects_shared_state_and_accepts_explicit_context(tmp_
     package.mkdir(parents=True)
     module = package / "operations.py"
     module.write_text("from mcp.server.auth.middleware.auth_context import auth_context_var as hidden\n")
-    command = [sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/check_mcp_operation_boundary.py")]
+    command = [sys.executable, str(Path(__file__).resolve().parents[2] / "litellm/scripts/check_mcp_operation_boundary.py")]
     monkeypatch.chdir(tmp_path)
     assert main() == 1
     assert "operations.py:1:" in capsys.readouterr().err

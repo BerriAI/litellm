@@ -343,6 +343,32 @@ def test_a_file_its_only_shard_ignores_is_not_covered_by_that_shards_glob() -> N
     assert selection.covers("tests/unit/proxy/test_update_spend.py") is False
 
 
+def test_a_deselected_file_is_treated_like_an_ignored_one() -> None:
+    # --ignore is a no-op for a file the shell glob already expanded, --deselect is what drops it
+    scalars: Final = (
+        coverage.Scalar(
+            key="test-path",
+            value="tests/unit/proxy/test_[q-z]*.py\n--deselect=tests/unit/proxy/test_update_spend.py",
+        ),
+    )
+    assert coverage._invoked_test_tokens(scalars) == frozenset({"tests/unit/proxy/test_[q-z]*.py"})
+    (selection,) = coverage._invoked_selections(scalars)
+    assert selection.covers("tests/unit/proxy/test_route_llm_request.py") is True
+    assert selection.covers("tests/unit/proxy/test_update_spend.py") is False
+
+
+def test_a_character_class_glob_in_a_test_path_is_one_token_that_names_only_its_letters() -> None:
+    (selection,) = coverage._invoked_selections(
+        (coverage.Scalar(key="test-path", value="tests/unit/proxy/test_[_a-p]*.py"),)
+    )
+    assert selection.included == frozenset({"tests/unit/proxy/test_[_a-p]*.py"})
+    assert selection.covers("tests/unit/proxy/test__types.py") is True
+    assert selection.covers("tests/unit/proxy/test_caching_routes.py") is True
+    assert selection.covers("tests/unit/proxy/test_route_llm_request.py") is False
+    assert coverage._token_names("tests/unit/proxy/test_[_a-p]*.py", "tests/unit/proxy/test_admin_mcp.py") is True
+    assert coverage._token_names("tests/unit/proxy/test_[_a-p]*.py", "tests/unit/proxy/test_route_llm_request.py") is False
+
+
 def test_check_shards_passes_on_the_repo_as_it_stands(capsys):
     assert coverage._check_shards() == 0
 
