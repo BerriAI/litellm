@@ -262,24 +262,28 @@ async def test_a_deadline_flush_reports_under_the_request_span_auth_set_after_th
 
 
 async def test_a_failed_sdk_calls_io_token_refund_reports_its_redis_span_under_the_span_its_caller_passed(
-    fake_redis_port: int, legacy_otel: tuple[TracerProvider, InMemorySpanExporter]
+    fake_redis_port: int, legacy_otel: tuple[TracerProvider, InMemorySpanExporter], monkeypatch: pytest.MonkeyPatch
 ):
     provider, exporter = legacy_otel
     usage: Final = RouterUsageStore(connect(RedisCache(host="127.0.0.1", port=fake_redis_port)).router_usage())
+    monkeypatch.setattr(litellm, "callbacks", [ModelRateLimitingCheck(usage)])
     caller: Final = provider.get_tracer(__name__).start_span("sdk caller")
     itpm: Final = UsageCounter("global_router", "d1", "openai/gpt-x", "12-00", "itpm")
     otpm: Final = UsageCounter("global_router", "d1", "openai/gpt-x", "12-00", "otpm")
-    failed_call: Final = {
-        "metadata": {
-            "litellm_parent_otel_span": caller,
-            ITPM_RESERVED_KEY: 5,
-            OTPM_RESERVED_KEY: 7,
-            ITPM_COUNTER_KEY: asdict(itpm),
-            OTPM_COUNTER_KEY: asdict(otpm),
-        }
-    }
 
-    await ModelRateLimitingCheck(usage).async_log_failure_event(failed_call, None, None, None)
+    with pytest.raises(Exception, match="provider down"):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=Exception("provider down"),
+            metadata={
+                "litellm_parent_otel_span": caller,
+                ITPM_RESERVED_KEY: 5,
+                OTPM_RESERVED_KEY: 7,
+                ITPM_COUNTER_KEY: asdict(itpm),
+                OTPM_COUNTER_KEY: asdict(otpm),
+            },
+        )
 
     assert await _redis_calls_under(exporter, caller) == {"async_increment"}
 
