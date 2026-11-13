@@ -230,6 +230,11 @@ describe("LoggingSettings", () => {
     renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
 
     expect(screen.queryByPlaceholderText("os.environ/LANGFUSE_SPAN_SCOPE")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Leave empty to use the proxy default (LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE, full if unset).",
+      ),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("combobox", { name: "langfuse span scope" }));
     expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual(["full", "llm_only"]);
     await user.click(screen.getByRole("option", { name: "llm_only" }));

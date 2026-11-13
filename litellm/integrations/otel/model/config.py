@@ -1,7 +1,7 @@
 """Typed configuration for the OpenTelemetry instrumentation."""
 
 from enum import Enum
-from functools import lru_cache
+from functools import cache, lru_cache
 from typing import Annotated, Final
 
 from pydantic import AliasChoices, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
@@ -213,7 +213,8 @@ class OpenTelemetryV2Config(BaseSettings):
         description=(
             "``llm_only`` keeps just the model-call spans on the operator's own Langfuse "
             "exporter (the spec whose owner is ``langfuse_otel``). Other exporters and "
-            "key/team destinations are not affected."
+            "key/team destinations are not affected. Destinations default to "
+            "``langfuse_destination_span_scope`` instead."
         ),
     )
     excluded_services: Annotated[frozenset[str], NoDecode] = Field(
@@ -312,9 +313,7 @@ class OpenTelemetryV2Config(BaseSettings):
     @field_validator("langfuse_span_scope", mode="before")
     @classmethod
     def _normalize_langfuse_span_scope(cls, value: object) -> object:
-        if isinstance(value, str):
-            return value.strip().lower()
-        return value
+        return _normalized_span_scope(value)
 
     @field_validator(
         "baggage_promoted_keys",
@@ -410,6 +409,46 @@ class _CaptureMessageContentSettings(BaseSettings):
 def capture_message_content_from_env() -> str:
     """The global capture mode, read without building a settings model that rereads every other env var"""
     return _CaptureMessageContentSettings().capture_message_content
+
+
+def _normalized_span_scope(value: object) -> object:
+    return value.strip().lower() if isinstance(value, str) else value
+
+
+class _LangfuseDestinationSpanScopeSettings(BaseSettings):
+    model_config = SettingsConfigDict(extra="ignore", frozen=True)
+
+    langfuse_destination_span_scope: OtelSpanScope = Field(
+        default="full",
+        validation_alias=AliasChoices(
+            "langfuse_destination_span_scope", "LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE"
+        ),
+    )
+
+    @field_validator("langfuse_destination_span_scope", mode="before")
+    @classmethod
+    def _normalize_scope(cls, value: object) -> object:
+        return _normalized_span_scope(value)
+
+
+def langfuse_destination_span_scope(configured: object = None) -> OtelSpanScope:
+    return _cached_langfuse_destination_span_scope(None if configured is None else str(configured))
+
+
+@cache
+def _cached_langfuse_destination_span_scope(configured: str | None) -> OtelSpanScope:
+    try:
+        return _LangfuseDestinationSpanScopeSettings.model_validate(
+            {"langfuse_destination_span_scope": configured} if configured is not None else {}
+        ).langfuse_destination_span_scope
+    except ValidationError as error:
+        verbose_logger.warning(
+            "Invalid LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE or "
+            "callback_settings.otel.langfuse_destination_span_scope. "
+            "Allowed values are 'full' and 'llm_only'. Falling back to 'full'. %s",
+            error,
+        )
+        return "full"
 
 
 _EXCLUDED_SERVICES_INPUT: Final[TypeAdapter[str | tuple[object, ...]]] = TypeAdapter(str | tuple[object, ...])

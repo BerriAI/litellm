@@ -1566,7 +1566,11 @@ def _tenant_destination(
     name: str, callbacks: Sequence[AddTeamCallback], service_name: str | None
 ) -> "OtelDestination | None":
     from litellm.integrations.otel.model.baggage import parse_destination_metadata_keys
-    from litellm.integrations.otel.model.config import parse_capture_message_content, parse_excluded_services
+    from litellm.integrations.otel.model.config import (
+        langfuse_destination_span_scope,
+        parse_capture_message_content,
+        parse_excluded_services,
+    )
     from litellm.integrations.otel.presets.destinations import destination_for
 
     callback_vars: Final = MappingProxyType(
@@ -1576,6 +1580,7 @@ def _tenant_destination(
             )
         )
     )
+    otel_settings: Final = (litellm.callback_settings or {}).get("otel", {})
     return destination_for(
         name,
         _tenant_otel_params(callback_vars),
@@ -1583,6 +1588,9 @@ def _tenant_destination(
         parse_capture_message_content(callback_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)),
         parse_excluded_services(callback_vars.get(EXCLUDED_SERVICES_VAR)),
         parse_destination_metadata_keys(callback_vars.get(BAGGAGE_METADATA_KEYS_VAR)),
+        langfuse_destination_span_scope=langfuse_destination_span_scope(
+            otel_settings.get("langfuse_destination_span_scope")
+        ),
     )
 
 
