@@ -14402,6 +14402,16 @@
         "filePlaceholder": "[File]",
         "audioPlaceholder": "[Audio]"
       },
+      "customer": {
+        "title": "Customer",
+        "org": "Customer org",
+        "team": "Customer team",
+        "member": "Customer member",
+        "recognized": "Recognized",
+        "asserted": "Asserted",
+        "view": "View",
+        "viewEntity": "View {{entity}}"
+      },
       "drawer": {
         "secondsSuffix": "s",
         "agentCountSuffix": " Agent",
