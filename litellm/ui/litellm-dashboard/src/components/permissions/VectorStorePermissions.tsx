@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { DatabaseIcon } from "@heroicons/react/outline";
 import { Badge } from "@/components/ui/badge";
 import { vectorStoreListCall } from "../networking";
-import { InheritedGrant, inheritedGrantTooltip } from "./inheritedGrants";
 
 interface VectorStoreDetails {
   vector_store_id: string;
@@ -12,27 +11,17 @@ interface VectorStoreDetails {
 
 interface VectorStorePermissionsProps {
   vectorStores: string[];
-  inheritedVectorStores?: InheritedGrant[];
   accessToken?: string | null;
 }
 
-const STORE_CHIP =
-  "inline-flex min-w-0 items-center px-3 py-1.5 rounded-lg bg-info/10 border border-info/20 text-info text-sm font-medium break-words";
-
-export function VectorStorePermissions({
-  vectorStores,
-  inheritedVectorStores = [],
-  accessToken,
-}: VectorStorePermissionsProps) {
+export function VectorStorePermissions({ vectorStores, accessToken }: VectorStorePermissionsProps) {
   const { t } = useTranslation();
   const [vectorStoreDetails, setVectorStoreDetails] = useState<VectorStoreDetails[]>([]);
-  const inheritedOnlyStores = inheritedVectorStores.filter((grant) => !vectorStores.includes(grant.id));
-  const storeCount = vectorStores.length + inheritedOnlyStores.length;
 
   // Fetch vector store details when component mounts
   useEffect(() => {
     const fetchVectorStores = async () => {
-      if (!accessToken || storeCount === 0) return;
+      if (!accessToken || vectorStores.length === 0) return;
 
       try {
         const response = await vectorStoreListCall(accessToken);
@@ -50,7 +39,7 @@ export function VectorStorePermissions({
     };
 
     fetchVectorStores();
-  }, [accessToken, storeCount]);
+  }, [accessToken, vectorStores.length]);
 
   // Function to get display name for vector store
   const getVectorStoreDisplayName = (storeId: string) => {
@@ -66,20 +55,17 @@ export function VectorStorePermissions({
       <div className="flex items-center gap-2">
         <DatabaseIcon className="h-4 w-4 text-info" />
         <p className="text-sm font-semibold text-foreground">{t("permissions.vectorStorePermissions.title")}</p>
-        <Badge variant="secondary">{storeCount}</Badge>
+        <Badge variant="secondary">{vectorStores.length}</Badge>
       </div>
 
-      {storeCount > 0 ? (
+      {vectorStores.length > 0 ? (
         <div className="flex flex-wrap gap-2">
           {vectorStores.map((store, index) => (
-            <div key={index} className={STORE_CHIP}>
+            <div
+              key={index}
+              className="inline-flex min-w-0 items-center px-3 py-1.5 rounded-lg bg-info/10 border border-info/20 text-info text-sm font-medium break-words"
+            >
               {getVectorStoreDisplayName(store)}
-            </div>
-          ))}
-          {inheritedOnlyStores.map((grant) => (
-            <div key={grant.id} title={inheritedGrantTooltip(grant, t)} className={STORE_CHIP}>
-              {getVectorStoreDisplayName(grant.id)}
-              {t("permissions.vectorStorePermissions.accessGroupSuffix")}
             </div>
           ))}
         </div>

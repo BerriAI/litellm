@@ -6,7 +6,6 @@ export interface AccessGroup {
   mcpServerIds: string[];
   agentIds: string[];
   skillNames: string[];
-  vectorStoreIds: string[];
   keyIds: string[];
   teamIds: string[];
   createdAt: string;

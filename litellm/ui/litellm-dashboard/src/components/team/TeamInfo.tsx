@@ -339,7 +339,6 @@ export interface TeamData {
     access_group_mcp_server_ids?: string[];
     access_group_agent_ids?: string[];
     access_group_skill_names?: string[];
-    access_group_vector_store_ids?: string[];
     unresolved_access_group_ids?: string[] | null;
     access_group_details?: TeamAccessGroupModelGrant[];
     router_settings?: Record<string, any>;
@@ -1388,11 +1387,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     info.access_group_details,
     (grant) => grant.skill_names,
   );
-  const inheritedVectorStores = computeInheritedGrants(
-    info.access_group_vector_store_ids,
-    info.access_group_details,
-    (grant) => grant.vector_store_ids,
-  );
 
   const initialKillSwitchOn = info.metadata?.disable_global_guardrails === true;
 
@@ -1561,7 +1555,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             inheritedMcpServers={inheritedMcpServers}
             inheritedAgents={inheritedAgents}
             inheritedSkills={inheritedSkills}
-            inheritedVectorStores={inheritedVectorStores}
             unresolvedAccessGroupIds={info.unresolved_access_group_ids}
             variant="card"
             accessToken={accessToken}
@@ -2716,7 +2709,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 inheritedMcpServers={inheritedMcpServers}
                 inheritedAgents={inheritedAgents}
                 inheritedSkills={inheritedSkills}
-                inheritedVectorStores={inheritedVectorStores}
                 unresolvedAccessGroupIds={info.unresolved_access_group_ids}
                 variant="inline"
                 className="pt-4 border-t border-border"

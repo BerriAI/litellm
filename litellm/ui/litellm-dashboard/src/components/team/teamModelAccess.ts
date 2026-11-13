@@ -14,7 +14,6 @@ export interface TeamAccessGroupModelGrant {
   mcp_server_ids?: string[];
   agent_ids?: string[];
   skill_names?: string[];
-  vector_store_ids?: string[];
 }
 
 export type TeamModelBadgeKind = "all-proxy" | "no-default" | "direct" | "access-group";

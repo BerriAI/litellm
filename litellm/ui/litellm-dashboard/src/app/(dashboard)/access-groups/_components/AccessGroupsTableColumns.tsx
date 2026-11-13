@@ -2,7 +2,7 @@
 
 import { ColumnDef } from "@tanstack/react-table";
 import type { TFunction } from "i18next";
-import { Bot, Database, Layers, MoreHorizontal, Server, Sparkles, Trash2 } from "lucide-react";
+import { Bot, Layers, MoreHorizontal, Server, Sparkles, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
@@ -23,7 +23,7 @@ interface ResourceTone {
   className: string;
 }
 
-const RESOURCE_TONES: Record<"models" | "mcpServers" | "agents" | "skills" | "vectorStores", ResourceTone> = {
+const RESOURCE_TONES: Record<"models" | "mcpServers" | "agents" | "skills", ResourceTone> = {
   models: { icon: Layers, className: "bg-info/10 text-info ring-blue-600/20" },
   mcpServers: { icon: Server, className: "bg-info/10 text-info ring-cyan-600/20" },
   agents: {
@@ -36,11 +36,6 @@ const RESOURCE_TONES: Record<"models" | "mcpServers" | "agents" | "skills" | "ve
     className:
       "bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-400/30",
   },
-  vectorStores: {
-    icon: Database,
-    className:
-      "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950 dark:text-emerald-300 dark:ring-emerald-400/30",
-  },
 };
 
 function ResourcesCell({ group }: { group: AccessGroup }) {
@@ -50,11 +45,6 @@ function ResourcesCell({ group }: { group: AccessGroup }) {
     { key: "mcpServers" as const, label: "accessGroups.table.resources.mcpServers", count: group.mcpServerIds.length },
     { key: "agents" as const, label: "accessGroups.table.resources.agents", count: group.agentIds.length },
     { key: "skills" as const, label: "accessGroups.table.resources.skills", count: group.skillNames.length },
-    {
-      key: "vectorStores" as const,
-      label: "accessGroups.table.resources.vectorStores",
-      count: group.vectorStoreIds.length,
-    },
   ] as const;
 
   return (

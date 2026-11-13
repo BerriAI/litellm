@@ -4,8 +4,6 @@ import { vectorStoreListCall } from "../networking";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import i18n from "@/i18n/i18n";
 interface VectorStoreSelectorProps {
-  id?: string;
-  "aria-describedby"?: string;
   onChange: (selectedVectorStores: string[]) => void;
   value?: string[];
   className?: string;
@@ -15,8 +13,6 @@ interface VectorStoreSelectorProps {
 }
 
 const VectorStoreSelector: React.FC<VectorStoreSelectorProps> = ({
-  id,
-  "aria-describedby": describedBy,
   onChange,
   value,
   className,
@@ -50,8 +46,6 @@ const VectorStoreSelector: React.FC<VectorStoreSelectorProps> = ({
   return (
     <div className="min-w-0">
       <MultiSelect
-        id={id}
-        aria-describedby={describedBy}
         placeholder={placeholder}
         onValueChange={onChange}
         value={value}

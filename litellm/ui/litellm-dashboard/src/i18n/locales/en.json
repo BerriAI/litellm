@@ -2903,8 +2903,7 @@
     },
     "vectorStorePermissions": {
       "title": "Vector Stores",
-      "empty": "No vector stores configured",
-      "accessGroupSuffix": " (access group)"
+      "empty": "No vector stores configured"
     },
     "inheritedGrants": {
       "anAccessGroup": "an access group",
@@ -6402,8 +6401,7 @@
         "models": "{{count}} Models",
         "mcpServers": "{{count}} MCP Servers",
         "agents": "{{count}} Agents",
-        "skills": "{{count}} Skills",
-        "vectorStores": "{{count}} Vector Stores"
+        "skills": "{{count}} Skills"
       },
       "rowActions": {
         "open": "Open access group actions",
@@ -6431,15 +6429,13 @@
         "models": "Models",
         "mcpServers": "MCP Servers",
         "agents": "Agents",
-        "skills": "Skills",
-        "vectorStores": "Vector Stores"
+        "skills": "Skills"
       },
       "empty": {
         "models": "No models assigned to this group",
         "mcpServers": "No MCP servers assigned to this group",
         "agents": "No agents assigned to this group",
-        "skills": "No skills assigned to this group",
-        "vectorStores": "No vector stores assigned to this group"
+        "skills": "No skills assigned to this group"
       },
       "toolPermissions": {
         "label": "MCP tool permissions",
@@ -6453,8 +6449,7 @@
         "models": "Models",
         "mcpServers": "MCP Servers",
         "agents": "Agents",
-        "skills": "Skills",
-        "vectorStores": "Vector Stores"
+        "skills": "Skills"
       },
       "name": {
         "label": "Group Name",
@@ -6480,11 +6475,6 @@
         "label": "Allowed Skills",
         "description": "Enabled skills are visible to everyone. Grant disabled (private) Claude Code plugins to the teams and keys in this group here.",
         "placeholder": "Select skills (optional)"
-      },
-      "vectorStores": {
-        "label": "Allowed Vector Stores",
-        "description": "Teams and keys in this group can use these vector stores, as if they were on their own list. A team or key with any allowed vector store can use only its allowed ones, so adding one here limits a team or key that has no limit today.",
-        "placeholder": "Select vector stores (optional)"
       }
     },
     "create": {

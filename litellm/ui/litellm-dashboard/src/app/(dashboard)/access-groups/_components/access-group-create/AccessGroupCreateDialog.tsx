@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { BotIcon, DatabaseIcon, InfoIcon, LayersIcon, ServerIcon, SparklesIcon } from "lucide-react";
+import { BotIcon, InfoIcon, LayersIcon, ServerIcon, SparklesIcon } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
@@ -20,7 +20,6 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import VectorStoreSelector from "@/components/vector_store_management/VectorStoreSelector";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { fetchClient } from "@/lib/http/api";
 
@@ -101,14 +100,14 @@ export const AccessGroupCreateDialog = ({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[700px]">
+      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{t("accessGroups.create.title")}</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={onSubmit} noValidate>
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="w-full flex-wrap group-data-horizontal/tabs:h-auto">
+            <TabsList className="w-full">
               <TabsTrigger value={GENERAL_TAB}>
                 <InfoIcon />
                 {t("accessGroups.form.tabs.general")}
@@ -128,10 +127,6 @@ export const AccessGroupCreateDialog = ({
               <TabsTrigger value="skills">
                 <SparklesIcon />
                 {t("accessGroups.form.tabs.skills")}
-              </TabsTrigger>
-              <TabsTrigger value="vector-stores">
-                <DatabaseIcon />
-                {t("accessGroups.form.tabs.vectorStores")}
               </TabsTrigger>
             </TabsList>
 
@@ -207,26 +202,6 @@ export const AccessGroupCreateDialog = ({
                     value={value}
                     accessToken={accessToken || ""}
                     placeholder={t("accessGroups.form.skills.placeholder")}
-                  />
-                )}
-              </FormField>
-            </TabsContent>
-
-            <TabsContent value="vector-stores" className="pt-4">
-              <FormField
-                control={form.control}
-                name="vectorStoreIds"
-                label={t("accessGroups.form.vectorStores.label")}
-                description={t("accessGroups.form.vectorStores.description")}
-              >
-                {({ id, value, onChange, "aria-describedby": describedBy }) => (
-                  <VectorStoreSelector
-                    id={id}
-                    aria-describedby={describedBy}
-                    onChange={onChange}
-                    value={value}
-                    accessToken={accessToken || ""}
-                    placeholder={t("accessGroups.form.vectorStores.placeholder")}
                   />
                 )}
               </FormField>
