@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from httpx import URL, Headers, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesTerminalEvent
+    from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse, ResponsesTerminalEvent
     from litellm.types.rerank import RerankResponse
     from litellm.types.utils import CostResponseTypes, StandardPassThroughResponseObject
 
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 RELAYED_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
 _NO_RESPONSE_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+_NO_MODEL_PARAMETERS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class PassthroughMetadata(LiteLLMBaseModel):
@@ -141,6 +142,12 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         """
         Check if the request is a streaming request
         """
+
+    def logging_messages(self, endpoint: str, request_data: Mapping[str, object]) -> Sequence[AllMessageValues] | None:
+        return None
+
+    def logging_model_parameters(self, endpoint: str, request_data: Mapping[str, object]) -> Mapping[str, object]:
+        return _NO_MODEL_PARAMETERS
 
     def format_url(
         self,
