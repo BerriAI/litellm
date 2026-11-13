@@ -1557,3 +1557,33 @@ def test_input_sequence_length_names_the_error_prometheus_raises() -> None:
     assert derivations.input_sequence_length(
         HookArgs(request=request, result={"usage": {"prompt_tokens": 9}})
     ) == InputSequenceLength(error_type="AttributeError", error_text="'NoneType' object has no attribute 'get'")
+
+
+def _moment_at(second: int) -> Moment:
+    return Moment(
+        year=2026, month=11, day=13, hour=9, minute=30, second=second, microsecond=250, utc_offset_seconds=-18000
+    )
+
+
+def test_attempt_timing_carries_the_times_prometheus_reads_apart_from_the_handler_arguments() -> None:
+    request: Final = {"start_time": _MOMENT, "end_time": _MOMENT + timedelta(seconds=9)}
+
+    timing: Final = derivations.attempt_timing(
+        HookArgs(request=request, start_time=_MOMENT + timedelta(seconds=5), end_time=_MOMENT + timedelta(seconds=7))
+    )
+
+    assert timing is not None
+    assert (timing.start, timing.end, timing.logged_start, timing.logged_end) == (
+        _moment_at(20),
+        _moment_at(22),
+        _moment_at(15),
+        _moment_at(24),
+    )
+
+
+@pytest.mark.parametrize("end_time", [None, 0, ""], ids=repr)
+def test_a_falsy_logged_end_is_absent_so_the_port_falls_back_to_now_like_prometheus(end_time: object) -> None:
+    timing: Final = derivations.attempt_timing(HookArgs(request={"end_time": end_time}))
+
+    assert timing is not None
+    assert (timing.logged_end, timing.rejected) == (None, None)

@@ -540,6 +540,8 @@ def attempt_timing(args: HookArgs) -> AttemptTiming | None:
             "completion_start_present": "completion_start_time" in request,
             "queue_seconds": _metadata_value(litellm_params(args).get("metadata"), "queue_time_seconds"),
             "overhead_ms": hidden.get("litellm_overhead_time_ms"),
+            "logged_start": request.get("start_time"),
+            "logged_end": request.get("end_time") or None,
         },
     )
 

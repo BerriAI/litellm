@@ -296,6 +296,8 @@ class AttemptTiming(Record):
     completion_start_present: bool | None = None
     queue_seconds: Scalar | None = None
     overhead_ms: Scalar | None = None
+    logged_start: MomentInput | None = None
+    logged_end: MomentInput | None = None
 
 
 class UsageRecord(Record):

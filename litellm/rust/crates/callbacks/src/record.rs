@@ -217,6 +217,8 @@ pub struct AttemptTiming {
     pub completion_start_present: Option<bool>,
     pub queue_seconds: Option<Scalar>,
     pub overhead_ms: Option<Scalar>,
+    pub logged_start: Option<Moment>,
+    pub logged_end: Option<Moment>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
