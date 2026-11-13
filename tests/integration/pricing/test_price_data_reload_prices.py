@@ -101,7 +101,14 @@ class _Failing:
     status: int
 
 
-_Served: TypeAlias = _Published | _Failing
+@dataclass(frozen=True, slots=True)
+class _Annotated:
+    """A published document that also carries a top-level value that is not a row"""
+
+    scale: float
+
+
+_Served: TypeAlias = _Published | _Failing | _Annotated
 
 
 class _CostMapServer:
@@ -314,6 +321,8 @@ def _cost_map_reply(served: _Served) -> Reply:
             return Reply(body=json.dumps(_catalog(scale, added)).encode())
         case _Failing(status=status):
             return Reply(status=status, body=b"{}")
+        case _Annotated(scale=scale):
+            return Reply(body=json.dumps({**_catalog(scale), "_comment": "mirrored"}).encode())
 
 
 def _responder(server: _CostMapServer) -> Callable[[Request], Reply]:
@@ -603,6 +612,10 @@ def test_price_data_changes_only_through_a_successful_reload_or_a_restart(gatewa
             server.serving = _Failing(404)
             failed: Final = _reload(first.gateway)
             assert failed.status_code == 502, failed.text
+            _charged_as_listed(first.gateway, _GEO_CATALOG, 1.0)
+            server.serving = _Annotated(_PUBLISHED_SCALE)
+            refused: Final = _reload(first.gateway)
+            assert refused.status_code == 502, refused.text
             _charged_as_listed(first.gateway, _GEO_CATALOG, 1.0)
             server.serving = _Published(_PUBLISHED_SCALE)
         with _lifecycle_proxy(gateway, tmp_path, wire.url, (_GEO_CATALOG,), database=database) as restarted:
