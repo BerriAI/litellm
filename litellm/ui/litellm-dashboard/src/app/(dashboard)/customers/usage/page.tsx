@@ -8,6 +8,7 @@ import { extractProxyErrorMessage } from "@/lib/http/client";
 import { uiHref } from "@/utils/uiHref";
 import CustomerMemberSpend from "../_components/CustomerMemberSpend";
 import CustomerUsageHeader from "../_components/CustomerUsageHeader";
+import CustomerHierarchyNavigation from "../_components/CustomerHierarchyNavigation";
 import CustomerUsageRankings from "../_components/CustomerUsageRankings";
 import CustomerUsageTrend from "../_components/CustomerUsageTrend";
 import useCustomerHierarchyUsage from "../_components/useCustomerHierarchyUsage";
@@ -73,6 +74,7 @@ export default function CustomerHierarchyUsagePage() {
         onTeamClick={selectTeam}
         onDateRangeChange={setDateRange}
       />
+      <CustomerHierarchyNavigation scope={scope} active="usage" />
       {usage.isError ? (
         <ErrorState
           title={t("customerPortal.analytics.error")}
