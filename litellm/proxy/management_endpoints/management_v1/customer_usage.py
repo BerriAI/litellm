@@ -3,18 +3,27 @@ from enum import Enum
 from functools import partial
 from typing import Annotated, Final, Protocol
 
-from fastapi import APIRouter, Depends
-from pydantic import TypeAdapter
+from fastapi import APIRouter, Depends, Query
+from pydantic import AfterValidator, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.proxy.list_api.common import reject_unknown_query_params
-from litellm.proxy.management_endpoints.common_daily_activity import DailySpendRecord, get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    DailySpendRecord,
+    InvalidDateRange,
+    daily_activity_repository,
+    daily_activity_scope,
+    get_daily_activity,
+    get_daily_activity_aggregated,
+)
+from litellm.proxy.management_endpoints.common_daily_activity import raise_public as raise_activity_error
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_endpoints.management_v1.customers import (
     raise_public,
     reject_duplicate_list_params,
     require_customer_admin,
 )
+from litellm.proxy.management_endpoints.team_endpoints import aggregated_date_range_error
 from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure, PrismaRecord
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
@@ -74,7 +83,13 @@ async def page_aliases(
     table: TableActions[PrismaRecord], entity: CustomerEntity, records: Sequence[DailySpendRecord]
 ) -> dict[str, dict[str, object]]:  # mutable-ok: get_daily_activity requires dictionary-returning metadata callbacks
     identifiers: Final = tuple(_OPTIONAL_TEXT.validate_python(getattr(row, entity.value, None)) for row in records)
-    rows: Final = await find_many_in(table, entity.value, tuple(value for value in identifiers if value))
+    return await customer_aliases(table, entity, tuple(value for value in identifiers if value))
+
+
+async def customer_aliases(
+    table: TableActions[PrismaRecord], entity: CustomerEntity, identifiers: Sequence[str]
+) -> dict[str, dict[str, object]]:  # mutable-ok: shared daily activity helper accepts dictionary-valued metadata
+    rows: Final = await find_many_in(table, entity.value, identifiers)
     values: Final = tuple(row.model_dump() for row in rows)
     return {
         _TEXT.validate_python(row[entity.value]): {
@@ -122,6 +137,65 @@ router: Final = APIRouter(
         Depends(reject_duplicate_list_params),
     ),
 )
+
+
+def bounded_organizations(value: str) -> str:
+    ids: Final = tuple(part.strip() for part in value.split(",") if part.strip())
+    if not ids or len(ids) > 100:
+        raise ValueError("Provide between 1 and 100 customer organization IDs")
+    return ",".join(ids)
+
+
+@router.get(
+    "/customer_organizations/daily/activity/aggregated",
+    response_model=SpendAnalyticsPaginatedResponse,
+    description=(
+        "Get complete daily usage totals for up to 100 customer organizations in one response. "
+        "Uses shared SQL daily-spend aggregation with per-organization breakdowns. "
+        "Dates are inclusive UTC days, limited to 400 days. Model/API-key filters apply before aggregation. "
+        "Key breakdowns show the top key; totals include every key. No raw-row pagination is required. "
+        "Budget counters are returned separately by organization reads. Proxy admins only."
+    ),
+)
+async def customer_organization_daily_activity_aggregated(
+    prisma_client: Annotated[PrismaClient, Depends(get_customer_usage_prisma)],
+    start_date: Annotated[str, Query(description="First UTC calendar day, YYYY-MM-DD, inclusive")],
+    end_date: Annotated[
+        str, Query(description="Last UTC calendar day, YYYY-MM-DD, inclusive, at most 400 days after start")
+    ],
+    customer_org_ids: Annotated[
+        str,
+        Query(description="Comma-separated IDs for up to 100 visible customer organizations"),
+        AfterValidator(bounded_organizations),
+    ],
+    model: str | None = None,
+    api_key: str | None = None,
+) -> SpendAnalyticsPaginatedResponse:
+    date_error: Final = aggregated_date_range_error(start_date, end_date)
+    if date_error is not None:
+        raise_activity_error(InvalidDateRange(reason=date_error))
+    ids: Final = customer_org_ids.split(",")
+    scope: Final = daily_activity_scope(
+        "litellm_dailycustomermemberspend",
+        CustomerEntity.ORGANIZATION.value,
+        ids,
+        None,
+        api_key,
+        start_date,
+        end_date,
+        model,
+        None,
+    )
+    aliases: Final = await customer_aliases(
+        metadata_table(prisma_client, CustomerEntity.ORGANIZATION), CustomerEntity.ORGANIZATION, ids
+    )
+    return await get_daily_activity_aggregated(
+        daily_activity_repository(prisma_client),
+        scope,
+        entity_metadata_field=aliases,
+        include_entity_breakdown=True,
+        api_key_limit=1,
+    )
 
 
 @router.get(
