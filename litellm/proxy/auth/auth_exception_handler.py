@@ -99,27 +99,34 @@ def _get_spend_logs_metadata(request: Request) -> Mapping[str, object] | None:
 
 
 def _with_client_context(
-    request_data: dict[str, object],
-    requester_ip: str | None,
-    user_agent: str | None,
-    spend_logs_metadata: Mapping[str, object] | None,
+    request_data: dict[str, object], requester_ip: str | None, user_agent: str | None
 ) -> dict[str, object]:
     """Auth gate rejections are raised before `add_litellm_data_to_request` records the
-    caller IP, User-Agent and spend logs metadata header, so their failure logs would otherwise carry none."""
+    caller IP and User-Agent, so their failure logs would otherwise carry neither."""
     key: Final = "litellm_metadata" if "litellm_metadata" in request_data else "metadata"
     metadata: Final = request_data.get(key)
     base: Final[Mapping[str, object]] = metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
     stamped: Final = {
-        **{
-            name: value
-            for name, value in (("requester_ip_address", requester_ip), ("user_agent", user_agent))
-            if value and not base.get(name)
-        },
-        **({"spend_logs_metadata": spend_logs_metadata} if spend_logs_metadata is not None else {}),
+        name: value
+        for name, value in (("requester_ip_address", requester_ip), ("user_agent", user_agent))
+        if value and not base.get(name)
     }
     if not stamped:
         return request_data
     return {**request_data, key: {**base, **stamped}}
+
+
+def _with_spend_logs_metadata(
+    request_data: dict[str, object], route: str, spend_logs_metadata: Mapping[str, object] | None
+) -> dict[str, object]:
+    if spend_logs_metadata is None:
+        return request_data
+    from litellm.proxy.litellm_pre_call_utils import metadata_variable_name_for_request
+
+    key: Final = metadata_variable_name_for_request(route, request_data)
+    metadata: Final = request_data.get(key)
+    base: Final[Mapping[str, object]] = metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
+    return {**request_data, key: {**base, "spend_logs_metadata": spend_logs_metadata}}
 
 
 def _escape_control_chars(value: str) -> str:
@@ -268,8 +275,10 @@ class UserAPIKeyAuthExceptionHandler:
 
             # Allow callbacks to transform the error response
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
-                request_data=_with_client_context(
-                    request_context, requester_ip, user_agent, _get_spend_logs_metadata(request)
+                request_data=_with_spend_logs_metadata(
+                    _with_client_context(request_context, requester_ip, user_agent),
+                    normalize_request_route(route),
+                    _get_spend_logs_metadata(request),
                 ),
                 original_exception=e,
                 user_api_key_dict=user_api_key_dict,

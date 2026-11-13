@@ -178,7 +178,7 @@ def _proxy_stamped_used_client_oauth_token(
     return stamped if isinstance(stamped, bool) else None
 
 
-_PROXY_STAMPED_REQUEST_FIELDS: Final = ("requester_ip_address", "user_agent")
+_PROXY_STAMPED_REQUEST_FIELDS: Final = ("requester_ip_address", "user_agent", "spend_logs_metadata")
 
 
 def _proxy_stamped_request_fields(

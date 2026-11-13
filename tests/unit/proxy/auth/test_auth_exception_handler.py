@@ -2,8 +2,9 @@ import asyncio
 import copy
 import json
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
 import pytest
@@ -42,6 +43,9 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler, _as_proxy_exception
 from litellm.proxy.auth.auth_utils import is_invalid_virtual_key_error
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
+from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
 
 class _EngineHttp500:
@@ -1142,22 +1146,31 @@ def _marked_malformed_key_error() -> HTTPException:
     return error
 
 
-async def _reject_and_record(
+async def _reject_and_read_failure_row(
     monkeypatch: pytest.MonkeyPatch,
     error: Exception,
+    route: str,
     headers: dict[str, str],
     request_data: dict[str, object],
-) -> tuple[ProxyException, _AuthFailureRecorder]:
+) -> tuple[ProxyException, Mapping[str, object]]:
     from litellm.proxy import proxy_server
 
-    recorder: Final = _AuthFailureRecorder()
-    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
     monkeypatch.setattr(proxy_server, "general_settings", {"allow_requests_on_db_unavailable": False})
     with pytest.raises(ProxyException) as exc_info:
         await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
-            error, _http_request(headers=headers), request_data, "/v1/chat/completions", None, "sk-test"
+            error, _http_request(headers=headers), request_data, route, None, "sk-test"
         )
-    return exc_info.value, recorder
+    row: Final = get_logging_payload(
+        kwargs=spend_writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        end_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    row_metadata: Final = json.loads(row["metadata"])
+    assert isinstance(row_metadata, dict)
+    return exc_info.value, row_metadata
 
 
 @pytest.mark.asyncio
@@ -1165,7 +1178,7 @@ async def _reject_and_record(
     "error_kind, expect_invalid_key",
     [("budget", False), ("unauthorized", False), ("malformed_key", True)],
 )
-async def test_auth_failure_logs_spend_logs_metadata_header(
+async def test_auth_failure_row_keeps_spend_logs_metadata_header(
     monkeypatch: pytest.MonkeyPatch, error_kind: str, expect_invalid_key: bool
 ) -> None:
     monkeypatch.setattr(litellm, "budget_exceeded_status_code", 429)
@@ -1177,86 +1190,93 @@ async def test_auth_failure_logs_spend_logs_metadata_header(
     error: Final = errors[error_kind]
     expected: Final = _as_proxy_exception(error)
 
-    raised, recorder = await _reject_and_record(
+    raised, row_metadata = await _reject_and_read_failure_row(
         monkeypatch,
         error,
+        "/v1/chat/completions",
         {"x-litellm-spend-logs-metadata": '{"marker": "rejected-call", "attempt": 2}'},
         {"model": "gpt-4o"},
     )
 
     assert (raised.code, raised.type, raised.message) == (expected.code, expected.type, expected.message)
     assert is_invalid_virtual_key_error(raised) is expect_invalid_key
-    assert recorder.error is error
-    assert recorder.data is not None
-    metadata: Final = recorder.data["metadata"]
-    assert isinstance(metadata, Mapping)
-    assert metadata["spend_logs_metadata"] == {"marker": "rejected-call", "attempt": 2}
+    assert row_metadata["status"] == "failure"
+    assert row_metadata["spend_logs_metadata"] == {"marker": "rejected-call", "attempt": 2}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "header, body_metadata, expected",
+    "header, body, expected",
     [
         pytest.param(
             '{"marker": "header"}',
-            {"spend_logs_metadata": {"marker": "body"}},
+            {"metadata": {"spend_logs_metadata": {"marker": "body"}}},
             {"marker": "header"},
             id="header_overrides_body_like_successful_requests",
         ),
-        pytest.param("{}", {"spend_logs_metadata": {"marker": "body"}}, {}, id="empty_object_header"),
-        pytest.param("{not json", {"spend_logs_metadata": {"marker": "body"}}, {"marker": "body"}, id="malformed"),
-        pytest.param('["marker"]', {"spend_logs_metadata": {"marker": "body"}}, {"marker": "body"}, id="non_object"),
-        pytest.param(None, {"spend_logs_metadata": {"marker": "body"}}, {"marker": "body"}, id="missing"),
-        pytest.param("{not json", {}, None, id="malformed_without_body_value"),
-        pytest.param(None, {}, None, id="missing_without_body_value"),
+        pytest.param(
+            '{"marker": "header"}',
+            {"metadata": {}, "litellm_metadata": {"spend_logs_metadata": {"marker": "body"}}},
+            {"marker": "header"},
+            id="chat_body_with_both_metadata_buckets",
+        ),
+        pytest.param("{}", {"metadata": {"spend_logs_metadata": {"marker": "body"}}}, {}, id="empty_object_header"),
+        pytest.param(
+            "{not json", {"metadata": {"spend_logs_metadata": {"marker": "body"}}}, {"marker": "body"}, id="malformed"
+        ),
+        pytest.param(
+            '["marker"]', {"metadata": {"spend_logs_metadata": {"marker": "body"}}}, {"marker": "body"}, id="non_object"
+        ),
+        pytest.param(None, {"metadata": {"spend_logs_metadata": {"marker": "body"}}}, {"marker": "body"}, id="missing"),
+        pytest.param("{not json", {"metadata": {}}, None, id="malformed_without_body_value"),
+        pytest.param(None, {"metadata": {}}, None, id="missing_without_body_value"),
     ],
 )
-async def test_auth_failure_spend_logs_metadata_header_precedence(
+async def test_auth_failure_row_spend_logs_metadata_precedence(
     monkeypatch: pytest.MonkeyPatch,
     header: str | None,
-    body_metadata: dict[str, object],
+    body: dict[str, object],
     expected: dict[str, object] | None,
 ) -> None:
-    request_data: Final[dict[str, object]] = {
-        "model": "gpt-4o",
-        "metadata": {**body_metadata, "user_supplied": "keep-me"},
-    }
+    request_data: Final[dict[str, object]] = {"model": "gpt-4o", **body}
     original_request_data: Final = copy.deepcopy(request_data)
 
-    _, recorder = await _reject_and_record(
+    _, row_metadata = await _reject_and_read_failure_row(
         monkeypatch,
         HTTPException(status_code=401, detail="Invalid API key"),
+        "/v1/chat/completions",
         {"x-litellm-spend-logs-metadata": header} if header is not None else {},
         request_data,
     )
 
-    assert recorder.data is not None
-    metadata: Final = recorder.data["metadata"]
-    assert isinstance(metadata, Mapping)
-    assert metadata.get("spend_logs_metadata") == expected
-    assert metadata["user_supplied"] == "keep-me"
+    assert row_metadata["spend_logs_metadata"] == expected
     assert request_data == original_request_data
 
 
 @pytest.mark.asyncio
-async def test_auth_failure_spend_logs_metadata_uses_litellm_metadata_when_present(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "route, body",
+    [
+        pytest.param("/v1/responses", {"input": "hi", "metadata": {"native": "keep-me"}}, id="responses"),
+        pytest.param("/v1/messages", {"messages": [], "metadata": {"user_id": "keep-me"}}, id="messages"),
+    ],
+)
+async def test_auth_failure_row_keeps_spend_logs_metadata_header_on_litellm_metadata_routes(
+    monkeypatch: pytest.MonkeyPatch, route: str, body: dict[str, object]
 ) -> None:
-    _, recorder = await _reject_and_record(
+    request_data: Final[dict[str, object]] = {"model": "gpt-4o", **body}
+    original_request_data: Final = copy.deepcopy(request_data)
+
+    _, row_metadata = await _reject_and_read_failure_row(
         monkeypatch,
-        HTTPException(status_code=401, detail="Invalid API key"),
-        {"x-litellm-spend-logs-metadata": '{"marker": "responses"}'},
-        {"litellm_metadata": {"user_supplied": "keep-me"}, "metadata": {}},
+        BudgetExceededError(current_cost=2, max_budget=1),
+        route,
+        {"x-litellm-spend-logs-metadata": '{"marker": "routed"}'},
+        request_data,
     )
 
-    assert recorder.data is not None
-    litellm_metadata: Final = recorder.data["litellm_metadata"]
-    metadata: Final = recorder.data["metadata"]
-    assert isinstance(litellm_metadata, Mapping)
-    assert isinstance(metadata, Mapping)
-    assert litellm_metadata["spend_logs_metadata"] == {"marker": "responses"}
-    assert litellm_metadata["user_supplied"] == "keep-me"
-    assert "spend_logs_metadata" not in metadata
+    assert row_metadata["spend_logs_metadata"] == {"marker": "routed"}
+    assert request_data == original_request_data
 
 
 @pytest.mark.asyncio
