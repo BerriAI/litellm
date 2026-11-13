@@ -18,6 +18,7 @@ import litellm.proxy
 import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_AccessGroupTable, LiteLLM_UserTable, LitellmUserRoles, ProxyException
+from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key, customer_org_alias_cache_key
 from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
     _authorize_authenticated_request,
@@ -25,7 +26,66 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 from tests._master_key import MASTER_KEY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "denial,code", (("scope", "403"), ("mismatch", "403"), ("unknown", "401"), ("model", "403"), ("budget", "422"))
+)
+async def test_customer_identity_is_retained_only_after_ownership_authorization(
+    monkeypatch: pytest.MonkeyPatch, denial: str, code: str
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    cache: Final = UserApiKeyCache()
+    hierarchy: Final = CustomerHierarchyAuth(
+        customer_org_id="customer-org-b",
+        customer_org_alias="customer-b",
+        customer_team_id="customer-team-b",
+        customer_member_id="customer-member-b",
+        scopes=(
+            CustomerScopeAuth(
+                key="customer_org",
+                entity_id="customer-org-b",
+                spend=1,
+                max_budget=10 if denial == "model" else 0,
+                allowed_models=("other-model",) if denial == "model" else (),
+            ),
+        ),
+    )
+    await cache.async_set_cache(key=customer_member_cache_key("customer-member-b"), value=hierarchy)
+    await cache.async_set_cache(
+        key=customer_org_alias_cache_key("customer-a"),
+        value=CustomerHierarchyAuth(customer_org_id="customer-org-a", customer_org_alias="customer-a", scopes=()),
+    )
+    database: Final = MagicMock()
+    database.db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr(server, "prisma_client", database)
+    monkeypatch.setattr(server, "user_api_key_cache", cache)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "general_settings", {})
+    identity: Final = UserAPIKeyAuth(
+        token="verified-customer-key",
+        metadata={"customer_org_id": "customer-org-b" if denial in ("budget", "model") else "customer-org-a"},
+        customer_hierarchy=hierarchy,
+    )
+    headers: Final = ((b"x-litellm-customer-member-id", b"customer-member-b"),) + (
+        ((b"x-litellm-customer-org-alias", b"customer-a" if denial == "mismatch" else b"unknown-customer"),)
+        if denial in ("mismatch", "unknown")
+        else ()
+    )
+    request: Final = StarletteRequest({"type": "http", "method": "POST", "path": "/v1/responses", "headers": headers})
+    with pytest.raises(ProxyException) as denied:
+        await _authorize_authenticated_request(
+            user_api_key_auth_obj=identity,
+            request=request,
+            request_data={"model": "qa-model", "input": "Hello"},
+            route="/v1/responses",
+            api_key="verified-customer-key",
+        )
+    assert denied.value.code == code
+    assert identity.customer_hierarchy == (hierarchy if denial == "budget" else None)
 
 
 class Request:
