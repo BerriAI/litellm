@@ -51,19 +51,24 @@ export async function customerOrganizationsUsageCall({
   endDate: string;
   signal?: AbortSignal;
 }): Promise<Activity> {
-  if (ids.some((id) => !id || id.includes(","))) throw new Error(i18n.t("customerPortal.analytics.invalidIdentifier"));
+  if (ids.some((id) => !id)) throw new Error(i18n.t("customerPortal.analytics.invalidIdentifier"));
   const uniqueIds = [...new Set(ids)];
-  const chunks = Array.from({ length: Math.ceil(uniqueIds.length / PAGE_SIZE) }, (_, index) =>
-    uniqueIds.slice(index * PAGE_SIZE, (index + 1) * PAGE_SIZE),
-  );
+  const needsExactFilter = (id: string) => id.includes(",") || id.trim() !== id;
+  const batchIds = uniqueIds.filter((id) => !needsExactFilter(id));
+  const filters = [
+    ...Array.from({ length: Math.ceil(batchIds.length / PAGE_SIZE) }, (_, index) => ({
+      customer_org_ids: batchIds.slice(index * PAGE_SIZE, (index + 1) * PAGE_SIZE).join(","),
+    })),
+    ...uniqueIds.filter(needsExactFilter).map((id) => ({ customer_org_id: id })),
+  ];
   const responses: DailyActivityAggregatedResponse[] = [];
-  for (let start = 0; start < chunks.length; start += MAX_CONCURRENT) {
+  for (let start = 0; start < filters.length; start += MAX_CONCURRENT) {
     const batch = await Promise.all(
-      chunks.slice(start, start + MAX_CONCURRENT).map((chunk) =>
+      filters.slice(start, start + MAX_CONCURRENT).map((filter) =>
         apiClient.get<DailyActivityAggregatedResponse>(`${PREFIX}/daily/activity/aggregated`, {
           accessToken,
           signal,
-          query: { start_date: startDate, end_date: endDate, customer_org_ids: chunk.join(",") },
+          query: { start_date: startDate, end_date: endDate, ...filter },
         }),
       ),
     );

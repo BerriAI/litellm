@@ -109,6 +109,27 @@ describe("complete customer organization usage", () => {
     await expect(customerOrganizationsUsageCall(usageRequest(["a"]))).rejects.toThrow();
   });
 
+  it("includes exact IDs containing commas or surrounding spaces without losing other customers", async () => {
+    const ids = ["normal", "customer,one", " spaced "];
+    get
+      .mockResolvedValueOnce(activity(ids[0], 60))
+      .mockResolvedValueOnce(activity(ids[1], 30))
+      .mockResolvedValueOnce(activity(ids[2], 10));
+    const result = await customerOrganizationsUsageCall(usageRequest([...ids, ids[1]]));
+    expect(result.metadata.total_spend).toBe(100);
+    expect(
+      customerOrganizationRows(
+        ids.map((id) => org(id)),
+        result,
+      ).map((row) => row.share),
+    ).toEqual([0.6, 0.3, 0.1]);
+    expect(get.mock.calls.map(([, options]) => options?.query)).toEqual([
+      { start_date: "2024-03-01", end_date: "2024-03-31", customer_org_ids: "normal" },
+      { start_date: "2024-03-01", end_date: "2024-03-31", customer_org_id: "customer,one" },
+      { start_date: "2024-03-01", end_date: "2024-03-31", customer_org_id: " spaced " },
+    ]);
+  });
+
   it("returns an empty aggregate without an unscoped request", async () => {
     const result = await customerOrganizationsUsageCall(usageRequest([]));
     expect(result.metadata.total_spend).toBe(0);

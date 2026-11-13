@@ -9818,7 +9818,7 @@ export interface paths {
         };
         /**
          * Customer Organization Daily Activity Aggregated
-         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key filters apply before aggregation. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
+         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key filters apply before aggregation. Provide either customer_org_ids or customer_org_id for one exact ID, including commas or whitespace. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
          */
         get: operations["customer_organization_daily_activity_aggregated_management_v1_customer_organizations_daily_activity_aggregated_get"];
         put?: never;
@@ -69235,7 +69235,9 @@ export interface operations {
                 /** @description Last UTC calendar day, YYYY-MM-DD, inclusive, at most 400 days after start */
                 end_date: string;
                 /** @description Comma-separated IDs for up to 100 visible customer organizations */
-                customer_org_ids: string;
+                customer_org_ids?: string | null;
+                /** @description One exact customer organization ID, without splitting or trimming */
+                customer_org_id?: string | null;
                 model?: string | null;
                 api_key?: string | null;
             };
