@@ -33,6 +33,9 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+from litellm.integrations.langfuse.langfuse_prompt_management import langfuse_client_init
+from litellm.litellm_core_utils import litellm_logging
 from litellm.router import as_output_cap, stamped_client_ceiling
 from litellm.router_api import RoutingContext
 from tests.unit.redis.stores.router_session_pins_memory import memory_pins
@@ -5523,6 +5526,126 @@ class TestRouterPreRoutingSharedAliasName:
         sent = await self._routed_call_kwargs(router)
 
         assert not any(key.startswith("_alias_marker") for key in sent)
+
+_PROMPT_TIER_API_BASE: Final = "https://prompt-tier.test/v1"
+_PROMPT_TIER_SETTINGS: Final = MappingProxyType(
+    {
+        "quick": MappingProxyType({"temperature": 0.42, "max_tokens": 31}),
+        "deep": MappingProxyType({"temperature": 0.82, "max_tokens": 63}),
+    }
+)
+
+
+@pytest.fixture
+def langfuse_prompt_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-prompt-tier")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-prompt-tier")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://langfuse-prompt-tier.test")
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    langfuse_client_init.cache_clear()
+    yield
+    langfuse_client_init.cache_clear()
+
+
+def _prompt_tier_router(integration: Literal["dotprompt", "langfuse"]) -> Router:
+    def tier_deployment(tier: str) -> Mapping[str, object]:
+        return {
+            "model_name": tier,
+            "litellm_params": {
+                "model": f"{'langfuse/' if integration == 'langfuse' else ''}openai/{tier}-tier",
+                "api_base": _PROMPT_TIER_API_BASE,
+                "api_key": "test-key",
+                **({"prompt_id": f"{tier}-prompt"} if integration == "langfuse" else {}),
+            },
+            "model_info": {"max_output_tokens": 4096},
+        }
+
+    tiers: Final = {
+        tier_name: (
+            tier
+            if integration == "langfuse"
+            else {"model_name": tier, "litellm_params": {"prompt_id": f"{tier}-prompt"}}
+        )
+        for tier_name, tier in (("SIMPLE", "quick"), ("REASONING", "deep"))
+    }
+    return Router(
+        model_list=[
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_default_model": "quick",
+                    "complexity_router_config": {
+                        "classifier_type": "heuristic",
+                        "context_compaction": False,
+                        "keyword_tier_rules": [
+                            {"keywords": ["markerquick"], "tier": "SIMPLE"},
+                            {"keywords": ["markerdeep"], "tier": "REASONING"},
+                        ],
+                        "tiers": tiers,
+                    },
+                },
+            },
+            tier_deployment("quick"),
+            tier_deployment("deep"),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("langfuse_prompt_env")
+@pytest.mark.parametrize("integration", ["dotprompt", "langfuse"])
+@pytest.mark.parametrize("tier", ["quick", "deep"])
+async def test_a_tiers_selected_prompt_sends_its_generation_settings_over_the_tier_output_ceiling(
+    monkeypatch: pytest.MonkeyPatch, integration: Literal["dotprompt", "langfuse"], tier: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    if integration == "dotprompt":
+        monkeypatch.setattr(
+            litellm,
+            "callbacks",
+            [
+                DotpromptManager(
+                    prompt_data={
+                        f"{name}-prompt": {"content": f"System: Prompt {name}.", "metadata": dict(settings)}
+                        for name, settings in _PROMPT_TIER_SETTINGS.items()
+                    }
+                )
+            ],
+        )
+    router: Final = _prompt_tier_router(integration)
+
+    with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+        for name, settings in _PROMPT_TIER_SETTINGS.items():
+            upstream.get(host="langfuse-prompt-tier.test", path=f"/api/public/v2/prompts/{name}-prompt").respond(
+                json={
+                    "type": "text",
+                    "name": f"{name}-prompt",
+                    "version": 1,
+                    "config": dict(settings),
+                    "labels": ["production"],
+                    "tags": [],
+                    "prompt": f"Prompt {name}.",
+                }
+            )
+        endpoint: Final = upstream.post(f"{_PROMPT_TIER_API_BASE}/chat/completions").respond(
+            json={
+                "id": "chatcmpl-prompt-tier",
+                "object": "chat.completion",
+                "created": 1,
+                "model": f"{tier}-tier",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+            }
+        )
+        await router.acompletion(model="smart-router", messages=[{"role": "user", "content": f"marker{tier}"}])
+
+    assert endpoint.call_count == 1
+    sent: Final = json.loads(endpoint.calls[0].request.content)
+    assert sent["model"] == f"{tier}-tier"
+    assert sent["messages"][0] == {"role": "system", "content": f"Prompt {tier}."}
+    assert {key: sent.get(key) for key in _PROMPT_TIER_SETTINGS[tier]} == dict(_PROMPT_TIER_SETTINGS[tier])
+
 
 class TestAdaptiveSoftFloors:
     def test_adaptive_defaults_use_cost_weighted_cold_policy(self):

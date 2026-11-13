@@ -237,6 +237,7 @@ from .litellm_core_utils.core_helpers import (
     drops_unsupported_params,
     normalize_drop_params,
     safe_deep_copy,
+    without,
 )
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
@@ -807,16 +808,8 @@ async def acompletion(
         prompt_management_logger, AnthropicCacheControlHook
     )
 
-    if (
-        isinstance(litellm_logging_obj, LiteLLMLoggingObj)
-        and prompt_management_logger is not None
-        and not each_fallback_writes_its_own_cache_dialect
-    ):
-        (
-            model,
-            messages,
-            _,
-        ) = await litellm_logging_obj.async_get_chat_completion_prompt(
+    prompt_hook_result: Final = (
+        await litellm_logging_obj.async_get_chat_completion_prompt(
             model=model,
             messages=messages,
             non_default_params=kwargs,
@@ -828,6 +821,13 @@ async def acompletion(
             prompt_version=kwargs.get("prompt_version", None),
             request_kwargs=kwargs,
         )
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+        and prompt_management_logger is not None
+        and not each_fallback_writes_its_own_cache_dialect
+        else None
+    )
+    if prompt_hook_result is not None:
+        model, messages, _ = prompt_hook_result
         #########################################################
         # if the chat completion logging hook removed all tools,
         # set tools to None
@@ -848,7 +848,7 @@ async def acompletion(
         verbose_logger.debug("🔄 NO SHARED SESSION: acompletion called without shared_session")
 
     # Adjusted to use explicit arguments instead of *args and **kwargs
-    completion_kwargs: Final = {
+    caller_completion_kwargs: Final = {
         "model": model,
         "messages": messages,
         "functions": functions,
@@ -896,8 +896,17 @@ async def acompletion(
         "shared_session": shared_session,
         "enable_json_schema_validation": enable_json_schema_validation,
     }
+    request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
+    prompt_params: Final = cast(  # cast-ok: prompt hooks return a bare dict keyed by param name
+        "Mapping[str, object]", prompt_hook_result[2] if prompt_hook_result is not None else {}
+    )
+    prompt_overrides: Final = {
+        key: value
+        for key, value in prompt_params.items()
+        if key not in request_kwargs or request_kwargs[key] is not value
+    }
+    completion_kwargs: Final = {**caller_completion_kwargs, **prompt_overrides}
     if custom_llm_provider is None:
-        request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -912,7 +921,7 @@ async def acompletion(
 
     if fallbacks is not None:
         response = await async_completion_with_fallbacks(
-            **completion_kwargs, kwargs={"fallbacks": fallbacks, **caller_kwargs}
+            **caller_completion_kwargs, kwargs={"fallbacks": fallbacks, **caller_kwargs}
         )
         if response is None:
             raise Exception(
@@ -936,7 +945,7 @@ async def acompletion(
     try:
         # Use a partial function to pass your keyword arguments
         kwargs.pop("acompletion", None)
-        func: Final = partial(completion, **completion_kwargs, **kwargs)
+        func: Final = partial(completion, **completion_kwargs, **without(request_kwargs, *prompt_overrides))
 
         # Add the context to the function
         ctx: Final = contextvars.copy_context()
