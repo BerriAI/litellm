@@ -11,13 +11,12 @@ key, team and user search tool grants instead, the same check /search runs on th
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
-from typing import Final, Protocol, runtime_checkable
+from typing import Final
 
 from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import UI_TEAM_ID, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
     can_token_call_search_tool,
@@ -35,11 +34,6 @@ class _RequestMetadata(LiteLLMBaseModel):
 
 class _FallbackAccessSettings(LiteLLMBaseModel):
     enforce_fallback_model_access: bool = True
-
-
-@runtime_checkable
-class _BillingMetadata(Protocol):
-    def update(self, values: Mapping[str, object], /) -> None: ...
 
 
 async def is_model_authorized_for_token(*, model: str, valid_token: UserAPIKeyAuth, llm_router: RegistryReader) -> bool:
@@ -99,60 +93,15 @@ def _enforced_by_general_settings() -> bool:
     return _FallbackAccessSettings.model_validate(general_settings).enforce_fallback_model_access
 
 
-async def prepare_dashboard_fallback_billing(
-    model: str, request_kwargs: Mapping[str, object], auth: UserAPIKeyAuth, ctx: RoutingContext
-) -> bool:
-    context: Final = auth.dashboard_session_context
-    if context is None:
+async def dashboard_fallback_billing_allowed(model: str, auth: UserAPIKeyAuth, llm_router: RegistryReader) -> bool:
+    if auth.team_id != UI_TEAM_ID and not isinstance(auth.dashboard_session_origin, UserAPIKeyAuth):
         return True
-    billed: Final = (await dashboard_model_billing_auth(auth, model, ctx)).model_copy(
-        update={"budget_reservation": None}
-    )
-    if billed.team_id == auth.team_id:
-        return True
-    request: Final = context.request
-    if request is None:
+    try:
+        billed: Final = await dashboard_model_billing_auth(auth, model, llm_router)
+    except Exception as e:  # noqa: BLE001  # a fallback without a verified billing team must not run
+        verbose_proxy_logger.warning("Skipping fallback to model=%s: billing admission failed: %s", model, e)
         return False
-    metadata: Final = _dashboard_billing_metadata(request_kwargs)
-    if metadata is None:
-        return False
-    from litellm.proxy.auth.user_api_key_auth import run_centralized_common_checks
-    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-    from litellm.proxy.spend_tracking.budget_reservation import release_unbound_budget_reservation
-
-    if auth.budget_reservation is not None:
-        await release_unbound_budget_reservation(auth.budget_reservation)
-    await run_centralized_common_checks(
-        user_api_key_auth_obj=billed,
-        request=request,
-        request_data={**request_kwargs, "model": model},
-        route=billed.request_route or request.url.path,
-    )
-    request.state.budget_reservation = billed.budget_reservation
-    context.billing_auth.adopt_dashboard_billing(billed)
-    auth.adopt_dashboard_billing(billed)
-    metadata.update(
-        MappingProxyType(
-            {
-                **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(billed),
-                "user_api_key_auth": LiteLLMProxyRequestSetup.auth_for_request_metadata(billed),
-                "user_api_key_budget_reservation": billed.budget_reservation,
-            }
-        )
-    )
-    return True
-
-
-def _dashboard_billing_metadata(request_kwargs: Mapping[str, object]) -> _BillingMetadata | None:
-    return next(
-        (
-            value
-            for field in ("metadata", "litellm_metadata")
-            if isinstance(value := request_kwargs.get(field), _BillingMetadata)
-            and _token_in_metadata(value) is not None
-        ),
-        None,
-    )
+    return billed.team_id == auth.team_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,11 +128,7 @@ class RouterFallbackAccessCheck:
                 check_customer_model_access(model=model, valid_token=valid_token, llm_router=ctx)
             except ProxyException:
                 return False
-        try:
-            return await prepare_dashboard_fallback_billing(model, request_kwargs, valid_token, ctx)
-        except Exception as e:  # noqa: BLE001  # a fallback without its granting team's billing controls cannot run
-            verbose_proxy_logger.warning("Skipping fallback to model=%s: billing admission failed: %s", model, e)
-            return False
+        return await dashboard_fallback_billing_allowed(model, valid_token, ctx)
 
 
 router_fallback_access_check: Final = RouterFallbackAccessCheck(is_enforced=_enforced_by_general_settings)

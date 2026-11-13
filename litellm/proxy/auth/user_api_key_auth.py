@@ -4538,7 +4538,6 @@ async def _authorize_authenticated_request(
             user_api_key_auth_obj,
             billing_model if isinstance(billing_model, str) else None,
             llm_router=billing_router,
-            request=request,
         )
         if RouteChecks.is_llm_api_route(route=route)
         else user_api_key_auth_obj

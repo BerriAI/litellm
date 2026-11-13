@@ -1,4 +1,4 @@
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -21,7 +21,9 @@ from litellm.proxy.auth import auth_checks
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, common_checks
 from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
 from litellm.proxy.auth.fallback_model_access import RouterFallbackAccessCheck
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, move_guardrails_to_metadata
+from litellm.proxy.common_request_processing import _fallback_grant
+from litellm.proxy.policy_engine import policy_registry
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.spend_tracking.budget_reservation import get_reserved_counter_keys, release_budget_reservation
 from litellm.redis.stores.connection import connect
@@ -45,7 +47,9 @@ _TEAMS: Final[Mapping[str, LiteLLM_TeamTableCachedObj]] = {
     ),
     "team-exhausted": LiteLLM_TeamTableCachedObj(team_id="team-exhausted", models=["gpt-a"], spend=2, max_budget=1),
     "team-native-group": LiteLLM_TeamTableCachedObj(team_id="team-native-group", models=["team-access"]),
-    "team-billing-a": LiteLLM_TeamTableCachedObj(team_id="team-billing-a", models=["shared"], max_budget=10, spend=2),
+    "team-billing-a": LiteLLM_TeamTableCachedObj(
+        team_id="team-billing-a", models=["shared", "gpt-b"], max_budget=10, spend=2
+    ),
     "team-billing-b": LiteLLM_TeamTableCachedObj(team_id="team-billing-b", models=["shared"], max_budget=10, spend=3),
 }
 
@@ -671,42 +675,6 @@ async def test_dashboard_spend_row_and_budget_use_the_same_granting_team(
 
 
 @pytest.mark.asyncio
-async def test_dashboard_fallback_to_unbudgeted_own_model_clears_the_team_reservation(
-    monkeypatch: pytest.MonkeyPatch, teams: None
-) -> None:
-    _billing_database(monkeypatch, LiteLLM_UserTable(user_id="u1", models=["gpt-c"], teams=["team-billing-a"]))
-    token: Final = UserAPIKeyAuth(
-        api_key="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, user_role=LitellmUserRoles.INTERNAL_USER
-    )
-    request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
-    billed: Final = await _authorize_authenticated_request(
-        token, request, {"model": "shared"}, "/chat/completions", "dashboard-key", force_virtual_key_checks=True
-    )
-    assert billed is not None
-    previous: Final = billed.budget_reservation
-    assert previous is not None
-    metadata: Final = {
-        "user_api_key_auth": LiteLLMProxyRequestSetup.auth_for_request_metadata(billed),
-        "user_api_key_team_id": billed.team_id,
-        "user_api_key_budget_reservation": previous,
-    }
-    assert (
-        await RouterFallbackAccessCheck(is_enforced=lambda: True)(
-            model="gpt-c", request_kwargs={"metadata": metadata}, ctx=RoutingContext(_ROUTER)
-        )
-        is True
-    )
-    assert billed.team_id == metadata["user_api_key_team_id"] == UI_TEAM_ID
-    assert previous["finalized"] is True
-    assert (
-        metadata["user_api_key_budget_reservation"]
-        is billed.budget_reservation
-        is request.state.budget_reservation
-        is None
-    )
-
-
-@pytest.mark.asyncio
 async def test_dashboard_denied_fallback_keeps_its_existing_reservation(
     monkeypatch: pytest.MonkeyPatch, teams: None
 ) -> None:
@@ -762,17 +730,33 @@ async def test_dashboard_model_billing_keeps_admin_and_personal_keys_unchanged(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("enforced", [True, False])
 @pytest.mark.parametrize(
-    "initial,target,expected_team",
-    [("shared", "gpt-a", "team-native-group"), ("shared", "gpt-c", UI_TEAM_ID), ("gpt-c", "shared", "team-billing-a")],
+    "own_models,initial,target,expected_team,allowed",
+    [
+        (["gpt-c"], "shared", "gpt-a", "team-billing-a", False),
+        (["gpt-c"], "shared", "gpt-c", "team-billing-a", False),
+        (["gpt-c"], "gpt-c", "shared", UI_TEAM_ID, False),
+        (["gpt-c"], "shared", "gpt-b", "team-billing-a", True),
+        (["gpt-c", "gpt-b"], "gpt-c", "gpt-b", UI_TEAM_ID, True),
+    ],
 )
-async def test_dashboard_fallback_rebinds_the_budget_and_spend_identity(
-    monkeypatch: pytest.MonkeyPatch, teams: None, metadata_field: str, initial: str, target: str, expected_team: str
+async def test_dashboard_fallback_stays_with_the_original_billing_team(
+    monkeypatch: pytest.MonkeyPatch,
+    teams: None,
+    metadata_field: str,
+    enforced: bool,
+    own_models: Sequence[str],
+    initial: str,
+    target: str,
+    expected_team: str,
+    allowed: bool,
 ) -> None:
     owner: Final = LiteLLM_UserTable(
-        user_id="u1", models=["gpt-c"], teams=["team-billing-b", "team-native-group", "team-billing-a"]
+        user_id="u1", models=list(own_models), teams=["team-billing-b", "team-native-group", "team-billing-a"]
     )
     _billing_database(monkeypatch, owner)
+    monkeypatch.setattr(proxy_server, "general_settings", {"enforce_fallback_model_access": enforced})
     token: Final = UserAPIKeyAuth(
         api_key="dashboard-key",
         user_id="u1",
@@ -794,15 +778,74 @@ async def test_dashboard_fallback_rebinds_the_budget_and_spend_identity(
         "user_api_key_auth": LiteLLMProxyRequestSetup.auth_for_request_metadata(billed),
         "user_api_key_budget_reservation": previous,
     }
+    original_metadata: Final = dict(metadata)
     assert (
-        await RouterFallbackAccessCheck(is_enforced=lambda: True)(
+        await RouterFallbackAccessCheck(is_enforced=lambda: enforced)(
             model=target, request_kwargs={metadata_field: metadata}, ctx=RoutingContext(_ROUTER)
         )
-        is True
+        is allowed
     )
+    assert (
+        await _fallback_grant(target, billed, _ROUTER, proxy_server.proxy_logging_obj, initial) is not None
+    ) is allowed
     assert billed.team_id == metadata["user_api_key_team_id"] == expected_team
-    assert previous["finalized"] is True
+    assert metadata == original_metadata
+    assert previous["finalized"] is False
     assert metadata["user_api_key_budget_reservation"] is billed.budget_reservation is request.state.budget_reservation
-    assert billed.budget_reservation is not previous
+    assert billed.budget_reservation is previous
     assert not any("team-billing-b" in key for key in get_reserved_counter_keys(billed.budget_reservation))
+    await release_budget_reservation(billed.budget_reservation)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "team_config,expected_guardrails",
+    [
+        ({}, frozenset()),
+        ({"guardrails": ["team-input"]}, frozenset({"team-input"})),
+        (
+            {"guardrails": ["team-input"], "policies": ["team-policy"]},
+            frozenset({"team-input", "policy-input"}),
+        ),
+    ],
+)
+async def test_dashboard_primary_call_inherits_team_guardrails_and_policies_like_a_team_key(
+    monkeypatch: pytest.MonkeyPatch,
+    teams: None,
+    team_config: Mapping[str, object],
+    expected_guardrails: frozenset[str],
+) -> None:
+    _billing_database(
+        monkeypatch, LiteLLM_UserTable(user_id="u1", models=["no-default-models"], teams=["team-billing-a"])
+    )
+    guarded_team: Final = _TEAMS["team-billing-a"].model_copy(update={"metadata": team_config})
+    proxy_server.user_api_key_cache.set_cache(
+        "team_id:team-billing-a", guarded_team, model_type=LiteLLM_TeamTableCachedObj
+    )
+    registry: Final = policy_registry.PolicyRegistry()
+    registry.load_policies({"team-policy": {"guardrails": {"add": ["policy-input"]}}})
+    monkeypatch.setattr(policy_registry, "_policy_registry", registry)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+
+    async def guarded_team_row(team_id: str, **_: object) -> LiteLLM_TeamTableCachedObj:
+        return guarded_team if team_id == guarded_team.team_id else _TEAMS[team_id]
+
+    monkeypatch.setattr(auth_checks, "get_team_object", guarded_team_row)
+    token: Final = UserAPIKeyAuth(
+        api_key="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    billed: Final = await _authorize_authenticated_request(
+        token, request, {"model": "shared"}, "/chat/completions", "dashboard-key", force_virtual_key_checks=True
+    )
+    assert billed is not None
+    team_key: Final = UserAPIKeyAuth(
+        api_key="team-key", user_id="u1", team_id=guarded_team.team_id, team_metadata=guarded_team.metadata
+    )
+    dashboard_data: Final = {"model": "shared", "metadata": {}}
+    team_data: Final = {"model": "shared", "metadata": {}}
+    await move_guardrails_to_metadata(dashboard_data, "metadata", billed)
+    await move_guardrails_to_metadata(team_data, "metadata", team_key)
+    assert dashboard_data == team_data
+    assert frozenset(dashboard_data["metadata"].get("guardrails", [])) == expected_guardrails
     await release_budget_reservation(billed.budget_reservation)

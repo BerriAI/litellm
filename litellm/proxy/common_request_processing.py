@@ -812,19 +812,17 @@ class _DashboardBillingRequest(BaseModel):
     data: Mapping[str, object]
 
 
-async def _prepare_dashboard_request_billing(processing: object, auth: object, llm_router: Router | None) -> None:
+async def _check_dashboard_request_billing(processing: object, auth: object, llm_router: Router | None) -> None:
     if llm_router is None or not isinstance(auth, UserAPIKeyAuth):
         return
-    if auth.dashboard_session_context is None:
+    if auth.dashboard_session_origin is None:
         return
-    from litellm.proxy.auth.fallback_model_access import prepare_dashboard_fallback_billing
+    from litellm.proxy.auth.fallback_model_access import dashboard_fallback_billing_allowed
 
     data: Final = _DashboardBillingRequest.model_validate(processing, from_attributes=True).data
     model: Final = data.get("model")
-    if isinstance(model, str) and not await prepare_dashboard_fallback_billing(
-        model, data, auth, RoutingContext(llm_router)
-    ):
-        raise HTTPException(403, "Cannot establish dashboard model billing context")
+    if isinstance(model, str) and not await dashboard_fallback_billing_allowed(model, auth, RoutingContext(llm_router)):
+        raise HTTPException(403, "Dashboard fallbacks cannot change the billing team")
 
 
 def _is_auto_router(params: Mapping[str, object]) -> bool:
@@ -2498,7 +2496,11 @@ async def _fallback_grant(
         can_customer_access_model,
         get_end_user_object,
     )
-    from litellm.proxy.auth.fallback_model_access import is_model_authorized_for_token, router_fallback_access_check
+    from litellm.proxy.auth.fallback_model_access import (
+        dashboard_fallback_billing_allowed,
+        is_model_authorized_for_token,
+        router_fallback_access_check,
+    )
     from litellm.proxy.auth.user_api_key_auth import (
         _is_within_every_model_budget,  # pyright: ignore[reportPrivateUsage]  # the pre-call walk shares the auth-time fallback contract
     )
@@ -2515,6 +2517,8 @@ async def _fallback_grant(
     if not _fallback_pricing_admits(requested_model, fallback_model, llm_router):
         return None
     try:
+        if not await dashboard_fallback_billing_allowed(fallback_model, user_api_key_dict, llm_router):
+            return None
         end_user: Final = (
             await get_end_user_object(
                 end_user_id=user_api_key_dict.end_user_id,
@@ -3754,7 +3758,7 @@ class ProxyBaseLLMRequestProcessing:
             )
             phase_event("litellm.request.pre_call_completed")
 
-        await _prepare_dashboard_request_billing(self, user_api_key_dict, llm_router)
+        await _check_dashboard_request_billing(self, user_api_key_dict, llm_router)
 
         _post_call_guardrails_active: Final = self._has_post_call_guardrails()
 

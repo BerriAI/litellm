@@ -6476,22 +6476,21 @@ async def dashboard_model_billing_auth(
     auth: UserAPIKeyAuth,
     model: str | None,
     llm_router: RegistryReader | None,
-    request: Request | None = None,
 ) -> UserAPIKeyAuth:
     from litellm.proxy.auth.team_grants import team_grant_billing_auth_update
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
     if not _is_dashboard_session(auth) or not personal_key_team_model_access_applies(auth) or model is None:
         return auth
-    origin: Final = auth.dashboard_session_context.origin if auth.dashboard_session_context is not None else auth
+    origin: Final = auth.dashboard_session_origin or auth
     owner: Final = await _personal_key_owner(origin, prisma_client, user_api_key_cache, proxy_logging_obj)
     fields: Final = frozenset(
         name for name in UserAPIKeyAuth.model_fields if name.startswith(("team_", "organization_")) or name == "org_id"
     )
     original_billing: Final = TypeAdapter(Mapping[str, object]).validate_python(origin.model_dump(include=set(fields)))
     base: Final = auth.model_copy(update=original_billing)
-    if auth.dashboard_session_context is None:
-        base.bind_dashboard_session(origin, request)
+    if auth.dashboard_session_origin is None:
+        base.bind_dashboard_session(origin)
     if _dashboard_user_grants_model(model, origin, owner, llm_router):
         return base
     team: Final = await _dashboard_model_billing_team(origin, model, llm_router)
@@ -6507,10 +6506,7 @@ async def dashboard_model_billing_auth(
         else None
     )
     update: Final = await team_grant_billing_auth_update(base, team, membership)
-    billed: Final = base.model_copy(update=update)
-    if auth.dashboard_session_context is None:
-        billed.bind_dashboard_session(origin, request)
-    return billed
+    return base.model_copy(update=update)
 
 
 async def _dashboard_model_billing_team(
@@ -6729,7 +6725,7 @@ def _search_tool_deny_by_default(general_settings: Mapping[str, object]) -> bool
 
 def _is_dashboard_session(valid_token: UserAPIKeyAuth | None) -> bool:
     return valid_token is not None and (
-        valid_token.team_id == UI_TEAM_ID or valid_token.dashboard_session_context is not None
+        valid_token.team_id == UI_TEAM_ID or valid_token.dashboard_session_origin is not None
     )
 
 
