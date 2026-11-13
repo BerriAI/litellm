@@ -2,9 +2,8 @@ import asyncio
 import copy
 import json
 from collections.abc import Mapping
-from datetime import datetime, timezone
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -44,8 +43,10 @@ from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHan
 from litellm.proxy.auth.auth_utils import is_invalid_virtual_key_error
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.request_error_tracking import RequestErrorAccumulator
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
-from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.utils import PrismaClient
+from litellm.responses.streaming_iterator import drain_logging_tasks
 
 
 class _EngineHttp500:
@@ -1146,6 +1147,15 @@ def _marked_malformed_key_error() -> HTTPException:
     return error
 
 
+def _spend_log_database() -> MagicMock:
+    prisma: Final = MagicMock()
+    prisma.spend_log_transactions = []
+    prisma._spend_log_transactions_lock = asyncio.Lock()
+    prisma.tool_usage_transactions = []
+    prisma._tool_usage_transactions_lock = asyncio.Lock()
+    return prisma
+
+
 async def _reject_and_read_failure_row(
     monkeypatch: pytest.MonkeyPatch,
     error: Exception,
@@ -1155,24 +1165,28 @@ async def _reject_and_read_failure_row(
     recorder: _AuthFailureRecorder | None = None,
 ) -> tuple[ProxyException, Mapping[str, object]]:
     from litellm.proxy import proxy_server
+    from litellm.proxy.db import db_spend_update_writer as writer_module
 
-    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    database: Final = _spend_log_database()
+    spend_writer: Final = DBSpendUpdateWriter()
+    monkeypatch.setattr(writer_module, "request_error_accumulator", RequestErrorAccumulator())
+    monkeypatch.setattr(PrismaClient, "spend_log_queue_bytes", 0)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
     monkeypatch.setattr(
         litellm,
         "callbacks",
         [*([recorder] if recorder is not None else []), ProxyDBLogger(spend_writer=lambda: spend_writer)],
     )
     monkeypatch.setattr(proxy_server, "general_settings", {"allow_requests_on_db_unavailable": False})
-    with pytest.raises(ProxyException) as exc_info:
-        await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
-            error, _http_request(headers=headers), request_data, route, None, "sk-test"
-        )
-    row: Final = get_logging_payload(
-        kwargs=spend_writer.update_database.call_args.kwargs["kwargs"],
-        response_obj={},
-        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        end_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
-    )
+    try:
+        with pytest.raises(ProxyException) as exc_info:
+            await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
+                error, _http_request(headers=headers), request_data, route, None, "sk-test"
+            )
+    finally:
+        await drain_logging_tasks()
+    (row,) = database.spend_log_transactions
     row_metadata: Final = json.loads(row["metadata"])
     assert isinstance(row_metadata, dict)
     return exc_info.value, row_metadata

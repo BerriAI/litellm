@@ -4676,7 +4676,7 @@ class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
     Headers a user can pass that will get added to litellm metadata for the request
     """
 
-    spend_logs_metadata: object
+    spend_logs_metadata: ReadOnly[object]
     agent_id: str | None
     trace_id: str | None
     session_id: str | None
