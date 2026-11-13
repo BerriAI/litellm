@@ -668,8 +668,8 @@ snowflake_models: Set = set()
 gradient_ai_models: Set = set()
 llama_models: Set = set()
 nscale_models: Set = set()
-nebius_models: Set = set()
-nebius_embedding_models: Set = set()
+nebius_models: set[str] = set()  # mutable-ok: add_known_models extends this provider catalog at runtime
+nebius_embedding_models: set[str] = set()  # mutable-ok: add_known_models extends this provider catalog at runtime
 aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
@@ -937,6 +937,11 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             sambanova_embedding_models.add(key)
         elif value.get("litellm_provider") == "novita":
             novita_models.add(key)
+        elif value.get("litellm_provider") == "nebius":
+            if value.get("mode") == "embedding":
+                nebius_embedding_models.add(key)
+            else:
+                nebius_models.add(key)
         elif value.get("litellm_provider") == "nebius-chat-models":
             nebius_models.add(key)
         elif value.get("litellm_provider") == "nebius-embedding-models":
