@@ -3807,9 +3807,10 @@ class LiteLLMCompletionResponsesConfig:
                             id=mint_reasoning_item_id(),
                             status=LiteLLMCompletionResponsesConfig._responses_status_for_choice(choice),
                             role="assistant",
+                            summary=[],
                             content=[
                                 OutputText(
-                                    type="output_text",
+                                    type="reasoning_text",
                                     text=text,
                                     annotations=[],
                                 )
