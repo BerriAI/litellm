@@ -163,6 +163,31 @@ describe("customer hierarchy settings payloads", () => {
     });
   });
 
+  it.each([5e-7, 1.5e-9])("should keep a stored spend limit of %s when another limit is edited", (stored) => {
+    const record: Organization = { ...organization, budget: { ...organization.budget, max_budget: stored } };
+    const entity: CustomerHierarchyEntity = { kind: "organization", record };
+    expect(buildCustomerHierarchyPatch(entity, { ...customerHierarchyFields(entity), rpm: "20" })).toEqual({
+      ok: true,
+      patch: { kind: "organization", body: { budget: { ...record.budget, rpm_limit: 20 } } },
+    });
+  });
+
+  it.each(["1e999", "5e", "e5", "-5e-7", "0x10"])("should still reject the spend limit %s", (maxBudget) => {
+    const entity: CustomerHierarchyEntity = { kind: "organization", record: organization };
+    expect(buildCustomerHierarchyPatch(entity, { ...customerHierarchyFields(entity), maxBudget })).toEqual({
+      ok: false,
+      error: "invalidNumber",
+    });
+  });
+
+  it("should still reject exponent notation for a rate limit", () => {
+    const entity: CustomerHierarchyEntity = { kind: "organization", record: organization };
+    expect(buildCustomerHierarchyPatch(entity, { ...customerHierarchyFields(entity), tpm: "1e3" })).toEqual({
+      ok: false,
+      error: "invalidNumber",
+    });
+  });
+
   it("should retain an unchanged expiry exactly when editing the member name", () => {
     const entity: CustomerHierarchyEntity = { kind: "member", record: member };
     expect(buildCustomerHierarchyPatch(entity, { ...customerHierarchyFields(entity), alias: "New name" })).toEqual({

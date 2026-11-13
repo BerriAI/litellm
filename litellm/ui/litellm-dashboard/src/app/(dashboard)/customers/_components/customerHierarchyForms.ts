@@ -109,7 +109,7 @@ export const newCustomerHierarchyFields = (target: CustomerHierarchyCreateTarget
 const numericLimit = (raw: string, integer = false): number | null | undefined => {
   const value = raw.trim();
   if (!value) return null;
-  if (!(integer ? /^\d+$/ : /^(?:\d+(?:\.\d*)?|\.\d+)$/).test(value)) return undefined;
+  if (!(integer ? /^\d+$/ : /^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i).test(value)) return undefined;
   const number = Number(value);
   if (!Number.isFinite(number) || (integer && !Number.isSafeInteger(number))) return undefined;
   return number;
