@@ -863,6 +863,7 @@ class SpendLogCleanup:
             if expired_rows_sql is None
             else expired_rows_sql
         )
+        # bounded-ok: the IN slot is a SELECT subquery capped by LIMIT $2, never a spliced value list
         delete_sql: Final = f"""
             DELETE FROM "{table_name}"
             WHERE ({key_list}) IN (
