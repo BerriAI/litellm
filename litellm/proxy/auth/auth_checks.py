@@ -6557,6 +6557,7 @@ async def personal_key_team_visible_models(
     proxy_logging_obj: ProxyLogging | None,
     only_model_access_groups: bool = False,
     team_object: LiteLLM_TeamTableCachedObj | None = None,
+    return_wildcard_routes: bool = False,
 ) -> tuple[str, ...]:
     owner: Final = (
         await _personal_key_owner(user_api_key_dict, prisma_client, user_api_key_cache, proxy_logging_obj)
@@ -6567,7 +6568,14 @@ async def personal_key_team_visible_models(
         else None
     )
     candidates: Final = (
-        tuple(dict.fromkeys((*models, *llm_router.registry().names())))
+        tuple(
+            dict.fromkeys(
+                (
+                    *models,
+                    *(name for name in llm_router.registry().names() if return_wildcard_routes or "*" not in name),
+                )
+            )
+        )
         if _is_dashboard_session(user_api_key_dict)
         and llm_router is not None
         and not only_model_access_groups

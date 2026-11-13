@@ -10350,6 +10350,7 @@ async def get_available_models_for_user(
                 proxy_logging_obj=proxy_logging_obj,
                 only_model_access_groups=only_model_access_groups,
                 team_object=requested_team_object,
+                return_wildcard_routes=return_wildcard_routes,
             )
         )
         if personal_key_team_model_access_applies(user_api_key_dict)

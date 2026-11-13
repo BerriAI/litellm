@@ -304,6 +304,8 @@ async def _list_models(
     include_model_access_groups: bool = False,
     only_model_access_groups: bool = False,
     team_id: str | None = None,
+    llm_router: litellm.Router = _ROUTER,
+    return_wildcard_routes: bool = False,
 ) -> list[str]:
     async def _get_user_object(**_: object) -> LiteLLM_UserTable | None:
         return owner
@@ -311,7 +313,7 @@ async def _list_models(
     monkeypatch.setattr(auth_checks, "get_user_object", _get_user_object)
     return await get_available_models_for_user(
         user_api_key_dict=token,
-        llm_router=_ROUTER,
+        llm_router=llm_router,
         general_settings={},
         user_model=None,
         prisma_client=MagicMock(),
@@ -320,7 +322,33 @@ async def _list_models(
         include_model_access_groups=include_model_access_groups,
         only_model_access_groups=only_model_access_groups,
         team_id=team_id,
+        return_wildcard_routes=return_wildcard_routes,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("return_wildcard_routes", [False, True])
+async def test_dashboard_listing_respects_wildcard_exclusion(
+    monkeypatch: pytest.MonkeyPatch, teams: None, return_wildcard_routes: bool
+) -> None:
+    router: Final = litellm.Router(model_list=[
+        {"model_name": name, "litellm_params": {"model": name, "api_key": "test-key"}}
+        for name in ("openai/gpt-5.6", "openai/*")
+    ])
+    owner: Final = LiteLLM_UserTable(user_id="u1", models=[], teams=[])
+    token: Final = UserAPIKeyAuth(
+        token="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, models=[],
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    listed: Final = await _list_models(
+        monkeypatch, owner, token, llm_router=router, return_wildcard_routes=return_wildcard_routes
+    )
+    ordinary: Final = await _list_models(
+        monkeypatch, owner, token.model_copy(update={"team_id": None, "user_role": LitellmUserRoles.PROXY_ADMIN}),
+        llm_router=router, return_wildcard_routes=return_wildcard_routes,
+    )
+    assert set(listed) == set(ordinary)
+    assert ("openai/*" in listed) is return_wildcard_routes
 
 
 @pytest.mark.asyncio
