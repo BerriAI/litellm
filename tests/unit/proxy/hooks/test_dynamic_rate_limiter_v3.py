@@ -6,8 +6,9 @@ Core tests to validate that priority weights are respected (0.9/0.1) instead of 
 
 import asyncio
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta
+from types import ModuleType
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -3677,3 +3678,16 @@ async def test_a_worker_without_redis_reads_the_models_saturation_from_its_own_m
     group: Final = handler.llm_router.registry().group("shared-model")
     assert group is not None
     assert await handler._check_model_saturation("shared-model", group) == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
+async def test_the_limiter_loads_and_admits_requests_without_redis_installed(
+    monkeypatch: pytest.MonkeyPatch, import_without_redis_installed: Callable[[str], ModuleType]
+):
+    module: Final = import_without_redis_installed("litellm.proxy.hooks.dynamic_rate_limiter_v3")
+    handler: Final[PROXY_DynamicRateLimitHandlerV3] = module.PROXY_DynamicRateLimitHandlerV3(
+        internal_usage_cache=DualCache()
+    )
+    handler.update_variables(llm_router=_borrowing_handler(monkeypatch, borrows=False).llm_router)
+
+    await _check(handler, _class_team("team-a"), saturation=0.0, priority="interactive")
