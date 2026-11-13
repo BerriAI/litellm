@@ -17,11 +17,11 @@
 
 ## Layout
 
-Every forwarding decision has one home. `rewrite.rs` owns what Python and the client receive, as pure functions over requests and responses. `Rejection` in `error.rs` is the only place that picks a status for a request Rust answers itself. `settings.rs` parses the environment into typed values, so an `Upstream` is a loopback origin by construction. `server.rs` accepts client connections and owns their timeouts, since `axum::serve` exposes none, and `connections.rs` tracks every connection and relay for shutdown. `forward.rs` and `websocket.rs` only move requests, bodies and upgraded connections and never touch a header themselves. `connector.rs` keeps hyper reading Python's answer after Python stops reading the request
+Every forwarding decision has one home. `rewrite.rs` owns what Python and the client receive, as pure functions over requests and responses. `Rejection` in `error.rs` is the only place that picks a status for a request Rust answers itself. `settings.rs` parses the environment into typed values, so an `Upstream` is a loopback origin by construction. `server.rs` accepts client connections and owns their timeouts, since `axum::serve` exposes none, and hands each request to an app service with its `ClientSocket` in the extensions. `Forward` is itself that service in forward-only mode, and the fallback of the gateway's native router otherwise. The crate never decides what the app serves, and `connections.rs` tracks every connection and relay for shutdown. `forward.rs` and `websocket.rs` only move requests, bodies and upgraded connections and never touch a header themselves. `connector.rs` keeps hyper reading Python's answer after Python stops reading the request
 
 ## Environment
 
-`Settings` reads only these variables, and only when `LITELLM_FORWARD_UPSTREAM` is set. The Python supervisor in `litellm/proxy/rust_forward/` sets every one of them from the values Python actually runs with, so all of them are required and a missing or invalid one fails startup naming it. The crate never reads Python's own settings (`HOST`, `PORT`, `KEEPALIVE_TIMEOUT`, `GRACEFUL_SHUTDOWN_TIMEOUT`) and keeps no copy of Python's defaults, since Python can get those values from CLI flags the environment never shows
+`Settings` reads only these variables, and only when `LITELLM_FORWARD_UPSTREAM` is set. The Python supervisor in `litellm/proxy/rust_forward/` sets every one of them from the values Python actually runs with, so all of them are required and a missing or invalid one fails startup naming it. `LITELLM_FORWARD_CONFIG` is written empty when Python has no local config file, so a value left in the supervisor's own environment never reaches the gateway. The crate never reads Python's own settings (`HOST`, `PORT`, `KEEPALIVE_TIMEOUT`, `GRACEFUL_SHUTDOWN_TIMEOUT`) and keeps no copy of Python's defaults, since Python can get those values from CLI flags the environment never shows
 
 Only the Python supervisor starts the gateway in forwarding mode, from `litellm` and from `python -m gateway.launch`, on a laptop and in every image. `supervisor/children.py` is the only writer of these variables, so adding, renaming or removing one changes `settings.rs` and `children.rust_spec` in the same change. Without `LITELLM_FORWARD_UPSTREAM` the binary runs as the standalone Rust gateway and this crate does nothing
 
@@ -32,6 +32,7 @@ Only the Python supervisor starts the gateway in forwarding mode, from `litellm`
 | `LITELLM_FORWARD_PORT` | public bind port |
 | `LITELLM_FORWARD_UPSTREAM_KEEPALIVE` | seconds uvicorn keeps an idle connection open. Pooled connections are retired at half of it, and idle client connections are closed after it |
 | `LITELLM_FORWARD_SHUTDOWN_DRAIN` | seconds to drain on shutdown, already including Python's graceful timeout and teardown headroom |
+| `LITELLM_FORWARD_CONFIG` | absolute path of the local YAML file Python loads its config from, or empty. The crate only carries it. The gateway binary serves its native routes in front of Python when it is set and only forwards when it is empty |
 
 ## Tests
 

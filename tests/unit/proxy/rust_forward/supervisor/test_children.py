@@ -1,6 +1,8 @@
 import socket
 from typing import Final
 
+import pytest
+
 from litellm.constants import GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
 from litellm.proxy.proxy_cli import run_server
 from litellm.proxy.rust_forward.mode import Supervised, rust_forward_mode
@@ -51,4 +53,13 @@ def test_rust_child_serves_public_port_and_forwards_to_private_listener() -> Non
         "LITELLM_FORWARD_PORT": "4000",
         "LITELLM_FORWARD_UPSTREAM_KEEPALIVE": "2",
         "LITELLM_FORWARD_SHUTDOWN_DRAIN": str(2.5 + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS),
+        "LITELLM_FORWARD_CONFIG": "",
     }
+
+
+@pytest.mark.parametrize(
+    ("config_path", "written"), [("/etc/litellm/config.yaml", "/etc/litellm/config.yaml"), (None, "")]
+)
+def test_rust_child_always_gets_the_config_python_loads(config_path: str | None, written: str) -> None:
+    spec: Final = rust_spec(POSIX, "gateway", 45555, python_server(config_path=config_path))
+    assert spec.env_overrides["LITELLM_FORWARD_CONFIG"] == written

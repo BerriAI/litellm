@@ -179,21 +179,29 @@ impl MasterKeyAuthenticator {
     }
 
     async fn key(&self) -> Result<MasterKey, Error> {
-        let configured = self.key.as_ref().ok_or(Error::Unconfigured)?;
-        let resolved = match configured.expose().strip_prefix("os.environ/") {
-            Some(name) if !name.is_empty() => self
-                .secrets
-                .get_secret_str(name)
-                .await?
-                .ok_or(Error::Unconfigured)?,
-            Some(_) => return Err(Error::Unconfigured),
-            None => configured.clone(),
-        };
-        if resolved.expose().trim().is_empty() {
-            return Err(Error::Unconfigured);
-        }
-        Ok(MasterKey::new(resolved))
+        master_key(self.key.as_ref(), self.secrets.as_ref())
+            .await?
+            .ok_or(Error::Unconfigured)
     }
+}
+
+/// The configured master key with an `os.environ/` reference resolved, `None` when it is unset,
+/// names no variable, or resolves to blank.
+pub async fn master_key(
+    configured: Option<&SecretValue>,
+    secrets: &dyn SecretSource,
+) -> Result<Option<MasterKey>, Error> {
+    let Some(configured) = configured else {
+        return Ok(None);
+    };
+    let resolved = match configured.expose().strip_prefix("os.environ/") {
+        Some("") => None,
+        Some(name) => secrets.get_secret_str(name).await?,
+        None => Some(configured.clone()),
+    };
+    Ok(resolved
+        .filter(|key| !key.expose().trim().is_empty())
+        .map(MasterKey::new))
 }
 
 impl Authenticator for MasterKeyAuthenticator {
@@ -214,17 +222,21 @@ impl Authenticator for MasterKeyAuthenticator {
             if !expected.matches(credential) {
                 return Err(Error::InvalidToken);
             }
-            Ok(VerifiedIdentity {
-                principal: master_principal(),
-                authentication: Authentication {
-                    method: AuthenticationMethod::MasterKey,
-                    verifier: "litellm:master-key".into(),
-                    credential_id: "master".into(),
-                    expires_at: None,
-                },
-                restrictions: Permissions::All,
-            })
+            Ok(master_identity())
         })
+    }
+}
+
+pub(crate) fn master_identity() -> VerifiedIdentity {
+    VerifiedIdentity {
+        principal: master_principal(),
+        authentication: Authentication {
+            method: AuthenticationMethod::MasterKey,
+            verifier: "litellm:master-key".into(),
+            credential_id: "master".into(),
+            expires_at: None,
+        },
+        restrictions: Permissions::All,
     }
 }
 

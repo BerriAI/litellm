@@ -15,7 +15,7 @@ A supervised Python server differs from Python alone in exactly two ways, and no
 
 ## Modules
 
-- `server.py` describes what an entry point would serve with on the public port, as a `PythonServer`. The supervisor reads nothing else about the entry point
+- `server.py` describes what an entry point would serve with on the public port and the local config file it loads, as a `PythonServer`. The supervisor reads nothing else about the entry point
 - `mode.py` is the Python child's side. `Supervised` is the whole contract the supervisor hands the child, and the `uvicorn_*` and `gunicorn_*` functions translate it into each server's own options
 - `peer.py` restores the client address
 - `supervisor/` starts, watches and stops both children. Its rules are in `supervisor/AGENTS.md`
@@ -44,5 +44,5 @@ Python must see each request as if the client had connected directly. `x-litellm
 Each environment contract is written and read in one place
 
 - The Python child's contract is the `mode.Supervised` type itself. `mode.supervised_environment` serializes it into one variable and `mode.rust_forward_mode` validates it back, so a new field needs no parsing code
-- `supervisor.children.rust_spec` writes the `LITELLM_FORWARD_*` variables that `gateway-forward`'s `settings.rs` reads. Python owns every value Rust needs, so a new one gets a new variable there and a matching field in `settings.rs` in the same change
+- `supervisor.children.rust_spec` writes the `LITELLM_FORWARD_*` variables that `gateway-forward`'s `settings.rs` reads. Python owns every value Rust needs, so a new one gets a new variable there and a matching field in `settings.rs` in the same change. `LITELLM_FORWARD_CONFIG` is `PythonServer.config_path`, the local YAML file `server.local_config_path` says the proxy loads, and it is written empty when there is none, so the Rust child never reads a config path the supervisor did not resolve
 - `mode.rust_forward_mode` reads `LITELLM_RUST_FIRST` strictly, so an invalid value stops the CLI at startup with one line naming it. It is independent of `LITELLM_RUST`, which only selects the Rust paths inside the SDK in `litellm/rust_bridge/configuration.py`, so neither turns the other on
