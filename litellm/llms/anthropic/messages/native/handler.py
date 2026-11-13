@@ -639,18 +639,39 @@ async def anthropic_messages(
     )
     ctx: Final = contextvars.copy_context()
     func_with_context: Final = partial(ctx.run, func)
+
+    def map_exception(e: BaseLLMException) -> Exception:
+        try:
+            exception_type(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                original_exception=e,
+                extra_kwargs=kwargs,
+            )
+        except Exception as mapped:  # noqa: BLE001  # exception_type hands the mapped error back by raising it
+            return mapped
+        return e
+
     try:
         init_response: Final = await loop.run_in_executor(None, func_with_context)
-        if asyncio.iscoroutine(init_response):
-            return await init_response
-        return init_response
+        response: Final = await init_response if asyncio.iscoroutine(init_response) else init_response
     except BaseLLMException as e:
-        raise exception_type(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            original_exception=e,
-            extra_kwargs=kwargs,
-        )
+        raise map_exception(e)
+    return _with_stream_exceptions_mapped(response, map_exception)
+
+
+def _with_stream_exceptions_mapped(
+    response: AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object],
+    map_exception: Callable[[BaseLLMException], Exception],
+) -> AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]:
+    from .streaming_iterator import AnthropicMessagesStreamingResponse, ExceptionMappedAnthropicSSEStream
+
+    if not isinstance(response, AnthropicMessagesStreamingResponse):
+        return response
+    return AnthropicMessagesStreamingResponse(
+        completion_stream=ExceptionMappedAnthropicSSEStream(response.completion_stream, map_exception),
+        hidden_params=response.hidden_params,
+    )
 
 
 def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict | None:

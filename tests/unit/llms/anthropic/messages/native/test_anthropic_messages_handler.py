@@ -2,7 +2,9 @@ import asyncio
 import copy
 import json
 import os
+import struct
 import uuid
+import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -2996,3 +2998,53 @@ async def test_azure_messages_replay_encrypted_reasoning_only_to_responses(
     else:
         assert route.calls.last.request.url.path.endswith("/chat/completions")
         assert "qa-opaque-reasoning" not in json.dumps(body)
+
+
+def _bedrock_exception_frame(exception_type: str, payload: bytes) -> bytes:
+    def _header(name: str, value: str) -> bytes:
+        return bytes([len(name)]) + name.encode() + bytes([7]) + struct.pack(">H", len(value)) + value.encode()
+
+    headers: Final = (
+        _header(":message-type", "exception")
+        + _header(":exception-type", exception_type)
+        + _header(":content-type", "application/json")
+    )
+    prelude: Final = struct.pack(">II", 16 + len(headers) + len(payload), len(headers))
+    message: Final = prelude + struct.pack(">I", zlib.crc32(prelude)) + headers + payload
+    return message + struct.pack(">I", zlib.crc32(message))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("bedrock_exception_type", "mapped_exception", "status_code"),
+    [
+        ("internalServerException", litellm.ServiceUnavailableError, 503),
+        ("throttlingException", litellm.RateLimitError, 429),
+    ],
+)
+async def test_bedrock_exception_event_mid_stream_raises_the_mapped_exception(
+    bedrock_exception_type: str, mapped_exception: type[Exception], status_code: int
+) -> None:
+    frame: Final = _bedrock_exception_frame(bedrock_exception_type, b'{"message":"boom"}')
+    bedrock: Final = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, headers={"content-type": "application/vnd.amazon.eventstream"}, content=frame, request=request
+        )
+    )
+
+    stream: Final = await litellm.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        stream=True,
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        client=AsyncHTTPHandler(transport=bedrock),
+    )
+
+    with pytest.raises(mapped_exception) as raised:
+        async for _ in stream:
+            pass
+    assert raised.value.status_code == status_code
+    assert bedrock_exception_type in str(raised.value)

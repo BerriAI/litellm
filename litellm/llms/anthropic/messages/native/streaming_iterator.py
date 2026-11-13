@@ -3,7 +3,7 @@ import contextlib
 import json
 import math
 import re
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
@@ -31,6 +31,7 @@ from litellm.llms.anthropic.messages.native.utils import (
 )
 from litellm.llms.anthropic.messages.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.messages.utils import anthropic_sse_frame
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
@@ -536,6 +537,36 @@ class SafeguardedAnthropicSSEStream:
 
     async def aclose(self) -> None:
         await self._frames.aclose()
+        await aclose_if_supported(self._stream)
+
+
+class ExceptionMappedAnthropicSSEStream:
+    """
+    Maps a provider exception raised while the stream is read (e.g. a Bedrock
+    ``exception`` event decoded into a ``BedrockError``) the same way
+    ``anthropic_messages`` maps one raised before the stream is returned, so
+    callers catch the litellm exception types instead of the internal
+    provider class.
+    """
+
+    def __init__(self, stream: AsyncIterator[bytes], map_exception: Callable[[BaseLLMException], Exception]) -> None:
+        self._stream: Final = stream
+        self._map_exception: Final = map_exception
+
+    @property
+    def has_buffered_provider_output(self) -> bool:
+        return getattr(self._stream, "has_buffered_provider_output", False) is True
+
+    def __aiter__(self) -> "ExceptionMappedAnthropicSSEStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        try:
+            return await self._stream.__anext__()
+        except BaseLLMException as e:
+            raise self._map_exception(e)
+
+    async def aclose(self) -> None:
         await aclose_if_supported(self._stream)
 
 
