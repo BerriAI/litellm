@@ -222,7 +222,7 @@ from litellm.router_api import (
     request_fallback_chain,
 )
 from litellm.secret_managers.main import get_secret_bool
-from litellm.types.proxy.auth.customer_hierarchy import CustomerIdentityAssertion
+from litellm.types.proxy.auth.customer_hierarchy import CustomerIdentityAssertion, CustomerRequestIdentity
 from litellm.types.services import ServiceTypes
 
 try:
@@ -4508,6 +4508,72 @@ def _resolve_request_principal(request: Request, valid_token: UserAPIKeyAuth) ->
     )
 
 
+def _customer_assertion_through_db_outage(
+    error: Exception, customer_identity: CustomerRequestIdentity, user_api_key_auth_obj: UserAPIKeyAuth
+) -> CustomerIdentityAssertion | None:
+    """The customer the headers named, recorded unverified, when the hierarchy lookup failed on a database
+    outage the proxy is configured to serve through. None for any other failure."""
+    if not (
+        PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+        and PrismaDBExceptionHandler.is_database_connection_error(
+            error, authenticated_customer_hierarchy=user_api_key_auth_obj.via_virtual_key
+        )
+    ):
+        return None
+    verbose_proxy_logger.warning(
+        "DB unavailable, admitting request without customer hierarchy. customer org alias=%s, customer member id=%s",
+        customer_identity.customer_org_alias,
+        customer_identity.customer_member_id,
+    )
+    return CustomerIdentityAssertion.model_validate(
+        {
+            "customer_org_alias": customer_identity.customer_org_alias,
+            "customer_member_id": customer_identity.customer_member_id,
+            "customer_team_id": customer_identity.customer_team_id,
+            "key_customer_org_id": _KEY_METADATA_ADAPTER.validate_python(
+                user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # key metadata is untyped, validated here
+            ).get("customer_org_id"),
+        }
+    )
+
+
+async def _resolve_request_customer_hierarchy(
+    user_api_key_auth_obj: UserAPIKeyAuth,
+    customer_identity: CustomerRequestIdentity,
+    request: Request,
+    request_data: dict[str, object],
+    route: str,
+) -> None:
+    """Records on the request's auth object the customer hierarchy the headers name, or only the named identity
+    when the lookup failed on a database outage the proxy serves through."""
+    from litellm.proxy.proxy_server import llm_router, prisma_client, user_api_key_cache
+
+    try:
+        hierarchy: Final = await resolve_customer_hierarchy(
+            identity=customer_identity,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            llm_router=llm_router,
+            request_model=_get_model_from_request_context(
+                request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
+            ),
+            route=route,
+            key_metadata=_KEY_METADATA_ADAPTER.validate_python(
+                user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key metadata, validated here
+            ),
+        )
+    except CustomerBudgetExceededError as error:
+        user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
+        raise
+    except Exception as e:
+        assertion: Final = _customer_assertion_through_db_outage(e, customer_identity, user_api_key_auth_obj)
+        if assertion is None:
+            raise
+        user_api_key_auth_obj.customer_identity_assertion = assertion  # rebind-ok: request auth
+    else:
+        user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
+
+
 async def _authorize_authenticated_request(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
@@ -4558,51 +4624,9 @@ async def _authorize_authenticated_request(
         user_api_key_auth_obj.customer_identity_assertion = None  # rebind-ok: request-owned customer assertion
         if customer_identity is not None and not _is_unauthenticated_public_route(route):
             with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
-                try:
-                    hierarchy: Final = await resolve_customer_hierarchy(
-                        identity=customer_identity,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        llm_router=llm_router,
-                        request_model=_get_model_from_request_context(
-                            request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
-                        ),
-                        route=route,
-                        key_metadata=_KEY_METADATA_ADAPTER.validate_python(
-                            user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key metadata, validated here
-                        ),
-                    )
-                except CustomerBudgetExceededError as error:
-                    user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
-                    raise
-                except Exception as e:
-                    if not (
-                        PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
-                        and PrismaDBExceptionHandler.is_database_connection_error(
-                            e, authenticated_customer_hierarchy=user_api_key_auth_obj.via_virtual_key
-                        )
-                    ):
-                        raise
-                    verbose_proxy_logger.warning(
-                        "DB unavailable, admitting request without customer hierarchy. "
-                        "customer org alias=%s, customer member id=%s",
-                        customer_identity.customer_org_alias,
-                        customer_identity.customer_member_id,
-                    )
-                    user_api_key_auth_obj.customer_identity_assertion = (  # rebind-ok: request auth
-                        CustomerIdentityAssertion.model_validate(
-                            {
-                                "customer_org_alias": customer_identity.customer_org_alias,
-                                "customer_member_id": customer_identity.customer_member_id,
-                                "customer_team_id": customer_identity.customer_team_id,
-                                "key_customer_org_id": _KEY_METADATA_ADAPTER.validate_python(
-                                    user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # key metadata is untyped, validated here
-                                ).get("customer_org_id"),
-                            }
-                        )
-                    )
-                else:
-                    user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
+                await _resolve_request_customer_hierarchy(
+                    user_api_key_auth_obj, customer_identity, request, request_data, route
+                )
 
         grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
         user_api_key_auth_obj.apply_access_group_rule_grants(grants)
