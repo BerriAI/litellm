@@ -4806,6 +4806,7 @@ class LlmProviders(str, Enum):
     DOTPROMPT = "dotprompt"
     MANUS = "manus"
     WANDB = "wandb"
+    OUTRUN = "outrun"
     OVHCLOUD = "ovhcloud"
     SCALEWAY = "scaleway"
     LEMONADE = "lemonade"
