@@ -643,35 +643,61 @@ class ProxyExtrasDBManager:
                     logger.warning(f"Failed to resolve migration {migration_name}: {e.stderr}")
 
     @staticmethod
-    def raise_if_lens_rename_pending(connect: LensCheckConnect | None = None) -> None:
+    def _legacy_schema_object_exists(query: str, subject: str, connect: LensCheckConnect | None) -> bool:
         database_url: Final = os.environ.get("DATABASE_URL")
         if not database_url:
-            return
+            return False
         try:
             import psycopg
         except ImportError as exc:
-            raise RuntimeError("Install psycopg to verify Lens data safety before prisma db push.") from exc
+            raise RuntimeError(f"Install psycopg to verify {subject} data safety before prisma db push.") from exc
         open_connection: Final = connect if connect is not None else psycopg.connect
         try:
             with open_connection(
                 ProxyExtrasDBManager._strip_prisma_query_params(database_url), connect_timeout=10, autocommit=True
             ) as connection:
-                legacy: Final = connection.execute(
-                    "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
-                    "WHERE n.nspname=%s AND c.relname IN ('LiteLLM_Engine', 'LiteLLM_EngineRun', 'LiteLLM_EngineWorker') "
-                    "LIMIT 1",
-                    (ProxyExtrasDBManager._prisma_schema_param(database_url) or "public",),
-                ).fetchone()
+                return (
+                    connection.execute(
+                        query, (ProxyExtrasDBManager._prisma_schema_param(database_url) or "public",)
+                    ).fetchone()
+                    is not None
+                )
         except psycopg.Error as exc:
             raise RuntimeError(
-                "Cannot verify Lens data safety; refusing prisma db push. "
+                f"Cannot verify {subject} data safety; refusing prisma db push. "
                 f"The database check failed: {_redact_credentials(str(exc)).strip()}"
             ) from exc
-        if legacy is not None:
+
+    @staticmethod
+    def raise_if_lens_rename_pending(connect: LensCheckConnect | None = None) -> None:
+        if ProxyExtrasDBManager._legacy_schema_object_exists(
+            "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE n.nspname=%s AND c.relname IN ('LiteLLM_Engine', 'LiteLLM_EngineRun', 'LiteLLM_EngineWorker') "
+            "LIMIT 1",
+            "Lens",
+            connect,
+        ):
             raise RuntimeError(
                 "Legacy Lens tables exist. prisma db push would drop saved Lens data. "
                 "Apply the shipped 20261001100000_rename_lens migration to this database schema before retrying. "
                 "Deployments using migration history can upgrade without --use_prisma_db_push instead."
+            )
+
+    @staticmethod
+    def raise_if_customer_member_override_rename_pending(connect: LensCheckConnect | None = None) -> None:
+        if ProxyExtrasDBManager._legacy_schema_object_exists(
+            "SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid "
+            "JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE n.nspname=%s AND c.relname='LiteLLM_CustomerMemberTable' "
+            "AND a.attname='budget_id' AND NOT a.attisdropped LIMIT 1",
+            "customer member budget override",
+            connect,
+        ):
+            raise RuntimeError(
+                "LiteLLM_CustomerMemberTable still has the budget_id column. prisma db push would drop it "
+                "and unlink every customer member budget override. Apply the shipped "
+                "20261112120000_rename_customer_member_budget_override_id migration to this database schema "
+                "before retrying. Deployments using migration history can upgrade without --use_prisma_db_push instead."
             )
 
     @staticmethod
@@ -1037,6 +1063,7 @@ class ProxyExtrasDBManager:
 
         if not use_migrate:
             ProxyExtrasDBManager.raise_if_lens_rename_pending()
+            ProxyExtrasDBManager.raise_if_customer_member_override_rename_pending()
             if ProxyExtrasDBManager.spend_logs_is_partitioned():
                 raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
             original_dir = os.getcwd()
@@ -1715,6 +1742,7 @@ class ProxyExtrasDBManager:
                         raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
                     # Use prisma db push with increased timeout
                     ProxyExtrasDBManager.raise_if_lens_rename_pending()
+                    ProxyExtrasDBManager.raise_if_customer_member_override_rename_pending()
                     prisma_toolchain.run_prisma(
                         [_get_prisma_command(), "db", "push", "--accept-data-loss"],
                         timeout=prisma_command_timeout(),

@@ -818,6 +818,34 @@ class TestLensRenamePendingCheck:
         assert executed[0][1] == ("public",)
 
 
+class TestCustomerMemberOverrideRenamePendingCheck:
+    _DATABASE_URL: Final = "postgresql://litellm:hunter2@localhost:5432/litellm?schema=tenant_a"
+
+    def test_a_leftover_budget_id_column_refuses_the_push(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
+        executed: Final[list[tuple[str, tuple[str]]]] = []
+
+        def legacy_column_present(conninfo: str, *, connect_timeout: int, autocommit: bool) -> _FakePsycopgConn:
+            return _FakePsycopgConn(executed)
+
+        with pytest.raises(RuntimeError) as err:
+            ProxyExtrasDBManager.raise_if_customer_member_override_rename_pending(connect=legacy_column_present)
+        assert "20261112120000_rename_customer_member_budget_override_id" in str(err.value)
+        assert executed[0][1] == ("tenant_a",)
+
+    def test_an_unreachable_database_refuses_the_push(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import psycopg
+
+        monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
+
+        def refuse(conninfo: str, *, connect_timeout: int, autocommit: bool) -> NoReturn:
+            raise psycopg.OperationalError("FATAL:  sorry, too many clients already")
+
+        with pytest.raises(RuntimeError) as err:
+            ProxyExtrasDBManager.raise_if_customer_member_override_rename_pending(connect=refuse)
+        assert "FATAL:  sorry, too many clients already" in str(err.value)
+
+
 class TestSpendLogsPartitionDetectionSchemaScope:
     """A same-named LiteLLM_SpendLogs in another schema must not trip the
     detector: the catalog lookup has to be scoped to Prisma's target schema."""

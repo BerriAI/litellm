@@ -1281,6 +1281,7 @@ class PrismaManager:
                     from litellm_proxy_extras.utils import ProxyExtrasDBManager
 
                     ProxyExtrasDBManager.raise_if_lens_rename_pending()
+                    ProxyExtrasDBManager.raise_if_customer_member_override_rename_pending()
                     PrismaManager._raise_if_partitioned_spend_logs()
                     run_prisma(
                         [
