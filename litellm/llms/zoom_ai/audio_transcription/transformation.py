@@ -108,8 +108,8 @@ class _Word(TypedDict):
 
 class _OptionalFields(TypedDict, total=False):
     language: ReadOnly[str]
-    segments: ReadOnly[list[_Segment]]  # writable-ok: never written, list is the OpenAI response shape
-    words: ReadOnly[list[_Word]]  # writable-ok: never written, list is the OpenAI response shape
+    segments: ReadOnly[list[_Segment]]  # mutable-ok: OpenAI response shape is a JSON list
+    words: ReadOnly[list[_Word]]  # mutable-ok: OpenAI response shape is a JSON list
     polished_text: ReadOnly[str]
 
 
