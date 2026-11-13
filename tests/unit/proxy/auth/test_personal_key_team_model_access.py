@@ -8,6 +8,7 @@ from fastapi import Request
 import litellm
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -19,15 +20,25 @@ from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, common_c
 from litellm.proxy.utils import get_available_models_for_user
 
 _TEAMS: Final[Mapping[str, LiteLLM_TeamTableCachedObj]] = {
+    UI_TEAM_ID: LiteLLM_TeamTableCachedObj(team_id=UI_TEAM_ID, models=[]),
     "team-a": LiteLLM_TeamTableCachedObj(team_id="team-a", models=["gpt-a", "shared"]),
     "team-b": LiteLLM_TeamTableCachedObj(team_id="team-b", models=["gpt-b", "shared"]),
     "team-open": LiteLLM_TeamTableCachedObj(team_id="team-open", models=[]),
     "team-blocked": LiteLLM_TeamTableCachedObj(team_id="team-blocked", models=["gpt-a"], blocked=True),
+    "team-group": LiteLLM_TeamTableCachedObj(
+        team_id="team-group", models=["no-default-models"], access_group_ids=["team-models"]
+    ),
+    "team-exhausted": LiteLLM_TeamTableCachedObj(team_id="team-exhausted", models=["gpt-a"], spend=2, max_budget=1),
+    "team-native-group": LiteLLM_TeamTableCachedObj(team_id="team-native-group", models=["team-access"]),
 }
 
 _ROUTER: Final = litellm.Router(
     model_list=[
-        {"model_name": name, "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"}}
+        {
+            "model_name": name,
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"},
+            "model_info": {"access_groups": ["team-access"] if name == "gpt-a" else []},
+        }
         for name in ("gpt-a", "gpt-b", "shared", "gpt-c")
     ]
 )
@@ -272,6 +283,101 @@ async def _list_models(monkeypatch: pytest.MonkeyPatch, owner: LiteLLM_UserTable
         proxy_logging_obj=MagicMock(),
         user_api_key_cache=MagicMock(),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", [False, True])
+@pytest.mark.parametrize(
+    "own_models, owner_teams, expected",
+    [
+        (["no-default-models"], ["team-a"], {"gpt-a", "shared"}),
+        (["gpt-c"], [], {"gpt-c"}),
+        (["gpt-c"], ["team-a"], {"gpt-a", "shared", "gpt-c"}),
+        ([], [], {"gpt-a", "gpt-b", "shared", "gpt-c"}),
+        ([], ["team-a"], {"gpt-a", "gpt-b", "shared", "gpt-c"}),
+        (["no-default-models"], [], set()),
+        (["no-default-models"], ["team-blocked"], set()),
+        (["no-default-models"], ["team-missing"], set()),
+        (["no-default-models"], ["team-exhausted"], set()),
+        pytest.param(["no-default-models"], ["team-native-group"], {"gpt-a"}, id="team-model-access-group"),
+    ],
+)
+async def test_dashboard_lists_and_calls_own_and_team_models(
+    monkeypatch: pytest.MonkeyPatch,
+    teams: None,
+    flag: bool,
+    own_models: list[str],
+    owner_teams: list[str],
+    expected: set[str],
+) -> None:
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", flag)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    owner: Final = LiteLLM_UserTable(user_id="u1", models=own_models, teams=owner_teams)
+    token: Final = UserAPIKeyAuth(
+        token="dashboard-key",
+        user_id="u1",
+        team_id=UI_TEAM_ID,
+        models=own_models,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    assert set(await _list_models(monkeypatch, owner, token)) == expected
+    for model in ("gpt-a", "gpt-b", "shared", "gpt-c"):
+        if model in expected:
+            await can_key_call_resolved_model(model=model, llm_model_list=None, valid_token=token, llm_router=_ROUTER)
+            assert await _common_checks(model, owner, token) is True
+        else:
+            with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
+                await can_key_call_resolved_model(
+                    model=model, llm_model_list=None, valid_token=token, llm_router=_ROUTER
+                )
+            assert str(exc_info.value.code) == "403"
+
+
+@pytest.mark.asyncio
+async def test_admin_dashboard_models_are_not_capped_by_teams(monkeypatch: pytest.MonkeyPatch, teams: None) -> None:
+    _enable(monkeypatch)
+    owner: Final = LiteLLM_UserTable(user_id="admin", teams=["team-a"], user_role=LitellmUserRoles.PROXY_ADMIN.value)
+    token: Final = UserAPIKeyAuth(
+        token="dashboard-key",
+        user_id="admin",
+        team_id=UI_TEAM_ID,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    assert set(await _list_models(monkeypatch, owner, token)) == {"gpt-a", "gpt-b", "shared", "gpt-c"}
+    await can_key_call_resolved_model(model="gpt-c", llm_model_list=None, valid_token=token, llm_router=_ROUTER)
+
+
+@pytest.mark.parametrize("flag", [False, True])
+def test_dashboard_does_not_inherit_mcp_or_agent_team_grants(monkeypatch: pytest.MonkeyPatch, flag: bool) -> None:
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", flag)
+    assert (
+        auth_checks.personal_key_inherits_team_grants(
+            UserAPIKeyAuth(token="dashboard-key", user_id="u1", team_id=UI_TEAM_ID)
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_dashboard_lists_and_calls_team_access_group_models(
+    monkeypatch: pytest.MonkeyPatch,
+    teams: None,
+) -> None:
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", False)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(auth_checks, "get_models_from_access_groups", AsyncMock(return_value=["gpt-b"]))
+    owner: Final = LiteLLM_UserTable(user_id="u1", models=["no-default-models"], teams=["team-group"])
+    token: Final = UserAPIKeyAuth(
+        token="dashboard-key",
+        user_id="u1",
+        team_id=UI_TEAM_ID,
+        models=owner.models,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    assert await _list_models(monkeypatch, owner, token) == ["gpt-b"]
+    await can_key_call_resolved_model(model="gpt-b", llm_model_list=None, valid_token=token, llm_router=_ROUTER)
+    with pytest.raises(ModelAccessDeniedProxyException):
+        await can_key_call_resolved_model(model="gpt-c", llm_model_list=None, valid_token=token, llm_router=_ROUTER)
 
 
 @pytest.mark.asyncio

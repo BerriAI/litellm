@@ -1365,7 +1365,12 @@ async def common_checks(
     )
 
     ## 2.1 If user can call model (if personal key)
-    if _model and team_object is None and user_object is not None:
+    if (
+        _model
+        and team_object is None
+        and user_object is not None
+        and not (_is_dashboard_session(valid_token) and personal_key_team_model_access_applies(valid_token))
+    ):
         with tracer.trace("litellm.proxy.auth.common_checks.can_user_call_model"):
             await can_user_call_model(
                 model=_model,
@@ -5583,6 +5588,27 @@ async def can_key_call_model(
             object_type="key",
         )
     except ProxyException:
+        if _is_dashboard_session(valid_token) and personal_key_team_model_access_applies(valid_token):
+            from litellm.proxy.proxy_server import (
+                prisma_client as dashboard_prisma_client,
+            )
+            from litellm.proxy.proxy_server import (
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
+            owner: Final = await _personal_key_owner(
+                valid_token, dashboard_prisma_client, user_api_key_cache, proxy_logging_obj
+            )
+            return await can_personal_key_call_model_via_teams(
+                model=model,
+                user_object=owner,
+                valid_token=valid_token,
+                llm_router=llm_router,
+                prisma_client=dashboard_prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
         # Fallback: check key's access_group_ids
         key_access_group_ids: Final = valid_token.access_group_ids or []
         if key_access_group_ids:
@@ -6011,9 +6037,11 @@ async def can_user_call_model(
 
 def personal_key_team_model_access_applies(valid_token: UserAPIKeyAuth | None) -> bool:
     return (
-        bool(litellm.personal_key_model_access_from_teams)
-        and valid_token is not None
-        and valid_token.team_id is None
+        valid_token is not None
+        and (
+            _is_dashboard_session(valid_token)
+            or (bool(litellm.personal_key_model_access_from_teams) and valid_token.team_id is None)
+        )
         and valid_token.user_id is not None
         and valid_token.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS
         and valid_token.user_role != LitellmUserRoles.PROXY_ADMIN
@@ -6026,8 +6054,24 @@ def personal_key_inherits_team_grants(valid_token: UserAPIKeyAuth | None) -> boo
     return (
         personal_key_team_model_access_applies(valid_token)
         and valid_token is not None
+        and valid_token.team_id is None
         and valid_token.api_key is not None
     )
+
+
+def _dashboard_key_grants_model(model: str, valid_token: UserAPIKeyAuth, llm_router: RegistryReader | None) -> bool:
+    if not _is_dashboard_session(valid_token):
+        return False
+    try:
+        return can_object_call_model(
+            model=model,
+            models=_resolve_key_models_for_auth_check(valid_token),
+            llm_router=llm_router,
+            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+            object_type="key",
+        )
+    except ProxyException:
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -6139,6 +6183,14 @@ async def _team_grants_personal_key_model(
             proxy_logging_obj=proxy_logging_obj,
             key_model_aliases=key_model_aliases,
         )
+        if _is_dashboard_session(valid_token):
+            return prisma_client is not None and await _personal_key_team_within_budget(
+                team=team_object,
+                valid_token=valid_token,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
     except ProxyException:
         return False
     except Exception as e:  # noqa: BLE001  # fail closed: a team check that errors grants nothing
@@ -6387,6 +6439,11 @@ async def personal_key_team_visible_models(
     user_api_key_cache: UserApiKeyCache | None,
     proxy_logging_obj: ProxyLogging | None,
 ) -> tuple[str, ...]:
+    candidates: Final = (
+        tuple(dict.fromkeys((*models, *llm_router.registry().names())))
+        if _is_dashboard_session(user_api_key_dict) and llm_router is not None
+        else models
+    )
     teams: Final = await _personal_key_listing_teams(
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
@@ -6396,9 +6453,11 @@ async def personal_key_team_visible_models(
     return tuple(
         [
             model
-            for model in (models if teams else ())
-            if (
-                prisma_client is not None
+            for model in candidates
+            if _dashboard_key_grants_model(model, user_api_key_dict, llm_router)
+            or (
+                bool(teams)
+                and prisma_client is not None
                 and user_api_key_cache is not None
                 and proxy_logging_obj is not None
                 and await _loaded_teams_allow_model(
@@ -6437,6 +6496,8 @@ async def can_personal_key_call_model_via_teams(
         else ()
     )
     for requested_model in requested_models:
+        if _dashboard_key_grants_model(requested_model, valid_token, llm_router):
+            continue
         if user_object is None or not await _loaded_teams_allow_model(
             model=requested_model,
             teams=teams,
