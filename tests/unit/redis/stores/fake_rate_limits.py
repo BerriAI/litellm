@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from itertools import chain
 from typing import Final, Generic, TypeVar
 
 from pydantic import TypeAdapter
@@ -90,6 +91,13 @@ def _over_limit(raw: list[RawValue]) -> tuple[int, int, int] | None:
     return None
 
 
+def counter_pairs(
+    counters: Sequence[RateLimitCounter], text: Callable[[RateLimitCounter], str | None]
+) -> list[str | None]:
+    """Each counter's window start, always ``None`` here, then its count, the shape ``BATCH_COUNTER_READ_SCRIPT`` answers in."""
+    return list(chain.from_iterable((None, text(counter)) for counter in counters))
+
+
 @dataclass
 class FakeRateLimits:
     """Assign a fake to a ``*_script`` attribute to give the limiter a Redis that runs it; a script the test
@@ -153,7 +161,7 @@ class FakeRateLimits:
 
         async def reply() -> list[str | None]:
             if self.batch_counter_read_script is None:
-                return [text for counter in counters for text in (None, self._local_text(counter))]
+                return counter_pairs(counters, self._local_text)
             raw: Final = await self._run(self.batch_counter_read_script, "batch_counter_read_script", keys, [])
             return [_text(value) for value in raw]
 

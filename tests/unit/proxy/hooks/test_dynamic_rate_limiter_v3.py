@@ -35,7 +35,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.hooks.priority_class_share import pool_member
 from litellm.redis.stores.rate_limits import LocalValue, RateLimitCounter, RateLimitEntry, RateLimitScope
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
-from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, Resolved
+from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, Resolved, counter_pairs
 
 
 class TimeController:
@@ -1436,17 +1436,21 @@ async def test_saturation_check_cache_ttl_configuration(monkeypatch):
             "TTL should be configurable via priority_reservation_settings"
         )
 
-        # The Redis count is written back to memory for the configured TTL
+        # The Redis count is written back to an empty memory for the configured TTL
         get_cache_calls = []
 
         class _RecordingRateLimits(FakeRateLimits):
+            def read_counters(self, counters, send):
+                return Resolved(lambda: _resolved(counter_pairs(counters, lambda _counter: "1")), send, "read_counters")
+
             def set_local(self, entry, value, ttl_seconds):
                 get_cache_calls.append({"entry": entry, "ttl": ttl_seconds})
-                super().set_local(entry, value, ttl_seconds)
+
+        async def _resolved(value):
+            return value
 
         counter = RateLimitScope("model_saturation_check", model).counter("requests")
         fakes = _RecordingRateLimits()
-        fakes.memory.set_local(counter, 1, 60)
         handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
             handler.internal_usage_cache,
             rate_limit_store=fakes.store(),
@@ -3809,7 +3813,7 @@ class _SharedRedisRateLimits(FakeRateLimits):
 
     def read_counters(self, counters: Sequence[RateLimitCounter], send: object) -> Resolved[list[str | None]]:
         async def reply() -> list[str | None]:
-            return [text for counter in counters for text in (None, self._redis_text(counter))]
+            return counter_pairs(counters, self._redis_text)
 
         return Resolved(reply, send, "read_counters")
 
