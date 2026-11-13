@@ -17,6 +17,7 @@ const audit = {
   spend: 0,
 };
 const organization: Organization = {
+  budget_groups_revision: "a".repeat(64),
   ...audit,
   customer_org_id: "org-1",
   alias: "Example customer",

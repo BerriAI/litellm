@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING, Final, cast
 
@@ -21,6 +22,7 @@ from tests.unit.proxy.management_helpers.test_customer_hierarchy import (
     Database,
     DeleteConflictTable,
     Record,
+    Table,
 )
 
 if TYPE_CHECKING:
@@ -1622,6 +1624,198 @@ def test_member_in_two_teams_is_listed_under_each_and_teams_from_another_organiz
     assert mixed.status_code == 404, mixed.text
     fetched: Final = http.get("/management/v1/customer_organizations/org")
     assert fetched.json()["member_count"] == 1
+
+
+def test_grouped_configuration_preserves_settings_swaps_names_and_selects_a_new_default() -> None:
+    http: Final = client()
+    org: Final = family(http)
+    first, second = org["default_budgets"]
+    response: Final = http.patch(
+        "/management/v1/customer_organizations/org/default_budgets",
+        json={
+            "expected_revision": org["budget_groups_revision"],
+            "default_budgets": [
+                {"budget_id": first["budget_id"], "name": second["name"], "cap_policy": "pause_allow_increase"},
+                {"budget_id": second["budget_id"], "name": first["name"]},
+                {"name": "new", "budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]},
+            ],
+            "default_budget_template": "new",
+        },
+    )
+    assert response.status_code == 200, response.text
+    saved: Final = response.json()
+    assert saved["default_budgets"][0] == {**first, "name": second["name"], "cap_policy": "pause_allow_increase"}
+    assert saved["default_budgets"][1] == {**second, "name": first["name"]}
+    assert saved["default_budget_template_id"] == saved["default_budgets"][2]["budget_id"]
+    assert saved["budget_groups_revision"] != org["budget_groups_revision"]
+    assert http.get("/management/v1/customer_organizations/org").json() == saved
+
+
+def test_grouped_configuration_rejects_stale_edits_without_losing_external_groups() -> None:
+    http: Final = client()
+    org: Final = family(http)
+    external: Final = http.post("/management/v1/customer_organizations/org/default_budgets", json={"name": "external"})
+    assert external.status_code == 201, external.text
+    response: Final = http.patch(
+        "/management/v1/customer_organizations/org/default_budgets",
+        json={
+            "expected_revision": org["budget_groups_revision"],
+            "default_budgets": [{"budget_id": row["budget_id"], "name": row["name"]} for row in org["default_budgets"]],
+            "default_budget_template": "standard",
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["type"].endswith("configuration-conflict")
+    assert http.get("/management/v1/customer_organizations/org").json() == external.json()
+
+
+def test_grouped_configuration_referenced_deletion_rejects_the_whole_save() -> None:
+    http: Final = client()
+    org: Final = family(http)
+    member: Final = http.post(
+        "/management/v1/customer_members", json={"customer_member_id": "m", "parent_team_ids": ["team"]}
+    )
+    assert member.status_code == 201, member.text
+    before: Final = http.get("/management/v1/customer_organizations/org").json()
+    response: Final = http.patch(
+        "/management/v1/customer_organizations/org/default_budgets",
+        json={
+            "expected_revision": org["budget_groups_revision"],
+            "default_budgets": [
+                {"budget_id": org["default_budgets"][1]["budget_id"], "name": "changed", "max_budget": 999},
+                {"name": "new", "max_budget": 1},
+            ],
+            "default_budget_template": "new",
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["type"].endswith("template-in-use")
+    assert http.get("/management/v1/customer_organizations/org").json() == before
+
+
+def test_grouped_configuration_keeps_window_clocks_and_invalidates_member_cache() -> None:
+    cache: Final = UserApiKeyCache()
+    http: Final = client(cache=cache)
+    org: Final = family(http)
+    member: Final = http.post(
+        "/management/v1/customer_members", json={"customer_member_id": "m", "parent_team_ids": ["team"]}
+    )
+    assert member.status_code == 201, member.text
+    first: Final = org["default_budgets"][0]
+    windows: Final = http.patch(
+        f"/management/v1/customer_organizations/org/default_budgets/{first['budget_id']}",
+        json={
+            "budget_limits": [
+                {"budget_duration": "1mo", "max_budget": 10, "reset_at": "2027-01-15T00:00:00Z"},
+                {"budget_duration": "12mo", "max_budget": 100, "reset_at": "2027-11-15T00:00:00Z"},
+            ]
+        },
+    )
+    assert windows.status_code == 200, windows.text
+    advanced: Final = http.patch(
+        f'/management/v1/customer_organizations/org/default_budgets/{first["budget_id"]}',
+        json={
+            "budget_limits": [
+                {**row, "reset_at": "2028-01-15T00:00:00Z"}
+                for row in windows.json()["default_budgets"][0]["budget_limits"]
+            ]
+        },
+    )
+    assert advanced.status_code == 200, advanced.text
+    assert advanced.json()["budget_groups_revision"] == windows.json()["budget_groups_revision"]
+    cache.set_cache(customer_member_cache_key("m"), "old-budget")
+    saved: Final = http.patch(
+        "/management/v1/customer_organizations/org/default_budgets",
+        json={
+            "expected_revision": windows.json()["budget_groups_revision"],
+            "default_budgets": [
+                {
+                    "budget_id": first["budget_id"],
+                    "name": "standard",
+                    "budget_limits": [
+                        {"budget_duration": "1mo", "max_budget": 15},
+                        {"budget_duration": "12mo", "max_budget": 100},
+                    ],
+                }
+            ],
+            "default_budget_template": "standard",
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    previous: Final = advanced.json()["default_budgets"][0]
+    assert saved.json()["default_budgets"] == [
+        {
+            **previous,
+            "budget_limits": [
+                {**previous["budget_limits"][0], "max_budget": 15},
+                previous["budget_limits"][1],
+            ],
+        }
+    ]
+    assert cache.get_cache(customer_member_cache_key("m")) is None
+    assert (
+        http.get("/management/v1/customer_members/m").json()["effective_budget"]["budget_limits"][0]["max_budget"] == 15
+    )
+
+
+@pytest.mark.parametrize("case", ("duplicate_id", "foreign_id", "duplicate_name", "missing_default"))
+def test_invalid_grouped_configuration_leaves_existing_groups_untouched(case: str) -> None:
+    http: Final = client()
+    org: Final = family(http)
+    first, second = org["default_budgets"]
+    groups: Final = [
+        {"budget_id": first["budget_id"], "name": "changed", "max_budget": 999},
+        {
+            "budget_id": first["budget_id"]
+            if case == "duplicate_id"
+            else "foreign"
+            if case == "foreign_id"
+            else second["budget_id"],
+            "name": "changed" if case == "duplicate_name" else "second",
+        },
+    ]
+    response: Final = http.patch(
+        "/management/v1/customer_organizations/org/default_budgets",
+        json={
+            "expected_revision": org["budget_groups_revision"],
+            "default_budgets": groups,
+            "default_budget_template": "missing" if case == "missing_default" else "changed",
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert http.get("/management/v1/customer_organizations/org").json() == org
+
+
+class FailingBudgetInsertTable(Table):
+    async def create(self, data: Mapping[str, object], include: Mapping[str, object] | None = None) -> Record:
+        from prisma.errors import UniqueViolationError
+
+        if data.get("name") == "failed-insert":
+            raise UniqueViolationError({})
+        return await super().create(data, include)
+
+
+def test_grouped_configuration_rolls_back_earlier_writes_when_a_later_database_write_fails() -> None:
+    database: Final = Database()
+    database.litellm_budgettable = FailingBudgetInsertTable("budget_id", database)
+    http: Final = client(database=database)
+    org: Final = family(http)
+    before_budgets: Final = dict(database.litellm_budgettable.rows)
+    response: Final = http.patch(
+        "/management/v1/customer_organizations/org/default_budgets",
+        json={
+            "expected_revision": org["budget_groups_revision"],
+            "default_budgets": [
+                {"budget_id": org["default_budget_template_id"], "name": "changed", "max_budget": 999},
+                {"name": "created-first", "max_budget": 1},
+                {"name": "failed-insert", "max_budget": 2},
+            ],
+            "default_budget_template": "created-first",
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert http.get("/management/v1/customer_organizations/org").json() == org
+    assert database.litellm_budgettable.rows == before_budgets
 
 
 def test_list_and_detail_expose_each_effective_budget_with_its_own_recorded_spend() -> None:

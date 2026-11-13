@@ -12,6 +12,7 @@ import { extractProxyErrorMessage } from "@/lib/http/client";
 import { uiHref } from "@/utils/uiHref";
 import CustomerHierarchyNavigation, { customerHierarchyHref } from "./CustomerHierarchyNavigation";
 import CustomerHierarchySettings from "./CustomerHierarchySettings";
+import CustomerBudgetGroups from "./CustomerBudgetGroups";
 import CustomerBudgetSummary from "./CustomerBudgetSummary";
 import type { CustomerUsageEntity } from "./customerUsageApi";
 import CreateCustomerHierarchyDialog from "./CreateCustomerHierarchyDialog";
@@ -359,7 +360,14 @@ export default function CustomerHierarchyManager() {
       <HierarchyHeader hierarchy={hierarchy} selected={selected} />
       <CustomerHierarchyNavigation scope={currentScope} active={tab} />
       <section>
-        {tab === "settings" ? (
+        {tab === "budget_groups" ? (
+          <CustomerBudgetGroups
+            key={scope.org}
+            organization={selected.organization}
+            onSaved={hierarchy.organizationSaved}
+          />
+        ) : null}
+        {tab === "settings" && (
           <CustomerHierarchySettings
             key={customerEntityId(entity)}
             organization={selected.organization}
@@ -367,7 +375,8 @@ export default function CustomerHierarchyManager() {
             onSaved={hierarchy.refresh}
             onDeleted={onDeleted}
           />
-        ) : (
+        )}
+        {(tab === "teams" || tab === "members") && (
           <HierarchyChildTable hierarchy={hierarchy} selected={selected} scope={scope} />
         )}
       </section>
