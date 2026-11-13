@@ -33423,6 +33423,8 @@ export interface components {
          * @description One level of the customer hierarchy a request runs under, with the limits its budget row grants.
          */
         CustomerScopeAuth: {
+            /** Alias */
+            alias?: string | null;
             /** Allowed Models */
             allowed_models?: string[] | null;
             /**
