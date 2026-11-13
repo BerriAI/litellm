@@ -1,4 +1,16 @@
 {
+  "crowllm": {
+    "base_url": "https://crowllm.com/v1",
+    "api_key_env": "CROWLLM_API_KEY",
+    "api_base_env": "CROWLLM_API_BASE",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/embeddings",
+      "/v1/rerank",
+      "/v1/audio/speech",
+      "/v1/audio/transcriptions"
+    ]
+  },
   "publicai": {
     "base_url": "https://api.publicai.co/v1",
     "api_key_env": "PUBLICAI_API_KEY",
