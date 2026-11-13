@@ -617,6 +617,26 @@ async fn delete_drops_memory_and_redis(
     }
 }
 
+#[tokio::test]
+async fn delete_drops_memory_before_it_waits_for_redis() {
+    let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
+    let store = store(Some(connect(&deployment)));
+    store.set("team_id:t1", team("t"), None).await.unwrap();
+    deployment.freeze().await.unwrap();
+
+    let keys = ["team_id:t1".to_owned()];
+    let mut deleting = std::pin::pin!(store.delete(&keys));
+    tokio::select! {
+        biased;
+        _ = &mut deleting => panic!("the delete finished against a frozen Redis"),
+        () = std::future::ready(()) => {}
+    }
+
+    assert_eq!(store.get_local("team_id:t1").unwrap(), None);
+    deployment.thaw().await.unwrap();
+    let _ = deleting.await;
+}
+
 #[rstest]
 #[tokio::test]
 async fn increment_if_present_only_raises_an_entry_redis_holds(

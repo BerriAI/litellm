@@ -289,8 +289,10 @@ impl AuthCache {
     }
 
     /// `UserApiKeyCache.async_delete_cache_keys`: the key-object partition and the rest as two
-    /// concurrent `DualCache.async_delete_cache_keys`. Both run even when one fails.
+    /// concurrent `DualCache.async_delete_cache_keys`. Both run even when one fails. Memory is
+    /// dropped before the first wait on Redis.
     pub async fn delete(&self, keys: &[String]) -> Result<(), Error> {
+        keys.iter().try_for_each(|key| self.delete_local(key))?;
         let voided = self.void_leases(keys).await;
         let (key_objects, others): (Vec<String>, Vec<String>) =
             keys.iter().cloned().partition(|key| is_key_object(key));

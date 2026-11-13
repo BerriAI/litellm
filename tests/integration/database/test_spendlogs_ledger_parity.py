@@ -1812,7 +1812,6 @@ async def test_customer_budget_reset_reloads_cached_hierarchy_spend(
 async def test_customer_budget_reset_reloads_the_cached_organization_alias_spend(
     parity_database: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A request naming only the organization alias reads its own cache entry, which the reset drops too."""
     from litellm.proxy.auth.customer_hierarchy_auth import (
         CustomerHierarchyAuth,
         get_customer_organization_hierarchy,

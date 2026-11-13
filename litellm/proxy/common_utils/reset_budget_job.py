@@ -739,6 +739,8 @@ class ResetBudgetJob:
                 await self.pod_lock_manager.release_lock(cronjob_id=RESET_BUDGET_JOB_NAME)
 
     async def _evict_on_every_worker(self, keys: Sequence[str]) -> None:
+        if not keys:
+            return
         await self._invalidate_cache("user_api_key_cache", keys)
         await broadcast_evictions(keys)
 
