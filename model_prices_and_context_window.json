@@ -51235,7 +51235,8 @@
         "supports_prompt_caching": false,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_sampling_params": false
     },
     "au.anthropic.claude-haiku-4-5-20251001-v1:0": {
         "cache_creation_input_token_cost": 1.375e-06,
@@ -62776,7 +62777,8 @@
         "supports_prompt_caching": false,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_sampling_params": false
     },
     "global.xai.grok-4.6": {
         "supports_regex_lookaround": false,
@@ -62803,7 +62805,8 @@
         "supports_prompt_caching": false,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_sampling_params": false
     },
     "volcengine/doubao-seed-2-0-pro-260215": {
         "litellm_provider": "volcengine",
@@ -75245,7 +75248,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_sampling_params": false
     },
     "global.moonshotai.kimi-k3": {
         "supports_regex_lookaround": false,
@@ -75276,7 +75280,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_sampling_params": false
     },
     "bedrock/kimi-latest": {
         "alias_of": "global.moonshotai.kimi-k3"
@@ -75310,7 +75315,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_sampling_params": false
     },
     "xiaomi_mimo/mimo-v2.6-pro": {
         "cache_read_input_token_cost": 3.6e-09,
@@ -77516,7 +77522,8 @@
         "supports_prompt_caching": false,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_sampling_params": false
     },
     "bedrock/grok-latest": {
         "alias_of": "global.xai.grok-4.7"
@@ -77544,7 +77551,8 @@
         "supports_prompt_caching": false,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_sampling_params": false
     },
     "us-gov.xai.grok-4.7": {
         "supports_regex_lookaround": false,
@@ -78211,7 +78219,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_sampling_params": false
     },
 "claude-haiku-5-5": {
         "input_cost_per_token_above_100k_tokens_batches": 2.5e-07,
