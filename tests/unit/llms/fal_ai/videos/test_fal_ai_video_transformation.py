@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+import respx
 from litellm.exceptions import UnsupportedParamsError
 
 import litellm
@@ -28,11 +29,80 @@ H3_MAX_TURBO_IMAGE_MODEL = "minimax/h3-max-turbo/image-to-video"
 H3_MAX_RECAST_MODEL = "minimax/h3-max/recast"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pricing_source", ["litellm_params", "model_info"])
+@pytest.mark.parametrize(
+    ("pricing", "expected_cost"),
+    [
+        ({"output_cost_per_second": 0.017}, 0.085),
+        ({"output_cost_per_video_clip": {"5s": {"480p": 0.19}}}, 0.19),
+    ],
+)
+async def test_router_video_uses_configured_deployment_price(
+    monkeypatch: pytest.MonkeyPatch, pricing_source: str, pricing: dict[str, object], expected_cost: float
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost})
+    router: Final = litellm.Router(
+        num_retries=0,
+        model_list=[
+            {
+                "model_name": "configured-video",
+                "litellm_params": {
+                    "model": "fal_ai/fal-ai/longcat-video/distilled/text-to-video/480p",
+                    "api_key": "synthetic-fal-key",
+                    **(pricing if pricing_source == "litellm_params" else {}),
+                },
+                "model_info": pricing if pricing_source == "model_info" else {},
+            }
+        ],
+    )
+    with respx.mock:
+        upstream: Final = respx.post("https://queue.fal.run/fal-ai/longcat-video/distilled/text-to-video/480p").mock(
+            return_value=httpx.Response(200, json={"request_id": "configured-priced-clip"})
+        )
+        video: Final = await router.avideo_generation(model="configured-video", prompt="clip", seconds="5", size="480p")
+    assert video._hidden_params["response_cost"] == pytest.approx(expected_cost)
+    assert upstream.call_count == 1
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    ("size", "resolution"),
+    [
+        ("360p", "360p"),
+        ("540p", "540p"),
+        ("720p", "720p"),
+        ("1080p", "1080p"),
+        ("640x360", "360p"),
+        ("960x540", "540p"),
+        ("720x1280", "720p"),
+    ],
+)
+def test_pixverse_resolution_maps_to_request_and_billing(size: str, resolution: str, drop_params: bool) -> None:
+    config: Final = FalAIVideoConfig()
+    params: Final = config.map_openai_params(
+        {"seconds": "5", "size": size}, "fal-ai/pixverse/v5/text-to-video", drop_params
+    )
+    assert params["resolution"] == resolution
+    response: Final = config.transform_video_create_response(
+        model="fal-ai/pixverse/v5/text-to-video",
+        raw_response=httpx.Response(
+            200, json={"request_id": "pixverse-clip"}, request=httpx.Request("POST", "https://queue.fal.run")
+        ),
+        logging_obj=Mock(),
+        request_data=params,
+    )
+    assert response.usage is not None
+    assert response.usage["video_resolution"] == resolution
+
+
 @pytest.mark.parametrize("drop_params", [False, True])
 def test_native_video_parameters_keep_precedence(drop_params: bool) -> None:
     params: Final = {"aspect_ratio": "1:1", "seed": 0, "duration": 6}
     assert FalAIVideoConfig().map_openai_params({"seconds": "5", "size": "1280x720", **params}, MODEL, drop_params) == {
-        "resolution": "720p", **params,
+        "resolution": "720p",
+        **params,
     }
 
 
@@ -755,7 +825,9 @@ class TestFalAIVideoTransformation:
         assert rows
         for model, row in rows.items():
             if (flat_cost := row.get("output_cost_per_video")) is not None:
-                assert default_video_cost_calculator(model, duration, "fal_ai", video_resolution=resolution) == flat_cost
+                assert (
+                    default_video_cost_calculator(model, duration, "fal_ai", video_resolution=resolution) == flat_cost
+                )
                 continue
             for key, value in row.items():
                 if key.startswith("output_cost_per_second_") and value is not None:
@@ -796,4 +868,6 @@ def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
     config: Final = FalAIVideoConfig()
     with pytest.raises(UnsupportedParamsError, match=field):
         config.map_openai_params({field: 1}, "video-model", False)
-    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params({}, "video-model", True)
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params(
+        {}, "video-model", True
+    )

@@ -11,6 +11,32 @@ from litellm.llms.openai.cost_calculation import video_generation_cost
 from litellm.types.utils import ImageObject, ImageResponse
 
 
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"duration": "8", "resolution": "720p"}, 0.6),
+        ({"duration": 5, "resolution": "540p"}, 0.1),
+        ({"resolution": "720p"}, 0.3),
+        ({"duration": 8}, None),
+        ({"duration": 8, "resolution": "1080p"}, None),
+        ({"duration": "invalid", "resolution": "720p"}, None),
+    ],
+)
+def test_passthrough_video_clip_pricing(body: dict[str, object], expected: float | None) -> None:
+    litellm.register_model(
+        {
+            "fal_ai/test-clip": {
+                "output_cost_per_video_clip": {
+                    "8s": {"720p": 0.6},
+                    "5s": {"720p": 0.3, "540p": 0.1},
+                }
+            }
+        },
+        persist_across_reloads=False,
+    )
+    assert fal_ai_passthrough_cost("test-clip", body) == expected
+
+
 @pytest.fixture(autouse=True)
 def _use_local_model_cost_map(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -37,13 +63,19 @@ def _image_response_with_dimensions(dimensions: tuple[tuple[int, int], ...]) -> 
 
 
 @pytest.mark.parametrize("duration", [0.0, 8.0])
+@pytest.mark.parametrize("clip_prices", [None, {"5s": {"720p": 0.19}}])
 def test_catalog_flat_video_price_reaches_both_video_calculators(
-    monkeypatch: pytest.MonkeyPatch, duration: float
+    monkeypatch: pytest.MonkeyPatch, duration: float, clip_prices: dict[str, dict[str, float]] | None
 ) -> None:
     monkeypatch.setitem(
         litellm.model_cost,
         "fal_ai/fal-ai/test-flat-video",
-        {"litellm_provider": "fal_ai", "mode": "video_generation", "output_cost_per_video": 0.37},
+        {
+            "litellm_provider": "fal_ai",
+            "mode": "video_generation",
+            "output_cost_per_video": 0.37,
+            "output_cost_per_video_clip": clip_prices,
+        },
     )
     assert video_generation_cost("fal-ai/test-flat-video", duration, "fal_ai") == pytest.approx(0.37)
     assert default_video_cost_calculator("fal-ai/test-flat-video", duration, "fal_ai") == pytest.approx(0.37)
