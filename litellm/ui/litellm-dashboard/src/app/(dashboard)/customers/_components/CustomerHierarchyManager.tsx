@@ -359,9 +359,9 @@ export default function CustomerHierarchyManager() {
       <section>
         {tab === "budget_groups" ? (
           <CustomerBudgetGroups
-            key={JSON.stringify([scope.org, context.dataUpdatedAt])}
+            key={scope.org}
             organization={selected.organization}
-            onSaved={hierarchy.refresh}
+            onSaved={hierarchy.organizationSaved}
           />
         ) : null}
         {tab === "settings" && (

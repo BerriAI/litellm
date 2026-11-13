@@ -174,6 +174,18 @@ export default function useCustomerHierarchy() {
       { history: "push" },
     );
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["customer-hierarchy"] });
+  const organizationSaved = async (organization: Organization) => {
+    const queryKey = ["customer-hierarchy", "manage", organization.customer_org_id, null, null];
+    await queryClient.cancelQueries({ queryKey });
+    const saved: CustomerHierarchyContext = {
+      organization,
+      team: null,
+      member: null,
+      entity: { kind: "organization", record: organization },
+    };
+    queryClient.setQueryData(queryKey, saved);
+    refresh();
+  };
   return {
     scope,
     context,
@@ -189,6 +201,7 @@ export default function useCustomerHierarchy() {
     openMember,
     openCreatedScope,
     refresh,
+    organizationSaved,
     setPage: (hierarchyPage: number) => void setParams({ hierarchyPage }),
   };
 }

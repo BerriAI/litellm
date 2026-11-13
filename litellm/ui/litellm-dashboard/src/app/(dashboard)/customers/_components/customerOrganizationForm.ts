@@ -70,14 +70,23 @@ export type CustomerOrganizationFormError =
   | "invalidRateLimit"
   | "defaultRequired";
 
-export function validateCustomerBudgetGroups(fields: Pick<CustomerOrganizationFields, "groups" | "defaultGroupId">) {
-  if (!fields.groups.length || !fields.groups.some((group) => group.id === fields.defaultGroupId)) {
+export function validateCustomerBudgetGroups(
+  fields: Pick<CustomerOrganizationFields, "groups" | "defaultGroupId">,
+  existingGroupIds: readonly string[] = [],
+) {
+  const missingDefault = !fields.defaultGroupId && !existingGroupIds.length;
+  const invalidDefault = fields.defaultGroupId && !fields.groups.some((group) => group.id === fields.defaultGroupId);
+  if (missingDefault || invalidDefault) {
     return { ok: false, error: "defaultRequired" } as const;
   }
   const names = fields.groups.map((group) => group.name.trim());
   if (names.some((name) => !name)) return { ok: false, error: "groupNameRequired" } as const;
   if (new Set(names).size !== names.length) return { ok: false, error: "duplicateGroups" } as const;
-  if (fields.groups.some((group) => !group.monthlyBudget.trim() && !group.yearlyBudget.trim())) {
+  if (
+    fields.groups.some(
+      (group) => !existingGroupIds.includes(group.id) && !group.monthlyBudget.trim() && !group.yearlyBudget.trim(),
+    )
+  ) {
     return { ok: false, error: "groupLimitRequired" } as const;
   }
   if (fields.groups.some((group) => !validAmount(group.monthlyBudget) || !validAmount(group.yearlyBudget))) {

@@ -65,6 +65,16 @@ export default function CustomerBudgetGroupsEditor({
     const remaining = groups.filter((group) => group.id !== id);
     onChange(remaining, defaultGroupId === id ? remaining[0]?.id ?? "" : defaultGroupId);
   };
+  const addGroup = () => {
+    const group: CustomerBudgetGroupFields = {
+      id: crypto.randomUUID(),
+      name: "",
+      monthlyBudget: "",
+      yearlyBudget: "",
+      capPolicy: defaultCustomerCapPolicy,
+    };
+    onChange([...groups, group], groups.length ? defaultGroupId : group.id);
+  };
   return (
     <section className="space-y-3 border-t pt-5" aria-labelledby="cc-groups-title">
       <div>
@@ -173,26 +183,7 @@ export default function CustomerBudgetGroupsEditor({
           </div>
         ))}
       </RadioGroup>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={() =>
-          onChange(
-            [
-              ...groups,
-              {
-                id: crypto.randomUUID(),
-                name: "",
-                monthlyBudget: "",
-                yearlyBudget: "",
-                capPolicy: defaultCustomerCapPolicy,
-              },
-            ],
-            defaultGroupId,
-          )
-        }
-      >
+      <Button type="button" variant="ghost" size="sm" onClick={addGroup}>
         <Plus className="size-4" />
         {t("customerPortal.createDialog.addGroup")}
       </Button>

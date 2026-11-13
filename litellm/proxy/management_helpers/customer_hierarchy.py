@@ -22,6 +22,8 @@ from litellm.repositories.chunked_in import delete_many_in, find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
+    BudgetGroupChange,
+    BudgetGroupsUpdate,
     BudgetTemplate,
     CustomerMember,
     MemberCreate,
@@ -57,6 +59,7 @@ class ErrorCode(str, Enum):
     REQUEST_ALREADY_PENDING = "request_already_pending"
     EXPIRY_IN_PAST = "expiry_in_past"
     KEY_NOT_IN_ORG = "key_not_in_org"
+    CONFIGURATION_CONFLICT = "configuration_conflict"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +69,11 @@ class Failure:
 
 _LOCK_ORGANIZATION_SQL: Final = (
     'SELECT 1 AS locked FROM "LiteLLM_CustomerOrganizationTable" WHERE customer_org_id = $1 FOR UPDATE'
+)
+_LOCK_TEMPLATES_SQL: Final = (
+    'SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id IN '
+    '(SELECT unnest(budget_template_ids) FROM "LiteLLM_CustomerOrganizationTable" WHERE customer_org_id = $1) '
+    "ORDER BY budget_id FOR UPDATE"
 )
 
 
@@ -149,6 +157,23 @@ def budget_window_values(
 
 def budget_values(budget: Budget) -> Mapping[str, object]:
     return _VALUES.validate_python(budget.model_dump(include=set(Budget.model_fields)))
+
+
+def group_budget_patch(group: BudgetGroupChange, current: OrganizationBudget | None) -> Budget:
+    patch: Final = Budget.model_validate(group.model_dump(exclude_unset=True, exclude={"budget_id", "name"}))
+    if patch.budget_limits is None:
+        return patch
+    resets: Final = (
+        {limit.budget_duration: limit.reset_at for limit in (current.budget_limits or ())} if current else {}
+    )
+    return patch.model_copy(
+        update={
+            "budget_limits": tuple(
+                limit.model_copy(update={"reset_at": resets.get(limit.budget_duration, limit.reset_at)})
+                for limit in patch.budget_limits
+            )
+        }
+    )
 
 
 _JSON_BUDGET_COLUMNS: Final = frozenset({"model_tpm_limit", "model_rpm_limit"})
@@ -605,6 +630,7 @@ class CustomerHierarchyStore:
     async def update_organization(
         self, organization_id: str, payload: OrganizationPatch, actor: str
     ) -> Organization | Failure:
+        await self.lock_organization(organization_id)
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return organization
@@ -674,6 +700,7 @@ class CustomerHierarchyStore:
         return None
 
     async def resolve_member_template(self, organization_id: str, template_id: str | None) -> str | Failure | None:
+        await self.lock_organization(organization_id)
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return Failure(ErrorCode.PARENT_NOT_FOUND)
@@ -683,6 +710,53 @@ class CustomerHierarchyStore:
         if any(template.budget_id == selected for template in organization.default_budgets):
             return selected
         return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
+
+    async def configure_templates(
+        self, organization_id: str, payload: BudgetGroupsUpdate, actor: str
+    ) -> Organization | Failure:
+        await self.lock_organization(organization_id)
+        await self.db.query_raw(_LOCK_TEMPLATES_SQL, organization_id)
+        organization: Final = await self.get_organization(organization_id)
+        if isinstance(organization, Failure):
+            return organization
+        if payload.expected_revision != organization.budget_groups_revision:
+            return Failure(ErrorCode.CONFIGURATION_CONFLICT)
+        originals: Final = {group.budget_id: group for group in organization.default_budgets}
+        retained: Final = tuple(group.budget_id for group in payload.default_budgets if group.budget_id is not None)
+        if len(set(retained)) != len(retained) or not set(retained).issubset(originals):
+            return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
+        names: Final = tuple(group.name for group in payload.default_budgets)
+        if len(set(names)) != len(names):
+            return Failure(ErrorCode.INVALID_TEMPLATE_NAMES)
+        if payload.default_budget_template is not None and payload.default_budget_template not in names:
+            return Failure(ErrorCode.INVALID_DEFAULT_BUDGET)
+        removed: Final = tuple(budget_id for budget_id in originals if budget_id not in retained)
+        if removed and await self.members.count(where={"budget_id": {"in": removed}}):
+            return Failure(ErrorCode.TEMPLATE_IN_USE)
+        ids: Final = tuple(
+            [
+                await self.write_configured_template(group, originals.get(group.budget_id or ""), actor)
+                for group in payload.default_budgets
+            ]
+        )
+        default_id: Final = (
+            ids[names.index(payload.default_budget_template)] if payload.default_budget_template else None
+        )
+        await self.write_template_metadata(organization_id, ids, default_id, actor)
+        await self._delete_unused_budgets(removed)
+        return await self.get_organization(organization_id)
+
+    async def write_configured_template(
+        self, group: BudgetGroupChange, current: OrganizationBudget | None, actor: str
+    ) -> str:
+        patch: Final = group_budget_patch(group, current)
+        if current is None:
+            return await self.create_budget(patch, actor, group.name)
+        if patch.model_fields_set:
+            await self.update_budget(current.budget_id, patch, actor)
+        if group.name != current.name:
+            await update_budget_row(self.budgets, current.budget_id, {"name": group.name}, actor)
+        return current.budget_id
 
     async def create_team(self, payload: TeamCreate, actor: str) -> Team | Failure:
         parent: Final = await self.organizations.find_unique(where={"customer_org_id": payload.parent_org_id})
@@ -1055,6 +1129,11 @@ class CustomerHierarchy:
 
     async def add_template(self, organization_id: str, payload: BudgetTemplate, actor: str) -> Organization | Failure:
         return await self.transaction(lambda store: store.add_template(organization_id, payload, actor))
+
+    async def configure_templates(
+        self, organization_id: str, payload: BudgetGroupsUpdate, actor: str
+    ) -> Organization | Failure:
+        return await self.transaction(lambda store: store.configure_templates(organization_id, payload, actor))
 
     async def update_template(
         self, organization_id: str, budget_id: str, payload: TemplatePatch, actor: str

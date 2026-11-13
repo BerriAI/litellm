@@ -9,86 +9,73 @@ import { Button } from "@/components/ui/button";
 import type { Organization } from "./customerHierarchyForms";
 import CustomerBudgetGroupsEditor from "./CustomerBudgetGroupsEditor";
 import { customerBudgetGroupRows, planCustomerBudgetGroups } from "./customerBudgetGroupsPlan";
-import type { CustomerBudgetGroupFields, CustomerOrganizationFormError } from "./customerOrganizationForm";
+import type { CustomerBudgetGroupFields } from "./customerOrganizationForm";
+
+interface Draft {
+  base: Organization;
+  groups: CustomerBudgetGroupFields[];
+  defaultGroupId: string;
+}
 
 export default function CustomerBudgetGroups({
   organization,
   onSaved,
 }: {
   organization: Organization;
-  onSaved: () => void;
+  onSaved: (organization: Organization) => void | Promise<void>;
 }) {
   const { t } = useTranslation();
-  const [groups, setGroups] = useState(() => customerBudgetGroupRows(organization));
-  const [defaultGroupId, setDefaultGroupId] = useState(organization.default_budget_template_id ?? "");
+  const [draft, setDraft] = useState<Draft | null>(null);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<CustomerOrganizationFormError | "renameCollision" | null>(null);
-  const plan = planCustomerBudgetGroups(organization, groups, defaultGroupId);
-  const unchanged =
-    JSON.stringify(groups) === JSON.stringify(customerBudgetGroupRows(organization)) &&
-    defaultGroupId === (organization.default_budget_template_id ?? "");
-  const changeGroups = (next: CustomerBudgetGroupFields[], defaultId: string) => {
-    setGroups(next);
-    setDefaultGroupId(defaultId);
+  const [error, setError] = useState<string | null>(null);
+  const base = draft?.base ?? organization;
+  const groups = draft?.groups ?? customerBudgetGroupRows(base);
+  const defaultGroupId = draft?.defaultGroupId ?? base.default_budget_template_id ?? "";
+  const plan = planCustomerBudgetGroups(base, groups, defaultGroupId);
+  const changeGroups = (groups: CustomerBudgetGroupFields[], defaultGroupId: string) => {
+    setDraft({ base, groups, defaultGroupId });
     setError(null);
   };
   const save = async (event: FormEvent) => {
     event.preventDefault();
     if (pending) return;
     if (!plan.ok) {
-      setError(plan.error);
+      setError(t(`customerPortal.createDialog.errors.${plan.error}`));
       return;
     }
     setPending(true);
-    const path = { customer_org_id: organization.customer_org_id };
+    setError(null);
     try {
-      const created = [];
-      for (const item of plan.creates) {
-        const response = await fetchClient.POST(
-          "/management/v1/customer_organizations/{customer_org_id}/default_budgets",
-          {
-            params: { path },
-            body: item.body,
-          },
-        );
-        const template = response.data?.default_budgets.find((group) => group.name === item.body.name);
-        if (!template) {
-          toast.error(t("customerPortal.budgetGroups.missingCreated"));
-          return;
-        }
-        created.push({ rowId: item.rowId, budgetId: template.budget_id });
-      }
-      for (const item of plan.updates) {
-        await fetchClient.PATCH("/management/v1/customer_organizations/{customer_org_id}/default_budgets/{budget_id}", {
-          params: { path: { ...path, budget_id: item.budgetId } },
-          body: item.body,
-        });
-      }
-      if (plan.defaultChange) {
-        const budgetId =
-          created.find((item) => item.rowId === plan.defaultChange?.rowId)?.budgetId ?? plan.defaultChange.rowId;
-        await fetchClient.PATCH("/management/v1/customer_organizations/{customer_org_id}", {
-          params: { path },
-          body: { default_budget_template_id: budgetId },
-        });
-      }
-      for (const budgetId of plan.removes) {
-        await fetchClient.DELETE(
-          "/management/v1/customer_organizations/{customer_org_id}/default_budgets/{budget_id}",
-          {
-            params: { path: { ...path, budget_id: budgetId } },
-          },
-        );
-      }
+      const response = await fetchClient.PATCH(
+        "/management/v1/customer_organizations/{customer_org_id}/default_budgets",
+        { params: { path: { customer_org_id: base.customer_org_id } }, body: plan.body },
+      );
+      if (!response.data) throw new Error(t("customerPortal.hierarchy.error"));
+      await onSaved(response.data);
+      setDraft(null);
       toast.success(t("customerPortal.hierarchy.saved"));
     } catch (failure) {
-      toast.error(extractProxyErrorMessage(failure));
+      setError(extractProxyErrorMessage(failure));
     } finally {
-      onSaved();
       setPending(false);
     }
   };
-  const noChanges = unchanged || (plan.ok && !plan.changed);
+  const reload = async () => {
+    setPending(true);
+    try {
+      const response = await fetchClient.GET("/management/v1/customer_organizations/{customer_org_id}", {
+        params: { path: { customer_org_id: base.customer_org_id } },
+      });
+      if (!response.data) throw new Error(t("customerPortal.hierarchy.error"));
+      await onSaved(response.data);
+      setDraft(null);
+      setError(null);
+    } catch (failure) {
+      setError(extractProxyErrorMessage(failure));
+    } finally {
+      setPending(false);
+    }
+  };
   return (
     <form onSubmit={save} className="max-w-3xl space-y-5">
       <fieldset disabled={pending}>
@@ -101,14 +88,19 @@ export default function CustomerBudgetGroups({
       </fieldset>
       {error && (
         <p role="alert" className="text-sm text-destructive">
-          {error === "renameCollision"
-            ? t("customerPortal.budgetGroups.renameCollision")
-            : t(`customerPortal.createDialog.errors.${error}`)}
+          {error}
         </p>
       )}
-      <Button type="submit" disabled={pending || noChanges}>
-        {t("customerPortal.hierarchy.save")}
-      </Button>
+      <div className="flex gap-3">
+        <Button type="submit" disabled={pending || !draft || (plan.ok && !plan.changed)}>
+          {t("customerPortal.hierarchy.save")}
+        </Button>
+        {draft && (
+          <Button type="button" variant="outline" disabled={pending} onClick={() => void reload()}>
+            {t("customerPortal.budgetGroups.discard")}
+          </Button>
+        )}
+      </div>
     </form>
   );
 }

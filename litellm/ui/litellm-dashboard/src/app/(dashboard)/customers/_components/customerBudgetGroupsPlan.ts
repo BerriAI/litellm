@@ -7,8 +7,6 @@ import {
   type CustomerBudgetGroupFields,
 } from "./customerOrganizationForm";
 
-type Template = components["schemas"]["BudgetTemplate"];
-type Patch = components["schemas"]["TemplatePatch"];
 export const customerBudgetGroupRows = (organization: Organization): CustomerBudgetGroupFields[] =>
   organization.default_budgets.map((group) => ({
     id: group.budget_id,
@@ -23,67 +21,38 @@ export function planCustomerBudgetGroups(
   groups: CustomerBudgetGroupFields[],
   defaultGroupId: string,
 ) {
-  const validation = validateCustomerBudgetGroups({ groups, defaultGroupId });
-  if (!validation.ok) return validation;
-  const originals = organization.default_budgets;
-  const collision = groups.some((group) =>
-    originals.some((original) => original.name === group.name.trim() && original.budget_id !== group.id),
+  const originals = customerBudgetGroupRows(organization);
+  const validation = validateCustomerBudgetGroups(
+    { groups, defaultGroupId },
+    originals.map((group) => group.id),
   );
-  if (collision) return { ok: false, error: "renameCollision" } as const;
-  const creates = groups
-    .filter((group) => !originals.some((original) => original.budget_id === group.id))
-    .map((group) => ({
-      rowId: group.id,
-      body: {
-        name: group.name.trim(),
-        cap_policy: group.capPolicy,
-        budget_limits: [...limit(group.monthlyBudget, "1mo"), ...limit(group.yearlyBudget, "12mo")],
-      } satisfies Template,
-    }));
-  const updates = originals.flatMap((original) => {
-    const group = groups.find((row) => row.id === original.budget_id);
-    if (!group) return [];
-    const editableLimits = [...limit(group.monthlyBudget, "1mo"), ...limit(group.yearlyBudget, "12mo")];
-    const originalLimits = (original.budget_limits ?? [])
-      .filter((entry) => entry.budget_duration === "1mo" || entry.budget_duration === "12mo")
-      .map((entry) => ({ budget_duration: entry.budget_duration, max_budget: entry.max_budget }))
-      .sort((a, b) => a.budget_duration.localeCompare(b.budget_duration));
-    const limitsChanged =
-      JSON.stringify(originalLimits) !==
-      JSON.stringify([...editableLimits].sort((a, b) => a.budget_duration.localeCompare(b.budget_duration)));
-    const body: Patch = {
-      ...(group.name.trim() !== original.name ? { name: group.name.trim() } : {}),
-      ...(group.capPolicy !== (original.cap_policy ?? defaultCustomerCapPolicy) ? { cap_policy: group.capPolicy } : {}),
-      ...(limitsChanged
-        ? {
-            budget_limits: [
-              ...(original.budget_limits ?? []).filter(
-                (entry) => entry.budget_duration !== "1mo" && entry.budget_duration !== "12mo",
-              ),
-              ...editableLimits,
-            ],
-          }
-        : {}),
+  if (!validation.ok) return validation;
+  const default_budgets = groups.map((group) => {
+    const original = originals.find((row) => row.id === group.id);
+    const limits = [...limit(group.monthlyBudget, "1mo"), ...limit(group.yearlyBudget, "12mo")];
+    const previous = original
+      ? [...limit(original.monthlyBudget, "1mo"), ...limit(original.yearlyBudget, "12mo")]
+      : null;
+    return {
+      ...(original ? { budget_id: original.id } : {}),
+      name: group.name.trim(),
+      ...(group.capPolicy !== original?.capPolicy ? { cap_policy: group.capPolicy } : {}),
+      ...(JSON.stringify(limits) !== JSON.stringify(previous) ? { budget_limits: limits } : {}),
     };
-    return Object.keys(body).length ? [{ budgetId: original.budget_id, body }] : [];
   });
-  const removes = originals
-    .filter((original) => !groups.some((group) => group.id === original.budget_id))
-    .map((original) => original.budget_id);
-  const defaultChange =
-    defaultGroupId === organization.default_budget_template_id
-      ? null
-      : {
-          rowId: defaultGroupId,
-          name: groups.find((group) => group.id === defaultGroupId)!.name.trim(),
-        };
-  const templatesChanged = creates.length || updates.length || removes.length;
-  return {
-    ok: true,
-    creates,
-    updates,
-    removes,
-    defaultChange,
-    changed: Boolean(templatesChanged || defaultChange),
-  } as const;
+  const body: components["schemas"]["BudgetGroupsUpdate"] = {
+    expected_revision: organization.budget_groups_revision,
+    default_budgets,
+    default_budget_template: groups.find((group) => group.id === defaultGroupId)?.name.trim() ?? null,
+  };
+  const changed =
+    defaultGroupId !== (organization.default_budget_template_id ?? "") ||
+    groups.length !== originals.length ||
+    default_budgets.some(
+      (group) =>
+        group.name !== originals.find((original) => original.id === group.budget_id)?.name ||
+        group.cap_policy !== undefined ||
+        group.budget_limits !== undefined,
+    );
+  return { ok: true, body, changed } as const;
 }

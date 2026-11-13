@@ -1,8 +1,10 @@
 from collections.abc import Mapping
 from datetime import datetime
+from hashlib import sha256
+from json import dumps
 from typing import Final, Literal, TypeAlias
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, NonNegativeInt, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, NonNegativeInt, computed_field, field_validator
 
 from litellm.models.budget import BudgetLimits
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
@@ -48,6 +50,20 @@ class TemplatePatch(Budget):
 
 class OrganizationBudget(BudgetTemplate):
     budget_id: str
+
+
+class BudgetGroupChange(BudgetTemplate):
+    budget_id: str | None = Field(default=None, description="Existing template ID. Omit to create a template.")
+
+
+class BudgetGroupsUpdate(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_revision: str = Field(min_length=64, max_length=64)
+    default_budgets: tuple[BudgetGroupChange, ...] = Field(
+        description="Complete retained group list. Existing groups patch only supplied fields. Omitted groups are deleted."
+    )
+    default_budget_template: str | None = Field(description="Final name of the default group, or null for no default.")
 
 
 class OrganizationFields(BaseModel):
@@ -115,6 +131,18 @@ class Organization(AuditFields):
     customer_org_id: str
     default_budget_template_id: str | None = None
     default_budgets: tuple[OrganizationBudget, ...] = ()
+
+    @computed_field
+    @property
+    def budget_groups_revision(self) -> str:
+        configuration: Final = {
+            "default": self.default_budget_template_id,
+            "groups": tuple(
+                group.model_dump(mode="json", exclude={"budget_limits": {"__all__": {"reset_at"}}})
+                for group in self.default_budgets
+            ),
+        }
+        return sha256(dumps(configuration, sort_keys=True).encode()).hexdigest()
 
 
 class Team(AuditFields):
