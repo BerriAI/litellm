@@ -101605,5 +101605,59 @@
         "supports_vision": true,
         "supports_web_search": true,
         "web_search_billing_unit": "per_query"
+    },
+    "together_ai/thinkingmachines/Inkling-2-Small": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1e-06,
+        "source": "https://api.together.ai/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fal_ai/google/gemini-omni-flash/v1.2/upscale": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of upscaled output video by target resolution; the 1080p tier and output_cost_per_second take the higher source-dependent rate ($0.0819 from a 360p source) because the catalog selects by target resolution alone and the source resolution has no field, so a 720p source upscaled to 1080p ($0.041 per second) is overcounted, the same convention as fal_ai/blackforestlabs/flux-video-upscale"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0819,
+        "output_cost_per_second_1080p": 0.0819,
+        "output_cost_per_second_4k": 0.1638,
+        "output_cost_per_second_720p": 0.041,
+        "source": "https://fal.ai/models/google/gemini-omni-flash/v1.2/upscale",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/decart/lucy-5b/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.15,
+        "source": "https://fal.ai/models/decart/lucy-5b/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/decart/lucy-5b/image-to-video": {
+        "alias_of": "fal_ai/decart/lucy-5b/image-to-video"
     }
 }

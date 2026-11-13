@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -134,6 +135,15 @@ class _CustomerLedger:
         return ()
 
     async def execute(self, query: str, *args: object) -> int:
+        if query.startswith('INSERT INTO "LiteLLM_DailyCustomerMemberSpend"'):
+            columns: Final = re.findall(r'"([a-z_]+)"', query.split("VALUES", 1)[0])[:-1]
+            values: Final = dict(zip(columns, args, strict=True))
+            self.daily = {
+                name: self.daily.get(name, 0) + value
+                for name, value in values.items()
+                if isinstance(value, (int, float))
+            }
+            return 1
         if "SET state = 'applied'" not in query:
             return 0
         if self.fail_acknowledgement:
@@ -141,11 +151,6 @@ class _CustomerLedger:
             raise OSError("database connection lost before delivery acknowledgement")
         self.pending = False
         return 1
-
-    def upsert_daily(self, *, where: object, data: object) -> None:
-        values: Final = _FIELDS.validate_python(_FIELDS.validate_python(data)["create"])
-        counters: Final = {name: value for name, value in values.items() if isinstance(value, (int, float))}
-        self.daily = {name: self.daily.get(name, 0) + value for name, value in counters.items()}
 
     def update_entity(self, entity: str, *, where: object, data: object) -> int:
         spend: Final = _INCREMENTS.validate_python(data)["spend"]["increment"]
@@ -158,6 +163,9 @@ _CUSTOMER_PAYLOAD: Final = json.dumps(
         "request_id": "customer-completed-request",
         "startTime": datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat(),
         "api_key": "hashed-key",
+        "model": "usage-model",
+        "model_group": "usage-model",
+        "custom_llm_provider": "openai",
         "spend": 0.75,
         "prompt_tokens": 10,
         "completion_tokens": 5,
@@ -179,13 +187,11 @@ async def test_customer_daily_and_lifetime_totals_commit_once_after_delivery_rep
     transaction: Final = MagicMock()
     transaction.query_raw = AsyncMock(side_effect=ledger.query)
     transaction.execute_raw = AsyncMock(side_effect=ledger.execute)
-    transaction.litellm_dailycustomermemberspend.upsert = AsyncMock(side_effect=ledger.upsert_daily)
-    transaction.litellm_customerorganizationtable.update_many = AsyncMock(
-        side_effect=partial(ledger.update_entity, "organization")
-    )
-    transaction.litellm_customerteamtable.update_many = AsyncMock(side_effect=partial(ledger.update_entity, "team"))
-    transaction.litellm_customermembertable.update_many = AsyncMock(side_effect=partial(ledger.update_entity, "member"))
-    transaction.batch_.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
+    batcher: Final = MagicMock()
+    batcher.litellm_customerorganizationtable.update_many.side_effect = partial(ledger.update_entity, "organization")
+    batcher.litellm_customerteamtable.update_many.side_effect = partial(ledger.update_entity, "team")
+    batcher.litellm_customermembertable.update_many.side_effect = partial(ledger.update_entity, "member")
+    transaction.batch_.return_value.__aenter__ = AsyncMock(return_value=batcher)
     transaction.batch_.return_value.__aexit__ = AsyncMock(return_value=False)
 
     @asynccontextmanager

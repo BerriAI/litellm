@@ -6,7 +6,7 @@ Core tests to validate that priority weights are respected (0.9/0.1) instead of 
 
 import asyncio
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Final
@@ -33,9 +33,9 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     claim_request_stash_for_data,
 )
 from litellm.proxy.hooks.priority_class_share import pool_member
-from litellm.redis.stores.rate_limits import RateLimitScope
+from litellm.redis.stores.rate_limits import LocalValue, RateLimitCounter, RateLimitEntry, RateLimitScope
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
-from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits
+from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, Resolved, counter_pairs
 
 
 class TimeController:
@@ -1436,20 +1436,25 @@ async def test_saturation_check_cache_ttl_configuration(monkeypatch):
             "TTL should be configurable via priority_reservation_settings"
         )
 
-        # Track read-through (memory then Redis) gets to verify TTL is passed
+        # The Redis count is written back to an empty memory for the configured TTL
         get_cache_calls = []
 
         class _RecordingRateLimits(FakeRateLimits):
-            async def get(self, entry, *, backfill_ttl_seconds=None):
-                get_cache_calls.append({"entry": entry, "ttl": backfill_ttl_seconds})
+            def read_counters(self, counters, send):
+                return Resolved(lambda: _resolved(counter_pairs(counters, lambda _counter: "1")), send, "read_counters")
 
+            def set_local(self, entry, value, ttl_seconds):
+                get_cache_calls.append({"entry": entry, "ttl": ttl_seconds})
+
+        async def _resolved(value):
+            return value
+
+        counter = RateLimitScope("model_saturation_check", model).counter("requests")
+        fakes = _RecordingRateLimits()
         handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
             handler.internal_usage_cache,
-            rate_limit_store=_RecordingRateLimits().store(),
+            rate_limit_store=fakes.store(),
         )
-
-        # Call _get_saturation_value_from_cache
-        counter = RateLimitScope("model_saturation_check", model).counter("requests")
 
         await handler._get_saturation_value_from_cache(counter)
 
@@ -1908,6 +1913,38 @@ async def test_flexible_team_is_steered_to_its_alternate_once_the_preferred_mode
     assert (
         await handler.async_post_call_response_headers_hook(data={}, user_api_key_dict=flexible, response=None) is None
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team_allowed_models, granted", [(("luna", "opus"), True), (("luna",), False)])
+async def test_an_alternate_is_granted_only_when_every_customer_level_permits_it(
+    monkeypatch: pytest.MonkeyPatch, team_allowed_models: tuple[str, ...], granted: bool
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth import auth_checks, user_api_key_auth
+    from litellm.proxy.hooks.dynamic_rate_limiter_v3 import alternate_grant_for
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
+
+    monkeypatch.setattr(proxy_server, "llm_router", _steering_router("luna", "opus"))
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(user_api_key_auth, "_is_fallback_model_authorized", AsyncMock(return_value=True))
+    monkeypatch.setattr(user_api_key_auth, "_is_within_every_model_budget", AsyncMock(return_value=True))
+    monkeypatch.setattr(auth_checks, "collect_matched_model_access_groups", AsyncMock(return_value=()))
+    monkeypatch.setattr(auth_checks, "_model_access_group_max_budget_check", AsyncMock(return_value=None))
+    customer: Final = UserAPIKeyAuth(
+        customer_hierarchy=CustomerHierarchyAuth(
+            customer_member_id="member-1",
+            customer_team_id="team-1",
+            customer_org_id="org-1",
+            scopes=(
+                CustomerScopeAuth(key="customer_org", entity_id="org-1"),
+                CustomerScopeAuth(key="customer_team", entity_id="team-1", allowed_models=team_allowed_models),
+                CustomerScopeAuth(key="customer_member", entity_id="member-1", allowed_models=("luna", "opus")),
+            ),
+        )
+    )
+
+    assert (await alternate_grant_for(customer, "opus") is not None) is granted
 
 
 @pytest.mark.asyncio
@@ -3797,3 +3834,77 @@ async def test_a_failing_metrics_sink_never_changes_admission(monkeypatch: pytes
     refusal: Final = await _refused_at_the_hook(handler, _team_key())
     assert refusal.headers is not None
     assert refusal.headers["rate_limited_by"] == "model_per_team_saturated"
+
+
+class _SharedRedisRateLimits(FakeRateLimits):
+    """One Redis behind several workers, each with its own memory."""
+
+    def __init__(self, redis: dict[RateLimitEntry, LocalValue]) -> None:
+        super().__init__()
+        self.redis = redis
+
+    def read_counters(self, counters: Sequence[RateLimitCounter], send: object) -> Resolved[list[str | None]]:
+        async def reply() -> list[str | None]:
+            return counter_pairs(counters, self._redis_text)
+
+        return Resolved(reply, send, "read_counters")
+
+    def _redis_text(self, counter: RateLimitCounter) -> str | None:
+        value: Final = self.redis.get(counter)
+        return None if value is None or isinstance(value, dict) else str(value)
+
+
+@pytest.mark.asyncio
+async def test_every_worker_reads_the_models_saturation_from_redis_not_from_what_it_served_itself(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    redis: Final[dict[RateLimitEntry, LocalValue]] = {}
+    busy, idle = (_borrowing_handler(monkeypatch, borrows=True) for _ in range(2))
+    for worker in (busy, idle):
+        worker.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+            worker.internal_usage_cache, rate_limit_store=_SharedRedisRateLimits(redis).store()
+        )
+    counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
+    redis[counter] = 700
+    busy.v3_limiter.rate_limits.set_local(counter, 700, 60)
+    idle.v3_limiter.rate_limits.set_local(counter, 30, 60)
+    group: Final = busy.llm_router.registry().group("shared-model")
+    assert group is not None
+    assert await busy._check_model_saturation("shared-model", group) == pytest.approx(0.7)
+    assert await idle._check_model_saturation("shared-model", group) == pytest.approx(0.7)
+
+
+class _FailingRedisRateLimits(FakeRateLimits):
+    def read_counters(self, counters: Sequence[RateLimitCounter], send: object) -> Resolved[list[str | None]]:
+        raise ConnectionError("redis down")
+
+
+@pytest.mark.asyncio
+async def test_a_worker_whose_redis_read_fails_reads_the_models_saturation_from_its_own_memory(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache, rate_limit_store=_FailingRedisRateLimits().store()
+    )
+    counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
+    handler.v3_limiter.rate_limits.set_local(counter, 700, 60)
+    group: Final = handler.llm_router.registry().group("shared-model")
+    assert group is not None
+    assert await handler._check_model_saturation("shared-model", group) == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
+async def test_a_worker_without_redis_reads_the_models_saturation_from_its_own_memory(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    fakes: Final = FakeRateLimits(connected=False)
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache, rate_limit_store=fakes.store()
+    )
+    counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
+    fakes.set_local(counter, 700, 60)
+    group: Final = handler.llm_router.registry().group("shared-model")
+    assert group is not None
+    assert await handler._check_model_saturation("shared-model", group) == pytest.approx(0.7)

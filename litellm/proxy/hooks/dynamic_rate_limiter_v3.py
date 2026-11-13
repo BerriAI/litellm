@@ -126,6 +126,7 @@ async def alternate_grant_for(user_api_key_dict: UserAPIKeyAuth, model: str) -> 
         get_team_membership,
         get_team_object,
     )
+    from litellm.proxy.auth.customer_hierarchy_auth import check_customer_hierarchy_model_access
     from litellm.proxy.auth.user_api_key_auth import (
         _is_fallback_model_authorized,  # pyright: ignore[reportPrivateUsage]  # steering shares the fallback contract
         _is_within_every_model_budget,  # pyright: ignore[reportPrivateUsage]  # steering shares the fallback contract
@@ -189,6 +190,8 @@ async def alternate_grant_for(user_api_key_dict: UserAPIKeyAuth, model: str) -> 
             can_customer_access_model(
                 model=model, end_user_object=end_user_object, llm_router=llm_router, valid_token=user_api_key_dict
             )
+        if user_api_key_dict.customer_hierarchy is not None:
+            check_customer_hierarchy_model_access(user_api_key_dict.customer_hierarchy, model, llm_router)
     except Exception:  # noqa: BLE001  # a failed team, member, project or customer lookup must not authorize an alternate
         return None
     if not await _is_fallback_model_authorized(
@@ -587,21 +590,19 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         self,
         counter: RateLimitCounter,
     ) -> int | float | str | None:
-        """
-        Get saturation value with configurable local cache TTL.
-
-        Uses DualCache with configurable TTL for local cache storage.
-        TTL is configurable via litellm.priority_reservation_settings.saturation_check_cache_ttl
-
-        Args:
-            counter: The saturation counter
-
-        Returns:
-            Counter value, or None if not found
-        """
-        value: Final = await self.v3_limiter.rate_limits.get(
-            counter, backfill_ttl=self._get_saturation_check_cache_ttl()
-        )
+        """The model's counter as Redis holds it, so every worker agrees on saturation. A worker's own in-memory copy
+        carries only the usage it served itself, and steady traffic keeps that copy alive past any TTL. The read is
+        written back to memory for ``saturation_check_cache_ttl`` seconds; without Redis, or when the read fails, memory is
+        all there is."""
+        rate_limits: Final = self.v3_limiter.rate_limits
+        try:
+            value: Final = await rate_limits.get_from_redis(
+                counter, backfill_ttl=self._get_saturation_check_cache_ttl()
+            )
+        except Exception as e:  # noqa: BLE001  # any Redis failure degrades to the local mirror, as the limiter's counter reads do
+            verbose_proxy_logger.warning("Saturation read failed in Redis, using this worker's copy: %s", e)
+            local: Final = rate_limits.local((counter,))[0]
+            return None if isinstance(local, dict) else local
         return None if isinstance(value, dict) else value
 
     def _get_priority_weight(self, priority: str | None, model_info: ModelGroupInfo | None = None) -> float:
