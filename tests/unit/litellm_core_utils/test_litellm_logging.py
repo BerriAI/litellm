@@ -1901,6 +1901,103 @@ class TestAnthropicPassthroughCustomPricing:
 class TestUpdateFromKwargs:
     """Tests for the update_from_kwargs convenience wrapper."""
 
+    @pytest.mark.parametrize(
+        ("request_params", "disable_no_log_param", "expected_events"),
+        [({}, False, 1), ({"no-log": False}, False, 1), ({"no-log": True}, False, 0), ({"no-log": True}, True, 1)],
+    )
+    def test_hook_added_no_log_skips_success_callback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        request_params: Mapping[str, object],
+        disable_no_log_param: bool,
+        expected_events: int,
+    ) -> None:
+        events: Final[asyncio.Queue[object]] = asyncio.Queue()
+
+        def record_success(
+            kwargs: Mapping[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            events.put_nowait(response_obj)
+
+        monkeypatch.setattr(litellm, "global_disable_no_log_param", disable_no_log_param)
+        monkeypatch.setattr(litellm, "success_callback", [])
+        monkeypatch.setattr(litellm, "_async_success_callback", [])
+        now: Final = datetime.datetime(2026, 1, 1)
+        request_kwargs: Final = dict[str, object](litellm_call_id="hook-no-log")
+        logging_obj: Final = LitellmLogging(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=False,
+            call_type="completion",
+            start_time=now,
+            litellm_call_id="hook-no-log",
+            function_id="hook-no-log",
+            dynamic_success_callbacks=[record_success],
+            kwargs=request_kwargs,
+        )
+        request_kwargs.update(request_params)
+
+        logging_obj.update_from_kwargs(kwargs=request_kwargs, litellm_params={"litellm_call_id": "hook-no-log"})
+        logging_obj.success_handler(result=ModelResponse(id="hook-no-log-response"), start_time=now, end_time=now)
+
+        assert events.qsize() == expected_events
+
+    @pytest.mark.parametrize(
+        ("retained_params", "request_params", "caller_params", "expected"),
+        [
+            ({"no-log": True}, {}, {}, False),
+            ({"no-log": True}, {"no-log": False}, {}, True),
+            ({}, {"no-log": True}, {"no-log": False}, True),
+            ({}, {"no-log": False}, {"no-log": True}, False),
+        ],
+    )
+    def test_no_log_preserves_retained_values_and_caller_precedence(
+        self,
+        logging_obj: LitellmLogging,
+        monkeypatch: pytest.MonkeyPatch,
+        retained_params: Mapping[str, object],
+        request_params: Mapping[str, object],
+        caller_params: Mapping[str, object],
+        expected: bool,
+    ) -> None:
+        monkeypatch.setattr(litellm, "global_disable_no_log_param", False)
+        logging_obj.update_environment_variables(litellm_params=dict(retained_params), optional_params={})
+
+        logging_obj.update_from_kwargs(kwargs=dict(request_params), litellm_params=dict(caller_params))
+
+        assert (
+            logging_obj.should_run_callback(
+                callback="generic", litellm_params=logging_obj.litellm_params, event_hook="success_handler"
+            )
+            is expected
+        )
+
+    def test_hook_added_no_log_keeps_proxy_callbacks_enabled(
+        self, logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "global_disable_no_log_param", False)
+        proxy_callback: Final = PROXY_MaxParallelRequestsHandler_v3(
+            internal_usage_cache=InternalUsageCache(DualCache())
+        )
+
+        logging_obj.update_from_kwargs(kwargs={"no-log": True})
+
+        assert (
+            logging_obj.should_run_callback(
+                callback=proxy_callback, litellm_params=logging_obj.litellm_params, event_hook="success_handler"
+            )
+            is True
+        )
+        assert (
+            logging_obj.should_run_callback(
+                callback="generic", litellm_params=logging_obj.litellm_params, event_hook="success_handler"
+            )
+            is False
+        )
+
     def test_extracts_metadata_from_kwargs(self, logging_obj):
         metadata = {"user_api_key": "sk-test", "model_info": {"id": "abc"}}
         kwargs = {"metadata": metadata, "other_key": "ignored"}
