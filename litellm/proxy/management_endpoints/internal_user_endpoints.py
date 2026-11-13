@@ -152,6 +152,7 @@ class _AdminTeamAndKeyRows(TypedDict):
 _ADMIN_TEAM_AND_KEY_ROWS_ADAPTER: Final = TypeAdapter(
     list[_AdminTeamAndKeyRows], config=ConfigDict(hide_input_in_errors=True)
 )
+_TEAM_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _ADMIN_KEY_ROW_ADAPTER: Final = TypeAdapter(
     dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
@@ -491,7 +492,7 @@ async def _memberships_on_team_member_budget(
         row.team_id
         for row in team_rows
         if isinstance(row.metadata, dict)
-        and cast(dict[str, object], row.metadata).get("team_member_budget_id") is not None
+        and _TEAM_METADATA_ADAPTER.validate_python(row.metadata).get("team_member_budget_id") is not None
     )
     return tuple(
         m.model_copy(update={"max_budget_in_team": None}) if m.team_id in budgeted_team_ids else m for m in memberships
