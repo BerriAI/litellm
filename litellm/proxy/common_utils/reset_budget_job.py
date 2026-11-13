@@ -688,9 +688,9 @@ class ResetBudgetJob:
             return
         table: Final = CustomerMemberRepository(self.prisma_client, use_writer=True).table
         parents: Final = (
-            {"parent_team_id": {"in": list(identities)}}
+            {"parent_team_id": {"in": list(identities)}}  # bounded-ok: one RESET_BUDGET_JOB_BATCH_SIZE page
             if entity == "team"
-            else {"parent_team": {"is": {"parent_org_id": {"in": list(identities)}}}}
+            else {"parent_team": {"is": {"parent_org_id": {"in": list(identities)}}}}  # bounded-ok: one reset page
         )
         cursor: str | None = None  # rebind-ok: keyset walk must invalidate every descendant after commit
         while True:
