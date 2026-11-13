@@ -9,7 +9,10 @@ use std::{
 };
 
 pub use self::batch_read::TierPolicy;
-pub(crate) use self::{batch_read::BatchReads, increment::PipelineIncrement};
+pub(crate) use self::{
+    batch_read::{BatchReads, Reservation},
+    increment::PipelineIncrement,
+};
 use crate::{
     memory::{Clock, Memory, lock},
     remote::RemoteSlot,

@@ -22,8 +22,9 @@ from PIL import Image
 import litellm
 from litellm import Router
 from litellm._logging import verbose_logger
-from litellm.caching.caching import DualCache
 from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_usage import RouterUsageStore, UsageCounter
 from litellm.router_strategy.lowest_tpm_rpm_v2 import (
     LowestTPMLoggingHandler_v2 as LowestTPMLoggingHandler,
 )
@@ -32,6 +33,11 @@ from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
 
 ### UNIT TESTS FOR TPM/RPM ROUTING ###
+
+
+def _memory_usage() -> RouterUsageStore:
+    return RouterUsageStore(connect(None).router_usage())
+
 
 """
 - Given 2 deployments, make sure it's shuffling deployments correctly.
@@ -49,8 +55,8 @@ def restore_verbose_logger_level() -> Iterator[None]:
 def test_tpm_rpm_updated():
     from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
-    test_cache = DualCache()
-    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+    test_cache = _memory_usage()
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
     deployment = "azure/gpt-4.1-mini"
@@ -90,11 +96,11 @@ def test_tpm_rpm_updated():
     )
     dt = get_utc_datetime()
     current_minute = dt.strftime("%H-%M")
-    tpm_count_api_key = f"{deployment_id}:{deployment}:tpm:{current_minute}"
-    rpm_count_api_key = f"{deployment_id}:{deployment}:rpm:{current_minute}"
+    tpm_counter = UsageCounter.for_deployment(deployment_id, deployment, "tpm", current_minute)
+    rpm_counter = UsageCounter.for_deployment(deployment_id, deployment, "rpm", current_minute)
 
-    assert response_obj["usage"]["total_tokens"] == test_cache.get_cache(key=tpm_count_api_key)
-    assert 1 == test_cache.get_cache(key=rpm_count_api_key)
+    assert response_obj["usage"]["total_tokens"] == test_cache.get_local(tpm_counter)
+    assert 1 == test_cache.get_local(rpm_counter)
 
 
 # test_tpm_rpm_updated()
@@ -104,7 +110,7 @@ def test_tpm_rpm_updated():
 def test_get_available_deployments():
     from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
-    test_cache = DualCache()
+    test_cache = _memory_usage()
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
@@ -117,7 +123,7 @@ def test_get_available_deployments():
             "model_info": {"id": "5678"},
         },
     ]
-    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
     model_group = "gpt-3.5-turbo"
     ## DEPLOYMENT 1 ##
     total_tokens = 50
@@ -571,8 +577,8 @@ def test_return_potential_deployments():
     Assert deployment at limit is filtered out
     """
 
-    test_cache = DualCache()
-    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+    test_cache = _memory_usage()
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
 
     args: Dict = {
         "healthy_deployments": [
@@ -782,8 +788,8 @@ async def test_a_health_check_probe_does_not_count_toward_its_deployment_usage(
 ) -> None:
     from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
-    cache: Final = DualCache()
-    logger: Final = LowestTPMLoggingHandler(router_cache=cache)
+    usage: Final = _memory_usage()
+    logger: Final = LowestTPMLoggingHandler(usage=usage)
     base: Final = create_standard_logging_payload()
     payload: Final = {
         **base,
@@ -794,6 +800,7 @@ async def test_a_health_check_probe_does_not_count_toward_its_deployment_usage(
         "metadata": {**base["metadata"], "user_api_key_hash": user_api_key_hash},
     }
 
+    minute_before: Final = get_utc_datetime().strftime("%H-%M")
     await logger.async_log_success_event(
         kwargs={
             "litellm_params": {
@@ -807,6 +814,10 @@ async def test_a_health_check_probe_does_not_count_toward_its_deployment_usage(
         start_time=None,
         end_time=None,
     )
+    minute_after: Final = get_utc_datetime().strftime("%H-%M")
 
-    tpm_keys: Final = [key for key in cache.in_memory_cache.cache_dict if key.startswith("primary:") and ":tpm:" in key]
-    assert bool(tpm_keys) is counts_tokens, f"{user_api_key_hash} wrote tpm keys {tpm_keys}"
+    counted: Final = [
+        usage.get_local(UsageCounter.for_deployment("primary", "openai/gpt-4o", "tpm", minute))
+        for minute in {minute_before, minute_after}
+    ]
+    assert any(counted) is counts_tokens, f"{user_api_key_hash} left the deployment tpm counter at {counted}"

@@ -23,6 +23,9 @@ pub enum SpendCounter {
     Project(String),
     ModelAccessGroup(String),
     ShadowEval(String),
+    CustomerOrg(String),
+    CustomerTeam(String),
+    CustomerMember(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -51,6 +54,9 @@ impl SpendCounter {
             Self::Project(id) => format!("spend:project:{id}"),
             Self::ModelAccessGroup(name) => format!("spend:model_access_group:{name}"),
             Self::ShadowEval(job_id) => format!("spend:shadow_eval:{job_id}"),
+            Self::CustomerOrg(id) => format!("spend:customer_org:{id}"),
+            Self::CustomerTeam(id) => format!("spend:customer_team:{id}"),
+            Self::CustomerMember(id) => format!("spend:customer_member:{id}"),
         }
     }
 
@@ -95,7 +101,24 @@ impl SpendCounter {
             "project" => Self::Project(id.to_owned()),
             "model_access_group" => Self::ModelAccessGroup(id.to_owned()),
             "shadow_eval" => Self::ShadowEval(id.to_owned()),
+            "customer_org" => Self::CustomerOrg(id.to_owned()),
+            "customer_team" => Self::CustomerTeam(id.to_owned()),
+            "customer_member" => Self::CustomerMember(id.to_owned()),
             _ => return Err(invalid()),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SpendCounter;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::organization("spend:customer_org:tenant:lifetime")]
+    #[case::team("spend:customer_team:tenant:team:2026-01-01T00:00:00+00:00")]
+    #[case::member("spend:customer_member:user@example.com:lifetime")]
+    fn customer_counter_keys_round_trip(#[case] key: &str) {
+        assert_eq!(SpendCounter::parse(key).unwrap().key(), key);
     }
 }

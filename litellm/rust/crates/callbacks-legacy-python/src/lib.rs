@@ -14,6 +14,7 @@ mod deferred;
 mod error;
 mod logger;
 mod mapping;
+mod messages_input;
 mod python;
 pub use adapter::LegacyLogging;
 pub use call::PublicCall;

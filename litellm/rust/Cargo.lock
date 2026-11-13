@@ -3691,6 +3691,7 @@ dependencies = [
  "proptest",
  "pyo3",
  "rstest",
+ "serde",
  "serde_json",
  "strum",
  "thiserror 2.0.19",
@@ -4009,6 +4010,7 @@ dependencies = [
 name = "litellm-host"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "futures-util",
  "litellm-coroutine",
  "litellm-secret-value",
@@ -4370,10 +4372,14 @@ dependencies = [
  "aws-credential-types",
  "backon",
  "bytes",
+ "litellm-auth-gcp",
+ "litellm-auth-types",
  "litellm-error",
  "litellm-http",
  "litellm-s3",
+ "litellm-secret-value",
  "litellm-tracing",
+ "percent-encoding",
  "reqwest",
  "rstest",
  "thiserror 2.0.19",
@@ -4547,6 +4553,7 @@ dependencies = [
  "litellm-secret-value",
  "litellm-tracing",
  "rstest",
+ "sha2 0.10.9",
  "strum",
  "thiserror 2.0.19",
  "tokio",

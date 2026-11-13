@@ -21,6 +21,7 @@ interface UsageStatStripProps {
   loading: boolean;
   requestCountsPending: boolean;
   budget: number | null;
+  showBudgetHint?: boolean;
 }
 
 /** Spend, requests, tokens and averages for a range, each with a daily sparkline. */
@@ -30,9 +31,13 @@ export default function UsageStatStrip({
   loading,
   requestCountsPending,
   budget,
+  showBudgetHint = true,
 }: UsageStatStripProps) {
   const { t } = useTranslation();
   const daily = useMemo(() => dailyTotals(results), [results]);
+  const budgetHint = budget
+    ? t("usage.statStrip.budgetHint", { budget: t("format.usd", { val: budget }) })
+    : t("usage.statStrip.noBudget");
   return (
     <div className="grid grid-cols-1 overflow-hidden rounded-xl border bg-card sm:grid-cols-2 lg:grid-cols-4 lg:divide-x">
       <StatCell trend={<Sparkline data={daily} dataKey="spend" color={BRAND} className="h-14" />}>
@@ -40,11 +45,7 @@ export default function UsageStatStrip({
           label={t("usage.statStrip.spend")}
           value={t("format.usd", { val: totals.spend })}
           pending={loading}
-          hint={
-            budget
-              ? t("usage.statStrip.budgetHint", { budget: t("format.usd", { val: budget }) })
-              : t("usage.statStrip.noBudget")
-          }
+          hint={showBudgetHint ? budgetHint : undefined}
         />
       </StatCell>
       <StatCell trend={<Sparkline data={daily} dataKey="requests" color={BRAND} className="h-14" />}>

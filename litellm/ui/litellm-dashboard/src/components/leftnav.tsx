@@ -50,10 +50,8 @@ import {
   ShieldCheck,
   Tags,
   Terminal,
-  Trophy,
   User,
   Users,
-  Receipt,
   Wallet,
   Wrench,
   Workflow,
@@ -208,13 +206,6 @@ const customerPortalGroups: MenuGroup[] = [
         icon: <Users {...ICON} />,
         roles: all_admin_roles,
       },
-      {
-        key: "chargebacks",
-        page: "chargebacks",
-        label: "shell.nav.items.chargebacks",
-        icon: <Receipt {...ICON} />,
-        roles: all_admin_roles,
-      },
     ],
   },
 ];
@@ -332,17 +323,6 @@ const menuGroups: MenuGroup[] = [
         label: "shell.nav.items.alerts",
         icon: <Bell {...ICON} />,
         roles: rolesWithCapability("viewGlobalSpend"),
-      },
-      {
-        key: "model-insights",
-        page: "model-insights",
-        icon: <Trophy {...ICON} />,
-        roles: all_admin_roles,
-        label: (
-          <span className="flex items-center gap-2">
-            <Trans i18nKey="shell.nav.items.modelLeaderboard" /> <BetaBadge />
-          </span>
-        ),
       },
       {
         key: "cost-optimization",

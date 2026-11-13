@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, ListToolsResult, TextContent
 from mcp.types import Tool as MCPTool
 from openai.types.responses.tool_param import Mcp
 
@@ -76,6 +76,10 @@ def _setup_proxy_logging(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     proxy_module = types.SimpleNamespace(proxy_logging_obj=proxy_logging_obj, prisma_client=None)
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
     return proxy_logging_obj.post_call_failure_hook
+
+
+def _listing_client() -> types.SimpleNamespace:
+    return types.SimpleNamespace(discovery_auth_fingerprint=AsyncMock(return_value="test-credential-hash"))
 
 
 def test_deduplicate_mcp_tools_single_allowed_server():
@@ -1592,8 +1596,8 @@ async def test_bridge_listing_leaves_the_callers_catalog_unchanged(
     with (
         patch.dict(manager.tool_name_to_mcp_server_name_mapping),
         patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
-        patch.object(manager, "create_mcp_client", AsyncMock(return_value=object())),
-        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
+        patch.object(manager, "create_mcp_client", AsyncMock(return_value=_listing_client())),
+        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=ListToolsResult(tools=upstream))),
     ):
         try:
             if real_listing:
@@ -1665,9 +1669,10 @@ async def test_concurrent_bridge_calls_use_their_own_served_metadata(monkeypatch
         MCPTool(name="status", description="Read status", inputSchema={"type": "object"}),
     ]
     client: Final = AsyncMock()
+    client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
     client.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")])
     manager.create_mcp_client = AsyncMock(return_value=client)
-    manager._fetch_tools_with_timeout = AsyncMock(return_value=upstream)
+    manager._fetch_tools_with_timeout = AsyncMock(return_value=ListToolsResult(tools=upstream))
     guardrail: Final = _BridgeMetadataGuardrail()
     logger: Final = ProxyLogging(user_api_key_cache=DualCache())
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
@@ -1784,13 +1789,13 @@ async def _listing_through_the_gateway(
     agent_permission: LiteLLM_ObjectPermissionTable | None = None,
     servers: Sequence[MCPServer] = GATEWAY_SERVERS,
 ) -> tuple[list[MCPTool], list[str]]:
-    async def upstream_listing(_client: object, server_name: str) -> list[MCPTool]:
-        return list(UPSTREAM_TOOLS[server_name])
+    async def upstream_listing(_client: object, server_name: str) -> ListToolsResult:
+        return ListToolsResult(tools=list(UPSTREAM_TOOLS[server_name]))
 
     manager: Final = MCPServerManager()
     manager.registry = {server.server_id: server for server in servers}
     manager.config_mcp_servers = dict(manager.registry)
-    manager.create_mcp_client = AsyncMock(return_value=object())
+    manager.create_mcp_client = AsyncMock(return_value=_listing_client())
     manager._fetch_tools_with_timeout = AsyncMock(side_effect=upstream_listing)
     tables: Final = types.SimpleNamespace(litellm_mcptoolsettable=toolset_table or _toolset_table())
     monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)

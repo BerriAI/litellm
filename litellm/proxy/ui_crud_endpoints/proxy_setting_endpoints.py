@@ -377,6 +377,11 @@ class UISettings(LiteLLMBaseModel):
         description="If true, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth.",
     )
 
+    disable_aria: bool = Field(
+        default=False,
+        description="Hides Aria for everyone on this deployment.",
+    )
+
     moyai_url: str | None = Field(
         default=None,
         description="URL of a connected Moyai deployment. When set, the Moyai entry in the UI navigation opens this deployment instead of the Moyai landing page.",
@@ -432,6 +437,7 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
+    "disable_aria",
     "moyai_url",
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 }

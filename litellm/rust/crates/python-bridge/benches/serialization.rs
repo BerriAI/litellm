@@ -1,8 +1,11 @@
 use std::{hint::black_box, time::Duration};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use litellm_host_python::{from_py, to_py};
-use pyo3::{prelude::*, types::PyDict};
+use litellm_host_python::{from_py, json_to_py, to_py};
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyString},
+};
 use serde_json::{Value, json};
 
 const PAYLOAD_SIZES: &[(&str, usize)] = &[
@@ -89,12 +92,81 @@ fn bridge_serialization(c: &mut Criterion) {
     });
 }
 
+const MESSAGES_INPUT_TEXTS: &[(&str, &str)] = &[
+    (
+        "ascii",
+        "Here is some ordinary English text about the code.\n",
+    ),
+    (
+        "mixed",
+        "Here is some ordinary English text about the code. Done \u{2705} caf\u{e9} \u{1f600}\n",
+    ),
+    (
+        "unicode",
+        "\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{30c6}\u{30ad}\u{30b9}\u{30c8} \u{1f600}\u{1f680} caf\u{e9}\n",
+    ),
+];
+
+fn messages_body(text: &str) -> Value {
+    let turn = text.repeat(6);
+    let messages: Vec<Value> = (0..)
+        .map(|index| {
+            json!([
+                {"role": "user", "content": [{"type": "text", "text": turn}]},
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": turn},
+                    {"type": "tool_use", "id": format!("toolu_{index:06}"), "name": "bash", "input": {"command": "ls"}}
+                ]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": format!("toolu_{index:06}"), "content": turn}]}
+            ])
+        })
+        .scan(0, |size, turns| {
+            *size += turns.to_string().len();
+            (*size < 210 * 1024).then_some(turns)
+        })
+        .flat_map(|turns| turns.as_array().cloned().unwrap_or_default())
+        .collect();
+    json!({"model": "claude-sonnet-5", "max_tokens": 4096, "messages": messages, "stream": true})
+}
+
+fn messages_input(c: &mut Criterion) {
+    Python::initialize();
+    Python::attach(|py| {
+        let json = py.import("json").expect("Python json module should import");
+        for &(label, text) in MESSAGES_INPUT_TEXTS {
+            let body = messages_body(text);
+            let dict = json_to_py(py, &body).expect("body should convert");
+            c.bench_with_input(
+                BenchmarkId::new("messages_input_python_json_dumps", label),
+                &dict,
+                |b, dict| {
+                    b.iter(|| {
+                        json.call_method1("dumps", (black_box(dict),))
+                            .expect("body should serialize")
+                    })
+                },
+            );
+            c.bench_with_input(
+                BenchmarkId::new("messages_input_rust_raw_json", label),
+                &body,
+                |b, body| {
+                    b.iter(|| {
+                        let bytes = litellm_host::raw_json::to_vec(black_box(body))
+                            .expect("body should serialize");
+                        PyString::new(py, std::str::from_utf8(&bytes).expect("JSON is UTF-8"))
+                    })
+                },
+            );
+        }
+    });
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default()
         .sample_size(20)
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(4));
-    targets = bridge_serialization
+    targets = bridge_serialization, messages_input
 }
 criterion_main!(benches);

@@ -141,6 +141,13 @@ def without(
     return {key: value for key, value in mapping.items() if key not in keys}
 
 
+def only(
+    mapping: Mapping[_Key, _Value], *keys: object
+) -> dict[_Key, _Value]:  # mutable-ok: a fresh copy the caller owns
+    """``mapping`` with only ``keys``, as a new dict in the same order; ``mapping`` is unchanged."""
+    return {key: value for key, value in mapping.items() if key in keys}
+
+
 def decoded_json_object(value: object) -> Mapping[str, object]:
     mapping: Final = as_str_mapping(value)
     if mapping is not None:

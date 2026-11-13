@@ -175,7 +175,11 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.deployment_pricing import pricing_models
-from litellm.litellm_core_utils.duration_parser import get_budget_window_start
+from litellm.litellm_core_utils.duration_parser import (
+    get_annual_budget_window_start,
+    get_budget_window_start,
+    is_annual_budget_duration,
+)
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsDispatch,
@@ -208,6 +212,7 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolv
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_change
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_settings
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db import tool_registry_writer
 from litellm.proxy.db.create_views import (
@@ -1689,11 +1694,20 @@ def _deployment_attribution_for_model_group(model_group: object, team_id: str | 
     )
 
 
-def _call_type_for_route(route: str | None) -> str | None:
+def _call_type_for_route(route: str | None, *, method: str | None = None) -> str | None:
     """The route's call type when it maps to a single operation (its async and sync variants);
-    None for routes shared by several operations, since the method is not known here."""
+    None for routes shared by several operations unless the method disambiguates them."""
     if route is None:
         return None
+    normalized_route: Final = re.sub(r"^/v1(?:beta)?/", "/", route)
+    endpoint_call_type: Final = {
+        "/responses/compact": "acompact_responses",
+        "/interactions": "acreate_interaction",
+    }.get(normalized_route)
+    if endpoint_call_type is not None:
+        return endpoint_call_type
+    if normalized_route == "/videos" and method == "POST":
+        return "avideo_generation"
     call_types: Final = get_call_types_for_route(route)
     if not call_types:
         return None
@@ -1769,7 +1783,14 @@ def _as_str_mapping(value: object) -> Mapping[str, object]:
 def _proxy_only_error_logged_metadata_keys(*, authenticated: bool, past_pre_call: bool) -> frozenset[str]:
     return frozenset(
         key
-        for key, logged in (("tags", authenticated), ("standard_logging_guardrail_information", past_pre_call))
+        for key, logged in (
+            ("tags", authenticated),
+            ("session_id", authenticated),
+            ("trace_user_id", authenticated),
+            ("trace_id", authenticated),
+            ("trace_name", authenticated),
+            ("standard_logging_guardrail_information", past_pre_call),
+        )
         if logged
     )
 
@@ -4270,6 +4291,8 @@ class ProxyLogging:
         )
         if litellm_logging_obj is None:
             from litellm._uuid import uuid
+            from litellm.proxy.litellm_pre_call_utils import key_and_team_logging_fields
+            from litellm.proxy.proxy_server import proxy_config
 
             request_data.setdefault("litellm_call_id", str(uuid.uuid4()))
 
@@ -4280,6 +4303,7 @@ class ProxyLogging:
                 **_proxy_only_error_log_fields(  # pyright: ignore[reportArgumentType]  # the allowlist never carries is_async_call
                     request_fields, logged_metadata_keys
                 ),
+                **key_and_team_logging_fields(user_api_key_dict=user_api_key_dict, proxy_config=proxy_config),
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
             request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
@@ -9516,7 +9540,11 @@ def _as_aware(moment: datetime) -> datetime:
 
 def _reset_window(budget_duration: str, budget_reset_at: datetime) -> tuple[datetime, datetime] | None:
     window_end: Final = _as_aware(budget_reset_at)
-    window_start: Final = get_budget_window_start(budget_duration, window_end)
+    window_start: Final = (
+        get_annual_budget_window_start(window_end, get_budget_reset_settings().timezone)
+        if is_annual_budget_duration(budget_duration)
+        else get_budget_window_start(budget_duration, window_end)
+    )
     return (window_start, window_end) if window_start < window_end else None
 
 
