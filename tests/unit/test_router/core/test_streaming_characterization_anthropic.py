@@ -22,6 +22,7 @@ from tests.unit.test_router.core.scripted_host import (
     deployment,
     rate_limit,
     server_error,
+    tool_call_sent_failure,
 )
 from tests.unit.test_router.core.streaming_helpers import (
     BLOCK_START,
@@ -266,6 +267,19 @@ async def test_a_failed_agentic_followup_before_content_skips_the_retries_for_th
     assert frames == [MESSAGE_START, text_delta("B"), MESSAGE_STOP]
     assert host.deployments_called() == ["a", "b"]
     assert host.sleeps == []
+
+
+async def test_a_failure_after_an_mcp_tool_call_was_sent_before_content_is_raised_without_retry_or_fallback(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    failed: Final = tool_call_sent_failure(server_error())
+    host.answer("openai/a", anthropic_stream(MESSAGE_START, error=failed), answered_ok())
+    host.answer("openai/b", fallback_ok())
+    core = make_core(model_list=GROUPS_AB, fallbacks=[{"a": ["b"]}], num_retries=2)
+    stream = await open_stream(core)
+    with pytest.raises(litellm.InternalServerError, match="boom"):
+        await collect_bytes(stream)
+    assert host.deployments_called() == ["a"]
 
 
 async def test_a_stream_retry_carries_the_superseded_attempt_usage(make_core: MakeCore, host: ScriptedHost) -> None:

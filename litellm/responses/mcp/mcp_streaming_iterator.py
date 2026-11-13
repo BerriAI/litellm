@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     GatewayTools,
     allowed_tools_tool_choice_kept_on_follow_up,
 )
+from litellm.litellm_core_utils.mcp_tool_dispatch import ToolDispatch
 from litellm.responses.litellm_completion_transformation.streaming_iterator import LiteLLMCompletionStreamingIterator
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.mcp.stream_round_billing import StreamedRoundBilling
@@ -301,6 +302,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         served_tools: Sequence[MCPTool] | None = None,
         tool_choice: object = None,
         gateway: GatewayTools = NO_GATEWAY_TOOLS,
+        tool_dispatch: ToolDispatch | None = None,
     ):
         # MCP setup
         self.mcp_tools_with_litellm_proxy = mcp_tools_with_litellm_proxy or []
@@ -336,6 +338,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         # Response collection for tool execution
         self.collected_response: ResponsesAPIResponse | None = None
+        self._tool_dispatch: Final = ToolDispatch() if tool_dispatch is None else tool_dispatch
 
         # Counts completed rounds of tool execution, so a model that keeps
         # calling tools (e.g. retrying after an error) can't loop forever.
@@ -469,7 +472,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self._iteration_started = True
             self._round_billing = self._bill_rounds_on_one_row()
         try:
-            chunk: Final = await self._anext_impl()
+            with self._tool_dispatch.failures_not_replayed():
+                chunk: Final = await self._anext_impl()
         except Exception:
             if self._round_billing is not None:
                 self._round_billing.finish()
@@ -920,21 +924,21 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     # Add the in_progress and arguments events (not the completed event yet)
                     self.tool_execution_events.extend(call_events[:-1])
 
-            # Execute the tools
-            tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
-                tool_server_map=self.tool_server_map,
-                served_tools=self.served_tools,
-                tool_calls=tool_calls,
-                user_api_key_auth=self.user_api_key_auth,
-                mcp_auth_header=self.mcp_auth_header,
-                mcp_server_auth_headers=self.mcp_server_auth_headers,
-                oauth2_headers=self.oauth2_headers,
-                raw_headers=self.raw_headers,
-                litellm_call_id=self.litellm_call_id,
-                litellm_trace_id=self.litellm_trace_id,
-                request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(self.original_request_params),
-                guardrail_context=MCPRequestContext.resolve_guardrail_context(self.original_request_params),
-            )
+            with self._tool_dispatch.recording():
+                tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+                    tool_server_map=self.tool_server_map,
+                    served_tools=self.served_tools,
+                    tool_calls=tool_calls,
+                    user_api_key_auth=self.user_api_key_auth,
+                    mcp_auth_header=self.mcp_auth_header,
+                    mcp_server_auth_headers=self.mcp_server_auth_headers,
+                    oauth2_headers=self.oauth2_headers,
+                    raw_headers=self.raw_headers,
+                    litellm_call_id=self.litellm_call_id,
+                    litellm_trace_id=self.litellm_trace_id,
+                    request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(self.original_request_params),
+                    guardrail_context=MCPRequestContext.resolve_guardrail_context(self.original_request_params),
+                )
 
             # Create completion events and output_item.done events for tool execution
             for tool_result in tool_results:

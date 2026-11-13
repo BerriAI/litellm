@@ -100,6 +100,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_MAX_PAGES,
     MCP_TOOL_LISTING_TIMEOUT,
 )
+from litellm.litellm_core_utils.mcp_tool_dispatch import active_tool_dispatch
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.mcp_client.tools import list_tools_result_with_pagination, list_tools_with_pagination
 from litellm.proxy.mcp_server.mcp_context import get_active_mcp_request_ctx
@@ -1185,6 +1186,7 @@ class MCPClient:
                 callers only opt in when the downstream side can carry it.
         """
         verbose_logger.info("MCP client calling tool '%s'", call_tool_request_params.name)
+        tool_dispatch: Final = active_tool_dispatch()
 
         async def on_progress(progress: float, total: float | None, message: str | None):
             percentage: Final = (progress / total * 100) if total else 0
@@ -1216,6 +1218,8 @@ class MCPClient:
             async def request(
                 responses: InputResponses | None, state: str | None
             ) -> MCPCallToolResult | InputRequiredResult:
+                if tool_dispatch is not None:
+                    tool_dispatch.record_sent()
                 return await session.call_tool(
                     name=call_tool_request_params.name,
                     arguments=call_tool_request_params.arguments,

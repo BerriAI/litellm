@@ -738,6 +738,7 @@ impl Core {
         // pick raises (no Python exception stands behind it) has no fallback.
         retried_failure(error).is_none_or(|failure| {
             failure.kind == FailureKind::GuardrailIntervention
+                || failure.tool_calls_sent
                 || (!snapshot.settings.fallback_on_unsupported_params
                     && is_bad_request_without_fallback(&failure))
         })
