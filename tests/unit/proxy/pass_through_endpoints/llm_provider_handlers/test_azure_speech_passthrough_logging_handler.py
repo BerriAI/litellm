@@ -86,6 +86,66 @@ def _make_logging_obj() -> MagicMock:
 
 class TestAzureSpeechPassthroughHandler:
     @pytest.mark.parametrize(
+        "definition,expected_model,model_rate",
+        [
+            ('{"enhancedMode":{"enabled":true,"model":"MAI-Transcribe-2"}}', "MAI-Transcribe-2", 0.01),
+            ('{"enhancedMode":{"enabled":true,"model":"MAI-Transcribe-1.5"}}', "MAI-Transcribe-1.5", 0.02),
+            ('{"enhancedMode":{"enabled":true,"model":"future-model"}}', "future-model", None),
+            ('{"enhancedMode":{"enabled":false,"model":"MAI-Transcribe-2"}}', None, None),
+            ('{"enhancedMode":{"model":"MAI-Transcribe-2"}}', None, None),
+            ('{"enhancedMode":{"enabled":true}}', None, None),
+            ('{"enhancedMode":{"enabled":true,"model":""}}', None, None),
+            ('{"enhancedMode":{"enabled":"false","model":"MAI-Transcribe-2"}}', None, None),
+            ('{"enhancedMode":[]}', None, None),
+            ('{"enhancedMode":null}', None, None),
+            ('{"enhancedMode":{"enabled":true,"model":123}}', None, None),
+            ('{"locales":["en-US"]}', None, None),
+            ("not json", None, None),
+            ("[]", None, None),
+            (None, None, None),
+        ],
+    )
+    def test_fast_transcription_logs_selected_model_and_uses_its_price_or_standard_fallback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        definition: str | None,
+        expected_model: str | None,
+        model_rate: float | None,
+    ) -> None:
+        if model_rate is not None:
+            monkeypatch.setitem(
+                litellm.model_cost,
+                f"azure/speech/{expected_model}",
+                {
+                    "litellm_provider": "azure",
+                    "mode": "audio_transcription",
+                    "input_cost_per_second": model_rate,
+                    "output_cost_per_second": 0.0,
+                },
+            )
+        logging_obj: Final = _make_logging_obj()
+        handler_result: Final = AzureSpeechPassthroughLoggingHandler.azure_speech_passthrough_handler(
+            httpx_response=_make_response(FAST_URL),
+            response_body=FAST_BODY,
+            logging_obj=logging_obj,
+            url_route=FAST_URL,
+            result=json.dumps(FAST_BODY),
+            start_time=datetime(2026, 10, 26),
+            end_time=datetime(2026, 10, 26),
+            cache_hit=False,
+            request_body={"definition": definition},
+        )
+        model: Final = f"azure_speech/{expected_model or 'fast-transcription'}"
+        cost: Final = FAST_AUDIO_SECONDS * (model_rate if model_rate is not None else PRICE_PER_SECOND)
+
+        assert handler_result["kwargs"]["model"] == model
+        assert handler_result["kwargs"]["response_cost"] == pytest.approx(cost)
+        assert handler_result["kwargs"]["standard_logging_object"]["model"] == model
+        assert handler_result["kwargs"]["standard_logging_object"]["response_cost"] == pytest.approx(cost)
+        assert logging_obj.model_call_details["model"] == model
+        assert logging_obj.model_call_details["response_cost"] == pytest.approx(cost)
+
+    @pytest.mark.parametrize(
         "url_route,expected_model,expected_cost",
         [
             (SHORT_AUDIO_URL, "azure_speech/short-audio", TRANSCRIPT_AUDIO_SECONDS * PRICE_PER_SECOND),
