@@ -122,6 +122,17 @@ def test_plain_query_price_leaves_a_token_priced_row_billing_tokens(
     ) == pytest.approx(expected_costs)
 
 
+@pytest.mark.parametrize("call_type", ["decisions", "adecisions", "systemone", "asystemone"])
+def test_nadir_bucket_bills_its_per_request_fee_from_the_catalog(call_type: str) -> None:
+    assert cost_calculator.cost_per_token(
+        model="nadir/bucket",
+        custom_llm_provider="nadir",
+        prompt_tokens=100,
+        completion_tokens=10,
+        call_type=cast(CallTypesLiteral, call_type),
+    ) == (0.002, 0.0)
+
+
 _LUNA_USAGE: Final = Usage(
     prompt_tokens=100,
     completion_tokens=10,
