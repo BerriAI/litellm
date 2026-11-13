@@ -81,6 +81,7 @@ export default function UISettings() {
     relativeTimeOptions.find((option) => option.settingValue === values.usage_default_time_range)?.settingValue ??
     "last_7_days";
   const usageRangeConfigOwned = data?.source?.usage_default_time_range === "config";
+  const ariaConfigOwned = data?.source?.disable_aria === "config";
   const moyaiUrl = (values.moyai_url as string | undefined) ?? null;
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
@@ -362,6 +363,29 @@ export default function UISettings() {
               </Select>
               {usageRangeConfigOwned && (
                 <p className="text-sm text-muted-foreground">{t("adminPanel.uiSettings.usageRange.managedByConfig")}</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <SettingRow
+                checked={values.disable_aria === true}
+                disabled={isUpdating || ariaConfigOwned}
+                onCheckedChange={(checked) =>
+                  updateSettings(
+                    { disable_aria: checked },
+                    {
+                      onSuccess: () => toast.success(t("adminPanel.uiSettings.toasts.updated")),
+                      onError: (error) => toast.fromError(error),
+                    },
+                  )
+                }
+                ariaLabel={t("adminPanel.uiSettings.settings.disableAria.label")}
+                label={t("adminPanel.uiSettings.settings.disableAria.label")}
+                description={t("adminPanel.uiSettings.settings.disableAria.description")}
+              />
+              {ariaConfigOwned && (
+                <p className="text-sm text-muted-foreground">
+                  {t("adminPanel.uiSettings.settings.disableAria.managedByConfig")}
+                </p>
               )}
             </div>
             <SettingRow

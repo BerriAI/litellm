@@ -470,6 +470,8 @@ class LiteLLMRoutes(enum.Enum):
         "/skill-hub/submissions",
         "/skill-hub/submissions/{submission_id}",
         "/skill-hub/submissions/{submission_id}/archive",
+        "/skill-hub/submissions/{submission_id}/upload",
+        "/skill-hub/submissions/{submission_id}/withdraw",
         "/skill-hub/submissions/{submission_id}/approve",
         "/skill-hub/submissions/{submission_id}/reject",
         "/skill-hub/submissions/{submission_id}/scan",
@@ -722,6 +724,18 @@ class LiteLLMRoutes(enum.Enum):
             "/jwt/key/mapping/delete",
             "/jwt/key/mapping/list",
             "/jwt/key/mapping/info",
+            "/management/v1/customer_organizations",
+            "/management/v1/customer_organizations/daily/activity/aggregated",
+            "/management/v1/customer_organizations/{customer_org_id}",
+            "/management/v1/customer_organizations/daily/activity",
+            "/management/v1/customer_organizations/{customer_org_id}/default_budgets",
+            "/management/v1/customer_organizations/{customer_org_id}/default_budgets/{budget_id}",
+            "/management/v1/customer_teams",
+            "/management/v1/customer_teams/{customer_team_id}",
+            "/management/v1/customer_teams/daily/activity",
+            "/management/v1/customer_members",
+            "/management/v1/customer_members/{customer_member_id}",
+            "/management/v1/customer_members/daily/activity",
         ]
         + key_management_routes
         + mcp_management_routes
@@ -2346,6 +2360,14 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=None,
         description="List of HTTP methods this endpoint handles (e.g., ['GET', 'POST']). If None or empty, all methods (GET, POST, PUT, DELETE, PATCH) are supported for backward compatibility. This allows the same path to have different targets for different HTTP methods.",
     )
+    display_name: str | None = Field(
+        default=None,
+        description="Human-readable name for this endpoint. The Model Hub lists the endpoint under this name, falling back to the path when unset.",
+    )
+    show_in_model_hub: bool = Field(
+        default=False,
+        description="If True, this endpoint is published on the public Model Hub as a row in mode 'passthrough'.",
+    )
 
 
 class PassThroughEndpointResponse(LiteLLMPydanticObjectBase):
@@ -2927,6 +2949,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     store_prompts_in_spend_logs: bool | None = Field(
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
+    )
+    redact_tokens_in_spend_logs: bool = Field(
+        True,
+        description="Masks token-shaped secrets in stored spend log request and response content by default. Set False to opt out.",
     )
     spend_logs_prompt_storage: Literal["latest_turn"] | None = Field(
         None,
@@ -3833,6 +3859,7 @@ class SpendLogsRouterMetadata(TypedDict):
 
 
 class SpendLogsMetadata(TypedDict):
+    user_api_key_customer_usage: ReadOnly[NotRequired[str | None]]
     actor_agent_id: ReadOnly[NotRequired[str | None]]
     target_agent_id: ReadOnly[NotRequired[str | None]]
     billing_agent_id: ReadOnly[NotRequired[str | None]]

@@ -47,12 +47,8 @@ def test_native_stream_headers_reach_spend_callbacks() -> None:
 
 def test_recorded_messages_stream_keeps_the_provider_header_names() -> None:
     logger: Final = _supplied_logger()
-    sent: Final[tuple[str, Mapping[str, str], Mapping[str, object]]] = (
-        "http://upstream/v1/messages",
-        {},
-        {"stream": True},
-    )
-    legacy.record_response(logger, 200, [("request-id", "req_native")], "", sent)
+    sent: Final[tuple[str, Mapping[str, str], bytes]] = ("http://upstream/v1/messages", {}, b'{"stream":true}')
+    legacy.record_response(logger, 200, [("request-id", "req_native")], "", True, sent)
     legacy.stream_opened(logger, {"additional_headers": {"llm_provider-request-id": "req_native"}})
 
     assert logger.stream is True
@@ -278,7 +274,7 @@ def test_the_rust_contract_matches_the_shim_signatures() -> None:
     assert contract == {name: list(inspect.signature(getattr(legacy, name)).parameters) for name in contract}
 
 
-def test_messages_input_is_the_body_as_the_python_handler_builds_and_serializes_it() -> None:
+def test_messages_input_order_is_the_key_order_the_python_handler_builds_its_body_in() -> None:
     body: Final = {
         "model": "claude-sonnet-4-5",
         "messages": [{"role": "user", "content": "hi"}],
@@ -289,17 +285,19 @@ def test_messages_input_is_the_body_as_the_python_handler_builds_and_serializes_
         "output_config": {"effort": "low"},
     }
 
-    logged: Final = legacy.messages_input(
-        body, {"output_config": {"effort": "low"}, "context_management": {"edits": []}}
+    order: Final = legacy.messages_input_order(
+        body, {"output_config": {"effort": "low"}, "context_management": {"edits": []}, "absent": 1}
     )
 
-    assert logged == [
-        {
-            "role": "user",
-            "content": '{"messages": [{"role": "user", "content": "hi"}], "max_tokens": 16, "model": "claude-sonnet-4-5", '
-            '"stream": true, "system": "brief", "output_config": {"effort": "low"}, "context_management": {"edits": []}}',
-        }
-    ]
+    assert order == (
+        "messages",
+        "max_tokens",
+        "model",
+        "stream",
+        "system",
+        "output_config",
+        "context_management",
+    )
 
 
 def _messages_logger() -> Logging:
@@ -317,7 +315,7 @@ def _messages_logger() -> Logging:
 def test_native_provider_response_is_recorded_for_logging_replay() -> None:
     logger: Final = _messages_logger()
 
-    legacy.record_response(logger, 200, (("request-id", "req_native"),), '{"id": "msg_native"}', None)
+    legacy.record_response(logger, 200, (("request-id", "req_native"),), '{"id": "msg_native"}', False, None)
 
     recorded: Final[object] = logger.model_call_details["httpx_response"]
     assert isinstance(recorded, httpx.Response)
@@ -329,7 +327,7 @@ def test_native_provider_response_is_recorded_for_logging_replay() -> None:
 def test_a_non_ascii_provider_header_is_recorded_as_httpx_decodes_it() -> None:
     logger: Final = _messages_logger()
 
-    legacy.record_response(logger, 200, (("x-fz-unicode", "caf\u00e9"),), '{"id": "msg_native"}', None)
+    legacy.record_response(logger, 200, (("x-fz-unicode", "caf\u00e9"),), '{"id": "msg_native"}', False, None)
 
     assert logger.model_call_details["response_headers"]["x-fz-unicode"] == "caf\u00e9"
 
@@ -340,17 +338,17 @@ _SENT_HEADERS: Final = MappingProxyType({"x-api-key": "sk-ant", "anthropic-beta"
 
 def test_native_provider_response_carries_the_request_that_was_sent() -> None:
     logger: Final = _messages_logger()
-    body: Final = {"model": "claude-sonnet-4-5", "thread": {"type": "create"}}
+    wire: Final = '{"model":"claude-sonnet-4-5","system":"caf\u00e9","temperature":1e-7}'.encode()
 
     legacy.record_response(
-        logger, 200, (), '{"id": "msg_native"}', ("https://api.anthropic.com/v1/messages", _SENT_HEADERS, body)
+        logger, 200, (), '{"id": "msg_native"}', False, ("https://api.anthropic.com/v1/messages", _SENT_HEADERS, wire)
     )
 
     recorded: Final = _HTTPX_RESPONSE.validate_python(logger.model_call_details["httpx_response"])
     assert recorded.request.method == "POST"
     assert str(recorded.request.url) == "https://api.anthropic.com/v1/messages"
     assert recorded.request.headers["anthropic-beta"] == "message-threads-2026-08-12"
-    assert recorded.request.content == b'{"model": "claude-sonnet-4-5", "thread": {"type": "create"}}'
+    assert recorded.request.content == wire
     assert recorded.content == b'{"id": "msg_native"}'
 
 
@@ -362,7 +360,8 @@ def test_native_stream_response_is_recorded_unread_like_the_python_stream() -> N
         200,
         (("request-id", "req_native"),),
         "",
-        ("https://api.anthropic.com/v1/messages", _SENT_HEADERS, {"stream": True}),
+        True,
+        ("https://api.anthropic.com/v1/messages", _SENT_HEADERS, b'{"stream":true}'),
     )
 
     recorded: Final = _HTTPX_RESPONSE.validate_python(logger.model_call_details["httpx_response"])

@@ -463,6 +463,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_reasoning_token: float | None
     output_cost_per_reasoning_token_flex: float | None
     output_cost_per_reasoning_token_priority: float | None
+    output_cost_per_video: ReadOnly[float | None]
     output_cost_per_video_per_second: float | None  # only for vertex ai models
     output_cost_per_audio_per_second: float | None  # only for vertex ai models
     output_cost_per_second: float | None  # for OpenAI Speech models
@@ -479,6 +480,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_image_1536: ReadOnly[float | None]
     output_cost_per_image_1K: ReadOnly[float | None]
     output_cost_per_image_2K: ReadOnly[float | None]
+    output_cost_per_billable_unit: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
     ocr_cost_per_page_batches: ReadOnly[float | None]
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
@@ -4163,6 +4165,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_1536: float | None = None
     output_cost_per_image_1K: float | None = None
     output_cost_per_image_2K: float | None = None
+    output_cost_per_billable_unit: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 
@@ -4266,6 +4269,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_reasoning_token: float | None = None
     output_cost_per_reasoning_token_flex: float | None = None
     output_cost_per_reasoning_token_priority: float | None = None
+    output_cost_per_video: float | None = None
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
@@ -5388,6 +5392,14 @@ class PriorityReservationSettings(LiteLLMBaseModel):
     saturation_threshold: float = Field(
         default=0.50,
         description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits.",
+    )
+    team_model_limit_borrows_idle_capacity_from_other_teams: bool = Field(
+        default=False,
+        description="When true, a team's model_tpm_limit and model_rpm_limit on a model this limiter covers stop being ceilings. The team may run past them on capacity other teams are not using while the model is below saturation_threshold, and is held to them once the model saturates.",
+    )
+    priority_class_share_splits_equally_among_active_teams: bool = Field(
+        default=False,
+        description="When true, a priority class's share of a model is renormalized over the classes whose teams used the model in the current window and split equally among that class's active teams, and once the model saturates each team is held to its own share instead of the class pool. Keys without a team keep the class pool.",
     )
 
     saturation_check_cache_ttl: int = Field(

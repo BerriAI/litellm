@@ -792,13 +792,13 @@ class DBSpendUpdateWriter:
 
             ## CREATE SPEND LOG PAYLOAD ##
             from litellm.proxy.spend_tracking.spend_tracking_utils import (
-                get_logging_payload,
+                get_logging_payload_async,
                 get_request_model_access_groups,
             )
 
             llm_router: Final = get_llm_router()
-            payload: Final = get_logging_payload(
-                kwargs=kwargs,
+            payload: Final = await get_logging_payload_async(
+                kwargs=_SPEND_METADATA_ADAPTER.validate_python(kwargs) if kwargs is not None else None,
                 response_obj=completion_response,
                 start_time=start_time,
                 end_time=end_time,
