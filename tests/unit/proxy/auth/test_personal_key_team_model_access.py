@@ -3,7 +3,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 import litellm
 from litellm.proxy import proxy_server
@@ -12,6 +12,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    Member,
     ModelAccessDeniedProxyException,
     UserAPIKeyAuth,
 )
@@ -21,8 +22,12 @@ from litellm.proxy.utils import get_available_models_for_user
 
 _TEAMS: Final[Mapping[str, LiteLLM_TeamTableCachedObj]] = {
     UI_TEAM_ID: LiteLLM_TeamTableCachedObj(team_id=UI_TEAM_ID, models=[]),
-    "team-a": LiteLLM_TeamTableCachedObj(team_id="team-a", models=["gpt-a", "shared"]),
-    "team-b": LiteLLM_TeamTableCachedObj(team_id="team-b", models=["gpt-b", "shared"]),
+    "team-a": LiteLLM_TeamTableCachedObj(
+        team_id="team-a", models=["gpt-a", "shared"], members_with_roles=[Member(user_id="u1", role="user")]
+    ),
+    "team-b": LiteLLM_TeamTableCachedObj(
+        team_id="team-b", models=["gpt-b", "shared"], members_with_roles=[Member(user_id="u1", role="user")]
+    ),
     "team-open": LiteLLM_TeamTableCachedObj(team_id="team-open", models=[]),
     "team-blocked": LiteLLM_TeamTableCachedObj(team_id="team-blocked", models=["gpt-a"], blocked=True),
     "team-group": LiteLLM_TeamTableCachedObj(
@@ -269,8 +274,16 @@ async def test_resolved_model_check_denies_when_personal_key_owner_lookup_fails(
     assert str(exc_info.value.code) == "403"
 
 
-async def _list_models(monkeypatch: pytest.MonkeyPatch, owner: LiteLLM_UserTable, token: UserAPIKeyAuth) -> list[str]:
-    async def _get_user_object(**_: object) -> LiteLLM_UserTable:
+async def _list_models(
+    monkeypatch: pytest.MonkeyPatch,
+    owner: LiteLLM_UserTable | None,
+    token: UserAPIKeyAuth,
+    *,
+    include_model_access_groups: bool = False,
+    only_model_access_groups: bool = False,
+    team_id: str | None = None,
+) -> list[str]:
+    async def _get_user_object(**_: object) -> LiteLLM_UserTable | None:
         return owner
 
     monkeypatch.setattr(auth_checks, "get_user_object", _get_user_object)
@@ -282,6 +295,9 @@ async def _list_models(monkeypatch: pytest.MonkeyPatch, owner: LiteLLM_UserTable
         prisma_client=MagicMock(),
         proxy_logging_obj=MagicMock(),
         user_api_key_cache=MagicMock(),
+        include_model_access_groups=include_model_access_groups,
+        only_model_access_groups=only_model_access_groups,
+        team_id=team_id,
     )
 
 
@@ -340,6 +356,75 @@ async def test_dashboard_lists_and_calls_own_and_team_models(
                 )
             with pytest.raises(ModelAccessDeniedProxyException):
                 await _common_checks(model, owner, token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "own_models, owner_teams, expected",
+    [
+        ([], [], {"team-access"}),
+        (["gpt-c"], [], set()),
+        (["no-default-models"], [], set()),
+        (["no-default-models"], ["team-native-group"], {"team-access"}),
+    ],
+)
+async def test_dashboard_group_only_listing_does_not_restore_model_names(
+    monkeypatch: pytest.MonkeyPatch,
+    teams: None,
+    own_models: list[str],
+    owner_teams: list[str],
+    expected: set[str],
+) -> None:
+    owner: Final = LiteLLM_UserTable(user_id="u1", models=own_models, teams=owner_teams)
+    token: Final = UserAPIKeyAuth(
+        token="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, models=[], user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    assert (
+        set(
+            await _list_models(
+                monkeypatch, owner, token, include_model_access_groups=True, only_model_access_groups=True
+            )
+        )
+        == expected
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("own_models", [[], ["gpt-c"], ["no-default-models"]])
+@pytest.mark.parametrize("team_id, expected", [("team-a", {"gpt-a", "shared"}), ("team-b", {"gpt-b", "shared"})])
+async def test_dashboard_team_listing_excludes_own_models_and_other_teams(
+    monkeypatch: pytest.MonkeyPatch,
+    teams: None,
+    own_models: list[str],
+    team_id: str,
+    expected: set[str],
+) -> None:
+    owner: Final = LiteLLM_UserTable(user_id="u1", models=own_models, teams=["team-a", "team-b"])
+    token: Final = UserAPIKeyAuth(
+        token="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, models=[], user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    assert set(await _list_models(monkeypatch, owner, token, team_id=team_id)) == expected
+
+
+@pytest.mark.asyncio
+async def test_dashboard_validated_team_listing_does_not_require_owner_lookup(
+    monkeypatch: pytest.MonkeyPatch, teams: None
+) -> None:
+    token: Final = UserAPIKeyAuth(
+        token="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, models=[], user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    assert set(await _list_models(monkeypatch, None, token, team_id="team-a")) == {"gpt-a", "shared"}
+
+
+@pytest.mark.asyncio
+async def test_dashboard_team_listing_requires_membership(monkeypatch: pytest.MonkeyPatch, teams: None) -> None:
+    owner: Final = LiteLLM_UserTable(user_id="u1", models=[], teams=["team-a"])
+    token: Final = UserAPIKeyAuth(
+        token="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, models=[], user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _list_models(monkeypatch, owner, token, team_id="team-native-group")
+    assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio

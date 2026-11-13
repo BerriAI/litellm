@@ -6453,28 +6453,40 @@ async def personal_key_team_visible_models(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache | None,
     proxy_logging_obj: ProxyLogging | None,
+    only_model_access_groups: bool = False,
+    team_object: LiteLLM_TeamTableCachedObj | None = None,
 ) -> tuple[str, ...]:
     owner: Final = (
         await _personal_key_owner(user_api_key_dict, prisma_client, user_api_key_cache, proxy_logging_obj)
-        if _is_dashboard_session(user_api_key_dict) and user_api_key_cache is not None and proxy_logging_obj is not None
+        if _is_dashboard_session(user_api_key_dict)
+        and team_object is None
+        and user_api_key_cache is not None
+        and proxy_logging_obj is not None
         else None
     )
     candidates: Final = (
         tuple(dict.fromkeys((*models, *llm_router.registry().names())))
-        if _is_dashboard_session(user_api_key_dict) and llm_router is not None
+        if _is_dashboard_session(user_api_key_dict)
+        and llm_router is not None
+        and not only_model_access_groups
+        and team_object is None
         else models
     )
-    teams: Final = await _personal_key_listing_teams(
-        user_api_key_dict=user_api_key_dict,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
+    teams: Final = tuple(
+        (team_object,)
+        if team_object is not None
+        else await _personal_key_listing_teams(
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
     )
     return tuple(
         [
             model
             for model in candidates
-            if _dashboard_user_grants_model(model, user_api_key_dict, owner, llm_router)
+            if (team_object is None and _dashboard_user_grants_model(model, user_api_key_dict, owner, llm_router))
             or (
                 bool(teams)
                 and prisma_client is not None
