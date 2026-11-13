@@ -4114,9 +4114,7 @@ def _get_builtin_model_info_for_registration(
     changing the map mid-walk, is retried, so a transient failure registers exactly
     where the untripped lookup would.
     """
-    lookups: Final = (
-        lookup_catalog_model_info(model, custom_llm_provider) for _ in range(_REGISTRATION_ATTEMPTS)
-    )
+    lookups: Final = (lookup_catalog_model_info(model, custom_llm_provider) for _ in range(_REGISTRATION_ATTEMPTS))
     return next(
         (lookup for lookup in lookups if not (isinstance(lookup, ModelInfoLookupMiss) and lookup.tripped)),
         ModelInfoLookupMiss(tripped=True),
