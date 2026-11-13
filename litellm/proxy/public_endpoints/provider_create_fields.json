@@ -4508,5 +4508,33 @@
       }
     ],
     "default_model_placeholder": "bigmodel/glm-5.3"
+  },
+  {
+    "provider": "BINERIC",
+    "provider_display_name": "Bineric",
+    "litellm_provider": "bineric",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.bineric.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "bineric/lynx-30b"
   }
 ]
