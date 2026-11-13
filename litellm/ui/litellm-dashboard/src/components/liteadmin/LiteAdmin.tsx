@@ -53,13 +53,26 @@ type LiteAdminState = {
 };
 
 const LiteAdminContext = createContext<LiteAdminState | null>(null);
+function isInternalUser(userRole: string | null): boolean {
+  return !isProxyAdminRole(userRole) && !hasProxyWideSpendView(userRole);
+}
+
+function usageScope(
+  userRole: string | null,
+  userId: string,
+  teamAccess: boolean,
+): Extract<LiteAdminSession["access"], { mode: "usage" }>["scope"] {
+  if (hasProxyWideSpendView(userRole)) return { type: "global" };
+  return { type: teamAccess ? "user_and_teams" : "user", userId };
+}
+
 function useLiteAdminSession() {
   const auth = useAuthorized();
   const [disabled] = useDisableLiteAdmin(auth.userId);
   const sessionReady = !auth.isLoading && auth.isAuthorized;
   const { data: uiSettings } = useUISettings({ staleTime: 0, refetchInterval: 30_000, enabled: sessionReady });
   const admin = auth.premiumUser === true && !auth.isViewOnly && isProxyAdminRole(auth.userRole);
-  const internalUser = !isProxyAdminRole(auth.userRole) && !hasProxyWideSpendView(auth.userRole);
+  const internalUser = isInternalUser(auth.userRole);
   const internalAccess = uiSettings?.values?.aria_internal_user_access ?? "own_usage";
   if (!uiSettings || uiSettings.values?.disable_aria === true) return null;
   if (internalUser && internalAccess === "none") return null;
@@ -69,12 +82,7 @@ function useLiteAdminSession() {
     ? { mode: "admin" }
     : {
         mode: "usage",
-        scope: hasProxyWideSpendView(auth.userRole)
-          ? { type: "global" }
-          : {
-              type: internalUser && internalAccess === "own_and_team_usage" ? "user_and_teams" : "user",
-              userId: auth.userId,
-            },
+        scope: usageScope(auth.userRole, auth.userId, internalUser && internalAccess === "own_and_team_usage"),
       };
   const session = {
     userId: auth.userId,
