@@ -150,7 +150,8 @@ impl AzureAuthService {
                     scope,
                     authority,
                 })?
-                .with_token_retry(inputs.token_retry);
+                .with_token_retry(inputs.token_retry)
+                .with_token_transport(inputs.token_transport);
                 let source = request.credential_source();
                 self.native
                     .acquire(request)
@@ -160,6 +161,7 @@ impl AzureAuthService {
                     .map(Some)
             }
             AzureCredentialPlan::Native(request) => {
+                let request = request.with_token_transport(inputs.token_transport);
                 let source = request.credential_source();
                 self.native
                     .acquire(request.with_token_retry(inputs.token_retry))
@@ -170,6 +172,7 @@ impl AzureAuthService {
             AzureCredentialPlan::Chain(requests) => {
                 let mut failures = Vec::new();
                 for request in requests {
+                    let request = request.with_token_transport(inputs.token_transport);
                     let source = request.credential_source();
                     match self
                         .native
@@ -1207,6 +1210,47 @@ mod tests {
             Error::EmptyCallerCredential {
                 caller: "Azure AD token provider"
             }
+        );
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn a_client_secret_asking_for_python_s_transport_fetches_its_token_through_it() {
+        let pki = crate::test_support::Pki::new();
+        let port = pki.token_endpoint().await;
+        let bundle = pki.ca.display().to_string();
+        let service = AzureAuthService::with_acquirer(Arc::new(
+            crate::native::NativeAzureTokenAcquirer::with_requests_transport(
+                4,
+                crate::requests_transport::RequestsTransport::new(Arc::new(move || {
+                    vec![("REQUESTS_CA_BUNDLE".to_owned(), bundle.clone())]
+                })),
+            ),
+        ));
+        let configured = |value: String| {
+            crate::types::ConfigValue::Value(Sourced::new(value, InputSource::Deployment))
+        };
+        let inputs = AzureAuthInputs {
+            tenant_id: configured("tenant".to_owned()),
+            client_id: configured("client".to_owned()),
+            client_secret: crate::types::ConfigValue::Value(Sourced::new(
+                SecretValue::new("secret"),
+                InputSource::Deployment,
+            )),
+            azure_authority_host: configured(format!("https://127.0.0.1:{port}")),
+            token_transport: crate::types::TokenTransport::PythonRequests,
+            ..AzureAuthInputs::default()
+        };
+
+        let credential = service
+            .get_azure_ad_token(&inputs, &|_| None)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            credential.value().secret().expose(),
+            crate::test_support::SERVED_TOKEN
         );
     }
 }

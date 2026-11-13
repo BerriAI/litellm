@@ -19,8 +19,9 @@ use litellm_secret_value::SecretValue;
 use super::credential_provider_cache::{
     AzureCredentialProviderCache, AzureCredentialProviderCacheKey,
 };
+use super::requests_transport::RequestsTransport;
 use super::token_retry::TokenRetry;
-use super::types::AzureTokenRetry;
+use super::types::{AzureTokenRetry, TokenTransport};
 
 #[derive(Clone, Debug)]
 pub(crate) enum NativeAzureRequest {
@@ -63,6 +64,7 @@ pub(crate) struct ValidatedAzureRequest {
     credential_source: InputSource,
     probe_imds: bool,
     token_retry: AzureTokenRetry,
+    token_transport: TokenTransport,
 }
 
 impl ValidatedAzureRequest {
@@ -74,12 +76,20 @@ impl ValidatedAzureRequest {
             credential_source,
             probe_imds: false,
             token_retry: AzureTokenRetry::SdkDefault,
+            token_transport: TokenTransport::default(),
         })
     }
 
     pub(crate) fn with_token_retry(self, token_retry: AzureTokenRetry) -> Self {
         Self {
             token_retry,
+            ..self
+        }
+    }
+
+    pub(crate) fn with_token_transport(self, token_transport: TokenTransport) -> Self {
+        Self {
+            token_transport,
             ..self
         }
     }
@@ -126,6 +136,7 @@ impl CredentialAttempt {
 pub(crate) struct NativeAzureTokenAcquirer {
     cache: AzureCredentialProviderCache,
     transport: Option<azure_core::http::Transport>,
+    requests: Arc<RequestsTransport>,
     imds_available: tokio::sync::Mutex<ImdsAvailability>,
 }
 
@@ -146,9 +157,17 @@ impl Default for NativeAzureTokenAcquirer {
 
 impl NativeAzureTokenAcquirer {
     pub(crate) fn new(cache_capacity: u64) -> Self {
+        Self::with_requests_transport(cache_capacity, RequestsTransport::process())
+    }
+
+    pub(super) fn with_requests_transport(
+        cache_capacity: u64,
+        requests: RequestsTransport,
+    ) -> Self {
         Self {
             cache: AzureCredentialProviderCache::new(cache_capacity),
             transport: None,
+            requests: Arc::new(requests),
             imds_available: tokio::sync::Mutex::new(ImdsAvailability::Unknown),
         }
     }
@@ -159,9 +178,8 @@ impl NativeAzureTokenAcquirer {
         transport: azure_core::http::Transport,
     ) -> Self {
         Self {
-            cache: AzureCredentialProviderCache::new(cache_capacity),
             transport: Some(transport),
-            imds_available: tokio::sync::Mutex::new(ImdsAvailability::Unknown),
+            ..Self::new(cache_capacity)
         }
     }
 
@@ -210,8 +228,16 @@ impl NativeAzureTokenAcquirer {
         request: ValidatedAzureRequest,
     ) -> Result<ResolvedCredential, Error> {
         let scope = request.request.scope().to_string();
-        let key = request.request.cache_key(request.token_retry);
-        let transport = self.transport.clone();
+        let key = request.cache_key();
+        let transport = self
+            .transport
+            .clone()
+            .or_else(|| match request.token_transport {
+                TokenTransport::AzureSdk => None,
+                TokenTransport::PythonRequests => Some(azure_core::http::Transport::new(
+                    Arc::clone(&self.requests) as Arc<dyn azure_core::http::HttpClient>,
+                )),
+            });
         let credential = self
             .cache
             .get_or_create(key, async move {
@@ -283,6 +309,15 @@ async fn probe_imds(transport: azure_core::http::Transport) -> Result<(), Error>
     Ok(())
 }
 
+impl ValidatedAzureRequest {
+    fn cache_key(&self) -> AzureCredentialProviderCacheKey {
+        AzureCredentialProviderCacheKey {
+            token_transport: self.token_transport,
+            ..self.request.cache_key(self.token_retry)
+        }
+    }
+}
+
 impl NativeAzureRequest {
     fn scope(&self) -> &str {
         match self {
@@ -313,6 +348,7 @@ impl NativeAzureRequest {
                 scope: scope.value().clone(),
                 token_retry,
                 secret_identity: secret_digest(client_secret.value().expose()),
+                token_transport: TokenTransport::default(),
             },
             Self::ClientAssertion {
                 tenant_id,
@@ -335,6 +371,7 @@ impl NativeAzureRequest {
                     "{assertion_identity}:{}",
                     secret_digest(assertion.value().expose())
                 ),
+                token_transport: TokenTransport::default(),
             },
             Self::WorkloadIdentity {
                 tenant_id,
@@ -353,6 +390,7 @@ impl NativeAzureRequest {
                 scope: scope.value().clone(),
                 token_retry,
                 secret_identity: token_file_path.value().clone(),
+                token_transport: TokenTransport::default(),
             },
             Self::ManagedIdentity {
                 client_id, scope, ..
@@ -367,6 +405,7 @@ impl NativeAzureRequest {
                 scope: scope.value().clone(),
                 token_retry,
                 secret_identity: String::new(),
+                token_transport: TokenTransport::default(),
             },
             Self::DeveloperTools { scope, .. } => AzureCredentialProviderCacheKey {
                 mechanism: "developer-tools",
@@ -376,6 +415,7 @@ impl NativeAzureRequest {
                 scope: scope.value().clone(),
                 token_retry,
                 secret_identity: String::new(),
+                token_transport: TokenTransport::default(),
             },
         }
     }

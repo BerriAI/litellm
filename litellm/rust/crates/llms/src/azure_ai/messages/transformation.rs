@@ -1,6 +1,8 @@
 use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
 use litellm_auth::{InputSource, Sourced};
-use litellm_auth_azure::{AzureAuthInputs, AzureTokenRetry, ConfigValue, DEFAULT_AZURE_SCOPE};
+use litellm_auth_azure::{
+    AzureAuthInputs, AzureTokenRetry, ConfigValue, DEFAULT_AZURE_SCOPE, TokenTransport,
+};
 use litellm_host::interceptors::RetriedRequest;
 use litellm_http::request::has_header;
 use litellm_llms_types::{
@@ -344,6 +346,7 @@ fn entra_id_auth(
                 )),
                 azure_scope: configured(&scope),
                 token_retry: AzureTokenRetry::Python,
+                token_transport: TokenTransport::PythonRequests,
                 ..AzureAuthInputs::default()
             }),
         };
@@ -700,14 +703,15 @@ mod tests {
             AuthScheme::HostAzureAdToken => "host".to_string(),
             AuthScheme::AzureAdToken { inputs } => match inputs.tenant_id.as_value() {
                 Some(tenant_id) => format!(
-                    "client_secret:{}:{}:{:?}",
+                    "client_secret:{}:{}:{:?}:{:?}",
                     tenant_id.value(),
                     inputs
                         .azure_scope
                         .as_value()
                         .map(|scope| scope.value().as_str())
                         .unwrap_or_default(),
-                    inputs.token_retry
+                    inputs.token_retry,
+                    inputs.token_transport
                 ),
                 None => "caller".to_string(),
             },
@@ -717,7 +721,8 @@ mod tests {
         }
     }
 
-    const SECRET: &str = "client_secret:t:https://cognitiveservices.azure.com/.default:Python";
+    const SECRET: &str =
+        "client_secret:t:https://cognitiveservices.azure.com/.default:Python:PythonRequests";
 
     #[rstest]
     #[case::nothing_is_unauthenticated(json!({}), &[], "unauthenticated")]
@@ -741,7 +746,7 @@ mod tests {
     #[case::client_secret_with_the_scope_python_reads(
         json!({"tenant_id": "t", "client_id": "c", "client_secret": "s"}),
         &[("AZURE_SCOPE", "api://scope/.default")],
-        "client_secret:t:api://scope/.default:Python"
+        "client_secret:t:api://scope/.default:Python:PythonRequests"
     )]
     #[case::client_secret_outranks_a_token(
         json!({"tenant_id": "t", "client_id": "c", "client_secret": "s", "azure_ad_token": "tok"}),

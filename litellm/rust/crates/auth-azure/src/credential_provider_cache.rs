@@ -15,6 +15,7 @@ pub(crate) struct AzureCredentialProviderCacheKey {
     pub(crate) scope: String,
     pub(crate) secret_identity: String,
     pub(crate) token_retry: crate::types::AzureTokenRetry,
+    pub(crate) token_transport: super::types::TokenTransport,
 }
 
 pub(crate) struct AzureCredentialProviderCache {
