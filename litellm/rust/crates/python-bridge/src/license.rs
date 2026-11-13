@@ -2,16 +2,16 @@ use std::time::Duration;
 
 use litellm_error::Report;
 use litellm_http::{ClientVariant, HttpClientConfig};
-use litellm_license::{LICENSE_SERVER, License, PublicKey};
+use litellm_license::{LICENSE_SERVER, PublicKey};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 #[pyclass(
     frozen,
-    name = "NativeLicenseVerifier",
+    name = "LicenseVerifier",
     module = "litellm.rust_bridge._native"
 )]
-pub(crate) struct NativeLicenseVerifier {
+pub(crate) struct LicenseVerifier {
     public_key: PublicKey,
     server: String,
     timeout: Duration,
@@ -19,7 +19,7 @@ pub(crate) struct NativeLicenseVerifier {
 }
 
 #[pymethods]
-impl NativeLicenseVerifier {
+impl LicenseVerifier {
     #[new]
     #[pyo3(signature = (*, timeout_seconds, public_key_pem = None, license_server = None))]
     fn new(
@@ -45,10 +45,10 @@ impl NativeLicenseVerifier {
     }
 
     /// `None` when the key did not sign this license or it expired
-    fn verify_offline(&self, py: Python<'_>, license: &str) -> Option<NativeLicense> {
+    fn verify_offline(&self, py: Python<'_>, license: &str) -> Option<License> {
         self.public_key
             .verify(license, jiff::Zoned::now().datetime())
-            .map(NativeLicense)
+            .map(License)
             .inspect_err(|error| {
                 crate::logger::capture(py).scope(|| {
                     litellm_tracing::debug!("license not verified locally: {}", Report::new(error));
@@ -82,11 +82,11 @@ impl NativeLicenseVerifier {
     }
 }
 
-#[pyclass(frozen, name = "NativeLicense", module = "litellm.rust_bridge._native")]
-pub(crate) struct NativeLicense(License);
+#[pyclass(frozen, name = "License", module = "litellm.rust_bridge._native")]
+pub(crate) struct License(litellm_license::License);
 
 #[pymethods]
-impl NativeLicense {
+impl License {
     #[getter]
     fn expiration_date(&self) -> String {
         self.0.expiration_date.to_string()

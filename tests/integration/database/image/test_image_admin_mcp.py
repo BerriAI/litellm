@@ -26,8 +26,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi import HTTPException
 from litellm_admin_mcp.server import create_http_app
 from litellm.proxy import proxy_server
-from litellm.proxy.auth.litellm_license import LicenseCheck
-from litellm.rust_bridge._native import NativeLicenseVerifier
+from litellm.proxy.license import LicenseCheck, LicenseVerifier
 
 module_name: Final = {
     "unified": "litellm.proxy.proxy_server",
@@ -46,7 +45,7 @@ if sys.argv[1] == "base":
     )
     public_key_pem: Final = private_key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
     proxy_server._license_check = LicenseCheck(
-        NativeLicenseVerifier(timeout_seconds=5, public_key_pem=public_key_pem.decode())
+        LicenseVerifier(timeout_seconds=5, public_key_pem=public_key_pem.decode())
     )
     proxy_server._license_check.license_str = base64.b64encode(message + b"." + signature).decode()
 

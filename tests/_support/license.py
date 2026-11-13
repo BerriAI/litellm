@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from litellm.rust_bridge._native import NativeLicense, NativeLicenseVerifier
+from litellm.proxy.license import License, LicenseVerifier
 
 
 def sign_license(private_key: RSAPrivateKey, claims: Mapping[str, object]) -> str:
@@ -25,9 +25,9 @@ def sign_license(private_key: RSAPrivateKey, claims: Mapping[str, object]) -> st
     return base64.b64encode(message + b"." + signature).decode()
 
 
-def license_verifier(private_key: RSAPrivateKey, license_server: str | None = None) -> NativeLicenseVerifier:
+def license_verifier(private_key: RSAPrivateKey, license_server: str | None = None) -> LicenseVerifier:
     pem: Final = private_key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo).decode()
-    return NativeLicenseVerifier(timeout_seconds=5, public_key_pem=pem, license_server=license_server)
+    return LicenseVerifier(timeout_seconds=5, public_key_pem=pem, license_server=license_server)
 
 
 @contextmanager
@@ -62,7 +62,7 @@ def _test_signer() -> RSAPrivateKey:
     return rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
-def native_license(**claims: object) -> NativeLicense:
+def native_license(**claims: object) -> License:
     """A license the Rust verifier accepted, signed by a throwaway key, expiring in 2999 unless overridden"""
     signer: Final = _test_signer()
     verified: Final = license_verifier(signer).verify_offline(

@@ -33,11 +33,11 @@ from litellm.proxy.auth.auth_utils import (
     enforce_batch_limits_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
-from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.common_utils.callback_config_validation import credential_reference_rejection
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
+from litellm.proxy.license import LicenseCheck
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
 from litellm.proxy.management.teams.dependencies import get_team_access

@@ -1,11 +1,11 @@
-# What is this?
-## If litellm license in env, checks if it's valid
 import os
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import NON_LLM_CONNECTION_TIMEOUT
-from litellm.rust_bridge._native import NativeLicense, NativeLicenseVerifier
+from litellm.rust_bridge._native import License, LicenseVerifier
+
+__all__ = ("AUTO_ROUTER_LICENSE_FEATURE", "AUTO_ROUTER_LICENSE_REMEDY", "License", "LicenseCheck", "LicenseVerifier")
 
 AUTO_ROUTER_LICENSE_FEATURE: Final = "auto_router"
 AUTO_ROUTER_LICENSE_REMEDY: Final = "A LiteLLM license with the 'auto_router' feature lifts the limit."
@@ -17,16 +17,16 @@ class LicenseCheck:
     - Returns if license is valid
     """
 
-    def __init__(self, verifier: NativeLicenseVerifier | None = None) -> None:
+    def __init__(self, verifier: LicenseVerifier | None = None) -> None:
         self.license_str = os.getenv("LITELLM_LICENSE", None)
         verbose_proxy_logger.debug("License configured: %s", self.license_str is not None)
-        self.verifier: Final = verifier or NativeLicenseVerifier(timeout_seconds=NON_LLM_CONNECTION_TIMEOUT)
+        self.verifier: Final = verifier or LicenseVerifier(timeout_seconds=NON_LLM_CONNECTION_TIMEOUT)
         self._premium_check_logged = False
-        self.airgapped_license_data: NativeLicense | None = None
+        self.airgapped_license_data: License | None = None
 
     def _verify(self, license_str: str) -> bool:
         premium: Final = self.verifier.verify_remote(license_str)
-        verbose_proxy_logger.debug("litellm.proxy.auth.litellm_license.py::_verify - License is premium=%s", premium)
+        verbose_proxy_logger.debug("license.py::_verify - License is premium=%s", premium)
         return premium
 
     def is_premium(self) -> bool:
@@ -37,7 +37,7 @@ class LicenseCheck:
         try:
             if not self._premium_check_logged:
                 verbose_proxy_logger.debug(
-                    "litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - License configured: %s",
+                    "license.py::is_premium() - ENTERING 'IS_PREMIUM' - License configured: %s",
                     self.license_str is not None,
                 )
 
@@ -46,7 +46,7 @@ class LicenseCheck:
 
             if not self._premium_check_logged:
                 verbose_proxy_logger.debug(
-                    "litellm.proxy.auth.litellm_license.py::is_premium() - License configured after refresh: %s",
+                    "license.py::is_premium() - License configured after refresh: %s",
                     self.license_str is not None,
                 )
                 self._premium_check_logged = True

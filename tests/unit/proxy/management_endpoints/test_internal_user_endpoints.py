@@ -1012,7 +1012,7 @@ async def test_new_user_license_gate_counts_only_billable_users(mocker):
     SCIM-deactivated rows). Deactivated users that push the raw total over
     max_users must not block creation, while active users over the limit must.
     """
-    from litellm.proxy.auth.litellm_license import LicenseCheck
+    from litellm.proxy.license import LicenseCheck
 
     async def _noop(*args, **kwargs):
         return None

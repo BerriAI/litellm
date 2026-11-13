@@ -90,6 +90,7 @@ from litellm.proxy.health_check import (  # noqa: F401  # legacy module exports
     run_with_timeout,
     update_litellm_params_for_health_check,
 )
+from litellm.proxy.license import License
 from litellm.proxy.middleware.admission_control_middleware import (
     get_admission_control_stats,
 )
@@ -99,7 +100,6 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.router import Router
 from litellm.router_api import deployment_usable_by_team
-from litellm.rust_bridge._native import NativeLicense
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 from litellm.types.router import reject_server_owned_wif_fields
@@ -1875,10 +1875,10 @@ async def shared_health_check_status_endpoint(
         )
 
 
-def read_license_data() -> NativeLicense | None:
+def read_license_data() -> License | None:
     from litellm.proxy.proxy_server import _license_check, premium_user_data
 
-    license_data: NativeLicense | None = premium_user_data or _license_check.airgapped_license_data
+    license_data: License | None = premium_user_data or _license_check.airgapped_license_data
 
     if license_data is None and _license_check.license_str:
         try:

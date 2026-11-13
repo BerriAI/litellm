@@ -205,7 +205,6 @@ from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
-from litellm.rust_bridge._native import NativeLicense
 from litellm.rust_bridge.catalog import Target
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
@@ -459,7 +458,6 @@ from litellm.proxy.auth.fallback_model_access import router_fallback_access_chec
 from litellm.proxy.auth.fallback_rate_limit import RouterFallbackRateLimitCheck
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.legacy_empty_models_check import warn_about_legacy_empty_models
-from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
 from litellm.proxy.auth.login_throttle import (
     LoginThrottle,
     declared_proxy_ranges,
@@ -736,6 +734,7 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (  # noqa: F401, RUF10
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.lens.adapter import router as lens_router
 from litellm.proxy.lens.internal import LensInternalMiddleware
+from litellm.proxy.license import AUTO_ROUTER_LICENSE_REMEDY, License, LicenseCheck
 from litellm.proxy.list_api.common import (
     ManagementProblem,
     problem_response,
@@ -1231,7 +1230,7 @@ except ImportError:
 server_root_path: Final = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: NativeLicense | None = _license_check.airgapped_license_data
+premium_user_data: License | None = _license_check.airgapped_license_data
 
 
 def _set_premium_user(is_premium: bool) -> None:

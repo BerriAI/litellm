@@ -56,7 +56,7 @@ from litellm.proxy.utils import ProxyLogging
 @pytest.fixture
 def admin_mcp_proxy(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     from litellm.proxy import proxy_server
-    from litellm.proxy.auth.litellm_license import LicenseCheck
+    from litellm.proxy.license import LicenseCheck
 
     monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", "true")
     monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-" + "1234567890abcdef" * 4)
