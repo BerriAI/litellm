@@ -54,6 +54,12 @@ def test_mistral_embedding_uses_mistral_embeddings_endpoint(respx_mock: respx.Mo
             {"label": "qa"},
         ),
         ({"user_api_key": "internal"}, True, None),
+        ({"user_api_key": "internal", "user_api_key_user_email": "private@example.test"}, False, None),
+        (
+            {"user_api_key_user_email": "private@example.test", "requester_metadata": {"label": "qa"}},
+            False,
+            {"label": "qa"},
+        ),
     ],
 )
 def test_mistral_embedding_forwards_only_requester_metadata(

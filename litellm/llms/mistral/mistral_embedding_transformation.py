@@ -10,7 +10,7 @@ def embedding_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object] | N
     )
     if metadata is None:
         return None
-    if kwargs.get("proxy_server_request") is not None:
+    if kwargs.get("proxy_server_request") is not None or any(key.startswith("user_api_key") for key in metadata):
         requester: Final = TypeAdapter[dict[str, object] | None](dict[str, object] | None).validate_python(
             metadata.get("requester_metadata")
         )
