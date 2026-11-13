@@ -1,11 +1,29 @@
+import asyncio
 from typing import Final
 
 import httpx
+import pytest
+from starlette.requests import Request
+from starlette.types import Message, Scope
 
-from litellm.proxy.control_plane.auth.rbac import EDITOR_ROLE, USAGE_VIEWER_ROLE, VIEWER_ROLE
+from litellm.proxy.control_plane.auth.rbac import (
+    EDITOR_ROLE,
+    USAGE_VIEWER_ROLE,
+    VIEWER_ROLE,
+    build_principal,
+)
+from litellm.proxy.control_plane.common.exceptions import ControlPlaneException
+from litellm.proxy.control_plane.container import build_container
 from litellm.proxy.control_plane.dataplanes.client import DataplaneClient, RetryPolicy
+from litellm.proxy.control_plane.dataplanes.credentials import Caller
 from litellm.proxy.control_plane.dataplanes.dependencies import get_dataplane_client
+from litellm.proxy.control_plane.proxy.router import _forward
+from litellm.proxy.control_plane.settings import ControlPlaneSettings
 from tests.unit.proxy.control_plane.support import (
+    DATAPLANES,
+    MASTER_KEY,
+    RoutedTransport,
+    no_exchange,
     response,
     rig,
 )
@@ -60,7 +78,7 @@ def test_scope_denied_passthrough_reads_and_writes_are_audited() -> None:
         ("alice", "eu", "GET", "/key/sk-[redacted]", "denied"),
         ("alice", "eu", "POST", "/key/sk-[redacted]/regenerate", "denied"),
     }
-    assert all("Missing scope" in event["detail"] for event in trail)
+    assert {event["detail"] for event in trail} == {"missing scope: proxy:read", "missing scope: proxy:write"}
 
 
 def test_get_preserves_repeated_query_parameters_in_order() -> None:
@@ -92,7 +110,7 @@ def test_writes_need_proxy_write_go_out_once_and_are_audited() -> None:
     assert timed_out.status_code == 502 and "1 attempt" in timed_out.json()["detail"]
     failed: Final = client.delete("/api/v1/dataplanes/eu/proxy/key/delete", headers=editor)
     assert (failed.status_code, failed.json()) == (400, {"error": {"message": "no such key"}})
-    trail: Final = client.get("/api/v1/audit", headers=minter.headers(role="admin")).json()["items"]
+    trail: Final = client.get("/api/v1/audit?dataplane=eu", headers=minter.headers(role="admin")).json()["items"]
     assert [(e["method"], e["path"], e["decision"], e["status"]) for e in trail] == [
         ("DELETE", "/key/delete", "allowed", 400),
         ("PATCH", "/team/update", "unreachable", None),
@@ -119,7 +137,9 @@ def test_passthrough_write_accepts_a_200_kilobyte_body() -> None:
 def test_denied_paths_are_403_audited_and_never_reach_the_dataplane() -> None:
     client, transport, minter = rig({})
     blocked: Final = client.post(
-        "/api/v1/dataplanes/eu/proxy/v1/chat/completions", json={"model": "x"}, headers=minter.headers(role=EDITOR_ROLE)
+        "/api/v1/dataplanes/eu/proxy/v1/chat/completions",
+        content=b"[",
+        headers={**minter.headers(role=EDITOR_ROLE), "Content-Type": "application/json"},
     )
     assert blocked.status_code == 403 and "inference" in blocked.json()["detail"]
     assert transport.calls == []
@@ -149,7 +169,10 @@ def test_audit_read_needs_its_scope_and_filters_by_actor() -> None:
     client.get("/api/v1/dataplanes/eu/proxy/key/list", headers=minter.headers("eu"))
     assert client.get("/api/v1/audit", headers=minter.headers(role=EDITOR_ROLE)).status_code == 403
     assert client.get("/api/v1/audit?actor=bob", headers=minter.headers(role="admin")).json()["items"] == []
-    assert len(client.get("/api/v1/audit?actor=alice", headers=minter.headers(role="admin")).json()["items"]) == 1
+    assert (
+        len(client.get("/api/v1/audit?actor=alice&dataplane=eu", headers=minter.headers(role="admin")).json()["items"])
+        == 1
+    )
 
 
 def test_audit_reads_are_clamped_to_the_callers_dataplane_binding() -> None:
@@ -169,9 +192,7 @@ def test_a_redirecting_dataplane_is_a_502_and_the_redirect_is_never_followed() -
     client, transport, minter = rig(
         {f"{EU}/v1/mcp/server/tools/call": [httpx.Response(302, headers={"Location": "http://127.0.0.1:9/"})]}
     )
-    reply: Final = client.get(
-        "/api/v1/dataplanes/eu/proxy/v1/mcp/server/tools/call", headers=minter.headers("eu")
-    )
+    reply: Final = client.get("/api/v1/dataplanes/eu/proxy/v1/mcp/server/tools/call", headers=minter.headers("eu"))
     assert reply.status_code == 502 and "redirect" in reply.json()["detail"]
     assert [url for url, _, _ in transport.calls] == [f"{EU}/v1/mcp/server/tools/call"]
     trail: Final = client.get("/api/v1/audit", headers=minter.headers(role="admin")).json()["items"]
@@ -324,3 +345,193 @@ def test_guardrail_apply_is_denied_even_under_a_management_prefix() -> None:
 
     assert reply.status_code == 403 and "guardrail apply" in reply.json()["detail"]
     assert transport.calls == []
+
+
+@pytest.mark.asyncio
+async def test_pending_request_body_does_not_hold_a_strict_audit_reservation() -> None:
+    settings: Final = ControlPlaneSettings.model_validate(
+        {
+            "LITELLM_MASTER_KEY": MASTER_KEY,
+            "dataplanes": DATAPLANES,
+            "audit_queue_size": 2,
+            "audit_strict": True,
+        }
+    )
+    transport: Final = RoutedTransport({f"{EU}/key/generate": iter([response(200, {"token_id": "t1"})])})
+    container: Final = build_container(settings, transport=transport, exchanger=no_exchange)
+    principal: Final = build_principal(
+        container.policy,
+        "alice",
+        "alice@x.test",
+        frozenset({EDITOR_ROLE}),
+        None,
+        frozenset({"eu"}),
+        "session",
+    )
+    caller: Final = Caller(principal, "session-token")
+    dataplane: Final = container.registry.get("eu")
+    assert dataplane is not None
+    body_started: Final = asyncio.Event()
+    release_body: Final = asyncio.Event()
+
+    async def receive() -> Message:
+        body_started.set()
+        await release_body.wait()
+        return {"type": "http.request", "body": b'{"key_alias":"x"}', "more_body": False}
+
+    scope: Final[Scope] = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/key/generate",
+        "raw_path": b"/key/generate",
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json")],
+        "client": ("testclient", 123),
+        "server": ("testserver", 80),
+    }
+    request: Final = Request(scope, receive)
+    write: Final = asyncio.create_task(
+        _forward(
+            request,
+            "key/generate",
+            principal,
+            dataplane,
+            caller,
+            container.dataplane_client,
+            container.audit_log,
+        )
+    )
+    await body_started.wait()
+    await asyncio.sleep(0)
+    try:
+        first: Final = container.audit_log.reserve()
+        second: Final = container.audit_log.reserve()
+        assert first is not None and second is not None
+        first.release()
+        second.release()
+    finally:
+        release_body.set()
+        reply: Final = await write
+    assert reply.status_code == 200
+    assert [(event.path, event.decision) for event in container.audit_log.recent(1)] == [("/key/generate", "allowed")]
+
+
+@pytest.mark.asyncio
+async def test_malformed_write_body_uses_its_strict_audit_reservation() -> None:
+    settings: Final = ControlPlaneSettings.model_validate(
+        {
+            "LITELLM_MASTER_KEY": MASTER_KEY,
+            "dataplanes": DATAPLANES,
+            "audit_queue_size": 2,
+            "audit_strict": True,
+        }
+    )
+    transport: Final = RoutedTransport({})
+    container: Final = build_container(settings, transport=transport, exchanger=no_exchange)
+    principal: Final = build_principal(
+        container.policy,
+        "alice",
+        "alice@x.test",
+        frozenset({EDITOR_ROLE}),
+        None,
+        frozenset({"eu"}),
+        "session",
+    )
+    dataplane: Final = container.registry.get("eu")
+    assert dataplane is not None
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"[", "more_body": False}
+
+    scope: Final[Scope] = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/key/generate",
+        "raw_path": b"/key/generate",
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json")],
+        "client": ("testclient", 123),
+        "server": ("testserver", 80),
+    }
+    request: Final = Request(scope, receive)
+
+    with pytest.raises(ControlPlaneException) as raised:
+        await _forward(
+            request,
+            "key/generate",
+            principal,
+            dataplane,
+            Caller(principal, "session-token"),
+            container.dataplane_client,
+            container.audit_log,
+        )
+
+    assert raised.value.body.status == 400
+    assert container.audit_log.pipeline.workers[0].queue.qsize() == 1
+    assert container.audit_log.pipeline.workers[0].queue.get_nowait().event.path == "/key/generate"
+
+
+@pytest.mark.asyncio
+async def test_denied_path_precedes_a_full_strict_audit_reservation() -> None:
+    settings: Final = ControlPlaneSettings.model_validate(
+        {
+            "LITELLM_MASTER_KEY": MASTER_KEY,
+            "dataplanes": DATAPLANES,
+            "audit_queue_size": 2,
+            "audit_strict": True,
+        }
+    )
+    container: Final = build_container(settings, transport=RoutedTransport({}), exchanger=no_exchange)
+    principal: Final = build_principal(
+        container.policy,
+        "alice",
+        "alice@x.test",
+        frozenset({EDITOR_ROLE}),
+        None,
+        frozenset({"eu"}),
+        "session",
+    )
+    dataplane: Final = container.registry.get("eu")
+    assert dataplane is not None
+    container.audit_log.record("alice", None, "eu", "POST", "/occupied", "allowed", 200)
+    container.audit_log.record("alice", None, "eu", "POST", "/occupied", "allowed", 200)
+    assert container.audit_log.pipeline.workers[0].queue.full()
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope: Final[Scope] = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/mcp/server/oauth/id/register",
+        "raw_path": b"/v1/mcp/server/oauth/id/register",
+        "query_string": b"",
+        "headers": [],
+        "client": ("testclient", 123),
+        "server": ("testserver", 80),
+    }
+
+    with pytest.raises(ControlPlaneException) as raised:
+        await _forward(
+            Request(scope, receive),
+            "v1/mcp/server/oauth/id/register",
+            principal,
+            dataplane,
+            Caller(principal, "session-token"),
+            container.dataplane_client,
+            container.audit_log,
+        )
+
+    assert raised.value.body.status == 403
+    assert [(event.path, event.decision) for event in container.audit_log.recent(1)] == [
+        ("/v1/mcp/server/oauth/id/register", "denied")
+    ]

@@ -3,6 +3,7 @@ from typing import Final
 import pytest
 from pydantic import ValidationError
 
+from litellm.proxy.control_plane.audit.event import CONTROL_PLANE_ID
 from litellm.proxy.control_plane.settings import ControlPlaneSettings, load_settings
 from litellm.types.proxy.control_plane.auth import PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH
 
@@ -79,3 +80,37 @@ def test_usage_window_maximum_is_configurable() -> None:
         {"LITELLM_MASTER_KEY": MASTER_KEY, "usage_max_window_days": 12}
     )
     assert settings.usage_max_window_days == 12
+
+
+def test_dataplane_id_cannot_be_reserved_for_the_control_plane() -> None:
+    with pytest.raises(ValidationError, match="dataplane id 'control-plane' is reserved"):
+        ControlPlaneSettings.model_validate(
+            {
+                "LITELLM_MASTER_KEY": MASTER_KEY,
+                "dataplanes": {CONTROL_PLANE_ID: {"url": "https://control.test"}},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("audit_capacity", 0),
+        ("audit_queue_size", 1),
+        ("audit_batch_size", 0),
+        ("audit_drain_seconds", 0),
+    ],
+)
+def test_audit_capacity_and_delivery_limits_must_be_positive(field: str, value: int) -> None:
+    with pytest.raises(ValidationError):
+        ControlPlaneSettings.model_validate({"LITELLM_MASTER_KEY": MASTER_KEY, field: value})
+
+
+def test_audit_queue_size_allows_two_slots() -> None:
+    settings: Final = ControlPlaneSettings.model_validate({"LITELLM_MASTER_KEY": MASTER_KEY, "audit_queue_size": 2})
+    assert settings.audit_queue_size == 2
+
+
+def test_strict_audit_requires_at_least_one_sink() -> None:
+    with pytest.raises(ValidationError, match="requires at least one audit sink"):
+        ControlPlaneSettings.model_validate({"LITELLM_MASTER_KEY": MASTER_KEY, "audit_strict": True, "audit_sinks": ()})

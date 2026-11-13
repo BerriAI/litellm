@@ -84,6 +84,7 @@ class ExporterSpec(LiteLLMBaseModel):
             "``endpoint`` is a base URL the signal path is appended to."
         ),
     )
+    logs_endpoint: str | None = None
     headers: str | None = None
     owner: ExporterOwner | None = Field(
         default=None,
@@ -186,6 +187,10 @@ class OpenTelemetryV2Config(BaseSettings):
             "Complete OTLP/HTTP trace URL for the single-destination shorthand, "
             "used verbatim instead of ``endpoint`` + ``/v1/traces``."
         ),
+    )
+    logs_endpoint: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OTEL_LOGS_ENDPOINT", "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"),
     )
     headers: str | None = Field(
         default=None,
@@ -345,7 +350,7 @@ class OpenTelemetryV2Config(BaseSettings):
     @model_validator(mode="after")
     def _normalize(self) -> "OpenTelemetryV2Config":
         # An endpoint with the default exporter kind implies OTLP/HTTP.
-        if (self.endpoint or self.traces_endpoint) and self.exporter == "console":
+        if (self.endpoint or self.traces_endpoint or self.logs_endpoint) and self.exporter == "console":
             self.exporter = "otlp_http"
         # When no explicit destinations are given, fold the single-destination
         # shorthand into one spec so the provider always has a destination. A spec
@@ -357,9 +362,12 @@ class OpenTelemetryV2Config(BaseSettings):
                     kind=self.exporter,
                     endpoint=self.endpoint,
                     traces_endpoint=self.traces_endpoint,
+                    logs_endpoint=self.logs_endpoint,
                     headers=self.headers,
                 )
-                if not self.model_fields_set.isdisjoint(("exporter", "endpoint", "traces_endpoint", "headers"))
+                if not self.model_fields_set.isdisjoint(
+                    ("exporter", "endpoint", "traces_endpoint", "logs_endpoint", "headers")
+                )
                 else ExporterSpec()
             ]
         # Ensure ``genai`` is always present and first.
