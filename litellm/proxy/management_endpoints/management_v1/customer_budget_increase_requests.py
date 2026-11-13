@@ -1,0 +1,175 @@
+"""Temporary budget increases for paused customer members.
+
+Same request and approval shape as MCP server and skill submissions: anyone with a key files a request that waits
+in ``pending_review``, a proxy admin approves or rejects it, and an approval lands as the member's budget override.
+"""
+
+from datetime import datetime, timezone
+from typing import Annotated, Final, Literal
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, Query, Request
+from pydantic import TypeAdapter
+
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.customer_hierarchy_auth import forget_customer_hierarchies
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
+from litellm.proxy.management_endpoints.management_v1.customers import (
+    customer_actor,
+    get_customer_hierarchy,
+    get_user_api_key_cache,
+    list_response,
+    resolve,
+)
+from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, ErrorCode, Failure, Page
+from litellm.proxy.management_helpers.utils import (
+    management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
+)
+from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    Budget,
+    BudgetIncreaseRejection,
+    BudgetIncreaseRequest,
+    BudgetIncreaseRequestCreate,
+    CustomerMember,
+    IncreaseRequestStatus,
+    MemberPatch,
+)
+from litellm.types.proxy.management_endpoints.management_v1 import ListResponse
+
+router: Final = APIRouter(
+    prefix=f"{MANAGEMENT_V1_PREFIX}/customer_budget_increase_requests", tags=["customer management"]
+)
+
+Hierarchy = Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)]
+Caller = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+Admin = Annotated[str, Depends(customer_actor)]
+Cache = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
+
+_REQUEST: Final = TypeAdapter(BudgetIncreaseRequest)
+_REQUESTS: Final = TypeAdapter(tuple[BudgetIncreaseRequest, ...])
+
+
+def _requests_table(hierarchy: CustomerHierarchy):  # noqa: ANN202  # the in-memory and prisma tables share the actions used here
+    return hierarchy.db.litellm_customerbudgetincreaserequest  # pyright: ignore[reportAttributeAccessIssue]  # prisma table
+
+
+def _allows_increase(member: CustomerMember) -> bool:
+    return member.effective_budget.cap_policy == "pause_allow_increase"
+
+
+def _granted_override(member: CustomerMember, request: BudgetIncreaseRequest) -> Budget:
+    """The approved amount replaces only the member's cap, keeping the rest of an existing override."""
+    current: Final = member.budget_override if member.budget_override is not None else Budget()
+    return current.model_copy(update={"max_budget": request.requested_max_budget})
+
+
+@router.post("", response_model=BudgetIncreaseRequest, status_code=201)
+@management_endpoint_wrapper
+async def request_budget_increase(
+    data: BudgetIncreaseRequestCreate, caller: Caller, hierarchy: Hierarchy
+) -> BudgetIncreaseRequest:
+    """File a temporary increase for a member whose budget is set to pause_allow_increase. Waits for an admin."""
+    member: Final = resolve(await hierarchy.get_member(data.customer_member_id))
+    if not _allows_increase(member):
+        resolve(Failure(ErrorCode.INCREASE_NOT_ALLOWED))
+    row: Final = await _requests_table(hierarchy).create(
+        data={
+            "request_id": str(uuid4()),
+            "customer_member_id": data.customer_member_id,
+            "requested_max_budget": data.requested_max_budget,
+            "expires_at": data.expires_at,
+            "reason": data.reason,
+            "status": "pending_review",
+            "submitted_by": caller.user_id or caller.api_key or "unknown",
+            "submitted_at": datetime.now(timezone.utc),
+        }
+    )
+    return _REQUEST.validate_python(row, from_attributes=True)
+
+
+@router.get("", response_model=ListResponse[BudgetIncreaseRequest])
+@management_endpoint_wrapper
+async def list_budget_increase_requests(
+    request: Request,
+    actor: Admin,
+    hierarchy: Hierarchy,
+    status: IncreaseRequestStatus | None = Query(default=None),
+    customer_member_id: str | None = Query(default=None, max_length=256),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+) -> ListResponse[BudgetIncreaseRequest]:
+    """The admin review queue. Proxy admins only."""
+    where: Final = {
+        **({"status": status} if status is not None else {}),
+        **({"customer_member_id": customer_member_id} if customer_member_id is not None else {}),
+    }
+    table: Final = _requests_table(hierarchy)
+    rows: Final = await table.find_many(
+        where=where, order=[{"submitted_at": "desc"}], skip=(page - 1) * page_size, take=page_size
+    )
+    total: Final = await table.count(where=where)
+    return list_response(
+        Page(data=_REQUESTS.validate_python(rows, from_attributes=True), total_count=total), request, page, page_size
+    )
+
+
+async def _pending(hierarchy: CustomerHierarchy, request_id: str) -> BudgetIncreaseRequest:
+    row: Final = await _requests_table(hierarchy).find_unique(where={"request_id": request_id})
+    if row is None:
+        resolve(Failure(ErrorCode.NOT_FOUND))
+    pending: Final = _REQUEST.validate_python(row, from_attributes=True)
+    if pending.status != "pending_review":
+        resolve(Failure(ErrorCode.REQUEST_NOT_PENDING))
+    return pending
+
+
+async def _review(
+    hierarchy: CustomerHierarchy,
+    request_id: str,
+    actor: str,
+    status: Literal["approved", "rejected"],
+    notes: str | None,
+) -> BudgetIncreaseRequest:
+    row: Final = await _requests_table(hierarchy).update(
+        where={"request_id": request_id},
+        data={"status": status, "reviewed_by": actor, "reviewed_at": datetime.now(timezone.utc), "review_notes": notes},
+    )
+    return _REQUEST.validate_python(row, from_attributes=True)
+
+
+@router.get("/{request_id}", response_model=BudgetIncreaseRequest)
+@management_endpoint_wrapper
+async def get_budget_increase_request(request_id: str, actor: Admin, hierarchy: Hierarchy) -> BudgetIncreaseRequest:
+    """One request. Proxy admins only."""
+    row: Final = await _requests_table(hierarchy).find_unique(where={"request_id": request_id})
+    if row is None:
+        resolve(Failure(ErrorCode.NOT_FOUND))
+    return _REQUEST.validate_python(row, from_attributes=True)
+
+
+@router.put("/{request_id}/approve", response_model=BudgetIncreaseRequest)
+@management_endpoint_wrapper
+async def approve_budget_increase_request(
+    request_id: str, actor: Admin, hierarchy: Hierarchy, cache: Cache
+) -> BudgetIncreaseRequest:
+    """Grant the increase: the member's override takes the requested cap until the request's expiry. Proxy admins only."""
+    pending: Final = await _pending(hierarchy, request_id)
+    member: Final = resolve(await hierarchy.get_member(pending.customer_member_id))
+    patch: Final = MemberPatch(
+        budget_override=_granted_override(member, pending), budget_override_expires_at=pending.expires_at
+    )
+    resolve(await hierarchy.update_member(pending.customer_member_id, patch, actor))
+    await forget_customer_hierarchies((pending.customer_member_id,), cache)
+    return await _review(hierarchy, request_id, actor, "approved", None)
+
+
+@router.put("/{request_id}/reject", response_model=BudgetIncreaseRequest)
+@management_endpoint_wrapper
+async def reject_budget_increase_request(
+    request_id: str, actor: Admin, hierarchy: Hierarchy, body: BudgetIncreaseRejection | None = None
+) -> BudgetIncreaseRequest:
+    """Decline the increase and leave the member paused, with optional review notes. Proxy admins only."""
+    await _pending(hierarchy, request_id)
+    return await _review(hierarchy, request_id, actor, "rejected", None if body is None else body.review_notes)

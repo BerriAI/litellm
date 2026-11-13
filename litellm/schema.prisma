@@ -30,6 +30,7 @@ model LiteLLM_BudgetTable {
   model_rpm_limit Json?
   budget_duration String?
   budget_limits Json?
+  cap_policy String?
   budget_reset_at DateTime?
   allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
   temp_budget_increase Float?
@@ -77,6 +78,7 @@ model LiteLLM_CustomerTeamTable {
   budget_override_id String?
   budget_override LiteLLM_BudgetTable? @relation("CustomerTeamBudgetOverride", fields: [budget_override_id], references: [budget_id], onDelete: Restrict)
   budget_override_expires_at DateTime?
+  budget_increase_requests LiteLLM_CustomerBudgetIncreaseRequest[]
   created_at DateTime @default(now())
   created_by String
   updated_at DateTime @default(now()) @updatedAt
@@ -103,6 +105,23 @@ model LiteLLM_CustomerMemberTable {
   updated_by String
   @@index([parent_org_id])
   @@index([spend])
+}
+
+model LiteLLM_CustomerBudgetIncreaseRequest {
+  request_id String @id @default(uuid())
+  customer_member_id String
+  customer_member LiteLLM_CustomerMemberTable @relation(fields: [customer_member_id], references: [customer_member_id], onDelete: Cascade)
+  requested_max_budget Float
+  expires_at DateTime?
+  reason String?
+  status String @default("pending_review")
+  submitted_by String
+  submitted_at DateTime @default(now())
+  reviewed_by String?
+  reviewed_at DateTime?
+  review_notes String?
+  @@index([status])
+  @@index([customer_member_id])
 }
 
 // Models on proxy

@@ -158,6 +158,7 @@ class Database:
         self.litellm_customerteamtable = Table("customer_team_id", self)
         self.litellm_customermembertable = Table("customer_member_id", self)
         self.litellm_budgettable = Table("budget_id", self)
+        self.litellm_customerbudgetincreaserequest = Table("request_id", self)
         self.locked_organization_ids: tuple[str, ...] = ()
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:

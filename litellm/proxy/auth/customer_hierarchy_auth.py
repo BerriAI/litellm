@@ -41,7 +41,7 @@ from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerScopeAuth,
     CustomerScopeKey,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget, CustomerMember
+from litellm.types.proxy.management_endpoints.customer_hierarchy import INCREASE_REQUEST_ROUTE, Budget, CustomerMember
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -153,6 +153,7 @@ def _scope(key: CustomerScopeKey, entity_id: str, spend: float, budget: Budget |
         allowed_models=budget.allowed_models or None,
         model_tpm_limit=budget.model_tpm_limit,
         model_rpm_limit=budget.model_rpm_limit,
+        cap_policy=budget.cap_policy,
     )
 
 
@@ -377,6 +378,16 @@ def _cache_ttl(row: Mapping[str, object], now: datetime, default_ttl: float) -> 
     return max(1.0, min(default_ttl, (min(expiries) - now).total_seconds()))
 
 
+def cap_policy_hint(hierarchy: CustomerHierarchyAuth, key: str, entity_id: str) -> str:
+    """What the paused caller can do, from the budget of the level that blocked it."""
+    policy: Final = next(
+        (scope.cap_policy for scope in hierarchy.scopes if scope.key == key and scope.entity_id == entity_id), None
+    )
+    if policy == "pause_allow_increase":
+        return f" Request a temporary increase through POST {INCREASE_REQUEST_ROUTE}."
+    return " Spend resumes when the budget window resets."
+
+
 def check_customer_hierarchy_budget(hierarchy: CustomerHierarchyAuth) -> None:
     """Raises ``BudgetExceededError`` for the first level, org first, whose spend has reached its ``max_budget``."""
     for scope in hierarchy.scopes:
@@ -386,7 +397,8 @@ def check_customer_hierarchy_budget(hierarchy: CustomerHierarchyAuth) -> None:
                 max_budget=scope.max_budget,
                 message=(
                     f"ExceededBudget: {scope.key}={scope.entity_id} over budget. "
-                    f"Spend={scope.spend}, Budget={scope.max_budget}"
+                    f"Spend={scope.spend}, Budget={scope.max_budget}."
+                    f"{cap_policy_hint(hierarchy, scope.key, scope.entity_id)}"
                 ),
                 entity_type=scope.key,
                 entity_id=scope.entity_id,
@@ -442,7 +454,10 @@ async def check_customer_hierarchy_windows(
                 raise litellm.BudgetExceededError(
                     current_cost=spend,
                     max_budget=counter.max_budget,
-                    message=f"ExceededBudget: {counter.entity_type}={counter.entity_id} over {counter.window_duration} budget.",
+                    message=(
+                        f"ExceededBudget: {counter.entity_type}={counter.entity_id} over {counter.window_duration} budget."
+                        f"{cap_policy_hint(hierarchy, counter.entity_type, counter.entity_id)}"
+                    ),
                     entity_type=counter.entity_type,
                     entity_id=counter.entity_id,
                 )

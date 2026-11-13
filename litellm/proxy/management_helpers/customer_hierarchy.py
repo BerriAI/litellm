@@ -52,6 +52,8 @@ class ErrorCode(str, Enum):
     INVALID_TEMPLATE_NAMES = "invalid_template_names"
     TEMPLATE_IN_USE = "template_in_use"
     BUDGET_REQUIRED = "budget_required"
+    INCREASE_NOT_ALLOWED = "increase_not_allowed"
+    REQUEST_NOT_PENDING = "request_not_pending"
 
 
 @dataclass(frozen=True, slots=True)

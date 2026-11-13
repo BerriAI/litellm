@@ -1,11 +1,15 @@
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Final
+from typing import Final, Literal, TypeAlias
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, NonNegativeInt, field_validator
 
 from litellm.models.budget import BudgetLimits
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
+
+CapPolicy: TypeAlias = Literal["pause_until_reset", "pause_allow_increase"]
+INCREASE_REQUEST_ROUTE: Final = "/management/v1/customer_budget_increase_requests"
+IncreaseRequestStatus: TypeAlias = Literal["pending_review", "approved", "rejected"]
 
 
 class Budget(BaseModel):
@@ -20,6 +24,10 @@ class Budget(BaseModel):
     budget_limits: BudgetLimits | None = None
     model_tpm_limit: Mapping[str, NonNegativeInt] | None = None
     model_rpm_limit: Mapping[str, NonNegativeInt] | None = None
+    cap_policy: CapPolicy | None = Field(
+        default=None,
+        description="What a paused member can do at the cap: wait for the reset (default) or request a temporary increase",
+    )
 
     @field_validator("budget_duration")
     @classmethod
@@ -126,3 +134,34 @@ class CustomerMember(AuditFields):
     budget_override: Budget | None = None
     budget_override_expires_at: datetime | None = None
     effective_budget: Budget
+
+
+class BudgetIncreaseRequestCreate(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    customer_member_id: str = Field(max_length=256)
+    requested_max_budget: float = Field(ge=0, allow_inf_nan=False)
+    expires_at: AwareDatetime | None = None
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class BudgetIncreaseRejection(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    review_notes: str | None = Field(default=None, max_length=1000)
+
+
+class BudgetIncreaseRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    request_id: str
+    customer_member_id: str
+    requested_max_budget: float
+    expires_at: datetime | None = None
+    reason: str | None = None
+    status: IncreaseRequestStatus
+    submitted_by: str
+    submitted_at: datetime
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    review_notes: str | None = None

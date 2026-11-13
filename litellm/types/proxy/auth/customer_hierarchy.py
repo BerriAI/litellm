@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.models.budget import BudgetLimit
 from litellm.types.integrations.slack_alerting import Litellm_EntityType
+from litellm.types.proxy.management_endpoints.customer_hierarchy import CapPolicy
 
 CustomerScopeKey: TypeAlias = Literal["customer_org", "customer_team", "customer_member"]
 
@@ -35,6 +36,7 @@ class CustomerScopeAuth(BaseModel):
     allowed_models: tuple[str, ...] | None = None
     model_tpm_limit: Mapping[str, int] | None = None
     model_rpm_limit: Mapping[str, int] | None = None
+    cap_policy: CapPolicy | None = None
 
 
 class CustomerHierarchyAuth(BaseModel):

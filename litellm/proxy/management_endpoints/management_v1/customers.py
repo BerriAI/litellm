@@ -65,6 +65,10 @@ def error_details(code: ErrorCode) -> tuple[int, str, str]:
             return 409, "Template in use", "A default or referenced template cannot be deleted."
         case ErrorCode.BUDGET_REQUIRED:
             return 422, "Budget required", "A member requires a template or a budget override."
+        case ErrorCode.INCREASE_NOT_ALLOWED:
+            return 422, "Increase not allowed", "The member's budget does not allow temporary increase requests."
+        case ErrorCode.REQUEST_NOT_PENDING:
+            return 409, "Request not pending", "Only a pending increase request can be approved or rejected."
         case ErrorCode.FORBIDDEN:
             return 403, "Forbidden", "Only proxy admins can manage customer hierarchies."
         case ErrorCode.DATABASE_UNAVAILABLE:
