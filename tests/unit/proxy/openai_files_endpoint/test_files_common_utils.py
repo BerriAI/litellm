@@ -17,12 +17,14 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_team_provider_credentials,
     apply_unified_file_ids,
     canonical_provider_file_id,
+    encode_file_id_with_model,
     get_credentials_for_model,
     get_team_provider_credentials,
     get_team_provider_deployment,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
     prepare_data_with_credentials,
+    provider_file_id_spellings,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
@@ -988,3 +990,16 @@ def test_create_paths_keep_a_request_bucket_and_reads_keep_the_deployment_bucket
 )
 def test_canonical_provider_file_id_collapses_every_spelling_to_the_stored_id(file_id: str, canonical: str):
     assert canonical_provider_file_id(file_id) == canonical
+
+
+def test_provider_file_id_spellings_unwraps_a_model_encoded_id_and_covers_the_stored_forms():
+    wrapped: Final = encode_file_id_with_model(file_id="batch-out1", model="gemini-deployment")
+
+    assert provider_file_id_spellings(wrapped) == (
+        wrapped,
+        "batch-out1",
+        "files/batch-out1",
+        "https://generativelanguage.googleapis.com/v1beta/files/batch-out1",
+    )
+    for spelling in ("batch-out1", "files%2Fbatch-out1", "batch-out1/"):
+        assert set(provider_file_id_spellings(spelling)) >= set(provider_file_id_spellings(wrapped)[1:]), spelling

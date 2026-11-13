@@ -6643,3 +6643,73 @@ async def test_enforce_provider_file_access_still_passes_a_file_nobody_registere
     managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
 
     await managed_files.enforce_provider_file_access("files/batch-other", UserAPIKeyAuth(user_id="stranger"))
+
+
+_GEMINI_UPLOAD_URI: Final = "https://generativelanguage.googleapis.com/v1beta/files/upload-1"
+
+
+def _gemini_upload_row_stored_as_its_uri() -> LiteLLM_ManagedFileTable:
+    return LiteLLM_ManagedFileTable(
+        unified_file_id="file-encoded-gemini-upload",
+        file_object=OpenAIFileObject(
+            id="file-encoded-gemini-upload",
+            object="file",
+            bytes=12,
+            created_at=1,
+            filename="input.jsonl",
+            purpose="batch",
+            status="processed",
+        ),
+        model_mappings={"model-gemini": _GEMINI_UPLOAD_URI},
+        flat_model_file_ids=[_GEMINI_UPLOAD_URI],
+        created_by="owner",
+        team_id="team-owner",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "spelling", ("upload-1", "files/upload-1", "files%2Fupload-1", "upload-1/", _GEMINI_UPLOAD_URI)
+)
+async def test_enforce_provider_file_access_denies_a_stranger_a_row_stored_as_the_gemini_uri(spelling: str):
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_upload_row_stored_as_its_uri())
+    stranger: Final = UserAPIKeyAuth(user_id="stranger", team_id="team-stranger")
+
+    with pytest.raises(HTTPException) as denied:
+        await managed_files.enforce_provider_file_access(spelling, stranger)
+
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_enforce_provider_file_access_denies_a_stranger_the_model_encoded_wrapper_of_another_keys_file():
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    wrapped: Final = encode_file_id_with_model(file_id="batch-out1", model="model-gemini")
+    stranger: Final = UserAPIKeyAuth(user_id="stranger", team_id="team-stranger")
+
+    with pytest.raises(HTTPException) as denied:
+        await managed_files.enforce_provider_file_access(wrapped, stranger)
+
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_store_unified_file_id_indexes_the_canonical_provider_file_id():
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_managedfiletable.upsert = AsyncMock(return_value=MagicMock())
+    proxy_managed_files: Final = PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=MagicMock(), prisma_client=prisma_client
+    )
+
+    await proxy_managed_files.store_unified_file_id(
+        file_id="file-encoded-gemini-upload",
+        file_object=None,
+        litellm_parent_otel_span=None,
+        model_mappings={"model-gemini": _GEMINI_UPLOAD_URI},
+        user_api_key_dict=UserAPIKeyAuth(user_id="owner", team_id="team-owner"),
+    )
+
+    written: Final = prisma_client.db.litellm_managedfiletable.upsert.call_args.kwargs["data"]
+    assert written["create"]["flat_model_file_ids"] == ["upload-1"]
+    assert written["update"]["flat_model_file_ids"] == ["upload-1"]
+    assert json.loads(written["create"]["model_mappings"]) == {"model-gemini": _GEMINI_UPLOAD_URI}
