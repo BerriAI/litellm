@@ -503,7 +503,7 @@ def test_partial_member_override_updates_preserve_other_fields_and_never_change_
     assert inherited.json()["effective_budget"]["allowed_models"] == ["model-a"]
     unchanged: Final = http.get("/management/v1/customer_organizations/org")
     assert unchanged.status_code == 200, unchanged.text
-    assert unchanged.json() == organization
+    assert unchanged.json() == {**organization, "member_count": 1}
 
 
 def test_first_added_template_is_default_and_default_cannot_be_unset_without_replacement() -> None:
@@ -539,3 +539,27 @@ def test_template_routes_return_404_for_a_missing_organization(
 ) -> None:
     response: Final = client().request(method, "/management/v1" + path, json=body)
     assert response.status_code == 404, response.text
+
+
+def test_organization_list_counts_all_members_and_searches_before_paginating() -> None:
+    http: Final = client()
+    family(http)
+    for identifier in ("member-a", "member-b"):
+        created: Final = http.post(
+            "/management/v1/customer_members", json={"customer_member_id": identifier, "parent_team_id": "team"}
+        )
+        assert created.status_code == 201, created.text
+    other: Final = http.post(
+        "/management/v1/customer_organizations", json={"customer_org_id": "other", "alias": "Literal%_"}
+    )
+    assert other.status_code == 201, other.text
+    page: Final = http.get("/management/v1/customer_organizations", params={"q": "ORG", "page_size": 1})
+    assert page.status_code == 200, page.text
+    assert page.json()["meta"]["total_count"] == 1
+    assert page.json()["data"][0]["member_count"] == 2
+    assert page.json()["data"][0]["spend"] == 0
+    assert page.json()["data"][0]["budget"]["max_budget"] == 1000
+    literal: Final = http.get("/management/v1/customer_organizations", params={"q": "%_"})
+    assert literal.json()["data"][0]["customer_org_id"] == "other"
+    assert literal.json()["data"][0]["member_count"] == 0
+    assert literal.json()["meta"]["total_count"] == 1

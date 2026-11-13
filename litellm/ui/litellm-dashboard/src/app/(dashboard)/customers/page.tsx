@@ -6,6 +6,7 @@ import { Plus } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { $api } from "@/lib/http/api";
+import { customerUsageTotals } from "./_components/customerUsageTotals";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -17,8 +18,8 @@ import CustomerDetail from "./_components/CustomerDetail";
 import { calendarDate, customerUsagePresets, useCustomerUsageRange } from "./_components/customerUsageRange";
 
 const TABLE_OPTIONS = {
-  sortFields: ["spend"],
-  defaultSort: { id: "spend", desc: true },
+  sortFields: ["created_at"],
+  defaultSort: { id: "created_at", desc: false },
   defaultPageSize: 25,
   filterColumns: [],
 };
@@ -29,29 +30,70 @@ export default function CustomersPage() {
   return <CustomerOrganizations />;
 }
 
+function CustomerBudgetUsage({ spend, maxBudget }: { spend: number; maxBudget: number | null }) {
+  const { t } = useTranslation();
+  const spendLabel = t("format.usd", { val: spend });
+  if (maxBudget === null) {
+    return (
+      <>
+        <p className="font-medium">{spendLabel}</p>
+        <p className="text-xs text-muted-foreground">{t("customerPortal.list.noMaxBudget")}</p>
+      </>
+    );
+  }
+  const percentage =
+    maxBudget > 0
+      ? t("customerPortal.list.budgetUsed", {
+          percentage: t("format.number", {
+            val: spend / maxBudget,
+            style: "percent",
+            maximumFractionDigits: 1,
+          }),
+        })
+      : t("customerPortal.list.zeroBudgetPercentage");
+  return (
+    <>
+      <p className="whitespace-nowrap font-medium">
+        {t("customerPortal.list.budgetUsage", { spend: spendLabel, max: t("format.usd", { val: maxBudget }) })}
+      </p>
+      <p className="text-xs text-muted-foreground">{percentage}</p>
+    </>
+  );
+}
+
 function CustomerOrganizations() {
   const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const [createOpen, setCreateOpen] = useState(false);
   const { dateValue, onDateChange, preset } = useCustomerUsageRange();
   const { search, setSearch, pagination, onPaginationChange } = useUrlTableState(TABLE_OPTIONS);
+  const organizations = $api.useQuery(
+    "get",
+    "/management/v1/customer_organizations",
+    {
+      params: {
+        query: { q: search, page: pagination.pageIndex + 1, page_size: pagination.pageSize },
+      },
+    },
+    { enabled: Boolean(accessToken) },
+  );
+  const rows = organizations.data?.data ?? [];
   const usage = $api.useQuery(
     "get",
-    "/management/v1/customer_organization_usage",
+    "/management/v1/customer_organizations/daily/activity/aggregated",
     {
       params: {
         query: {
           start_date: calendarDate(dateValue.from),
           end_date: calendarDate(dateValue.to),
-          q: search,
-          page: pagination.pageIndex + 1,
-          page_size: pagination.pageSize,
+          customer_org_ids: rows.map((customer) => customer.customer_org_id).join(","),
         },
       },
     },
-    { enabled: Boolean(accessToken) },
+    { enabled: Boolean(accessToken) && rows.length > 0 },
   );
-  const rows = usage.data?.data ?? [];
+  const loading = organizations.isPending || (rows.length > 0 && usage.isPending);
+  const totals = customerUsageTotals(usage.data?.results ?? []);
 
   return (
     <div className="w-full space-y-4 px-6 py-5">
@@ -87,8 +129,11 @@ function CustomerOrganizations() {
             className="max-w-sm"
           />
         </div>
-        {usage.isError ? (
-          <ErrorState message={t("customerPortal.list.error")} onRetry={() => void usage.refetch()} />
+        {organizations.isError || usage.isError ? (
+          <ErrorState
+            message={t("customerPortal.list.error")}
+            onRetry={() => void (organizations.isError ? organizations.refetch() : usage.refetch())}
+          />
         ) : (
           <Table aria-label={t("customerPortal.list.title")}>
             <TableHeader>
@@ -96,39 +141,47 @@ function CustomerOrganizations() {
                 <TableHead className="pl-4">{t("customerPortal.list.columns.customer")}</TableHead>
                 <TableHead className="text-right">{t("customerPortal.list.columns.spend")}</TableHead>
                 <TableHead className="text-right">{t("customerPortal.list.columns.requests")}</TableHead>
-                <TableHead className="pr-4 text-right">{t("customerPortal.list.columns.tokens")}</TableHead>
+                <TableHead className="text-right">{t("customerPortal.list.columns.tokens")}</TableHead>
+                <TableHead className="text-right">{t("customerPortal.list.columns.budgetUsage")}</TableHead>
+                <TableHead className="pr-4 text-right">{t("customerPortal.list.columns.members")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {usage.isPending && (
+              {loading && (
                 <TableRow>
-                  <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                  <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
                     {t("customerPortal.list.loading")}
                   </TableCell>
                 </TableRow>
               )}
-              {!usage.isPending && rows.length === 0 && (
+              {!loading && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                  <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
                     {t(search ? "customerPortal.list.noMatches" : "customerPortal.list.empty")}
                   </TableCell>
                 </TableRow>
               )}
-              {!usage.isPending &&
+              {!loading &&
                 rows.map((customer) => (
                   <TableRow key={customer.customer_org_id}>
                     <TableCell className="pl-4">
                       <p className="font-medium">{customer.alias || customer.customer_org_id}</p>
                       <p className="font-mono text-[11px] text-muted-foreground">{customer.customer_org_id}</p>
                     </TableCell>
-                    <TableCell className="text-right font-medium tabular-nums">
-                      {t("format.usd", { val: customer.spend })}
+                    <TableCell className="text-right tabular-nums">
+                      {t("format.usd", { val: totals[customer.customer_org_id]?.spend ?? 0 })}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {t("format.number", { val: customer.requests })}
+                      {t("format.number", { val: totals[customer.customer_org_id]?.requests ?? 0 })}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {t("format.number", { val: totals[customer.customer_org_id]?.tokens ?? 0 })}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      <CustomerBudgetUsage spend={customer.spend} maxBudget={customer.budget?.max_budget ?? null} />
                     </TableCell>
                     <TableCell className="pr-4 text-right tabular-nums">
-                      {t("format.number", { val: customer.tokens })}
+                      {t("format.number", { val: customer.member_count })}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -138,14 +191,19 @@ function CustomerOrganizations() {
         <DataTablePagination
           page={pagination.pageIndex}
           pageSize={pagination.pageSize}
-          rowCount={usage.data?.meta.total_count ?? 0}
+          rowCount={organizations.data?.meta.total_count ?? 0}
           onPageChange={(pageIndex) => onPaginationChange({ ...pagination, pageIndex })}
           onPageSizeChange={(pageSize) => onPaginationChange({ pageSize, pageIndex: 0 })}
-          isLoading={usage.isFetching}
+          isLoading={organizations.isFetching || usage.isFetching}
         />
       </div>
+      <p className="text-xs text-muted-foreground">{t("customerPortal.list.budgetAndMembersHelp")}</p>
       <p className="text-xs text-muted-foreground">{t("customerPortal.list.attribution")}</p>
-      <CreateCustomerDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={() => void usage.refetch()} />
+      <CreateCustomerDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={() => void organizations.refetch()}
+      />
     </div>
   );
 }

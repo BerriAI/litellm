@@ -314,11 +314,11 @@ def provider_bucket_metadata(provider: str, base: Mapping[str, object]) -> Mappi
 def update_breakdown_metrics(
     breakdown: BreakdownMetrics,
     record: DailySpendRecord,
-    model_metadata: Mapping[str, dict[str, object]],
-    provider_metadata: Mapping[str, dict[str, object]],
+    model_metadata: Mapping[str, Mapping[str, object]],
+    provider_metadata: Mapping[str, Mapping[str, object]],
     api_key_metadata: Mapping[str, KeyMetadataRow] | None,
     entity_id_field: str | None = None,
-    entity_metadata_field: Mapping[str, dict[str, object]] | None = None,
+    entity_metadata_field: Mapping[str, Mapping[str, object]] | None = None,
 ) -> BreakdownMetrics:
     """Updates breakdown metrics for a single record using the existing update_metrics function.
 
@@ -589,8 +589,8 @@ def daily_activity_repository(prisma_client: PrismaClient) -> DailyActivityRepos
 def daily_activity_scope(
     table: str,
     entity_id_field: str,
-    entity_id: str | list[str] | None,
-    exclude_entity_ids: list[str] | None,
+    entity_id: str | Sequence[str] | None,
+    exclude_entity_ids: Sequence[str] | None,
     api_key: str | Sequence[str] | None,
     start_date: str,
     end_date: str,
@@ -638,7 +638,7 @@ def _aggregate_spend_records_sync(
     records: Sequence[DailySpendRecord],
     api_key_metadata: Mapping[str, KeyMetadataRow] | None,
     entity_id_field: str | None,
-    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    entity_metadata_field: Mapping[str, Mapping[str, object]] | None,
 ) -> _AggregatedSpendData:
     model_metadata: Final[dict[str, dict[str, object]]] = {}
     provider_metadata: Final[dict[str, dict[str, object]]] = {}
@@ -688,7 +688,7 @@ async def _aggregate_spend_records(
     repository: DailyActivityRepository,
     records: Sequence[DailySpendRecord],
     entity_id_field: str | None,
-    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    entity_metadata_field: Mapping[str, Mapping[str, object]] | None,
 ) -> _AggregatedSpendData:
     """Aggregate rows into DailySpendData list and total metrics.
 
@@ -960,19 +960,19 @@ async def get_daily_activity(
     prisma_client: PrismaClient | None,
     table_name: str,
     entity_id_field: str,
-    entity_id: str | list[str] | None,
-    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    entity_id: str | Sequence[str] | None,
+    entity_metadata_field: Mapping[str, Mapping[str, object]] | None,
     start_date: str | None,
     end_date: str | None,
     model: str | None,
     api_key: str | list[str] | None,
     page: int,
     page_size: int,
-    exclude_entity_ids: list[str] | None = None,
+    exclude_entity_ids: Sequence[str] | None = None,
     metadata_metrics_func: Callable[[Sequence[DailySpendRecord]], SpendMetrics] | None = None,
     timezone_offset_minutes: int | None = None,
     include_current_utc_day: bool = False,
-    resolve_entity_metadata: Callable[[Sequence[DailySpendRecord]], Awaitable[dict[str, dict[str, object]]]]
+    resolve_entity_metadata: Callable[[Sequence[DailySpendRecord]], Awaitable[Mapping[str, Mapping[str, object]]]]
     | None = None,
     team_ids: tuple[str, ...] | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
@@ -1192,7 +1192,7 @@ async def get_daily_activity_aggregated(
     repository: DailyActivityRepository,
     scope: DailyActivityScope,
     *,
-    entity_metadata_field: Mapping[str, dict[str, object]] | None = None,
+    entity_metadata_field: Mapping[str, Mapping[str, object]] | None = None,
     include_entity_breakdown: bool = False,
     include_guardrail_breakdown: bool = False,
     api_key_limit: int = constants.USAGE_TOP_API_KEYS_DEFAULT,

@@ -43,6 +43,7 @@ PRISMA_TO_PG_TABLE: Final[Mapping[DailyActivityTable, str]] = MappingProxyType(
         DailyActivityTable.TAG: "LiteLLM_DailyTagSpend",
         DailyActivityTable.ORGANIZATION: "LiteLLM_DailyOrganizationSpend",
         DailyActivityTable.CUSTOMER: "LiteLLM_DailyEndUserSpend",
+        DailyActivityTable.CUSTOMER_MEMBER: "LiteLLM_DailyCustomerMemberSpend",
         DailyActivityTable.AGENT: "LiteLLM_DailyAgentSpend",
     }
 )
@@ -205,7 +206,7 @@ def build_customer_daily_rows_sql(scope: DailyActivityScope, *, page: int, page_
 
 
 def _ptu_flat_cost_select(table: DailyActivityTable, *, aggregate: bool = True) -> str:
-    if table is DailyActivityTable.TEAM:
+    if table in (DailyActivityTable.TEAM, DailyActivityTable.CUSTOMER_MEMBER):
         return "SUM(ptu_flat_cost)::float AS ptu_flat_cost" if aggregate else "SUM(scoped.ptu_flat_cost)::float"
     return "0::float AS ptu_flat_cost" if aggregate else "0::float"
 

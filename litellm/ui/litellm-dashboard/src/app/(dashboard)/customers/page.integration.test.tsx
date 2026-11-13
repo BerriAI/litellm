@@ -7,6 +7,7 @@ vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
 
 const NOW = new Date("2024-03-15T12:00:00Z");
 const requests: URL[] = [];
+const listRequests: URL[] = [];
 const creations: unknown[] = [];
 let failed = false;
 
@@ -18,22 +19,50 @@ const handleRequest = async (request: Request): Promise<Response> => {
   if (url.pathname === "/management/v1/users/me") {
     return Response.json({ user_id: "admin", user_role: "proxy_admin", user_email: null });
   }
-  if (url.pathname === "/management/v1/customer_organization_usage") {
+  if (url.pathname === "/management/v1/customer_organizations" && request.method === "GET") {
+    listRequests.push(url);
+    return Response.json({
+      data: [
+        { customer_org_id: "customer-a", alias: "Customer A", spend: 51, budget: { max_budget: 500 }, member_count: 3 },
+        { customer_org_id: "over-budget", spend: 750, budget: { max_budget: 500 }, member_count: 2 },
+        { customer_org_id: "zero-budget", spend: 1, budget: { max_budget: 0 }, member_count: 1 },
+        { customer_org_id: "no-budget", spend: 0, budget: null, member_count: 0 },
+        { customer_org_id: "unused-budget", spend: 0, budget: { max_budget: 500 }, member_count: 4 },
+      ],
+      meta: { total_count: 30, page: Number(url.searchParams.get("page")), page_size: 25, total_pages: 2 },
+      links: {},
+    });
+  }
+  if (url.pathname === "/management/v1/customer_organizations/daily/activity/aggregated") {
     requests.push(url);
     if (failed) return Response.json({ detail: "Unavailable" }, { status: 503 });
     const previous = url.searchParams.get("start_date") === "2024-02-01";
     return Response.json({
-      data: [
+      results: [
         {
-          customer_org_id: "customer-a",
-          alias: "Customer A",
-          spend: previous ? 7 : 12,
-          requests: previous ? 20 : 40,
-          tokens: previous ? 400 : 800,
+          date: previous ? "2024-02-01" : "2024-03-01",
+          breakdown: {
+            entities: {
+              "customer-a": { metrics: { spend: previous ? 3 : 15, api_requests: 10, total_tokens: 300 } },
+            },
+          },
+        },
+        {
+          date: previous ? "2024-02-15" : "2024-03-15",
+          breakdown: {
+            entities: {
+              "customer-a": {
+                metrics: {
+                  spend: previous ? 4 : 36,
+                  api_requests: previous ? 10 : 30,
+                  total_tokens: previous ? 100 : 500,
+                },
+              },
+            },
+          },
         },
       ],
-      meta: { total_count: 30, page: Number(url.searchParams.get("page")), page_size: 25, total_pages: 2 },
-      links: {},
+      metadata: { has_more: false, total_pages: 1 },
     });
   }
   if (url.pathname === "/management/v1/customer_organizations" && request.method === "POST") {
@@ -49,6 +78,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   testQueryClient.clear();
   requests.length = 0;
+  listRequests.length = 0;
   creations.length = 0;
   failed = false;
   const claims = { key: "sk-test", user_id: "admin", user_role: "proxy_admin", exp: NOW.getTime() / 1000 + 3600 };
@@ -67,21 +97,32 @@ afterEach(() => {
 });
 
 describe("customer organization usage", () => {
-  it("applies the previous month to the API, updates totals and resets pagination", async () => {
+  it("changes range totals in one aggregate request while retaining current budget usage", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
     renderWithProviders(<CustomersPage />, { searchParams: "?page=2", onUrlUpdate });
     const row = await screen.findByRole("row", { name: /Customer A/ });
-    expect(within(row).getByText("$12.00")).toBeInTheDocument();
+    expect(within(row).getByText("$51.00 / $500.00")).toBeInTheDocument();
+    expect(within(row).getByText("10.2% used")).toBeInTheDocument();
+    expect(within(row).getByText("3")).toBeInTheDocument();
     expect(within(row).getByText("40")).toBeInTheDocument();
     expect(within(row).getByText("800")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /1 Mar 2024/ }));
     await user.click(screen.getByRole("button", { name: /Previous month/ }));
     await user.click(screen.getByRole("button", { name: "Apply", exact: true }));
     expect(await screen.findByText("$7.00")).toBeInTheDocument();
+    const updatedRow = screen.getByRole("row", { name: /Customer A/ });
+    expect(within(updatedRow).getByText("10.2% used")).toBeInTheDocument();
+    expect(within(updatedRow).getByText("$51.00 / $500.00")).toBeInTheDocument();
+    expect(within(updatedRow).getByText("3")).toBeInTheDocument();
     expect(requests.at(-1)?.searchParams.get("start_date")).toBe("2024-02-01");
     expect(requests.at(-1)?.searchParams.get("end_date")).toBe("2024-02-29");
-    expect(requests.at(-1)?.searchParams.get("page")).toBe("1");
+    expect(listRequests.at(-1)?.searchParams.get("page")).toBe("1");
+    expect(requests).toHaveLength(2);
+    expect(requests.at(-1)?.searchParams.get("customer_org_ids")).toBe(
+      "customer-a,over-budget,zero-budget,no-budget,unused-budget",
+    );
+    expect(requests.at(-1)?.searchParams.has("page")).toBe(false);
     expect(onUrlUpdate.mock.lastCall?.[0].queryString).toContain("range=2024-02-01..2024-02-29");
   });
 
@@ -97,6 +138,24 @@ describe("customer organization usage", () => {
     await user.click(screen.getByRole("button", { name: "Apply", exact: true }));
     expect(await screen.findByText("$7.00")).toBeInTheDocument();
     expect(requests.at(-1)?.searchParams.get("end_date")).toBe("2024-02-29");
+  });
+
+  it("shows over-budget percentages, zero and missing limits, and members without usage", async () => {
+    renderWithProviders(<CustomersPage />);
+    const over = await screen.findByRole("row", { name: /over-budget/ });
+    expect(within(over).getByText("$750.00 / $500.00")).toBeInTheDocument();
+    expect(within(over).getByText("150% used")).toBeInTheDocument();
+    const zero = screen.getByRole("row", { name: /zero-budget/ });
+    expect(within(zero).getByText("$1.00 / $0.00")).toBeInTheDocument();
+    expect(within(zero).getByText("Percentage unavailable for a $0 budget")).toBeInTheDocument();
+    const uncapped = screen.getByRole("row", { name: /no-budget/ });
+    expect(within(uncapped).getAllByText("$0.00")).toHaveLength(2);
+    expect(within(uncapped).getByText("No max budget")).toBeInTheDocument();
+    const unused = screen.getByRole("row", { name: /unused-budget/ });
+    expect(within(unused).getByText("$0.00 / $500.00")).toBeInTheDocument();
+    expect(within(unused).getByText("0% used")).toBeInTheDocument();
+    expect(within(unused).getByText("4")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Members" })).toBeInTheDocument();
   });
 
   it("shows a failure instead of presenting missing usage as zero", async () => {

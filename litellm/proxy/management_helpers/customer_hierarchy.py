@@ -4,14 +4,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from itertools import chain
-from typing import TYPE_CHECKING, Final, Generic, Protocol, TypeVar
+from typing import TYPE_CHECKING, Final, Generic, LiteralString, Protocol, TypeVar
 from uuid import uuid4
 
 from pydantic import ConfigDict, Field, TypeAdapter, model_validator
 
 from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.proxy.list_api.common import escape_like
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
 from litellm.repositories.chunked_in import find_many_in
+from litellm.repositories.customer_activity_repository import CustomerActivityRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
@@ -84,6 +86,7 @@ class BudgetRecord(Budget):
 
 
 _VALUES: Final = TypeAdapter(Mapping[str, object])
+_QUERY_ROWS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _BUDGET: Final[TypeAdapter[BudgetRecord | None]] = TypeAdapter(BudgetRecord | None)
 _EXPIRY: Final[TypeAdapter[datetime | None]] = TypeAdapter(datetime | None)
 
@@ -131,10 +134,13 @@ class StoredBudget(BudgetRecord):
     budget_id: str
 
 
-def organization_response(row: OrganizationRecord, budgets: Mapping[str, StoredBudget]) -> Organization:
+def organization_response(
+    row: OrganizationRecord, budgets: Mapping[str, StoredBudget], member_count: int
+) -> Organization:
     return Organization.model_validate(
         {
             **row.model_dump(exclude={"budget_ids", "budget_names"}),
+            "member_count": member_count,
             "default_budgets": tuple(
                 OrganizationBudget.model_validate(
                     {
@@ -225,7 +231,7 @@ class CustomerHierarchyStore:
     async def organization_responses(self, rows: Sequence[PrismaRecord]) -> tuple[Organization, ...]:
         records: Final = tuple(
             OrganizationRecord.model_validate(
-                {**row.model_dump(), "budget": related_budget(row.model_dump().get("budget"))}
+                {**row.model_dump(), "budget": related_budget(row.model_dump().get("budget"), self.now)}
             )
             for row in rows
         )
@@ -233,7 +239,16 @@ class CustomerHierarchyStore:
         budget_rows: Final = await find_many_in(self.budgets, "budget_id", budget_ids)
         resolved: Final = tuple(StoredBudget.model_validate(row.model_dump()) for row in budget_rows)
         budgets: Final = {budget.budget_id: budget for budget in resolved}
-        return tuple(organization_response(record, budgets) for record in records)
+
+        async def query_rows(query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]:
+            return _QUERY_ROWS.validate_python(await self.db.query_raw(query, *args))
+
+        counts: Final = await CustomerActivityRepository(query_rows).member_counts(
+            tuple(record.customer_org_id for record in records)
+        )
+        return tuple(
+            organization_response(record, budgets, counts.get(record.customer_org_id, 0)) for record in records
+        )
 
     async def get_organization(self, organization_id: str) -> Organization | Failure:
         row: Final = await self.organizations.find_unique(
@@ -527,9 +542,20 @@ class CustomerHierarchyStore:
         await self.delete_released_budget(member.budget_id, budget_id)
         return await self.get_member(member_id)
 
-    async def list_organizations(self, page: int, page_size: int) -> Page[Organization]:
-        count: Final = await self.organizations.count()
+    async def list_organizations(self, page: int, page_size: int, search: str = "") -> Page[Organization]:
+        where: Final = (
+            {
+                "OR": tuple(
+                    {field: {"contains": escape_like(search), "mode": "insensitive"}}
+                    for field in ("alias", "customer_org_id")
+                )
+            }
+            if search
+            else {}
+        )
+        count: Final = await self.organizations.count(where=where)
         rows: Final = await self.organizations.find_many(
+            where=where,
             skip=(page - 1) * page_size,
             take=page_size,
             order=[{"created_at": "asc"}, {"customer_org_id": "asc"}],
@@ -664,8 +690,10 @@ class CustomerHierarchy:
             lambda store: store.delete_member(entity_id), operation_type=TransactionOperation.DELETE
         )
 
-    async def list_organizations(self, page: int = 1, page_size: int = 50) -> Page[Organization] | Failure:
-        return await self.transaction(lambda store: store.list_organizations(page, page_size))
+    async def list_organizations(
+        self, page: int = 1, page_size: int = 50, search: str = ""
+    ) -> Page[Organization] | Failure:
+        return await self.transaction(lambda store: store.list_organizations(page, page_size, search))
 
     async def list_teams(
         self, parent_org_id: str | None = None, page: int = 1, page_size: int = 50
