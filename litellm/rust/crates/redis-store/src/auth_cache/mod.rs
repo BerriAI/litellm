@@ -1,13 +1,11 @@
 mod keys;
 mod types;
 
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use litellm_python_compat::{Value, json};
 use litellm_redis_client::{Declared, RedisBatch, commands};
+use parking_lot::Mutex;
 
 pub use self::keys::is_key_object;
 pub use self::types::Settings;
@@ -15,7 +13,7 @@ use crate::{
     Error, Number, Pending, RequestRedis, Send, codec,
     dual_cache::DualCache,
     failure_log::redis_failure,
-    memory::{Clock, lock, system_clock},
+    memory::{Clock, system_clock},
     remote::{Remote, RemoteSlot},
     request::ready,
 };
@@ -67,13 +65,13 @@ impl AuthCache {
     }
 
     pub fn settings(&self) -> Settings {
-        *lock(&self.settings)
+        *self.settings.lock()
     }
 
     /// `UserApiKeyCache.update_cache_ttl` and `update_in_memory_max_size` on both partitions, which
     /// keep what they hold.
     pub fn reconfigure(&self, settings: Settings) {
-        *lock(&self.settings) = settings;
+        *self.settings.lock() = settings;
         self.key_objects.reconfigure(settings.memory());
         self.objects.reconfigure(settings.memory());
     }

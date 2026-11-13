@@ -266,17 +266,9 @@ impl SpendCounters {
         spend: Number,
     ) -> Result<Option<Number>, Error> {
         let key = counter.key();
-        {
-            let _guard = self.cache.memory().guard();
-            if self
-                .cache
-                .memory()
-                .get(&key)?
-                .is_none_or(|cached| cached.as_f64() < spend.as_f64())
-            {
-                self.cache.memory().set(&key, spend, None)?;
-            }
-        }
+        self.cache
+            .memory()
+            .set_if(&key, spend, None, |cached| cached.as_f64() < spend.as_f64())?;
         let Some(remote) = self.cache.redis().get() else {
             return Ok(None);
         };

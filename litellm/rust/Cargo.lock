@@ -3610,6 +3610,7 @@ version = "0.1.0"
 dependencies = [
  "litellm-cache",
  "litellm-cache-testing",
+ "parking_lot",
  "rstest",
  "tokio",
 ]
@@ -4552,6 +4553,7 @@ dependencies = [
  "litellm-redis-testing",
  "litellm-secret-value",
  "litellm-tracing",
+ "parking_lot",
  "rstest",
  "sha2 0.10.9",
  "strum",
