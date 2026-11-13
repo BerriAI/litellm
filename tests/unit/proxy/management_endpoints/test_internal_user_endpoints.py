@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLM_UserTableFiltered,
@@ -40,6 +41,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     ui_view_users,
 )
 from litellm.proxy.proxy_server import app
+from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
@@ -78,6 +80,38 @@ def test_user_update_initializes_each_budget_window() -> None:
     windows: Final = json.loads(updated["budget_limits"])
     assert [(window["budget_duration"], window["max_budget"]) for window in windows] == [("1h", 5.0), ("30d", 100.0)]
     assert all(datetime.fromisoformat(window["reset_at"]).tzinfo is not None for window in windows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("windows", [None, [], [{"budget_duration": "1h", "max_budget": 5.0}]])
+async def test_new_user_omits_unset_json_budget_windows(
+    mocker: MockerFixture, windows: list[dict[str, object]] | None
+) -> None:
+    table: Final = SimpleNamespace(
+        find_first=AsyncMock(return_value=None),
+        count=AsyncMock(return_value=0),
+        create=AsyncMock(return_value=LiteLLM_UserTable(user_id="budget-user")),
+    )
+    mocker.patch("prisma.Prisma", return_value=SimpleNamespace(litellm_usertable=table))
+    database: Final = PrismaClient(
+        database_url="postgresql://unused:unused@localhost/unused",
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", database)
+    response: Final = await new_user(
+        data=NewUserRequest.model_validate(
+            {"user_id": "budget-user", "auto_create_key": False, "budget_limits": windows}
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    assert response.user_id == "budget-user"
+    stored: Final = table.create.call_args.kwargs["data"]
+    if windows:
+        persisted: Final = json.loads(stored["budget_limits"])
+        assert [(window["budget_duration"], window["max_budget"]) for window in persisted] == [("1h", 5.0)]
+        assert datetime.fromisoformat(persisted[0]["reset_at"]).tzinfo is not None
+    else:
+        assert "budget_limits" not in stored
 
 
 @pytest.mark.asyncio
@@ -150,7 +184,6 @@ async def test_new_user_returns_conflict_when_id_is_taken_after_duplicate_check(
 
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
-    from litellm.proxy.utils import PrismaClient
 
 
 @pytest.mark.asyncio

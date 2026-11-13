@@ -5528,7 +5528,7 @@ async def generate_key_helper_fn(
         }
         if teams is not None:
             user_data["teams"] = teams
-        if request_type == "user":
+        if request_type == "user" and budget_limits_json is not None:
             user_data["budget_limits"] = budget_limits_json
         if model_max_budget:
             # Only when supplied: the SSO and default-key callers reach this with the
