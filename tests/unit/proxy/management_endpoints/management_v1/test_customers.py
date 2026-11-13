@@ -81,7 +81,7 @@ def test_member_can_reuse_global_budget_but_not_an_owned_override() -> None:
     http: Final = client(database=database)
     family(http)
     created: Final = http.post("/management/v1/customer_members", json={
-        "customer_member_id": "global-member", "parent_team_id": "team", "budget_id": "global",
+        "customer_member_id": "global-member", "parent_team_ids": ["team"], "budget_id": "global",
         "budget_override": {"budget_limits": [{"budget_duration": "1mo", "max_budget": 100}]},
     })
     assert created.status_code == 201, created.text
@@ -89,7 +89,7 @@ def test_member_can_reuse_global_budget_but_not_an_owned_override() -> None:
         "1mo": 100, "12mo": 1000,
     }
     shared_override: Final = http.post("/management/v1/customer_members", json={
-        "customer_member_id": "other-member", "parent_team_id": "team",
+        "customer_member_id": "other-member", "parent_team_ids": ["team"],
         "budget_id": created.json()["budget_override_id"],
     })
     assert shared_override.status_code == 422, shared_override.text
@@ -109,7 +109,7 @@ def test_member_window_override_round_trip_and_clear(clear_limits: object) -> No
     assert template.status_code == 201, template.text
     budget_id: Final = next(row["budget_id"] for row in template.json()["default_budgets"] if row["name"] == "combined")
     created: Final = http.post("/management/v1/customer_members", json={
-        "customer_member_id": "window-member", "parent_team_id": "team", "budget_id": budget_id,
+        "customer_member_id": "window-member", "parent_team_ids": ["team"], "budget_id": budget_id,
         "budget_override": {"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]},
     })
     assert created.status_code == 201, created.text
