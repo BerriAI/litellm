@@ -566,7 +566,6 @@ async def aresponses_api_with_mcp(
                             base_iterator=final_response,
                             mcp_events=tool_execution_events,
                             user_api_key_auth=user_api_key_auth,
-                            tool_dispatch=tool_dispatch,
                         )
 
                     # Add custom output elements to the final response (for non-streaming)

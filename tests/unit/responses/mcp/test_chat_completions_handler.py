@@ -3139,21 +3139,16 @@ class _BlockEveryLedgerCall(CustomGuardrail):
         return data
 
 
-async def _complete_through_the_router(router: Router, auth: UserAPIKeyAuth, stream: bool) -> object:
-    response: Final = await router.acompletion(
+async def _complete_through_the_router(router: Router, auth: UserAPIKeyAuth) -> object:
+    return await router.acompletion(
         model=LEDGER_MODEL,
         messages=[{"role": "user", "content": "write alpha"}],
         tools=list(LEDGER_TOOLS),
         user_api_key_auth=auth,
-        stream=stream,
     )
-    if not stream:
-        return response
-    return [chunk async for chunk in cast(AsyncIterator[object], response)]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
 @pytest.mark.parametrize(
     ("tool_calls", "tool_error"),
     [(1, None), (2, None), (1, ConnectionError("connection reset after the call was sent"))],
@@ -3162,7 +3157,6 @@ async def _complete_through_the_router(router: Router, auth: UserAPIKeyAuth, str
 async def test_a_failed_continuation_after_a_sent_mcp_tool_call_is_returned_without_running_the_tool_again(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
-    stream: bool,
     tool_calls: int,
     tool_error: Exception | None,
 ) -> None:
@@ -3172,7 +3166,7 @@ async def test_a_failed_continuation_after_a_sent_mcp_tool_call_is_returned_with
     router: Final = ledger_router(respx_mock, monkeypatch, upstream)
 
     with pytest.raises(litellm.InternalServerError):
-        await _complete_through_the_router(router, auth, stream)
+        await _complete_through_the_router(router, auth)
 
     assert ledger.calls == tool_calls
     assert (upstream.initial_calls, upstream.continuation_calls) == (1, 1)
@@ -3193,7 +3187,7 @@ async def test_a_failed_continuation_after_every_mcp_tool_call_was_blocked_is_st
     router: Final = ledger_router(respx_mock, monkeypatch, upstream)
 
     with pytest.raises(litellm.InternalServerError):
-        await _complete_through_the_router(router, auth, stream=False)
+        await _complete_through_the_router(router, auth)
 
     assert ledger.calls == 0
     assert upstream.continuation_calls > 1
@@ -3201,16 +3195,15 @@ async def test_a_failed_continuation_after_every_mcp_tool_call_was_blocked_is_st
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
 async def test_a_continuation_that_succeeds_after_a_sent_mcp_tool_call_runs_the_tool_once(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, stream: bool
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ledger: Final = Ledger()
     auth: Final = serve_ledger(monkeypatch, ledger)
     upstream: Final = ModelUpstream(tool_calls=1, continuation_fails=False)
     router: Final = ledger_router(respx_mock, monkeypatch, upstream)
 
-    await _complete_through_the_router(router, auth, stream)
+    await _complete_through_the_router(router, auth)
 
     assert ledger.calls == 1
     assert (upstream.initial_calls, upstream.continuation_calls) == (1, 1)

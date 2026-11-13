@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from importlib import import_module
 from typing import Final
 from unittest.mock import AsyncMock, patch
@@ -17,6 +18,14 @@ from litellm.llms.anthropic.messages.native.handler import (
 from litellm.llms.anthropic.messages.native.mcp_handler import (
     _build_tool_result_message,
     _extract_tool_use_blocks,
+)
+from tests._support.mcp_ledger_gateway import (
+    LEDGER_ANTHROPIC_MODEL,
+    LEDGER_TOOLS,
+    Ledger,
+    ModelUpstream,
+    ledger_router,
+    serve_ledger,
 )
 
 MCP_REFERENCE = {
@@ -482,3 +491,31 @@ async def test_anthropic_messages_with_mcp_loads_a_filtered_routes_beta_map_off_
 @pytest.mark.asyncio
 async def test_anthropic_messages_with_mcp_never_loads_the_beta_map_for_first_party_anthropic():
     assert await _mcp_safeguards_turn_recording_beta_map_loads("anthropic", "claude-sonnet-4-6") == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_calls", "continuation_fails"),
+    [(1, True), (2, True), (1, False)],
+    ids=["one_tool_continuation_fails", "two_tools_continuation_fails", "continuation_succeeds"],
+)
+async def test_a_messages_continuation_after_a_sent_mcp_tool_call_never_runs_the_tool_again(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tool_calls: int, continuation_fails: bool
+) -> None:
+    ledger: Final = Ledger()
+    auth: Final = serve_ledger(monkeypatch, ledger)
+    upstream: Final = ModelUpstream(tool_calls=tool_calls, continuation_fails=continuation_fails)
+    router: Final = ledger_router(respx_mock, monkeypatch, upstream)
+    request: Final = router.aanthropic_messages(
+        model=LEDGER_ANTHROPIC_MODEL,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "write alpha"}],
+        tools=list(LEDGER_TOOLS),
+        litellm_metadata={"user_api_key_auth": auth},
+    )
+
+    with pytest.raises(litellm.InternalServerError) if continuation_fails else nullcontext():
+        await request
+
+    assert ledger.calls == tool_calls
+    assert (upstream.initial_calls, upstream.continuation_calls) == (1, 1)

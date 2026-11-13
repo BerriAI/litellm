@@ -273,7 +273,6 @@ async def acompletion_with_mcp(
                 self.follow_up_exhausted = False
                 self._round_billing: ChatStreamRoundBilling | None = engaged_round_billing(initial_stream.logging_obj)
                 self._unsent_usage_chunk: ModelResponseStream | None = None
-                self._tool_dispatch: Final = ToolDispatch()
 
             def __aiter__(self):
                 return self
@@ -373,10 +372,6 @@ async def acompletion_with_mcp(
                     self._round_billing.finish()
 
             async def __anext__(self) -> ModelResponseStream:
-                with self._tool_dispatch.failures_not_replayed():
-                    return await self._billed_next_chunk()
-
-            async def _billed_next_chunk(self) -> ModelResponseStream:
                 round_billing: Final = self._round_billing
                 if round_billing is None:
                     return await self._next_chunk()
@@ -512,21 +507,21 @@ async def acompletion_with_mcp(
                     )
 
                     if self.tool_calls:
-                        with self._tool_dispatch.recording():
-                            self.tool_results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
-                                tool_server_map=self.tool_server_map,
-                                served_tools=deduplicated_mcp_tools,
-                                tool_calls=self.tool_calls,
-                                user_api_key_auth=self.user_api_key_auth,
-                                mcp_auth_header=self.mcp_auth_header,
-                                mcp_server_auth_headers=self.mcp_server_auth_headers,
-                                oauth2_headers=self.oauth2_headers,
-                                raw_headers=self.raw_headers,
-                                litellm_call_id=self.litellm_call_id,
-                                litellm_trace_id=self.litellm_trace_id,
-                                request_tags=self.request_tags,
-                                guardrail_context=context.guardrail_context,
-                            )
+                        # Execute tool calls
+                        self.tool_results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+                            tool_server_map=self.tool_server_map,
+                            served_tools=deduplicated_mcp_tools,
+                            tool_calls=self.tool_calls,
+                            user_api_key_auth=self.user_api_key_auth,
+                            mcp_auth_header=self.mcp_auth_header,
+                            mcp_server_auth_headers=self.mcp_server_auth_headers,
+                            oauth2_headers=self.oauth2_headers,
+                            raw_headers=self.raw_headers,
+                            litellm_call_id=self.litellm_call_id,
+                            litellm_trace_id=self.litellm_trace_id,
+                            request_tags=self.request_tags,
+                            guardrail_context=context.guardrail_context,
+                        )
 
             async def _prepare_follow_up_call(self):
                 """Prepare and initiate follow-up call with tool results."""
