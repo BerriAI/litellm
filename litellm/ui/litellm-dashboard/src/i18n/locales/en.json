@@ -14387,7 +14387,11 @@
         "title": "Customer",
         "org": "Customer org",
         "team": "Customer team",
-        "member": "Customer member"
+        "member": "Customer member",
+        "recognized": "Recognized",
+        "asserted": "Asserted",
+        "view": "View",
+        "viewEntity": "View {{entity}}"
       },
       "drawer": {
         "secondsSuffix": "s",

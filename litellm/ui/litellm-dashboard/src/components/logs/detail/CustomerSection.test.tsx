@@ -1,5 +1,5 @@
 import type { PropsWithChildren } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { CustomerSection } from "./CustomerSection";
 
@@ -15,7 +15,7 @@ vi.mock("./TruncatedValue", () => ({
 }));
 
 describe("CustomerSection", () => {
-  it("labels each customer scope and makes its identifier and display name copyable", () => {
+  it("summarizes names when collapsed and links each recognized customer scope when expanded", () => {
     render(
       <CustomerSection
         metadata={{
@@ -29,11 +29,22 @@ describe("CustomerSection", () => {
       />,
     );
 
-    expect(screen.getByText("Customer")).toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: /Customer org.*Customer org display/ });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveTextContent("Customer member display");
+    expect(trigger).toHaveTextContent("Recognized");
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    fireEvent.click(trigger);
     for (const scope of ["org", "team", "member"]) {
-      expect(screen.getByText(`Customer ${scope}`)).toBeInTheDocument();
       expect(screen.getByRole("button", { name: `Copy customer-${scope}-1` })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: `Copy Customer ${scope} display` })).toBeInTheDocument();
+      const url = new URL(
+        screen.getByRole("link", { name: `View Customer ${scope}` }).getAttribute("href")!,
+        "http://localhost",
+      );
+      expect(url.pathname).toMatch(/customers\/manage$/);
+      expect(url.searchParams.get("org")).toBe("customer-org-1");
+      expect(url.searchParams.get("team")).toBe(scope === "org" ? null : "customer-team-1");
+      expect(url.searchParams.get("member")).toBe(scope === "member" ? "customer-member-1" : null);
     }
   });
 
@@ -48,8 +59,17 @@ describe("CustomerSection", () => {
   it("displays historical customer IDs without aliases", () => {
     render(<CustomerSection metadata={{ user_api_key_customer_member_id: "historical-customer-member" }} />);
 
-    expect(screen.getByText("Customer member")).toBeInTheDocument();
+    expect(screen.getByText("Asserted")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Customer member.*historical-customer-member/ }));
     expect(screen.getByRole("button", { name: "Copy historical-customer-member" })).toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("shows a legacy end user as an asserted Customer without hierarchy links", () => {
+    render(<CustomerSection endUser="legacy-customer" />);
+    expect(screen.getByText("Asserted")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /legacy-customer/ })).toHaveTextContent("legacy-customer");
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
   it.each([

@@ -94,6 +94,19 @@ class AmbiguousOrganizationAlias:
     alias: str
 
 
+class CustomerBudgetExceededError(litellm.BudgetExceededError):
+    def __init__(self, hierarchy: CustomerHierarchyAuth, error: litellm.BudgetExceededError) -> None:
+        super().__init__(
+            current_cost=error.current_cost,
+            max_budget=error.max_budget,
+            message=error.message,
+            llm_provider=error.llm_provider,
+            entity_type=error.entity_type,
+            entity_id=error.entity_id,
+        )
+        self.customer_hierarchy: Final = hierarchy
+
+
 def customer_member_cache_key(customer_member_id: str) -> str:
     return f"customer_member_id:{customer_member_id}"
 
@@ -419,7 +432,10 @@ async def resolve_customer_hierarchy(
     """Load the hierarchy the headers name and admit the request against it. ``request_model`` is the model the
     route will actually serve, which may differ from the body."""
     hierarchy: Final = await load_customer_hierarchy(identity, prisma_client, user_api_key_cache, register)
-    check_customer_hierarchy_access(hierarchy, llm_router, request_model, route, key_metadata)
+    try:
+        check_customer_hierarchy_access(hierarchy, llm_router, request_model, route, key_metadata)
+    except litellm.BudgetExceededError as error:
+        raise CustomerBudgetExceededError(hierarchy, error) from error
     return hierarchy
 
 
@@ -431,12 +447,12 @@ def check_customer_hierarchy_access(
     key_metadata: Mapping[str, object] | None = None,
 ) -> None:
     check_customer_hierarchy_key_scope(hierarchy, key_metadata or {})
-    if not RouteChecks.is_info_route(route):
-        check_customer_hierarchy_budget(hierarchy)
     requested: Final = (request_model,) if isinstance(request_model, str) else tuple(request_model or ())
     for model in requested:
         if model:
             check_customer_hierarchy_model_access(hierarchy, model, llm_router)
+    if not RouteChecks.is_info_route(route):
+        check_customer_hierarchy_budget(hierarchy)
 
 
 def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_metadata: Mapping[str, object]) -> None:

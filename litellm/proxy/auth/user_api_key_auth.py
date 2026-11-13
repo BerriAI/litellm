@@ -131,9 +131,9 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.customer_hierarchy_auth import (
-    check_customer_hierarchy_access,
+    CustomerBudgetExceededError,
     customer_identity_from_headers,
-    load_customer_hierarchy,
+    resolve_customer_hierarchy,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
@@ -4551,14 +4551,11 @@ async def _authorize_authenticated_request(
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
         if customer_identity is not None:
             with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
-                hierarchy: Final = await load_customer_hierarchy(
-                    identity=customer_identity,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                )
                 try:
-                    check_customer_hierarchy_access(
-                        hierarchy=hierarchy,
+                    hierarchy: Final = await resolve_customer_hierarchy(
+                        identity=customer_identity,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
                         llm_router=llm_router,
                         request_model=_get_model_from_request_context(
                             request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
@@ -4568,10 +4565,10 @@ async def _authorize_authenticated_request(
                             user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key metadata, validated here
                         ),
                     )
-                except litellm.BudgetExceededError:
-                    user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request-owned auth state
+                except CustomerBudgetExceededError as error:
+                    user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
                     raise
-                user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request-owned auth state
+                user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
 
         grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
         user_api_key_auth_obj.apply_access_group_rule_grants(grants)

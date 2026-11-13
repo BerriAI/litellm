@@ -14,6 +14,7 @@ import { copyToClipboard, getSpendString } from "@/utils/dataUtils";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import { getBatchIdFromRequestId, getBatchRequestCounts, isBatchCallType } from "../batchLogUtils";
 import type { LogEntry } from "../types";
+import { customerLogIdentity } from "../customerIdentity";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { AgentBadge, AgentIcon, BatchBadge, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
 
@@ -310,20 +311,16 @@ export const getRequestLogsTableColumns = (
     size: 190,
     enableSorting: false,
     cell: ({ row }) => {
-      const metadata = row.original.metadata;
-      const customerOrg =
-        readMetaString(metadata, "user_api_key_customer_org_alias") ??
-        readMetaString(metadata, "user_api_key_customer_org_id");
-      const customerMember = readMetaString(metadata, "user_api_key_customer_member_id");
-      if (!customerOrg && !customerMember) return <span className="text-muted-foreground">-</span>;
+      const { summary, recognized } = customerLogIdentity(row.original.metadata, row.original.end_user);
+      if (!summary.length) return <span className="text-muted-foreground">-</span>;
       return (
         <div className="flex flex-col gap-0.5">
-          {customerOrg && (
-            <TruncatedText value={customerOrg} tooltip={`${t("logs.detail.customer.org")}: ${customerOrg}`} />
-          )}
-          {customerMember && (
-            <TruncatedText value={customerMember} tooltip={`${t("logs.detail.customer.member")}: ${customerMember}`} />
-          )}
+          {summary.map((customer) => (
+            <TruncatedText key={customer.scope} value={customer.name} tooltip={customer.name} />
+          ))}
+          <Badge variant={recognized ? "secondary" : "outline"} className="mt-0.5 text-[10px]">
+            {t(`logs.detail.customer.${recognized ? "recognized" : "asserted"}`)}
+          </Badge>
         </div>
       );
     },

@@ -198,8 +198,6 @@ export function LogDetailContent({
         </Card>
       </div>
 
-      <CustomerSection metadata={metadata} />
-
       {/* Batch Results */}
       {isBatchCallType(logEntry.call_type) && <BatchResultsSection logEntry={logEntry} metadata={metadata} />}
 
@@ -208,6 +206,8 @@ export function LogDetailContent({
 
       {/* Metrics */}
       <MetricsSection logEntry={logEntry} metadata={metadata} />
+
+      <CustomerSection metadata={metadata} endUser={logEntry.end_user} />
 
       {/* Cost Breakdown */}
       <CostBreakdownViewer
