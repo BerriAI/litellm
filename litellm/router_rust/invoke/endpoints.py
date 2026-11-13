@@ -53,6 +53,7 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     surface_for_call,
 )
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, endpoint_selection
+from litellm.vector_stores.deployments import is_vector_store_router_deployment
 from litellm.vector_stores.search_query import store_search_params
 
 if TYPE_CHECKING:
@@ -1191,6 +1192,19 @@ def _resolved_credentials(core: EndpointCore, deployment: Mapping[str, object], 
     model_id: Final = as_dict(deployment.get("model_info")).get("id")
     resolved: Final = registry.credentials(str(model_id or requested), form="with_provider")
     return as_dict(resolved)  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
+
+
+def vector_store_deployment_refusal(plan: Plan, deployment: Mapping[str, object], group: str) -> Exception | None:
+    """A vector store deployment serves vector store search alone, whichever request or fallback picked it."""
+    if plan.host_op in _VECTOR_STORE_SEARCH_OPS or not is_vector_store_router_deployment(deployment):
+        return None
+    from litellm.exceptions import UnsupportedEndpointError
+
+    return UnsupportedEndpointError(
+        message=f"'{group}' is a vector store deployment and only serves vector store search",
+        model=group,
+        llm_provider="",
+    )
 
 
 def embedding_batch_refusal(

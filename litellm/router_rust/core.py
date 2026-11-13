@@ -114,6 +114,7 @@ from litellm.router_rust.invoke.endpoints import (
     selection_endpoint,
     stamp_error,
     unrouted_fields,
+    vector_store_deployment_refusal,
 )
 from litellm.router_rust.invoke.shaping import Shaping, non_stream_timeout
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
@@ -4927,14 +4928,21 @@ class _Driver:
         level: Final = step.get("fallback_level")
         # The request params the walk's dict targets merged in (`kwargs.update(target)`).
         params: Final = as_str_mapping(step.get("params"))
-        call: Final = attempt_call(
-            self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-            self._plan,
-            self._request if params is None else {**self._request, **params},
-            deployment,
-            group=requested,
-            requested=requested,
-            fallback_level=level if isinstance(level, int) else 0,
+        refusal: Final = vector_store_deployment_refusal(self._plan, deployment, requested)
+        call: Final = (
+            attempt_call(
+                self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+                self._plan,
+                self._request if params is None else {**self._request, **params},
+                deployment,
+                group=requested,
+                requested=requested,
+                fallback_level=level if isinstance(level, int) else 0,
+            )
+            if refusal is None
+            else AttemptCall(
+                self._plan.host_op, dict(self._request), dict(self._request), requested, requested, refusal
+            )
         )
         self._strip_undecryptable_reasoning(step, deployment, call.kwargs)
         shaped: Final = shape_attempt_kwargs(call.kwargs, deployment)

@@ -128,9 +128,31 @@ def vector_store_deployment_problems(config: Mapping[str, object]) -> tuple[str,
     clash: Final = (
         (f"vector_store_deployments names {clashing} are already model_list model names",) if clashing else ()
     )
+    mixed: Final = tuple(
+        f"vector_store_deployments '{name}' mixes custom_llm_provider values {sorted(providers)}; "
+        "every deployment in a group must use the same provider"
+        for name, providers in _group_providers(deployments).items()
+        if len(providers) > 1
+    )
     stores: Final = as_object_list(config.get("vector_store_registry")) or ()
-    return clash + tuple(
-        problem for store in stores if (problem := _grouped_store_problem(store, deployments)) is not None
+    return (
+        clash
+        + mixed
+        + tuple(problem for store in stores if (problem := _grouped_store_problem(store, deployments)) is not None)
+    )
+
+
+def _group_providers(deployments: tuple[VectorStoreDeploymentConfig, ...]) -> Mapping[str, frozenset[str]]:
+    names: Final = frozenset(deployment.deployment_name for deployment in deployments)
+    return MappingProxyType(
+        {
+            name: frozenset(
+                deployment.litellm_params.custom_llm_provider
+                for deployment in deployments
+                if deployment.deployment_name == name
+            )
+            for name in names
+        }
     )
 
 

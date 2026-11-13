@@ -3625,7 +3625,6 @@ async def test_a_request_a_hook_turned_streaming_runs_unbounded_under_a_header_t
     ("route_type", "data"),
     [
         ("acompletion", {"model": "kb-search", "messages": [{"role": "user", "content": "hi"}]}),
-        ("acompletion", {"model": "gpt-4o, kb-search", "messages": [{"role": "user", "content": "hi"}]}),
         ("acompletion", {"model": "kb-search", "messages": [], "api_key": "caller-key"}),
         ("aembedding", {"model": "kb-search", "input": "hi"}),
         ("acompletion", {"model": "azure_ai/kb-search", "messages": [{"role": "user", "content": "hi"}]}),
@@ -3649,5 +3648,89 @@ async def test_a_vector_store_deployment_group_refuses_every_call_but_vector_sto
         ]
     )
 
+    llm_call = await route_request(data, llm_router, None, route_type)
+
     with pytest.raises(litellm.BadRequestError, match="is a vector store deployment"):
-        await route_request(data, llm_router, None, route_type)
+        await llm_call
+
+
+def _router_with_a_vector_store_group() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake", "mock_response": "from gpt-4o"},
+            },
+            {
+                "model_name": "kb-search",
+                "litellm_params": {
+                    "model": "azure_ai/kb-search",
+                    "custom_llm_provider": "azure_ai",
+                    "api_base": "https://eastus.search.windows.net",
+                    "api_key": "search-key",
+                    "mock_response": "from the search deployment",
+                },
+                "model_info": {"id": "search-eastus", "mode": "vector_store"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_batch_completion_naming_a_vector_store_group_refuses_that_entry():
+    llm_call = await route_request(
+        {"model": "gpt-4o, kb-search", "messages": [{"role": "user", "content": "hi"}]},
+        _router_with_a_vector_store_group(),
+        None,
+        "acompletion",
+    )
+
+    gpt_result, search_result = await llm_call
+
+    assert gpt_result.choices[0].message.content == "from gpt-4o"
+    assert isinstance(search_result, litellm.BadRequestError)
+    assert "is a vector store deployment" in str(search_result)
+
+
+def _router_with_a_failing_model_and_a_vector_store_group(**router_settings: object) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake", "api_base": "http://127.0.0.1:1"},
+            },
+            {
+                "model_name": "kb-search",
+                "litellm_params": {
+                    "model": "openai/kb-search",
+                    "api_key": "search-key",
+                    "mock_response": "from the search deployment",
+                },
+                "model_info": {"id": "search-eastus", "mode": "vector_store"},
+            },
+        ],
+        num_retries=0,
+        **router_settings,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallbacks", [["kb-search"], [{"gpt-4o": ["kb-search"]}]])
+async def test_a_request_fallback_to_a_vector_store_group_never_reaches_it(fallbacks):
+    llm_call = await route_request(
+        {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], "fallbacks": fallbacks},
+        _router_with_a_failing_model_and_a_vector_store_group(),
+        None,
+        "acompletion",
+    )
+
+    with pytest.raises(litellm.InternalServerError, match="Fallback to kb-search also failed.*is a vector store deployment"):
+        await llm_call
+
+
+@pytest.mark.asyncio
+async def test_a_router_fallback_to_a_vector_store_group_never_reaches_it():
+    llm_router = _router_with_a_failing_model_and_a_vector_store_group(fallbacks=[{"gpt-4o": ["kb-search"]}])
+
+    with pytest.raises(litellm.InternalServerError, match="Fallback to kb-search also failed.*is a vector store deployment"):
+        await llm_router.acompletion(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])

@@ -157,3 +157,17 @@ def test_with_primary_deployment_uses_the_lowest_order_connection():
 def test_with_primary_deployment_fails_when_the_group_has_no_deployments():
     with pytest.raises(ValueError, match="'kb-search' has no deployments"):
         with_primary_deployment({"vector_store_deployment": "kb-search"}, ())
+
+
+def test_a_group_that_mixes_providers_fails_at_load_even_when_the_store_matches_one_of_them():
+    problems = vector_store_deployment_problems(
+        {
+            "vector_store_deployments": [
+                {"deployment_name": "kb-search", "litellm_params": {"custom_llm_provider": "milvus", "order": 1}},
+                {"deployment_name": "kb-search", "litellm_params": {"custom_llm_provider": "azure_ai", "order": 2}},
+            ],
+            "vector_store_registry": [_store(vector_store_deployment="kb-search")],
+        }
+    )
+
+    assert any("mixes custom_llm_provider values ['azure_ai', 'milvus']" in problem for problem in problems)
