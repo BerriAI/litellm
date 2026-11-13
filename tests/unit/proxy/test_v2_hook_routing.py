@@ -18,6 +18,7 @@ from litellm.integrations.custom_logger_v2 import (
     Field,
     Hook,
     Patch,
+    Respond,
     on,
 )
 from litellm.integrations.custom_logger_v2.host import V2Outcome, reset_host_for_tests
@@ -655,10 +656,11 @@ async def test_a_v2_callback_abort_stops_the_hook_before_later_legacy_loggers(
         [_PreCall("before", journal), _V2Callback(journal, outcome=abort), _PreCall("after", journal)],
     )
 
-    with pytest.raises(V2Outcome) as raised:
+    with pytest.raises(HTTPException) as raised:
         await proxy_logging.pre_call_hook(user_api_key_dict=AUTH, data={"model": "m"}, call_type="completion")
 
-    assert raised.value.outcome is abort
+    assert raised.value.status_code == 429
+    assert raised.value.detail == {"error": "slow down"}
     assert journal == ["before", ("v2", None)]
 
 
@@ -704,10 +706,11 @@ async def test_during_call_v2_callback_between_legacy_runs_with_them_and_its_abo
     ]
     monkeypatch.setattr(litellm, "callbacks", callbacks)
 
-    with pytest.raises(V2Outcome) as raised:
+    with pytest.raises(HTTPException) as raised:
         await proxy_logging.during_call_hook(data={"model": "m"}, user_api_key_dict=AUTH, call_type="completion")
 
-    assert raised.value.outcome is abort
+    assert raised.value.status_code == 400
+    assert raised.value.detail == {"error": "flagged"}
     assert journal == ["first", "v2", "second"]
 
 
@@ -946,10 +949,11 @@ async def test_post_call_success_v2_callback_abort_stops_the_loggers_after_it(
         [_PostLogger("before", journal), _Patcher(outcome=abort), _PostLogger("after", journal)],
     )
 
-    with pytest.raises(V2Outcome) as raised:
+    with pytest.raises(HTTPException) as raised:
         await _post_call(proxy_logging, ModelResponse())
 
-    assert raised.value.outcome is abort
+    assert raised.value.status_code == 400
+    assert raised.value.detail == {"error": "unsafe output"}
     assert journal == ["before"]
 
 
@@ -1210,3 +1214,64 @@ async def test_deferred_stream_v2_callback_between_two_guardrails_patches_what_t
     assert v2_callback.seen[0] is from_first
     assert second.seen[0] is from_v2
     assert dispatch.dispatched == [from_v2]
+
+
+class _Responder(CustomLoggerV2):
+    @on(Hook.post_call_success, may_abort=True)
+    async def post_call_success(self, view: object, ctx: CallContext[object]) -> Respond:
+        return Respond(response={"answer": "from the v2 callback"})
+
+
+async def test_post_call_success_v2_abort_raises_the_exception_it_carries(
+    monkeypatch: pytest.MonkeyPatch, proxy_logging: ProxyLogging
+) -> None:
+    error: Final = ProxyException(message="budget exceeded", type="budget_exceeded", param=None, code=400)
+    monkeypatch.setattr(litellm, "callbacks", [_Patcher(outcome=Abort(status=400, message="ignored", exception=error))])
+
+    with pytest.raises(ProxyException) as raised:
+        await _post_call(proxy_logging, ModelResponse())
+
+    assert raised.value is error
+
+
+async def test_post_call_success_v2_respond_is_not_wired_and_fails_loudly(
+    monkeypatch: pytest.MonkeyPatch, proxy_logging: ProxyLogging
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_Responder()])
+
+    with pytest.raises(V2Outcome) as raised:
+        await _post_call(proxy_logging, ModelResponse())
+
+    assert isinstance(raised.value.outcome, Respond)
+
+
+async def test_post_call_failure_v2_abort_becomes_the_transformed_error_and_never_raises(
+    monkeypatch: pytest.MonkeyPatch, proxy_logging: ProxyLogging
+) -> None:
+    first: Final = _Legacy([])
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [first, _Patcher(outcome=Abort(status=429, message="slow down", headers={"retry-after": "3"}))],
+    )
+
+    result: Final = await proxy_logging.post_call_failure_hook(
+        request_data={"model": "m"}, original_exception=RuntimeError("upstream"), user_api_key_dict=AUTH
+    )
+
+    assert isinstance(result, HTTPException)
+    assert result.status_code == 429
+    assert result.detail == {"error": "slow down"}
+    assert result.headers == {"retry-after": "3"}
+    assert len(first.seen) == 1
+
+
+async def test_list_models_v2_abort_raises_its_status(
+    monkeypatch: pytest.MonkeyPatch, proxy_logging: ProxyLogging
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_Patcher(outcome=Abort(status=403, message="no models for you"))])
+
+    with pytest.raises(HTTPException) as raised:
+        await proxy_logging.hidden_by_listing_callbacks(AUTH, ["a"])
+
+    assert raised.value.status_code == 403

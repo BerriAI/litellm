@@ -2118,14 +2118,26 @@ def hook_fields(kwargs: object, run: HookRun[_T], slot: Field) -> HookRunFields[
     return HookRunFields(KwargsFields(kwargs, PROXY_REQUEST_KEYS), run, slot)
 
 
+def v2_abort_error(abort: Abort) -> Exception:
+    return abort.exception or HTTPException(
+        status_code=abort.status,
+        detail={"error": abort.message},
+        headers=dict(abort.headers or {}),
+    )
+
+
 def raise_v2_abort(result: HookResult) -> HookResult:
     if isinstance(result.outcome, Abort):
-        raise result.outcome.exception or HTTPException(
-            status_code=result.outcome.status,
-            detail={"error": result.outcome.message},
-            headers=dict(result.outcome.headers or {}),
-        )
+        raise v2_abort_error(result.outcome)
     return result
+
+
+def _keep_v2_abort(run: HookRun[Exception], abort: Abort) -> None:
+    error: Final = v2_abort_error(abort)
+    if isinstance(error, HTTPException):
+        run.keep_first(error)
+        return
+    verbose_proxy_logger.exception("[Non-Blocking] Error in async_post_call_failure_hook callback: %s", error)
 
 
 def _proxy_call_facts(data: Mapping[str, object] | None, call_type: str) -> CallFacts:
@@ -2143,9 +2155,15 @@ async def run_hook_subscribers(
     subscribers: HookSubscribers,
     fields: Mapping[Field, object],
     binding: Callable[[object, object], Awaitable[None] | None],
+    on_abort: Callable[[Abort], None] | None = None,
 ) -> None:
-    if subscribers.entries:
-        _ = kwargs_after(await run_subscribers(subscribers, fields, binding))
+    if not subscribers.entries:
+        return
+    result: Final = await run_subscribers(subscribers, fields, binding)
+    if on_abort is not None and isinstance(result.outcome, Abort):
+        on_abort(result.outcome)
+        return
+    _ = kwargs_after(raise_v2_abort(result))
 
 
 class ProxyLogging:
@@ -3973,7 +3991,9 @@ class ProxyLogging:
         def start(callback: object, request: object) -> Awaitable[object] | None:
             return self._start_during_call(callback, request, user_api_key_dict, call_type, guardrails_only)
 
-        _ = kwargs_after(await run_subscribers(subscribers, KwargsFields(data, PROXY_REQUEST_KEYS), start))
+        _ = kwargs_after(
+            raise_v2_abort(await run_subscribers(subscribers, KwargsFields(data, PROXY_REQUEST_KEYS), start))
+        )
         return data
 
     def _start_during_call(
@@ -4335,6 +4355,7 @@ class ProxyLogging:
             hook_subscribers(Hook.post_call_failure, callbacks, admit=Admit.every_entry),
             hook_fields(request_data, run, Field.error),
             partial(self._post_call_failure_one, run, request_data, user_api_key_dict, redacted_traceback_str),
+            on_abort=partial(_keep_v2_abort, run),
         )
         return run.transformed
 
