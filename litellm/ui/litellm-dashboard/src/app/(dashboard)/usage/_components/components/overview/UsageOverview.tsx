@@ -7,12 +7,18 @@ import { KeyRound, Users } from "lucide-react";
 import type { OverviewTotals } from "./overviewData";
 import { Panel } from "./Primitives";
 import UsageStatStrip from "./UsageStatStrip";
-import UsageBreakdownChart from "./UsageBreakdownChart";
+import UsageTrendPanel from "./UsageTrendPanel";
+import type { StatComparison } from "./usageComparison";
+import type { DayRange } from "./usageTrendData";
 
 interface UsageOverviewProps {
   results: readonly DailyData[];
   totals: OverviewTotals;
   loading: boolean;
+  failed: boolean;
+  requestsFailed: boolean;
+  range: DayRange | null;
+  comparison?: StatComparison;
   requestCountsPending: boolean;
   budget: number | null;
   subscriptionCosts: ReactNode;
@@ -27,6 +33,10 @@ export default function UsageOverview({
   results,
   totals,
   loading,
+  failed,
+  requestsFailed,
+  range,
+  comparison,
   requestCountsPending,
   subscriptionCosts,
   topKeys,
@@ -45,11 +55,14 @@ export default function UsageOverview({
         loading={loading}
         requestCountsPending={requestCountsPending}
         budget={budget}
+        comparison={comparison}
+        failed={failed}
+        requestsFailed={requestsFailed}
       />
 
       {subscriptionCosts}
 
-      <UsageBreakdownChart results={results} loading={loading} />
+      <UsageTrendPanel results={results} range={range} loading={loading} failed={failed} />
 
       {topAgents}
       {providerBreakdown}

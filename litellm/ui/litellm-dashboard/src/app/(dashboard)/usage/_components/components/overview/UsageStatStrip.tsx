@@ -3,11 +3,15 @@
 import React, { useMemo } from "react";
 import type { TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
+import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import type { DailyData } from "@/components/UsagePage/types";
 import { cn } from "@/lib/cva.config";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { Skeleton } from "@/components/ui/skeleton";
 import { dailyTotals, type OverviewTotals } from "./overviewData";
 import { PANEL_INSET_X, Sparkline, Stat } from "./Primitives";
+import type { Change, StatComparison } from "./usageComparison";
+import { formatDayRange } from "./usageTrendData";
 
 const BRAND = "#2b3fd6";
 const ONE_DECIMAL = { minimumFractionDigits: 1, maximumFractionDigits: 1 } as const;
@@ -22,6 +26,37 @@ interface UsageStatStripProps {
   requestCountsPending: boolean;
   budget: number | null;
   showBudgetHint?: boolean;
+  /** Changes against the preceding period; omitted where a surface has no comparison. */
+  comparison?: StatComparison;
+  /** The range's own figures failed to load, so every tile reads unavailable rather than zero. */
+  failed?: boolean;
+  /** Request counts can come from gateway tallies that still loaded when the spend aggregate failed. */
+  requestsFailed?: boolean;
+}
+
+function ChangeLine({ change, period }: { change: Change; period: string }) {
+  const { t } = useTranslation();
+  const vs = t("usage.statStrip.comparison.vs", { period });
+  if (change.kind === "pending") return <Skeleton className="mt-1 h-4 w-28" />;
+  const rising = change.kind === "change" && change.percent >= 0;
+  const text = (() => {
+    if (change.kind === "unavailable") return t("usage.statStrip.comparison.unavailable");
+    if (change.kind === "new") return t("usage.statStrip.comparison.new");
+    if (change.kind === "same") return t("usage.statStrip.comparison.same");
+    const magnitude = t("format.number", { val: Math.abs(change.percent), ...ONE_DECIMAL });
+    return t(rising ? "usage.statStrip.comparison.up" : "usage.statStrip.comparison.down", { percent: magnitude });
+  })();
+  const Icon = rising ? ArrowUpRight : ArrowDownRight;
+  return (
+    <div
+      className="mt-1 flex min-w-0 items-center gap-1 text-xs leading-4 text-muted-foreground"
+      title={`${text} ${vs}`}
+    >
+      {change.kind === "change" && <Icon aria-hidden="true" className="size-3 shrink-0" />}
+      <span className="font-medium tabular-nums text-foreground">{text}</span>{" "}
+      <span className="truncate">{vs}</span>
+    </div>
+  );
 }
 
 /** Spend, requests, tokens and averages for a range, each with a daily sparkline. */
@@ -32,8 +67,21 @@ export default function UsageStatStrip({
   requestCountsPending,
   budget,
   showBudgetHint = true,
+  comparison,
+  failed = false,
+  requestsFailed = failed,
 }: UsageStatStripProps) {
   const { t } = useTranslation();
+  const period = comparison ? formatDayRange(comparison.previous) : "";
+  const changeFor = (change: Change | null | undefined) =>
+    change && !loading && !failed ? <ChangeLine change={change} period={period} /> : null;
+  const unavailable = t("usage.statStrip.unavailable");
+  const exactTokens = t("usage.statStrip.exactTokens", { tokens: t("format.number", { val: totals.tokens }) });
+  const tokensValue = (() => {
+    if (failed) return unavailable;
+    if (loading) return null;
+    return t("format.compactNumber", { val: totals.tokens });
+  })();
   const daily = useMemo(() => dailyTotals(results), [results]);
   const budgetHint = budget
     ? t("usage.statStrip.budgetHint", { budget: t("format.usd", { val: budget }) })
@@ -43,18 +91,20 @@ export default function UsageStatStrip({
       <StatCell trend={<Sparkline data={daily} dataKey="spend" color={BRAND} className="h-14" />}>
         <Stat
           label={t("usage.statStrip.spend")}
-          value={t("format.usd", { val: totals.spend })}
+          value={failed ? unavailable : t("format.usd", { val: totals.spend })}
           pending={loading}
           hint={showBudgetHint ? budgetHint : undefined}
         />
+        {changeFor(comparison?.spend)}
       </StatCell>
       <StatCell trend={<Sparkline data={daily} dataKey="requests" color={BRAND} className="h-14" />}>
         <Stat
           label={t("usage.statStrip.totalRequests")}
-          value={t("format.number", { val: totals.requests })}
+          value={requestsFailed ? unavailable : t("format.number", { val: totals.requests })}
           pending={requestCountsPending}
         />
-        {!requestCountsPending && (
+        {!requestCountsPending && changeFor(comparison?.requests)}
+        {!requestCountsPending && !requestsFailed && (
           <div className="mt-0.5 flex gap-3 text-xs leading-4 text-muted-foreground">
             <span>
               <Trans
@@ -84,18 +134,19 @@ export default function UsageStatStrip({
       <StatCell trend={<Sparkline data={daily} dataKey="tokens" color={BRAND} className="h-14" />}>
         <Stat
           label={t("usage.statStrip.totalTokens")}
-          value={loading ? null : t("format.compactNumber", { val: totals.tokens })}
-          exact={t("usage.statStrip.exactTokens", { tokens: t("format.number", { val: totals.tokens }) })}
+          value={tokensValue}
+          exact={failed ? undefined : exactTokens}
           pending={loading}
           hint={
-            loading
+            loading || failed
               ? undefined
               : t("usage.statStrip.cacheReadHint", {
                   tokens: t("format.compactNumber", { val: totals.cacheReadTokens }),
                 })
           }
         />
-        {!loading && (
+        {changeFor(comparison?.tokens)}
+        {!loading && !failed && (
           <Popover>
             <PopoverTrigger className="mt-1 text-xs font-medium text-primary underline-offset-4 hover:underline">
               {t("usage.statStrip.viewTokenBreakdown")}
@@ -134,12 +185,13 @@ export default function UsageStatStrip({
         <div className="grid gap-3">
           <Stat
             label={t("usage.statStrip.avgCostPerRequest")}
-            value={t("format.usd", { val: totals.avgCostPerRequest, ...FOUR_DECIMALS })}
+            value={failed ? unavailable : t("format.usd", { val: totals.avgCostPerRequest, ...FOUR_DECIMALS })}
             pending={loading}
           />
+          {changeFor(comparison?.avgCostPerRequest)}
           <Stat
             label={t("usage.statStrip.avgLatency")}
-            value={totals.avgLatencyMs === null ? "—" : latency(totals.avgLatencyMs, t)}
+            value={totals.avgLatencyMs === null || failed ? "—" : latency(totals.avgLatencyMs, t)}
             pending={loading}
             hint={
               totals.successRate === null

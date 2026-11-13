@@ -42,6 +42,50 @@ describe("StackedUsageChart", () => {
   });
 });
 
+describe("StackedUsageChart bar totals", () => {
+  const data = [
+    { day: "2026-10", a: 1, b: 2 },
+    { day: "2026-11", a: 4, b: 0 },
+  ];
+  // Totals unlike any axis tick, so a match can only be the printed bar total.
+  const totals = new Map([
+    ["2026-10", 13],
+    ["2026-11", 17],
+  ]);
+
+  it("prints each bucket's total above its bar, including one whose top series is zero", () => {
+    const { container } = render(
+      <StackedUsageChart
+        data={data}
+        series={["a", "b"]}
+        xKey="day"
+        format={usd}
+        totalFor={(day) => totals.get(day)}
+        showTotals
+      />,
+    );
+    const labels = Array.from(container.querySelectorAll("text")).map((node) => node.textContent);
+    expect(labels).toContain("$13.00");
+    expect(labels).toContain("$17.00");
+  });
+
+  it("prints no totals on a log scale, where a stack top is not the sum", () => {
+    const { container } = render(
+      <StackedUsageChart
+        data={data}
+        series={["a", "b"]}
+        xKey="day"
+        format={usd}
+        totalFor={(day) => totals.get(day)}
+        showTotals
+        scale="log"
+      />,
+    );
+    const labels = Array.from(container.querySelectorAll("text")).map((node) => node.textContent);
+    expect(labels).not.toContain("$13.00");
+  });
+});
+
 describe("StackedUsageTooltipRow", () => {
   it("formats the value and keeps it apart from a long series name", () => {
     render(<StackedUsageTooltipRow value={0.091} name="cerebras/gpt-oss-120b" color="#a855f7" format={usd} />);

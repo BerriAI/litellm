@@ -2,7 +2,7 @@ import moment from "moment";
 import { parseAsNativeArrayOf, parseAsString, parseAsStringEnum, type inferParserType } from "nuqs";
 
 import type { EntityType } from "@/components/EntityUsageExport/types";
-import { relativeTimeOptions } from "@/components/shared/date_range_presets";
+import { calendarMonthOptions, relativeTimeOptions } from "@/components/shared/date_range_presets";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { uiHref } from "@/utils/uiHref";
 import { USAGE_OPTIONS, type UsageOption } from "./components/UsageViewSelect/UsageViewSelect";
@@ -14,6 +14,8 @@ export type UsageTab = (typeof USAGE_TABS)[number];
 export const DEFAULT_USAGE_TAB: UsageTab = "cost";
 
 const entityIds = parseAsNativeArrayOf(parseAsString);
+
+export const USAGE_RANGE_OPTIONS = [...relativeTimeOptions, ...calendarMonthOptions];
 
 export const usageUrlParsers = {
   view: parseAsString,
@@ -126,7 +128,7 @@ type DateParams = Pick<UsageUrlParams, "range" | "from" | "to">;
 
 export const dateRangeFromParams = (params: DateParams): DateRangePickerValue | undefined => {
   if (params.range !== null) {
-    return relativeTimeOptions.find((option) => option.shortLabel === params.range)?.getValue();
+    return USAGE_RANGE_OPTIONS.find((option) => option.shortLabel === params.range)?.getValue();
   }
   if (params.from === null || params.to === null) return undefined;
   return customRangeFromParams(params.from, params.to);
@@ -142,7 +144,7 @@ export const defaultUsageDateRange = (setting: unknown): { value: DateRangePicke
 };
 
 export const dateRangePatch = (value: DateRangePickerValue, presetShortLabel: string | null): UsageUrlPatch => {
-  if (presetShortLabel !== null && relativeTimeOptions.some((option) => option.shortLabel === presetShortLabel)) {
+  if (presetShortLabel !== null && USAGE_RANGE_OPTIONS.some((option) => option.shortLabel === presetShortLabel)) {
     return { range: presetShortLabel, from: null, to: null };
   }
   if (!value.from || !value.to) return { range: null, from: null, to: null };
@@ -185,7 +187,7 @@ export const clientPanelPatch = (client: UsageUrlParams["client"]): UsageUrlPatc
 const invalidDatePatch = (params: DateParams): UsageUrlPatch => {
   const hasCustomRange = params.from !== null || params.to !== null;
   if (params.range !== null) {
-    const rangeIsPreset = relativeTimeOptions.some((option) => option.shortLabel === params.range);
+    const rangeIsPreset = USAGE_RANGE_OPTIONS.some((option) => option.shortLabel === params.range);
     return {
       ...(rangeIsPreset ? {} : { range: null }),
       ...(hasCustomRange ? { from: null, to: null } : {}),

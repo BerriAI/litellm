@@ -10,6 +10,7 @@ import type { DateRangePickerValue } from "@/components/shared/date_picker_types
 import UserDropdown from "@/components/common_components/UserDropdown";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import type { ClientUsageScopeOption } from "../hooks/clientUsageScope";
+import { USAGE_RANGE_OPTIONS } from "../usageUrlState";
 import { stackedUsageColor } from "@/components/shared/charts";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -175,6 +176,7 @@ export default function ClientUsagePanel({
             <AdvancedDatePicker
               compact
               value={dateValue}
+              options={USAGE_RANGE_OPTIONS}
               presetShortLabel={presetShortLabel}
               onValueChange={onDateChange}
             />

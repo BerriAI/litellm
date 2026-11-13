@@ -69,6 +69,53 @@ describe("UsageStatStrip token breakdown", () => {
   });
 });
 
+describe("UsageStatStrip period comparison", () => {
+  const previous = { start: "2026-10-01", end: "2026-10-12" };
+
+  it("puts each change beside its own figure with the period it compares against", () => {
+    render(
+      <UsageStatStrip
+        {...defaultProps}
+        comparison={{
+          previous,
+          spend: { kind: "change", percent: 12.345 },
+          tokens: { kind: "new" },
+          requests: null,
+          avgCostPerRequest: { kind: "change", percent: -3.21 },
+        }}
+      />,
+    );
+    const cellOf = (label: string) => screen.getByText(label).parentElement?.parentElement as HTMLElement;
+
+    expect(cellOf("Spend")).toHaveTextContent("+12.3% vs Oct 1 – Oct 12");
+    expect(cellOf("Total Tokens")).toHaveTextContent("New vs Oct 1 – Oct 12");
+    expect(cellOf("Total Requests")).not.toHaveTextContent("vs Oct 1");
+    expect(cellOf("Avg cost / request")).toHaveTextContent("-3.2% vs Oct 1 – Oct 12");
+  });
+
+  it("says the comparison is unavailable without hiding the current figures", () => {
+    const unavailable = { kind: "unavailable" } as const;
+    render(
+      <UsageStatStrip
+        {...defaultProps}
+        comparison={{ previous, spend: unavailable, tokens: unavailable, requests: null, avgCostPerRequest: unavailable }}
+      />,
+    );
+
+    expect(screen.getAllByText("Comparison unavailable")).toHaveLength(3);
+    expect(screen.getByText("$42.50")).toBeInTheDocument();
+  });
+
+  it("shows every spend figure as unavailable instead of zero when the range failed to load", () => {
+    const zeros = { ...totals, spend: 0, tokens: 0, avgCostPerRequest: 0 };
+    render(<UsageStatStrip {...defaultProps} totals={zeros} failed />);
+
+    expect(screen.getAllByText("Unavailable")).toHaveLength(4);
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+    expect(screen.queryByText("$0.0000")).not.toBeInTheDocument();
+  });
+});
+
 describe("UsageStatStrip in another UI language", () => {
   afterEach(async () => {
     await i18n.changeLanguage("en");

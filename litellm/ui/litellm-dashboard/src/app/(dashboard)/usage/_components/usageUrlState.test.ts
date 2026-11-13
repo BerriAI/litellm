@@ -211,6 +211,30 @@ describe("date range", () => {
   });
 
   it.each([
+    ["3M", new Date(2026, 8, 1)],
+    ["6M", new Date(2026, 5, 1)],
+    ["12M", new Date(2025, 11, 1)],
+  ])("resolves ?range=%s to whole calendar months through today", (preset, from) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 10, 12, 15, 30));
+    try {
+      expect(dateRangeFromParams(load(`?range=${preset}`))).toEqual({
+        from,
+        to: new Date(2026, 10, 12, 23, 59, 59, 999),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a month preset as a rolling key for the main and the client panel range", () => {
+    const value = { from: new Date(2026, 8, 1), to: new Date(2026, 10, 12, 23, 59, 59, 999) };
+
+    expect(applyPatch("?from=a&to=b", dateRangePatch(value, "3M"))).toBe("?range=3M");
+    expect(clientDateRangePatch(value, "12M")).toEqual({ client_range: "12M", client_from: null, client_to: null });
+  });
+
+  it.each([
     ["an unknown preset", "?range=90d"],
     ["an ISO timestamp", "?from=2026-01-04T13:00:00.000Z&to=2026-01-05"],
     ["an impossible date", "?from=2026-02-30&to=2026-03-01"],

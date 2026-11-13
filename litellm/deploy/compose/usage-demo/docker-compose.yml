@@ -1,0 +1,85 @@
+# Synthetic Usage dashboard demo: LiteLLM built from this checkout, its own
+# Postgres and a dedicated Redis shared by two proxy workers. Nothing here calls
+# a model provider. See README.md in this directory for the walkthrough.
+#
+#   export USAGE_DEMO_MASTER_KEY="sk-$(openssl rand -hex 16)"
+#   docker compose -f litellm/deploy/compose/usage-demo/docker-compose.yml up -d --build --wait
+#   docker compose -f litellm/deploy/compose/usage-demo/docker-compose.yml exec -T db \
+#     psql -v ON_ERROR_STOP=1 -U llmproxy -d litellm -f /seed/seed_usage_demo.sql
+#
+# The project name and volume are fixed and demo-only, so the stack never
+# touches the litellm_postgres_data volume of litellm/deploy/compose.
+name: litellm-usage-demo
+
+services:
+  litellm:
+    image: litellm-usage-demo:local
+    pull_policy: build
+    build:
+      context: ../../../..
+      dockerfile: litellm/deploy/docker/Dockerfile
+      target: runtime
+    command: ["--config", "/app/usage-demo-config.yaml", "--port", "4000", "--num_workers", "2"]
+    ports:
+      - "127.0.0.1:${USAGE_DEMO_PORT:-4000}:4000"
+    volumes:
+      - ./config.yaml:/app/usage-demo-config.yaml:ro
+    environment:
+      LITELLM_MASTER_KEY: ${USAGE_DEMO_MASTER_KEY:?export USAGE_DEMO_MASTER_KEY, see the header of this file}
+      UI_USERNAME: admin
+      UI_PASSWORD: ${USAGE_DEMO_MASTER_KEY}
+      DATABASE_URL: postgresql://llmproxy:usage-demo-db@db:5432/litellm
+      LITELLM_MIGRATION_DIR: /tmp/litellm-migrations
+      LITELLM_TELEMETRY: "False"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
+      - /app/.cache:rw,noexec,nosuid,nodev,size=128m,mode=1777
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+
+  db:
+    image: postgres:16.6
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: usage-demo-db
+    volumes:
+      - usage_demo_postgres:/var/lib/postgresql/data
+      - ./seed_usage_demo.sql:/seed/seed_usage_demo.sql:ro
+      - ./reset_usage_demo.sql:/seed/reset_usage_demo.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7.4.2
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  usage_demo_postgres:
+    name: litellm_usage_demo_postgres

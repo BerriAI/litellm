@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, LabelList, XAxis, YAxis } from "recharts";
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
@@ -26,6 +26,13 @@ export const stackedUsageColor = (index: number) => STACKED_USAGE_PALETTE[index 
 
 export type StackedUsageScale = "linear" | "log";
 
+interface BarTotalLabelProps {
+  x?: number | string;
+  y?: number | string;
+  width?: number | string;
+  index?: number;
+}
+
 export interface StackedUsageChartProps {
   data: readonly Record<string, unknown>[];
   /** Series keys, bottom of the stack first. */
@@ -43,6 +50,17 @@ export interface StackedUsageChartProps {
   totalLabel?: string;
   scale?: StackedUsageScale;
   className?: string;
+  /** Tooltip header text for an `xKey` value; defaults to `xLabel`. */
+  tooltipLabel?: (value: string) => string;
+  /** Full-precision formatter for tooltip values, when `format` abbreviates axis ticks. */
+  tooltipFormat?: (value: number) => string;
+  /** Prints `totalFor` above each bar. Linear scale only, since a log stack has no meaningful top. */
+  showTotals?: boolean;
+  /** Charts sharing a `syncId` move their tooltips together across the same buckets. */
+  syncId?: string;
+  /** Fixed tick column width, so stacked charts line their plot areas up. */
+  yAxisWidth?: number;
+  ariaLabel?: string;
 }
 
 /**
@@ -83,6 +101,12 @@ export function StackedUsageChart({
   totalLabel = i18n.t("shared.charts.stackedUsageChart.total"),
   scale = "linear",
   className,
+  tooltipLabel = xLabel,
+  tooltipFormat = format,
+  showTotals = false,
+  syncId,
+  yAxisWidth,
+  ariaLabel,
 }: StackedUsageChartProps) {
   const fill = (index: number) => colors?.[index] ?? stackedUsageColor(index);
   const nameOf = (index: number) => labels?.[index] ?? series[index];
@@ -92,12 +116,41 @@ export function StackedUsageChart({
   const tooltipHeader = (_label: unknown, payload: readonly { payload?: Record<string, unknown> }[]) => {
     const xValue = String(payload?.[0]?.payload?.[xKey] ?? "");
     const total = totalFor?.(xValue);
-    return total === undefined ? xLabel(xValue) : `${xLabel(xValue)} · ${totalLabel} ${format(total)}`;
+    return total === undefined
+      ? tooltipLabel(xValue)
+      : `${tooltipLabel(xValue)} · ${totalLabel} ${tooltipFormat(total)}`;
+  };
+  const totalsVisible = showTotals && scale === "linear" && totalFor !== undefined;
+  const renderTotal = ({ x, y, width, index }: BarTotalLabelProps) => {
+    const row = index === undefined ? undefined : data[index];
+    const total = row === undefined ? undefined : totalFor?.(String(row[xKey] ?? ""));
+    if (total === undefined) return null;
+    return (
+      <text
+        x={Number(x) + Number(width) / 2}
+        y={Number(y) - 6}
+        textAnchor="middle"
+        className="fill-muted-foreground text-[11px] tabular-nums"
+      >
+        {format(total)}
+      </text>
+    );
   };
 
   return (
-    <ChartContainer config={config} className={cn("aspect-auto h-[380px] w-full", className)}>
-      <BarChart data={[...data]} margin={{ left: 8, right: 8 }} barCategoryGap="15%" maxBarSize={64}>
+    <ChartContainer
+      config={config}
+      role="group"
+      aria-label={ariaLabel}
+      className={cn("aspect-auto h-[380px] w-full", className)}
+    >
+      <BarChart
+        data={[...data]}
+        margin={{ left: 8, right: 8, top: totalsVisible ? 20 : 5 }}
+        barCategoryGap="15%"
+        maxBarSize={64}
+        syncId={syncId}
+      >
         <CartesianGrid vertical={false} />
         <XAxis
           dataKey={xKey}
@@ -110,6 +163,7 @@ export function StackedUsageChart({
           scale={scale}
           domain={scale === "log" ? LOG_SCALE_DOMAIN : LINEAR_SCALE_DOMAIN}
           allowDataOverflow
+          width={yAxisWidth}
           tickLine={false}
           axisLine={false}
           tickFormatter={(value) => format(Number(value))}
@@ -124,7 +178,7 @@ export function StackedUsageChart({
                   value={Number(value)}
                   name={nameOf(series.indexOf(String(item.dataKey)))}
                   color={item.color}
-                  format={format}
+                  format={tooltipFormat}
                 />
               )}
             />
@@ -138,7 +192,9 @@ export function StackedUsageChart({
             stackId="usage"
             fill={fill(index)}
             isAnimationActive={false}
-          />
+          >
+            {totalsVisible && index === series.length - 1 && <LabelList dataKey={key} content={renderTotal} />}
+          </Bar>
         ))}
       </BarChart>
     </ChartContainer>

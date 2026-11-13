@@ -19,12 +19,16 @@ interface AdvancedDatePickerProps {
   showTimeRange?: boolean;
   align?: "left" | "right";
   compact?: boolean;
+  options?: readonly RelativeTimeOption[];
 }
 
-export function matchRelativeTimeOption(value: DateRangePickerValue): RelativeTimeOption | undefined {
+export function matchRelativeTimeOption(
+  value: DateRangePickerValue,
+  options: readonly RelativeTimeOption[] = relativeTimeOptions,
+): RelativeTimeOption | undefined {
   const { from, to } = value;
   if (!from || !to) return undefined;
-  return relativeTimeOptions.find((option) => {
+  return options.find((option) => {
     const optionRange = option.getValue();
     return moment(from).isSame(optionRange.from, "day") && moment(to).isSame(optionRange.to, "day");
   });
@@ -42,6 +46,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   showTimeRange = true,
   align = "right",
   compact = false,
+  options = relativeTimeOptions,
 }) => {
   const { t } = useTranslation();
   const inputId = useId();
@@ -57,8 +62,9 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const getMatchingOption = useCallback(
-    (currentValue: DateRangePickerValue): string | null => matchRelativeTimeOption(currentValue)?.shortLabel ?? null,
-    [],
+    (currentValue: DateRangePickerValue): string | null =>
+      matchRelativeTimeOption(currentValue, options)?.shortLabel ?? null,
+    [options],
   );
 
   // Update selected option when value changes
@@ -296,7 +302,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                   </span>
                 </div>
                 <div className={cn("overflow-y-auto", compact ? "grid h-auto grid-cols-2" : "h-[350px]")}>
-                  {relativeTimeOptions.map((option) => {
+                  {options.map((option) => {
                     const isSelected = selectedOption === option.shortLabel;
                     return (
                       <button

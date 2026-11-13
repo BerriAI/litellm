@@ -21,6 +21,7 @@ import type ClientUsagePanel from "./ClientUsagePanel";
 
 const mockEntityUsageMounted = vi.hoisted(() => vi.fn());
 const mockClientUsagePanel = vi.hoisted(() => vi.fn());
+const mockExportModal = vi.hoisted(() => vi.fn());
 
 vi.mock("./ClientUsagePanel", () => ({
   default: (props: ComponentProps<typeof ClientUsagePanel>) => {
@@ -74,7 +75,9 @@ beforeAll(() => {
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
-  formatDate: (date: Date) => date.toISOString().slice(0, 10),
+  // Local calendar days, as the real formatter sends them, so day math reads the same in every timezone.
+  formatDate: (date: Date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`,
   subscriptionUsageCall: vi.fn(),
   subscriptionAccountCreateCall: vi.fn(),
   subscriptionAccountUpdateCall: vi.fn(),
@@ -244,7 +247,10 @@ vi.mock("@/components/cloudzero_export_modal", () => ({
 }));
 
 vi.mock("@/components/EntityUsageExport", () => ({
-  default: () => <div>Entity Usage Export Modal</div>,
+  default: (props: { onExport: (exportType: string, format: string) => Promise<Blob> }) => {
+    mockExportModal(props);
+    return <div>Entity Usage Export Modal</div>;
+  },
 }));
 
 vi.mock("@/components/liteadmin/LiteAdmin", () => ({
@@ -278,8 +284,16 @@ vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
   useUserLookup: vi.fn(() => ({ data: null })),
 }));
 
+// The overview's previous-period request is the only aggregate that asks for a single key per day without
+// naming one, so routing on that keeps every assertion below about the range the page is showing.
+const isComparisonRequest = (request: unknown): boolean => {
+  const fields = request as { apiKeyLimit?: number; apiKey?: string | null };
+  return fields.apiKeyLimit === 1 && !fields.apiKey;
+};
+
 describe("UsagePage", () => {
   const mockUserDailyActivityAggregatedCall = vi.fn();
+  const mockComparisonCall = vi.fn();
   const mockDailyActivityAggregatedCall = vi.mocked(networking.dailyActivityAggregatedCall);
   const mockDailyActivityKeyPageCall = vi.mocked(networking.dailyActivityKeyPageCall);
   const mockUserDailyActivityUserPageCall = vi.mocked(networking.userDailyActivityUserPageCall);
@@ -565,9 +579,12 @@ describe("UsagePage", () => {
       offset: 0,
       limit: 50,
     });
-    mockDailyActivityAggregatedCall.mockImplementation((entity: string, request: unknown) =>
-      entity === "user" ? mockUserDailyActivityAggregatedCall(request) : Promise.resolve({ results: [], metadata: {} }),
-    );
+    mockDailyActivityAggregatedCall.mockImplementation((entity: string, request: unknown) => {
+      if (entity !== "user") return Promise.resolve({ results: [], metadata: {} });
+      return isComparisonRequest(request) ? mockComparisonCall(request) : mockUserDailyActivityAggregatedCall(request);
+    });
+    mockComparisonCall.mockReset();
+    mockComparisonCall.mockResolvedValue({ results: [], metadata: {} });
     mockEntityUsageMounted.mockClear();
     mockTagListCall.mockClear();
     mockGatewayDailyActivityCall.mockClear();
@@ -836,9 +853,8 @@ describe("UsagePage", () => {
     expect(totalTokensElements.length).toBeGreaterThan(0);
 
     // Check for chart titles (these are in the Overview tab)
-    expect(screen.getByText("Daily usage")).toBeInTheDocument();
-    expect(screen.getByText("Daily spend by model (top 8, rest grouped as Other)")).toBeInTheDocument();
-    expect(screen.getByText("Top models")).toBeInTheDocument();
+    expect(screen.getByText("Usage trend")).toBeInTheDocument();
+    expect(await screen.findByText("Contribution by model")).toBeInTheDocument();
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
     expect(screen.getByText("Top Users by Spend")).toBeInTheDocument();
   });
@@ -868,25 +884,22 @@ describe("UsagePage", () => {
     });
   });
 
-  it("should rename the usage chart when the weekly bucket is selected", async () => {
+  it("defaults a twelve month range to monthly buckets and lets the user switch back to daily", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<UsagePage {...defaultProps} />);
+    renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?from=2024-02-01&to=2025-01-31" });
 
-    await waitFor(() => {
-      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
-    });
+    const bucketSize = await screen.findByRole("radiogroup", { name: "Bucket size" });
+    expect(within(bucketSize).getByRole("radio", { name: "Monthly" })).toBeChecked();
 
-    expect(screen.getByText("Daily usage")).toBeInTheDocument();
+    await user.click(within(bucketSize).getByRole("radio", { name: "Daily" }));
 
-    await user.click(screen.getByRole("radio", { name: "Weekly" }));
-
-    expect(screen.getByText("Weekly usage")).toBeInTheDocument();
-    expect(screen.getByText("Weekly spend by model (top 8, rest grouped as Other)")).toBeInTheDocument();
-    expect(screen.queryByText("Daily usage")).not.toBeInTheDocument();
+    expect(within(bucketSize).getByRole("radio", { name: "Daily" })).toBeChecked();
   });
 
-  it("should render the top models chart stacked in the shared usage palette", async () => {
-    const { container } = renderWithProviders(<UsagePage {...defaultProps} />);
+  it("stacks tokens and spend by the same model in the shared palette without inventing an Other segment", async () => {
+    const { container } = renderWithProviders(<UsagePage {...defaultProps} />, {
+      searchParams: "?from=2025-01-01&to=2025-01-01",
+    });
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
@@ -901,15 +914,16 @@ describe("UsagePage", () => {
       );
     };
 
-    // One day stacked as the top model (gpt-4) over the "Other" remainder of that day's spend.
+    // One day, one bar in the tokens chart and one in the spend chart, both gpt-4. The day total
+    // exceeds the model breakdown, and that gap is reported in words rather than drawn as "Other".
     await waitFor(() => {
       expect(spendBars()).toHaveLength(2);
     });
 
     const fills = new Set(spendBars().map((rect) => rect.getAttribute("fill")));
-    expect(fills).toEqual(new Set([STACKED_USAGE_PALETTE[0], OTHER_COLOR]));
-
-    expect(screen.getAllByText("Jan 1").length).toBeGreaterThan(0);
+    expect(fills).toEqual(new Set([STACKED_USAGE_PALETTE[0]]));
+    expect(fills).not.toContain(OTHER_COLOR);
+    expect(screen.getByText(/differs from the daily totals by \$50\.25 and 35,000 tokens/)).toBeInTheDocument();
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
   });
 
@@ -921,7 +935,7 @@ describe("UsagePage", () => {
     });
 
     // Default view should show Global Usage (for admin)
-    expect(screen.getByText("Daily usage")).toBeInTheDocument();
+    expect(screen.getByText("Usage trend")).toBeInTheDocument();
 
     // Switch to Team Usage view
     const usageSelect = screen.getByTestId("usage-view-select");
@@ -1374,7 +1388,60 @@ describe("UsagePage", () => {
     });
   });
 
+  describe("previous period comparison", () => {
+    it("asks for the preceding month in the same user scope and states each change against it", async () => {
+      mockComparisonCall.mockResolvedValue({
+        results: [],
+        metadata: { total_spend: 100.6, total_tokens: 0, total_api_requests: 1500 },
+      });
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?user=user-001&from=2025-01-01&to=2025-01-31" });
+
+      await waitFor(() => {
+        expect(mockComparisonCall).toHaveBeenCalledWith(
+          expect.objectContaining({
+            entityIds: ["user-001"],
+            startTime: new Date(2024, 11, 1),
+            endTime: new Date(2024, 11, 31, 23, 59, 59, 999),
+          }),
+        );
+      });
+      // Spend and average cost per request both rose by a quarter; tokens had no baseline at all.
+      expect(await overview().findAllByText("+25.0%")).toHaveLength(2);
+      expect(overview().getAllByText("vs Dec 1 – Dec 31").length).toBeGreaterThan(0);
+      expect(within(overview().getByText("Total Tokens").parentElement!.parentElement!).getByText("New")).toBeVisible();
+      expect(overview().queryByText(/Infinity/)).not.toBeInTheDocument();
+    });
+
+    it("keeps the current range on screen and says the comparison is unavailable when it fails", async () => {
+      mockComparisonCall.mockRejectedValue(new Error("previous period down"));
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?from=2025-01-01&to=2025-01-31" });
+
+      expect((await overview().findAllByText("Comparison unavailable")).length).toBeGreaterThan(0);
+      expect(overview().getByText("$125.75")).toBeInTheDocument();
+      expect(screen.queryByText("Failed to load spend data")).not.toBeInTheDocument();
+    });
+
+    it("exports exactly the scope and dates the overview is showing", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?user=user-001&from=2025-01-01&to=2025-01-31" });
+      await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled());
+      const shown = mockUserDailyActivityAggregatedCall.mock.lastCall?.[0];
+
+      await mockExportModal.mock.lastCall?.[0].onExport("daily", "csv");
+
+      expect(networking.dailyActivityExportCall).toHaveBeenCalledWith("user", shown, "daily", "csv");
+    });
+  });
+
   describe("aggregated endpoint failure", () => {
+    it("shows the range's figures as unavailable rather than zero", async () => {
+      mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("Aggregated endpoint not available"));
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?from=2025-01-01&to=2025-01-31" });
+
+      expect((await overview().findAllByText("Unavailable")).length).toBeGreaterThan(0);
+      expect(overview().queryByText("$0.00")).not.toBeInTheDocument();
+      expect(overview().getByText("Usage trend is unavailable because spend data failed to load.")).toBeInTheDocument();
+    });
+
     it("shows the failure alert instead of retrying other routes when the aggregated call fails", async () => {
       mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("Aggregated endpoint not available"));
 
@@ -1383,7 +1450,11 @@ describe("UsagePage", () => {
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
-      expect(mockDailyActivityAggregatedCall.mock.calls.filter((c) => c[0] === "user")).toHaveLength(1);
+      expect(
+        mockDailyActivityAggregatedCall.mock.calls.filter(([entity, request]) => {
+          return entity === "user" && !isComparisonRequest(request);
+        }),
+      ).toHaveLength(1);
       const alert = await screen.findByRole("alert");
       expect(alert).toHaveTextContent("Failed to load spend data");
       expect(alert).toHaveTextContent("Aggregated endpoint not available");

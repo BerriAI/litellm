@@ -8748,7 +8748,10 @@
       "last7Days": "Last 7 days",
       "last30Days": "Last 30 days",
       "monthToDate": "Month to date",
-      "yearToDate": "Year to date"
+      "yearToDate": "Year to date",
+      "last3Months": "Last 3 months",
+      "last6Months": "Last 6 months",
+      "last12Months": "Last 12 months"
     },
     "searchBox": {
       "operators": {
@@ -15379,6 +15382,15 @@
     },
     "statStrip": {
       "spend": "Spend",
+      "unavailable": "Unavailable",
+      "comparison": {
+        "vs": "vs {{period}}",
+        "up": "+{{percent}}%",
+        "down": "-{{percent}}%",
+        "new": "New",
+        "same": "No change",
+        "unavailable": "Comparison unavailable"
+      },
       "budgetHint": "of {{budget}} budget",
       "noBudget": "No budget set",
       "totalRequests": "Total Requests",
@@ -15407,6 +15419,44 @@
       "topUsersBySpend": "Top Users by Spend",
       "otherSeries": "Other",
       "weekOf": "Wk of {{date}}"
+    },
+    "trend": {
+      "title": "Usage trend",
+      "subtitle": "Tokens and spend by model, {{range}}",
+      "viewLabel": "Chart view",
+      "viewOptions": {
+        "paired": "Tokens & spend",
+        "requests": "Requests"
+      },
+      "granularityMonth": "Monthly",
+      "tokensTitle": "Tokens",
+      "spendTitle": "Spend",
+      "requestsTitle": "Requests",
+      "chartLabel": "{{metric}} stacked by model",
+      "legend": "Models",
+      "loading": "Loading usage trend",
+      "empty": "No usage recorded in this range",
+      "unavailable": "Usage trend is unavailable because spend data failed to load.",
+      "weekTooltip": "Week of {{range}} ({{days}} days)",
+      "partialMonthTooltip": "{{month}}, partial: {{range}}",
+      "partialNote": "Partial periods cover only the days in range: {{periods}}.",
+      "unattributedNote": "The model breakdown differs from the daily totals by {{spend}} and {{tokens}} tokens, so bars and table show the attributed amount only.",
+      "table": {
+        "title": "Contribution by model",
+        "model": "Model",
+        "tokens": "Tokens",
+        "tokenShare": "Token share",
+        "spend": "Spend",
+        "spendShare": "Spend share",
+        "observedRate": "Observed $ / 1M tokens",
+        "total": "Total",
+        "inOther": "In Other",
+        "percent": "{{value}}%",
+        "notApplicable": "n/a",
+        "spendWithoutTokens": "Spend without tokens",
+        "noMeteredSpend": "No metered spend",
+        "rateNote": "Observed $ / 1M tokens is recorded spend divided by total tokens in this range, including cache, per-request and flat charges. It is not a list price. Models outside the top 8 share the Other color in the charts."
+      }
     },
     "breakdownChart": {
       "granularityOptions": {
