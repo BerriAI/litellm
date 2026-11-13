@@ -490,7 +490,8 @@ async def _memberships_on_team_member_budget(
     budgeted_team_ids: Final = frozenset(
         row.team_id
         for row in team_rows
-        if isinstance(row.metadata, dict) and row.metadata.get("team_member_budget_id") is not None
+        if isinstance(row.metadata, dict)
+        and cast(dict[str, object], row.metadata).get("team_member_budget_id") is not None
     )
     return tuple(
         m.model_copy(update={"max_budget_in_team": None}) if m.team_id in budgeted_team_ids else m for m in memberships
