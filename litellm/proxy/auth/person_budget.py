@@ -69,9 +69,9 @@ async def _member_assignment(
             model_type=PersonBudgetAssignmentRecord,
             ttl=get_management_object_ttl(cache),
         )
-        return assignment
     except Exception:  # noqa: BLE001  # an unreadable assignment must not silently remove personal caps
         return PersonBudgetFailure.UNAVAILABLE
+    return assignment
 
 
 async def load_person_budget_definition(
@@ -93,9 +93,9 @@ async def load_person_budget_definition(
         await cache.async_set_cache(
             key=cache_key, value=budget, model_type=PersonBudgetDefinition, ttl=get_management_object_ttl(cache)
         )
-        return budget
     except Exception:  # noqa: BLE001  # configuration failures deny only people with assigned budgets
         return PersonBudgetFailure.UNAVAILABLE
+    return budget
 
 
 def person_budget_windows(

@@ -121,7 +121,9 @@ mod tests {
 
     #[rstest]
     #[case::monthly_user("spend:person:user:person%3Aone:window:1mo@2026-11-01T05:30:00+00:00")]
-    #[case::annual_customer("spend:person:customer_member:person%2Ftwo:window:12mo@2026-01-01T08:00:00+00:00")]
+    #[case::annual_customer(
+        "spend:person:customer_member:person%2Ftwo:window:12mo@2026-01-01T08:00:00+00:00"
+    )]
     fn personal_windows_round_trip_without_a_committed_twin(#[case] key: &str) {
         let counter = SpendCounter::parse(key).expect("valid personal window");
         assert!(matches!(counter, SpendCounter::PersonWindow { .. }));

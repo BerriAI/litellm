@@ -4251,7 +4251,7 @@ async def run_centralized_common_checks(
             and not skip_budget_checks
             and not route_skips_budget_checks(route=route)
         ):
-            user_api_key_auth_obj.person_budget_windows = require_person_budget_windows(
+            user_api_key_auth_obj.person_budget_windows = require_person_budget_windows(  # rebind-ok: reservation and spend hooks share this request credential
                 await prepare_person_budget_windows(
                     user=personal_budget_user,
                     customer=user_api_key_auth_obj.customer_hierarchy,
