@@ -124,6 +124,11 @@ enum Pending {
     Read(Reply<Result<Option<Bytes>, Error>>),
 }
 
+pub(super) struct Selected {
+    pub(super) hosted: bool,
+    pub(super) read: Vec<(String, Option<String>)>,
+}
+
 #[derive(Default)]
 pub(super) struct HostedTransport {
     handler: Option<Py<PyAny>>,
@@ -132,13 +137,23 @@ pub(super) struct HostedTransport {
 }
 
 impl HostedTransport {
-    pub(super) fn select(&mut self, py: Python<'_>, request: &Bound<'_, PyDict>) -> PyResult<bool> {
-        let handler = py
+    /// Whether the call sends through Python's client, and the secrets the host read to decide it,
+    /// which the native route reuses rather than reading again.
+    pub(super) fn select(
+        &mut self,
+        py: Python<'_>,
+        request: &Bound<'_, PyDict>,
+    ) -> PyResult<Selected> {
+        let (handler, read): (Bound<'_, PyAny>, Vec<(String, Option<String>)>) = py
             .import(ROUTE_HOST_MODULE)?
             .getattr("transport_handler")?
-            .call1((request,))?;
+            .call1((request,))?
+            .extract()?;
         self.handler = (!handler.is_none()).then(|| handler.unbind());
-        Ok(self.handler.is_some())
+        Ok(Selected {
+            hosted: self.handler.is_some(),
+            read,
+        })
     }
 
     pub(super) fn pending(&self) -> bool {

@@ -3509,6 +3509,56 @@ AZURE_AUTH_CASES: Final = tuple(
     )
 )
 
+AZURE_URL_CASES: Final = tuple(
+    replace(case, model=AZURE_CLAUDE, rust_providers=AZURE_AI)
+    for case in (
+        Case(
+            "azure_ai_base_userinfo_starting_with_anthropic",
+            _kw(api_base_userinfo="anthropic", api_base_suffix="/d/dep-u01/anthropic"),
+        ),
+        Case("azure_ai_base_slash_before_query", _kw(api_base_suffix="/d/dep-u02/?q=1")),
+        Case("azure_ai_base_trailing_spaces_without_anthropic", _kw(api_base_suffix="/d/dep-u04  ")),
+        Case("azure_ai_base_trailing_newline_without_anthropic", _kw(api_base_suffix="/d/dep-u04\n"), upstream=()),
+        Case("azure_ai_base_trailing_spaces_after_anthropic", _kw(api_base_suffix="/d/dep-u04/anthropic  ")),
+        Case("azure_ai_base_trailing_crlf_after_anthropic", _kw(api_base_suffix="/d/dep-u04/anthropic\r\n")),
+        Case("azure_ai_blank_base", _kw(api_base="   "), upstream=()),
+        Case(
+            "azure_ai_blank_base_with_environment_base",
+            _kw(api_base="   "),
+            env=MappingProxyType({"AZURE_API_BASE": "http://127.0.0.1:9/d/dep-env/anthropic"}),
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_padded_environment_base",
+            _kw(api_base=None),
+            env=MappingProxyType({"AZURE_API_BASE": " http://127.0.0.1:9/d/dep-env/anthropic "}),
+            upstream=(),
+        ),
+        Case("azure_ai_missing_base", _kw(api_base=None), upstream=()),
+        Case("azure_ai_missing_base_stream", _kw(api_base=None, stream=True), upstream=()),
+        Case("azure_ai_empty_base", _kw(api_base=""), upstream=()),
+        Case("azure_ai_base_without_scheme", _kw(api_base="fuzz.invalid/d/dep-e04/anthropic"), upstream=()),
+        Case("azure_ai_scheme_relative_base", _kw(api_base="//fuzz.invalid/d/dep-e04/anthropic"), upstream=()),
+        Case("azure_ai_ftp_base", _kw(api_base="ftp://fuzz.invalid/d/dep-e04/anthropic"), upstream=()),
+        Case("azure_ai_base_not_a_url", _kw(api_base="not a url"), upstream=()),
+        Case(
+            "azure_ai_base_non_numeric_port",
+            _kw(api_base="http://fuzz.invalid:notaport/d/dep-e04/anthropic"),
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_base_out_of_range_port",
+            _kw(api_base="http://fuzz.invalid:99999/d/dep-e04/anthropic"),
+            upstream=(),
+        ),
+        Case("azure_ai_base_empty_host", _kw(api_base="http:///d/dep-e04/anthropic"), upstream=()),
+    )
+)
+
+# An anthropic base with no host goes through Python's client, so the key is never sent to the host
+# the native parser read from the path (`d`).
+ANTHROPIC_URL_CASES: Final = (Case("anthropic_base_empty_host", _kw(api_base="http:///d"), upstream=()),)
+
 CASES: Final = (
     *REQUEST_CASES,
     *INPUT_VALUE_CASES,
@@ -3535,6 +3585,8 @@ CASES: Final = (
     *DEPLOYMENT_HOOK_CASES,
     *HOOKED_STREAM_AND_CACHE_CASES,
     *AZURE_AUTH_CASES,
+    *AZURE_URL_CASES,
+    *ANTHROPIC_URL_CASES,
 )
 
 
@@ -3693,12 +3745,14 @@ def _kwargs(case: Case, server: RecordingServer) -> dict[str, object]:
     # other leg.
     supplied: Final = copy.deepcopy(dict(case.kwargs))
     suffix: Final = supplied.pop("api_base_suffix", "")
+    userinfo: Final = supplied.pop("api_base_userinfo", "")
+    base: Final = server.base_url.replace("://", f"://{userinfo}@", 1) if userinfo else server.base_url
     kwargs: Final[dict[str, object]] = {
         "model": case.model,
         "max_tokens": 64,
         "messages": [dict(USER)],
         "api_key": API_KEY,
-        "api_base": f"{server.base_url}{suffix}",
+        "api_base": f"{base}{suffix}",
         **supplied,
     }
     return {name: value for name, value in kwargs.items() if value is not None or name in ("safeguards", *case.nones)}
@@ -3839,7 +3893,9 @@ async def _invoke(
         if isinstance(result, dict):
             body = cast(Mapping[str, object], result)
             return _response(body, case.private_keys), _hidden_params(body)
-        time.sleep(case.busy_before_reading)  # noqa: ASYNC251  # holds the event loop, as a caller's own work between the call and its first read does
+        time.sleep(
+            case.busy_before_reading
+        )  # holds the event loop, as a caller's own work between the call and its first read does
         chunks, failure = await _consume_async(cast(AsyncIterator[object], result))
     hidden: Final = _hidden_params(result)
     partition: Final = {"partition": _partition(chunks)} if case.partitioned else {}

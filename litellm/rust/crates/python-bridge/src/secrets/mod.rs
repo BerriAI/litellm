@@ -7,6 +7,7 @@ mod provider;
 mod python;
 pub(crate) mod resolved;
 pub(crate) mod runtime;
+pub(crate) mod seeded;
 mod vault;
 
 use std::sync::Arc;

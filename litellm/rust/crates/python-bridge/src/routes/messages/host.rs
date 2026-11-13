@@ -36,7 +36,7 @@ use serde_json::{Map, Value};
 
 use super::agentic::HookedRequest;
 use super::safeguards::{SafeguardsCall, SafeguardsHost};
-use super::transport::{HostedTransport, TransportCall, python_failure};
+use super::transport::{HostedTransport, Selected, TransportCall, python_failure};
 use crate::{
     errors::{RequestMarker, route_failure},
     marshal::{
@@ -236,7 +236,7 @@ fn azure_module_settings<'py>(
 pub(super) struct MessagesHosted;
 
 impl litellm_host::protocol::Protocol for MessagesHosted {
-    type Request = (MessagesCall, Selection, bool);
+    type Request = (MessagesCall, Selection, Selected);
     type Response = <Messages as litellm_host::protocol::Protocol>::Response;
     type Error = Error;
     type HostCall = MessagesHostCall;
@@ -755,7 +755,7 @@ impl PythonBinding for MessagesPythonHost {
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<(MessagesCall, Selection, bool), InvokeError<Error>> {
+    ) -> Result<(MessagesCall, Selection, Selected), InvokeError<Error>> {
         self.view
             .resolve(py, arguments)
             .map_err(InvokeError::Python)?;
@@ -781,11 +781,11 @@ impl PythonBinding for MessagesPythonHost {
             .is_some_and(|stream| stream.is(pyo3::types::PyBool::new(py, true)));
         self.arguments = Some(arguments.clone().unbind());
         let request = self.decode_call(py, arguments)?;
-        let hosted = self
+        let transport = self
             .transport
             .select(py, self.view.request(py).map_err(InvokeError::Python)?)
             .map_err(InvokeError::Python)?;
-        Ok((request, selection, hosted))
+        Ok((request, selection, transport))
     }
 
     fn encode_response(

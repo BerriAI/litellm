@@ -973,14 +973,14 @@ def no_tls_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     "client", (None, object(), httpx.AsyncClient(), HTTPHandler()), ids=("none", "object", "httpx", "sync-handler")
 )
 def test_the_native_client_stands_in_for_any_client_python_ignores(client: object) -> None:
-    assert messages_host.transport_handler({"client": client}) is None
+    assert messages_host.transport_handler({"client": client}) == (None, [])
 
 
 @pytest.mark.usefixtures("no_tls_settings")
 def test_a_caller_async_handler_is_the_handler_python_posts_through() -> None:
     client: Final = AsyncHTTPHandler()
 
-    assert messages_host.transport_handler({"client": client}) is client
+    assert messages_host.transport_handler({"client": client}) == (client, [])
 
 
 @pytest.mark.usefixtures("no_tls_settings")
@@ -994,7 +994,7 @@ def test_tls_the_native_client_cannot_apply_posts_through_pythons_anthropic_hand
         monkeypatch.setattr(litellm, name, value)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
 
-    handler: Final = messages_host.transport_handler({"client": object()})
+    handler, _ = messages_host.transport_handler({"client": object()})
 
     assert handler is get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
     assert callbacks_legacy_python.times_provider_exchange(object(), None) is False
@@ -1011,7 +1011,7 @@ def fips_cipher_exclusion() -> Iterator[None]:
 def test_fips_cipher_exclusion_posts_through_pythons_anthropic_handler(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
 
-    handler: Final = messages_host.transport_handler({"client": None})
+    handler, _ = messages_host.transport_handler({"client": None})
 
     assert handler is get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
     assert callbacks_legacy_python.times_provider_exchange(None, None) is False
@@ -1035,7 +1035,7 @@ def test_a_non_positive_timeout_posts_through_pythons_anthropic_handler(
 ) -> None:
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
 
-    handler: Final = messages_host.transport_handler({"client": None, "timeout": timeout})
+    handler, _ = messages_host.transport_handler({"client": None, "timeout": timeout})
 
     assert handler is get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
     assert callbacks_legacy_python.times_provider_exchange(None, timeout) is False
@@ -1044,7 +1044,97 @@ def test_a_non_positive_timeout_posts_through_pythons_anthropic_handler(
 @pytest.mark.usefixtures("no_tls_settings")
 @pytest.mark.parametrize("timeout", (None, 0.5, httpx.Timeout(10.0)), ids=("unset", "positive", "httpx"))
 def test_a_positive_timeout_keeps_the_native_client(timeout: object) -> None:
-    assert messages_host.transport_handler({"client": None, "timeout": timeout}) is None
+    assert messages_host.transport_handler({"client": None, "timeout": timeout}) == (None, [])
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize(
+    "api_base",
+    (
+        "http://user:secret@host.example/d",
+        "http://user@host.example/d",
+        "http:///d",
+        "http://:443/d",
+        "http://host.example:99999/d",
+        "http://host.example:port/d",
+    ),
+    ids=("credentials", "user", "no-host", "port-only", "port-out-of-range", "port-not-a-number"),
+)
+@pytest.mark.parametrize("model", ("anthropic/claude-x", "azure_ai/claude-x"))
+def test_a_base_the_native_parser_reads_otherwise_posts_through_pythons_handler(
+    monkeypatch: pytest.MonkeyPatch, api_base: str, model: str
+) -> None:
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    handler, read = messages_host.transport_handler({"client": None, "model": model, "api_base": api_base})
+
+    assert handler is get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
+    assert read == []
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize(
+    "api_base",
+    ("https://host.example/d", "http://host.example:8080/d?x=1", "https://[::1]:443/d"),
+    ids=("plain", "port-and-query", "ipv6"),
+)
+@pytest.mark.parametrize("model", ("anthropic/claude-x", "azure_ai/claude-x"))
+def test_a_plain_base_keeps_the_native_client(api_base: str, model: str) -> None:
+    assert messages_host.transport_handler({"client": None, "model": model, "api_base": api_base}) == (None, [])
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize(
+    ("environment", "hosted"),
+    ((" https://env.example/d ", True), ("https://env.example/d", False), (None, False)),
+    ids=("padded", "plain", "unset"),
+)
+@pytest.mark.parametrize("api_base", (None, ""), ids=("absent", "empty"))
+def test_azure_ai_reads_azure_api_base_once_and_hands_it_to_the_native_route(
+    monkeypatch: pytest.MonkeyPatch, environment: str | None, hosted: bool, api_base: str | None
+) -> None:
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    reads: Final[list[str]] = []
+
+    def get_secret_str(name: str) -> str | None:
+        reads.append(name)
+        return environment
+
+    monkeypatch.setattr(messages_host, "get_secret_str", get_secret_str)
+
+    handler, read = messages_host.transport_handler(
+        {"client": None, "model": "azure_ai/claude-x", "api_base": api_base}
+    )
+
+    assert (handler is not None) is hosted
+    assert read == [("AZURE_API_BASE", environment)]
+    assert reads == ["AZURE_API_BASE"]
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize(
+    "request_",
+    (
+        {"client": None, "model": "anthropic/claude-x"},
+        {"client": None, "model": "azure_ai/claude-x", "api_base": "https://call.example/d"},
+        {"client": AsyncHTTPHandler(), "model": "azure_ai/claude-x"},
+        {"client": None, "model": "azure_ai/claude-x", "timeout": 0},
+    ),
+    ids=("anthropic", "azure-call-base", "azure-caller-handler", "azure-python-timeout"),
+)
+def test_azure_api_base_is_left_to_the_native_route_when_the_choice_does_not_need_it(
+    monkeypatch: pytest.MonkeyPatch, request_: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    def get_secret_str(name: str) -> str | None:
+        raise AssertionError(name)
+
+    monkeypatch.setattr(messages_host, "get_secret_str", get_secret_str)
+
+    _, read = messages_host.transport_handler(request_)
+
+    assert read == []
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,7 @@ import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Final, TypeAlias, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
+from urllib.parse import SplitResult, urlsplit
 
 import httpx
 from aiohttp.http_exceptions import ContentLengthError, TransferEncodingError
@@ -90,6 +91,7 @@ from litellm.rust_bridge.execution import AsyncStream
 from litellm.rust_bridge.host import cache, callbacks_legacy_python, http_transport
 from litellm.rust_bridge.messages.entrypoints import MessagesStreamHead
 from litellm.rust_bridge.public_call import NativeCall, known_params, optional_sequence, optional_str
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.integrations.custom_logger import WEBSEARCH_CONVERTED_STREAM_KEY
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.router import GenericLiteLLMParams
@@ -1217,8 +1219,9 @@ class Sent:
 
 def _unsendable_api_base(api_base: object) -> bool:
     """A caller api_base the native URL parser rejects or reads otherwise than httpx and aiohttp
-    (no http(s) scheme, whitespace, control or non-ASCII characters): Python's client decides what
-    such a URL does, from a relative-URL error to a request on the host it finds."""
+    (no http(s) scheme, whitespace, control or non-ASCII characters, credentials, no host or a port
+    Python cannot read): Python's client decides what such a URL does, from a relative-URL error to
+    a request on the host it finds."""
     if not isinstance(api_base, str) or not api_base:
         return False
     return not (
@@ -1226,18 +1229,50 @@ def _unsendable_api_base(api_base: object) -> bool:
         and api_base.isprintable()
         and " " not in api_base
         and api_base.lower().startswith(("http://", "https://"))
+        and _plain_authority(api_base)
     )
 
 
-def transport_handler(request: Mapping[str, object]) -> AsyncHTTPHandler | None:
+def _plain_authority(api_base: str) -> bool:
+    try:
+        parts: Final = urlsplit(api_base)
+    except ValueError:
+        return True
+    return bool(parts.hostname) and parts.username is None and _readable_port(parts)
+
+
+def _readable_port(parts: SplitResult) -> bool:
+    try:
+        return parts.port is None or parts.port >= 0
+    except ValueError:
+        return False
+
+
+_SecretsRead: TypeAlias = list[tuple[str, str | None]]
+
+
+def _sent_api_base(request: Mapping[str, object]) -> tuple[object, _SecretsRead]:
+    """The base Python's URL builder reads, and the secrets read to find it: azure_ai falls back to
+    `AZURE_API_BASE`, read once, which the native route then reuses."""
+    api_base: Final = request.get("api_base")
+    if api_base or "model" not in request or _resolved_provider(request) != "azure_ai":
+        return api_base, []
+    environment: Final = get_secret_str("AZURE_API_BASE")
+    return environment, [("AZURE_API_BASE", environment)]
+
+
+def transport_handler(request: Mapping[str, object]) -> tuple[AsyncHTTPHandler | None, _SecretsRead]:
+    """The client the call sends through (None for the native one), and the secrets read to choose
+    it, which the native route reuses rather than reading them again."""
     client: Final = request.get("client")
     if isinstance(client, AsyncHTTPHandler):
-        return client
-    if not http_transport.sends_through_python(client, request.get("timeout")) and not _unsendable_api_base(
-        request.get("api_base")
-    ):
-        return None
-    return get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
+        return client, []
+    if http_transport.sends_through_python(client, request.get("timeout")):
+        return get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC), []
+    api_base, read = _sent_api_base(request)
+    if not _unsendable_api_base(api_base):
+        return None, read
+    return get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC), read
 
 
 def decoding_failure(message: str, request: Mapping[str, object], request_provider: str) -> Exception:
@@ -1259,7 +1294,12 @@ def unencodable_header(value: bytes, received: bool) -> Exception:
 def _sent_url(request: Mapping[str, object], url: str) -> str:
     """The native URL builder trims the caller's api_base; Python sends it as given."""
     api_base: Final = request.get("api_base")
-    if not isinstance(api_base, str) or api_base == api_base.strip() or not _unsendable_api_base(api_base):
+    if (
+        not isinstance(api_base, str)
+        or api_base == api_base.strip()
+        or not _unsendable_api_base(api_base)
+        or _resolved_provider(request) != "anthropic"
+    ):
         return url
     try:
         return _python_messages_url(api_base) if url == _python_messages_url(api_base.strip()) else url

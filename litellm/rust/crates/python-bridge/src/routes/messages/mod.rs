@@ -33,11 +33,14 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
         move |py, arguments, request| {
             let hooked = pre_request::runs_pre_request_hooks(py)?;
             let context = litellm_host_python::PythonContext::capture(py)?;
+            let secrets = std::sync::Arc::new(crate::secrets::seeded::SeededSecrets::new(
+                crate::secrets::source(py)?,
+            ));
             let route = litellm_inference_messages::MessagesRoute::new(
                 crate::http::messages_client(py, arguments, asynchronous)?
                     .map_err(crate::http::client_error)?,
                 crate::http::resources().auth.clone(),
-                crate::secrets::source(py)?,
+                std::sync::Arc::clone(&secrets) as _,
             )
             .with_workload_identity(std::sync::Arc::new(
                 workload_identity::PythonWorkloadIdentity::new(context.clone()),
@@ -57,11 +60,16 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
             Ok(litellm_host::call::hosted_call(
                 request,
                 None,
-                move |(call, selection, hosted): (_, crate::cache::Selection, bool),
+                move |(call, selection, transport): (
+                    _,
+                    crate::cache::Selection,
+                    transport::Selected,
+                ),
                       services,
                       interceptors,
                       observers| async move {
-                    let route = if hosted {
+                    secrets.seed(transport.read);
+                    let route = if transport.hosted {
                         route.with_transport(std::sync::Arc::new(transport::PythonTransport::new(
                             services.clone(),
                         )))
