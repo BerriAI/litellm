@@ -156,6 +156,7 @@ from litellm.llms.bedrock.common_utils import (
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
+from litellm.llms.mistral.mistral_embedding_transformation import embedding_metadata
 from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     DeferredReasoningDropWarnings,
     OpenAIGPT5Config,
@@ -7637,6 +7638,20 @@ def embedding(
                 print_verbose=print_verbose,
             )
         elif custom_llm_provider == "mistral":
+            mistral_metadata: Final = embedding_metadata(
+                TypeAdapter[dict[str, object]](dict[str, object]).validate_python(kwargs)
+            )
+            if mistral_metadata is not None:
+                mistral_optional_params: Final = TypeAdapter[dict[str, object]](dict[str, object]).validate_python(
+                    optional_params
+                )
+                mistral_extra_body: Final = TypeAdapter[dict[str, object]](dict[str, object]).validate_python(
+                    mistral_optional_params.get("extra_body", {})
+                )
+                optional_params["extra_body"] = {
+                    **mistral_extra_body,
+                    "metadata": mistral_metadata,
+                }
             api_key = api_key or litellm.api_key or get_secret_str("MISTRAL_API_KEY")
             response = openai_chat_completions.embedding(
                 model=model,
