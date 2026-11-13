@@ -19,7 +19,7 @@ const MANAGE_PARSERS = {
   org: parseAsString,
   team: parseAsString,
   member: parseAsString,
-  tab: parseAsStringLiteral(["teams", "members", "settings"] as const),
+  tab: parseAsStringLiteral(["teams", "members", "budget_groups", "settings"] as const),
   hierarchyPage: parseAsInteger.withDefault(1),
 };
 
@@ -89,7 +89,7 @@ async function customerHierarchyChildren(
 
 function childView(
   selected: CustomerHierarchyContext | undefined,
-  requested: "teams" | "members" | "settings" | null,
+  requested: "teams" | "members" | "budget_groups" | "settings" | null,
 ): ChildList["kind"] {
   if (selected?.team) return "members";
   return requested === "members" ? "members" : "teams";
@@ -113,7 +113,8 @@ export default function useCustomerHierarchy() {
   const selected = context.data;
   const childTab = childView(selected, params.tab);
   const showSettings = params.member !== null || params.tab === "settings";
-  const tab: "teams" | "members" | "settings" = showSettings ? "settings" : childTab;
+  const organizationTab = params.tab === "budget_groups" && !params.team ? "budget_groups" : childTab;
+  const tab: "teams" | "members" | "budget_groups" | "settings" = showSettings ? "settings" : organizationTab;
   const childContext = selected && !selected.member ? selected : null;
   const page = Math.max(1, params.hierarchyPage);
   const children = useQuery({
@@ -126,7 +127,7 @@ export default function useCustomerHierarchy() {
       page,
     ],
     queryFn:
-      enabled && childContext && tab !== "settings"
+      enabled && childContext && tab !== "settings" && tab !== "budget_groups"
         ? ({ signal }) => customerHierarchyChildren(childContext, childTab, page, signal)
         : skipToken,
   });

@@ -3,11 +3,12 @@ import { cn } from "@/lib/cva.config";
 import { uiHref } from "@/utils/uiHref";
 import type { CustomerUsageScope } from "./customerUsageApi";
 
-type CustomerHierarchyView = "usage" | "teams" | "members" | "settings";
+type CustomerHierarchyView = "usage" | "teams" | "members" | "budget_groups" | "settings";
 const LABELS = {
   usage: "customerPortal.hierarchy.usage",
   teams: "customerPortal.hierarchy.teams",
   members: "customerPortal.hierarchy.members",
+  budget_groups: "customerPortal.budgetGroups.title",
   settings: "customerPortal.hierarchy.settings",
 } as const;
 
@@ -26,7 +27,7 @@ export default function CustomerHierarchyNavigation({
   active: CustomerHierarchyView;
 }) {
   const { t } = useTranslation();
-  let pages: readonly CustomerHierarchyView[] = ["usage", "teams", "members", "settings"];
+  let pages: readonly CustomerHierarchyView[] = ["usage", "teams", "members", "budget_groups", "settings"];
   if (scope.team) pages = ["usage", "members", "settings"];
   if (scope.member) pages = ["usage", "settings"];
   return (
@@ -37,7 +38,7 @@ export default function CustomerHierarchyNavigation({
           href={
             page === "usage"
               ? customerHierarchyHref("usage", scope)
-              : `${customerHierarchyHref("manage", scope)}${page === "settings" || (page === "members" && !scope.team) ? `&tab=${page}` : ""}`
+              : `${customerHierarchyHref("manage", scope)}${page === "settings" || page === "budget_groups" || (page === "members" && !scope.team) ? `&tab=${page}` : ""}`
           }
           aria-current={active === page ? "page" : undefined}
           className={cn(

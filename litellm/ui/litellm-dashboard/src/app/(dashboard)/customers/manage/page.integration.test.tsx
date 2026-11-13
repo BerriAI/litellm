@@ -113,6 +113,17 @@ function BrowserNavigationProbe() {
 }
 
 describe("customer hierarchy management", () => {
+  it("should show budget groups only at organization scope without requesting child tables", async () => {
+    renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1&tab=budget_groups" });
+    expect(await screen.findByRole("link", { name: "Budget groups" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Budget groups" })).toHaveAttribute(
+      "href",
+      `${uiHref("customers/manage")}?org=org-1&tab=budget_groups`,
+    );
+    expect(screen.getByRole("button", { name: "Add budget group" })).toBeEnabled();
+    expect(requestedUrls().map((url) => url.pathname)).toEqual(["/management/v1/customer_organizations/org-1"]);
+  });
+
   beforeEach(() => {
     auth.userRole = "Admin";
     vi.spyOn(toast, "success").mockReturnValue("test-toast");

@@ -20630,6 +20630,11 @@
     "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
   },
   "customerPortal": {
+    "budgetGroups": {
+      "title": "Budget groups",
+      "renameCollision": "A group name is already in use. Save a different name first before reusing it.",
+      "missingCreated": "The server did not return the new budget group. Refresh and try again."
+    },
     "hierarchy": {
       "customerNavigation": "Customer navigation",
       "usage": "Usage",

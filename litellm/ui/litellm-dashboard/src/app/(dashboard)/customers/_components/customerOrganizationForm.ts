@@ -40,7 +40,7 @@ const validRate = (value: string): boolean => {
   const rate = optionalAmount(value);
   return rate === null || (Number.isSafeInteger(rate) && rate >= 0);
 };
-const limit = (value: string, duration: "1mo" | "12mo") => {
+export const limit = (value: string, duration: "1mo" | "12mo") => {
   const amount = optionalAmount(value);
   return amount === null ? [] : [{ budget_duration: duration, max_budget: amount }];
 };
@@ -54,8 +54,7 @@ export type CustomerOrganizationFormError =
   | "invalidRateLimit"
   | "defaultRequired";
 
-export function buildCustomerOrganizationBody(fields: CustomerOrganizationFields) {
-  if (!fields.name.trim()) return { ok: false, error: "nameRequired" } as const;
+export function validateCustomerBudgetGroups(fields: Pick<CustomerOrganizationFields, "groups" | "defaultGroupId">) {
   if (!fields.groups.length || !fields.groups.some((group) => group.id === fields.defaultGroupId)) {
     return { ok: false, error: "defaultRequired" } as const;
   }
@@ -65,12 +64,17 @@ export function buildCustomerOrganizationBody(fields: CustomerOrganizationFields
   if (fields.groups.some((group) => !group.monthlyBudget.trim() && !group.yearlyBudget.trim())) {
     return { ok: false, error: "groupLimitRequired" } as const;
   }
-  if (
-    !validAmount(fields.monthlyBudget) ||
-    fields.groups.some((group) => !validAmount(group.monthlyBudget) || !validAmount(group.yearlyBudget))
-  ) {
+  if (fields.groups.some((group) => !validAmount(group.monthlyBudget) || !validAmount(group.yearlyBudget))) {
     return { ok: false, error: "invalidBudget" } as const;
   }
+  return { ok: true } as const;
+}
+
+export function buildCustomerOrganizationBody(fields: CustomerOrganizationFields) {
+  if (!fields.name.trim()) return { ok: false, error: "nameRequired" } as const;
+  const validation = validateCustomerBudgetGroups(fields);
+  if (!validation.ok) return validation;
+  if (!validAmount(fields.monthlyBudget)) return { ok: false, error: "invalidBudget" } as const;
   if (!validRate(fields.tpm) || !validRate(fields.rpm)) {
     return { ok: false, error: "invalidRateLimit" } as const;
   }
