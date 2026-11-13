@@ -661,8 +661,7 @@ def _reject_decisions_only_chat_completion(model: str, model_info: object) -> No
     raise litellm.BadRequestError(
         message=(
             f"Model '{model}' is a decisions-only deployment (model_info.mode is '{mode}') "
-            "and cannot serve chat completions. Decisions-only deployments serve the Decisions "
-            "API only. Use a chat deployment for chat completions."
+            "and serves the Decisions API only. Send this request to a deployment that is not decisions-only."
         ),
         model=model,
         llm_provider="",
