@@ -33144,14 +33144,17 @@ export interface components {
              */
             type: "custom";
         };
-        /** CustomerHierarchyAuth */
+        /**
+         * CustomerHierarchyAuth
+         * @description The levels a request is charged to. A request that named only an organization alias has no team or member.
+         */
         CustomerHierarchyAuth: {
             /** Customer Member Id */
-            customer_member_id: string;
+            customer_member_id?: string | null;
             /** Customer Org Id */
             customer_org_id: string;
             /** Customer Team Id */
-            customer_team_id: string;
+            customer_team_id?: string | null;
             /** Scopes */
             scopes: components["schemas"]["CustomerScopeAuth"][];
         };
