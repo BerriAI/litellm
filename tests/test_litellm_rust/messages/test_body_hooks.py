@@ -159,3 +159,29 @@ async def test_body_logging_setup_drops_a_logger_fn_from_a_supplied_logging_obje
 
     assert_served_natively(server)
     assert observed == []
+
+
+@pytest.mark.asyncio
+async def test_body_agentic_followup_reaches_the_azure_ai_deployment_it_came_from(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("AZURE_API_BASE", "AZURE_API_KEY", "AZURE_AI_API_KEY", "AZURE_OPENAI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    loop: Final = PlannedAgenticLoop()
+    server.enqueue(ResponseSpec(body=MESSAGES_RESPONSE))
+    server.default_response = ResponseSpec(body={**MESSAGES_RESPONSE, "id": "followup"})
+
+    with rebound(litellm, "callbacks", [loop]):
+        response: Final = await call(
+            server,
+            model="azure_ai/claude-sonnet-4-5",
+            api_key="azure-deployment-key",
+            api_base=f"{server.base_url}/d/dep-agentic/anthropic",
+        )
+        await drain_logging()
+
+    assert_served_natively(server, count=2)
+    assert [(sent.path, sent.headers.get("x-api-key")) for sent in server.requests] == [
+        ("/d/dep-agentic/anthropic/v1/messages", "azure-deployment-key")
+    ] * 2
+    assert response_id(response) == "agentic-replaced"
