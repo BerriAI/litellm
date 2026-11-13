@@ -3719,7 +3719,6 @@ dependencies = [
  "strum",
  "tempfile",
  "thiserror 2.0.19",
- "veil",
 ]
 
 [[package]]
@@ -4653,6 +4652,7 @@ version = "0.1.0"
 dependencies = [
  "rstest",
  "serde",
+ "serde_json",
  "subtle",
  "veil",
 ]

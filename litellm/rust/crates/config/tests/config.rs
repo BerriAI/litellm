@@ -244,21 +244,33 @@ future_section:
         Some(r#"{"type":"service_account"}"#)
     );
     assert!(model.litellm_params.extra.contains_key("future_param"));
-    assert!(model.additional_fields.contains_key("access_groups"));
+    assert!(
+        model
+            .additional_fields
+            .expose()
+            .contains_key("access_groups")
+    );
     assert_eq!(config.router_settings.allowed_fails, Some(2));
     assert!(
         config
             .router_settings
             .additional_fields
+            .expose()
             .contains_key("redis_host")
     );
     assert!(
         config
             .litellm_settings
             .additional_fields
+            .expose()
             .contains_key("custom_callback_name")
     );
-    assert!(config.additional_fields.contains_key("future_section"));
+    assert!(
+        config
+            .additional_fields
+            .expose()
+            .contains_key("future_section")
+    );
 }
 
 #[rstest]
@@ -349,7 +361,13 @@ fn parses_representative_python_configs(#[case] relative_path: &str) {
 fn accepts_python_callback_shorthand(#[case] setting: &str, #[case] expected_len: usize) {
     let config = Config::from_yaml(&format!("litellm_settings:\n  {setting}")).unwrap();
     assert_eq!(
-        config.litellm_settings.callbacks.as_ref().unwrap().len(),
+        config
+            .litellm_settings
+            .callbacks
+            .as_ref()
+            .unwrap()
+            .expose()
+            .len(),
         expected_len
     );
 }

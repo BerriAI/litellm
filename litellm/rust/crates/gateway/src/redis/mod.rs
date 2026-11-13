@@ -173,6 +173,7 @@ fn use_transaction_buffer(config: &Config) -> bool {
     match config
         .general_settings
         .additional_fields
+        .expose()
         .get("use_redis_transaction_buffer")
     {
         Some(Value::Bool(enabled)) => *enabled,

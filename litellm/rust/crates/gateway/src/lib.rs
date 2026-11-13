@@ -109,8 +109,9 @@ pub async fn build_mcp(
     if let Some(setting) = config
         .general_settings
         .additional_fields
+        .expose()
         .keys()
-        .chain(config.litellm_settings.additional_fields.keys())
+        .chain(config.litellm_settings.additional_fields.expose().keys())
         .find(|key| key.starts_with("mcp_"))
     {
         return Err(Error::McpSetting(setting.clone()));

@@ -1,6 +1,6 @@
 ---
 name: rust-redaction
-description: Keep secrets out of Debug output in litellm-rust with SecretValue and veil. Use when a struct or enum holds a password, token, key, credential URL or credential provider, when writing or reviewing a Debug impl, or when a type with secrets gets logged or traced
+description: Keep secrets out of Debug output in litellm-rust with SecretValue, Redacted and veil. Use when a struct or enum holds a password, token, key, credential URL or credential provider, when writing or reviewing a Debug impl, or when a type with secrets gets logged or traced
 metadata:
   internal: true
 ---
@@ -9,11 +9,11 @@ metadata:
 
 Every secret in a Debug output is hidden the same way, so a reviewer can tell at a glance that a field is covered and a new field cannot slip through a hand-written impl
 
-## Where SecretValue lives
+## Where SecretValue and Redacted live
 
-`SecretValue` lives in `crates/secret-value` and is imported as `litellm_secret_value::SecretValue` everywhere. No crate re-exports it, so there is one import path. Depend on `litellm-secret-value` directly. Do not pull in `litellm-auth-types` or `litellm-auth` just to get it
+`SecretValue` and `Redacted<T>` live in `crates/secret-value` and are imported as `litellm_secret_value::{Redacted, SecretValue}` everywhere. No crate re-exports them, so there is one import path. Depend on `litellm-secret-value` directly. Do not pull in `litellm-auth-types` or `litellm-auth` just to get them
 
-`crates/secret-value` holds only the type. Credential acquisition (`TokenProvider`, `CredentialPlan`, provider param tables) stays in `litellm-auth-types`, and generic clients such as `litellm-redis-client` must not depend on it
+`crates/secret-value` holds only the redaction types. Credential acquisition (`TokenProvider`, `CredentialPlan`, provider param tables) stays in `litellm-auth-types`, and generic clients such as `litellm-redis-client` must not depend on it
 
 ## Rules
 
@@ -31,9 +31,9 @@ Every secret in a Debug output is hidden the same way, so a reviewer can tell at
   }
   ```
 - Keep a secret as `SecretValue` until the last conversion into the third-party type (redis-rs, reqwest, an SDK) and call `expose()` there. Calling `expose()` early spreads plaintext `String`s through our own types
-- A secret that has to stay a raw type, because a serde wire shape or a third-party struct owns the field, is covered by deriving `veil::Redact` on the holder and marking the field `#[redact(with = "[REDACTED]")]`. `Redact` replaces `Debug`, so do not derive both
+- A bag of unparsed settings that may hold credentials (`additional_fields`, raw kwargs, callback lists) is typed as `Redacted<T>`. It deserializes as `T` (`#[serde(transparent)]`, so `#[serde(flatten)]` still works), prints only `[REDACTED]`, and gives up the value through `expose()`. The holder derives plain `Debug`. In `litellm-config`, `AdditionalFields` is already `Redacted<_>`, so every flattened bag is covered by its type
+- A secret that has to stay a raw type, because a third-party struct owns the field or a derive needs the bare type (`#[source]` on an error variant), is covered by deriving `veil::Redact` on the holder and marking the field `#[redact(with = "[REDACTED]")]`. `Redact` replaces `Debug`, so do not derive both
 - A URL that can carry userinfo is a secret as a whole. Do not parse it to show the host. Keep it as a `SecretValue`
-- A bag of unparsed settings that may hold credentials (`additional_fields`, raw kwargs) is redacted as a whole with `#[redact(with = "[REDACTED]")]`
 - An opaque handle over `Arc<dyn Trait>` whose trait has no `Debug` gets a newtype whose `Debug` prints only the type name with `finish_non_exhaustive()`. That impl shows nothing, so it is not a redaction impl and the first rule does not apply. A type holding such a handle can derive `Debug`
 - Never put a secret in a tracing field or an error message. Log the type with `?value`, or log only non-secret fields. See the rust-tracing and rust-error skills
 
