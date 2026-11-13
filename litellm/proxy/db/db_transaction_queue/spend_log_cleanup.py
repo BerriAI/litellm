@@ -267,8 +267,6 @@ _EXPIRED_GUARDRAIL_INDEX_ROWS_SQL: Final = """
     ) expired
     LIMIT $2
 """
-"""The table's only indexes lead with guardrail_id, so expired rows are found per guardrail (a loose index scan)
-rather than through a `start_time < $1` seq scan"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1107,7 +1105,7 @@ class SpendLogCleanup:
         self, prisma_client: PrismaClient, deadline: float
     ) -> tuple[TableCleanupResult, ...]:
         """
-        Prune the spend logs and the tool index rows derived from them.
+        Prune the spend logs and the tool and guardrail index rows derived from them.
 
         When the table is range-partitioned, whole expired partitions are dropped
         first because that reclaims disk immediately. Expired rows can still sit in

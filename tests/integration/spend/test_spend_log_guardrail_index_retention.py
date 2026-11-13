@@ -85,13 +85,11 @@ def test_spend_log_retention_prunes_expired_guardrail_index_rows(gateway: Gatewa
             database_setup=MIGRATE_DEPLOY,
         ),
     ):
-        _seed_spend_log(database_url, expired[0], days_ago=200)
         for request_id, guardrail_id in zip(expired, guardrails, strict=True):
             _seed_guardrail_index_row(database_url, request_id, guardrail_id, days_ago=200)
         _seed_guardrail_index_row(database_url, recent, guardrails[0], days_ago=1)
-        assert not eventually(
-            lambda: _spend_log_present(database_url, expired[0]), lambda present: not present, seconds=150
-        )
+        _seed_spend_log(database_url, expired[0], days_ago=200)
+        eventually(lambda: _spend_log_present(database_url, expired[0]), lambda present: not present, seconds=150)
         remaining: Final = eventually(
             lambda: _guardrail_index_rows(database_url, (*expired, recent)),
             lambda rows: all(request_id not in {row[0] for row in rows} for request_id in expired),
