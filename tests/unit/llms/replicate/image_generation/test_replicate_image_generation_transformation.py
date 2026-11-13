@@ -1,7 +1,7 @@
 import base64
 import time
 from typing import Final
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
@@ -20,6 +20,24 @@ API_BASE: Final = "https://api.replicate.com/v1"
 MODEL: Final = "black-forest-labs/flux-schnell"
 PREDICTIONS_URL: Final = f"{API_BASE}/models/{MODEL}/predictions"
 IMAGE_URLS: Final = ("https://replicate.delivery/out/0.webp", "https://replicate.delivery/out/1.webp")
+
+
+@pytest.mark.parametrize("ssl_verify", [None, False, True, "/certs/gateway.pem"])
+def test_replicate_httpx_client_passes_ssl_verify_and_returns_client(ssl_verify: object) -> None:
+    with patch.object(common_utils, "get_httpx_client") as factory:
+        result: Final = common_utils.replicate_httpx_client(ssl_verify)
+
+    factory.assert_called_once_with(params={"ssl_verify": ssl_verify})
+    assert result is factory.return_value
+
+
+@pytest.mark.parametrize("ssl_verify", [None, False, True, "/certs/gateway.pem"])
+def test_replicate_async_httpx_client_passes_provider_and_ssl_verify_and_returns_client(ssl_verify: object) -> None:
+    with patch.object(common_utils, "get_async_httpx_client") as factory:
+        result: Final = common_utils.replicate_async_httpx_client(ssl_verify)
+
+    factory.assert_called_once_with(llm_provider=LlmProviders.REPLICATE, params={"ssl_verify": ssl_verify})
+    assert result is factory.return_value
 
 
 @pytest.fixture(autouse=True)
