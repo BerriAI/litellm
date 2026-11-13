@@ -633,6 +633,106 @@ async def test_logging_hook_masks_the_response_too(presidio_guardrail):
     assert "[CREDIT_CARD]" in result_response.choices[0].message.content
     assert "4111-1111-1111-1111" not in result_response.choices[0].message.content
 
+@pytest.mark.asyncio
+async def test_logging_hook_does_not_mutate_client_request_or_response(presidio_guardrail):
+    """
+    Issue #47605: Presidio guardrail in logging_only mode must not mutate the client-facing
+    response object in place. Logging redaction must operate on a defensive copy of result
+    so the live response is returned unmasked to the client while logging receivers get
+    the redacted copy.
+    """
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]").replace("user@example.com", "[EMAIL]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    shared_messages = [{"role": "user", "content": "My email is user@example.com"}]
+    test_kwargs = {
+        "messages": shared_messages,
+        "input": shared_messages,
+        "model": "gpt-4",
+    }
+    response = ModelResponse(
+        id="1",
+        object="chat.completion",
+        created=0,
+        model="gpt-test",
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content="Sure, your card is 4111-1111-1111-1111",
+                ),
+                index=0,
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    result_kwargs, result_response = await presidio_guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result=response,
+        call_type="completion",
+    )
+
+    # 1. The returned logging objects MUST be redacted (both messages and input representation)
+    assert "[EMAIL]" in result_kwargs["messages"][0]["content"]
+    assert "[EMAIL]" in result_kwargs["input"][0]["content"]
+    assert "[CREDIT_CARD]" in result_response.choices[0].message.content
+
+    # 2. The client-facing response MUST NOT be mutated in-place (#47605)
+    assert "4111-1111-1111-1111" in response.choices[0].message.content
+    assert "[CREDIT_CARD]" not in response.choices[0].message.content
+    assert response is not result_response
+
+
+@pytest.mark.asyncio
+async def test_logging_hook_anthropic_format_does_not_mutate_client_response(presidio_guardrail):
+    """
+    Issue #47605: Presidio guardrail in logging_only mode must not mutate Anthropic
+    native response dicts in place.
+    """
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    test_kwargs = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "model": "claude-3-opus",
+    }
+    anthropic_response = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Sure, your card is 4111-1111-1111-1111"}],
+    }
+
+    result_kwargs, result_response = await presidio_guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result=anthropic_response,
+        call_type="completion",
+    )
+
+    assert isinstance(result_response, dict)
+    assert "[CREDIT_CARD]" in result_response["content"][0]["text"]
+    assert "4111-1111-1111-1111" in anthropic_response["content"][0]["text"]
+    assert "[CREDIT_CARD]" not in anthropic_response["content"][0]["text"]
+    assert anthropic_response is not result_response
+
+
+@pytest.mark.asyncio
+async def test_logging_hook_no_messages_returns_gracefully(presidio_guardrail):
+    test_kwargs = {"model": "gpt-4"}
+    response = ModelResponse(id="1")
+    result_kwargs, result_response = await presidio_guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result=response,
+        call_type="completion",
+    )
+    assert result_kwargs == test_kwargs
+
+
 
 @pytest.mark.asyncio
 async def test_logging_only_does_not_mask_pre_call_request(mock_user_api_key, mock_cache):
