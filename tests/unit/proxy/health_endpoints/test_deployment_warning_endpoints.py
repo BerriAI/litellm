@@ -204,12 +204,14 @@ class TestCurrentWarningConditions:
         monkeypatch.setattr("litellm.proxy.proxy_server.premium_user_data", license)
         monkeypatch.setattr(
             "litellm.proxy.proxy_server._license_check",
-            SimpleNamespace(airgapped_license_data=None, license_str=None, public_key=None),
+            SimpleNamespace(airgapped_license_data=None, license_str=None),
         )
 
     @pytest.mark.asyncio
     async def test_reads_every_signal_from_the_running_proxy(self, monkeypatch, set_logger_level):
-        self._proxy_state(monkeypatch, redis_cache=None, general_settings={}, license={"expiration_date": "2026-10-20"})
+        self._proxy_state(
+            monkeypatch, redis_cache=None, general_settings={}, license=SimpleNamespace(expiration_date="2026-10-20")
+        )
         monkeypatch.setenv("LITELLM_DISABLE_NO_REDIS_WARNING", "true")
         set_logger_level(logging.DEBUG)
 

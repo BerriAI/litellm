@@ -34,7 +34,7 @@ from litellm.proxy.middleware.billable_request_metrics_middleware import (
 )
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import EnterpriseLicenseData
+    from litellm.rust_bridge._native import NativeLicense
 
 ENDPOINT_ENV: Final = "LITELLM_BILLING_METRICS_ENDPOINT"
 CLIENT_ID_ENV: Final = "LITELLM_BILLING_METRICS_CLIENT_ID"
@@ -222,7 +222,7 @@ def _export_interval_ms() -> int:
 
 
 def load_billing_metrics_config(
-    *, license_data: "EnterpriseLicenseData | None", litellm_version: str
+    *, license_data: "NativeLicense | None", litellm_version: str
 ) -> BillingMetricsConfig | None:
     env: Final = MappingProxyType(
         {name: os.getenv(name) or "" for name in (ENDPOINT_ENV, CLIENT_ID_ENV, CLIENT_SECRET_ENV, TOKEN_URL_ENV)}
@@ -251,7 +251,7 @@ def load_billing_metrics_config(
         token_url=env[TOKEN_URL_ENV],
         export_interval_ms=_export_interval_ms(),
         litellm_version=litellm_version,
-        license_id=(license_data or {}).get("user_id"),
+        license_id=None if license_data is None else license_data.user_id,
     )
 
 
@@ -276,7 +276,7 @@ _ACTIVE_RECORDER: Final = _ActiveRecorderRegistry()
 
 
 def build_billing_metrics_recorder(
-    *, premium: bool, license_data: "EnterpriseLicenseData | None", litellm_version: str
+    *, premium: bool, license_data: "NativeLicense | None", litellm_version: str
 ) -> BillingMetricsRecorder | None:
     """Build the recorder, or None when the deployment is not licensed or metering is unconfigured."""
     if not premium:

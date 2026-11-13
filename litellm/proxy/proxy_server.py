@@ -143,7 +143,6 @@ from litellm.proxy._types import (
     ConfigList,
     ConfigYAML,
     CoordinationRedisParams,
-    EnterpriseLicenseData,
     FieldDetail,
     InvitationClaim,
     InvitationDelete,
@@ -206,6 +205,7 @@ from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
+from litellm.rust_bridge._native import NativeLicense
 from litellm.rust_bridge.catalog import Target
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
@@ -1231,7 +1231,7 @@ except ImportError:
 server_root_path: Final = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: Optional["EnterpriseLicenseData"] = _license_check.airgapped_license_data
+premium_user_data: NativeLicense | None = _license_check.airgapped_license_data
 
 
 def _set_premium_user(is_premium: bool) -> None:

@@ -36,7 +36,6 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
-    EnterpriseLicenseData,
     Litellm_EntityType,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -100,6 +99,7 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.router import Router
 from litellm.router_api import deployment_usable_by_team
+from litellm.rust_bridge._native import NativeLicense
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 from litellm.types.router import reject_server_owned_wif_fields
@@ -1875,22 +1875,14 @@ async def shared_health_check_status_endpoint(
         )
 
 
-def read_license_data() -> EnterpriseLicenseData | None:
+def read_license_data() -> NativeLicense | None:
     from litellm.proxy.proxy_server import _license_check, premium_user_data
 
-    license_data: EnterpriseLicenseData | None = premium_user_data or _license_check.airgapped_license_data
+    license_data: NativeLicense | None = premium_user_data or _license_check.airgapped_license_data
 
-    if (
-        license_data is None
-        and getattr(_license_check, "license_str", None)
-        and getattr(_license_check, "public_key", None)
-    ):
+    if license_data is None and _license_check.license_str:
         try:
-            verification_result: Final = _license_check.verify_license_without_api_request(
-                public_key=_license_check.public_key,
-                license_key=_license_check.license_str,
-            )
-            if verification_result is True:
+            if _license_check.verify_license_without_api_request(_license_check.license_str):
                 license_data = _license_check.airgapped_license_data
         except Exception:
             pass
@@ -1898,15 +1890,6 @@ def read_license_data() -> EnterpriseLicenseData | None:
     if license_data is None:
         return None
     return license_data
-
-
-def _read_allowed_features(license_data: Mapping[str, object]) -> list:
-    raw_allowed_features: Final = license_data.get("allowed_features")
-    if isinstance(raw_allowed_features, list):
-        return list(raw_allowed_features)
-    if raw_allowed_features is None:
-        return []
-    return [raw_allowed_features]
 
 
 @router.get(
@@ -1936,18 +1919,14 @@ async def health_license_endpoint(
             },
         }
 
-    expiration_date: Final = license_data.get("expiration_date")
-    max_users: Final = license_data.get("max_users")
-    max_teams: Final = license_data.get("max_teams")
-
     return {
         "has_license": has_license,
         "license_type": license_type,
-        "expiration_date": expiration_date,
-        "allowed_features": _read_allowed_features(license_data),
+        "expiration_date": license_data.expiration_date,
+        "allowed_features": license_data.allowed_features,
         "limits": {
-            "max_users": max_users,
-            "max_teams": max_teams,
+            "max_users": license_data.max_users,
+            "max_teams": license_data.max_teams,
         },
     }
 

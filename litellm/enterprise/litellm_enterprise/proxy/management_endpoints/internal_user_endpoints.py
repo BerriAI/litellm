@@ -2,6 +2,7 @@
 Enterprise internal user management endpoints
 """
 
+from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -22,7 +23,8 @@ async def available_enterprise_users(
     """
     For keys with `max_users` set, return the list of users that are allowed to use the key.
     """
-    from litellm.proxy._types import CommonProxyErrors, EnterpriseLicenseData
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.auth.auth_utils import has_user_setup_sso
     from litellm.proxy.proxy_server import (
         premium_user,
         premium_user_data,
@@ -37,31 +39,13 @@ async def available_enterprise_users(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if not premium_user:
-        # check if SSO is enabled - show 5 user limit
-        from litellm.proxy.auth.auth_utils import has_user_setup_sso
-
-        if has_user_setup_sso():
-            premium_user_data = EnterpriseLicenseData(
-                max_users=5,
-            )
+    sso_free_tier: Final = not premium_user and has_user_setup_sso()
+    license_data: Final = None if sso_free_tier else premium_user_data
+    max_users: Final = 5 if sso_free_tier else (None if license_data is None else license_data.max_users)
+    max_teams: Final = None if license_data is None else license_data.max_teams
 
     user_count = await UserRepository(prisma_client).count_billable_users()
     team_count = await TeamRepository(prisma_client).count()
-
-    if (
-        not premium_user_data
-        or premium_user_data is not None
-        and "max_users" not in premium_user_data
-    ):
-        max_users = None
-    else:
-        max_users = premium_user_data.get("max_users")
-
-    if premium_user_data and "max_teams" in premium_user_data:
-        max_teams = premium_user_data.get("max_teams")
-    else:
-        max_teams = None
 
     return {
         "total_users": max_users,

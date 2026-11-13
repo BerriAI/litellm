@@ -46,6 +46,7 @@ from litellm.types.workload_identity import (
 from tests._master_key import MASTER_KEY
 
 # Import shared proxy test helpers from conftest
+from tests._support.license import native_license
 from tests.unit.proxy.conftest import create_proxy_test_client
 
 
@@ -283,15 +284,11 @@ async def test_health_services_endpoint_sqs(status, error_message):
 
 @pytest.mark.asyncio
 async def test_health_license_endpoint_with_active_license():
-    license_data = {
-        "expiration_date": "2099-01-01",
-        "allowed_features": ["feature-a"],
-        "max_users": 100,
-        "max_teams": 5,
-    }
+    license_data = native_license(
+        expiration_date="2099-01-01", allowed_features=["feature-a"], max_users=100, max_teams=5
+    )
     mock_license_check = SimpleNamespace(
         license_str="test-license",
-        public_key=None,
         airgapped_license_data=license_data,
         verify_license_without_api_request=MagicMock(return_value=True),
     )
@@ -323,7 +320,6 @@ async def test_health_license_endpoint_with_active_license():
 async def test_health_license_endpoint_without_valid_license():
     mock_license_check = SimpleNamespace(
         license_str="invalid-key",
-        public_key=None,
         airgapped_license_data=None,
         verify_license_without_api_request=MagicMock(return_value=False),
     )

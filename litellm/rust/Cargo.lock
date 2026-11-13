@@ -3214,6 +3214,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "windows-link",
 ]
 
 [[package]]
@@ -4291,6 +4292,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-license"
+version = "0.1.0"
+dependencies = [
+ "backon",
+ "base64 0.22.1",
+ "jiff",
+ "litellm-error",
+ "litellm-http",
+ "rand 0.8.7",
+ "rsa",
+ "rstest",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "litellm-llms"
 version = "0.1.0"
 dependencies = [
@@ -4398,6 +4418,7 @@ dependencies = [
  "fancy-regex 0.19.2",
  "futures-util",
  "indexmap 2.14.0",
+ "jiff",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-cache",
@@ -4415,6 +4436,7 @@ dependencies = [
  "litellm-inference-ocr",
  "litellm-inference-responses",
  "litellm-inference-transcription",
+ "litellm-license",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-model-catalog",
@@ -6380,6 +6402,7 @@ dependencies = [
  "pkcs1",
  "pkcs8",
  "rand_core 0.6.4",
+ "sha2 0.10.9",
  "signature",
  "spki",
  "subtle",

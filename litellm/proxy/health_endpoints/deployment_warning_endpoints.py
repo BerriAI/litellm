@@ -228,7 +228,7 @@ async def current_warning_conditions(now: Annotated[datetime, Depends(utc_now)])
     license_data: Final = read_license_data()
     return deployment_warning_conditions(
         env_credential_login_enabled=env_credential_login_enabled(),
-        license_expiration_date=None if license_data is None else license_data.get("expiration_date"),
+        license_expiration_date=None if license_data is None else license_data.expiration_date,
         no_redis_on_multiple_workers=await no_redis_on_multiple_workers(),
         no_redis_warning_disabled_by_env=no_redis_warning_disabled_by_env(),
         detailed_debug=verbose_logger.isEnabledFor(logging.DEBUG),

@@ -5461,14 +5461,6 @@ from litellm.models.managed_files import (  # noqa: E402
 )
 
 
-class EnterpriseLicenseData(TypedDict, total=False):
-    expiration_date: str
-    user_id: str
-    allowed_features: list[str]
-    max_users: int
-    max_teams: int
-
-
 class ResponseLiteLLM_ManagedVectorStore(TypedDict, total=False):
     vector_store: LiteLLM_ManagedVectorStoresTable
 

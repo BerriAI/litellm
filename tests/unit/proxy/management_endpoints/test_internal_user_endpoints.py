@@ -43,6 +43,7 @@ from litellm.proxy.proxy_server import app
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
+from tests._support.license import native_license
 from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
@@ -1026,7 +1027,7 @@ async def test_new_user_license_gate_counts_only_billable_users(mocker):
     )
 
     license_check = LicenseCheck()
-    license_check.airgapped_license_data = {"max_users": 2}  # type: ignore
+    license_check.airgapped_license_data = native_license(max_users=2)
     mocker.patch("litellm.proxy.proxy_server._license_check", license_check)
 
     key_gen = mocker.patch(

@@ -1,46 +1,14 @@
 # What is this?
 ## If litellm license in env, checks if it's valid
-import base64
-import json
 import os
-from collections.abc import Mapping
-from datetime import datetime
-from typing import TYPE_CHECKING, Final
-
-import httpx
-from pydantic import TypeAdapter
-from typing_extensions import TypedDict
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import NON_LLM_CONNECTION_TIMEOUT
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-if TYPE_CHECKING:
-    from litellm.proxy._types import EnterpriseLicenseData
-
+from litellm.rust_bridge._native import NativeLicense, NativeLicenseVerifier
 
 AUTO_ROUTER_LICENSE_FEATURE: Final = "auto_router"
-LICENSE_ALL_FEATURES: Final = "*"
 AUTO_ROUTER_LICENSE_REMEDY: Final = "A LiteLLM license with the 'auto_router' feature lifts the limit."
-_LICENSE_VERDICT: Final = TypeAdapter(object)
-
-
-class _LicenseFields(TypedDict, total=False, extra_items=object):
-    pass
-
-
-def _license_fields(license_data: object) -> Mapping[str, object]:
-    fields: Final = as_str_mapping(license_data)
-    if fields is None:
-        raise TypeError(f"'{type(license_data).__name__}' object is not subscriptable")
-    return fields
-
-
-def _expiration_text(expiration_date: object) -> str:
-    if isinstance(expiration_date, str):
-        return expiration_date
-    raise TypeError(f"strptime() argument 1 must be str, not {type(expiration_date).__name__}")
 
 
 class LicenseCheck:
@@ -49,73 +17,17 @@ class LicenseCheck:
     - Returns if license is valid
     """
 
-    base_url = "https://license.litellm.ai"
-
-    def __init__(self) -> None:
+    def __init__(self, verifier: NativeLicenseVerifier | None = None) -> None:
         self.license_str = os.getenv("LITELLM_LICENSE", None)
         verbose_proxy_logger.debug("License configured: %s", self.license_str is not None)
-        self.http_handler = HTTPHandler(timeout=NON_LLM_CONNECTION_TIMEOUT)
+        self.verifier: Final = verifier or NativeLicenseVerifier(timeout_seconds=NON_LLM_CONNECTION_TIMEOUT)
         self._premium_check_logged = False
-        self.public_key = None
-        self.read_public_key()
-        self.airgapped_license_data: EnterpriseLicenseData | None = None
-
-    def read_public_key(self):
-        try:
-            from cryptography.hazmat.primitives import serialization
-
-            # current dir
-            current_dir: Final = os.path.dirname(os.path.realpath(__file__))
-
-            # check if public_key.pem exists
-            _path_to_public_key: Final = os.path.join(current_dir, "public_key.pem")
-            if os.path.exists(_path_to_public_key):
-                with open(_path_to_public_key, "rb") as key_file:
-                    self.public_key = serialization.load_pem_public_key(key_file.read())
-            else:
-                self.public_key = None
-        except Exception as e:
-            verbose_proxy_logger.error("Error reading public key: %s", e)
+        self.airgapped_license_data: NativeLicense | None = None
 
     def _verify(self, license_str: str) -> bool:
-        verbose_proxy_logger.debug(
-            "litellm.proxy.auth.litellm_license.py::_verify - Checking license against %s/verify_license",
-            self.base_url,
-        )
-        url: Final = f"{self.base_url}/verify_license/{license_str}"
-
-        response: httpx.Response | None = None
-        try:  # don't impact user, if call fails
-            num_retries: Final = 3
-            for i in range(num_retries):
-                try:
-                    response = self.http_handler.get(url=url)
-                    if response is None:
-                        raise Exception("No response from license server")
-                    response.raise_for_status()
-                except httpx.HTTPStatusError:
-                    if i == num_retries - 1:
-                        raise
-
-            if response is None:
-                raise Exception("No response from license server")
-
-            premium: Final = _LICENSE_VERDICT.validate_python(response.json()["verify"])
-
-            assert isinstance(premium, bool)
-
-            verbose_proxy_logger.debug(
-                "litellm.proxy.auth.litellm_license.py::_verify - License is premium=%s", premium
-            )
-            return premium
-        except Exception as e:
-            verbose_proxy_logger.error(
-                "litellm.proxy.auth.litellm_license.py::_verify - Unable to verify license via api. "
-                "error_type=%s status_code=%s",
-                type(e).__name__,
-                e.response.status_code if isinstance(e, httpx.HTTPStatusError) else None,
-            )
-            return False
+        premium: Final = self.verifier.verify_remote(license_str)
+        verbose_proxy_logger.debug("litellm.proxy.auth.litellm_license.py::_verify - License is premium=%s", premium)
+        return premium
 
     def is_premium(self) -> bool:
         """
@@ -141,46 +53,21 @@ class LicenseCheck:
 
             if self.license_str is None:
                 return False
-            elif (
-                self.verify_license_without_api_request(public_key=self.public_key, license_key=self.license_str)
-                is True
-            ) or self._verify(license_str=self.license_str) is True:
-                return True
-            return False
+            return self.verify_license_without_api_request(self.license_str) or self._verify(self.license_str)
         except Exception:
             return False
 
     def user_seat_limit(self) -> int | None:
-        if self.airgapped_license_data is None:
-            return None
-        max_users: Final = self.airgapped_license_data.get("max_users")
-        return max_users if isinstance(max_users, int) else None
+        return None if self.airgapped_license_data is None else self.airgapped_license_data.max_users
 
     def is_over_limit(self, total_users: int) -> bool:
-        """
-        Check if the license is over the limit
-        """
-        seat_limit: Final = self.user_seat_limit()
-        return seat_limit is not None and total_users > seat_limit
+        return self.airgapped_license_data is not None and self.airgapped_license_data.is_over_user_limit(total_users)
 
     def is_team_count_over_limit(self, team_count: int) -> bool:
-        """
-        Check if the license is over the limit
-        """
-        if self.airgapped_license_data is None:
-            return False
-
-        _max_teams_in_license: Final[int | None] = self.airgapped_license_data.get("max_teams")
-        if "max_teams" not in self.airgapped_license_data or not isinstance(_max_teams_in_license, int):
-            return False
-        return team_count > _max_teams_in_license
+        return self.airgapped_license_data is not None and self.airgapped_license_data.is_over_team_limit(team_count)
 
     def grants_feature(self, feature: str) -> bool:
-        if self.airgapped_license_data is None:
-            return False
-        allowed_features: Final = self.airgapped_license_data.get("allowed_features")
-        granted: Final = allowed_features if isinstance(allowed_features, list) else (allowed_features,)
-        return feature in granted or LICENSE_ALL_FEATURES in granted
+        return self.airgapped_license_data is not None and self.airgapped_license_data.grants(feature)
 
     def auto_router_capability_limit(self) -> int | None:
         """
@@ -193,51 +80,6 @@ class LicenseCheck:
             return None
         return 1
 
-    def verify_license_without_api_request(self, public_key, license_key):
-        try:
-            from cryptography.hazmat.primitives import hashes
-            from cryptography.hazmat.primitives.asymmetric import padding
-
-            from litellm.proxy._types import EnterpriseLicenseData
-
-            # Decode the license key - add padding if needed for base64
-            # Base64 strings need to be a multiple of 4 characters
-            padding_needed: Final = len(license_key) % 4
-            if padding_needed:
-                license_key += "=" * (4 - padding_needed)
-
-            decoded: Final = base64.b64decode(license_key)
-            message, signature = decoded.split(b".", 1)
-
-            # Verify the signature
-            public_key.verify(
-                signature,
-                message,
-                padding.PSS(
-                    mgf=padding.MGF1(hashes.SHA256()),
-                    salt_length=padding.PSS.MAX_LENGTH,
-                ),
-                hashes.SHA256(),
-            )
-
-            # Decode and parse the data
-            license_data: Final = _license_fields(_LICENSE_VERDICT.validate_python(json.loads(message.decode())))
-
-            # Check expiration date
-            expiration_date: Final = datetime.strptime(_expiration_text(license_data["expiration_date"]), "%Y-%m-%d")
-            if expiration_date < datetime.now():
-                self.airgapped_license_data = None
-                return False, "License has expired"
-
-            self.airgapped_license_data = EnterpriseLicenseData(**_LicenseFields(**license_data))
-
-            return True
-
-        except Exception as e:
-            self.airgapped_license_data = None
-            verbose_proxy_logger.debug(
-                "litellm.proxy.auth.litellm_license.py::verify_license_without_api_request - "
-                "Unable to verify license locally. error_type=%s",
-                type(e).__name__,
-            )
-            return False
+    def verify_license_without_api_request(self, license_key: str) -> bool:
+        self.airgapped_license_data = self.verifier.verify_offline(license_key)
+        return self.airgapped_license_data is not None
