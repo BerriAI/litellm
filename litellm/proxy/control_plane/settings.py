@@ -112,6 +112,7 @@ class ControlPlaneSettings(BaseSettings):
     dataplane_retry_attempts: int = 3
     fanout_concurrency: int = Field(default=16, ge=1)
     usage_max_window_days: int = Field(default=366, ge=1)
+    audit_capacity: int = Field(default=10_000, ge=1)
     api_prefix: str = "/api/v1"
 
     @field_validator("master_key")

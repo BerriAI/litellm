@@ -1,4 +1,5 @@
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -32,7 +33,8 @@ class FakeTransport:  # mutable-ok: records calls for assertions
     outcomes: Iterator[httpx.Response | Exception]
     calls: list[tuple[str, dict[str, str] | None]] = field(default_factory=list)
 
-    async def request(
+    @asynccontextmanager
+    async def stream(
         self,
         method: str,
         url: str,
@@ -41,13 +43,13 @@ class FakeTransport:  # mutable-ok: records calls for assertions
         json: dict[str, object] | None = None,
         headers: dict[str, str] | None = None,
         timeout: float,
-    ) -> httpx.Response:
+    ) -> AsyncIterator[httpx.Response]:
         assert method == "GET", "router never writes"
         self.calls.append((url, headers))
         outcome: Final = next(self.outcomes)
         if isinstance(outcome, Exception):
             raise outcome
-        return outcome
+        yield outcome
 
 
 async def _no_exchange(config: OAuthTokenExchangeConfig, subject_token: str) -> str:
