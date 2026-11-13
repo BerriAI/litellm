@@ -60,7 +60,7 @@ pub struct AzureAuthService {
     native: Arc<dyn AzureTokenAcquirer>,
 }
 
-trait AzureTokenAcquirer: Send + Sync {
+pub(crate) trait AzureTokenAcquirer: Send + Sync {
     fn acquire(
         &self,
         request: ValidatedAzureRequest,
@@ -86,7 +86,7 @@ impl Default for AzureAuthService {
 
 impl AzureAuthService {
     #[cfg(test)]
-    fn with_acquirer(native: Arc<dyn AzureTokenAcquirer>) -> Self {
+    pub(crate) fn with_acquirer(native: Arc<dyn AzureTokenAcquirer>) -> Self {
         Self { native }
     }
 
@@ -149,7 +149,8 @@ impl AzureAuthService {
                     assertion_identity: format!("{:?}", reference.value()),
                     scope,
                     authority,
-                })?;
+                })?
+                .with_token_retry(inputs.token_retry);
                 let source = request.credential_source();
                 self.native
                     .acquire(request)
@@ -161,7 +162,7 @@ impl AzureAuthService {
             AzureCredentialPlan::Native(request) => {
                 let source = request.credential_source();
                 self.native
-                    .acquire(request)
+                    .acquire(request.with_token_retry(inputs.token_retry))
                     .await
                     .into_result()
                     .map(|credential| Some(Sourced::new(credential, source)))
@@ -170,7 +171,11 @@ impl AzureAuthService {
                 let mut failures = Vec::new();
                 for request in requests {
                     let source = request.credential_source();
-                    match self.native.acquire(request).await {
+                    match self
+                        .native
+                        .acquire(request.with_token_retry(inputs.token_retry))
+                        .await
+                    {
                         CredentialAttempt::Resolved(credential) => {
                             return Ok(Some(Sourced::new(credential, source)));
                         }

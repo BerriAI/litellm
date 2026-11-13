@@ -7,6 +7,7 @@ use azure_core::http::{AsyncRawResponse, Context, Request, RetryOptions};
 use azure_core::time::{Duration, OffsetDateTime};
 
 use crate::retry_after::{RetryAfter, retry_after};
+use crate::types::AzureTokenRetry;
 
 const RETRIES_PER_KIND: u32 = 3;
 const BACKOFF_FACTOR: Duration = Duration::milliseconds(800);
@@ -20,6 +21,22 @@ pub(crate) enum TokenRetry {
 }
 
 impl TokenRetry {
+    /// A client secret or workload identity exchange, which azure-identity retries in Python.
+    pub(crate) fn exchange(policy: AzureTokenRetry) -> Self {
+        match policy {
+            AzureTokenRetry::SdkDefault => Self::SdkDefault,
+            AzureTokenRetry::Python => Self::AzureIdentity,
+        }
+    }
+
+    /// An OIDC assertion exchange, which Python posts once through LiteLLM's own HTTP handler.
+    pub(crate) fn assertion(policy: AzureTokenRetry) -> Self {
+        match policy {
+            AzureTokenRetry::SdkDefault => Self::SdkDefault,
+            AzureTokenRetry::Python => Self::Never,
+        }
+    }
+
     pub(crate) fn into_options(self) -> (RetryOptions, Vec<Arc<dyn Policy>>) {
         match self {
             Self::SdkDefault => (RetryOptions::default(), Vec::new()),

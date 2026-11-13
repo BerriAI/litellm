@@ -20,6 +20,7 @@ use super::credential_provider_cache::{
     AzureCredentialProviderCache, AzureCredentialProviderCacheKey,
 };
 use super::token_retry::TokenRetry;
+use super::types::AzureTokenRetry;
 
 #[derive(Clone, Debug)]
 pub(crate) enum NativeAzureRequest {
@@ -61,6 +62,7 @@ pub(crate) struct ValidatedAzureRequest {
     request: NativeAzureRequest,
     credential_source: InputSource,
     probe_imds: bool,
+    token_retry: AzureTokenRetry,
 }
 
 impl ValidatedAzureRequest {
@@ -71,7 +73,15 @@ impl ValidatedAzureRequest {
             request,
             credential_source,
             probe_imds: false,
+            token_retry: AzureTokenRetry::SdkDefault,
         })
+    }
+
+    pub(crate) fn with_token_retry(self, token_retry: AzureTokenRetry) -> Self {
+        Self {
+            token_retry,
+            ..self
+        }
     }
 
     pub(crate) fn with_imds_probe(self, enabled: bool) -> Self {
@@ -200,14 +210,13 @@ impl NativeAzureTokenAcquirer {
         request: ValidatedAzureRequest,
     ) -> Result<ResolvedCredential, Error> {
         let scope = request.request.scope().to_string();
-        let key = request.request.cache_key();
+        let key = request.request.cache_key(request.token_retry);
         let transport = self.transport.clone();
         let credential = self
             .cache
-            .get_or_create(
-                key,
-                async move { build_credential(request.request, transport) },
-            )
+            .get_or_create(key, async move {
+                build_credential(request.request, request.token_retry, transport)
+            })
             .await?;
         let token = credential
             .get_token(&[scope.as_str()], None)
@@ -285,7 +294,7 @@ impl NativeAzureRequest {
         }
     }
 
-    fn cache_key(&self) -> AzureCredentialProviderCacheKey {
+    fn cache_key(&self, token_retry: AzureTokenRetry) -> AzureCredentialProviderCacheKey {
         match self {
             Self::ClientSecret {
                 tenant_id,
@@ -302,6 +311,7 @@ impl NativeAzureRequest {
                 tenant_id: tenant_id.value().clone(),
                 client_id: client_id.value().clone(),
                 scope: scope.value().clone(),
+                token_retry,
                 secret_identity: secret_digest(client_secret.value().expose()),
             },
             Self::ClientAssertion {
@@ -320,6 +330,7 @@ impl NativeAzureRequest {
                 tenant_id: tenant_id.value().clone(),
                 client_id: client_id.value().clone(),
                 scope: scope.value().clone(),
+                token_retry,
                 secret_identity: format!(
                     "{assertion_identity}:{}",
                     secret_digest(assertion.value().expose())
@@ -340,6 +351,7 @@ impl NativeAzureRequest {
                 tenant_id: tenant_id.value().clone(),
                 client_id: client_id.value().clone(),
                 scope: scope.value().clone(),
+                token_retry,
                 secret_identity: token_file_path.value().clone(),
             },
             Self::ManagedIdentity {
@@ -353,6 +365,7 @@ impl NativeAzureRequest {
                     .map(|value| value.value().clone())
                     .unwrap_or_default(),
                 scope: scope.value().clone(),
+                token_retry,
                 secret_identity: String::new(),
             },
             Self::DeveloperTools { scope, .. } => AzureCredentialProviderCacheKey {
@@ -361,6 +374,7 @@ impl NativeAzureRequest {
                 tenant_id: String::new(),
                 client_id: String::new(),
                 scope: scope.value().clone(),
+                token_retry,
                 secret_identity: String::new(),
             },
         }
@@ -509,6 +523,7 @@ fn mixed_sources<T>() -> Result<T, Error> {
 
 fn build_credential(
     request: NativeAzureRequest,
+    token_retry: AzureTokenRetry,
     transport: Option<azure_core::http::Transport>,
 ) -> Result<Arc<dyn TokenCredential>, Error> {
     match request {
@@ -526,7 +541,7 @@ fn build_credential(
                 client_options: client_options(
                     authority.map(Sourced::into_value),
                     transport,
-                    TokenRetry::AzureIdentity,
+                    TokenRetry::exchange(token_retry),
                 ),
             }),
         )
@@ -545,7 +560,7 @@ fn build_credential(
                 client_options: client_options(
                     authority.map(Sourced::into_value),
                     transport,
-                    TokenRetry::Never,
+                    TokenRetry::assertion(token_retry),
                 ),
             }),
         )
@@ -561,7 +576,7 @@ fn build_credential(
                 client_options: client_options(
                     authority.map(Sourced::into_value),
                     transport,
-                    TokenRetry::AzureIdentity,
+                    TokenRetry::exchange(token_retry),
                 ),
             },
             client_id: Some(client_id.into_value()),
@@ -641,7 +656,9 @@ mod tests {
     use azure_core::http::{AsyncRawResponse, HttpClient, Request, StatusCode, Transport};
     use azure_core::{Bytes, Result};
 
-    use super::{NativeAzureRequest, NativeAzureTokenAcquirer, ValidatedAzureRequest};
+    use super::{
+        AzureTokenRetry, NativeAzureRequest, NativeAzureTokenAcquirer, ValidatedAzureRequest,
+    };
     use litellm_auth_types::{InputSource, Sourced};
     use litellm_secret_value::SecretValue;
 
@@ -895,7 +912,11 @@ mod tests {
             NativeAzureTokenAcquirer::with_transport(4, Transport::new(endpoint.clone()));
         let started = tokio::time::Instant::now();
 
-        let error = acquirer.acquire(request()).await.into_result().unwrap_err();
+        let error = acquirer
+            .acquire(request().with_token_retry(AzureTokenRetry::Python))
+            .await
+            .into_result()
+            .unwrap_err();
 
         assert!(
             litellm_error::Report::new(&error)
@@ -928,7 +949,7 @@ mod tests {
         let acquirer = NativeAzureTokenAcquirer::with_transport(4, Transport::new(endpoint));
 
         let error = acquirer
-            .acquire(client_secret_token_request())
+            .acquire(client_secret_token_request().with_token_retry(AzureTokenRetry::Python))
             .await
             .into_result()
             .unwrap_err();
@@ -955,6 +976,50 @@ mod tests {
             }
             (failure, _) => panic!("{failure:?} from {error:?}"),
         }
+    }
+
+    fn key_vault_style_inputs(token_retry: AzureTokenRetry) -> crate::AzureAuthInputs {
+        let configured = |value: &str| crate::ConfigValue::Value(deployment(value.to_string()));
+        crate::AzureAuthInputs {
+            tenant_id: configured("tenant"),
+            client_id: configured("client"),
+            client_secret: crate::ConfigValue::Value(deployment(SecretValue::new("secret"))),
+            azure_scope: configured("https://service.test/.default"),
+            azure_authority_host: configured("https://login.test"),
+            token_retry,
+            ..crate::AzureAuthInputs::default()
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::other_consumers_keep_the_sdk_default(AzureTokenRetry::SdkDefault, false)]
+    #[case::a_consumer_asking_for_python_gets_azure_identity_retries(AzureTokenRetry::Python, true)]
+    #[tokio::test(start_paused = true)]
+    async fn only_a_consumer_that_asks_retries_token_posts_like_python(
+        #[case] token_retry: AzureTokenRetry,
+        #[case] python: bool,
+    ) {
+        let endpoint = Arc::new(FailingTokenEndpoint {
+            status: StatusCode::Unauthorized,
+            retry_after: Some("2"),
+            posts: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let service = crate::AzureAuthService::with_acquirer(Arc::new(
+            NativeAzureTokenAcquirer::with_transport(4, Transport::new(endpoint.clone())),
+        ));
+
+        let error = service
+            .get_azure_ad_token(&key_vault_style_inputs(token_retry), &|_| None)
+            .await
+            .unwrap_err();
+
+        let posts = endpoint.posts.load(std::sync::atomic::Ordering::SeqCst);
+        let classified = litellm_error::find::<crate::EntraTokenFailure>(&error).is_some();
+        assert_eq!(
+            (classified, posts == 4),
+            (python, python),
+            "{posts} posts, {error:?}"
+        );
     }
 
     #[derive(Debug)]
@@ -1403,7 +1468,8 @@ mod tests {
             "secret",
             "https://service.test/.default",
             "https://127.0.0.1:1",
-        );
+        )
+        .with_token_retry(AzureTokenRetry::Python);
 
         let error = acquirer.acquire(request).await.into_result().unwrap_err();
 
