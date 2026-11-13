@@ -3,7 +3,8 @@ use std::fmt;
 use litellm_host::raw_json;
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
-    de::{self, Visitor},
+    de::{self, MapAccess, Visitor},
+    ser::SerializeStruct,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -12,6 +13,19 @@ pub enum Scalar {
     Int(i128),
     Float(f64),
     Text(String),
+    Stringified { text: String, truthy: bool },
+}
+
+impl Scalar {
+    pub fn truthy(&self) -> bool {
+        match self {
+            Self::Bool(flag) => *flag,
+            Self::Int(number) => *number != 0,
+            Self::Float(number) => *number != 0.0,
+            Self::Text(text) => !text.is_empty(),
+            Self::Stringified { truthy, .. } => *truthy,
+        }
+    }
 }
 
 fn non_finite(value: f64) -> &'static str {
@@ -48,6 +62,18 @@ fn ascii_literal(text: &str) -> String {
     literal
 }
 
+struct TextOut<'a>(&'a str);
+
+impl Serialize for TextOut<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if raw_json::is_marked(self.0) {
+            serializer.serialize_str(&raw_json::encode(&ascii_literal(self.0)))
+        } else {
+            serializer.serialize_str(self.0)
+        }
+    }
+}
+
 impl Serialize for Scalar {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
@@ -59,10 +85,13 @@ impl Serialize for Scalar {
             },
             Self::Float(number) if number.is_finite() => serializer.serialize_f64(*number),
             Self::Float(number) => serializer.serialize_str(&raw_json::encode(non_finite(*number))),
-            Self::Text(text) if raw_json::is_marked(text) => {
-                serializer.serialize_str(&raw_json::encode(&ascii_literal(text)))
+            Self::Text(text) => TextOut(text).serialize(serializer),
+            Self::Stringified { text, truthy } => {
+                let mut members = serializer.serialize_struct("Stringified", 2)?;
+                members.serialize_field("text", &TextOut(text))?;
+                members.serialize_field("truthy", truthy)?;
+                members.end()
             }
-            Self::Text(text) => serializer.serialize_str(text),
         }
     }
 }
@@ -82,13 +111,44 @@ fn marked<E: de::Error>(raw: &str) -> Result<Scalar, E> {
     }
 }
 
+struct TextIn(String);
+
+impl<'de> Deserialize<'de> for TextIn {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match Scalar::deserialize(deserializer)? {
+            Scalar::Text(text) => Ok(Self(text)),
+            other => Err(de::Error::custom(format!(
+                "{other:?} is not the str() text of a value"
+            ))),
+        }
+    }
+}
+
+const STRINGIFIED: &[&str] = &["text", "truthy"];
+
 struct ScalarVisitor;
 
-impl Visitor<'_> for ScalarVisitor {
+impl<'de> Visitor<'de> for ScalarVisitor {
     type Value = Scalar;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a bool, an integer, a float or a string")
+        formatter.write_str("a bool, an integer, a float, a string or a stringified value")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut members: A) -> Result<Scalar, A::Error> {
+        let mut text = None;
+        let mut truthy = None;
+        while let Some(name) = members.next_key::<String>()? {
+            match name.as_str() {
+                "text" => text = Some(members.next_value::<TextIn>()?.0),
+                "truthy" => truthy = Some(members.next_value::<bool>()?),
+                other => return Err(de::Error::unknown_field(other, STRINGIFIED)),
+            }
+        }
+        Ok(Scalar::Stringified {
+            text: text.ok_or_else(|| de::Error::missing_field("text"))?,
+            truthy: truthy.ok_or_else(|| de::Error::missing_field("truthy"))?,
+        })
     }
 
     fn visit_bool<E: de::Error>(self, value: bool) -> Result<Scalar, E> {
@@ -169,6 +229,9 @@ mod tests {
     #[case::infinity(json!(raw_json::encode("Infinity")), Scalar::Float(f64::INFINITY))]
     #[case::negative_infinity(json!(raw_json::encode("-Infinity")), Scalar::Float(f64::NEG_INFINITY))]
     #[case::marked_text(json!(raw_json::encode(r#""\uf8fflitellm-raw-json:\n\"\u00e9\ud83d\ude00""#)), Scalar::Text("\u{f8ff}litellm-raw-json:\n\"\u{e9}\u{1f600}".to_owned()))]
+    #[case::stringified_list(json!({"text": "['a1']", "truthy": true}), Scalar::Stringified { text: "['a1']".to_owned(), truthy: true })]
+    #[case::stringified_empty_set(json!({"text": "set()", "truthy": false}), Scalar::Stringified { text: "set()".to_owned(), truthy: false })]
+    #[case::stringified_marked_text(json!({"text": raw_json::encode(r#""\uf8fflitellm-raw-json:x""#), "truthy": true}), Scalar::Stringified { text: "\u{f8ff}litellm-raw-json:x".to_owned(), truthy: true })]
     fn a_python_scalar_keeps_its_type_and_value(#[case] sent: Value, #[case] read: Scalar) {
         let decoded: Scalar = serde_json::from_value(sent.clone()).unwrap();
         assert_eq!(decoded, read);
@@ -220,8 +283,34 @@ mod tests {
     }
 
     #[rstest]
+    fn a_stringified_value_never_equals_the_text_it_carries() {
+        let stringified: Scalar =
+            serde_json::from_value(json!({"text": "prod", "truthy": true})).unwrap();
+        assert_ne!(stringified, Scalar::Text("prod".to_owned()));
+    }
+
+    #[rstest]
+    #[case::true_flag(Scalar::Bool(true), true)]
+    #[case::false_flag(Scalar::Bool(false), false)]
+    #[case::zero(Scalar::Int(0), false)]
+    #[case::wide(Scalar::Int(10_i128.pow(20)), true)]
+    #[case::zero_float(Scalar::Float(-0.0), false)]
+    #[case::nan(Scalar::Float(f64::NAN), true)]
+    #[case::empty_text(Scalar::Text(String::new()), false)]
+    #[case::text(Scalar::Text("0".to_owned()), true)]
+    #[case::empty_list(Scalar::Stringified { text: "[]".to_owned(), truthy: false }, false)]
+    #[case::object(Scalar::Stringified { text: String::new(), truthy: true }, true)]
+    fn truthiness_is_what_python_bool_gives(#[case] value: Scalar, #[case] truthy: bool) {
+        assert_eq!(value.truthy(), truthy);
+    }
+
+    #[rstest]
     #[case::list(json!(["a1"]))]
     #[case::object(json!({"a": 1}))]
+    #[case::stringified_without_truthiness(json!({"text": "[]"}))]
+    #[case::stringified_without_text(json!({"truthy": false}))]
+    #[case::stringified_with_a_number_as_text(json!({"text": 7, "truthy": true}))]
+    #[case::stringified_with_another_member(json!({"text": "[]", "truthy": false, "type": "list"}))]
     #[case::null(Value::Null)]
     #[case::beyond_i128(json!(raw_json::encode("1000000000000000000000000000000000000000")))]
     fn a_value_that_is_not_a_scalar_does_not_decode(#[case] sent: Value) {

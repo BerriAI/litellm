@@ -157,6 +157,7 @@ pub struct BudgetReservation {
     #[serde(with = "crate::scalar::float")]
     pub reserved_cost: Option<f64>,
     pub entries: Option<Vec<Option<ReservationEntry>>>,
+    pub entries_is_list: Option<bool>,
     pub finalized: Option<bool>,
     pub callback_bound: Option<bool>,
     #[serde(with = "crate::scalar::float")]
@@ -422,6 +423,43 @@ mod tests {
             serde_json::from_value::<BudgetReservation>(written).unwrap(),
             reservation
         );
+    }
+
+    #[rstest]
+    fn reservation_entries_python_held_as_a_tuple_say_they_were_not_a_list() {
+        let reservation: BudgetReservation = serde_json::from_value(json!({
+            "entries": [{"counter_key": "k"}, null],
+            "entries_is_list": false,
+        }))
+        .unwrap();
+        assert_eq!(reservation.entries_is_list, Some(false));
+        assert_eq!(
+            reservation.entries,
+            Some(vec![
+                Some(ReservationEntry {
+                    counter_key: Some("k".to_owned()),
+                    ..ReservationEntry::default()
+                }),
+                None
+            ])
+        );
+    }
+
+    #[rstest]
+    fn identity_members_carry_a_stringified_value_apart_from_text() {
+        let identity: LoggedKeyIdentity = serde_json::from_value(json!({
+            "team_id": {"text": "['t1']", "truthy": true},
+            "team_alias": "['t1']",
+        }))
+        .unwrap();
+        assert_eq!(
+            identity.team_id,
+            Some(Scalar::Stringified {
+                text: "['t1']".to_owned(),
+                truthy: true
+            })
+        );
+        assert_ne!(identity.team_id, identity.team_alias);
     }
 
     #[rstest]
