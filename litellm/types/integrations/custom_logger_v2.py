@@ -16,7 +16,19 @@ ValueT: Final = TypeVar("ValueT")
 
 I64: TypeAlias = Annotated[int, Member(ge=-(2**63), le=2**63 - 1)]
 U16: TypeAlias = Annotated[int, Member(ge=0, le=2**16 - 1)]
-F64: TypeAlias = Annotated[float, Member(allow_inf_nan=False)]
+F64: TypeAlias = Annotated[float, Member(allow_inf_nan=True)]
+Flag: TypeAlias = Annotated[bool, Member(strict=True)]
+
+
+def _float_or_zero(value: object) -> float:
+    try:
+        return float(value or 0.0)  # pyright: ignore[reportArgumentType]  # float() takes what budget_reservation.py hands it
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError(f"float() refuses {type(value).__name__}") from error
+
+
+FloatOrZero: TypeAlias = Annotated[float, PlainValidator(_float_or_zero)]
+Formatted: TypeAlias = Annotated[str, PlainValidator(str)]
 
 _I128_BOUND: Final = 2**127
 
@@ -200,19 +212,20 @@ class BudgetPlan(Record):
     reservation_id: str | None = None
 
 
-class ReservationEntry(Strict):
-    counter_key: str | None = None
+class ReservationEntry(Record):
+    counter_key: Formatted | None = None
     entity_type: str | None = None
     entity_id: str | None = None
-    reserved_cost: F64 | None = None
-    applied_adjustment: F64 | None = None
+    reserved_cost: FloatOrZero | None = None
+    applied_adjustment: FloatOrZero | None = None
 
 
 class BudgetReservation(Record):
-    reserved_cost: F64 | None = None
-    entries: tuple[ReservationEntry, ...] | None = None
-    finalized: bool | None = None
-    input_cost: F64 | None = None
+    reserved_cost: FloatOrZero | None = None
+    entries: tuple[ReservationEntry | None, ...] | None = None
+    finalized: Flag | None = None
+    callback_bound: Flag | None = None
+    input_cost: FloatOrZero | None = None
     input_tokens: I64 | None = None
 
 
@@ -360,7 +373,9 @@ def _carried(record: type[BaseModel], member: str, raw: object) -> object:
 
 def coerce_record(record: type[RecordT], members: Mapping[str, object], rejected: tuple[str, ...] = ()) -> RecordT:
     carried: Final = tuple(
-        (member, _carried(record, member, raw)) for member, raw in members.items() if raw is not None
+        (member, _carried(record, member, raw))
+        for member, raw in members.items()
+        if raw is not None and member != "rejected" and member in record.model_fields
     )
     refused: Final = (*rejected, *(member for member, value in carried if value is _REJECTED))
     return record.model_validate(

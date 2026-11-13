@@ -27,6 +27,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     OutputCap,
     RateLimitState,
     RateLimitStatuses,
+    ReservationEntry,
     ScalarItem,
     Usage,
     UsageRecord,
@@ -273,18 +274,44 @@ def claim_budget_plan(args: HookArgs) -> BudgetPlan | None:
     return _plan(raw)
 
 
+def _reservation_entry(raw: object) -> ReservationEntry | None:
+    members: Final = mapping(raw)
+    return None if members is None else coerce_record(ReservationEntry, members)
+
+
 def budget_reservation(args: HookArgs) -> BudgetReservation | None:
     members: Final = mapping(getattr(args.auth, "budget_reservation", None))
-    return None if members is None else coerce_record(BudgetReservation, members)
+    if members is None:
+        return None
+    entries: Final = members.get("entries")
+    if not isinstance(entries, list):
+        return coerce_record(BudgetReservation, members)
+    return coerce_record(
+        BudgetReservation,
+        {**members, "entries": tuple(map(_reservation_entry, entries))},  # pyright: ignore[reportUnknownArgumentType]  # the shared reservation dict holds whatever was written
+    )
+
+
+def _written_entry(entry: object) -> object:
+    members: Final = mapping(entry)
+    if members is None:
+        return entry
+    return {key: item for key, item in members.items() if item is not None and key != "rejected"}
+
+
+def _written(key: str, item: object) -> object:
+    if key == "entries" and isinstance(item, list | tuple):
+        return list(map(_written_entry, item))  # pyright: ignore[reportUnknownArgumentType]  # entries a callback wrote
+    return item
 
 
 def _record_members(value: object) -> Mapping[str, object]:
-    if isinstance(value, BudgetReservation):
-        return value.model_dump(mode="json", exclude_none=True)
-    members: Final = mapping(value)
+    members: Final = value.model_dump(mode="python") if isinstance(value, BudgetReservation) else mapping(value)
     if members is None:
         raise TypeError("a budget_reservation write must be a mapping of reservation members")
-    return MappingProxyType({key: item for key, item in members.items() if item is not None})
+    return MappingProxyType(
+        {key: _written(key, item) for key, item in members.items() if item is not None and key != "rejected"}
+    )
 
 
 def write_budget_reservation(args: HookArgs, value: object) -> None:

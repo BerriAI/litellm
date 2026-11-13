@@ -33,6 +33,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     Outcome,
     RateLimitState,
     Record,
+    ReservationEntry,
     Scalar,
     ScalarItem,
     Usage,
@@ -256,6 +257,192 @@ def test_a_budget_reservation_write_updates_the_shared_dict_in_place() -> None:
     assert auth.budget_reservation is reservation
     assert reservation == {"reserved_cost": 0.5, "finalized": True, "input_tokens": 12}
     assert derivations.budget_reservation(args) == BudgetReservation(reserved_cost=0.5, finalized=True, input_tokens=12)
+
+
+def _built_reservation() -> dict[str, object]:  # mutable-ok: budget_reservation.py mutates the dict it builds
+    return {
+        "reserved_cost": 0.75,
+        "entries": [
+            {
+                "counter_key": "spend:key:hash",
+                "entity_type": "Key",
+                "entity_id": "hash",
+                "reserved_cost": 0.75,
+                "applied_adjustment": 0.0,
+            },
+            {
+                "counter_key": "spend:model_access_group:g1",
+                "entity_type": "Model access group",
+                "entity_id": "g1",
+                "reserved_cost": 0.75,
+                "applied_adjustment": 0.0,
+            },
+        ],
+        "finalized": False,
+        "callback_bound": False,
+        "input_cost": 0.25,
+        "input_tokens": 40,
+        "native_call_id": "call-1",
+    }
+
+
+def test_the_reservation_dict_budget_reservation_py_builds_reads_with_its_extra_keys_and_every_entry() -> None:
+    auth: Final = _auth()
+    auth.budget_reservation = _built_reservation()
+
+    read: Final = derivations.budget_reservation(HookArgs(auth=auth))
+
+    assert read is not None
+    assert read.rejected is None
+    assert (read.reserved_cost, read.finalized, read.callback_bound, read.input_cost, read.input_tokens) == (
+        0.75,
+        False,
+        False,
+        0.25,
+        40,
+    )
+    assert read.entries is not None
+    reserved_groups: Final = frozenset(
+        entry.entity_id for entry in read.entries if entry is not None and entry.entity_type == "Model access group"
+    )
+    assert reserved_groups == frozenset({"g1"})
+    assert read.entries[0] == ReservationEntry(
+        counter_key="spend:key:hash", entity_type="Key", entity_id="hash", reserved_cost=0.75, applied_adjustment=0.0
+    )
+
+
+@pytest.mark.parametrize(
+    ("entries", "expected", "rejected"),
+    [
+        pytest.param(("not", "a list"), None, ("entries",), id="tuple_is_not_the_list_capacity_checks"),
+        pytest.param("abc", None, ("entries",), id="text"),
+        pytest.param(["k", {"counter_key": "k"}], (None, ReservationEntry(counter_key="k")), None, id="text_entry"),
+        pytest.param(
+            [{"counter_key": 7, "extra": 1}], (ReservationEntry(counter_key="7"),), None, id="key_formatted_by_str"
+        ),
+        pytest.param(
+            [{"entity_type": ["x"], "entity_id": "g"}],
+            (ReservationEntry(entity_id="g", rejected=("entity_type",)),),
+            None,
+            id="non_text_entity_type",
+        ),
+    ],
+)
+def test_reservation_entries_keep_what_capacity_and_budgets_each_read(
+    entries: object, expected: tuple[ReservationEntry | None, ...] | None, rejected: tuple[str, ...] | None
+) -> None:
+    auth: Final = _auth()
+    auth.budget_reservation = {"reserved_cost": 1.0, "entries": entries}
+
+    read: Final = derivations.budget_reservation(HookArgs(auth=auth))
+
+    assert read is not None
+    assert (read.entries, read.rejected) == (expected, rejected)
+
+
+@pytest.mark.parametrize(
+    ("raw", "value"),
+    [
+        pytest.param("0.5", 0.5, id="numeric_text"),
+        pytest.param(0, 0.0, id="zero"),
+        pytest.param("", 0.0, id="falsy_text_is_zero"),
+        pytest.param(True, 1.0, id="flag"),
+        pytest.param(float("inf"), float("inf"), id="infinity"),
+        pytest.param("-inf", float("-inf"), id="negative_infinity_text"),
+    ],
+)
+def test_a_reservation_cost_reads_as_the_float_budgets_computes(raw: object, value: float) -> None:
+    auth: Final = _auth()
+    auth.budget_reservation = {"reserved_cost": raw, "input_cost": raw, "entries": [{"applied_adjustment": raw}]}
+
+    read: Final = derivations.budget_reservation(HookArgs(auth=auth))
+
+    assert read is not None
+    assert read.entries is not None
+    entry: Final = read.entries[0]
+    assert entry is not None
+    assert (read.reserved_cost, read.input_cost, entry.applied_adjustment) == (value, value, value)
+
+
+def test_a_nan_reservation_cost_reads_as_nan() -> None:
+    auth: Final = _auth()
+    auth.budget_reservation = {"reserved_cost": float("nan")}
+
+    read: Final = derivations.budget_reservation(HookArgs(auth=auth))
+
+    assert read is not None
+    assert read.reserved_cost is not None
+    assert math.isnan(read.reserved_cost)
+
+
+@pytest.mark.parametrize("flag", [1, "true", "yes"])
+def test_a_finalized_or_bound_flag_that_is_not_a_bool_is_named_in_rejected_because_python_tests_is_true(
+    flag: object,
+) -> None:
+    auth: Final = _auth()
+    auth.budget_reservation = {"finalized": flag, "callback_bound": flag}
+
+    read: Final = derivations.budget_reservation(HookArgs(auth=auth))
+
+    assert read == BudgetReservation(rejected=("finalized", "callback_bound"))
+
+
+def test_an_infinite_reservation_write_lands_in_the_shared_dict_as_floats_with_entries_as_a_list() -> None:
+    reservation: Final = _built_reservation()
+    auth: Final = _auth()
+    auth.budget_reservation = reservation
+    args: Final = HookArgs(auth=auth)
+    read: Final = derivations.budget_reservation(args)
+    assert read is not None
+    assert read.entries is not None
+
+    derivations.write_budget_reservation(
+        args,
+        read.model_copy(
+            update={
+                "reserved_cost": float("inf"),
+                "input_cost": float("nan"),
+                "entries": (read.entries[0], None),
+                "rejected": ("finalized",),
+            }
+        ),
+    )
+
+    assert reservation["reserved_cost"] == float("inf")
+    input_cost: Final = reservation["input_cost"]
+    assert isinstance(input_cost, float)
+    assert math.isnan(input_cost)
+    assert reservation["entries"] == [
+        {
+            "counter_key": "spend:key:hash",
+            "entity_type": "Key",
+            "entity_id": "hash",
+            "reserved_cost": 0.75,
+            "applied_adjustment": 0.0,
+        },
+        None,
+    ]
+    assert "rejected" not in reservation
+    assert reservation["native_call_id"] == "call-1"
+
+
+def test_a_wire_reservation_write_drops_nulls_inside_entries_and_the_rejected_names() -> None:
+    reservation: Final[dict[str, object]] = {"reserved_cost": 0.5}  # mutable-ok: the write updates this dict in place
+    auth: Final = _auth()
+    auth.budget_reservation = reservation
+
+    derivations.write_budget_reservation(
+        HookArgs(auth=auth),
+        {
+            "rejected": None,
+            "reserved_cost": float("inf"),
+            "entries": [{"rejected": ["entity_type"], "counter_key": "k", "reserved_cost": None}],
+        },
+    )
+
+    assert reservation == {"reserved_cost": float("inf"), "entries": [{"counter_key": "k"}]}
+    entries: Final = TypeAdapter(list[object]).validate_python(reservation["entries"])
+    assert type(entries[0]) is dict
 
 
 def test_usage_keeps_each_source_apart() -> None:

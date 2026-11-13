@@ -112,7 +112,9 @@ pub struct KeyLimits {
 #[serde(default, deny_unknown_fields)]
 pub struct BudgetPlanCounter {
     pub counter_key: Option<String>,
+    #[serde(with = "crate::scalar::float")]
     pub max_budget: Option<f64>,
+    #[serde(with = "crate::scalar::float")]
     pub fallback_spend: Option<f64>,
     pub entity_type: Option<String>,
     pub entity_id: Option<String>,
@@ -124,7 +126,9 @@ pub struct BudgetPlanCounter {
 pub struct BudgetPlan {
     pub rejected: Option<Vec<String>>,
     pub counters: Option<Vec<BudgetPlanCounter>>,
+    #[serde(with = "crate::scalar::float")]
     pub reservation_cost: Option<f64>,
+    #[serde(with = "crate::scalar::float")]
     pub input_cost: Option<f64>,
     pub input_tokens: Option<i64>,
     pub throttle_counter: Option<String>,
@@ -136,10 +140,13 @@ pub struct BudgetPlan {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ReservationEntry {
+    pub rejected: Option<Vec<String>>,
     pub counter_key: Option<String>,
     pub entity_type: Option<String>,
     pub entity_id: Option<String>,
+    #[serde(with = "crate::scalar::float")]
     pub reserved_cost: Option<f64>,
+    #[serde(with = "crate::scalar::float")]
     pub applied_adjustment: Option<f64>,
 }
 
@@ -147,9 +154,12 @@ pub struct ReservationEntry {
 #[serde(default, deny_unknown_fields)]
 pub struct BudgetReservation {
     pub rejected: Option<Vec<String>>,
+    #[serde(with = "crate::scalar::float")]
     pub reserved_cost: Option<f64>,
-    pub entries: Option<Vec<ReservationEntry>>,
+    pub entries: Option<Vec<Option<ReservationEntry>>>,
     pub finalized: Option<bool>,
+    pub callback_bound: Option<bool>,
+    #[serde(with = "crate::scalar::float")]
     pub input_cost: Option<f64>,
     pub input_tokens: Option<i64>,
 }
@@ -390,6 +400,28 @@ mod tests {
     #[rstest]
     fn a_member_the_record_does_not_know_is_rejected() {
         assert!(serde_json::from_value::<KeyIdentity>(json!({"team": "t"})).is_err());
+    }
+
+    #[rstest]
+    fn an_infinite_reservation_cost_and_a_non_mapping_entry_survive_a_write_back() {
+        let sent = json!({
+            "reserved_cost": litellm_host::raw_json::encode("Infinity"),
+            "entries": [{"counter_key": "k", "reserved_cost": 0.5}, null],
+            "callback_bound": false,
+        });
+        let reservation: BudgetReservation = serde_json::from_value(sent).unwrap();
+        assert_eq!(reservation.reserved_cost, Some(f64::INFINITY));
+        assert_eq!(reservation.entries.as_ref().map(Vec::len), Some(2));
+        assert_eq!(reservation.callback_bound, Some(false));
+        let written = serde_json::to_value(&reservation).unwrap();
+        assert_eq!(
+            written["reserved_cost"],
+            json!(litellm_host::raw_json::encode("Infinity"))
+        );
+        assert_eq!(
+            serde_json::from_value::<BudgetReservation>(written).unwrap(),
+            reservation
+        );
     }
 
     #[rstest]

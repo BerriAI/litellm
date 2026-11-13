@@ -60,7 +60,14 @@ from litellm.litellm_core_utils.litellm_logging import LOGGING_KEYS, Logging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import bind_v2_request_scope
 from litellm.proxy.utils import raise_v2_abort
-from litellm.types.integrations.custom_logger_v2 import Cost, GuardrailEntry, KeyIdentity, Outcome
+from litellm.types.integrations.custom_logger_v2 import (
+    BudgetReservation,
+    Cost,
+    GuardrailEntry,
+    KeyIdentity,
+    Outcome,
+    ReservationEntry,
+)
 
 RUST: Final = Path(__file__).parents[4] / "litellm/rust/crates"
 CONTRACT: Final = RUST / "callbacks/contract.json"
@@ -378,3 +385,40 @@ async def test_typed_records_reach_the_native_with_the_python_values_json_mode_w
         {"rejected": None, "mapping": True, "modes": ("pre_call", None), "duration": None},
     )
     assert fields["outcome"] == "success"
+
+
+async def test_an_infinite_budget_reservation_reaches_the_native_as_a_python_float() -> None:
+    handle: Final = Handle()
+    logger: Final = native_logger(handle)
+    assert isinstance(logger, NativeLogger)
+    view: Final = SimpleNamespace(
+        budget_reservation=BudgetReservation(
+            reserved_cost=float("inf"),
+            input_cost=float("nan"),
+            entries=(ReservationEntry(counter_key="k", reserved_cost=float("-inf")), None),
+        )
+    )
+
+    _ = await logger.run_native(
+        Hook.pre_call,
+        frozenset({Field.budget_reservation}),
+        view,
+        CallContext(hook=Hook.pre_call, call=None, state=None),
+    )
+
+    reservation: Final = _REQUEST.validate_python(handle.calls[0][1]["budget_reservation"])
+    input_cost: Final = reservation["input_cost"]
+    assert reservation["reserved_cost"] == float("inf")
+    assert isinstance(input_cost, float)
+    assert math.isnan(input_cost)
+    assert reservation["entries"] == (
+        {
+            "rejected": None,
+            "counter_key": "k",
+            "entity_type": None,
+            "entity_id": None,
+            "reserved_cost": float("-inf"),
+            "applied_adjustment": None,
+        },
+        None,
+    )

@@ -125,6 +125,31 @@ impl<'de> Deserialize<'de> for Scalar {
     }
 }
 
+pub mod float {
+    use litellm_host::raw_json;
+    use serde::{Deserialize, Deserializer, Serializer, de};
+
+    use super::{Scalar, non_finite};
+
+    pub fn serialize<S: Serializer>(value: &Option<f64>, serializer: S) -> Result<S::Ok, S::Error> {
+        match value {
+            None => serializer.serialize_none(),
+            Some(number) if number.is_finite() => serializer.serialize_some(number),
+            Some(number) => serializer.serialize_some(&raw_json::encode(non_finite(*number))),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<f64>, D::Error> {
+        match Option::<Scalar>::deserialize(deserializer)? {
+            None => Ok(None),
+            Some(Scalar::Float(number)) => Ok(Some(number)),
+            Some(other) => Err(de::Error::custom(format!("{other:?} is not a float"))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -158,6 +183,40 @@ mod tests {
             serde_json::to_value(&decoded).unwrap(),
             json!(raw_json::encode("NaN"))
         );
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct Cost {
+        #[serde(default, with = "float")]
+        value: Option<f64>,
+    }
+
+    #[rstest]
+    #[case::finite(json!({"value": 1.5}), Some(1.5))]
+    #[case::infinity(json!({"value": raw_json::encode("Infinity")}), Some(f64::INFINITY))]
+    #[case::negative_infinity(json!({"value": raw_json::encode("-Infinity")}), Some(f64::NEG_INFINITY))]
+    #[case::null(json!({"value": null}), None)]
+    #[case::missing(json!({}), None)]
+    fn a_float_member_keeps_infinity_both_ways(#[case] sent: Value, #[case] read: Option<f64>) {
+        let decoded: Cost = serde_json::from_value(sent).unwrap();
+        assert_eq!(decoded, Cost { value: read });
+        let again: Cost = serde_json::from_value(serde_json::to_value(&decoded).unwrap()).unwrap();
+        assert_eq!(again, decoded);
+    }
+
+    #[rstest]
+    fn a_nan_float_member_crosses_as_the_marker() {
+        let sent = json!({"value": raw_json::encode("NaN")});
+        let decoded: Cost = serde_json::from_value(sent.clone()).unwrap();
+        assert!(decoded.value.is_some_and(f64::is_nan));
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), sent);
+    }
+
+    #[rstest]
+    #[case::int(json!({"value": 2}))]
+    #[case::text(json!({"value": "1.5"}))]
+    fn a_float_member_takes_only_a_float(#[case] sent: Value) {
+        assert!(serde_json::from_value::<Cost>(sent).is_err());
     }
 
     #[rstest]

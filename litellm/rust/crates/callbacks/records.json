@@ -248,6 +248,9 @@
     "reserved_cost": 1.5,
     "entries": [
       {
+        "rejected": [
+          "member"
+        ],
         "counter_key": "text",
         "entity_type": "text",
         "entity_id": "text",
@@ -256,6 +259,7 @@
       }
     ],
     "finalized": true,
+    "callback_bound": true,
     "input_cost": 1.5,
     "input_tokens": 7
   },
