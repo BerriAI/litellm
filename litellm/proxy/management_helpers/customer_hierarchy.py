@@ -249,7 +249,6 @@ def organization_response(
                     {
                         **budgets[budget_id].model_dump(),
                         "name": budgets[budget_id].name or budget_id,
-                        "is_default": budget_id == row.default_budget_template_id,
                     }
                 )
                 for budget_id in row.budget_template_ids
@@ -359,14 +358,12 @@ def member_response(row: PrismaRecord, now: datetime) -> CustomerMember:
     )
 
 
-def default_template_index(templates: tuple[BudgetTemplate, ...]) -> int | Failure | None:
+def default_template_index(templates: tuple[BudgetTemplate, ...], default_name: str | None) -> int | Failure | None:
+    if default_name is not None:
+        named: Final = tuple(index for index, template in enumerate(templates) if template.name == default_name)
+        return named[0] if named else Failure(ErrorCode.INVALID_DEFAULT_BUDGET)
     if not templates:
         return None
-    flagged: Final = tuple(index for index, template in enumerate(templates) if template.is_default)
-    if len(flagged) > 1:
-        return Failure(ErrorCode.INVALID_DEFAULT_BUDGET)
-    if flagged:
-        return flagged[0]
     if len(templates) == 1:
         return 0
     return Failure(ErrorCode.INVALID_DEFAULT_BUDGET)
@@ -374,6 +371,15 @@ def default_template_index(templates: tuple[BudgetTemplate, ...]) -> int | Failu
 
 def alias_patch(payload: OrganizationPatch | TeamPatch | MemberPatch) -> Mapping[str, object]:
     return {"alias": payload.alias} if "alias" in payload.model_fields_set else {}
+
+
+def default_template_patch(organization: Organization, payload: OrganizationPatch) -> Mapping[str, str | None] | Failure:
+    if "default_budget_template_id" not in payload.model_fields_set:
+        return {}
+    selected: Final = payload.default_budget_template_id
+    if selected is not None and all(template.budget_id != selected for template in organization.default_budgets):
+        return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
+    return {"default_budget_template_id": selected}
 
 
 _BUDGET_INCLUDE: Final = {"budget": True}
@@ -514,7 +520,7 @@ class CustomerHierarchyStore:
         await self.db.query_raw(_LOCK_ORGANIZATION_SQL, organization_id)
 
     async def create_organization(self, payload: OrganizationCreate, actor: str) -> Organization | Failure:
-        default_index: Final = default_template_index(payload.default_budgets)
+        default_index: Final = default_template_index(payload.default_budgets, payload.default_budget_template)
         if isinstance(default_index, Failure):
             return default_index
         names: Final = tuple(template.name for template in payload.default_budgets)
@@ -534,7 +540,7 @@ class CustomerHierarchyStore:
         created: Final = tuple(
             [
                 await self.create_budget(
-                    Budget.model_validate(template.model_dump(exclude={"name", "is_default"})), actor, template.name
+                    Budget.model_validate(template.model_dump(exclude={"name"})), actor, template.name
                 )
                 for template in payload.default_budgets
             ]
@@ -566,10 +572,13 @@ class CustomerHierarchyStore:
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return organization
+        default_patch: Final = default_template_patch(organization, payload)
+        if isinstance(default_patch, Failure):
+            return default_patch
         budget_id: Final = await self.overall_budget_patch(organization.budget_id, payload, actor)
         await self.organizations.update(
             where={"customer_org_id": organization_id},
-            data={**alias_patch(payload), "budget_id": budget_id, "updated_by": actor},
+            data={**alias_patch(payload), **default_patch, "budget_id": budget_id, "updated_by": actor},
         )
         await self.delete_released_budget(organization.budget_id, budget_id)
         return await self.get_organization(organization_id)
@@ -583,9 +592,9 @@ class CustomerHierarchyStore:
         if payload.name in names.values():
             return Failure(ErrorCode.INVALID_TEMPLATE_NAMES)
         budget_id: Final = await self.create_budget(
-            Budget.model_validate(payload.model_dump(exclude={"name", "is_default"})), actor, payload.name
+            Budget.model_validate(payload.model_dump(exclude={"name"})), actor, payload.name
         )
-        default_id: Final = budget_id if payload.is_default or not names else organization.default_budget_template_id
+        default_id: Final = organization.default_budget_template_id if names else budget_id
         await self.write_template_metadata(organization_id, (*names, budget_id), default_id, actor)
         return await self.get_organization(organization_id)
 
@@ -602,14 +611,13 @@ class CustomerHierarchyStore:
         name: Final = payload.name if payload.name is not None else names[budget_id]
         if any(existing_name == name for existing_id, existing_name in names.items() if existing_id != budget_id):
             return Failure(ErrorCode.INVALID_TEMPLATE_NAMES)
-        if payload.is_default is False and organization.default_budget_template_id == budget_id:
-            return Failure(ErrorCode.INVALID_DEFAULT_BUDGET)
-        patch: Final = Budget.model_validate(payload.model_dump(exclude_unset=True, exclude={"name", "is_default"}))
+        patch: Final = Budget.model_validate(payload.model_dump(exclude_unset=True, exclude={"name"}))
         await self.update_budget(budget_id, patch, actor)
         if name != names[budget_id]:
             await update_budget_row(self.budgets, budget_id, {"name": name}, actor)
-        default_id: Final = budget_id if payload.is_default is True else organization.default_budget_template_id
-        await self.write_template_metadata(organization_id, tuple(names), default_id, actor)
+        await self.write_template_metadata(
+            organization_id, tuple(names), organization.default_budget_template_id, actor
+        )
         return await self.get_organization(organization_id)
 
     async def delete_template(self, organization_id: str, budget_id: str, actor: str) -> None | Failure:

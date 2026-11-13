@@ -27,13 +27,13 @@ describe("buildCustomerOrganizationBody", () => {
         default_budgets: [
           {
             name: "power",
-            is_default: true,
             budget_limits: [
               { budget_duration: "1mo", max_budget: 200.5 },
               { budget_duration: "12mo", max_budget: 1500 },
             ],
           },
         ],
+        default_budget_template: "power",
       },
     });
   });
@@ -44,9 +44,7 @@ describe("buildCustomerOrganizationBody", () => {
     if (!result.ok) return;
     expect(result.body).not.toHaveProperty("customer_org_id");
     expect(result.body).not.toHaveProperty("budget");
-    expect(result.body.default_budgets.filter((group) => group.is_default).map((group) => group.name)).toEqual([
-      "default_user",
-    ]);
+    expect(result.body.default_budget_template).toBe("default_user");
   });
 
   it("keeps zero caps and permits either calendar limit to be omitted", () => {
@@ -67,7 +65,7 @@ describe("buildCustomerOrganizationBody", () => {
       [{ budget_duration: "1mo", max_budget: 0 }],
       [{ budget_duration: "12mo", max_budget: 120 }],
     ]);
-    expect(result.body.default_budgets.map((group) => group.is_default)).toEqual([false, true]);
+    expect(result.body.default_budget_template).toBe("yearly");
   });
 
   it.each(["-1", "Infinity", "NaN", "invalid"])("rejects invalid amounts %s at either level", (value) => {

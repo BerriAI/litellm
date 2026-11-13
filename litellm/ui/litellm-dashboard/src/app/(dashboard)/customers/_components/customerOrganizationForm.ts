@@ -91,9 +91,9 @@ export function buildCustomerOrganizationBody(fields: CustomerOrganizationFields
       : {}),
     default_budgets: fields.groups.map((group): components["schemas"]["BudgetTemplate"] => ({
       name: group.name.trim(),
-      is_default: group.id === fields.defaultGroupId,
       budget_limits: [...limit(group.monthlyBudget, "1mo"), ...limit(group.yearlyBudget, "12mo")],
     })),
+    default_budget_template: fields.groups.find((group) => group.id === fields.defaultGroupId)?.name.trim(),
   } satisfies components["schemas"]["OrganizationCreate"];
   return { ok: true, body } as const;
 }
