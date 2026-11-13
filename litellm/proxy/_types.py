@@ -3357,6 +3357,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     models: list[str] = []
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
+    budget_limits: tuple[BudgetLimitEntry, ...] | None = None
     metadata: dict | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

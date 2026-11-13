@@ -34,6 +34,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     delete_cache_key_objects,
+    evict_budget_windows_absent_marker,
     forget_missing_user,
     get_jwt_key_mapping_cache_keys_for_tokens,
     get_team_object,
@@ -51,7 +52,7 @@ from litellm.proxy.auth.password_policy import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.openai_error_payload import openai_shaped_proxy_exception, proxy_exception_for
-from litellm.proxy.common_utils.timezone_utils import keeps_due_budget_reset
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     object_permission_cache_key,
@@ -1235,6 +1236,7 @@ async def user_info_v2(
             rpm_limit=user_data.get("rpm_limit"),
             models=user_data.get("models") or [],
             budget_duration=user_data.get("budget_duration"),
+            budget_limits=user_data.get("budget_limits"),
             budget_reset_at=user_data.get("budget_reset_at"),
             metadata=_redact_scim_enterprise_metadata(user_data.get("metadata")),
             created_at=user_data.get("created_at"),
@@ -1375,7 +1377,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
     for k, v in data_json.items():
-        if k in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit"):
+        if k in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit", "budget_limits"):
             if k in fields_set:
                 non_default_values[k] = v
         elif k == "model_max_budget":
@@ -1396,13 +1398,22 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
         ):  # models default to [], spend defaults to 0, we should not reset these values
             non_default_values[k] = v
 
+    if "budget_limits" in non_default_values:
+        non_default_values["budget_limits"] = json.dumps(
+            [
+                {
+                    **window.model_dump(),
+                    "reset_at": get_budget_reset_time(budget_duration=window.budget_duration).isoformat(),
+                }
+                for window in (data.budget_limits or ())
+            ]
+        )
+
     is_internal_user = False
     if data.user_role == LitellmUserRoles.INTERNAL_USER:
         is_internal_user = True
 
     if "budget_duration" in non_default_values:
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
         validate_budget_duration(non_default_values["budget_duration"])
         non_default_values["budget_reset_at"] = (
             get_budget_reset_time(budget_duration=non_default_values["budget_duration"])
@@ -1419,8 +1430,6 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     if "budget_duration" not in non_default_values:  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
             non_default_values["budget_duration"] = litellm.internal_user_budget_duration
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
             non_default_values["budget_reset_at"] = get_budget_reset_time(
                 budget_duration=non_default_values["budget_duration"]
             )
@@ -1616,7 +1625,14 @@ async def _update_single_user_helper(
         # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
-        _protected_fields: Final = ("max_budget", "model_max_budget", "soft_budget", "spend", "object_permission")
+        _protected_fields: Final = (
+            "max_budget",
+            "budget_limits",
+            "model_max_budget",
+            "soft_budget",
+            "spend",
+            "object_permission",
+        )
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
                 raise HTTPException(
@@ -1716,6 +1732,13 @@ async def _update_single_user_helper(
         )
 
         await _invalidate_user_spend_counter_if_changed(non_default_values)
+
+        if "budget_limits" in non_default_values:
+            await evict_budget_windows_absent_marker(
+                entity_type=Litellm_EntityType.USER,
+                entity_id=TypeAdapter(str).validate_python(non_default_values["user_id"]),
+                user_api_key_cache=user_api_key_cache,
+            )
 
         await evict_and_broadcast(
             cache_keys=(non_default_values["user_id"],),

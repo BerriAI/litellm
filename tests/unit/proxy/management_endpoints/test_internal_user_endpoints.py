@@ -51,6 +51,35 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
 client = TestClient(app)
 
 
+@pytest.mark.parametrize("windows", [None, []])
+def test_user_update_clears_budget_windows(windows: list[object] | None) -> None:
+    request: Final = UpdateUserRequest.model_validate({"user_id": "u", "budget_limits": windows})
+    updated: Final = _update_internal_user_params(request.model_dump(exclude_unset=True), request)
+    assert json.loads(updated["budget_limits"]) == []
+
+
+@pytest.mark.parametrize("duration, amount", [("0s", 1.0), ("bogus", 1.0), ("1h", -1.0), ("1h", float("inf"))])
+def test_user_budget_windows_reject_invalid_limits(duration: str, amount: float) -> None:
+    with pytest.raises(ValidationError):
+        NewUserRequest.model_validate({"budget_limits": [{"budget_duration": duration, "max_budget": amount}]})
+
+
+def test_user_update_initializes_each_budget_window() -> None:
+    request: Final = UpdateUserRequest.model_validate(
+        {
+            "user_id": "u",
+            "budget_limits": [
+                {"budget_duration": "1h", "max_budget": 5.0},
+                {"budget_duration": "30d", "max_budget": 100.0},
+            ],
+        }
+    )
+    updated: Final = _update_internal_user_params(request.model_dump(exclude_unset=True), request)
+    windows: Final = json.loads(updated["budget_limits"])
+    assert [(window["budget_duration"], window["max_budget"]) for window in windows] == [("1h", 5.0), ("30d", 100.0)]
+    assert all(datetime.fromisoformat(window["reset_at"]).tzinfo is not None for window in windows)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("binding", ["customer_org_id", "customer_team_id", "customer_member_id"])
 async def test_new_user_cannot_mint_customer_bound_keys_without_proxy_admin(binding: str) -> None:
@@ -3686,6 +3715,7 @@ async def test_user_info_v2_response_shape(mocker):
         "models",
         "budget_duration",
         "budget_reset_at",
+        "budget_limits",
         "metadata",
         "created_at",
         "updated_at",

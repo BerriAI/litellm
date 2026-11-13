@@ -616,6 +616,16 @@ async def _get_budget_counters(
         )
 
     is_team_key: Final = team_object is not None and team_object.team_id is not None
+    if (not is_team_key or apply_user_budget_to_team_keys) and user_object is not None:
+        counters.extend(
+            _get_budget_limit_counters(
+                entity_prefix=user_counter(user_object.user_id),
+                entity_type="User",
+                entity_id=user_object.user_id,
+                budget_limits=user_object.budget_limits,
+                fallback_spend=0.0,
+            )
+        )
     if (
         (not is_team_key or apply_user_budget_to_team_keys)
         and user_object is not None

@@ -164,6 +164,7 @@ from litellm.redis.stores.spend_counters import (
     team_member_counter,
     team_window_counter,
     user_counter,
+    user_window_counter,
 )
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
@@ -1451,10 +1452,14 @@ async def common_checks(
 
         async def _user_max_budget_check() -> None:
             # 4.1 personal budget
-            if user_object is None or user_object.max_budget is None:
+            if user_object is None:
                 return
             is_team_key: Final = team_object is not None and team_object.team_id is not None
             if is_team_key and general_settings.get("apply_user_budget_to_team_keys") is not True:
+                return
+
+            await _user_multi_budget_check(user_object)
+            if user_object.max_budget is None:
                 return
 
             from litellm.proxy.proxy_server import get_current_spend
@@ -7364,6 +7369,34 @@ async def team_max_budget_check(
 
 
 _team_max_budget_check: Final = team_max_budget_check
+
+
+async def _user_multi_budget_check(user_object: LiteLLM_UserTable | None) -> None:
+    if user_object is None or not user_object.budget_limits:
+        return
+    from litellm.proxy.proxy_server import get_current_spend
+
+    for window in user_object.budget_limits:
+        if (
+            spend := await get_current_spend(
+                counter_key=user_window_counter(user_object.user_id, window.budget_duration),
+                fallback_spend=0.0,
+                max_budget=window.max_budget,
+                window_entity_type="User",
+                window_entity_id=user_object.user_id,
+                window_duration=window.budget_duration,
+                window_start=get_budget_window_start(window),
+            )
+        ) < window.max_budget:
+            continue
+        if math.isfinite(window.max_budget) and spend >= window.max_budget:
+            raise litellm.BudgetExceededError(
+                current_cost=spend,
+                max_budget=window.max_budget,
+                message=f"ExceededBudget: User={user_object.user_id} over {window.budget_duration} budget",
+                entity_type=Litellm_EntityType.USER.value,
+                entity_id=user_object.user_id,
+            )
 
 
 async def _team_multi_budget_check(

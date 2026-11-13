@@ -2,7 +2,7 @@ import asyncio
 import json
 import sys
 import types
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
 from typing import Any, Dict, Final, List, Optional
@@ -1348,6 +1348,7 @@ def _make_reset_budget_windows_job(
     monkeypatch,
     key_rows: List[Dict[str, Any]],
     team_rows: List[Dict[str, Any]],
+    user_rows: Sequence[Mapping[str, object]] = (),
 ):
     """Build a ResetBudgetJob with a fully-mocked prisma client and a fake
     `litellm.proxy.proxy_server` module exposing a stub `spend_counter_store`.
@@ -1362,12 +1363,15 @@ def _make_reset_budget_windows_job(
             return key_rows
         if '"LiteLLM_TeamTable"' in query:
             return team_rows
+        if '"LiteLLM_UserTable"' in query:
+            return user_rows
         raise AssertionError(f"Unexpected query_raw call: {query}")
 
     prisma_client.db.query_raw = AsyncMock(side_effect=fake_query_raw)
     prisma_client.db.execute_raw = AsyncMock(return_value=1)
     prisma_client.db.litellm_verificationtoken.update = AsyncMock(return_value=None)
     prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
+    prisma_client.db.litellm_usertable.update = AsyncMock(return_value=None)
 
     # Stub out litellm.proxy.proxy_server so the in-function
     # `from litellm.proxy.proxy_server import spend_counter_store` resolves
@@ -1393,13 +1397,42 @@ def test_reset_budget_windows_uses_is_not_null_filter(monkeypatch):
     asyncio.run(job.reset_budget_windows())
 
     queries = [call.args[0] for call in prisma_client.db.query_raw.await_args_list]
-    assert len(queries) == 2, queries
-    key_query, team_query = queries
+    assert len(queries) == 3, queries
+    user_query, key_query, team_query = queries
+    assert '"LiteLLM_UserTable"' in user_query
+    assert "budget_limits IS NOT NULL" in user_query
 
     assert '"LiteLLM_VerificationToken"' in key_query
     assert "budget_limits IS NOT NULL" in key_query
     assert '"LiteLLM_TeamTable"' in team_query
     assert "budget_limits IS NOT NULL" in team_query
+
+
+def test_reset_budget_windows_resets_expired_user_window(
+    monkeypatch: pytest.MonkeyPatch, frozen_reset_clock: datetime
+) -> None:
+    job, prisma, counters = _make_reset_budget_windows_job(
+        monkeypatch,
+        key_rows=[],
+        team_rows=[],
+        user_rows=[
+            {
+                "user_id": "u",
+                "budget_limits": [
+                    {"budget_duration": "1h", "max_budget": 5.0, "reset_at": "2000-01-01T01:00:00Z"},
+                    {"budget_duration": "30d", "max_budget": 100.0, "reset_at": "2099-01-01T00:00:00Z"},
+                ],
+            },
+        ],
+    )
+    counters.memory["spend:user:u:window:1h"] = 5.0
+    counters.memory["spend:user:u:window:30d"] = 10.0
+    asyncio.run(job.reset_budget_windows())
+    assert counters.memory["spend:user:u:window:1h"] == 0.0
+    assert counters.memory["spend:user:u:window:30d"] == 10.0
+    written: Final = json.loads(prisma.db.litellm_usertable.update.await_args.kwargs["data"]["budget_limits"])
+    assert written[0]["reset_at"] != "2000-01-01T01:00:00Z"
+    assert written[1]["reset_at"] == "2099-01-01T00:00:00Z"
 
 
 def test_reset_budget_windows_resets_expired_key_window(monkeypatch):
@@ -3200,7 +3233,7 @@ def _cursor_paginating_window_job(monkeypatch, key_rows: List[Dict[str, Any]]):
     visited: List[str] = []
 
     async def fake_query_raw(query: str, *args, **kwargs):
-        if '"LiteLLM_TeamTable"' in query:
+        if '"LiteLLM_TeamTable"' in query or '"LiteLLM_UserTable"' in query:
             return []
         cursor, limit = args[0], args[1]
         page = [row for row in ordered if row["token"] > cursor][:limit]

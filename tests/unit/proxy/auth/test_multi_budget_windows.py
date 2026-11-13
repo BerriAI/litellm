@@ -3,12 +3,40 @@ Unit tests for multi-budget-window enforcement on API keys.
 """
 
 from unittest.mock import AsyncMock, patch
+from typing import Final
 
 import pytest
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import _virtual_key_multi_budget_check
+from litellm.proxy.auth import auth_checks
+from litellm.proxy import proxy_server
+from litellm.models.user import LiteLLM_UserTable
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hour, month, exhausted", [(4.0, 99.0, False), (5.0, 1.0, True), (1.0, 100.0, True)])
+async def test_user_is_blocked_by_either_window(
+    monkeypatch: pytest.MonkeyPatch, hour: float, month: float, exhausted: bool
+) -> None:
+    counters: Final = FakeSpendCounters(redis={"spend:user:u:window:1h": hour, "spend:user:u:window:30d": month})
+    monkeypatch.setattr(proxy_server, "spend_counter_store", counters.store())
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    user: Final = LiteLLM_UserTable(
+        user_id="u",
+        budget_limits=[
+            {"budget_duration": "1h", "max_budget": 5.0, "reset_at": "2026-08-01T01:00:00Z"},
+            {"budget_duration": "30d", "max_budget": 100.0, "reset_at": "2026-08-31T00:00:00Z"},
+        ],
+    )
+    if exhausted:
+        with pytest.raises(litellm.BudgetExceededError):
+            await auth_checks._user_multi_budget_check(user)
+        return
+    await auth_checks._user_multi_budget_check(user)
+    assert counters.redis == {"spend:user:u:window:1h": hour, "spend:user:u:window:30d": month}
 
 
 def _make_valid_token(**kwargs) -> UserAPIKeyAuth:

@@ -117,6 +117,11 @@ _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL: Final = (
     "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')" + _SETTLED_SPEND_LOG_FILTER
 )
 
+_SEED_FROM_SPEND_LOGS_USER_SQL: Final = _SEED_FROM_SPEND_LOGS_TEAM_SQL.replace("team_id =", '"user" =')
+_SEED_FROM_SPEND_LOGS_USER_UNBOUNDED_SQL: Final = _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL.replace(
+    "team_id =", '"user" ='
+)
+
 _UPSERT_TRANSACTION_TIMEOUT: Final = timedelta(seconds=60)
 
 
@@ -241,19 +246,24 @@ async def spend_logs_seed_totals(
     counts everything: that can only over-count once, which enforcement
     tolerates, whereas under-counting is a budget bypass.
     """
-    if entity_type == Litellm_EntityType.KEY.value:
-        bounded_sql, unbounded_sql = _SEED_FROM_SPEND_LOGS_KEY_SQL, _SEED_FROM_SPEND_LOGS_KEY_UNBOUNDED_SQL
-    elif entity_type == Litellm_EntityType.TEAM.value:
-        bounded_sql, unbounded_sql = _SEED_FROM_SPEND_LOGS_TEAM_SQL, _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL
-    else:
+    queries: Final = (
+        (_SEED_FROM_SPEND_LOGS_KEY_SQL, _SEED_FROM_SPEND_LOGS_KEY_UNBOUNDED_SQL)
+        if entity_type == Litellm_EntityType.KEY.value
+        else (_SEED_FROM_SPEND_LOGS_TEAM_SQL, _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL)
+        if entity_type == Litellm_EntityType.TEAM.value
+        else (_SEED_FROM_SPEND_LOGS_USER_SQL, _SEED_FROM_SPEND_LOGS_USER_UNBOUNDED_SQL)
+        if entity_type == Litellm_EntityType.USER.value
+        else None
+    )
+    if queries is None:
         return None
     read: Final = query or _seed_totals_query(prisma_client)
     async with db_span("seed_window_spend", "LiteLLM_SpendLogs"):
         rows: Final = (
-            await read(unbounded_sql, entity_id, window_start)
+            await read(queries[1], entity_id, window_start)
             if batch_started_at is None
             else await read(
-                bounded_sql,
+                queries[0],
                 entity_id,
                 window_start,
                 _exclusion_upper_bound(batch_started_at),

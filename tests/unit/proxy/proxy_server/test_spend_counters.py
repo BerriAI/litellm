@@ -471,6 +471,37 @@ async def test_increment_spend_counters_increments_all_buckets(monkeypatch):
     assert fake_user_cache.async_get_cache.called is True
 
 
+@pytest.mark.asyncio
+async def test_user_spend_increments_both_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    spend: Final = _spend_counters(
+        monkeypatch,
+        redis={
+            "spend:user:u": 0.0,
+            "spend:user:u:window:1h": 0.0,
+            "spend:user:u:window:30d": 0.0,
+        },
+    )
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="u",
+        value=LiteLLM_UserTable.model_validate(
+            {
+                "user_id": "u",
+                "budget_limits": [
+                    {"budget_duration": "1h", "max_budget": 5.0, "reset_at": "2026-08-01T01:00:00Z"},
+                    {"budget_duration": "30d", "max_budget": 100.0, "reset_at": "2026-08-31T00:00:00Z"},
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    await ps.increment_spend_counters(token=None, team_id=None, user_id="u", response_cost=2.0)
+    assert spend.redis == {"spend:user:u": 2.0, "spend:user:u:window:1h": 2.0, "spend:user:u:window:30d": 2.0}
+    windows: Final = await ps.accounting_window_keys(None, None, user_id="u")
+    assert {window["window_duration"] for window in windows} == {"1h", "30d"}
+
+
 class _ConcurrencyProbe:
     """Stand-in for the per-counter warm-check read that pins concurrency.
 

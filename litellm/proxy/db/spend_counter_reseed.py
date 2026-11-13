@@ -60,6 +60,7 @@ _WINDOW_SPEND_ENTITY_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "Key": Litellm_EntityType.KEY.value,
         "Team": Litellm_EntityType.TEAM.value,
+        "User": Litellm_EntityType.USER.value,
         "customer_org": Litellm_EntityType.CUSTOMER_ORG.value,
         "customer_team": Litellm_EntityType.CUSTOMER_TEAM.value,
         "customer_member": Litellm_EntityType.CUSTOMER_MEMBER.value,
@@ -70,6 +71,7 @@ _WINDOW_SPEND_LOG_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "Key": "api_key",
         "Team": "team_id",
+        "User": "user",
     }
 )
 
@@ -247,7 +249,7 @@ class SpendCounterReseed:
 
     @staticmethod
     def _is_key_or_team_window_counter(counter_key: str) -> bool:
-        for prefix in ("spend:key:", "spend:team:"):
+        for prefix in ("spend:key:", "spend:team:", "spend:user:"):
             if not counter_key.startswith(prefix):
                 continue
             _, separator, duration = counter_key.rpartition(":window:")
