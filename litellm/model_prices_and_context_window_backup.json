@@ -168,6 +168,11 @@
         "max_output_tokens": 4096
     },
     "sample_spec": {
+        "output_cost_per_video_clip": {
+            "5s": {
+                "720p": 0.0
+            }
+        },
         "code_interpreter_cost_per_session": 0.0,
         "computer_use_input_cost_per_1k_tokens": 0.0,
         "computer_use_output_cost_per_1k_tokens": 0.0,
