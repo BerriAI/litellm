@@ -247,6 +247,6 @@ def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_met
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
-async def forget_customer_hierarchy(customer_member_id: str, user_api_key_cache: UserApiKeyCache) -> None:
-    """Drop the cached hierarchy of a member that was changed or deleted so request auth reloads it."""
-    await evict_and_broadcast((customer_member_cache_key(customer_member_id),), user_api_key_cache)
+async def forget_customer_hierarchies(customer_member_ids: Sequence[str], user_api_key_cache: UserApiKeyCache) -> None:
+    """Drop the cached hierarchies of members whose own, team, org or template budget changed so auth reloads them."""
+    await evict_and_broadcast(tuple(customer_member_cache_key(m) for m in customer_member_ids), user_api_key_cache)

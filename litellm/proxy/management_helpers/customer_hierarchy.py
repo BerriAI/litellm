@@ -228,6 +228,11 @@ def alias_patch(payload: OrganizationPatch | TeamPatch | MemberPatch) -> Mapping
 
 _BUDGET_INCLUDE: Final = {"budget": True}
 _MEMBER_INCLUDE: Final = {"budget": True, "budget_template": True}
+_ID: Final = TypeAdapter(str)
+
+
+def _member_ids(rows: Sequence[PrismaRecord]) -> tuple[str, ...]:
+    return tuple(_ID.validate_python(row.model_dump()["customer_member_id"]) for row in rows)
 
 
 class CustomerHierarchyStore:
@@ -582,6 +587,17 @@ class CustomerHierarchyStore:
         )
         return Page(tuple(member_response(row, self.now) for row in rows), count)
 
+    async def member_ids_in_team(self, team_id: str) -> tuple[str, ...]:
+        return _member_ids(await self.members.find_many(where={"parent_team_id": team_id}))
+
+    async def member_ids_in_organization(self, organization_id: str) -> tuple[str, ...]:
+        teams: Final = await self.teams.find_many(where={"parent_org_id": organization_id})
+        team_ids: Final = tuple(_ID.validate_python(team.model_dump()["customer_team_id"]) for team in teams)
+        return _member_ids(await find_many_in(self.members, "parent_team_id", team_ids))
+
+    async def member_ids_using_template(self, budget_id: str) -> tuple[str, ...]:
+        return _member_ids(await self.members.find_many(where={"budget_template_id": budget_id}))
+
     async def delete_member(self, member_id: str) -> None | Failure:
         member: Final = await self.get_member(member_id)
         if isinstance(member, Failure):
@@ -684,6 +700,15 @@ class CustomerHierarchy:
         return await self.transaction(
             lambda store: store.delete_member(entity_id), operation_type=TransactionOperation.DELETE
         )
+
+    async def member_ids_in_team(self, entity_id: str) -> tuple[str, ...] | Failure:
+        return await self.transaction(lambda store: store.member_ids_in_team(entity_id))
+
+    async def member_ids_in_organization(self, entity_id: str) -> tuple[str, ...] | Failure:
+        return await self.transaction(lambda store: store.member_ids_in_organization(entity_id))
+
+    async def member_ids_using_template(self, budget_id: str) -> tuple[str, ...] | Failure:
+        return await self.transaction(lambda store: store.member_ids_using_template(budget_id))
 
     async def list_organizations(self, page: int = 1, page_size: int = 50) -> Page[Organization] | Failure:
         return await self.transaction(lambda store: store.list_organizations(page, page_size))

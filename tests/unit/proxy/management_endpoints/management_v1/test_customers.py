@@ -1,3 +1,4 @@
+import asyncio
 from typing import TYPE_CHECKING, Final, cast
 
 import pytest
@@ -5,10 +6,12 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import ManagementProblem, problem_response
 from litellm.proxy.management_endpoints.management_v1 import router
-from litellm.proxy.management_endpoints.management_v1.customers import get_customer_hierarchy
+from litellm.proxy.management_endpoints.management_v1.customers import get_customer_hierarchy, get_user_api_key_cache
 from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import NOW, Database
 
@@ -16,7 +19,7 @@ if TYPE_CHECKING:
     from prisma import Prisma
 
 
-def client(role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN) -> TestClient:
+def client(role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN, cache: UserApiKeyCache | None = None) -> TestClient:
     app: Final = FastAPI()
     app.include_router(router)
 
@@ -30,6 +33,7 @@ def client(role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN) -> TestClient:
     )  # cast-ok: in-memory Prisma edge
     app.dependency_overrides[user_api_key_auth] = lambda: auth
     app.dependency_overrides[get_customer_hierarchy] = lambda: hierarchy
+    app.dependency_overrides[get_user_api_key_cache] = lambda: cache if cache is not None else UserApiKeyCache()
     return TestClient(app)
 
 
@@ -578,6 +582,35 @@ def test_per_model_rate_limits_round_trip_at_every_level_and_override_the_templa
     assert http.get("/management/v1/customer_members/member").json()["effective_budget"]["model_rpm_limit"] == {
         "model-a": 1
     }
+
+
+def test_budget_edits_at_every_level_drop_the_cached_member_hierarchy() -> None:
+    cache: Final = UserApiKeyCache()
+    http: Final = client(cache=cache)
+    family(http)
+    assert (
+        http.post(
+            "/management/v1/customer_members", json={"customer_member_id": "m", "parent_team_id": "team"}
+        ).status_code
+        == 201
+    )
+    cache_key: Final = customer_member_cache_key("m")
+    edits: Final = (
+        ("/management/v1/customer_members/m", {"budget_override": {"max_budget": 1}}),
+        ("/management/v1/customer_teams/team", {"budget": {"max_budget": 2}}),
+        ("/management/v1/customer_organizations/org", {"budget": {"max_budget": 3}}),
+        (
+            f"/management/v1/customer_organizations/org/default_budgets/{family_default_budget_id(http)}",
+            {"max_budget": 4},
+        ),
+    )
+    for path, body in edits:
+        asyncio.run(cache.async_set_cache(key=cache_key, value="stale hierarchy"))
+        assert http.patch(path, json=body).status_code == 200, path
+        assert cache.get_cache(cache_key) is None, path
+    asyncio.run(cache.async_set_cache(key=cache_key, value="stale hierarchy"))
+    assert http.delete("/management/v1/customer_members/m").status_code == 204
+    assert cache.get_cache(cache_key) is None
 
 
 def family_default_budget_id(http: TestClient) -> str:
