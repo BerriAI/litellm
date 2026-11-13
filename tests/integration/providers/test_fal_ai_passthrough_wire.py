@@ -196,13 +196,13 @@ def test_fal_queue_submit_prices_string_resolution_like_the_integer(gateway: Gat
 @pytest.mark.parametrize(
     "path",
     (
-        "/fal_ai/google/nano-banana-2.1",
-        "/fal_ai/google/x/requests/%2e%2e/%2e%2e/nano-banana-2.1",
-        "/fal_ai/google/nano-banana-2.1%3Fa=/requests/x",
-        "/fal_ai/google/nano-banana-2.1%23/requests/x",
+        "/fal_ai/synthetic-vendor/unpriced-endpoint",
+        "/fal_ai/synthetic-vendor/x/requests/%2e%2e/%2e%2e/unpriced-endpoint",
+        "/fal_ai/synthetic-vendor/unpriced-endpoint%3Fa=/requests/x",
+        "/fal_ai/synthetic-vendor/unpriced-endpoint%23/requests/x",
     ),
 )
-def test_fal_queue_submit_to_unit_billed_endpoint_is_rejected_however_the_path_is_spelled(
+def test_fal_queue_submit_to_unpriced_endpoint_is_rejected_however_the_path_is_spelled(
     gateway: Gateway, tmp_path: Path, path: str
 ) -> None:
     def respond(request: Request) -> Reply:
