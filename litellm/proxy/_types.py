@@ -5403,6 +5403,12 @@ class DailyAgentSpendTransaction(BaseDailySpendTransaction):
     agent_id: str
 
 
+class DailyCustomerMemberSpendTransaction(BaseDailySpendTransaction):
+    customer_member_id: ReadOnly[str]
+    customer_team_id: ReadOnly[str]
+    customer_org_id: ReadOnly[str]
+
+
 class DBSpendUpdateTransactions(TypedDict):
     """
     Internal Data Structure for buffering spend updates in Redis or in memory before committing them to the database
@@ -5419,6 +5425,9 @@ class DBSpendUpdateTransactions(TypedDict):
     tag_list_transactions: dict[str, float] | None
     agent_list_transactions: dict[str, float] | None
     model_access_group_list_transactions: ReadOnly[dict[str, float] | None]
+    customer_org_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
+    customer_team_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
+    customer_member_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):

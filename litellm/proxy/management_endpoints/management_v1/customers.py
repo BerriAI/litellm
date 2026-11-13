@@ -1,11 +1,13 @@
 from math import ceil
-from typing import Annotated, Final, NoReturn, TypeVar
+from typing import Annotated, Final, NoReturn, TypeAlias, TypeVar
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from typing_extensions import assert_never
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.customer_hierarchy_auth import forget_customer_hierarchies
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import (
     PROBLEM_TYPE_BASE,
     ManagementProblem,
@@ -140,6 +142,15 @@ router: Final = APIRouter(
 )
 
 
+def get_user_api_key_cache() -> UserApiKeyCache:
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    return user_api_key_cache
+
+
+AuthCache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
+
+
 @router.post(
     "/customer_organizations",
     status_code=201,
@@ -179,8 +190,11 @@ async def update_customer_organization(
     data: OrganizationPatch,
     actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
 ) -> Organization:
-    return resolve(await hierarchy.update_organization(customer_org_id, data, actor))
+    organization: Final = resolve(await hierarchy.update_organization(customer_org_id, data, actor))
+    await forget_customer_hierarchies(resolve(await hierarchy.member_ids_in_organization(customer_org_id)), cache)
+    return organization
 
 
 @router.delete(
@@ -255,8 +269,11 @@ async def update_customer_team(
     data: TeamPatch,
     actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
 ) -> Team:
-    return resolve(await hierarchy.update_team(customer_team_id, data, actor))
+    team: Final = resolve(await hierarchy.update_team(customer_team_id, data, actor))
+    await forget_customer_hierarchies(resolve(await hierarchy.member_ids_in_team(customer_team_id)), cache)
+    return team
 
 
 @router.delete(
@@ -331,8 +348,11 @@ async def update_customer_member(
     data: MemberPatch,
     actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
 ) -> CustomerMember:
-    return resolve(await hierarchy.update_member(customer_member_id, data, actor))
+    member: Final = resolve(await hierarchy.update_member(customer_member_id, data, actor))
+    await forget_customer_hierarchies((customer_member_id,), cache)
+    return member
 
 
 @router.delete(
@@ -344,8 +364,10 @@ async def update_customer_member(
 async def delete_customer_member(
     customer_member_id: str,
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
 ) -> Response:
     resolve(await hierarchy.delete_member(customer_member_id))
+    await forget_customer_hierarchies((customer_member_id,), cache)
     return Response(status_code=204)
 
 
@@ -396,8 +418,11 @@ async def update_customer_budget_template(
     data: TemplatePatch,
     actor: Annotated[str, Depends(customer_actor)],
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
 ) -> Organization:
-    return resolve(await hierarchy.update_template(customer_org_id, budget_id, data, actor))
+    organization: Final = resolve(await hierarchy.update_template(customer_org_id, budget_id, data, actor))
+    await forget_customer_hierarchies(resolve(await hierarchy.member_ids_using_template(budget_id)), cache)
+    return organization
 
 
 @router.delete(

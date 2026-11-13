@@ -29446,6 +29446,14 @@ export interface components {
             budget_duration?: string | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -29604,6 +29612,14 @@ export interface components {
             is_default: boolean;
             /** Max Budget */
             max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Name */
             name: string;
             /** Rpm Limit */
@@ -33128,6 +33144,17 @@ export interface components {
              */
             type: "custom";
         };
+        /** CustomerHierarchyAuth */
+        CustomerHierarchyAuth: {
+            /** Customer Member Id */
+            customer_member_id: string;
+            /** Customer Org Id */
+            customer_org_id: string;
+            /** Customer Team Id */
+            customer_team_id: string;
+            /** Scopes */
+            scopes: components["schemas"]["CustomerScopeAuth"][];
+        };
         /** CustomerMember */
         CustomerMember: {
             /** Alias */
@@ -33198,6 +33225,40 @@ export interface components {
             spend: number;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * CustomerScopeAuth
+         * @description One level of the customer hierarchy a request runs under, with the limits its budget row grants.
+         */
+        CustomerScopeAuth: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Entity Id */
+            entity_id: string;
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "customer_org" | "customer_team" | "customer_member";
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * CyberArkConfig
@@ -42355,6 +42416,14 @@ export interface components {
             is_default: boolean;
             /** Max Budget */
             max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Name */
             name: string;
             /** Rpm Limit */
@@ -50003,6 +50072,14 @@ export interface components {
             is_default?: boolean | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Name */
             name?: string | null;
             /** Rpm Limit */
@@ -52528,6 +52605,7 @@ export interface components {
             created_by?: string | null;
             /** Created By User */
             created_by_user?: unknown | null;
+            customer_hierarchy?: components["schemas"]["CustomerHierarchyAuth"] | null;
             /** End User Id */
             end_user_id?: string | null;
             /** End User Max Budget */

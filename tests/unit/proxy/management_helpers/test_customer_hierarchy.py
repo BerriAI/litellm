@@ -79,7 +79,7 @@ class Table:
                 "budget_names": {},
                 "created_at": NOW,
                 "updated_at": NOW,
-                **data,
+                **{key: value.data if isinstance(value, Json) else value for key, value in data.items()},
             }
         )
         self.rows = {**self.rows, str(data[self.id_field]): row}

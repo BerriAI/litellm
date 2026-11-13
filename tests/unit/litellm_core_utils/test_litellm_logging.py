@@ -26,7 +26,7 @@ from openai._legacy_response import HttpxBinaryResponseContent
 from pydantic import BaseModel
 
 import litellm
-from litellm._internal_context import in_post_response_phase
+from litellm._internal_context import current_request_parent_otel_span, in_post_response_phase
 from litellm._logging import session_id_var, trace_id_var, verbose_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import DualCache
@@ -40,6 +40,7 @@ from litellm.constants import (
 )
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_llm import CustomLLM, CustomLLMError
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.token_counter import token_counter
@@ -78,7 +79,7 @@ from litellm.types.utils import (
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 import inspect
 from typing import List, Optional
-from litellm.types.utils import LiteLLMCommonStrings
+from litellm.types.utils import GenericStreamingChunk, LiteLLMCommonStrings
 
 
 @pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
@@ -1763,7 +1764,9 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         assert batch.usage.total_tokens == 35
 
     @pytest.mark.parametrize("batch_ignore_default_logging", [True, False])
-    def test_sync_logger_gets_a_free_event_for_the_cost_poller_retrieve(self, batch_ignore_default_logging: bool) -> None:
+    def test_sync_logger_gets_a_free_event_for_the_cost_poller_retrieve(
+        self, batch_ignore_default_logging: bool
+    ) -> None:
         sync_events: list[object] = []
 
         class SyncOnlyLogger(CustomLogger):
@@ -7345,7 +7348,12 @@ _WEB_SEARCH_REPLY: Final = (
         (
             [
                 {"type": "mcp_tool_use", "id": "mcptoolu_1", "name": "lookup", "server_name": "docs", "input": {}},
-                {"type": "mcp_tool_result", "tool_use_id": "mcptoolu_1", "is_error": False, "content": [{"type": "text", "text": "ok"}]},
+                {
+                    "type": "mcp_tool_result",
+                    "tool_use_id": "mcptoolu_1",
+                    "is_error": False,
+                    "content": [{"type": "text", "text": "ok"}],
+                },
                 {"type": "text", "text": "Found it."},
             ],
             "end_turn",
@@ -12879,7 +12887,12 @@ def test_get_model_cost_information_maps_requested_model_when_response_names_an_
     monkeypatch.setitem(
         litellm.model_cost,
         requested_model,
-        {"litellm_provider": "fireworks_ai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+        {
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 7e-6,
+        },
     )
     response: Final = ModelResponse(model="Sol Display Max", choices=[])
     response._hidden_params["provider_response_model"] = "Sol Display Max"
@@ -12891,15 +12904,27 @@ def test_get_model_cost_information_maps_requested_model_when_response_names_an_
 
     assert result["model_map_key"] == requested_model
     assert result["model_map_value"] is not None
-    assert result["model_map_value"]["input_cost_per_token"] == litellm.model_cost[requested_model]["input_cost_per_token"]
+    assert (
+        result["model_map_value"]["input_cost_per_token"] == litellm.model_cost[requested_model]["input_cost_per_token"]
+    )
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_get_model_cost_information_keeps_a_priced_response_model_that_echoes_without_its_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    served_row: Final = {"litellm_provider": "mistral", "mode": "chat", "input_cost_per_token": 2e-6, "output_cost_per_token": 5e-6}
-    requested_row: Final = {"litellm_provider": "mistral", "mode": "chat", "input_cost_per_token": 9e-6, "output_cost_per_token": 9e-6}
+    served_row: Final = {
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 5e-6,
+    }
+    requested_row: Final = {
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "input_cost_per_token": 9e-6,
+        "output_cost_per_token": 9e-6,
+    }
     monkeypatch.setitem(litellm.model_cost, "mistral/sol-snapshot-test", served_row)
     monkeypatch.setitem(litellm.model_cost, "mistral/sol-alias-test", requested_row)
     response: Final = ModelResponse(model="sol-snapshot-test", choices=[])
@@ -14787,7 +14812,9 @@ async def test_a_redacted_batch_retrieve_still_tells_the_spend_callbacks_whether
     ((kwargs, response_obj),) = recorder.events
     assert not isinstance(response_obj, LiteLLMBatch)
     assert defers_batch_cost(kwargs, response_obj) is deferred
-    assert (job_to_charge_once(kwargs, response_obj, 0.42) == ChargeOnceJob(kind="batch", job_id="batch_abc")) is charged
+    assert (
+        job_to_charge_once(kwargs, response_obj, 0.42) == ChargeOnceJob(kind="batch", job_id="batch_abc")
+    ) is charged
 
 
 _FAILED_ATTEMPT: Final = (Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500), 0.5)
@@ -15062,3 +15089,109 @@ async def test_failed_chat_prompt_is_counted_only_when_an_opted_in_logger_receiv
 
     assert counted_prompts == ([messages] if expects_estimate else [])
     assert logging_obj.model_call_details.get(FAILED_PROMPT_TOKEN_ESTIMATE_KEY) == (7 if expects_estimate else None)
+
+
+class _SpanSeenByCallbacks(CustomLogger):
+    """Records the request span a datastore op made inside each hook would report under."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: dict[str, object] = {}
+        self.logged = threading.Event()
+
+    def _record(self, hook: str) -> None:
+        self.seen[hook] = current_request_parent_otel_span()
+        self.logged.set()
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self._record("success")
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self._record("success")
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self._record("failure")
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self._record("failure")
+
+
+_FIRST_CHUNK: Final[GenericStreamingChunk] = {
+    "text": "hel",
+    "tool_use": None,
+    "is_finished": False,
+    "finish_reason": "",
+    "usage": None,
+    "index": 0,
+}
+
+
+class _BreaksMidStream(CustomLLM):
+    def streaming(self, *args, **kwargs) -> Iterator[GenericStreamingChunk]:
+        yield _FIRST_CHUNK
+        raise CustomLLMError(status_code=500, message="stream broke")
+
+    async def astreaming(self, *args, **kwargs) -> AsyncIterator[GenericStreamingChunk]:
+        yield _FIRST_CHUNK
+        raise CustomLLMError(status_code=500, message="stream broke")
+
+
+_SCENARIOS: Final = MappingProxyType(
+    {
+        "success": {"model": "gpt-4o-mini", "mock_response": "hello"},
+        "stream_success": {"model": "gpt-4o-mini", "mock_response": "hello", "stream": True},
+        "failure": {"model": "gpt-4o-mini", "mock_response": Exception("provider down")},
+        "mid_stream_failure": {"model": "span-probe/broken", "stream": True},
+    }
+)
+
+
+async def _sdk_call(*, asynchronous: bool, scenario: str, span: object) -> None:
+    request: Final = {
+        **_SCENARIOS[scenario],
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"litellm_parent_otel_span": span},
+    }
+    with contextlib.suppress(Exception):
+        if asynchronous:
+            response = await litellm.acompletion(**request)
+            if request.get("stream"):
+                async for _ in response:
+                    pass
+            return
+        response = litellm.completion(**request)
+        if request.get("stream"):
+            for _ in response:
+                pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [True, False], ids=["async", "sync"])
+@pytest.mark.parametrize(
+    ("scenario", "hook"),
+    [
+        ("success", "success"),
+        ("stream_success", "success"),
+        ("failure", "failure"),
+        ("mid_stream_failure", "failure"),
+    ],
+)
+async def test_every_callback_runs_under_the_span_an_sdk_caller_passed(
+    monkeypatch: pytest.MonkeyPatch, asynchronous: bool, scenario: str, hook: str
+) -> None:
+    """A store op in any callback parents under the caller's span, with no Router scope around the call, after a
+    stream ends or breaks, and on the executor threads the sync stream paths dispatch to without the caller's context."""
+    span: Final = object()
+    logger: Final = _SpanSeenByCallbacks()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "span-probe", "custom_handler": _BreaksMidStream()}]
+    )
+    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
+    monkeypatch.setattr(litellm, "_custom_providers", [])
+    litellm.utils.custom_llm_setup()
+
+    await _sdk_call(asynchronous=asynchronous, scenario=scenario, span=span)
+    await asyncio.wait_for(asyncio.to_thread(logger.logged.wait, 10), timeout=10)
+
+    assert (logger.seen.get(hook), current_request_parent_otel_span()) == (span, None)

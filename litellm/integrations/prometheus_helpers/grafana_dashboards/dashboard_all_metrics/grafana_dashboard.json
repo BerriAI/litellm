@@ -5852,6 +5852,17 @@
           "legendFormat": "self",
           "range": true,
           "refId": "M"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(litellm_redis_daily_customer_member_spend_update_queue_latency_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "redis_daily_customer_member_spend_update_queue",
+          "range": true,
+          "refId": "N"
         }
       ],
       "title": "Service latency p95 (litellm_<service>_latency)",
@@ -6052,6 +6063,17 @@
           "legendFormat": "self",
           "range": true,
           "refId": "N"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(litellm_redis_daily_customer_member_spend_update_queue_total_requests_total[$__rate_interval]))",
+          "legendFormat": "redis_daily_customer_member_spend_update_queue",
+          "range": true,
+          "refId": "O"
         }
       ],
       "title": "Service request rate (litellm_<service>_total_requests)",
@@ -6252,6 +6274,17 @@
           "legendFormat": "self / {{error_class}}",
           "range": true,
           "refId": "N"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(litellm_redis_daily_customer_member_spend_update_queue_failed_requests_total[$__rate_interval])) by (error_class)",
+          "legendFormat": "redis_daily_customer_member_spend_update_queue / {{error_class}}",
+          "range": true,
+          "refId": "O"
         }
       ],
       "title": "Service failure rate (litellm_<service>_failed_requests)",
