@@ -30,7 +30,7 @@ LegacyT: Final = TypeVar("LegacyT")
 Between: TypeAlias = Callable[[Mapping[Field, object]], Awaitable[Mapping[Field, object]]]
 SyncBinding: TypeAlias = Callable[[object, object], object]
 
-SWALLOWING_HOOKS: Final = frozenset({Hook.response_headers, Hook.post_call_failure})
+SWALLOWING_HOOKS: Final = frozenset({Hook.response_headers, Hook.post_call_failure, Hook.post_deployment_failure})
 
 _LOGGER: Final = logging.getLogger("LiteLLM")
 

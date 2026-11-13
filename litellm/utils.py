@@ -550,7 +550,7 @@ from litellm.integrations.custom_logger_v2.legacy import (
     run_subscribers,
 )
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
-from litellm.integrations.custom_logger_v2.outcomes import Patch
+from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -2035,11 +2035,16 @@ async def async_post_call_failure_deployment_hook(
         and (subscribers := hook_subscribers(Hook.post_deployment_failure, callbacks, admit=Admit.every_logger)).has_v2
     ):
         fields: Final = ResultFields(safe_request_data, PROXY_REQUEST_KEYS, Field.error, safe_exception)
-        _ = kwargs_after(
-            await run_subscribers(
-                subscribers, fields, partial(_start_post_deployment_failure, fields, typed_call_type, fallback_depth)
-            )
+        result: Final = await run_subscribers(
+            subscribers, fields, partial(_start_post_deployment_failure, fields, typed_call_type, fallback_depth)
         )
+        if isinstance(result.outcome, Abort):
+            verbose_logger.debug(
+                "async_post_call_failure_deployment_hook: a v2 abort keeps the original failure: %s",
+                result.outcome.message,
+            )
+            return
+        _ = kwargs_after(result)
         return
     for callback in callbacks:
         if isinstance(callback, CustomLogger):

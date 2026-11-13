@@ -28,6 +28,11 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs, ModelResponse
+from litellm.utils import (
+    async_post_call_failure_deployment_hook,
+    async_post_call_success_deployment_hook,
+    async_pre_call_deployment_hook,
+)
 
 AUTH: Final = UserAPIKeyAuth(api_key="sk-test")
 
@@ -1275,3 +1280,65 @@ async def test_list_models_v2_abort_raises_its_status(
         await proxy_logging.hidden_by_listing_callbacks(AUTH, ["a"])
 
     assert raised.value.status_code == 403
+
+
+class _DeploymentAbort(CustomLoggerV2):
+    def __init__(self, outcome: Abort) -> None:
+        self.outcome = outcome
+
+    @on(Hook.pre_deployment_call, may_abort=True)
+    async def pre_deployment_call(self, view: object, ctx: CallContext[object]) -> Abort:
+        return self.outcome
+
+    @on(Hook.post_deployment_success, may_abort=True)
+    async def post_deployment_success(self, view: object, ctx: CallContext[object]) -> Abort:
+        return self.outcome
+
+    @on(Hook.post_deployment_failure, may_abort=True)
+    async def post_deployment_failure(self, view: object, ctx: CallContext[object]) -> Abort:
+        return self.outcome
+
+
+def _deployment_hook(hook: Hook) -> Awaitable[object]:
+    request: Final[dict[str, object]] = {"model": "m", "messages": []}
+    if hook is Hook.pre_deployment_call:
+        return async_pre_call_deployment_hook(request, "acompletion", include_v2=True)
+    return async_post_call_success_deployment_hook(request, ModelResponse(), "acompletion", include_v2=True)
+
+
+@pytest.mark.parametrize("hook", [Hook.pre_deployment_call, Hook.post_deployment_success])
+async def test_a_v2_abort_at_a_deployment_hook_raises_the_exception_it_carries(
+    monkeypatch: pytest.MonkeyPatch, hook: Hook
+) -> None:
+    error: Final = litellm.RateLimitError(message="no capacity", llm_provider="openai", model="m")
+    monkeypatch.setattr(litellm, "callbacks", [_DeploymentAbort(Abort(status=429, message="ignored", exception=error))])
+
+    with pytest.raises(litellm.RateLimitError) as raised:
+        await _deployment_hook(hook)
+
+    assert raised.value is error
+
+
+class _FailingAtDeploymentFailure(CustomLoggerV2):
+    @on(Hook.post_deployment_failure, may_abort=True)
+    async def post_deployment_failure(self, view: object, ctx: CallContext[object]) -> None:
+        raise KeyError("usage")
+
+
+@pytest.mark.parametrize("raising", [False, True])
+async def test_a_v2_abort_or_error_at_post_deployment_failure_keeps_the_original_failure(
+    monkeypatch: pytest.MonkeyPatch, raising: bool
+) -> None:
+    error: Final = litellm.RateLimitError(message="no capacity", llm_provider="openai", model="m")
+    v2: Final = (
+        _FailingAtDeploymentFailure()
+        if raising
+        else _DeploymentAbort(Abort(status=429, message="ignored", exception=error))
+    )
+    monkeypatch.setattr(litellm, "callbacks", [v2])
+
+    returned: Final = await async_post_call_failure_deployment_hook(
+        {"model": "m"}, RuntimeError("upstream"), "acompletion", include_v2=True
+    )
+
+    assert returned is None
