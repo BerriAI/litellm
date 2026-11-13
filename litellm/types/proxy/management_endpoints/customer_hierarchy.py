@@ -93,6 +93,7 @@ class AuditFields(BaseModel):
 
 
 class Organization(AuditFields):
+    member_count: int = Field(default=0, ge=0, description="Current registered members across all customer teams")
     budget_id: str | None = None
     budget: Budget | None = None
     customer_org_id: str

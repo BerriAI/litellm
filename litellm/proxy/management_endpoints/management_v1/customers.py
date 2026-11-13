@@ -223,9 +223,10 @@ async def list_customer_organizations(
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1)] = 50,
+    q: Annotated[str, Query(description="Case-insensitive substring of the customer ID or alias")] = "",
 ) -> ListResponse[Organization]:
     size: Final = min(page_size, 100)
-    result: Final = resolve(await hierarchy.list_organizations(page, size))
+    result: Final = resolve(await hierarchy.list_organizations(page, size, q.strip()))
     return list_response(result, request, page, size)
 
 

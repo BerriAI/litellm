@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import reduce
 from typing import Final, cast
 
@@ -14,6 +14,7 @@ from litellm.proxy.list_api.common import ManagementProblem, problem_response
 from litellm.proxy.management_endpoints.management_v1.customer_usage import get_customer_usage_prisma, router
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.common_daily_activity import SpendMetrics
+from tests.unit.proxy.management_endpoints.test_common_daily_activity import _grouping_row
 
 
 class Record(BaseModel):
@@ -154,7 +155,11 @@ def usage_row(
     )
 
 
-def client(rows: tuple[DailyRecord, ...] = (), role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN) -> TestClient:
+def client(
+    rows: tuple[DailyRecord, ...] = (),
+    role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN,
+    database: Database | None = None,
+) -> TestClient:
     app: Final = FastAPI()
     app.include_router(router)
 
@@ -163,7 +168,7 @@ def client(rows: tuple[DailyRecord, ...] = (), role: LitellmUserRoles = LitellmU
         return problem_response(exc.problem)
 
     auth: Final = UserAPIKeyAuth(user_id="admin", user_role=role)
-    prisma: Final = cast(PrismaClient, Client(Database(Table(rows))))  # cast-ok: in-memory Prisma boundary
+    prisma: Final = cast(PrismaClient, Client(database or Database(Table(rows))))  # cast-ok: in-memory Prisma boundary
     app.dependency_overrides[user_api_key_auth] = lambda: auth
     app.dependency_overrides[get_customer_usage_prisma] = lambda: prisma
     return TestClient(app)
@@ -276,3 +281,79 @@ def test_unmatched_entities_return_the_standard_empty_response() -> None:
     assert response.status_code == 200, response.text
     assert response.json()["results"] == []
     assert response.json()["metadata"]["total_spend"] == 0
+
+
+RANGE: Final = {"start_date": "2024-01-01", "end_date": "2024-01-31"}
+
+
+class ActivityDatabase(Database):
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if "GROUPING SETS" in query:
+            values: Final = {
+                **asdict(_grouping_row(63, spend=500)),
+                "prompt_tokens": 3000,
+                "completion_tokens": 2000,
+                "api_requests": 1000,
+            }
+            return ({**values, "group_level": 127}, values)
+        if "api_key_rolled" in query:
+            return (
+                {
+                    **asdict(_grouping_row(63, spend=500)),
+                    "entity_id": "org-a",
+                    "api_key_rolled": 1,
+                    "prompt_tokens": 3000,
+                    "completion_tokens": 2000,
+                    "api_requests": 1000,
+                },
+            )
+        raise AssertionError(f"Unexpected query: {query}")
+
+
+def test_aggregated_activity_returns_complete_database_totals_as_one_page() -> None:
+    response: Final = client(database=ActivityDatabase(Table())).get(
+        "/management/v1/customer_organizations/daily/activity/aggregated", params={**RANGE, "customer_org_ids": "org-a"}
+    )
+    assert response.status_code == 200, response.text
+    body: Final = response.json()
+    assert body["metadata"]["total_spend"] == 500
+    assert body["metadata"]["total_api_requests"] == 1000
+    assert body["metadata"]["total_tokens"] == 5000
+    assert body["metadata"]["has_more"] is False
+    assert body["metadata"]["total_pages"] == 1
+    assert body["results"][0]["breakdown"]["entities"]["org-a"]["metrics"]["spend"] == 500
+
+
+@pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))
+def test_non_admins_cannot_read_customer_usage(role: LitellmUserRoles) -> None:
+    response: Final = client(role=role).get(
+        "/management/v1/customer_organizations/daily/activity/aggregated", params=RANGE
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "params,status",
+    (
+        ({**RANGE, "customer_org_ids": ""}, 422),
+        ({**RANGE, "customer_org_ids": ",".join(str(index) for index in range(101))}, 422),
+        ({"start_date": "2020-01-01", "end_date": "2024-01-01", "customer_org_ids": "org-a"}, 400),
+        ({**RANGE, "start_date": "2024-02-01", "customer_org_ids": "org-a"}, 400),
+        ({**RANGE, "start_date": "2024-02-30", "customer_org_ids": "org-a"}, 400),
+        ({"start_date": "2024-01-01", "customer_org_ids": "org-a"}, 422),
+        ({**RANGE, "customer_org_ids": "org-a", "unknown": "true"}, 400),
+    ),
+)
+def test_aggregate_work_is_bounded(params: Mapping[str, str], status: int) -> None:
+    response: Final = client(database=ActivityDatabase(Table())).get(
+        "/management/v1/customer_organizations/daily/activity/aggregated", params=params
+    )
+    assert response.status_code == status, response.text
+
+
+def test_duplicate_filters_are_rejected() -> None:
+    response: Final = client(database=ActivityDatabase(Table())).get(
+        "/management/v1/customer_organizations/daily/activity/aggregated"
+        "?start_date=2024-01-01&start_date=2024-01-02&end_date=2024-01-31&customer_org_ids=org-a"
+    )
+    assert response.status_code == 400, response.text
