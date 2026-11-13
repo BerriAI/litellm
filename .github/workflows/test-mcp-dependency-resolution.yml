@@ -38,6 +38,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# These jobs check packaging, installation and imports, so they build the Rust
+# workspace unoptimized. The release profile's fat LTO and opt-level 3 pushed
+# every job to its timeout. The overrides go through Cargo's environment
+# because a maturin `--profile ci` argument also reaches dependencies that
+# build from source, such as jiter on Python 3.15, which have no ci profile
+env:
+  CARGO_PROFILE_RELEASE_OPT_LEVEL: "0"
+  CARGO_PROFILE_RELEASE_LTO: "off"
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"
+
 jobs:
   resolve:
     runs-on: ubuntu-latest
