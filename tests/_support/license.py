@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from litellm.proxy.license import License, LicenseVerifier
+from litellm.proxy.auth.litellm_license import License, LicenseVerifier
 
 
 def sign_license(private_key: RSAPrivateKey, claims: Mapping[str, object]) -> str:

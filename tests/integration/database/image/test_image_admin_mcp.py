@@ -26,7 +26,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi import HTTPException
 from litellm_admin_mcp.server import create_http_app
 from litellm.proxy import proxy_server
-from litellm.proxy.license import LicenseCheck, LicenseVerifier
+from litellm.proxy.auth.litellm_license import LicenseCheck, LicenseVerifier
 
 module_name: Final = {
     "unified": "litellm.proxy.proxy_server",

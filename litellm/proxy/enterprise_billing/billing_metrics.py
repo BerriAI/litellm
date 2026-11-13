@@ -34,7 +34,7 @@ from litellm.proxy.middleware.billable_request_metrics_middleware import (
 )
 
 if TYPE_CHECKING:
-    from litellm.proxy.license import License
+    from litellm.proxy.auth.litellm_license import License
 
 ENDPOINT_ENV: Final = "LITELLM_BILLING_METRICS_ENDPOINT"
 CLIENT_ID_ENV: Final = "LITELLM_BILLING_METRICS_CLIENT_ID"

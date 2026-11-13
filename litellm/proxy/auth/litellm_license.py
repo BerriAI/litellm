@@ -26,7 +26,7 @@ class LicenseCheck:
 
     def _verify(self, license_str: str) -> bool:
         premium: Final = self.verifier.verify_remote(license_str)
-        verbose_proxy_logger.debug("license.py::_verify - License is premium=%s", premium)
+        verbose_proxy_logger.debug("litellm.proxy.auth.litellm_license.py::_verify - License is premium=%s", premium)
         return premium
 
     def is_premium(self) -> bool:
@@ -37,7 +37,7 @@ class LicenseCheck:
         try:
             if not self._premium_check_logged:
                 verbose_proxy_logger.debug(
-                    "license.py::is_premium() - ENTERING 'IS_PREMIUM' - License configured: %s",
+                    "litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - License configured: %s",
                     self.license_str is not None,
                 )
 
@@ -46,7 +46,7 @@ class LicenseCheck:
 
             if not self._premium_check_logged:
                 verbose_proxy_logger.debug(
-                    "license.py::is_premium() - License configured after refresh: %s",
+                    "litellm.proxy.auth.litellm_license.py::is_premium() - License configured after refresh: %s",
                     self.license_str is not None,
                 )
                 self._premium_check_logged = True

@@ -4543,7 +4543,7 @@ async def test_group_push_creates_its_new_members_only_when_they_all_fit_the_lic
 ):
     """Members a group push creates are seats too: the batch is checked against the seat limit
     up front, so a push cannot create users past it the way per-user checks racing each other could."""
-    from litellm.proxy.license import LicenseCheck
+    from litellm.proxy.auth.litellm_license import LicenseCheck
 
     license_check: Final = LicenseCheck()
     license_check.airgapped_license_data = native_license(max_users=3)

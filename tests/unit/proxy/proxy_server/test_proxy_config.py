@@ -2779,7 +2779,7 @@ def _booted_proxy(
     server_accepted_license: str | None = None,
 ) -> Iterator[list[str]]:
     """Yields the paths the license server was asked for"""
-    from litellm.proxy.license import LicenseCheck
+    from litellm.proxy.auth.litellm_license import LicenseCheck
 
     def _verdict(path: str) -> tuple[int, bytes]:
         accepted: Final = server_accepted_license is not None and server_accepted_license in path

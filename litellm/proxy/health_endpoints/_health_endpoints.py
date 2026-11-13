@@ -63,6 +63,7 @@ from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
     VERTEX_TARGET_PARAMS,
 )
+from litellm.proxy.auth.litellm_license import License
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils import http_parsing_utils
 from litellm.proxy.common_utils.model_listing_utils import (
@@ -90,7 +91,6 @@ from litellm.proxy.health_check import (  # noqa: F401  # legacy module exports
     run_with_timeout,
     update_litellm_params_for_health_check,
 )
-from litellm.proxy.license import License
 from litellm.proxy.middleware.admission_control_middleware import (
     get_admission_control_stats,
 )

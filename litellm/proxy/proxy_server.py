@@ -458,6 +458,7 @@ from litellm.proxy.auth.fallback_model_access import router_fallback_access_chec
 from litellm.proxy.auth.fallback_rate_limit import RouterFallbackRateLimitCheck
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.legacy_empty_models_check import warn_about_legacy_empty_models
+from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, License, LicenseCheck
 from litellm.proxy.auth.login_throttle import (
     LoginThrottle,
     declared_proxy_ranges,
@@ -734,7 +735,6 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (  # noqa: F401, RUF10
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.lens.adapter import router as lens_router
 from litellm.proxy.lens.internal import LensInternalMiddleware
-from litellm.proxy.license import AUTO_ROUTER_LICENSE_REMEDY, License, LicenseCheck
 from litellm.proxy.list_api.common import (
     ManagementProblem,
     problem_response,

@@ -7,7 +7,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
-from litellm.proxy.license import LicenseCheck
+from litellm.proxy.auth.litellm_license import LicenseCheck
 from tests._support.license import license_verifier, serve_license_server, sign_license
 
 UNSIGNED_LICENSE: Final = "test-only-private-license-marker"

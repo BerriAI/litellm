@@ -61,6 +61,7 @@ from litellm.proxy._types import (
     TeamModelDeleteRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
 from litellm.proxy.auth.model_checks import (
     GLOBAL_ALIASES_ONLY,
     OtherDeploymentsBill,
@@ -89,7 +90,6 @@ from litellm.proxy.common_utils.model_listing_utils import CallerAliases
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.proxy.license import AUTO_ROUTER_LICENSE_REMEDY
 from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, is_team_admin
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.team_endpoints import (  # noqa: F401  # legacy module exports
