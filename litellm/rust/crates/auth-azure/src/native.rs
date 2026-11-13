@@ -902,6 +902,53 @@ mod tests {
         assert_eq!(started.elapsed(), expected_wait);
     }
 
+    #[rstest::rstest]
+    #[case::exhausted_server_error(StatusCode::InternalServerError, None, Some(500))]
+    #[case::rejection(StatusCode::Unauthorized, None, Some(401))]
+    #[case::malformed_retry_after(StatusCode::InternalServerError, Some("soon"), None)]
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_token_post_keeps_what_python_reports_from_it(
+        #[case] status: StatusCode,
+        #[case] retry_after: Option<&'static str>,
+        #[case] answered: Option<u16>,
+    ) {
+        let endpoint = Arc::new(FailingTokenEndpoint {
+            status,
+            retry_after,
+            posts: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let acquirer = NativeAzureTokenAcquirer::with_transport(4, Transport::new(endpoint));
+
+        let error = acquirer
+            .acquire(client_secret_token_request())
+            .await
+            .into_result()
+            .unwrap_err();
+
+        match (
+            litellm_error::find::<crate::EntraTokenFailure>(&error),
+            answered,
+        ) {
+            (Some(crate::EntraTokenFailure::Response(response)), Some(expected)) => {
+                assert_eq!(response.status, expected);
+                assert!(
+                    String::from_utf8_lossy(&response.body).contains("AADSTS90033"),
+                    "{response:?}"
+                );
+            }
+            (Some(crate::EntraTokenFailure::InvalidRetryAfter(response)), None) => {
+                assert_eq!(
+                    response
+                        .headers
+                        .iter()
+                        .find(|(name, _)| name == "retry-after"),
+                    Some(&("retry-after".to_string(), "soon".to_string()))
+                );
+            }
+            (failure, _) => panic!("{failure:?} from {error:?}"),
+        }
+    }
+
     #[derive(Debug)]
     struct AvailableImdsClient {
         probe_status: StatusCode,

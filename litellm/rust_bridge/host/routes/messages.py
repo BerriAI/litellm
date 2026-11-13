@@ -18,6 +18,7 @@ from aiohttp.http_exceptions import ContentLengthError, TransferEncodingError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import exception_mapping_utils
@@ -1233,6 +1234,55 @@ def azure_ad_token(arguments: Mapping[str, object]) -> str:
     from litellm.llms.azure.common_utils import get_azure_ad_token
 
     return get_azure_ad_token(_handler_params(arguments)) or ""
+
+
+def map_token_failure(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception:
+    """Python's handler maps a litellm exception raised while it gets the call's credential, and lets any other
+    exception through as raised."""
+    if not isinstance(error, BaseLLMException):
+        return error
+    return _public_provider_error(error, error, request, request_provider)
+
+
+def azure_ad_token_failure(error: Exception) -> Exception:
+    """What `get_azure_ad_token` logs and raises when its token provider fails with `error`."""
+    from litellm.llms.azure.common_utils import azure_ad_token_failure as python_failure
+
+    verbose_logger.error("Error calling Azure AD token provider: %s", error)
+    failure: Final = python_failure(error)
+    failure.__cause__ = error
+    return failure
+
+
+def non_string_azure_ad_token(token: object) -> TypeError:
+    """What `get_azure_ad_token` logs and raises when its token provider returns `token`, not a string."""
+    verbose_logger.error("Azure AD token provider returned non-string value: %s", type(token))
+    return TypeError(f"Azure AD token must be a string, got {type(token)}")
+
+
+def entra_token_failure(reason: str) -> Exception:
+    """What `get_azure_ad_token` raises when azure-identity's `ClientSecretCredential` fails for `reason`."""
+    from azure.core.exceptions import ClientAuthenticationError
+
+    return azure_ad_token_failure(ClientAuthenticationError(message=f"Authentication failed: {reason}"))
+
+
+def entra_token_response_failure(status: int, headers: Sequence[tuple[str, str]], body: bytes) -> Exception | None:
+    """What `get_azure_ad_token` raises when the token endpoint gave a native client secret flow this
+    final answer, read by azure-identity's own `ClientSecretCredential` replaying it."""
+    from azure.core.exceptions import ClientAuthenticationError
+
+    from litellm.rust_bridge.host.routes.entra_replay import replayed_credential
+
+    with replayed_credential(status, tuple(headers), body) as credential:
+        try:
+            credential.get_token(_ENTRA_SCOPE)
+        except ClientAuthenticationError as error:
+            return azure_ad_token_failure(error)
+    return None
+
+
+_ENTRA_SCOPE: Final = "https://cognitiveservices.azure.com/.default"
 
 
 def workload_identity_token(params: Mapping[str, object], api_base: str | None) -> str | None:

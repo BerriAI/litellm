@@ -1,5 +1,7 @@
 import datetime
 import functools
+import json
+import logging
 from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
@@ -16,6 +18,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.llms.anthropic.messages.native import interceptors, mcp_handler
 from litellm.llms.anthropic.messages.native.interceptors.base import MessagesInterceptor
+from litellm.llms.azure.common_utils import AzureOpenAIError, EntraRejectionError
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -2027,3 +2030,159 @@ def test_short_circuits_needs_a_replaced_web_search_short_circuit(monkeypatch: p
     assert not messages_host.short_circuits()
     monkeypatch.setattr(litellm, "callbacks", [_ShortCircuit()])
     assert messages_host.short_circuits()
+
+
+_INVALID_CLIENT: Final = json.dumps(
+    {
+        "error": "invalid_client",
+        "error_description": "AADSTS7000215: Invalid client secret provided. Ensure the secret for app "
+        "'00000000-0000-0000-0000-0000000000b1' is the value. Trace ID: 0b1f0000-0000-0000-0000-000000000001",
+    }
+).encode()
+_UNKNOWN_APPLICATION: Final = json.dumps(
+    {
+        "error": "unauthorized_client",
+        "error_description": "AADSTS700016: Application with identifier '11111111-2222-3333-4444-555555555555' "
+        "was not found in the directory 'tenant'. Trace ID: x",
+    }
+).encode()
+_TRANSIENT: Final = json.dumps({"error": "temporarily_unavailable", "error_description": "AADSTS90033: Try again."})
+_JSON: Final = (("content-type", "application/json"),)
+
+
+# The "Authentication failed: ..." texts are azure-identity 1.25.2 and MSAL 1.37.0 wording: MSAL raises
+# "HTTP Error: <status>" for a 5xx (throttled_http_client.py), azure-core 1.41.0 raises "Invalid HTTP date"
+# for an unparseable Retry-After (pipeline/policies/_utils.py) and json raises its own decode error.
+@pytest.mark.parametrize(
+    ("status", "headers", "body", "raised", "status_code", "message"),
+    [
+        pytest.param(
+            401,
+            _JSON,
+            _INVALID_CLIENT,
+            EntraRejectionError,
+            401,
+            "Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided.",
+            id="listed_rejection_is_a_401",
+        ),
+        pytest.param(
+            400,
+            _JSON,
+            _UNKNOWN_APPLICATION,
+            EntraRejectionError,
+            401,
+            "Failed to get Azure AD token: AADSTS700016: Application with identifier '<redacted>' was not found "
+            "in the directory 'tenant'.",
+            id="rejection_redacts_guids",
+        ),
+        pytest.param(
+            500,
+            _JSON,
+            _TRANSIENT.encode(),
+            RuntimeError,
+            None,
+            "Failed to get Azure AD token: Authentication failed: HTTP Error: 500",
+            id="exhausted_server_error",
+        ),
+        pytest.param(
+            500,
+            (*_JSON, ("retry-after", "soon")),
+            _TRANSIENT.encode(),
+            RuntimeError,
+            None,
+            "Failed to get Azure AD token: Authentication failed: Invalid HTTP date",
+            id="malformed_retry_after",
+        ),
+        pytest.param(
+            400,
+            (("content-type", "text/html"),),
+            b"<html>nope</html>",
+            RuntimeError,
+            None,
+            "Failed to get Azure AD token: Authentication failed: Expecting value: line 1 column 1 (char 0)",
+            id="answer_that_is_not_json",
+        ),
+    ],
+)
+def test_a_native_token_endpoint_answer_raises_what_get_azure_ad_token_raises(
+    status: int,
+    headers: tuple[tuple[str, str], ...],
+    body: bytes,
+    raised: type[Exception],
+    status_code: int | None,
+    message: str,
+) -> None:
+    failure: Final = messages_host.entra_token_response_failure(status, headers, body)
+
+    assert type(failure) is raised
+    assert str(failure) == message
+    assert getattr(failure, "status_code", None) == status_code
+    assert failure.__cause__ is not None
+
+
+def test_a_failing_token_provider_logs_and_raises_what_get_azure_ad_token_does(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    error: Final = ValueError("token service unavailable")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        failure: Final = messages_host.azure_ad_token_failure(error)
+
+    assert type(failure) is RuntimeError
+    assert str(failure) == "Failed to get Azure AD token: token service unavailable"
+    assert failure.__cause__ is error
+    assert caplog.messages == ["Error calling Azure AD token provider: token service unavailable"]
+
+
+def test_a_non_string_token_logs_and_raises_what_get_azure_ad_token_does(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        failure: Final = messages_host.non_string_azure_ad_token(1)
+
+    assert type(failure) is TypeError
+    assert str(failure) == "Azure AD token must be a string, got <class 'int'>"
+    assert caplog.messages == ["Azure AD token provider returned non-string value: <class 'int'>"]
+
+
+_AZURE_CLAUDE_REQUEST: Final = MappingProxyType({"model": "azure_ai/claude-sonnet-4-5"})
+
+
+@pytest.mark.parametrize(
+    ("error", "raised", "status_code"),
+    [
+        pytest.param(
+            EntraRejectionError(status_code=401, message="Failed to get Azure AD token: AADSTS50126: Bad password."),
+            litellm.AuthenticationError,
+            401,
+            id="entra_rejection_is_an_authentication_error",
+        ),
+        pytest.param(
+            AzureOpenAIError(status_code=422, message="Azure AD Token expires_in not returned"),
+            litellm.BadRequestError,
+            422,
+            id="oidc_reply_without_fields_is_a_bad_request",
+        ),
+    ],
+)
+def test_a_litellm_token_failure_is_mapped_as_the_handler_maps_it(
+    error: Exception, raised: type[Exception], status_code: int
+) -> None:
+    failure: Final = messages_host.map_token_failure(error, _AZURE_CLAUDE_REQUEST, "azure_ai")
+
+    assert type(failure) is raised
+    assert getattr(failure, "status_code", None) == status_code
+    assert getattr(failure, "llm_provider", None) == "azure_ai"
+    assert str(error) in str(failure)
+    assert failure.__context__ is error
+
+
+def test_any_other_token_failure_reaches_the_caller_as_raised() -> None:
+    error: Final = RuntimeError("Failed to get Azure AD token: Authentication failed: HTTP Error: 500")
+
+    assert messages_host.map_token_failure(error, _AZURE_CLAUDE_REQUEST, "azure_ai") is error
+
+
+def test_a_failure_without_an_endpoint_answer_raises_what_get_azure_ad_token_raises() -> None:
+    failure: Final = messages_host.entra_token_failure("connection refused")
+
+    assert type(failure) is RuntimeError
+    assert str(failure) == "Failed to get Azure AD token: Authentication failed: connection refused"

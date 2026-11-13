@@ -550,6 +550,9 @@ KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
                 "int_top_p_on_adaptive_model",
                 "int_speed_on_model_without_speed",
                 "azure_ai_entra_token_provider_raises",
+                "azure_ai_entra_provider_rejection_is_an_authentication_error",
+                "azure_ai_entra_provider_rejection_redacts_guids",
+                "azure_ai_entra_provider_unlisted_code_is_a_runtime_error",
                 "azure_ai_oidc_reference_is_minted_by_python",
                 "azure_ai_token_refresh_outranks_a_static_token",
                 "azure_ai_username_and_password_are_minted_by_python",
@@ -3345,6 +3348,30 @@ def _failing_entra_provider() -> str:
     raise ValueError("token service unavailable")
 
 
+def _rejected_entra_provider() -> str:
+    from azure.core.exceptions import ClientAuthenticationError
+
+    raise ClientAuthenticationError(
+        message="Authentication failed: AADSTS7000215: Invalid client secret provided. Ensure the secret for app "
+        "'00000000-0000-0000-0000-0000000000b1' is the value. Trace ID: 0b1f0000-0000-0000-0000-000000000001"
+    )
+
+
+def _unknown_application_entra_provider() -> str:
+    from azure.core.exceptions import ClientAuthenticationError
+
+    raise ClientAuthenticationError(
+        message="Authentication failed: AADSTS700016: Application with identifier "
+        "'11111111-2222-3333-4444-555555555555' was not found in the directory 'tenant'. Trace ID: x"
+    )
+
+
+def _unlisted_entra_provider() -> str:
+    from azure.core.exceptions import ClientAuthenticationError
+
+    raise ClientAuthenticationError(message="Authentication failed: AADSTS50058: A silent sign-in request was sent.")
+
+
 AZURE_CLAUDE: Final = "azure_ai/claude-sonnet-4-5"
 A06_A08_CALLER_CREDENTIAL: Final = (
     "A06-A08 (approved by design): a caller x-api-key or bearer replaces the azure_ai operator key on Rust, "
@@ -3435,6 +3462,24 @@ AZURE_AUTH_CASES: Final = tuple(
         Case(
             "azure_ai_entra_token_provider_raises",
             _kw(api_key=None, azure_ad_token_provider=_failing_entra_provider),
+            model=AZURE_CLAUDE,
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_entra_provider_rejection_is_an_authentication_error",
+            _kw(api_key=None, azure_ad_token_provider=_rejected_entra_provider),
+            model=AZURE_CLAUDE,
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_entra_provider_rejection_redacts_guids",
+            _kw(api_key=None, azure_ad_token_provider=_unknown_application_entra_provider),
+            model=AZURE_CLAUDE,
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_entra_provider_unlisted_code_is_a_runtime_error",
+            _kw(api_key=None, azure_ad_token_provider=_unlisted_entra_provider),
             model=AZURE_CLAUDE,
             upstream=(),
         ),

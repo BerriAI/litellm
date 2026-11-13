@@ -853,6 +853,15 @@ impl PythonBinding for MessagesPythonHost {
                 self.map_transport_failure(py, raised)
             };
         }
+        if let Some(raised) = super::workload_identity::python_error(py, &error)
+            .or_else(|| super::workload_identity::entra_token_error(py, &error))
+        {
+            let mapped = py
+                .import(ROUTE_HOST_MODULE)?
+                .getattr("map_token_failure")?
+                .call1((raised.value(py), self.view.request(py)?, self.provider(py)))?;
+            return Ok(PyErr::from_value(mapped));
+        }
         if let Some(unencodable) = litellm_error::find::<UnencodableHeader>(&error) {
             let (value, received) = match unencodable {
                 UnencodableHeader::Sent(value) => (value, false),

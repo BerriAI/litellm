@@ -86,6 +86,66 @@ impl RetryBudget {
     }
 }
 
+/// The token endpoint's final answer, which a host replays through its own credential to raise
+/// what Python raises for it.
+#[derive(Debug)]
+pub struct TokenResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl TokenResponse {
+    async fn read(response: AsyncRawResponse) -> azure_core::Result<Self> {
+        let (status, headers, body) = response.deconstruct();
+        Ok(Self {
+            status: status.into(),
+            headers: headers
+                .iter()
+                .map(|(name, value)| (name.as_str().to_string(), value.as_str().to_string()))
+                .collect(),
+            body: body.collect().await?.to_vec(),
+        })
+    }
+
+    fn description(&self) -> String {
+        serde_json::from_slice::<serde_json::Value>(&self.body)
+            .ok()
+            .and_then(|body| {
+                body.get("error_description")?
+                    .as_str()
+                    .map(|text| format!(": {text}"))
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// How a token POST failed once azure-identity's retries are spent.
+#[derive(Debug, thiserror::Error)]
+pub enum EntraTokenFailure {
+    #[error("Entra ID token endpoint answered {}{}", .0.status, .0.description())]
+    Response(TokenResponse),
+    #[error("Invalid HTTP date")]
+    InvalidRetryAfter(TokenResponse),
+    #[error("Entra ID token request failed")]
+    Transport(#[source] azure_core::Error),
+}
+
+impl EntraTokenFailure {
+    pub fn response(&self) -> Option<&TokenResponse> {
+        match self {
+            Self::Response(response) | Self::InvalidRetryAfter(response) => Some(response),
+            Self::Transport(_) => None,
+        }
+    }
+}
+
+enum Next {
+    Wait(Duration),
+    Rejected,
+    Settle,
+}
+
 #[async_trait::async_trait]
 impl Policy for AzureIdentityRetry {
     async fn send(
@@ -97,20 +157,61 @@ impl Policy for AzureIdentityRetry {
         let mut budget = RetryBudget::new();
         loop {
             let outcome = next[0].send(ctx, request, &next[1..]).await;
-            let delay = match &outcome {
+            let step = match &outcome {
                 Ok(response) if is_retryable(response) && budget.spend(RetryKind::Status) => {
-                    retry_after(response.headers())?.unwrap_or_else(|| budget.backoff())
+                    match retry_after(response.headers()) {
+                        Ok(delay) => Next::Wait(delay.unwrap_or_else(|| budget.backoff())),
+                        Err(MalformedRetryAfter) => Next::Rejected,
+                    }
                 }
                 Err(error)
                     if transport_retry(error.kind()).is_some_and(|kind| budget.spend(kind)) =>
                 {
-                    budget.backoff()
+                    Next::Wait(budget.backoff())
                 }
-                _ => return outcome,
+                _ => Next::Settle,
             };
-            azure_core::sleep::sleep(delay).await;
+            match step {
+                Next::Wait(delay) => azure_core::sleep::sleep(delay).await,
+                Next::Rejected => {
+                    return failed(outcome?, EntraTokenFailure::InvalidRetryAfter).await;
+                }
+                Next::Settle => return settle(outcome).await,
+            }
         }
     }
+}
+
+async fn settle(outcome: PolicyResult) -> PolicyResult {
+    match outcome {
+        Ok(response) if u16::from(response.status()) >= 400 => {
+            failed(response, EntraTokenFailure::Response).await
+        }
+        Err(error) if transport_retry(error.kind()).is_some() => Err(transport_failure(error)),
+        outcome => outcome,
+    }
+}
+
+async fn failed(
+    response: AsyncRawResponse,
+    failure: fn(TokenResponse) -> EntraTokenFailure,
+) -> PolicyResult {
+    let status = response.status();
+    let response = TokenResponse::read(response)
+        .await
+        .map_err(transport_failure)?;
+    Err(azure_core::Error::new(
+        ErrorKind::HttpResponse {
+            status,
+            error_code: None,
+            raw_response: None,
+        },
+        failure(response),
+    ))
+}
+
+fn transport_failure(error: azure_core::Error) -> azure_core::Error {
+    azure_core::Error::new(error.kind().clone(), EntraTokenFailure::Transport(error))
 }
 
 fn is_retryable(response: &AsyncRawResponse) -> bool {
@@ -131,7 +232,9 @@ fn transport_retry(kind: &ErrorKind) -> Option<RetryKind> {
     }
 }
 
-fn retry_after(headers: &Headers) -> azure_core::Result<Option<Duration>> {
+struct MalformedRetryAfter;
+
+fn retry_after(headers: &Headers) -> Result<Option<Duration>, MalformedRetryAfter> {
     let Some((value, unit)) = RETRY_AFTER_HEADERS.iter().find_map(|(name, unit)| {
         headers
             .get_optional_str(name)
@@ -142,9 +245,7 @@ fn retry_after(headers: &Headers) -> azure_core::Result<Option<Duration>> {
     };
     parse_delay(value)
         .map(|delay| Some(delay * unit).filter(|delay| delay.is_positive()))
-        .ok_or_else(|| {
-            azure_core::Error::with_message(ErrorKind::DataConversion, "Invalid HTTP date")
-        })
+        .ok_or(MalformedRetryAfter)
 }
 
 fn parse_delay(value: &str) -> Option<Duration> {
@@ -152,7 +253,7 @@ fn parse_delay(value: &str) -> Option<Duration> {
         .trim()
         .parse::<f64>()
         .ok()
-        .and_then(Duration::checked_seconds_f64)
+        .map(|seconds| Duration::checked_seconds_f64(seconds).unwrap_or(Duration::ZERO))
         .or_else(|| {
             parse_rfc7231(value)
                 .ok()

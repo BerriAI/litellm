@@ -3489,6 +3489,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "strum",
+ "thiserror 2.0.19",
  "tokio",
  "url",
 ]
@@ -4396,6 +4397,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "aws-sdk-secretsmanager",
+ "azure_core",
  "bytes",
  "criterion",
  "fancy-regex 0.19.2",
@@ -4403,6 +4405,7 @@ dependencies = [
  "indexmap 2.14.0",
  "litellm-auth",
  "litellm-auth-aws",
+ "litellm-auth-azure",
  "litellm-cache",
  "litellm-cache-response",
  "litellm-callbacks-legacy-python",
