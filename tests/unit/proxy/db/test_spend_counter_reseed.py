@@ -16,8 +16,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from litellm.caching.dual_cache import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import PROXY_DB_LOOKUP_MAX_CONCURRENCY
 from litellm.proxy.db.db_lookup_gate import LoopBoundSemaphore, db_lookup_stall_tracker
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
@@ -72,6 +70,7 @@ class _FakePrismaClient:
         end_user_row: SimpleNamespace | None = None,
         end_user_error: Exception | None = None,
         project_row: SimpleNamespace | None = None,
+        customer_row: SimpleNamespace | None = None,
     ) -> None:
         self.db = SimpleNamespace(
             litellm_budgetwindowspend=_FakeFindUniqueTable(row=row, error=error),
@@ -79,6 +78,9 @@ class _FakePrismaClient:
             litellm_endusertable=_FakeFindUniqueTable(row=end_user_row, error=end_user_error),
             litellm_verificationtoken=_InFlightCountingTable(),
             litellm_projecttable=_FakeFindUniqueTable(row=project_row),
+            litellm_customerorganizationtable=_FakeFindUniqueTable(row=customer_row),
+            litellm_customerteamtable=_FakeFindUniqueTable(row=customer_row),
+            litellm_customermembertable=_FakeFindUniqueTable(row=customer_row),
         )
 
 
@@ -482,3 +484,31 @@ async def test_from_db_still_never_reads_the_end_user_row():
 
     assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:end_user:customer-42") is None
     assert prisma.db.litellm_endusertable.where_clauses == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "counter, table, field, identity",
+    [
+        ("spend:customer_org:org:1", "litellm_customerorganizationtable", "customer_org_id", "org:1"),
+        ("spend:customer_team:org:1:default", "litellm_customerteamtable", "customer_team_id", "org:1:default"),
+        (
+            "spend:customer_member:member@example.com",
+            "litellm_customermembertable",
+            "customer_member_id",
+            "member@example.com",
+        ),
+    ],
+)
+async def test_customer_counter_reseeds_recorded_spend_after_expiry_or_reset(
+    counter: str, table: str, field: str, identity: str
+) -> None:
+    prisma: Final = _FakePrismaClient(customer_row=SimpleNamespace(spend=4.5))
+    store: Final = SpendCounterStore(connect(None).spend_counters())
+    assert await SpendCounterReseed.coalesced(prisma, store, counter) == 4.5
+    assert await store.read(counter) == (4.5, False)
+    assert getattr(prisma.db, table).where_clauses == [{field: identity}]
+    getattr(prisma.db, table)._row.spend = 0.0
+    await store.delete((counter,))
+    assert await SpendCounterReseed.coalesced(prisma, store, counter) == 0.0
+    assert await store.read(counter) == (0.0, False)

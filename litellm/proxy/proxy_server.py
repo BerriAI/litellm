@@ -1122,6 +1122,7 @@ from litellm.types.llms.openai import (
     ResponseInProgressEvent,
     ResponsesAPIResponse,
 )
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -3680,6 +3681,7 @@ async def increment_spend_counters(
     project_id: str | None = None,
     committed_spend_scope: EntitySpendCounterKeys | None = None,
     windows_from_ledger: bool = False,
+    customer_hierarchy: CustomerHierarchyIds | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3702,6 +3704,7 @@ async def increment_spend_counters(
             tags=tags,
             model_access_groups=model_access_groups,
             project_id=project_id,
+            customer_hierarchy=customer_hierarchy,
         ),
     ):
         await _increment_spend_counters_batched(
@@ -3718,6 +3721,7 @@ async def increment_spend_counters(
             project_id=project_id,
             committed_spend_scope=committed_spend_scope,
             windows_from_ledger=windows_from_ledger,
+            customer_hierarchy=customer_hierarchy,
         )
 
 
@@ -3834,6 +3838,7 @@ async def _increment_spend_counters_batched(
     project_id: str | None = None,
     committed_spend_scope: EntitySpendCounterKeys | None = None,
     windows_from_ledger: bool = False,
+    customer_hierarchy: CustomerHierarchyIds | None = None,
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
     the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
@@ -4029,6 +4034,7 @@ async def _increment_spend_counters_batched(
             )
             if project_id is not None
             else None,
+            _prepare_customer_spend_increments(customer_hierarchy, cost) if customer_hierarchy is not None else None,
             _prepare_committed_spend_increments(counter_keys=committed_counter_keys, increment=cost)
             if committed_counter_keys
             else None,
@@ -4137,6 +4143,19 @@ async def _reconcile_budget_reservation_for_counter_update(
 async def _committed_spend_seeded(counter_key: str) -> bool:
     return await _is_spend_counter_cache_warm(committed_spend_key(counter_key)) or await seed_committed_spend(
         spend_counter_store=spend_counter_store, prisma_client=prisma_client, counter_key=counter_key
+    )
+
+
+async def _prepare_customer_spend_increments(
+    hierarchy: CustomerHierarchyIds, increment: float
+) -> tuple[PendingSpendIncrement, ...]:
+    return tuple(
+        await asyncio.gather(
+            *(
+                _prepare_spend_counter_increment(counter_key=key, source_cache_key=key, increment=increment)
+                for key in hierarchy.counter_keys()
+            )
+        )
     )
 
 

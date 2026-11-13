@@ -5,6 +5,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm.redis.stores.spend_counters.types import customer_counter
 from litellm.types.integrations.slack_alerting import Litellm_EntityType
 
 CustomerScopeKey: TypeAlias = Literal["customer_org", "customer_team", "customer_member"]
@@ -33,6 +34,15 @@ class CustomerScopeAuth(BaseModel):
     model_tpm_limit: Mapping[str, int] | None = None
     model_rpm_limit: Mapping[str, int] | None = None
 
+    def counter_key(self) -> str:
+        match self.key:
+            case "customer_org":
+                return customer_counter("org", self.entity_id)
+            case "customer_team":
+                return customer_counter("team", self.entity_id)
+            case "customer_member":
+                return customer_counter("member", self.entity_id)
+
 
 class CustomerHierarchyAuth(BaseModel):
     """The levels a request is charged to. A request that named only an organization alias has no team or member."""
@@ -53,6 +63,13 @@ class CustomerHierarchyIds:
     customer_org_id: str
     customer_team_id: str | None = None
     customer_member_id: str | None = None
+
+    def counter_keys(self) -> tuple[str, ...]:
+        return (
+            customer_counter("org", self.customer_org_id),
+            *((customer_counter("team", self.customer_team_id),) if self.customer_team_id is not None else ()),
+            *((customer_counter("member", self.customer_member_id),) if self.customer_member_id is not None else ()),
+        )
 
     def entities(self) -> Mapping[str, str | None]:
         return {

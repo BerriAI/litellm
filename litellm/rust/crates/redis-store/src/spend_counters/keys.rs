@@ -19,6 +19,9 @@ pub enum SpendCounter {
     User(String),
     EndUser(String),
     Org(String),
+    CustomerOrg(String),
+    CustomerTeam(String),
+    CustomerMember(String),
     Tag(String),
     Project(String),
     ModelAccessGroup(String),
@@ -47,6 +50,9 @@ impl SpendCounter {
             Self::User(id) => format!("spend:user:{id}"),
             Self::EndUser(id) => format!("spend:end_user:{id}"),
             Self::Org(id) => format!("spend:org:{id}"),
+            Self::CustomerOrg(id) => format!("spend:customer_org:{id}"),
+            Self::CustomerTeam(id) => format!("spend:customer_team:{id}"),
+            Self::CustomerMember(id) => format!("spend:customer_member:{id}"),
             Self::Tag(name) => format!("spend:tag:{name}"),
             Self::Project(id) => format!("spend:project:{id}"),
             Self::ModelAccessGroup(name) => format!("spend:model_access_group:{name}"),
@@ -91,11 +97,29 @@ impl SpendCounter {
             "user" => Self::User(id.to_owned()),
             "end_user" => Self::EndUser(id.to_owned()),
             "org" => Self::Org(id.to_owned()),
+            "customer_org" => Self::CustomerOrg(id.to_owned()),
+            "customer_team" => Self::CustomerTeam(id.to_owned()),
+            "customer_member" => Self::CustomerMember(id.to_owned()),
             "tag" => Self::Tag(id.to_owned()),
             "project" => Self::Project(id.to_owned()),
             "model_access_group" => Self::ModelAccessGroup(id.to_owned()),
             "shadow_eval" => Self::ShadowEval(id.to_owned()),
             _ => return Err(invalid()),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SpendCounter;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::org(SpendCounter::CustomerOrg("org:1".to_owned()), "spend:customer_org:org:1")]
+    #[case::team(SpendCounter::CustomerTeam("org:1:default".to_owned()), "spend:customer_team:org:1:default")]
+    #[case::member(SpendCounter::CustomerMember("member@example.com".to_owned()), "spend:customer_member:member@example.com")]
+    fn customer_keys_round_trip(#[case] counter: SpendCounter, #[case] key: &str) {
+        assert_eq!(SpendCounter::parse(key).unwrap(), counter);
+        assert_eq!(counter.key(), key);
     }
 }

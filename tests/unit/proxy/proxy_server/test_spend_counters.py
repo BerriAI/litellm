@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Final, Literal, cast
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
@@ -44,12 +44,12 @@ from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_user_cache_key, tag_cache_key
 from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
-from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
-
-from .conftest import normalize
 from litellm.rust_bridge._native import NativeRedisStoreError
+from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+from .conftest import normalize
 
 
 def _spend_counters(monkeypatch: pytest.MonkeyPatch, **fake: object) -> FakeSpendCounters:
@@ -1690,9 +1690,7 @@ async def test_update_cache_moves_this_workers_global_proxy_spend_to_the_shared_
 async def test_update_cache_keeps_the_newest_global_proxy_spend_when_redis_replies_out_of_order() -> None:
     held_increment_applied: Final = asyncio.Event()
     held_reply_released: Final = asyncio.Event()
-    cache, _ = shared_cache(
-        _SharedSpend(10.0, held=0.25, applied=held_increment_applied, released=held_reply_released)
-    )
+    cache, _ = shared_cache(_SharedSpend(10.0, held=0.25, applied=held_increment_applied, released=held_reply_released))
     cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0, local_only=True)
 
     async def _request(response_cost: float) -> None:
@@ -1788,3 +1786,47 @@ async def test_increment_spend_counters_timeout_invalidates_all_counters_without
     await _increment_every_spend_counter()
 
     _assert_every_pending_counter_invalidated(spend)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limited_scope", ["customer_org", "customer_team", "customer_member"])
+async def test_customer_cost_blocks_a_worker_with_stale_hierarchy_spend(
+    monkeypatch: pytest.MonkeyPatch, limited_scope: str
+) -> None:
+    from litellm.proxy.auth.customer_hierarchy_auth import check_customer_hierarchy_budget
+    from litellm.types.proxy.auth.customer_hierarchy import (
+        CustomerHierarchyAuth,
+        CustomerHierarchyIds,
+        CustomerScopeAuth,
+    )
+
+    ids: Final = CustomerHierarchyIds("org-1", "team-1", "member-1")
+    spend: Final = _spend_counters(monkeypatch, redis=dict.fromkeys(ids.counter_keys(), 0.0))
+    hierarchy: Final = CustomerHierarchyAuth(
+        customer_org_id="org-1",
+        customer_team_id="team-1",
+        customer_member_id="member-1",
+        scopes=(
+            CustomerScopeAuth(
+                key="customer_org", entity_id="org-1", max_budget=1 if limited_scope == "customer_org" else None
+            ),
+            CustomerScopeAuth(
+                key="customer_team", entity_id="team-1", max_budget=1 if limited_scope == "customer_team" else None
+            ),
+            CustomerScopeAuth(
+                key="customer_member",
+                entity_id="member-1",
+                max_budget=1 if limited_scope == "customer_member" else None,
+            ),
+        ),
+    )
+    await check_customer_hierarchy_budget(hierarchy)
+    await ps.increment_spend_counters(
+        token=None, team_id=None, user_id=None, response_cost=1.25, customer_hierarchy=ids
+    )
+
+    assert spend.redis == dict.fromkeys(ids.counter_keys(), 1.25)
+    with pytest.raises(litellm.BudgetExceededError) as exceeded:
+        await check_customer_hierarchy_budget(hierarchy)
+    assert exceeded.value.entity_type == limited_scope
+    assert exceeded.value.current_cost == 1.25

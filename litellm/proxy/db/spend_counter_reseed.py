@@ -34,6 +34,9 @@ from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     BudgetWindowSpendRepository,
+    CustomerMemberRepository,
+    CustomerOrganizationRepository,
+    CustomerTeamRepository,
     EndUserRepository,
     SpendLogsRepository,
     TeamMembershipRepository,
@@ -178,6 +181,18 @@ class SpendCounterReseed:
             if counter_key.startswith("spend:project:"):
                 return await ProjectRepository(prisma_client).table.find_unique(
                     where={"project_id": counter_key[len("spend:project:") :]}
+                )
+            if counter_key.startswith("spend:customer_org:"):
+                return await CustomerOrganizationRepository(prisma_client).table.find_unique(
+                    where={"customer_org_id": counter_key[len("spend:customer_org:") :]}
+                )
+            if counter_key.startswith("spend:customer_team:"):
+                return await CustomerTeamRepository(prisma_client).table.find_unique(
+                    where={"customer_team_id": counter_key[len("spend:customer_team:") :]}
+                )
+            if counter_key.startswith("spend:customer_member:"):
+                return await CustomerMemberRepository(prisma_client).table.find_unique(
+                    where={"customer_member_id": counter_key[len("spend:customer_member:") :]}
                 )
             return None
 

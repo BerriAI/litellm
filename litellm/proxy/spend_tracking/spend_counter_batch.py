@@ -22,6 +22,7 @@ from litellm.redis.stores.spend_counters import (
     team_member_counter,
     user_counter,
 )
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds
 
 _NO_VALUES: Final[Mapping[str, float | None]] = MappingProxyType({})
 
@@ -231,6 +232,7 @@ def post_call_counter_keys(
     tags: Sequence[object] | None,
     model_access_groups: Sequence[object] | None,
     project_id: str | None = None,
+    customer_hierarchy: CustomerHierarchyIds | None = None,
 ) -> frozenset[str]:
     """Every counter ``increment_spend_counters`` warm-checks, except budget windows which bind on read."""
     entity_keys: Final = frozenset(
@@ -247,7 +249,10 @@ def post_call_counter_keys(
     group_keys: Final = frozenset(
         model_access_group_counter(group) for group in model_access_groups or () if group and isinstance(group, str)
     )
-    return entity_keys | tag_keys | group_keys
+    customer_keys: Final[frozenset[str]] = (
+        frozenset(customer_hierarchy.counter_keys()) if customer_hierarchy is not None else frozenset()
+    )
+    return entity_keys | tag_keys | group_keys | customer_keys
 
 
 def bind_admission_counter_keys(token: UserAPIKeyAuth, end_user_id: str | None) -> None:

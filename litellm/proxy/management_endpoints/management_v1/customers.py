@@ -7,6 +7,7 @@ from typing_extensions import assert_never
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import forget_customer_hierarchies, forget_customer_organization_aliases
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import broadcast_evictions
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import (
     PROBLEM_TYPE_BASE,
@@ -19,6 +20,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarch
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
 )
+from litellm.redis.stores.spend_counters import customer_counter
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     BudgetTemplate,
     CustomerMember,
@@ -35,6 +37,13 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
 from litellm.types.proxy.management_endpoints.management_v1 import ListMeta, ListResponse, ProblemDetail
 
 T: Final = TypeVar("T")
+
+
+async def _forget_spend(counter_key: str) -> None:
+    from litellm.proxy.proxy_server import invalidate_spend_counter
+
+    await invalidate_spend_counter(counter_key)
+    await broadcast_evictions((counter_key,))
 
 
 def error_details(code: ErrorCode) -> tuple[int, str, str]:
@@ -212,6 +221,7 @@ async def delete_customer_organization(
 ) -> Response:
     previous: Final = resolve(await hierarchy.get_organization(customer_org_id))
     resolve(await hierarchy.delete_organization(customer_org_id))
+    await _forget_spend(customer_counter("org", customer_org_id))
     await forget_customer_organization_aliases((previous.alias,), cache)
     return Response(status_code=204)
 
@@ -292,6 +302,7 @@ async def delete_customer_team(
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
 ) -> Response:
     resolve(await hierarchy.delete_team(customer_team_id))
+    await _forget_spend(customer_counter("team", customer_team_id))
     return Response(status_code=204)
 
 
@@ -372,6 +383,7 @@ async def delete_customer_member(
     cache: AuthCache,
 ) -> Response:
     resolve(await hierarchy.delete_member(customer_member_id))
+    await _forget_spend(customer_counter("member", customer_member_id))
     await forget_customer_hierarchies((customer_member_id,), cache)
     return Response(status_code=204)
 

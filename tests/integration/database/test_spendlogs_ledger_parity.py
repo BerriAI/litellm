@@ -1652,8 +1652,17 @@ async def test_customer_daily_usage_is_atomic_with_accounting_and_survives_budge
                     sql.SQL("SELECT spend, budget_reset_at IS NOT NULL FROM {}").format(sql.Identifier(table))
                 ).fetchall() == [(0.25, True)]
                 connection.execute(sql.SQL("UPDATE {} SET budget_reset_at=%s").format(sql.Identifier(table)), (_NOW,))
+        customer_counters: Final = (
+            "spend:customer_member:member",
+            "spend:customer_team:customer-team",
+            "spend:customer_org:customer-org",
+        )
+        for counter in customer_counters:
+            await proxy_server.spend_counter_store.set(counter, 0.25)
         await job.reset_budget_for_customer_hierarchy()
         await job.reset_budget_for_customer_hierarchy()
+        for counter in customer_counters:
+            assert await proxy_server.spend_counter_store.read(counter) == (None, False)
         with psycopg.connect(parity_database) as connection:
             for table in tables:
                 assert connection.execute(

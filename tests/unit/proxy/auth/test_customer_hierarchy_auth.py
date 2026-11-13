@@ -121,7 +121,8 @@ def test_levels_without_a_budget_row_carry_no_limits() -> None:
     )
 
 
-def test_budget_check_fails_the_outermost_exhausted_level_first() -> None:
+@pytest.mark.asyncio
+async def test_budget_check_fails_the_outermost_exhausted_level_first() -> None:
     hierarchy: Final = customer_hierarchy_from_member_row(
         _row(
             template={"max_budget": 1.0},
@@ -132,13 +133,13 @@ def test_budget_check_fails_the_outermost_exhausted_level_first() -> None:
         NOW,
     )
     with pytest.raises(litellm.BudgetExceededError) as exc:
-        check_customer_hierarchy_budget(hierarchy)
+        await check_customer_hierarchy_budget(hierarchy)
     assert (exc.value.entity_type, exc.value.entity_id) == ("customer_org", "org-1")
 
     within: Final = customer_hierarchy_from_member_row(
         _row(template={"max_budget": 1.0}, team_budget={"max_budget": 5.0}, spend=(0.0, 4.99, 0.99)), NOW
     )
-    check_customer_hierarchy_budget(within)
+    await check_customer_hierarchy_budget(within)
 
 
 def test_model_access_requires_every_level_with_an_allowlist_to_permit_the_model() -> None:
@@ -463,3 +464,47 @@ async def test_an_unknown_member_stays_refused_without_an_alias_or_when_registra
         )
     assert (failed.value.code, failing.calls) == ("401", (("org-1", "user-7"),))
     assert "user-7" not in members.rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["customer_org", "customer_team", "customer_member"])
+async def test_cached_identity_enforces_another_workers_completed_spend(
+    monkeypatch: pytest.MonkeyPatch, scope: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    identities: Final = {"customer_org": "org-1", "customer_team": "team-1", "customer_member": "member-1"}
+    counters: Final = FakeSpendCounters(
+        redis={f"spend:{kind}:{identity}": 0.0 for kind, identity in identities.items()}
+    )
+    monkeypatch.setattr(proxy_server, "spend_counter_store", counters.store())
+    members: Final = _MemberTable(
+        {
+            "member-1": _row(
+                org_budget={"max_budget": 1.0} if scope == "customer_org" else None,
+                team_budget={"max_budget": 1.0} if scope == "customer_team" else None,
+                template={"max_budget": 1.0} if scope == "customer_member" else None,
+            )
+        }
+    )
+    prisma: Final = _Prisma(members)
+    cache: Final = UserApiKeyCache()
+
+    async def resolve_cached() -> CustomerHierarchyAuth:
+        return await resolve_customer_hierarchy(
+            CustomerRequestIdentity(customer_member_id="member-1"),
+            prisma,  # pyright: ignore[reportArgumentType]  # storage boundary double
+            cache,
+            llm_router=None,
+            request_model="usage-model",
+            route="/v1/responses",
+        )
+
+    await resolve_cached()
+    await counters.increment(f"spend:{scope}:{identities[scope]}", 1.25)
+
+    with pytest.raises(litellm.BudgetExceededError) as exceeded:
+        await resolve_cached()
+    assert (exceeded.value.entity_type, exceeded.value.current_cost) == (scope, 1.25)
+    assert members.lookups == 1

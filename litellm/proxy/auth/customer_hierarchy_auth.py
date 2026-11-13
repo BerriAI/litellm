@@ -263,20 +263,32 @@ def _cache_ttl(row: Mapping[str, object], now: datetime, default_ttl: float) -> 
     return max(1.0, min(default_ttl, (expires_at - now).total_seconds()))
 
 
-def check_customer_hierarchy_budget(hierarchy: CustomerHierarchyAuth) -> None:
+async def check_customer_hierarchy_budget(hierarchy: CustomerHierarchyAuth) -> None:
     """Raises ``BudgetExceededError`` for the first level, org first, whose spend has reached its ``max_budget``."""
-    for scope in hierarchy.scopes:
-        if scope.max_budget is not None and scope.spend >= scope.max_budget:
-            raise litellm.BudgetExceededError(
-                current_cost=scope.spend,
-                max_budget=scope.max_budget,
-                message=(
-                    f"ExceededBudget: {scope.key}={scope.entity_id} over budget. "
-                    f"Spend={scope.spend}, Budget={scope.max_budget}"
-                ),
-                entity_type=scope.key,
-                entity_id=scope.entity_id,
-            )
+    from litellm.proxy.spend_tracking.spend_counter_batch import bind_spend_counter_keys
+
+    limited: Final = tuple(scope for scope in hierarchy.scopes if scope.max_budget is not None)
+    bind_spend_counter_keys(frozenset(scope.counter_key() for scope in limited))
+    for scope in limited:
+        await _check_customer_scope_budget(scope)
+
+
+async def _check_customer_scope_budget(scope: CustomerScopeAuth) -> None:
+    from litellm.proxy.proxy_server import get_current_spend
+
+    spend: Final = await get_current_spend(
+        counter_key=scope.counter_key(), fallback_spend=scope.spend, max_budget=scope.max_budget
+    )
+    if scope.max_budget is not None and spend >= scope.max_budget:
+        raise litellm.BudgetExceededError(
+            current_cost=spend,
+            max_budget=scope.max_budget,
+            message=(
+                f"ExceededBudget: {scope.key}={scope.entity_id} over budget. Spend={spend}, Budget={scope.max_budget}"
+            ),
+            entity_type=scope.key,
+            entity_id=scope.entity_id,
+        )
 
 
 def check_customer_hierarchy_model_access(
@@ -414,7 +426,7 @@ async def resolve_customer_hierarchy(
     hierarchy: Final = await load_customer_hierarchy(identity, prisma_client, user_api_key_cache, register)
     check_customer_hierarchy_key_scope(hierarchy, key_metadata or {})
     if not RouteChecks.is_info_route(route):
-        check_customer_hierarchy_budget(hierarchy)
+        await check_customer_hierarchy_budget(hierarchy)
     requested: Final = (request_model,) if isinstance(request_model, str) else tuple(request_model or ())
     for model in requested:
         if model:

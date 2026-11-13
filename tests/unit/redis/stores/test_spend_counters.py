@@ -6,11 +6,13 @@ import pytest
 from litellm._internal_context import current_service_target
 from litellm.caching.redis_batch import Batch, request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
+from litellm.redis.store_settings import RedisStoreSettings
 from litellm.redis.stores.connection import RedisStores, connect
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     SpendCounterStore,
     committed_counter,
+    customer_counter,
     end_user_counter,
     is_unavailable,
     key_counter,
@@ -25,7 +27,6 @@ from litellm.redis.stores.spend_counters import (
     team_window_counter,
     user_counter,
 )
-from litellm.redis.store_settings import RedisStoreSettings
 from litellm.rust_bridge._native import NativeRedisClient, NativeRedisStoreError, NativeSpendCounters, SpendRead
 from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
 
@@ -43,6 +44,9 @@ _KEYS: Final = (
     (user_counter("user@example.com"), "spend:user:user@example.com"),
     (end_user_counter("customer é 1"), "spend:end_user:customer é 1"),
     (org_counter("org-1"), "spend:org:org-1"),
+    (customer_counter("org", "org:1"), "spend:customer_org:org:1"),
+    (customer_counter("team", "org:1:default"), "spend:customer_team:org:1:default"),
+    (customer_counter("member", "member@example.com"), "spend:customer_member:member@example.com"),
     (tag_counter("prod:eu"), "spend:tag:prod:eu"),
     (project_counter("proj-1"), "spend:project:proj-1"),
     (model_access_group_counter("gpt-group"), "spend:model_access_group:gpt-group"),

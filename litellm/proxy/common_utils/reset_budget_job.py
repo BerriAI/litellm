@@ -68,6 +68,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     SpendCounterStore,
+    customer_counter,
     end_user_counter,
     key_counter,
     key_window_counter,
@@ -679,6 +680,8 @@ class ResetBudgetJob:
                 lambda: self._write_customer_budget_resets(entity, rows, now),
                 reason="reset_budget_write_customer_failure",
             )
+            await self._invalidate_cache("spend counter", tuple(customer_counter(entity, row.identity) for row in rows))
+            await broadcast_evictions(tuple(customer_counter(entity, row.identity) for row in rows))
             await self._invalidate_customer_budget_caches(entity, tuple(row.identity for row in rows))
             if len(records) < RESET_BUDGET_JOB_BATCH_SIZE:
                 return

@@ -10,9 +10,6 @@ from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
 import pytest
-
-from litellm.redis.stores.connection import connect
-from litellm.redis.stores.spend_counters import SpendCounterStore
 from fastapi import FastAPI, HTTPException
 
 import litellm
@@ -29,16 +26,16 @@ from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     ProxyDBLogger,
-    _IncrementSpendCounters,
     _charge_request_cost,
     _get_budget_reservation_from_metadata,
+    _IncrementSpendCounters,
     _should_track_cost_callback,
     _update_database_and_spend_counters,
     is_pre_routing_rejection,
     run_spend_event,
 )
-from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
@@ -48,12 +45,15 @@ from litellm.proxy.utils import (
     BilledFailedAttempt,
     ProxyUpdateSpend,
 )
-from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
-from litellm.types.router import Deployment, LiteLLM_Params
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
     BackgroundResponseSettlement,
 )
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
+from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 
@@ -1424,6 +1424,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         model_access_groups=("premium",),
         project_id=None,
         committed_spend_scope=EntitySpendCounterKeys(),
+        customer_hierarchy=None,
     )
 
 
@@ -2940,6 +2941,9 @@ _LIVE_COUNTERS: Final = {
     "spend:project:project-1": 0.55,
     "spend:tag:batch-jobs": 0.6,
     "spend:model_access_group:premium": 0.65,
+    "spend:customer_org:customer-org-1": 0.7,
+    "spend:customer_team:customer-team-1": 0.75,
+    "spend:customer_member:customer-member-1": 0.8,
 }
 
 
@@ -2963,6 +2967,12 @@ async def _fail_request(
             org_id="org-1",
             project_id="project-1",
             committed_budget_spend=committed,
+            customer_hierarchy=CustomerHierarchyAuth(
+                customer_org_id="customer-org-1",
+                customer_team_id="customer-team-1",
+                customer_member_id="customer-member-1",
+                scopes=(),
+            ),
         ),
     )
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Final, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 from litellm.rust_bridge._native import NativeRedisStoreError
 
@@ -44,6 +44,10 @@ def end_user_counter(end_user_id: str) -> str:
 
 def org_counter(org_id: str) -> str:
     return f"spend:org:{org_id}"
+
+
+def customer_counter(entity: Literal["org", "team", "member"], entity_id: str) -> str:
+    return f"spend:customer_{entity}:{entity_id}"
 
 
 def tag_counter(tag: str) -> str:

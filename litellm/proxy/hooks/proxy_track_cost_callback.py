@@ -76,6 +76,7 @@ from litellm.proxy.utils import (
     BilledFailedAttempt,
     ProxyUpdateSpend,
 )
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds, customer_hierarchy_ids_from_request
 from litellm.types.proxy.auth.user_api_key_auth import committed_budget_spend_of_row
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 from litellm.types.router import Deployment
@@ -772,6 +773,7 @@ class _ProxyDBLogger(CustomLogger):
                 ),
                 project_id=user_api_key_dict.project_id,
                 committed_spend_scope=_committed_spend_scope(user_api_key_dict),
+                customer_hierarchy=customer_hierarchy_ids_from_request(row_kwargs),
                 **_ledger_counter_options(row_kwargs.get(ACCOUNTING_LEDGER_KWARG)),
             )
         except Exception:  # noqa: BLE001  # one row's counter failure must not keep the other rows' counters from landing
@@ -1286,6 +1288,7 @@ class _IncrementSpendCounters(Protocol):
         project_id: str | None = None,
         committed_spend_scope: EntitySpendCounterKeys | None = None,
         windows_from_ledger: bool = False,
+        customer_hierarchy: CustomerHierarchyIds | None = None,
     ) -> None: ...
 
 
@@ -1357,6 +1360,7 @@ async def _update_database_and_spend_counters(
         tags=request_tags,
         model_access_groups=model_access_groups,
         project_id=project_id,
+        customer_hierarchy=customer_hierarchy_ids_from_request(_OBJECT_MAPPING.validate_python(kwargs)),
     )
     with spend_counter_batch_scope(spend_counter_store, counter_keys=counter_keys):
         return await _update_database_and_spend_counters_in_batch(
@@ -1466,6 +1470,7 @@ async def _update_database_and_spend_counters_in_batch(
                     end_user_id=end_user_id,
                 )
             ),
+            customer_hierarchy=customer_hierarchy_ids_from_request(_OBJECT_MAPPING.validate_python(kwargs)),
             **_ledger_counter_options(_BATCH_CALLBACK_FIELDS.validate_python(kwargs).get(ACCOUNTING_LEDGER_KWARG)),
         )
     except Exception:
