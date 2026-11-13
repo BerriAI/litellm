@@ -589,10 +589,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     ) -> int | float | str | None:
         """The model's counter as Redis holds it, so every worker agrees on saturation. A worker's own in-memory copy
         carries only the usage it served itself, and steady traffic keeps that copy alive past any TTL. The read is
-        written back to memory for ``saturation_check_cache_ttl`` seconds; without Redis memory is all there is."""
-        value: Final = await self.v3_limiter.rate_limits.get_from_redis(
-            counter, backfill_ttl=self._get_saturation_check_cache_ttl()
-        )
+        written back to memory for ``saturation_check_cache_ttl`` seconds; without Redis, or when the read fails, memory is
+        all there is."""
+        rate_limits: Final = self.v3_limiter.rate_limits
+        try:
+            value: Final = await rate_limits.get_from_redis(
+                counter, backfill_ttl=self._get_saturation_check_cache_ttl()
+            )
+        except Exception as e:  # noqa: BLE001  # any Redis failure degrades to the local mirror, as the limiter's counter reads do
+            verbose_proxy_logger.warning("Saturation read failed in Redis, using this worker's copy: %s", e)
+            local: Final = rate_limits.local((counter,))[0]
+            return None if isinstance(local, dict) else local
         return None if isinstance(value, dict) else value
 
     def _get_priority_weight(self, priority: str | None, model_info: ModelGroupInfo | None = None) -> float:
