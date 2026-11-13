@@ -1,7 +1,7 @@
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
-import { act, fireEvent, render, screen, waitFor } from "../../../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders as render, screen, waitFor } from "../../../../../tests/test-utils";
 import CreateCustomerHierarchyDialog from "./CreateCustomerHierarchyDialog";
 import type { Organization, Team } from "./customerHierarchyForms";
 
@@ -158,6 +158,27 @@ describe("CreateCustomerHierarchyDialog", () => {
     await user.click(screen.getByRole("button", { name: "Create" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Customer entity ID already exists.");
     expect(screen.getByRole("textbox", { name: "Display name" })).toHaveValue("Engineering");
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(onCreated).not.toHaveBeenCalled();
+  });
+
+  it.each(["team", "member"] as const)("surfaces the free-tier 403 detail when creating a %s", async (kind) => {
+    fetchMock.mockResolvedValue(json({ detail: "Free customer portal limit reached. Upgrade to Enterprise." }, 403));
+    render(
+      <CreateCustomerHierarchyDialog
+        kind={kind}
+        organization={organization}
+        team={team}
+        open
+        onOpenChange={onOpenChange}
+        onCreated={onCreated}
+      />,
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), { target: { value: "Example" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Free customer portal limit reached. Upgrade to Enterprise.",
+    );
     expect(onOpenChange).not.toHaveBeenCalled();
     expect(onCreated).not.toHaveBeenCalled();
   });
