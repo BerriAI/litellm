@@ -2359,6 +2359,23 @@ async def test_a_reservation_at_saturation_is_refunded_when_the_call_fails(monke
 
 
 @pytest.mark.asyncio
+async def test_a_reservation_at_saturation_is_refunded_when_the_proxy_refuses_the_request_before_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A guardrail or the fallback walk turning the request away after admission gives the team its tokens back, and
+    a second release changes nothing."""
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    key: Final = _team_key()
+    await _check(handler, key, saturation=0.5, data=_prompt(words=30))
+    assert await _team_tokens_remaining(handler) < 70
+    for _ in range(2):
+        await handler.async_post_call_failure_hook(
+            request_data=_prompt(words=30), original_exception=Exception("guardrail refused"), user_api_key_dict=key
+        )
+        assert await _team_tokens_remaining(handler) == 100
+
+
+@pytest.mark.asyncio
 async def test_a_fallback_target_is_refused_once_it_saturates_and_the_teams_share_on_it_is_used(
     monkeypatch: pytest.MonkeyPatch,
 ):

@@ -1589,6 +1589,30 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             verbose_proxy_logger.exception("Error in dynamic rate limiter success event: %s", e)
 
     @with_service_target(RATE_LIMITS_TARGET)
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,  # pyright: ignore[reportMissingTypeArgument]  # the proxy's bare request dict, as the base hook declares it
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> None:
+        """Give back the team-share tokens held at admission when the proxy refuses the request before the call runs,
+        as a later hook or the pre-call fallback walk does. ``async_log_failure_event`` is a completion callback and
+        never fires for those refusals, so without this the hold stays charged until the window resets. Idempotent:
+        the first release zeroes the stash's reservation, so a settlement that still follows charges only usage."""
+        stash: Final = get_request_stash()
+        if stash is None:
+            return
+        refund: Final = _team_model_settlement(stash, None, 0, self.v3_limiter.window_size)
+        stash.borrowing_team_model_reserved_tokens = 0
+        stash.borrowing_team_model_cap_reserved_tokens = 0
+        stash.borrowing_team_model_reserved_window = None
+        stash.borrowing_team_model_cap_reserved_window = None
+        if refund:
+            await self.v3_limiter.async_increment_reservation_aware_tokens(
+                pipeline_operations=refund, parent_otel_span=user_api_key_dict.parent_otel_span
+            )
+
     async def async_log_failure_event(
         self, kwargs: object, response_obj: object, start_time: object, end_time: object
     ) -> None:

@@ -8508,8 +8508,11 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_the_rate_limited_models_hold_and_a_refused_fallbacks_hold_are_released_before_the_walk_moves_on(
-        self,
+        self, monkeypatch
     ):
+        """A key allowed one request at a time is admitted on the model the walk ends on, so the slots the limiter
+        held for the saturated model and for the refused fallback must have come back. Afterwards only the served
+        request holds the key's slot: one release frees it."""
         from fastapi import HTTPException
 
         from litellm.caching.caching import DualCache
@@ -8521,24 +8524,18 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             saturation_fallbacks_exhausted,
         )
         from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
-        from litellm.proxy.utils import InternalUsageCache
+        from litellm.proxy.utils import InternalUsageCache, hash_token
 
-        released: list[tuple[object, Exception]] = []
-
-        class RecordingLimiter(PROXY_MaxParallelRequestsHandler_v3):
-            async def async_post_call_failure_hook(
-                self,
-                request_data: dict,
-                original_exception: Exception,
-                user_api_key_dict: ProxyKey,
-                traceback_str: str | None = None,
-            ) -> None:
-                released.append((request_data["model"], original_exception))
-
+        cache = DualCache()
+        limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
+        key = ProxyKey(api_key=hash_token("sk-one-at-a-time"), max_parallel_requests=1)
         processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
         refusal = HTTPException(status_code=400, detail="guardrail refused the fallback")
 
-        async def mock_pre_call_logic(**kwargs):
+        async def admit_then_decide(**kwargs):
+            await limiter.async_pre_call_hook(
+                user_api_key_dict=key, cache=cache, data=processor.data, call_type="acompletion"
+            )
             if processor.data.get("model") == "gpt-4" and not saturation_fallbacks_exhausted():
                 raise ProxyRateLimitError(
                     detail="at saturation", headers={}, descriptor_key=SATURATION_FALLBACK_DESCRIPTOR_KEY
@@ -8547,19 +8544,79 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 raise refusal
             return processor.data, MagicMock()
 
+        async def every_model(*, model, valid_token, llm_router):
+            return True
+
+        monkeypatch.setattr("litellm.proxy.auth.fallback_model_access.is_model_authorized_for_token", every_model)
         proxy_logging_obj = MagicMock()
-        proxy_logging_obj.get_proxy_hook.return_value = RecordingLimiter(
-            internal_usage_cache=InternalUsageCache(DualCache())
-        )
+        proxy_logging_obj.get_proxy_hook.return_value = limiter
         mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.fallbacks = []
         settings = {"fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}], "fallback_on_saturation": True}
 
-        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=admit_then_decide):
             data, _ = await processor._pre_call_with_fallbacks(
                 request=MagicMock(),
                 general_settings={},
                 proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=key,
+                version=None,
+                proxy_config=_proxy_config(settings),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert data["model"] == "gpt-4"
+        with pytest.raises(HTTPException):
+            await limiter.async_pre_call_hook(
+                user_api_key_dict=key, cache=cache, data={"model": "gpt-4"}, call_type="acompletion"
+            )
+        await limiter.async_post_call_failure_hook(
+            request_data=data, original_exception=Exception("client went away"), user_api_key_dict=key
+        )
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=key, cache=cache, data={"model": "gpt-4"}, call_type="acompletion"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_exhausted_saturation_walk_hands_the_request_back_to_the_model_its_first_attempt_resolved(
+        self,
+    ):
+        """With aliases gpt-4 -> gpt-4-pool and gpt-4-pool -> gpt-4-overflow, the request the walk hands back is
+        served by gpt-4-pool as the first attempt was, not aliased a second time on to gpt-4-overflow."""
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import (
+            SATURATION_FALLBACK_DESCRIPTOR_KEY,
+            ProxyRateLimitError,
+            saturation_fallbacks_exhausted,
+        )
+
+        aliases = {"gpt-4": "gpt-4-pool", "gpt-4-pool": "gpt-4-overflow"}
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+
+        async def alias_then_saturate(*, model, **kwargs):
+            processor.data["model"] = aliases.get(model, model)
+            if not saturation_fallbacks_exhausted():
+                raise ProxyRateLimitError(
+                    detail="at saturation", headers={}, descriptor_key=SATURATION_FALLBACK_DESCRIPTOR_KEY
+                )
+            return processor.data, MagicMock()
+
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = []
+        settings = {"fallbacks": [{"gpt-4-pool": ["gpt-3.5-turbo"]}], "fallback_on_saturation": True}
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=alias_then_saturate):
+            data, _ = await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
                 user_api_key_dict=MagicMock(router_settings=None, agent_id=None, end_user_id=None),
                 version=None,
                 proxy_config=_proxy_config(settings),
@@ -8573,10 +8630,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 llm_router=mock_router,
             )
 
-        assert [model for model, _ in released] == ["gpt-4", "gpt-3.5-turbo"]
-        assert isinstance(released[0][1], ProxyRateLimitError)
-        assert released[1][1] is refusal
-        assert data["model"] == "gpt-4"
+        assert data["model"] == "gpt-4-pool"
 
     @pytest.mark.asyncio
     async def test_a_fallback_over_its_model_budget_is_skipped(self, monkeypatch):

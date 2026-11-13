@@ -163,6 +163,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
+from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
     get_or_create_request_stash,
@@ -2441,14 +2442,19 @@ async def _release_pre_call_hold(
     """Give back the slot and tokens the rate limiter holds for a model the walk is leaving: the requested model a
     later hook rate limited after the limiter admitted it, or a fallback the proxy refused after admitting it. The
     walk's next attempt overwrites the request's stash, so a hold not released here stays charged until the window
-    resets. The request has not failed, so only the limiter's release runs, not the failure logging and alerting of
-    ``post_call_failure_hook``."""
+    resets. The request has not failed, so only the limiters' releases run, not the failure logging and alerting of
+    ``post_call_failure_hook``. The dynamic rate limiter admits through its own inner limiter, so its team-share
+    reservation is released alongside the registered limiter's slot and tokens."""
     limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
-    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
-        return
-    await limiter.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # the limiter hook takes the proxy's bare request dict
-        request_data=dict(request_data), original_exception=refusal, user_api_key_dict=user_api_key_dict
+    dynamic_limiters: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
+        PROXY_DynamicRateLimitHandlerV3
     )
+    for holder in (limiter, *dynamic_limiters):
+        if not isinstance(holder, (PROXY_MaxParallelRequestsHandler_v3, PROXY_DynamicRateLimitHandlerV3)):
+            continue
+        await holder.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # the limiter hooks take the proxy's bare request dict
+            request_data=dict(request_data), original_exception=refusal, user_api_key_dict=user_api_key_dict
+        )
 
 
 async def _fallback_grant(
@@ -3379,7 +3385,7 @@ class ProxyBaseLLMRequestProcessing:
                     user_request_timeout=user_request_timeout,
                     user_max_tokens=user_max_tokens,
                     user_api_base=user_api_base,
-                    model=original_model,
+                    model=model,  # the requested name as the first attempt saw it, so its aliases apply once, not again
                     route_type=route_type,  # pyright: ignore[reportArgumentType]  # the proxy hands its route literal over as str, as the two calls above take it
                     llm_router=llm_router,
                 )
