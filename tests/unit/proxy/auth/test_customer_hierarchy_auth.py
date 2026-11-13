@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.proxy._types import ProxyException
@@ -95,6 +96,29 @@ def test_member_row_yields_org_team_and_member_scopes_with_the_effective_member_
         3.0,
     )
     assert member.model_tpm_limit == {"gpt-4o": 400}
+
+
+def test_a_team_override_caps_the_team_scope_until_it_expires() -> None:
+    base: Final = _row(template={"max_budget": 10.0}, team_budget={"max_budget": 50.0, "rpm_limit": 5})
+    team: Final = {**_team_of(base), "budget_override": {"max_budget": 500.0}}
+
+    active: Final = _scopes(
+        customer_hierarchy_from_member_row(
+            {**base, "parent_team": {**team, "budget_override_expires_at": NOW + timedelta(days=1)}}, NOW
+        )
+    )["customer_team"]
+    expired: Final = _scopes(
+        customer_hierarchy_from_member_row(
+            {**base, "parent_team": {**team, "budget_override_expires_at": NOW - timedelta(seconds=1)}}, NOW
+        )
+    )["customer_team"]
+
+    assert (active.max_budget, active.rpm_limit) == (500.0, 5)
+    assert (expired.max_budget, expired.rpm_limit) == (50.0, 5)
+
+
+def _team_of(row: Mapping[str, object]) -> Mapping[str, object]:
+    return TypeAdapter(Mapping[str, object]).validate_python(row["parent_team"])
 
 
 def test_an_expired_override_leaves_the_member_on_its_template() -> None:
@@ -238,6 +262,7 @@ class _Registrar:
         return CustomerMember.model_validate(
             {
                 "customer_member_id": member_id,
+                "parent_org_id": "org-1",
                 "parent_team_id": "team-1",
                 "effective_budget": {"max_budget": 10.0},
                 "created_at": NOW,

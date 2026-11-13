@@ -16,7 +16,9 @@ model LiteLLM_BudgetTable {
   customer_teams LiteLLM_CustomerTeamTable[] @relation("CustomerTeamBudget")
   customer_members LiteLLM_CustomerMemberTable[] @relation("CustomerMemberBudget")
   customer_member_overrides LiteLLM_CustomerMemberTable[] @relation("CustomerMemberBudgetOverride")
+  customer_team_overrides LiteLLM_CustomerTeamTable[] @relation("CustomerTeamBudgetOverride")
   budget_id String @id @default(uuid())
+  name String?
   max_budget Float?
   soft_budget Float?
   max_parallel_requests Int?
@@ -47,15 +49,15 @@ model LiteLLM_BudgetTable {
 
 model LiteLLM_CustomerOrganizationTable {
   spend Float @default(0.0)
-  budget_ids String[] @default([])
-  budget_names Json @default("{}")
+  budget_template_ids String[] @default([])
   budget_id String?
   budget LiteLLM_BudgetTable? @relation("CustomerOrganizationBudget", fields: [budget_id], references: [budget_id])
   customer_org_id String @id @default(uuid())
   alias String?
-  default_budget_id String?
-  default_budget LiteLLM_BudgetTable? @relation("CustomerOrganizationDefaultBudget", fields: [default_budget_id], references: [budget_id])
+  default_budget_template_id String?
+  default_budget_template LiteLLM_BudgetTable? @relation("CustomerOrganizationDefaultBudget", fields: [default_budget_template_id], references: [budget_id])
   teams LiteLLM_CustomerTeamTable[]
+  members LiteLLM_CustomerMemberTable[]
   created_at DateTime @default(now())
   created_by String
   updated_at DateTime @default(now()) @updatedAt
@@ -70,6 +72,9 @@ model LiteLLM_CustomerTeamTable {
   parent_org LiteLLM_CustomerOrganizationTable @relation(fields: [parent_org_id], references: [customer_org_id])
   budget_id String?
   budget LiteLLM_BudgetTable? @relation("CustomerTeamBudget", fields: [budget_id], references: [budget_id])
+  budget_override_id String?
+  budget_override LiteLLM_BudgetTable? @relation("CustomerTeamBudgetOverride", fields: [budget_override_id], references: [budget_id], onDelete: Restrict)
+  budget_override_expires_at DateTime?
   members LiteLLM_CustomerMemberTable[]
   created_at DateTime @default(now())
   created_by String
@@ -82,6 +87,8 @@ model LiteLLM_CustomerMemberTable {
   spend Float @default(0.0)
   customer_member_id String @id @default(uuid())
   alias String?
+  parent_org_id String
+  parent_org LiteLLM_CustomerOrganizationTable @relation(fields: [parent_org_id], references: [customer_org_id])
   parent_team_id String
   parent_team LiteLLM_CustomerTeamTable @relation(fields: [parent_team_id], references: [customer_team_id])
   budget_id String?
@@ -93,6 +100,7 @@ model LiteLLM_CustomerMemberTable {
   created_by String
   updated_at DateTime @default(now()) @updatedAt
   updated_by String
+  @@index([parent_org_id])
   @@index([parent_team_id])
   @@index([budget_id])
 }

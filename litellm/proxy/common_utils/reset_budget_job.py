@@ -271,20 +271,20 @@ def _budget_link_where(
     return {link: {"in": list(budget_ids)}, **extra}
 
 
-def _customer_member_link_where(budget_ids: Sequence[str]) -> Mapping[str, object]:
+def _customer_override_link_where(budget_ids: Sequence[str]) -> Mapping[str, object]:
     return {"OR": [{"budget_id": {"in": list(budget_ids)}}, {"budget_override_id": {"in": list(budget_ids)}}]}
 
 
-def _active_override_members_where(now: datetime) -> Mapping[str, object]:
-    """Members whose unexpired override carries its own window, reset on the override's schedule."""
+def _active_override_where(now: datetime) -> Mapping[str, object]:
+    """Teams or members whose unexpired override carries its own window, reset on the override's schedule."""
     return {
         **_SPENT_ROWS_WHERE,
         "OR": [{"budget_override_expires_at": None}, {"budget_override_expires_at": {"gt": now}}],
     }
 
 
-def _template_members_where(now: datetime) -> Mapping[str, object]:
-    """Members whose window comes from the template: no override, an expired one, or one without a duration."""
+def _template_governed_where(now: datetime) -> Mapping[str, object]:
+    """Teams or members whose window comes from their budget: no override, an expired one, or one without a duration."""
     return {
         **_SPENT_ROWS_WHERE,
         "OR": [
@@ -664,7 +664,7 @@ class ResetBudgetJob:
         parents: Final = (
             {"parent_team_id": {"in": list(identities)}}  # bounded-ok: one RESET_BUDGET_JOB_BATCH_SIZE page
             if entity == "team"
-            else {"parent_team": {"is": {"parent_org_id": {"in": list(identities)}}}}  # bounded-ok: one reset page
+            else {"parent_org_id": {"in": list(identities)}}  # bounded-ok: one RESET_BUDGET_JOB_BATCH_SIZE page
         )
         cursor: str | None = None  # rebind-ok: keyset walk must invalidate every descendant after commit
         while True:
@@ -906,12 +906,12 @@ class ResetBudgetJob:
         )
         customer_teams: Final[tuple[_CustomerTeamRow, ...]] = await self._fetch_linked_rows(
             table=CustomerTeamRepository(self.prisma_client).table,
-            where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
+            where={**_customer_override_link_where(budget_ids), **_SPENT_ROWS_WHERE},
             log_subject="customer teams",
         )
         customer_members: Final[tuple[_CustomerMemberRow, ...]] = await self._fetch_linked_rows(
             table=CustomerMemberRepository(self.prisma_client).table,
-            where={**_customer_member_link_where(budget_ids), **_SPENT_ROWS_WHERE},
+            where={**_customer_override_link_where(budget_ids), **_SPENT_ROWS_WHERE},
             log_subject="customer members",
         )
         rollover_caps: Final[Mapping[str, float]] = MappingProxyType(
@@ -1040,10 +1040,13 @@ class ResetBudgetJob:
             _queue_budget_linked_resets(uow.tags, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.model_access_groups, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.customer_organizations, cascade, extra=_SPENT_ROWS_WHERE)
-            _queue_budget_linked_resets(uow.customer_teams, cascade, extra=_SPENT_ROWS_WHERE)
-            _queue_budget_linked_resets(uow.customer_members, cascade, extra=_template_members_where(now))
+            _queue_budget_linked_resets(uow.customer_teams, cascade, extra=_template_governed_where(now))
             _queue_budget_linked_resets(
-                uow.customer_members, cascade, extra=_active_override_members_where(now), link="budget_override_id"
+                uow.customer_teams, cascade, extra=_active_override_where(now), link="budget_override_id"
+            )
+            _queue_budget_linked_resets(uow.customer_members, cascade, extra=_template_governed_where(now))
+            _queue_budget_linked_resets(
+                uow.customer_members, cascade, extra=_active_override_where(now), link="budget_override_id"
             )
             for budget_id, budget_reset_at in cascade.budget_resets:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)

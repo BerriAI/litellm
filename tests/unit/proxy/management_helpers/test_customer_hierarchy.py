@@ -74,8 +74,7 @@ class Table:
         row: Final = Record.model_validate(
             {
                 "spend": 0.0,
-                "budget_ids": (),
-                "budget_names": {},
+                "budget_template_ids": (),
                 "created_at": NOW,
                 "updated_at": NOW,
                 **{key: value.data if isinstance(value, Json) else value for key, value in data.items()},

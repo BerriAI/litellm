@@ -59,6 +59,8 @@ class TeamPatch(BaseModel):
 
     alias: str | None = None
     budget: Budget | None = None
+    budget_override: Budget | None = None
+    budget_override_expires_at: AwareDatetime | None = None
 
 
 class TeamCreate(TeamPatch):
@@ -77,6 +79,7 @@ class MemberPatch(BaseModel):
 
 class MemberCreate(MemberPatch):
     customer_member_id: str | None = None
+    parent_org_id: str | None = Field(default=None, description="Must match the parent team's organization when set")
     parent_team_id: str
 
 
@@ -97,7 +100,7 @@ class Organization(AuditFields):
     budget_id: str | None = None
     budget: Budget | None = None
     customer_org_id: str
-    default_budget_id: str | None = None
+    default_budget_template_id: str | None = None
     default_budgets: tuple[OrganizationBudget, ...] = ()
 
 
@@ -106,10 +109,15 @@ class Team(AuditFields):
     parent_org_id: str
     budget_id: str | None = None
     budget: Budget | None = None
+    budget_override_id: str | None = None
+    budget_override: Budget | None = None
+    budget_override_expires_at: datetime | None = None
+    effective_budget: Budget
 
 
 class CustomerMember(AuditFields):
     customer_member_id: str
+    parent_org_id: str
     parent_team_id: str
     budget_id: str | None = None
     budget_override_id: str | None = None

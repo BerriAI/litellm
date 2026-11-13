@@ -16,7 +16,7 @@ const organization: Organization = {
   ...audit,
   customer_org_id: "org-1",
   alias: "Example organization",
-  default_budget_id: "template-1",
+  default_budget_template_id: "template-1",
   default_budgets: [
     { budget_id: "template-1", name: "Standard", is_default: true, max_budget: 10 },
     { budget_id: "template-2", name: "Pro", is_default: false, max_budget: 50 },

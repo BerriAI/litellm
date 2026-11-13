@@ -241,7 +241,8 @@ _LOCK_BUDGET_CUSTOMER_ORGS_SQL: Final = (
     'ORDER BY customer_org_id COLLATE "C" FOR UPDATE'
 )
 _LOCK_BUDGET_CUSTOMER_TEAMS_SQL: Final = (
-    'SELECT 1 AS locked FROM "LiteLLM_CustomerTeamTable" WHERE budget_id = ANY($1::text[]) '
+    'SELECT 1 AS locked FROM "LiteLLM_CustomerTeamTable" '
+    "WHERE budget_id = ANY($1::text[]) OR budget_override_id = ANY($1::text[]) "
     'ORDER BY customer_team_id COLLATE "C" FOR UPDATE'
 )
 _LOCK_BUDGET_CUSTOMER_MEMBERS_SQL: Final = (

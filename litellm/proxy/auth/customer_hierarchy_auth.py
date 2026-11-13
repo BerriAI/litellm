@@ -51,7 +51,7 @@ _ORGANIZATION_INCLUDE: Final = {"budget": True}
 _MEMBER_INCLUDE: Final = {
     "budget": True,
     "budget_override": True,
-    "parent_team": {"include": {"budget": True, "parent_org": {"include": {"budget": True}}}},
+    "parent_team": {"include": {"budget": True, "budget_override": True, "parent_org": {"include": {"budget": True}}}},
 }
 _EXPIRY: Final[TypeAdapter[datetime | None]] = TypeAdapter(datetime | None)
 
@@ -70,6 +70,8 @@ class _TeamRow(BaseModel):
     customer_team_id: str
     spend: float = 0.0
     budget: Mapping[str, object] | None = None
+    budget_override: Mapping[str, object] | None = None
+    budget_override_expires_at: datetime | None = None
     parent_org: _OrganizationRow
 
 
@@ -153,6 +155,10 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
     organization: Final = team.parent_org
     template: Final = related_budget(member.budget, now)
     override: Final = related_budget(member.budget_override, now, template.max_budget if template is not None else None)
+    team_budget: Final = related_budget(team.budget, now)
+    team_override: Final = related_budget(
+        team.budget_override, now, team_budget.max_budget if team_budget is not None else None
+    )
     return CustomerHierarchyAuth(
         customer_member_id=member.customer_member_id,
         customer_team_id=team.customer_team_id,
@@ -164,7 +170,12 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
                 organization.spend,
                 related_budget(organization.budget, now),
             ),
-            _scope("customer_team", team.customer_team_id, team.spend, related_budget(team.budget, now)),
+            _scope(
+                "customer_team",
+                team.customer_team_id,
+                team.spend,
+                effective_member_budget(team_budget, team_override, team.budget_override_expires_at, now),
+            ),
             _scope(
                 "customer_member",
                 member.customer_member_id,
