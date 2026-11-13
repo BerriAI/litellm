@@ -136,6 +136,20 @@ def frame(bot: str = "bot", tenant: str = "tenant") -> dict[str, JsonValue]:
     }
 
 
+@pytest.mark.parametrize("scope", ["llm_api_routes", "agent_routes"])
+def test_admin_owned_inference_keys_cannot_read_connection(connected: Connected, scope: str) -> None:
+    route: Final = ROOT + f"/sources/{connected.connection.source_id}/connection"
+    with connected.gateway.scenario() as scenario:
+        user: Final = scenario.user(user_role="proxy_admin")
+        key: Final = scenario.key(user_id=user, allowed_routes=[scope])
+        denied: Final = connected.gateway.request("GET", route, key=key)
+        assert denied.status_code == 403, denied.text
+        assert connected.connection.ingest_key not in denied.text
+        allowed: Final = connected.gateway.request("GET", route)
+        assert allowed.status_code == 200, allowed.text
+        assert Connection.model_validate(allowed.json()) == connected.connection
+
+
 def test_connect_test_auth_and_content_free_discovery(connected: Connected) -> None:
     probe: Final = connected.hook({**frame(), "source": {"application": "config-test"}})
     assert probe.status_code == 200 and probe.json() == {"action": "allow"}, probe.text

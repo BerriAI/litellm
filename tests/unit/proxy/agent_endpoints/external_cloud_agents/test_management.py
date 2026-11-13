@@ -2,11 +2,28 @@ import json
 from typing import Final
 
 import pytest
+from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.external_cloud_agents import endpoints
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
-from tests.unit.proxy.agent_endpoints.external_cloud_agents.conftest import Harness, NOW
+from tests.unit.proxy.agent_endpoints.external_cloud_agents.conftest import NOW, Harness
+
+
+@pytest.mark.parametrize("scope", ["llm_api_routes", "agent_routes"])
+def test_admin_owned_inference_key_cannot_reveal_connection(harness: Harness, scope: str) -> None:
+    route: Final = f"/v1/external_cloud_agents/sources/{harness.source_id}/connection"
+    restricted: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=[scope])
+    with pytest.raises(HTTPException) as denied:
+        RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=restricted)
+    assert denied.value.status_code == 403
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route, valid_token=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    )
+    shown: Final = harness.client.get(route)
+    assert shown.status_code == 200
+    assert shown.json()["ingest_key"]
 
 
 def test_no_body_creation_encrypts_and_connection_reshows_same_key(harness: Harness) -> None:

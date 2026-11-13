@@ -545,7 +545,7 @@ class LiteLLMRoutes(enum.Enum):
     # Agent registry CRUD routes — control-plane. Gated by DISABLE_ADMIN_ENDPOINTS.
     # The handlers in agent_endpoints/endpoints.py enforce proxy-admin on writes and
     # scope reads by role, so these also appear in self_managed_routes.
-    agent_management_routes = (
+    external_cloud_agent_management_routes = (
         "/v1/external_cloud_agents/sources",
         "/v1/external_cloud_agents/sources/{source_id}/connection",
         "/v1/external_cloud_agents/sources/{source_id}",
@@ -553,6 +553,9 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/external_cloud_agents/sources/{source_id}/sync_spend",
         "/v1/external_cloud_agents/agents",
         "/v1/external_cloud_agents/spend",
+    )
+
+    agent_management_routes = (
         "/v1/agents",
         "/v1/agents/{agent_id}",
         "/v1/agents/make_public",
@@ -748,6 +751,7 @@ class LiteLLMRoutes(enum.Enum):
         + key_management_routes
         + mcp_management_routes
         + list(agent_management_routes)
+        + list(external_cloud_agent_management_routes)
         + list(skill_hub_routes)
     )
 
