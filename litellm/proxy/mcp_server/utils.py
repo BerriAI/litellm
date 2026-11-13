@@ -277,11 +277,11 @@ def server_has_tool_denylist(server: MCPServer) -> bool:
 
 
 def _denied_by_pattern(tool_name: str, rule: MCPToolNamePatterns | None) -> bool:
-    return isinstance(rule, MCPToolNamePatterns) and (rule.unusable or rule.fullmatches(tool_name))
+    return isinstance(rule, MCPToolNamePatterns) and (rule.unusable or rule.fullmatches(tool_name, on_timeout=True))
 
 
 def _allowed_by_pattern(tool_name: str, rule: MCPToolNamePatterns | None) -> bool:
-    return isinstance(rule, MCPToolNamePatterns) and rule.fullmatches(tool_name)
+    return isinstance(rule, MCPToolNamePatterns) and rule.fullmatches(tool_name, on_timeout=False)
 
 
 def is_tool_allowed_for_server(tool_name: str, server: MCPServer) -> bool:

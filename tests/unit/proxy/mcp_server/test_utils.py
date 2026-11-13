@@ -327,3 +327,19 @@ def test_tool_name_patterns_decide_which_tools_a_server_exposes(
         **dict.fromkeys(allowed, True),
         **dict.fromkeys(blocked, False),
     }
+
+
+@pytest.mark.parametrize(
+    "tool_policy",
+    [{"disallowed_tools_regex": [r"(a|aa)+"]}, {"allowed_tools_regex": [r"(a|aa)+"]}],
+    ids=["deny", "allow"],
+)
+def test_a_tool_name_that_makes_a_pattern_backtrack_fails_closed_quickly(tool_policy: dict[str, object]) -> None:
+    import time
+
+    server: Final = _mail_server(tool_policy)
+    started: Final = time.monotonic()
+
+    allowed: Final = is_tool_allowed_for_server("a" * 80 + "-", server)
+
+    assert (allowed, time.monotonic() - started < 1) == (False, True)

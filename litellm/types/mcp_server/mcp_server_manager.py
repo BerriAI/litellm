@@ -1,10 +1,10 @@
 import functools
 import json
-import re
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any, Final, Literal
 
+import regex
 from pydantic import AfterValidator, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 from typing_extensions import Self
 
@@ -95,11 +95,16 @@ def parse_pinned_tools(value: object) -> dict[str, PinnedMCPTool] | None:
     return _PINNED_TOOLS.validate_python(decoded or None)
 
 
+_TOOL_NAME_MATCH_TIMEOUT_SECONDS: Final = 0.05
+"""Upper bound on one pattern match. Upstream servers choose tool names, so a name built to make a
+backtracking pattern run for a long time must not stall the event loop during tools/list."""
+
+
 @functools.lru_cache(maxsize=512)
-def compile_tool_name_pattern(pattern: str) -> re.Pattern[str] | None:
+def compile_tool_name_pattern(pattern: str) -> "regex.Pattern[str] | None":
     try:
-        return re.compile(pattern, re.DOTALL)
-    except re.error:
+        return regex.compile(pattern, regex.DOTALL)
+    except regex.error:
         return None
 
 
@@ -140,9 +145,20 @@ class MCPToolNamePatterns(LiteLLMBaseModel):
             raise ValueError(f"tool name patterns do not compile: {invalid!r}")
         return patterns
 
-    def fullmatches(self, tool_name: str) -> bool:
+    def fullmatches(self, tool_name: str, *, on_timeout: bool) -> bool:
+        """Whether any pattern fully matches ``tool_name``.
+
+        A match that runs past the time limit returns ``on_timeout``, so each caller picks the answer
+        that fails closed: a deny list treats it as a match, an allow list as no match."""
         compiled: Final = (compile_tool_name_pattern(pattern) for pattern in self.patterns)
-        return any(pattern.fullmatch(tool_name) is not None for pattern in compiled if pattern is not None)
+        try:
+            return any(
+                pattern.fullmatch(tool_name, timeout=_TOOL_NAME_MATCH_TIMEOUT_SECONDS) is not None
+                for pattern in compiled
+                if pattern is not None
+            )
+        except TimeoutError:
+            return on_timeout
 
 
 _TOOL_NAME_PATTERNS_RULE: Final[TypeAdapter[MCPToolNamePatterns | None]] = TypeAdapter(MCPToolNamePatterns | None)
