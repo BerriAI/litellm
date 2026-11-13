@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
+from functools import reduce
 from types import MappingProxyType
 from typing import Annotated, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
 
@@ -4732,6 +4733,39 @@ def _ensure_document_messages_have_text(
     return [_with_text_when_document_only(message) for message in contents]
 
 
+def _is_non_pdf_document(block: BedrockContentBlock) -> bool:
+    return "document" in block and block["document"].get("format") != "pdf"
+
+
+def _cache_point_slot(placed: Sequence[BedrockContentBlock]) -> int | None:
+    slot: Final = next(
+        (index + 1 for index in range(len(placed) - 1, -1, -1) if not _is_non_pdf_document(placed[index])), 0
+    )
+    return None if slot == 0 or "cachePoint" in placed[slot - 1] else slot
+
+
+def _with_cache_point_placed(
+    placed: tuple[BedrockContentBlock, ...], block: BedrockContentBlock
+) -> tuple[BedrockContentBlock, ...]:
+    if not ("cachePoint" in block and placed and _is_non_pdf_document(placed[-1])):
+        return (*placed, block)
+    slot: Final = _cache_point_slot(placed)
+    return placed if slot is None else (*placed[:slot], block, *placed[slot:])
+
+
+def _with_cache_points_off_non_pdf_documents(message: BedrockMessageBlock) -> BedrockMessageBlock:
+    """
+    Bedrock Converse rejects a cachePoint that directly follows a non-PDF document ("Cache point cannot be
+    inserted after the preceding content block", observed on Claude models on 2026-11-10, see issue #50923).
+    The cachePoint moves ahead of those documents, and is dropped when nothing cacheable precedes them.
+    """
+    blocks: Final = message["content"]
+    if not any("cachePoint" in block and _is_non_pdf_document(before) for before, block in zip(blocks, blocks[1:])):
+        return message
+    empty: Final[tuple[BedrockContentBlock, ...]] = ()
+    return BedrockMessageBlock(role=message["role"], content=list(reduce(_with_cache_point_placed, blocks, empty)))
+
+
 def _sort_bedrock_assistant_content_blocks(
     blocks: list[BedrockContentBlock],
 ) -> list[BedrockContentBlock]:
@@ -5320,9 +5354,10 @@ class BedrockConverseMessagesProcessor:
                     llm_provider=llm_provider,
                 )
 
-        converse_messages: Final = _ensure_document_messages_have_text(
-            _rename_duplicate_bedrock_document_names(contents)
-        )
+        converse_messages: Final = [
+            _with_cache_points_off_non_pdf_documents(message)
+            for message in _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+        ]
         if not (to_claude and converse_messages):
             return converse_messages
         return [*converse_messages[:-1], _assistant_turn_rstripped(converse_messages[-1])]
@@ -5767,7 +5802,10 @@ def _bedrock_converse_messages_pt(
                 llm_provider=llm_provider,
             )
 
-    converse_messages: Final = _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+    converse_messages: Final = [
+        _with_cache_points_off_non_pdf_documents(message)
+        for message in _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+    ]
     if not (to_claude and converse_messages):
         return converse_messages
     return [*converse_messages[:-1], _assistant_turn_rstripped(converse_messages[-1])]

@@ -9304,3 +9304,82 @@ def test_wrong_type_template_field_in_requests_leaves_the_deployments_in_rotatio
     response = router.completion(model="template-group", messages=TEMPLATE_MESSAGES, mock_response="Blue")
 
     assert response.choices[0].message.content == "Blue"
+
+
+_CACHE_CONTROL: Final = {"type": "ephemeral"}
+_TEXT_PART: Final = {"type": "text", "text": "What is the answer?"}
+
+
+def _file_part(mime: str, cached: bool = True):
+    data: Final = base64.b64encode(b"The answer is 42.").decode()
+    part: Final = {"type": "file", "file": {"file_data": f"data:{mime};base64,{data}", "filename": "notes"}}
+    return {**part, "cache_control": _CACHE_CONTROL} if cached else part
+
+
+def _block_kinds(message):
+    return [next(iter(block)) for block in message["content"]]
+
+
+_CACHE_POINT_AFTER_DOCUMENT_CASES: Final = [
+    pytest.param(
+        [_TEXT_PART, _file_part("text/plain")],
+        ["text", "cachePoint", "document"],
+        id="txt_last_moves_cache_point_ahead",
+    ),
+    pytest.param(
+        [_TEXT_PART, _file_part("text/csv")],
+        ["text", "cachePoint", "document"],
+        id="csv_last_moves_cache_point_ahead",
+    ),
+    pytest.param(
+        [_TEXT_PART, _file_part("text/plain", cached=False), _file_part("text/markdown")],
+        ["text", "cachePoint", "document", "document"],
+        id="cache_point_moves_ahead_of_every_trailing_text_document",
+    ),
+    pytest.param(
+        [{**_TEXT_PART, "cache_control": _CACHE_CONTROL}, _file_part("text/plain")],
+        ["text", "cachePoint", "document"],
+        id="does_not_stack_two_cache_points",
+    ),
+    pytest.param(
+        [_file_part("text/plain"), _TEXT_PART],
+        ["document", "text"],
+        id="dropped_when_nothing_precedes_the_document",
+    ),
+    pytest.param(
+        [_file_part("text/plain")],
+        ["document", "text", "cachePoint"],
+        id="document_only_turn_keeps_cache_point_after_placeholder",
+    ),
+    pytest.param(
+        [_TEXT_PART, _file_part("application/pdf")],
+        ["text", "document", "cachePoint"],
+        id="pdf_keeps_cache_point",
+    ),
+    pytest.param(
+        [_TEXT_PART, _file_part("application/pdf", cached=False), _file_part("text/plain")],
+        ["text", "document", "cachePoint", "document"],
+        id="cache_point_stops_behind_a_pdf",
+    ),
+]
+
+
+@pytest.mark.parametrize(("content", "expected_kinds"), _CACHE_POINT_AFTER_DOCUMENT_CASES)
+def test_bedrock_converse_cache_point_never_follows_non_pdf_document(content, expected_kinds):
+    messages: Final = [{"role": "user", "content": content}]
+
+    result: Final = _bedrock_converse_messages_pt(messages, "anthropic.claude-haiku-4-5", "bedrock")
+
+    assert _block_kinds(result[0]) == expected_kinds
+
+
+@pytest.mark.parametrize(("content", "expected_kinds"), _CACHE_POINT_AFTER_DOCUMENT_CASES)
+@pytest.mark.asyncio
+async def test_bedrock_converse_cache_point_never_follows_non_pdf_document_async(content, expected_kinds):
+    messages: Final = [{"role": "user", "content": content}]
+
+    result: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages, "anthropic.claude-haiku-4-5", "bedrock"
+    )
+
+    assert _block_kinds(result[0]) == expected_kinds
