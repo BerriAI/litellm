@@ -53,7 +53,7 @@ type LiteAdminState = {
 };
 
 const LiteAdminContext = createContext<LiteAdminState | null>(null);
-function isInternalUser(userRole: string | null): boolean {
+function isInternalUser(userRole: string): boolean {
   return !isProxyAdminRole(userRole) && !hasProxyWideSpendView(userRole);
 }
 
