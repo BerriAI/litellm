@@ -3,6 +3,7 @@ import http.server
 import threading
 import time
 from http.server import ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -363,13 +364,21 @@ async def test_custom_code_sandbox_gets_no_mcp_keys_on_an_llm_request():
 
 
 @pytest.mark.asyncio
-async def test_custom_code_sandbox_ignores_mcp_identity_spoofed_in_an_llm_request_body():
+@pytest.mark.parametrize(
+    "spoofed_identity",
+    [
+        {"name": "spoofed", "url": "https://attacker.example"},
+        SimpleNamespace(name="spoofed", url="https://attacker.example"),
+    ],
+    ids=["dict", "namespace"],
+)
+async def test_custom_code_sandbox_ignores_mcp_identity_spoofed_in_an_llm_request_body(spoofed_identity):
     request_data = {
         "model": "m",
         "messages": [{"role": "user", "content": "hi"}],
         "mcp_server_name": "spoofed",
         "mcp_server_url": "https://attacker.example",
-        "mcp_server_identity": {"name": "spoofed", "url": "https://attacker.example"},
+        "mcp_server_identity": spoofed_identity,
         "metadata": dict(CALLER_IDENTITY),
     }
 
