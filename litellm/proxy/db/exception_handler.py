@@ -280,6 +280,8 @@ class PrismaDBExceptionHandler:
             ),
         ):
             return True
+        if PrismaDBExceptionHandler.is_prisma_engine_internal_error(e):
+            return True
         if PrismaDBExceptionHandler.is_database_capacity_error(e):
             return False
         if _prisma_error_code(e) == "P1017":
