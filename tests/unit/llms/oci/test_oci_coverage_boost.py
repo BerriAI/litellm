@@ -449,9 +449,9 @@ def test_adapt_cohere_user_in_history():
         {"role": "user", "content": "current question"},
     ]
     history = adapt_messages_to_cohere_standard(messages)
-    assert len(history) == 1
-    assert history[0].role == "USER"
+    assert [msg.role for msg in history] == ["USER", "USER"]
     assert history[0].message == "first question"
+    assert history[1].message == "current question"
 
 
 def test_adapt_cohere_assistant_in_history():
@@ -461,7 +461,7 @@ def test_adapt_cohere_assistant_in_history():
         {"role": "user", "content": "follow-up"},
     ]
     history = adapt_messages_to_cohere_standard(messages)
-    assert len(history) == 2
+    assert [msg.role for msg in history] == ["USER", "CHATBOT", "USER"]
     chatbot_msg = history[1]
     assert chatbot_msg.role == "CHATBOT"
     assert chatbot_msg.message == "answer"
@@ -483,8 +483,7 @@ def test_adapt_cohere_assistant_with_tool_calls_in_history():
         {"role": "user", "content": "thanks"},
     ]
     history = adapt_messages_to_cohere_standard(messages)
-    assert len(history) == 1
-    assert history[0].role == "CHATBOT"
+    assert [msg.role for msg in history] == ["CHATBOT", "USER"]
     assert history[0].toolCalls is not None
     assert history[0].toolCalls[0].name == "calc"
 
