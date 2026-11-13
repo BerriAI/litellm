@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
+use litellm_core_utils::settings::Lookup;
+use litellm_python_compat::boolean::str_to_bool;
+
 use crate::compatibility::python_manager_string;
-use litellm_core_utils::{serde_compat::parse_str_bool, settings::Lookup};
 
 use crate::state::{LookupTarget, normalize_secret_name};
 use crate::{Error, OidcResolver, Secret, SecretManagerState};
@@ -140,7 +142,7 @@ impl SecretResolver {
             .await?
         {
             Some(Secret::Bool(value)) => Ok(Some(value)),
-            Some(Secret::String(value)) => match parse_str_bool(value.expose()) {
+            Some(Secret::String(value)) => match str_to_bool(value.expose()) {
                 Some(value) => Ok(Some(value)),
                 None if self.python_compatible => Ok(None),
                 None => Err(Error::TypeMismatch {
@@ -168,7 +170,7 @@ impl SecretResolver {
             return Some(python_manager_string(SecretValue::new(value)));
         }
         Some(
-            parse_str_bool(&value)
+            str_to_bool(&value)
                 .map_or_else(|| Secret::String(SecretValue::new(value)), Secret::Bool),
         )
     }

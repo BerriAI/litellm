@@ -1,5 +1,5 @@
-use litellm_core_utils::serde_compat::parse_str_bool;
 use litellm_error::Report;
+use litellm_python_compat::boolean::str_to_bool;
 use pyo3::{
     exceptions::{PyAttributeError, PyRuntimeError, PyValueError},
     prelude::*,
@@ -189,7 +189,7 @@ impl<'py> Field<'py> {
         if self.value.is_none() {
             return Ok(None);
         }
-        Ok(parse_str_bool(&self.strict_string()?))
+        Ok(str_to_bool(&self.strict_string()?))
     }
 
     pub(crate) fn optional_strict_string(&self) -> Result<Option<String>, ProjectionError> {

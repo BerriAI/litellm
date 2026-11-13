@@ -3,8 +3,9 @@ mod deployment;
 use std::collections::HashMap;
 
 use litellm_config::{Config, Spelled};
-use litellm_core_utils::{serde_compat::parse_pydantic_bool, settings::Lookup};
+use litellm_core_utils::settings::Lookup;
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
+use litellm_python_compat::boolean::lax_bool;
 
 pub use deployment::Deployment;
 
@@ -17,8 +18,8 @@ fn is_on(flag: Option<&Spelled<bool>>, env: &impl Lookup) -> bool {
         Some(Spelled::Text(text)) => match text.strip_prefix("os.environ/") {
             Some(name) => env
                 .get(name)
-                .is_some_and(|value| parse_pydantic_bool(&value) == Some(true)),
-            None => parse_pydantic_bool(text) == Some(true),
+                .is_some_and(|value| lax_bool(&value) == Some(true)),
+            None => lax_bool(text) == Some(true),
         },
         None => false,
     }

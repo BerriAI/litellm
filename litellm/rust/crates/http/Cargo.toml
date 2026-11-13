@@ -12,6 +12,7 @@ test-support = []
 http.workspace = true
 litellm-core-utils.workspace = true
 litellm-error.workspace = true
+litellm-python-compat.workspace = true
 hyper-util.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
