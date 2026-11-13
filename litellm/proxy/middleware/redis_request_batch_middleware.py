@@ -22,4 +22,4 @@ class RedisRequestBatchMiddleware:
             try:
                 await self.app(scope, receive, send)
             finally:
-                await batches.flush_all()
+                await batches.flush_pre_call()

@@ -59,7 +59,7 @@ def test_acount_tokens_fallback_to_local():
     """Test that unsupported providers fall back to local tiktoken counting."""
     result = asyncio.run(
         litellm.acount_tokens(
-            model="together_ai/meta-llama/Llama-3-8b-chat-hf",
+            model="together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
             messages=[{"role": "user", "content": "Hello"}],
         )
     )

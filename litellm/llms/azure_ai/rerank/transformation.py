@@ -111,10 +111,4 @@ class AzureAIRerankConfig(CohereRerankConfig):
         return rerank_response
 
     def _get_base_model(self, azure_model_group: str | None) -> str | None:
-        if azure_model_group is None:
-            return None
-        if azure_model_group == "offer-cohere-rerank-mul-paygo":
-            return "azure_ai/cohere-rerank-v3-multilingual"
-        if azure_model_group == "offer-cohere-rerank-eng-paygo":
-            return "azure_ai/cohere-rerank-v3-english"
         return azure_model_group
