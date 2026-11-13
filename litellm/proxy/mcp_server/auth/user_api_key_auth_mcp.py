@@ -93,7 +93,7 @@ from litellm.repositories.table_repositories import (
     AgentsRepository,
     MCPServerRepository,
 )
-from litellm.rust_bridge._native import RustAuth
+from litellm.rust_bridge._native import RustAuth, RustAuthSettings
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
@@ -287,11 +287,13 @@ async def _bearer_is_litellm_credential(token: str) -> bool:
     return token.startswith(LITELLM_VIRTUAL_KEY_PREFIX) and await virtual_key_may_exist(token)
 
 
-def _identity_check(token: str, route: str, settings: Mapping[str, object]) -> _IdentityCheck | None:
+def _identity_check(
+    token: str, route: str, settings: Mapping[str, object], auth_settings: RustAuthSettings
+) -> _IdentityCheck | None:
     """The identity check LiteLLM's own auth would run on ``token`` for ``route``, in its order: OAuth2
     introspection, then trusted reverse-proxy identity headers, then a JWT whose issuer may be LiteLLM's."""
     from litellm.proxy.auth import core as auth_core  # noqa: PLC0415  # proxy import cycle
-    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth import jwt as proxy_jwt  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.mcp_server.bridge_token_flow import (  # noqa: PLC0415  # bridge flow imports this module
         jwt_issuer_may_be_litellm,
     )
@@ -300,26 +302,28 @@ def _identity_check(token: str, route: str, settings: Mapping[str, object]) -> _
     )
 
     enable_jwt_auth: Final = settings.get("enable_jwt_auth") is True
-    if RustAuth.oauth2_introspection_applies(auth_core.request(token, route), auth_core.proxy_settings()):
+    if RustAuth.oauth2_introspection_applies(auth_core.request(token, route, None), auth_settings):
         return "oauth2" if premium_user is True else None
     if settings.get("enable_oauth2_proxy_auth") is True:
         return "oauth2_proxy"
-    if enable_jwt_auth and premium_user is True and JWTHandler.is_jwt(token=token) and jwt_issuer_may_be_litellm(token):
+    if enable_jwt_auth and premium_user is True and proxy_jwt.is_jwt(token) and jwt_issuer_may_be_litellm(token):
         return "jwt"
     return None
 
 
-async def _verify_identity(check: Literal["oauth2_proxy", "jwt"], token: str, request: Request) -> None:
+async def _verify_identity(
+    check: Literal["oauth2_proxy", "jwt"], token: str, request: Request, auth_settings: RustAuthSettings
+) -> None:
+    from litellm.proxy.auth import jwt as proxy_jwt  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.oauth2_proxy_hook import (  # noqa: PLC0415  # proxy import cycle
         handle_oauth2_proxy_request,
     )
-    from litellm.proxy.proxy_server import jwt_handler  # noqa: PLC0415  # startup owns the active auth configuration
 
     match check:
         case "oauth2_proxy":
             await handle_oauth2_proxy_request(request=request)
         case "jwt":
-            await jwt_handler.auth_jwt(token=token)  # pyright: ignore[reportUnknownMemberType]  # returns a bare dict; only whether it raises matters
+            _ = await proxy_jwt.verify(auth_settings, token)
         case _:  # pragma: no cover - exhaustiveness guard, unreachable while the Literal holds
             assert_never(check)  # pragma: no cover
 
@@ -332,6 +336,7 @@ async def _upstream_bearer_identity(token: str, litellm_api_key: str, request: R
     runs once inside the full check, where a provider that does not vouch is ``None``. Past that, only a
     user LiteLLM does not know is ``None``; every other refusal (budget, blocked team, disallowed route)
     propagates."""
+    from litellm.proxy.auth import core as auth_core  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.mcp_server.bridge_token_flow import (  # noqa: PLC0415  # bridge flow imports this module
         custom_auth_configured,
@@ -345,14 +350,15 @@ async def _upstream_bearer_identity(token: str, litellm_api_key: str, request: R
             return await user_api_key_auth(api_key=litellm_api_key, request=request)
         except (HTTPException, ProxyException):
             return None
+    auth_settings: Final = auth_core.proxy_settings()
     check: Final = _identity_check(
-        token, get_request_route(request), _PROXY_SETTINGS_ADAPTER.validate_python(general_settings)
+        token, get_request_route(request), _PROXY_SETTINGS_ADAPTER.validate_python(general_settings), auth_settings
     )
     if check is None:
         return None
     if check != "oauth2":
         try:
-            await _verify_identity(check, token, request)
+            await _verify_identity(check, token, request, auth_settings)
         except Exception:  # noqa: BLE001  # any verification failure means LiteLLM does not vouch for this bearer
             return None
     try:

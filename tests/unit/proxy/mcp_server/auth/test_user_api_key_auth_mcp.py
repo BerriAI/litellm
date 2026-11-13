@@ -2697,8 +2697,8 @@ class TestMCPDelegateAuthToUpstream:
             patch.dict(proxy_server.general_settings, {"enable_jwt_auth": True}),
             patch.object(proxy_server, "premium_user", True),
             patch.object(proxy_server, "user_custom_auth", None),
-            patch.object(proxy_server.jwt_handler, "auth_jwt", auth_jwt),
-            patch.object(proxy_server.jwt_handler, "litellm_jwtauth", LiteLLM_JWTAuth(), create=True),
+            patch.object(proxy_server, "litellm_jwtauth", LiteLLM_JWTAuth()),
+            patch("litellm.proxy.auth.jwt.verify", auth_jwt),
             patch.dict(os.environ),
         ):
             os.environ.pop("JWT_ISSUER", None)
@@ -2927,7 +2927,9 @@ class TestMCPDelegateAuthToUpstream:
     @staticmethod
     @contextlib.contextmanager
     def _idp_auth_enabled(
-        mechanism: Literal["oauth2", "oauth2_proxy"], verify: AsyncMock, premium: bool = True
+        mechanism: Literal["oauth2", "oauth2_proxy"],
+        verify: AsyncMock,
+        premium: bool = True,
     ) -> Iterator[None]:
         from litellm.proxy import proxy_server
         from litellm.proxy.auth.oauth2_check import Oauth2Handler
@@ -2987,7 +2989,11 @@ class TestMCPDelegateAuthToUpstream:
         ids=["granted-user", "user-not-granted", "token-inactive", "provider-rejects-token"],
     )
     async def test_delegate_oauth2_introspects_once_and_follows_the_jwt_rules(
-        self, provider_status: int, active: bool, allowed_server_ids: Sequence[str], expected_user_id: str | None
+        self,
+        provider_status: int,
+        active: bool,
+        allowed_server_ids: Sequence[str],
+        expected_user_id: str | None,
     ) -> None:
         """The provider is asked about the token once per request. A token it vouches for admits a granted
         user by name, and one it reports inactive or rejects outright is forwarded anonymously instead of

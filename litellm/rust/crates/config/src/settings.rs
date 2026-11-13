@@ -1,12 +1,56 @@
 use std::fmt;
 
+use litellm_core_utils::serde_compat::parse_str_bool;
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 
 use crate::{
-    AdditionalFields, CacheSettings, JwtAuthSettings, Object, RedisSettings, Spelled, Value,
-    value::one_or_many,
+    AdditionalFields, CacheSettings, JwtAuthSettings, LitellmRole, Object, RedisSettings,
+    RolePermissions, Spelled, Value, value::one_or_many,
 };
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct UserHeaderMapping {
+    pub header_name: String,
+    pub litellm_user_role: LitellmRole,
+}
+
+fn user_header_mappings<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Box<[UserHeaderMapping]>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Shape {
+        One(UserHeaderMapping),
+        Many(Box<[UserHeaderMapping]>),
+    }
+    Ok(match Option::<Shape>::deserialize(deserializer)? {
+        None => Box::default(),
+        Some(Shape::One(mapping)) => Box::new([mapping]),
+        Some(Shape::Many(mappings)) => mappings,
+    })
+}
+
+/// A flag the proxy also accepts as a string, true only for one `parse_str_bool` reads as true.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LenientFlag(pub bool);
+
+impl<'de> Deserialize<'de> for LenientFlag {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Shape {
+            Flag(bool),
+            Text(String),
+        }
+        Ok(Self(match Option::<Shape>::deserialize(deserializer)? {
+            None => false,
+            Some(Shape::Flag(flag)) => flag,
+            Some(Shape::Text(text)) => parse_str_bool(&text) == Some(true),
+        }))
+    }
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -85,8 +129,20 @@ pub struct GeneralSettings {
     pub enable_jwt_auth: Option<bool>,
     pub enable_oauth2_auth: Option<bool>,
     pub enable_oauth2_proxy_auth: Option<bool>,
+    pub allow_user_auth: Option<bool>,
+    pub allow_requests_on_db_unavailable: LenientFlag,
     pub public_routes: Option<Box<[String]>>,
+    pub allowed_ips: Option<Box<[String]>>,
+    pub allowed_routes: Option<Box<[String]>>,
+    pub custom_auth: Option<String>,
+    pub litellm_key_header_name: Option<String>,
+    pub pass_through_endpoints: Option<Box<[Object]>>,
     pub litellm_jwtauth: Option<JwtAuthSettings>,
+    pub role_permissions: Option<Box<[RolePermissions]>>,
+    pub enforce_rbac: Option<bool>,
+    pub user_header_name: Option<String>,
+    #[serde(deserialize_with = "user_header_mappings")]
+    pub user_header_mappings: Box<[UserHeaderMapping]>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }
@@ -127,8 +183,19 @@ impl Default for GeneralSettings {
             enable_jwt_auth: None,
             enable_oauth2_auth: None,
             enable_oauth2_proxy_auth: None,
+            allow_user_auth: None,
+            allow_requests_on_db_unavailable: LenientFlag::default(),
             public_routes: None,
+            allowed_ips: None,
+            allowed_routes: None,
+            custom_auth: None,
+            litellm_key_header_name: None,
+            pass_through_endpoints: None,
             litellm_jwtauth: None,
+            role_permissions: None,
+            enforce_rbac: None,
+            user_header_name: None,
+            user_header_mappings: Box::default(),
             additional_fields: AdditionalFields::new(),
         }
     }
@@ -282,7 +349,9 @@ impl fmt::Debug for LiteLlmSettings {
 
 #[cfg(test)]
 mod tests {
+    use super::{GeneralSettings, LenientFlag};
     use crate::JwtAuthSettings;
+    use rstest::rstest;
 
     #[test]
     fn jwt_auth_settings_hide_unknown_fields() {
@@ -294,5 +363,28 @@ mod tests {
 
         assert!(!debug.contains("credential-value"), "{debug}");
         assert!(debug.contains("[REDACTED]"), "{debug}");
+    }
+
+    #[rstest]
+    #[case::flag(serde_json::json!(true), true)]
+    #[case::true_text(serde_json::json!(" True "), true)]
+    #[case::python_stripped_true_text(serde_json::json!("\u{1c}true"), true)]
+    #[case::false_text(serde_json::json!("false"), false)]
+    #[case::other_text(serde_json::json!("yes"), false)]
+    #[case::null(serde_json::Value::Null, false)]
+    fn lenient_flag_is_true_only_for_true(
+        #[case] value: serde_json::Value,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            serde_json::from_value::<LenientFlag>(value).unwrap(),
+            LenientFlag(expected)
+        );
+    }
+
+    #[test]
+    fn unset_lenient_flag_is_false() {
+        let general: GeneralSettings = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(general.allow_requests_on_db_unavailable, LenientFlag(false));
     }
 }
