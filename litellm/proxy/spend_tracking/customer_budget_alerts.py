@@ -5,6 +5,7 @@ from typing import Final, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, InstanceOf, TypeAdapter
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.management_helpers.customer_hierarchy import (
     PrismaRecord,
@@ -29,6 +30,7 @@ class CustomerBudgetClaims(Protocol):
     async def async_increment_cache(self, *, key: str, value: float, ttl: float) -> float | None: ...
 
 
+@with_service_target("customer_budget_alerts")
 async def claim_customer_budget_alert(cache: CustomerBudgetClaims, key: str, ttl: float) -> bool:
     return await cache.async_increment_cache(key=key, value=1, ttl=ttl) == 1
 

@@ -2829,7 +2829,7 @@ class DBSpendUpdateWriter:
             )
             if on_table_committed is not None:
                 on_table_committed(level.transactions)
-            if outer_transaction is None:
+            if outer_transaction is None and db_spend_update_transactions.get(level.transactions):
                 await send_customer_budget_alerts(
                     {level.transactions: db_spend_update_transactions.get(level.transactions)},
                     prisma_client.db,
