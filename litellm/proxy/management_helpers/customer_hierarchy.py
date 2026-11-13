@@ -1166,10 +1166,7 @@ class CustomerHierarchyStore:
         elif await self.members.count(where={"parent_team_ids": {"has": team_id}}):
             return Failure(ErrorCode.HAS_CHILDREN)
         await self.teams.delete(where={"customer_team_id": team_id})
-        if team.budget_id is not None:
-            await self._delete_unused_budgets(
-                tuple(b for b in (team.budget_id, team.budget_override_id) if b is not None)
-            )
+        await self._delete_unused_budgets(tuple(b for b in (team.budget_id, team.budget_override_id) if b is not None))
         return None
 
     async def delete_organization(self, organization_id: str, *, cascade: bool = False) -> None | Failure:
