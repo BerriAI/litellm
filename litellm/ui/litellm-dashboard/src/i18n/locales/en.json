@@ -9648,6 +9648,31 @@
       }
     },
     "chat": {
+      "customer": {
+        "title": "Customer",
+        "organization": "Customer org",
+        "team": "Customer team",
+        "member": "Customer member",
+        "selectOrg": "Select customer org",
+        "optionalMember": "Customer member (optional)",
+        "noMembers": "No customer members in this customer org",
+        "aliasRequired": "Customer orgs need an alias to send requests",
+        "orgRequired": "Select a customer org before a customer member",
+        "orgOnly": "Use customer org only",
+        "headersHint": "Customer headers are visible and editable in Settings, under Custom headers",
+        "codeHint": "Set LITELLM_API_KEY in your environment, then copy this request into your app",
+        "anthropic": "Anthropic Python",
+        "curl": "curl",
+        "clear": "Clear customer context",
+        "budgets": "Customer budgets",
+        "spend": "Spend {{value}}",
+        "remaining": "Remaining {{value}}",
+        "unlimited": "Unlimited",
+        "refreshing": "Refreshing customer budgets…",
+        "settled": "Spend reflects settled requests",
+        "unavailable": "Could not refresh customer budgets. Check customer context and management access",
+        "test": "Test in Playground"
+      },
       "inspector": {
         "routing": {
           "title": "Routing",

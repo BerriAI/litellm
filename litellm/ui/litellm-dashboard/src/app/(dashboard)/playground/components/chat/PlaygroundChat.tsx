@@ -28,6 +28,9 @@ import { useCodeInterpreter } from "../../hooks/useCodeInterpreter";
 import { filterModelsForEndpoint, isModelCompatibleWithEndpoint } from "../chat_ui/EndpointUtils";
 import RealtimePlayground from "../chat_ui/RealtimePlayground";
 import { Composer } from "./Composer";
+import { CustomerBudgetStrip, CustomerControl } from "./CustomerContext";
+import { usePlaygroundCustomer } from "./usePlaygroundCustomer";
+import { generatePlaygroundCode, supportsCustomerEndpoint } from "@/components/chat_ui/playgroundCode";
 import { EndpointMenu, VoiceMenu } from "./ComposerControls";
 import { Conversation, formatCost } from "./Conversation";
 import { capabilitiesFor, CODE_INTERPRETER_SUGGESTIONS, SUGGESTIONS } from "./endpointCapabilities";
@@ -173,6 +176,7 @@ export function PlaygroundChat({
   const directTool = directTarget?.tool ?? null;
   const toolsFailed = directServers.some((server) => directServerTools[server]?.failed);
   const customHeaders = customHeadersFromPairs(settings.headerPairs);
+  const customer = usePlaygroundCustomer(accessToken, settings.headerPairs, update);
 
   const sendDeps: SendDeps = {
     settings,
@@ -186,6 +190,8 @@ export function PlaygroundChat({
     toolArgsForm,
     chat,
     codeInterpreter,
+    onRequestSettled: customer.onRequestSettled,
+    customerReady: !customer.pendingLink,
   };
   const draft = usePlaygroundSend(sendDeps);
 
@@ -225,6 +231,32 @@ export function PlaygroundChat({
   };
 
   const code = (sdk: CodeSdk): string => {
+    if (supportsCustomerEndpoint(settings.endpoint))
+      return generatePlaygroundCode({
+        endpoint: settings.endpoint,
+        sdk,
+        model: settings.model ?? "your-model-name",
+        prompt:
+          draft.text ||
+          messages
+            .findLast((message) => message.role === "user" && typeof message.content === "string")
+            ?.content?.toString() ||
+          "Your prompt here",
+        headers: customHeaders,
+        baseUrl:
+          settings.proxyBaseUrl ||
+          proxySettings?.LITELLM_UI_API_DOC_BASE_URL ||
+          proxySettings?.PROXY_BASE_URL ||
+          window.location.origin,
+        metadata: Object.fromEntries(
+          Object.entries({
+            tags: settings.tags,
+            vector_stores: settings.vectorStores,
+            guardrails: settings.guardrails,
+            policies: settings.policies,
+          }).filter(([, values]) => values.length > 0),
+        ),
+      });
     const snippet: Parameters<typeof generateCodeSnippet>[0] = {
       apiKeySource: "custom",
       accessToken: null,
@@ -242,7 +274,7 @@ export function PlaygroundChat({
       ),
       endpointType: settings.endpoint,
       selectedModel: settings.model ?? undefined,
-      selectedSdk: sdk,
+      selectedSdk: sdk === "azure" ? "azure" : "openai",
       selectedVoice: settings.voice,
       proxySettings,
       customHeaders,
@@ -338,6 +370,7 @@ export function PlaygroundChat({
         onValueChange={(endpoint) => update((current) => withEndpoint(current, endpoint))}
       />
       {capabilities.voice && <VoiceMenu value={settings.voice} onValueChange={(voice) => update({ voice })} />}
+      {supportsCustomerEndpoint(settings.endpoint) && <CustomerControl customer={customer} />}
     </>
   );
 
@@ -402,7 +435,7 @@ export function PlaygroundChat({
           }}
         />
       }
-      sendDisabled={draft.isLoading}
+      sendDisabled={draft.isLoading || customer.pendingLink}
     />
   );
 
@@ -411,11 +444,21 @@ export function PlaygroundChat({
       ? CODE_INTERPRETER_SUGGESTIONS
       : SUGGESTIONS[settings.endpoint] ?? [];
 
-  const inspector = <InspectorPanel message={inspectedMessage} code={code} />;
+  const inspector = <InspectorPanel message={inspectedMessage} code={code} endpoint={settings.endpoint} />;
 
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {supportsCustomerEndpoint(settings.endpoint) && (customer.alias || customer.pendingLink) && (
+          <CustomerBudgetStrip
+            context={customer.budget.data}
+            error={
+              customer.failure ?? (customer.linkError ? { status: null, message: customer.linkError.message } : null)
+            }
+            loading={customer.budget.isFetching || customer.pendingLink}
+            unavailable={customer.budget.isError}
+          />
+        )}
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
           <span className="text-xs text-muted-foreground tabular-nums">{conversationSummary(messages, t)}</span>
           <span className="ml-auto flex items-center gap-2">

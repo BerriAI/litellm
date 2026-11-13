@@ -21,6 +21,8 @@ import type { MessageType } from "@/components/chat_ui/types";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
+import { supportsCustomerEndpoint, type PlaygroundCodeSdk } from "@/components/chat_ui/playgroundCode";
 import { FieldDescription } from "@/components/ui/field";
 import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/components/ui/item";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
@@ -29,7 +31,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { formatCost, formatSeconds, servedModel } from "./Conversation";
 import { CopyIconButton, FallbackBadge, LongValue } from "./ModelName";
 
-export type CodeSdk = "openai" | "azure";
+export type CodeSdk = PlaygroundCodeSdk;
 
 function TraceRow({ title, description, children }: { title: string; description?: string; children?: ReactNode }) {
   return (
@@ -281,34 +283,52 @@ function Trace({ message }: { message: MessageType | null }) {
   );
 }
 
-function CodeTab({ code }: { code: (sdk: CodeSdk) => string }) {
+function CodeTab({
+  code,
+  messagesMode,
+  curl,
+}: {
+  code: (sdk: CodeSdk) => string;
+  messagesMode: boolean;
+  curl: boolean;
+}) {
   const { t } = useTranslation();
   const [sdk, setSdk] = useState<CodeSdk>("openai");
-  const snippet = code(sdk);
+  const useOpenAI = sdk === "anthropic" || (sdk === "curl" && !curl);
+  const textSdk = useOpenAI ? "openai" : sdk;
+  const selectedSdk = messagesMode && sdk !== "curl" ? "anthropic" : textSdk;
+  const snippet = code(selectedSdk);
   return (
     <div className="flex flex-col">
       <div className="flex items-center gap-2 px-4 pt-3">
         <ToggleGroup
-          value={[sdk]}
+          value={[selectedSdk]}
           onValueChange={(value) => value[0] && setSdk(value[0] as CodeSdk)}
           variant="outline"
           size="sm"
           spacing={0}
           aria-label={t("playground.chat.inspector.code.sdk")}
         >
-          <ToggleGroupItem value="openai" className="h-7 px-2 text-xs">
-            {t("playground.chat.inspector.code.openai")}
+          <ToggleGroupItem value={messagesMode ? "anthropic" : "openai"} className="h-7 px-2 text-xs">
+            {messagesMode ? t("playground.chat.customer.anthropic") : t("playground.chat.inspector.code.openai")}
           </ToggleGroupItem>
-          <ToggleGroupItem value="azure" className="h-7 px-2 text-xs">
-            {t("playground.chat.inspector.code.azure")}
-          </ToggleGroupItem>
+          {!messagesMode && (
+            <ToggleGroupItem value="azure" className="h-7 px-2 text-xs">
+              {t("playground.chat.inspector.code.azure")}
+            </ToggleGroupItem>
+          )}
+          {curl && (
+            <ToggleGroupItem value="curl" className="h-7 px-2 text-xs">
+              {t("playground.chat.customer.curl")}
+            </ToggleGroupItem>
+          )}
         </ToggleGroup>
         <span className="ml-auto">
           <CopyIconButton value={snippet} label={t("playground.chat.inspector.code.copyLabel")} />
         </span>
       </div>
       <FieldDescription className="px-4 pt-2 text-xs">
-        {t("playground.chat.inspector.code.description")}
+        {curl ? t("playground.chat.customer.codeHint") : t("playground.chat.inspector.code.description")}
       </FieldDescription>
       <ScrollArea className="w-full">
         <pre className="px-4 py-3 font-mono text-xs leading-5 whitespace-pre text-foreground">{snippet}</pre>
@@ -318,7 +338,15 @@ function CodeTab({ code }: { code: (sdk: CodeSdk) => string }) {
   );
 }
 
-export function InspectorPanel({ message, code }: { message: MessageType | null; code: (sdk: CodeSdk) => string }) {
+export function InspectorPanel({
+  message,
+  code,
+  endpoint,
+}: {
+  message: MessageType | null;
+  code: (sdk: CodeSdk) => string;
+  endpoint?: EndpointType;
+}) {
   const { t } = useTranslation();
   return (
     <Tabs defaultValue="trace" className="min-h-0 flex-1 gap-0">
@@ -333,7 +361,11 @@ export function InspectorPanel({ message, code }: { message: MessageType | null;
           <Trace message={message} />
         </TabsContent>
         <TabsContent value="code">
-          <CodeTab code={code} />
+          <CodeTab
+            code={code}
+            messagesMode={endpoint === EndpointType.ANTHROPIC_MESSAGES}
+            curl={endpoint !== undefined && supportsCustomerEndpoint(endpoint)}
+          />
         </TabsContent>
       </ScrollArea>
     </Tabs>

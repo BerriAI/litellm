@@ -4,7 +4,37 @@ import {
   customHeadersFromPairs,
   parseStoredHeaderPairs,
   withRequiredHeaders,
+  customerHeaderPairs,
+  customerFromHeaderPairs,
 } from "./request_headers";
+
+describe("customer headers", () => {
+  it("replaces customer context case-insensitively and preserves unrelated headers", () => {
+    const pairs = customerHeaderPairs(
+      [
+        ["X-LiteLLM-Customer-Org-Alias", "old"],
+        ["x-litellm-customer-member-id", "old-id"],
+        ["x-trace", "keep"],
+      ],
+      "customer-alias",
+      "customer-member",
+    );
+    expect(
+      withRequiredHeaders(buildPlaygroundHeaders([], customHeadersFromPairs(pairs)), { Authorization: "Bearer key" }),
+    ).toEqual({
+      "x-trace": "keep",
+      "x-litellm-customer-org-alias": "customer-alias",
+      "x-litellm-customer-member-id": "customer-member",
+      Authorization: "Bearer key",
+    });
+    expect(customerFromHeaderPairs(pairs)).toEqual({ alias: "customer-alias", memberId: "customer-member" });
+    expect(customerHeaderPairs(pairs, null, null)).toEqual([["x-trace", "keep"]]);
+    expect(customerHeaderPairs(pairs, "customer-alias", null)).toEqual([
+      ["x-trace", "keep"],
+      ["x-litellm-customer-org-alias", "customer-alias"],
+    ]);
+  });
+});
 
 describe("customHeadersFromPairs", () => {
   it("trims header names and drops rows without a name", () => {

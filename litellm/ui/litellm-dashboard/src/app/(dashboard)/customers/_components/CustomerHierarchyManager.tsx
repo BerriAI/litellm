@@ -14,6 +14,7 @@ import CustomerHierarchySettings from "./CustomerHierarchySettings";
 import { customerEntityId, customerEntityLabel } from "./customerHierarchyForms";
 import useCustomerHierarchy, { type CustomerHierarchyContext } from "./useCustomerHierarchy";
 import type { CustomerHierarchyScope } from "./customerHierarchyApi";
+import { customerPlaygroundHref } from "../../playground/components/chat/customerContext";
 
 type Hierarchy = ReturnType<typeof useCustomerHierarchy>;
 interface ScopeProps {
@@ -24,6 +25,7 @@ interface ScopeProps {
 
 function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" | "selected">) {
   const { t } = useTranslation();
+  const router = useRouter();
   const entity = selected.entity;
   const team = selected.team;
   const label = customerEntityLabel(entity);
@@ -74,6 +76,24 @@ function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" |
       <h1 className="text-2xl font-semibold tracking-tight">{label}</h1>
       <p className="mt-1.5 text-sm text-muted-foreground">{t("customerPortal.hierarchy.subtitle")}</p>
       <p className="mt-3 font-mono text-xs text-muted-foreground">{customerEntityId(entity)}</p>
+      {entity.kind !== "team" && (
+        <Button
+          className="mt-3"
+          variant="outline"
+          size="sm"
+          disabled={!selected.organization.alias}
+          onClick={() =>
+            router.push(
+              customerPlaygroundHref(
+                selected.organization.customer_org_id,
+                selected.member?.customer_member_id ?? null,
+              ),
+            )
+          }
+        >
+          {t("playground.chat.customer.test")}
+        </Button>
+      )}
     </header>
   );
 }

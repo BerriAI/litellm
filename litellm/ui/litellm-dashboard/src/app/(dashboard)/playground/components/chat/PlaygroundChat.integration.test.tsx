@@ -5,7 +5,14 @@ import { renderWithProviders as render, testQueryClient } from "@/../tests/test-
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
-import { callMCPTool, fetchMCPServers, fetchMCPToolsets, listMCPTools, tagListCall } from "@/components/networking";
+import {
+  apiClient,
+  callMCPTool,
+  fetchMCPServers,
+  fetchMCPToolsets,
+  listMCPTools,
+  tagListCall,
+} from "@/components/networking";
 import { setSecureItem } from "@/utils/secureStorage";
 import { fetchClient } from "@/lib/http/api";
 import { PlaygroundChat } from "./PlaygroundChat";
@@ -24,6 +31,7 @@ vi.mock("@/components/llm_calls/chat_completion", () => ({ makeOpenAIChatComplet
 vi.mock("@/components/llm_calls/responses_api", () => ({ makeOpenAIResponsesRequest: vi.fn() }));
 
 vi.mock("@/components/networking", () => ({
+  apiClient: { get: vi.fn().mockResolvedValue({ data: [], meta: { total_pages: 1 } }) },
   tagListCall: vi.fn().mockResolvedValue({}),
   vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
   getGuardrailsList: vi.fn().mockResolvedValue({ guardrails: [{ guardrail_name: "pii-mask" }] }),
@@ -91,6 +99,9 @@ describe("PlaygroundChat", () => {
     testQueryClient.clear();
     Element.prototype.scrollIntoView = vi.fn();
     chatRequest.mockReset();
+    vi.mocked(apiClient.get)
+      .mockReset()
+      .mockResolvedValue({ data: [], meta: { total_pages: 1 } });
     responsesRequest.mockReset();
     vi.mocked(callMCPTool).mockReset();
     credentialPost.mockReset().mockResolvedValue({ data: {}, response: new Response() });
@@ -104,6 +115,56 @@ describe("PlaygroundChat", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("consumes a customer deep link, sends its headers and clears the context", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    const organization = {
+      customer_org_id: "customer-org",
+      alias: "customer-alias",
+      spend: 1,
+      budget: { max_budget: 10 },
+    };
+    const team = { customer_team_id: "customer-team", parent_org_id: "customer-org" };
+    const member = {
+      customer_member_id: "customer-member",
+      parent_team_id: "customer-team",
+      spend: 1,
+      effective_budget: { max_budget: 5 },
+    };
+    const resources = { customer_organizations: organization, customer_teams: team, customer_members: member };
+    const responses = Object.fromEntries(
+      Object.entries(resources).flatMap(([resource, row]) => [
+        [`/management/v1/${resource}`, { data: [row], meta: { total_pages: 1 } }],
+        [`/management/v1/${resource}/${Object.values(row)[0]}`, row],
+      ]),
+    );
+    vi.mocked(apiClient.get).mockImplementation(async (path) => responses[path]);
+    chatRequest.mockImplementation(replyWith("Hi there"));
+    preload({ selectedModel: "gpt-fast" });
+    const searchParams = { customerOrg: "customer-org", customerMember: "customer-member" };
+    render(
+      <PlaygroundChat accessToken="session-token" disabledPersonalKeyCreation={false} proxySettings={undefined} />,
+      { searchParams, onUrlUpdate },
+    );
+
+    expect(await screen.findByText("Customer org · customer-alias")).toBeInTheDocument();
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(onUrlUpdate.mock.lastCall![0].searchParams.get("customerOrg")).toBeNull();
+    expect(onUrlUpdate.mock.lastCall![0].searchParams.get("customerMember")).toBeNull();
+    await send(user, "hello");
+    expect((chatRequest.mock.calls[0] as ChatArgs)[26]).toMatchObject({
+      "x-litellm-customer-org-alias": "customer-alias",
+      "x-litellm-customer-member-id": "customer-member",
+    });
+
+    await user.click(screen.getByRole("button", { name: "Customer · customer-alias" }));
+    await user.click(screen.getByRole("button", { name: "Clear customer context" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("region", { name: "Customer budgets" })).not.toBeInTheDocument();
+    await send(user, "again");
+    expect((chatRequest.mock.calls[1] as ChatArgs)[26]).toEqual({});
   });
 
   it("sends the chosen model and guardrails with the session key", async () => {

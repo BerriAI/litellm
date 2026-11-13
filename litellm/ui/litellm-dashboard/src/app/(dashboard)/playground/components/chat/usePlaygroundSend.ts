@@ -43,6 +43,8 @@ export type SendDeps = Readonly<{
   toolArgsForm: RefObject<MCPToolArgumentsFormRef | null>;
   chat: UseChatHistoryReturn;
   codeInterpreter: UseCodeInterpreterReturn;
+  customerReady?: boolean;
+  onRequestSettled?: (error: unknown) => void;
 }>;
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -151,6 +153,7 @@ export function usePlaygroundSend(deps: SendDeps) {
   };
 
   const prepare = async (): Promise<PreparedRequest | null> => {
+    if (deps.customerReady === false) return null;
     const { settings } = deps;
     const missing = missingInput(deps, text, files, t);
     if (missing !== null) {
@@ -249,7 +252,12 @@ export function usePlaygroundSend(deps: SendDeps) {
           live.handleResponseId(responseId);
         },
       };
-      await dispatchRequest(context);
+      const outcome = await dispatchRequest(context).then(
+        () => ({ error: null }),
+        (error: unknown) => ({ error }),
+      );
+      deps.onRequestSettled?.(controller.signal.aborted ? null : outcome.error);
+      if (outcome.error !== null) throw outcome.error;
       if (controller.signal.aborted) return;
       chat.setChatHistory((current) => withTrace(current, history.length, trace()));
     } catch (error) {
