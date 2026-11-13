@@ -156,6 +156,12 @@ def _tightest_of(*shares: tuple[RateLimitDescriptor, int] | None) -> tuple[RateL
     return min((share for share in shares if share is not None), key=lambda share: share[1], default=None)
 
 
+def _share_on_model(
+    share: RateLimitDescriptor | None, holder_id: str | None, model_group: str
+) -> RateLimitDescriptor | None:
+    return share if share is not None and share["value"] == f"{holder_id}:{model_group}" else None
+
+
 def _capped_idle_share(
     share: RateLimitDescriptor | None, cap: RateLimitDescriptor | None
 ) -> tuple[RateLimitDescriptor, int] | None:
@@ -854,6 +860,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             if not loggers or stash is None or model_group is None:
                 return
             class_share_kind: Final = _class_share_kind(stash.priority_class_share_holder)
+            group: Final = (
+                self.v3_limiter.rate_limited_model(model_group)
+                or RateLimitedModel(requested=model_group, group=model_group)
+            ).group
             for kind, state in stash.borrowing_shares.items():
                 holder = settlement.holder(kind)
                 hold = holds.get(kind)
@@ -863,6 +873,14 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     if hold is not None
                     else _tightest_of(
                         _tightest_team_share((state.limit, class_share)), _capped_idle_share(state.share, state.cap)
+                    )
+                ) or _tightest_team_share(
+                    (
+                        (
+                            hold.share
+                            if hold is not None
+                            else _share_on_model(state.share, None if holder is None else holder.entity_id, group)
+                        ),
                     )
                 )
                 if holder is None or share is None:

@@ -5224,6 +5224,13 @@
         "managedByConfig": "Managed by the deployment configuration."
       },
       "settings": {
+        "ariaInternalUserAccess": {
+          "label": "Aria access for internal users",
+          "description": "Choose whether internal users can ask Aria about their own usage or permitted team usage. Admins and proxy-wide viewers are unaffected. Active dashboards check for changes every 30 seconds.",
+          "none": "No access",
+          "own_usage": "Own usage only",
+          "own_and_team_usage": "Own and team usage"
+        },
         "disableAria": {
           "label": "Hide Aria Agent for everyone",
           "description": "Hides Aria from navigation, Usage, and its workspace for all users, including admins. Active dashboards check for changes every 30 seconds.",
@@ -20778,8 +20785,13 @@
       "subtitle": "Usage across each customer organization’s customer teams and customer members.",
       "create": "Create customer organization",
       "searchPlaceholder": "Search by customer organization ID or alias",
+      "overallUsage": "Overall customer usage",
+      "overallUsageHelp": "Usage across all external customer organizations for the selected dates.",
+      "newestFirst": "Newest first",
+      "budgetAndShareHelp": "Budget spend follows each configured reset period. Share of overall spend uses the current UTC calendar month across all customer organizations, regardless of search or pagination. Status reflects all configured budget limits. The date picker controls the summary above.",
       "columns": {
         "customer": "$t(customerPortal.entities.organization)",
+        "overallSpendShare": "Share of overall spend",
         "spend": "Spend",
         "requests": "Requests",
         "tokens": "Tokens",

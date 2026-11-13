@@ -998,7 +998,7 @@ def test_budget_table_reset_evicts_cached_customer_hierarchies_after_commit(
     """A member's cached hierarchy holds the org, team and member spend the
     request path checks, so every member a reset touches, directly or through
     its team or org, is evicted once the cascade lands."""
-    from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key
+    from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key, customer_org_alias_cache_key
 
     counter_cache = _make_counter_invalidation_job(monkeypatch)
     broadcasts: list[tuple[str, ...]] = []
@@ -1009,7 +1009,7 @@ def test_budget_table_reset_evicts_cached_customer_hierarchies_after_commit(
     monkeypatch.setattr(reset_budget_job_module, "broadcast_evictions", _broadcast)
     mock_prisma_client.data["budget"] = [_budget_row(budget_id="tier", budget_duration="7d")]
     mock_prisma_client.db.litellm_customerorganizationtable.set_find_many_results(
-        [types.SimpleNamespace(customer_org_id="org-1", spend=3.0, budget_id="tier")]
+        [types.SimpleNamespace(customer_org_id="org-1", alias="org-alias", spend=3.0, budget_id="tier")]
     )
     mock_prisma_client.db.litellm_customermembertable.set_find_many_results([_customer_member("member-1", 1.0)])
 
@@ -1019,6 +1019,7 @@ def test_budget_table_reset_evicts_cached_customer_hierarchies_after_commit(
     evicted = {call.kwargs["key"] for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
     assert customer_member_cache_key("member-1") in evicted
     assert customer_member_cache_key("member-1") in {key for keys in broadcasts for key in keys}
+    assert customer_org_alias_cache_key("org-alias") in {key for keys in broadcasts for key in keys}
     descendant_reads = [
         call["where"]
         for call in mock_prisma_client.db.litellm_customermembertable.find_many_calls
