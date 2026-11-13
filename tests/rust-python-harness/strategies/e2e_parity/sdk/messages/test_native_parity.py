@@ -484,6 +484,7 @@ class Case:
             *(("hook_inputs",) if self.loggers else ()),
             *(("classified",) if self.classifier is not None else ()),
             *(("tool_runs",) if self.gateway else ()),
+            *(("stream_type",) if self.kwargs.get("stream") is True else ()),
         )
 
     def params(self) -> Iterator[object]:
@@ -4046,6 +4047,7 @@ class Leg:
     hook_inputs: tuple[object, ...] = ()
     classified: tuple[Mapping[str, object], ...] = ()
     tool_runs: tuple[Mapping[str, object], ...] = ()
+    stream_type: object = None
 
 
 @dataclass(slots=True)
@@ -4352,9 +4354,11 @@ async def _invoke(
         chunks, failure = await _consume_async(cast(AsyncIterator[object], result))
     hidden: Final = _hidden_params(result)
     partition: Final = {"partition": _partition(chunks)} if case.partitioned else {}
+    stream_type: Final = {"stream_type": type(result).__name__}
     if failure is not None:
-        return {**_error(failure, "stream", chunks), **partition}, hidden
+        return {**_error(failure, "stream", chunks), **partition, **stream_type}, hidden
     return {
+        **stream_type,
         "kind": "stream",
         "chunk_types": sorted({type(chunk).__name__ for chunk in chunks}),
         "text": _SERVER_TOOL_ID.sub("srvtoolu_<id>", _stream_text(chunks)),
@@ -4540,7 +4544,8 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
                 }
                 for sent in server.requests[request_count:]
             ),
-            outcome=outcome,
+            outcome={name: value for name, value in outcome.items() if name != "stream_type"},
+            stream_type=outcome.get("stream_type"),
             hidden_params=hidden,
             logged=logged,
             callback_kwargs=callback_kwargs,
@@ -4633,6 +4638,8 @@ async def test_native_messages_match_python(
             assert native.classified == python.classified
         case "tool_runs":
             assert native.tool_runs == python.tool_runs
+        case "stream_type":
+            assert native.stream_type == python.stream_type
         case _:
             assert _comparable(native.callback_kwargs.get(aspect)) == _comparable(python.callback_kwargs.get(aspect))
 
@@ -5253,6 +5260,51 @@ async def test_both_lanes_log_nothing_for_a_stream_never_read(
 ) -> None:
     python: Final = await _unread_stream(parity_server, native=False, closed=closed)
     native: Final = await _unread_stream(parity_server, native=True, closed=closed)
+
+    assert native_messages.calls == 0
+    assert native == python
+
+
+async def _entered_stream(server: RecordingServer, native: bool) -> str:
+    server.enqueue(_burst(TEXT_STREAM))
+    acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        stream: Final = cast(
+            AsyncGenerator[object],
+            await acall(
+                model=SONNET,
+                max_tokens=64,
+                messages=[dict(USER)],
+                api_key=API_KEY,
+                api_base=server.base_url,
+                stream=True,
+            ),
+        )
+        try:
+            entered: Final = await _enter(stream)
+        finally:
+            await stream.aclose()
+            await drain_logging()
+    server.responses.clear()
+    return entered
+
+
+async def _enter(stream: object) -> str:
+    try:
+        async with cast(contextlib.AbstractAsyncContextManager[object], stream):
+            return "entered"
+    except (TypeError, AttributeError) as refused:
+        return f"{type(refused).__name__}: {refused}"
+
+
+@pytest.mark.asyncio
+async def test_both_lanes_treat_a_stream_as_an_async_context_manager_alike(
+    parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _entered_stream(parity_server, native=False)
+    native: Final = await _entered_stream(parity_server, native=True)
 
     assert native_messages.calls == 0
     assert native == python

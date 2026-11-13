@@ -522,6 +522,21 @@ async def _unrequested_stream_delivered(
     return delivered
 
 
+def cached_stream(head: object, kwargs: dict[str, object]) -> None:  # mutable-ok: the call's own kwargs
+    """Hands the stream a cache hit or miss returns on Python back through the head: the cached replay, with the
+    metadata `@client` stamps on it, or the cache writer a miss is wrapped in."""
+    logger: Final = kwargs.get("litellm_logging_obj")
+    if not isinstance(head, MessagesStreamHead) or not isinstance(logger, LiteLLMLoggingObj):
+        return
+    hit: Final = cache.stream_hit(logger)
+    if hit is None:
+        head.cache_writer = functools.partial(cache.stream_writer, logger)  # rebind-ok: the head carries it back
+        return
+    served: Final = datetime.datetime.now(datetime.timezone.utc).astimezone().replace(tzinfo=None)
+    callbacks_legacy_python.finalize(hit, logger, kwargs, logger.start_time, served, cache_hit=True)
+    head.cached = hit  # rebind-ok: the head carries the cached stream back
+
+
 def unrequested_stream(
     head: object,
     kwargs: dict[str, object],  # mutable-ok: the call's own kwargs, as `@client` hands them on

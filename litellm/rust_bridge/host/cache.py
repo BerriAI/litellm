@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import weakref
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # bounded cast of the served response
 
 from pydantic import TypeAdapter
@@ -210,6 +210,47 @@ def _replace(response: object, cached: Mapping[str, object] | None) -> None:
         )
         served.clear()
         served.update(cached)
+
+
+def stream_hit(logger: Logging) -> object | None:
+    """The cached stream Python's caching handler returns for the hit this call read, if it read one."""
+    from litellm.caching.caching_handler import (
+        _set_cached_hidden_param,  # pyright: ignore[reportPrivateUsage]  # the @client cache hit's own hidden params
+    )
+    from litellm.llms.anthropic.messages.native.response_cache import (
+        CachedAnthropicMessagesStreamIterator,
+        convert_cached_anthropic_messages_result,
+    )
+
+    cached: Final = _HITS.pop(logger, None)
+    handler: Final = logger.llm_caching_handler
+    if cached is None or handler is None:
+        return None
+    stream: Final = convert_cached_anthropic_messages_result(
+        cached_result=cached, logging_obj=logger, kwargs=handler.request_kwargs
+    )
+    if not isinstance(stream, CachedAnthropicMessagesStreamIterator):
+        return None
+    _set_cached_hidden_param(stream, "cache_key", hit_cache_key(logger))
+    return stream
+
+
+def stream_writer(logger: Logging, stream: object) -> object:
+    """The stream as Python's caching handler hands a cache miss back. Rust stores the stream itself, so the
+    writer never persists it again."""
+    from litellm.caching.caching_handler import LLMCachingHandler
+    from litellm.llms.anthropic.messages.native.response_cache import AnthropicMessagesStreamCacheWriter
+
+    handler: Final = logger.llm_caching_handler
+    if not isinstance(handler, LLMCachingHandler):
+        return stream
+    wrapped: Final = handler.wrap_streaming_result_for_cache(
+        result=cast("AsyncIterator[bytes]", stream),  # cast-ok: the public native stream yields SSE bytes
+        call_type=handler.original_function.__name__,
+    )
+    if isinstance(wrapped, AnthropicMessagesStreamCacheWriter):
+        wrapped.persisted = True
+    return wrapped
 
 
 def restore_hit(response: object, logger: Logging) -> None:
