@@ -6,6 +6,7 @@ use litellm_llms_types::{
     providers::anthropic::{BetaProvider, BetaSet},
     recognized::{Recognized, map_known_runs},
 };
+use serde_json::Value;
 
 use crate::{
     anthropic::{
@@ -113,6 +114,49 @@ fn strip_scope_from_message(message: Message) -> Message {
     }
 }
 
+/// Python's sanitizer reads any mapping, so a message that did not parse loses the scope of
+/// every `cache_control` object among its content blocks too.
+fn strip_scope_from_raw_message(message: Value) -> Value {
+    let Value::Object(fields) = message else {
+        return message;
+    };
+    Value::Object(
+        fields
+            .into_iter()
+            .map(|(key, value)| match value {
+                Value::Array(blocks) if key == "content" => (
+                    key,
+                    Value::Array(blocks.into_iter().map(strip_scope_from_raw_block).collect()),
+                ),
+                value => (key, value),
+            })
+            .collect(),
+    )
+}
+
+fn strip_scope_from_raw_block(block: Value) -> Value {
+    let Value::Object(fields) = block else {
+        return block;
+    };
+    Value::Object(
+        fields
+            .into_iter()
+            .map(|(key, value)| match value {
+                Value::Object(cache_control) if key == "cache_control" => (
+                    key,
+                    Value::Object(
+                        cache_control
+                            .into_iter()
+                            .filter(|(field, _)| field != "scope")
+                            .collect(),
+                    ),
+                ),
+                value => (key, value),
+            })
+            .collect(),
+    )
+}
+
 /// Python's `_remove_scope_from_cache_control`: hosts other than the first-party API reject
 /// `cache_control.scope`, so it is dropped from the system prompt and every message block.
 pub fn strip_cache_control_scope(request: MessagesRequest) -> MessagesRequest {
@@ -120,7 +164,12 @@ pub fn strip_cache_control_scope(request: MessagesRequest) -> MessagesRequest {
         messages: request
             .messages
             .into_iter()
-            .map(|message| message.map_known(strip_scope_from_message))
+            .map(|message| match message {
+                Recognized::Known(message) => Recognized::Known(strip_scope_from_message(message)),
+                Recognized::Unrecognized(message) => {
+                    Recognized::Unrecognized(strip_scope_from_raw_message(message))
+                }
+            })
             .collect(),
         params: MessagesOptionalParams {
             system: request.params.system.map(strip_scope_from_system),
@@ -134,7 +183,7 @@ pub fn strip_cache_control_scope(request: MessagesRequest) -> MessagesRequest {
 mod tests {
     use crate::base_llm::messages::{
         mid_conversation_system::CONVERTED_SYSTEM_NOTE,
-        normalization::normalize_system_role_messages,
+        normalization::{normalize_system_role_messages, strip_cache_control_scope},
     };
     use litellm_llms_types::{
         formats::messages::MessagesRequest, providers::anthropic::BetaProvider,
@@ -376,6 +425,42 @@ mod tests {
                 {"role": "assistant", "content": "hello"},
                 {"role": "user", "content": "go on"}
             ])
+        );
+    }
+
+    #[rstest]
+    #[case::unparsed_block_beside_a_scoped_one(
+        json!({"role": "user", "content": [
+            {"type": "text", "text": 5},
+            {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "scope": "global", "ttl": "1h"}}
+        ]}),
+        json!({"role": "user", "content": [
+            {"type": "text", "text": 5},
+            {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+        ]})
+    )]
+    #[case::unparsed_scoped_block(
+        json!({"role": "user", "content": [{"type": "text", "text": 5, "cache_control": {"scope": "global"}}]}),
+        json!({"role": "user", "content": [{"type": "text", "text": 5, "cache_control": {}}]})
+    )]
+    #[case::non_object_cache_control(
+        json!({"content": [{"type": "text", "text": "hi", "cache_control": "global"}]}),
+        json!({"content": [{"type": "text", "text": "hi", "cache_control": "global"}]})
+    )]
+    #[case::text_content(
+        json!({"role": 5, "content": "hi", "cache_control": {"scope": "global"}}),
+        json!({"role": 5, "content": "hi", "cache_control": {"scope": "global"}})
+    )]
+    fn an_unparsed_message_loses_its_cache_control_scope(
+        #[case] message: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(
+            serde_json::to_value(strip_cache_control_scope(request(
+                json!({"messages": [message]})
+            )))
+            .unwrap()["messages"],
+            json!([expected])
         );
     }
 }

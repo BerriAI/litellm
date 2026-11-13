@@ -65,6 +65,15 @@ pub fn is_system_turn(message: &Recognized<Message>) -> bool {
     }
 }
 
+/// The `role` of a message whether or not it parsed, as Python reads it off any mapping.
+pub fn message_role(message: &Recognized<Message>) -> Option<&str> {
+    match message {
+        Recognized::Known(message) => Some(&message.role),
+        Recognized::Unrecognized(Value::Object(fields)) => fields.get(ROLE).and_then(Value::as_str),
+        Recognized::Unrecognized(_) => None,
+    }
+}
+
 pub fn system_role_message_as_user(message: Message) -> Message {
     Message {
         role: USER_ROLE.into(),

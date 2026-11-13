@@ -156,6 +156,8 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     }
 }
 
+const OUTPUT_CONFIG: &str = "output_config";
+
 const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
     "services.ai.azure.com",
     "openai.azure.com",
@@ -527,11 +529,14 @@ fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
         .is_some_and(|value| !value.is_null())
 }
 
+/// Python's `messages_carry_output_config` reads any mapping, so a message that did not parse,
+/// such as a system turn sent without content, counts too.
 fn messages_carry_output_config(messages: &[Recognized<Message>]) -> bool {
-    messages
-        .iter()
-        .filter_map(Recognized::known)
-        .any(|message| message.extra.contains_key("output_config"))
+    messages.iter().any(|message| match message {
+        Recognized::Known(message) => message.extra.contains_key(OUTPUT_CONFIG),
+        Recognized::Unrecognized(Value::Object(fields)) => fields.contains_key(OUTPUT_CONFIG),
+        Recognized::Unrecognized(_) => false,
+    })
 }
 
 fn uses_thinking_display_updates(params: &MessagesOptionalParams) -> bool {
@@ -575,13 +580,34 @@ fn is_tool_reference_change(block: &ContentBlock) -> bool {
         == Some("tool_reference")
 }
 
+fn is_raw_tool_reference_change(block: &Value) -> bool {
+    block
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|block_type| block_type == "tool_addition" || block_type == "tool_removal")
+        && block
+            .get("tool")
+            .and_then(|tool| tool.get("type"))
+            .and_then(Value::as_str)
+            == Some("tool_reference")
+}
+
+/// `AnthropicModelInfo.is_mid_conversation_tool_change_used` reads any mapping, so a system
+/// message that did not parse is scanned through its raw content too.
 fn messages_carry_tool_changes(messages: &[Recognized<Message>]) -> bool {
-    messages
-        .iter()
-        .filter_map(Recognized::known)
-        .filter(|message| message.role == "system")
-        .flat_map(Message::blocks)
-        .any(is_tool_reference_change)
+    messages.iter().any(|message| match message {
+        Recognized::Known(message) => {
+            message.role == "system" && message.blocks().iter().any(is_tool_reference_change)
+        }
+        Recognized::Unrecognized(Value::Object(fields)) => {
+            fields.get("role").and_then(Value::as_str) == Some("system")
+                && matches!(
+                    fields.get("content"),
+                    Some(Value::Array(blocks)) if blocks.iter().any(is_raw_tool_reference_change)
+                )
+        }
+        Recognized::Unrecognized(_) => false,
+    })
 }
 
 fn unsupported_param(model: &str, param: &str, value: &str, hint: &str) -> Error {
@@ -1475,6 +1501,43 @@ mod tests {
     #[case::per_message_null_output_config(
         json!({"messages": [{"role": "user", "content": "hi", "output_config": null}]}),
         &["per-turn-control-2026-07-01"]
+    )]
+    #[case::contentless_system_output_config(
+        json!({"messages": [
+            {"role": "", "content": "Hello"},
+            {"role": "system", "output_config": {"effort": "high"}},
+        ]}),
+        &["per-turn-control-2026-07-01"]
+    )]
+    #[case::unparsed_message_output_config(
+        json!({"messages": [{"role": "user", "content": 5, "output_config": {"effort": "low"}}]}),
+        &["per-turn-control-2026-07-01"]
+    )]
+    #[case::unparsed_signed_compaction_block_in_history(
+        json!({"messages": [
+            {"role": "assistant", "content": [{"type": "text", "text": 5}, {"type": "compaction", "content": "summary", "signature": "sig"}]},
+            {"role": "user", "content": "Continue"},
+        ]}),
+        &["compact-2026-09-04"]
+    )]
+    #[case::unparsed_unsigned_compaction_block_in_history(
+        json!({"messages": [
+            {"role": "assistant", "content": [{"type": "text", "text": 5}, {"type": "compaction", "content": "summary", "signature": ""}]},
+        ]}),
+        &[]
+    )]
+    #[case::unparsed_system_tool_addition(
+        json!({"messages": [
+            {"role": "user", "content": "Use the ping tool"},
+            {"role": "system", "content": [{"type": "text", "text": 5}, {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+        ]}),
+        &["mid-conversation-tool-changes-2026-07-01"]
+    )]
+    #[case::unparsed_user_tool_addition(
+        json!({"messages": [
+            {"role": "user", "content": [{"type": "text", "text": 5}, {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+        ]}),
+        &[]
     )]
     #[case::safeguards(
         json!({"safeguards": [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]}),

@@ -322,15 +322,29 @@ pub fn requires_native_compaction_beta(
     compaction: Option<&Value>,
     messages: &[Recognized<Message>],
 ) -> bool {
-    compaction.is_some()
-        || messages
-            .iter()
-            .filter_map(Recognized::known)
-            .flat_map(Message::blocks)
-            .any(|block| {
-                block.is_type(ContentBlockType::Compaction)
-                    && block.signature.as_deref().is_some_and(|s| !s.is_empty())
+    compaction.is_some() || messages.iter().any(carries_signed_compaction_block)
+}
+
+/// Python's `carries_signed_compaction_block` reads any mapping, so a message that did not parse
+/// is scanned through its raw content too.
+fn carries_signed_compaction_block(message: &Recognized<Message>) -> bool {
+    match message {
+        Recognized::Known(message) => message.blocks().iter().any(|block| {
+            block.is_type(ContentBlockType::Compaction)
+                && block.signature.as_deref().is_some_and(|s| !s.is_empty())
+        }),
+        Recognized::Unrecognized(Value::Object(fields)) => matches!(
+            fields.get("content"),
+            Some(Value::Array(blocks)) if blocks.iter().any(|block| {
+                block.get("type").and_then(Value::as_str) == Some("compaction")
+                    && block
+                        .get("signature")
+                        .and_then(Value::as_str)
+                        .is_some_and(|signature| !signature.is_empty())
             })
+        ),
+        Recognized::Unrecognized(_) => false,
+    }
 }
 
 fn is_blank(text: Option<&str>) -> bool {

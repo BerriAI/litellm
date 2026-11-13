@@ -5,11 +5,15 @@ use litellm_llms_types::{
     providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet},
     recognized::Recognized,
 };
+use serde_json::{Map, Value};
 
-use crate::base_llm::messages::mid_conversation_system::is_system_role_message;
+use crate::base_llm::messages::mid_conversation_system::{is_system_role_message, message_role};
 
 const ASSISTANT_ROLE: &str = "assistant";
+const SYSTEM_ROLE: &str = "system";
 const CLEAR_AT: &str = "clear_at";
+const CONTENT: &str = "content";
+const TYPE: &str = "type";
 const OUTPUT_CONFIG: &str = "output_config";
 const TOOL_CHANGE_BLOCK_TYPES: [&str; 2] = ["tool_addition", "tool_removal"];
 
@@ -90,6 +94,15 @@ pub fn strip_beta_gated_system_messages(
             Recognized::Known(message) if is_system_role_message(&message) => {
                 let (kept, gated) = strip_system_message(message, active);
                 (kept.map(Recognized::Known), gated)
+            }
+            Recognized::Unrecognized(Value::Object(fields))
+                if fields.get("role").and_then(Value::as_str) == Some(SYSTEM_ROLE) =>
+            {
+                let (kept, gated) = strip_unrecognized_system_message(fields, active);
+                (
+                    kept.map(|fields| Recognized::Unrecognized(Value::Object(fields))),
+                    gated,
+                )
             }
             other => (Some(other), Vec::new()),
         })
@@ -173,6 +186,68 @@ fn strip_system_message(message: Message, active: &BetaSet) -> (Option<Message>,
     )
 }
 
+/// The same strip over a `role: "system"` message that did not parse, such as one sent without
+/// content: Python reads the fields off any mapping, and a missing or `null` content counts as
+/// empty.
+fn strip_unrecognized_system_message(
+    fields: Map<String, Value>,
+    active: &BetaSet,
+) -> (Option<Map<String, Value>>, Vec<GatedField>) {
+    let clear_at_gated = fields.contains_key(CLEAR_AT) && GatedField::ClearAt.gated(active);
+    let output_config_gated =
+        fields.contains_key(OUTPUT_CONFIG) && GatedField::OutputConfig.gated(active);
+    let tool_changes_gated = matches!(
+        fields.get(CONTENT),
+        Some(Value::Array(blocks)) if blocks.iter().any(is_raw_tool_change_block)
+    ) && GatedField::ToolChanges.gated(active);
+    let gated: Vec<GatedField> = [
+        (clear_at_gated, GatedField::ClearAt),
+        (output_config_gated, GatedField::OutputConfig),
+        (tool_changes_gated, GatedField::ToolChanges),
+    ]
+    .into_iter()
+    .filter_map(|(gated, field)| gated.then_some(field))
+    .collect();
+    if gated.is_empty() {
+        return (Some(fields), gated);
+    }
+    let rewritten: Map<String, Value> = fields
+        .into_iter()
+        .filter(|(key, _)| {
+            !((clear_at_gated && key == CLEAR_AT) || (output_config_gated && key == OUTPUT_CONFIG))
+        })
+        .map(|(key, value)| match value {
+            Value::Array(blocks) if tool_changes_gated && key == CONTENT => (
+                key,
+                Value::Array(
+                    blocks
+                        .into_iter()
+                        .filter(|block| !is_raw_tool_change_block(block))
+                        .collect(),
+                ),
+            ),
+            value => (key, value),
+        })
+        .collect();
+    let emptied = match rewritten.get(CONTENT) {
+        None | Some(Value::Null) => true,
+        Some(Value::String(text)) => text.is_empty(),
+        Some(Value::Array(blocks)) => blocks.is_empty(),
+        Some(_) => false,
+    };
+    if emptied && !rewritten.contains_key(OUTPUT_CONFIG) {
+        return (None, [gated, vec![GatedField::Emptied]].concat());
+    }
+    (Some(rewritten), gated)
+}
+
+fn is_raw_tool_change_block(block: &Value) -> bool {
+    block
+        .get(TYPE)
+        .and_then(Value::as_str)
+        .is_some_and(|block_type| TOOL_CHANGE_BLOCK_TYPES.contains(&block_type))
+}
+
 fn is_tool_change_block(block: &ContentBlock) -> bool {
     matches!(
         &block.block_type,
@@ -182,7 +257,7 @@ fn is_tool_change_block(block: &ContentBlock) -> bool {
 }
 
 fn ends_on_assistant(messages: &[Recognized<Message>]) -> bool {
-    matches!(messages.last(), Some(Recognized::Known(message)) if message.role == ASSISTANT_ROLE)
+    messages.last().and_then(message_role) == Some(ASSISTANT_ROLE)
 }
 
 #[cfg(test)]
@@ -278,6 +353,16 @@ mod tests {
         "per-turn-control-2026-07-01",
         json!({"role": "system", "content": [], "output_config": {"effort": "low"}})
     )]
+    #[case::contentless_turn_keeping_output_config(
+        json!({"role": "system", "clear_at": {"type": "turns"}, "output_config": {"effort": "low"}}),
+        "per-turn-control-2026-07-01",
+        json!({"role": "system", "output_config": {"effort": "low"}})
+    )]
+    #[case::unparsed_content_losing_a_tool_change(
+        json!({"role": "system", "content": [{"type": "text", "text": 5}, tool_addition()]}),
+        "",
+        json!({"role": "system", "content": [{"type": "text", "text": 5}]})
+    )]
     fn gated_system_fields_are_dropped(
         #[case] system: Value,
         #[case] active: &str,
@@ -321,6 +406,33 @@ mod tests {
                 {"role": "user", "content": "go on"}
             ]))
         );
+    }
+
+    #[rstest]
+    #[case::missing_content(json!({"role": "system", "clear_at": {"type": "turns"}}))]
+    #[case::null_content(json!({"role": "system", "content": null, "clear_at": {"type": "turns"}}))]
+    #[case::only_unparsed_tool_changes(
+        json!({"role": "system", "content": [{"type": "tool_removal", "text": 5}], "output_config": {"effort": "low"}})
+    )]
+    fn an_emptied_unparsed_system_turn_is_dropped(#[case] system: Value) {
+        assert_eq!(
+            strip(messages(conversation(system)), &BetaSet::default(), true),
+            messages(json!([
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "user", "content": "go on"}
+            ]))
+        );
+    }
+
+    #[rstest]
+    fn an_emptied_turn_that_would_leave_an_unparsed_assistant_prefill_keeps_every_message() {
+        let sent = messages(json!([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": null},
+            {"role": "system", "content": "", "clear_at": {"type": "turns"}}
+        ]));
+        assert_eq!(strip(sent.clone(), &BetaSet::default(), true), sent);
     }
 
     #[rstest]

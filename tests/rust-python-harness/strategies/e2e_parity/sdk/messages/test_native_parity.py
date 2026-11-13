@@ -3867,6 +3867,62 @@ AZURE_SHAPING_CASES: Final = tuple(
             warned=True,
         ),
         Case(
+            "azure_ai_contentless_system_output_config_adds_per_turn_control",
+            _kw(messages=_mid_conversation_system(output_config={"effort": "high"})),
+            model=AZURE_OPUS_4_8,
+        ),
+        Case(
+            "azure_ai_contentless_system_with_clear_at_dropped_where_the_role_is_accepted",
+            _kw(drop_params=True, messages=_mid_conversation_system(clear_at={"type": "turns"})),
+            model=AZURE_OPUS_4_8,
+            warned=True,
+        ),
+        Case(
+            "azure_ai_unparsed_system_tool_reference_addition_adds_its_beta",
+            _kw(
+                tools=[{**WEATHER_TOOL, "defer_loading": True}],
+                messages=_mid_conversation_system(
+                    content=[
+                        {"type": "text", "text": "Note.", "id": 5},
+                        {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}},
+                    ]
+                ),
+            ),
+            model=AZURE_OPUS_4_8,
+        ),
+        Case(
+            "azure_ai_unparsed_message_cache_control_scope_dropped",
+            _kw(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Note.", "id": 5},
+                            {"type": "text", "text": "Hi.", "cache_control": {"type": "ephemeral", "scope": "global"}},
+                        ],
+                    }
+                ]
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
+            "azure_ai_beta_signed_compaction_in_an_unparsed_message",
+            _kw(
+                messages=[
+                    dict(USER),
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "Note.", "id": 5},
+                            {"type": "compaction", "content": "Summary.", "signature": "sig"},
+                        ],
+                    },
+                    {"role": "user", "content": "Go on."},
+                ]
+            ),
+            model=AZURE_CLAUDE,
+        ),
+        Case(
             "azure_ai_contentless_leading_system_hoisted",
             _kw(messages=[{"role": "system", "content": "Be terse."}, {"role": "system"}, dict(USER)]),
             model=AZURE_CLAUDE,
