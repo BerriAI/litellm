@@ -245,7 +245,7 @@ impl Router {
         };
         let mut last = failure;
         for attempt in origin.attempted_retries..budget {
-            if last.agentic_followup {
+            if last.agentic_followup || last.tool_calls_sent {
                 break;
             }
             if !policy_applies

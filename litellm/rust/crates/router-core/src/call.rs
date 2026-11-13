@@ -233,6 +233,12 @@ fn group_members(
 /// What `_maybe_run_weighted_failover` catches and defers to the regular fallbacks:
 /// `openai.APIError` (every litellm provider error, a failure the host reported no classes for
 /// among them), `RouterRateLimitError` and `RouterRateLimitErrorBasic`. Anything else propagates.
+/// An MCP tool call reached its server before `error`: every later attempt, a retry or any
+/// fallback of any level, would run the tool again, so the whole walk raises it as it is.
+fn sent_tool_calls(error: &Error) -> bool {
+    error.attempt().is_some_and(|failure| failure.tool_calls_sent)
+}
+
 fn defers_to_regular_fallbacks(error: &Error) -> bool {
     retried_failure(error).is_some_and(|failure| {
         failure.classes.is_empty()
@@ -419,7 +425,9 @@ impl Core {
                 .await
             {
                 Ok(response) => return Ok(response),
-                Err(raised) if defers_to_regular_fallbacks(raised.as_ref().unwrap_or(&error)) => {}
+                Err(raised)
+                    if !raised.as_ref().is_some_and(sent_tool_calls)
+                        && defers_to_regular_fallbacks(raised.as_ref().unwrap_or(&error)) => {}
                 // Outside the `try` around the regular fallbacks: the level raises it as it is.
                 Err(raised) => {
                     self.host.observe(&RouterEvent::OrderChainFailed {
@@ -443,6 +451,14 @@ impl Core {
             .await
         {
             Ok(response) => return Ok(response),
+            Err(Some(raised)) if sent_tool_calls(&raised) => {
+                self.host.observe(&RouterEvent::FallbacksFailed {
+                    level: at.level,
+                    chain: true,
+                    last_hop: true,
+                });
+                return Err(raised);
+            }
             Err(raised) => raised,
         };
         if !order_path {
@@ -650,6 +666,7 @@ impl Core {
                         response.attempted_fallbacks = hop;
                         return Ok(response);
                     }
+                    Err(raised) if sent_tool_calls(&raised) => return Err(Some(raised)),
                     Err(raised) => last_hop_error = Some(raised),
                 }
             }
@@ -930,7 +947,9 @@ impl Core {
         if matches!(
             &*failed.error,
             Error::Attempt(failure)
-                if failure.kind == FailureKind::GuardrailIntervention || failure.agentic_followup
+                if failure.kind == FailureKind::GuardrailIntervention
+                    || failure.agentic_followup
+                    || failure.tool_calls_sent
         ) {
             return Err(failed);
         }
@@ -1103,7 +1122,12 @@ impl Core {
                     response.max_retries = Some(num_retries);
                     return Ok(response);
                 }
-                Err(next) if next.error.attempt().is_some_and(|f| f.agentic_followup) => {
+                Err(next)
+                    if next
+                        .error
+                        .attempt()
+                        .is_some_and(|f| f.agentic_followup || f.tool_calls_sent) =>
+                {
                     return Err(next);
                 }
                 Err(next) => {

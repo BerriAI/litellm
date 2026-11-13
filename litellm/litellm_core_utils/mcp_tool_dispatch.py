@@ -1,3 +1,4 @@
+from asyncio import CancelledError
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -35,7 +36,7 @@ class ToolDispatch:
     def failures_not_replayed(self) -> Generator[None]:
         try:
             yield
-        except Exception as error:
+        except (Exception, CancelledError) as error:
             if self._sent:
                 mark_failure_after_tool_calls_sent(error)
             raise
