@@ -80,20 +80,49 @@ def _project_user(model_limits: object, project_id: str | None = "project-1") ->
     )
 
 
-def test_project_model_scopes_charge_each_limited_model_only_its_own_tokens():
+def test_project_model_scopes_charge_each_limited_row_model_only_its_own_tokens():
     scopes = resolve_project_model_batch_enqueued_token_scopes(
         _project_user({"gpt-5.5": 100, "claude-opus-5-5": 50}),
-        {"gpt-5.5": 80, "unlimited-model": 999},
+        row_tokens_by_model={"gpt-5.5": 80, "unlimited-model": 999},
+        routing_model="unlimited-model",
+        batch_tokens=1079,
         model_group_of=lambda model: model,
     )
     assert scopes == (BatchEnqueuedTokenScope(key="project_model", value="project-1:gpt-5.5", limit=100, tokens=80),)
+
+
+def test_project_model_scopes_charge_the_routing_model_the_whole_batch_whatever_rows_name():
+    scopes = resolve_project_model_batch_enqueued_token_scopes(
+        _project_user({"capped-deployment": 100}),
+        row_tokens_by_model={"unlisted-model": 400},
+        routing_model="capped-deployment",
+        batch_tokens=500,
+        model_group_of=lambda model: model,
+    )
+    assert scopes == (
+        BatchEnqueuedTokenScope(key="project_model", value="project-1:capped-deployment", limit=100, tokens=500),
+    )
+
+
+def test_project_model_scopes_charge_rows_of_the_routing_group_once():
+    groups: Final = MappingProxyType({"mini-alias": "gpt-mini", "gpt-mini": "gpt-mini"})
+    scopes = resolve_project_model_batch_enqueued_token_scopes(
+        _project_user({"gpt-mini": 100}),
+        row_tokens_by_model={"mini-alias": 30},
+        routing_model="gpt-mini",
+        batch_tokens=30,
+        model_group_of=groups.__getitem__,
+    )
+    assert scopes == (BatchEnqueuedTokenScope(key="project_model", value="project-1:gpt-mini", limit=100, tokens=30),)
 
 
 def test_project_model_scopes_share_one_counter_per_model_group_under_the_tightest_limit():
     groups: Final = MappingProxyType({"gpt-latest": "gpt-5.5", "gpt-5.5": "gpt-5.5", "mini": "gpt-mini"})
     scopes = resolve_project_model_batch_enqueued_token_scopes(
         _project_user({"gpt-latest": 100, "gpt-5.5": 70, "gpt-mini": 40}),
-        {"gpt-latest": 30, "gpt-5.5": 20, "mini": 5},
+        row_tokens_by_model={"gpt-latest": 30, "gpt-5.5": 20, "mini": 5},
+        routing_model=None,
+        batch_tokens=55,
         model_group_of=groups.__getitem__,
     )
     assert scopes == (
@@ -116,7 +145,12 @@ def test_project_model_scopes_share_one_counter_per_model_group_under_the_tighte
 )
 def test_project_model_scopes_ignore_unusable_limits(user):
     assert not project_has_model_batch_enqueued_token_limits(user)
-    assert resolve_project_model_batch_enqueued_token_scopes(user, {"gpt-5.5": 10}, model_group_of=str) == ()
+    assert (
+        resolve_project_model_batch_enqueued_token_scopes(
+            user, row_tokens_by_model={"gpt-5.5": 10}, routing_model="gpt-5.5", batch_tokens=10, model_group_of=str
+        )
+        == ()
+    )
 
 
 def test_project_model_limits_are_detected_before_the_batch_file_is_read():

@@ -194,24 +194,36 @@ def _limited_model_charges(
 
 def resolve_project_model_batch_enqueued_token_scopes(
     user_api_key_dict: UserAPIKeyAuth,
-    tokens_by_model: Mapping[str, int],
+    row_tokens_by_model: Mapping[str, int],
+    routing_model: str | None,
+    batch_tokens: int,
     model_group_of: Callable[[str], str],
 ) -> tuple[BatchEnqueuedTokenScope, ...]:
-    """One scope per model group the batch runs that has a project limit, charged only that group's tokens.
+    """One scope per limited model group a batch touches, under the tightest limit keyed by any of its names.
 
-    A limit keyed by either the requested name or its model group applies, and names that resolve to
-    the same group share one counter under the tightest of their limits.
+    The routing model is charged the whole batch, because rows run on it whatever model they name, and
+    every other model a row names is charged that row's tokens, so neither can hide behind the other.
     """
-    charges: Final = tuple(
-        _limited_model_charges(_read_project_model_limits(user_api_key_dict), tokens_by_model, model_group_of)
+    limits: Final = _read_project_model_limits(user_api_key_dict)
+    row_charges: Final = tuple(_limited_model_charges(limits, row_tokens_by_model, model_group_of))
+    routing_charges: Final = tuple(
+        _limited_model_charges(
+            limits,
+            MappingProxyType({routing_model: batch_tokens}) if routing_model else _NO_MODEL_LIMITS,
+            model_group_of,
+        )
     )
+    charges: Final = (*row_charges, *routing_charges)
     groups: Final = sorted(frozenset(group for group, _, _ in charges))
     return tuple(
         BatchEnqueuedTokenScope(
             key="project_model",
             value=f"{user_api_key_dict.project_id}:{group}",
             limit=min(limit for charge_group, limit, _ in charges if charge_group == group),
-            tokens=sum(tokens for charge_group, _, tokens in charges if charge_group == group),
+            tokens=max(
+                sum(tokens for charge_group, _, tokens in row_charges if charge_group == group),
+                max((tokens for charge_group, _, tokens in routing_charges if charge_group == group), default=0),
+            ),
         )
         for group in groups
     )

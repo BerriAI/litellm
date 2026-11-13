@@ -18,7 +18,7 @@ Quick summary:
 """
 
 import json
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, TypeAlias
@@ -642,16 +642,21 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             case BatchEnqueuedTokenReservation():
                 get_or_create_request_stash().batch_enqueued_reservation = outcome
 
-    @staticmethod
-    def _batch_tokens_by_model(batch_usage: BatchFileUsage, routing_model: str | None) -> Mapping[str, int]:
-        """Each row model's tokens, with rows that name no model charged to the model the batch routes to."""
-        by_model: Final = MappingProxyType(
-            {model: usage.get("total_tokens", 0) for model, usage in batch_usage.per_model_usage.items()}
-        )
-        unattributed: Final = batch_usage.total_tokens - sum(by_model.values())
-        if unattributed <= 0 or routing_model is None:
-            return MappingProxyType(by_model)
-        return MappingProxyType({**by_model, routing_model: by_model.get(routing_model, 0) + unattributed})
+    async def _refund_enqueued_reservation_if_rejected(
+        self, user_api_key_dict: UserAPIKeyAuth, check: Awaitable[None]
+    ) -> None:
+        """Run a check that follows the enqueued-token reservation, refunding the reservation if it rejects the batch."""
+        try:
+            await check
+        except HTTPException:
+            stash: Final = get_or_create_request_stash()
+            if stash.batch_enqueued_reservation is not None:
+                await self.parallel_request_limiter.batch_enqueued_token_store.refund(
+                    reservation=stash.batch_enqueued_reservation,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                stash.batch_enqueued_reservation = None
+            raise
 
     def _model_group_of(self, model: str) -> str:
         rate_limited: Final = self.parallel_request_limiter.rate_limited_model(model)
@@ -792,6 +797,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         data: dict,
         batch_usage: BatchFileUsage,
         descriptors: list["RateLimitDescriptor"] | None = None,
+        include_project_io_limits: bool = True,
     ) -> None:
         """
         Atomically check + increment rate-limit counters by the batch amounts.
@@ -821,9 +827,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             for _d in descriptors
         ]
 
-        project_io_descriptors, project_io_increments = self._create_project_io_descriptors_for_models(
-            user_api_key_dict=user_api_key_dict,
-            per_model_usage=batch_usage.per_model_usage,
+        project_io_descriptors, project_io_increments = (
+            self._create_project_io_descriptors_for_models(
+                user_api_key_dict=user_api_key_dict,
+                per_model_usage=batch_usage.per_model_usage,
+            )
+            if include_project_io_limits
+            else ([], [])
         )
         descriptors = [*descriptors, *project_io_descriptors]
         increments = [*increments, *project_io_increments]
@@ -1340,11 +1350,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 *key_and_team_scopes,
                 *resolve_project_model_batch_enqueued_token_scopes(
                     user_api_key_dict,
-                    self._batch_tokens_by_model(
-                        batch_usage,
-                        self._get_batch_routing_model(data),  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
+                    row_tokens_by_model=MappingProxyType(
+                        {model: usage.get("total_tokens", 0) for model, usage in batch_usage.per_model_usage.items()}
                     ),
-                    self._model_group_of,
+                    routing_model=self._get_batch_routing_model(data),  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
+                    batch_tokens=batch_usage.total_tokens,
+                    model_group_of=self._model_group_of,
                 ),
             )
             if enqueued_scopes:
@@ -1354,6 +1365,28 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     batch_usage=batch_usage,
                     scopes=enqueued_scopes,
                 )
+                daily_descriptors: Final = [
+                    descriptor
+                    for descriptor in (
+                        batch_rate_limit_descriptors
+                        if batch_rate_limit_descriptors is not None
+                        else self._create_batch_rate_limit_descriptors(  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
+                            user_api_key_dict=user_api_key_dict, data=data
+                        )
+                    )
+                    if descriptor["key"].endswith(BATCH_TPD_DESCRIPTOR_SUFFIX)
+                ]
+                if daily_descriptors:
+                    await self._refund_enqueued_reservation_if_rejected(
+                        user_api_key_dict,
+                        self._check_and_increment_batch_counters(  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
+                            user_api_key_dict=user_api_key_dict,
+                            data=data,
+                            batch_usage=batch_usage,
+                            descriptors=daily_descriptors,
+                            include_project_io_limits=False,
+                        ),
+                    )
                 verbose_proxy_logger.debug("Batch enqueued-token reservation succeeded")
                 return data
 

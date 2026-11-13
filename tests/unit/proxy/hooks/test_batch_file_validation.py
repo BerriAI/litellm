@@ -2269,6 +2269,7 @@ _MODEL_LESS_BATCH_FILE_CONTENT = (
     b'{"body": {"max_tokens": 40, "messages": [{"role": "user", "content": "hi"}]}}\n'
 )
 _ALIASED_BATCH_FILE_CONTENT = _ENQUEUED_BATCH_FILE_CONTENT.replace(b"gpt-4o-mini", b"mini-alias")
+_UNLISTED_MODEL_BATCH_FILE_CONTENT = _ENQUEUED_BATCH_FILE_CONTENT.replace(b"gpt-4o-mini", b"unlisted-model")
 _MIXED_MODEL_BATCH_FILE_CONTENT = (
     _ENQUEUED_BATCH_FILE_CONTENT
     + b'{"body": {"model": "gpt-5.5", "max_tokens": 40, "messages": [{"role": "user", "content": "hello there"}]}}\n'
@@ -2288,8 +2289,18 @@ def _project_model_limited_user(model_limits: Mapping[str, int]) -> UserAPIKeyAu
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "file_content",
-    [_ENQUEUED_BATCH_FILE_CONTENT, _MODEL_LESS_BATCH_FILE_CONTENT, _ALIASED_BATCH_FILE_CONTENT],
-    ids=["rows name the model", "rows name no model", "rows name an alias of the model"],
+    [
+        _ENQUEUED_BATCH_FILE_CONTENT,
+        _MODEL_LESS_BATCH_FILE_CONTENT,
+        _ALIASED_BATCH_FILE_CONTENT,
+        _UNLISTED_MODEL_BATCH_FILE_CONTENT,
+    ],
+    ids=[
+        "rows name the model",
+        "rows name no model",
+        "rows name an alias of the model",
+        "rows name an unlisted model",
+    ],
 )
 async def test_project_model_enqueued_limit_rejects_a_batch_over_that_models_limit(file_content):
     rate_limiter, local_cache = _enqueued_rate_limiter({"mini-alias": "gpt-4o-mini"}.get)
@@ -2354,6 +2365,36 @@ async def test_project_model_enqueued_limit_for_another_model_leaves_the_batch_o
     assert data["_batch_token_count"] > 10
     stash = get_request_stash()
     assert stash is None or stash.batch_enqueued_reservation is None
+
+
+@pytest.mark.asyncio
+async def test_daily_token_limit_still_applies_alongside_a_project_model_reservation():
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches()
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        daily_capped = _project_model_limited_user({"gpt-4o-mini": 1000000}).model_copy(update={"tpd_limit": 10})
+        rejected_data = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=daily_capped,
+                cache=local_cache,
+                data=rejected_data,
+                call_type="acreate_batch",
+            )
+        assert exc.value.status_code == 429
+        assert "Batch enqueued token limit" not in str(exc.value.detail)
+
+        exact_fit = _project_model_limited_user({"gpt-4o-mini": rejected_data["_batch_token_count"]})
+        accepted_data = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        result = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=exact_fit,
+            cache=local_cache,
+            data=accepted_data,
+            call_type="acreate_batch",
+        )
+
+    assert result is accepted_data
 
 
 @pytest.mark.asyncio
