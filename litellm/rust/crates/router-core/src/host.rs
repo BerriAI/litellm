@@ -561,7 +561,8 @@ pub enum RouterEvent {
     /// `async_function_with_fallbacks_common_utils`' order path, with no outcome message: what the
     /// chain's last hop raised when `last_hop`, else its own error (a context window error, or a
     /// chain no hop of which ran). Weighted failover raising what it does not catch
-    /// (`_maybe_run_weighted_failover`) ends the level the same way.
+    /// (`_maybe_run_weighted_failover`) ends the level the same way, as does a hop that failed
+    /// after sending an MCP tool call, whose error every enclosing level raises as it is.
     OrderChainFailed {
         level: u32,
         last_hop: bool,

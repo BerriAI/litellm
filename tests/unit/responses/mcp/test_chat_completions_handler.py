@@ -27,6 +27,7 @@ from litellm import Router
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.agentic_followup_failure import sent_tool_calls_before
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import UserAPIKeyAuth
@@ -3262,3 +3263,5 @@ async def test_a_fallback_that_sent_an_mcp_tool_call_ends_the_whole_fallback_wal
     assert ledger.calls == 1
     assert upstream.calls == expected_calls
     assert f"{raising_group} continuation failed" in str(raised.value)
+    assert "failed before any tool ran" not in str(raised.value)
+    assert sent_tool_calls_before(raised.value)

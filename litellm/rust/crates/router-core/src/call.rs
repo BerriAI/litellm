@@ -452,9 +452,8 @@ impl Core {
         {
             Ok(response) => return Ok(response),
             Err(Some(raised)) if sent_tool_calls(&raised) => {
-                self.host.observe(&RouterEvent::FallbacksFailed {
+                self.host.observe(&RouterEvent::OrderChainFailed {
                     level: at.level,
-                    chain: true,
                     last_hop: true,
                 });
                 return Err(raised);

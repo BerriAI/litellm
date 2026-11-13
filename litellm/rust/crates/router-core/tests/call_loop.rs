@@ -928,6 +928,11 @@ async fn a_fallback_hop_that_sent_a_tool_call_ends_the_whole_fallback_walk() {
     let refused = router.call(Op::from("acompletion"), request()).await;
     assert!(matches!(refused, Err(Error::Attempt(failed)) if failed.tool_calls_sent));
     assert_eq!(host.selected(), ["p1", "b1"]);
+    assert!(
+        host.events
+            .lock()
+            .contains(&RouterEvent::OrderChainFailed { level: 0, last_hop: true })
+    );
 }
 
 #[rstest]
