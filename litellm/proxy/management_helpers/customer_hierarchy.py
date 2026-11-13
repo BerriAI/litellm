@@ -337,13 +337,12 @@ class CustomerHierarchyStore:
     async def organization_member_counts(self, organization_ids: tuple[str, ...]) -> Mapping[str, int]:
         if not organization_ids:
             return {}
-        async with db_span("find_many", "LiteLLM_CustomerTeamTable"):
+        async with db_span("find_many", "LiteLLM_CustomerMemberTable"):
             rows: Final = _MEMBER_COUNTS.validate_python(
                 await self.db.query_raw(
-                    "SELECT t.parent_org_id AS customer_org_id, COUNT(m.customer_member_id) AS member_count "
-                    'FROM "LiteLLM_CustomerTeamTable" t '
-                    'LEFT JOIN "LiteLLM_CustomerMemberTable" m ON m.parent_team_id = t.customer_team_id '
-                    "WHERE t.parent_org_id = ANY($1::text[]) GROUP BY t.parent_org_id",
+                    "SELECT parent_org_id AS customer_org_id, COUNT(customer_member_id) AS member_count "
+                    'FROM "LiteLLM_CustomerMemberTable" '
+                    "WHERE parent_org_id = ANY($1::text[]) GROUP BY parent_org_id",
                     list(organization_ids),
                 )
             )
@@ -532,11 +531,8 @@ class CustomerHierarchyStore:
         await self.budgets.delete(where={"budget_id": budget_id})
         return None
 
-    async def resolve_member_template(self, team_id: str, template_id: str | None) -> str | Failure | None:
-        team: Final = await self.get_team(team_id)
-        if isinstance(team, Failure):
-            return Failure(ErrorCode.PARENT_NOT_FOUND)
-        organization: Final = await self.get_organization(team.parent_org_id)
+    async def resolve_member_template(self, organization_id: str, template_id: str | None) -> str | Failure | None:
+        organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return Failure(ErrorCode.PARENT_NOT_FOUND)
         selected: Final = template_id if template_id is not None else organization.default_budget_template_id
@@ -589,13 +585,22 @@ class CustomerHierarchyStore:
         await self.delete_released_budget(team.budget_override_id, override_id)
         return await self.get_team(team_id)
 
+    async def member_organization(self, payload: MemberCreate) -> str | Failure:
+        """The one organization every listed team belongs to, which the payload's ``parent_org_id`` must match."""
+        teams: Final = await find_many_in(self.teams, "customer_team_id", payload.parent_team_ids)
+        organizations: Final = frozenset(_ID.validate_python(team.model_dump()["parent_org_id"]) for team in teams)
+        if len(teams) != len(set(payload.parent_team_ids)) or len(organizations) != 1:
+            return Failure(ErrorCode.PARENT_NOT_FOUND)
+        organization_id: Final = next(iter(organizations))
+        if payload.parent_org_id is not None and payload.parent_org_id != organization_id:
+            return Failure(ErrorCode.PARENT_NOT_FOUND)
+        return organization_id
+
     async def create_member(self, payload: MemberCreate, actor: str) -> CustomerMember | Failure:
-        team: Final = await self.get_team(payload.parent_team_id)
-        if isinstance(team, Failure):
-            return Failure(ErrorCode.PARENT_NOT_FOUND)
-        if payload.parent_org_id is not None and payload.parent_org_id != team.parent_org_id:
-            return Failure(ErrorCode.PARENT_NOT_FOUND)
-        template_id: Final = await self.resolve_member_template(payload.parent_team_id, payload.budget_id)
+        organization_id: Final = await self.member_organization(payload)
+        if isinstance(organization_id, Failure):
+            return organization_id
+        template_id: Final = await self.resolve_member_template(organization_id, payload.budget_id)
         if isinstance(template_id, Failure):
             return template_id
         if template_id is None and payload.budget_override is None:
@@ -608,8 +613,8 @@ class CustomerHierarchyStore:
             data={
                 "customer_member_id": member_id,
                 "alias": payload.alias,
-                "parent_org_id": team.parent_org_id,
-                "parent_team_id": payload.parent_team_id,
+                "parent_org_id": organization_id,
+                "parent_team_ids": tuple(dict.fromkeys(payload.parent_team_ids)),
                 "budget_id": template_id,
                 "budget_override_id": override_id,
                 "budget_override_expires_at": payload.budget_override_expires_at,
@@ -624,7 +629,7 @@ class CustomerHierarchyStore:
             return member.budget_id
         if payload.budget_id is None:
             return None
-        return await self.resolve_member_template(member.parent_team_id, payload.budget_id)
+        return await self.resolve_member_template(member.parent_org_id, payload.budget_id)
 
     async def override_patch(self, current_id: str | None, payload: TeamPatch | MemberPatch, actor: str) -> str | None:
         if "budget_override" not in payload.model_fields_set:
@@ -693,7 +698,7 @@ class CustomerHierarchyStore:
         return Page(tuple(team_response(row, self.now) for row in rows), count)
 
     async def list_members(self, parent_team_id: str | None, page: int, page_size: int) -> Page[CustomerMember]:
-        where: Final = {"parent_team_id": parent_team_id} if parent_team_id is not None else {}
+        where: Final = {"parent_team_ids": {"has": parent_team_id}} if parent_team_id is not None else {}
         count: Final = await self.members.count(where=where)
         rows: Final = await self.members.find_many(
             where=where,
@@ -705,7 +710,7 @@ class CustomerHierarchyStore:
         return Page(tuple(member_response(row, self.now) for row in rows), count)
 
     async def member_ids_in_team(self, team_id: str) -> tuple[str, ...]:
-        return _member_ids(await self.members.find_many(where={"parent_team_id": team_id}))
+        return _member_ids(await self.members.find_many(where={"parent_team_ids": {"has": team_id}}))
 
     async def member_ids_in_organization(self, organization_id: str) -> tuple[str, ...]:
         return _member_ids(await self.members.find_many(where={"parent_org_id": organization_id}))
@@ -726,7 +731,7 @@ class CustomerHierarchyStore:
         team: Final = await self.get_team(team_id)
         if isinstance(team, Failure):
             return team
-        if await self.members.count(where={"parent_team_id": team_id}):
+        if await self.members.count(where={"parent_team_ids": {"has": team_id}}):
             return Failure(ErrorCode.HAS_CHILDREN)
         await self.teams.delete(where={"customer_team_id": team_id})
         if team.budget_id is not None:

@@ -1689,7 +1689,7 @@ def _seed_customer_hierarchy(parity_database: str) -> None:
             "INSERT INTO \"LiteLLM_CustomerTeamTable\" (customer_team_id, parent_org_id, budget_id, created_by, updated_by) VALUES ('customer-team', 'customer-org', 'budget', 'test', 'test')"
         )
         connection.execute(
-            "INSERT INTO \"LiteLLM_CustomerMemberTable\" (customer_member_id, parent_org_id, parent_team_id, budget_id, created_by, updated_by) VALUES ('member', 'customer-org', 'customer-team', 'budget', 'test', 'test')"
+            "INSERT INTO \"LiteLLM_CustomerMemberTable\" (customer_member_id, parent_org_id, parent_team_ids, budget_id, created_by, updated_by) VALUES ('member', 'customer-org', ARRAY['customer-team'], 'budget', 'test', 'test')"
         )
 
 

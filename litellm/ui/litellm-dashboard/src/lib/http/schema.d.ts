@@ -33157,6 +33157,12 @@ export interface components {
             customer_team_id?: string | null;
             /** Scopes */
             scopes: components["schemas"]["CustomerScopeAuth"][];
+            /**
+             * Team Scopes
+             * @description Every team the member belongs to, in parent_team_ids order; scopes holds the selected one
+             * @default []
+             */
+            team_scopes: components["schemas"]["CustomerScopeAuth"][];
         };
         /** CustomerMember */
         CustomerMember: {
@@ -33183,8 +33189,8 @@ export interface components {
             effective_budget: components["schemas"]["Budget"];
             /** Parent Org Id */
             parent_org_id: string;
-            /** Parent Team Id */
-            parent_team_id: string;
+            /** Parent Team Ids */
+            parent_team_ids: string[];
             /**
              * Spend
              * @default 0
@@ -40480,11 +40486,14 @@ export interface components {
             customer_member_id?: string | null;
             /**
              * Parent Org Id
-             * @description Must match the parent team's organization when set
+             * @description Must match the parent teams' organization when set
              */
             parent_org_id?: string | null;
-            /** Parent Team Id */
-            parent_team_id: string;
+            /**
+             * Parent Team Ids
+             * @description Teams the member belongs to, first is default
+             */
+            parent_team_ids: string[];
         };
         /** MemberPatch */
         MemberPatch: {

@@ -36,7 +36,7 @@ async def test_a_new_member_joins_the_organizations_default_team_on_the_organiza
     member: Final = await ensure_customer_member("org-1", "user-7", _prisma(database))
 
     assert isinstance(member, CustomerMember)
-    assert (member.customer_member_id, member.parent_team_id) == ("user-7", default_team_id("org-1"))
+    assert (member.customer_member_id, member.parent_team_ids) == ("user-7", (default_team_id("org-1"),))
     assert member.effective_budget.max_budget == 10.0
     team: Final = database.litellm_customerteamtable.rows[default_team_id("org-1")].model_dump()
     assert (team["parent_org_id"], team["alias"]) == ("org-1", "default")
@@ -56,7 +56,7 @@ async def test_registering_the_same_member_twice_keeps_one_row_and_reuses_an_exi
     second: Final = await ensure_customer_member("org-1", "user-7", _prisma(database))
 
     assert isinstance(first, CustomerMember) and isinstance(second, CustomerMember)
-    assert first.parent_team_id == second.parent_team_id == default_team_id("org-1")
+    assert first.parent_team_ids == second.parent_team_ids == (default_team_id("org-1"),)
     assert tuple(database.litellm_customermembertable.rows) == ("user-7",)
     assert tuple(database.litellm_customerteamtable.rows) == (default_team_id("org-1"),)
 

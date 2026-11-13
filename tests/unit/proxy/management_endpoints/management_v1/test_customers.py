@@ -83,7 +83,7 @@ def family(http: TestClient) -> dict[str, object]:
         ("GET", "/customer_teams/id", None),
         ("PATCH", "/customer_teams/id", {}),
         ("DELETE", "/customer_teams/id", None),
-        ("POST", "/customer_members", {"parent_team_id": "id"}),
+        ("POST", "/customer_members", {"parent_team_ids": ["id"]}),
         ("GET", "/customer_members", None),
         ("GET", "/customer_members/id", None),
         ("PATCH", "/customer_members/id", {}),
@@ -114,7 +114,7 @@ def test_template_edits_propagate_and_only_live_override_fields_win() -> None:
         "/management/v1/customer_members",
         json={
             "customer_member_id": "default",
-            "parent_team_id": "team",
+            "parent_team_ids": ["team"],
         },
     )
     assert default.status_code == 201, default.text
@@ -124,7 +124,7 @@ def test_template_edits_propagate_and_only_live_override_fields_win() -> None:
         "/management/v1/customer_members",
         json={
             "customer_member_id": "override",
-            "parent_team_id": "team",
+            "parent_team_ids": ["team"],
             "budget_id": other_id,
             "budget_override": {"max_budget": 3, "allowed_models": []},
         },
@@ -134,7 +134,7 @@ def test_template_edits_propagate_and_only_live_override_fields_win() -> None:
         "/management/v1/customer_members",
         json={
             "customer_member_id": "expired",
-            "parent_team_id": "team",
+            "parent_team_ids": ["team"],
             "budget_override": {"max_budget": 1},
             "budget_override_expires_at": "2025-01-01T00:00:00Z",
         },
@@ -189,7 +189,7 @@ def test_override_can_be_reexpired_cleared_and_template_switched() -> None:
         "/management/v1/customer_members",
         json={
             "customer_member_id": "member",
-            "parent_team_id": "team",
+            "parent_team_ids": ["team"],
             "budget_override": {"max_budget": 5},
         },
     )
@@ -229,7 +229,7 @@ def test_clearing_an_override_also_clears_its_expiry() -> None:
         "/management/v1/customer_members",
         json={
             "customer_member_id": "member",
-            "parent_team_id": "team",
+            "parent_team_ids": ["team"],
             "budget_override": {"max_budget": 5},
             "budget_override_expires_at": "2025-01-01T00:00:00Z",
         },
@@ -274,7 +274,7 @@ def test_template_deletion_guards_names_and_references() -> None:
         "/management/v1/customer_members",
         json={
             "customer_member_id": "member",
-            "parent_team_id": "team",
+            "parent_team_ids": ["team"],
             "budget_id": selected_id,
         },
     )
@@ -313,19 +313,19 @@ def test_missing_template_requires_custom_budget_and_wrong_org_is_rejected() -> 
         "/management/v1/customer_teams", json={"customer_team_id": "empty-team", "parent_org_id": "empty"}
     )
     assert team.status_code == 201, team.text
-    missing: Final = http.post("/management/v1/customer_members", json={"parent_team_id": "empty-team"})
+    missing: Final = http.post("/management/v1/customer_members", json={"parent_team_ids": ["empty-team"]})
     assert missing.status_code == 422, missing.text
     wrong: Final = http.post(
         "/management/v1/customer_members",
         json={
-            "parent_team_id": "empty-team",
+            "parent_team_ids": ["empty-team"],
             "budget_id": org["default_budget_template_id"],
             "budget_override": {"max_budget": 2},
         },
     )
     assert wrong.status_code == 422, wrong.text
     custom: Final = http.post(
-        "/management/v1/customer_members", json={"parent_team_id": "empty-team", "budget_override": {"max_budget": 2}}
+        "/management/v1/customer_members", json={"parent_team_ids": ["empty-team"], "budget_override": {"max_budget": 2}}
     )
     assert custom.status_code == 201, custom.text
     assert custom.json()["budget_id"] is None
@@ -337,7 +337,7 @@ def test_missing_template_requires_custom_budget_and_wrong_org_is_rejected() -> 
     (
         ("customer_organizations", {}),
         ("customer_teams", {"parent_org_id": "org"}),
-        ("customer_members", {"parent_team_id": "team"}),
+        ("customer_members", {"parent_team_ids": ["team"]}),
     ),
 )
 @pytest.mark.parametrize("method", ("POST", "PATCH"))
@@ -356,7 +356,7 @@ def test_new_entities_report_zero_spend_and_no_reset_and_parent_deletion_conflic
     http: Final = client()
     org: Final = family(http)
     member: Final = http.post(
-        "/management/v1/customer_members", json={"customer_member_id": "member", "parent_team_id": "team"}
+        "/management/v1/customer_members", json={"customer_member_id": "member", "parent_team_ids": ["team"]}
     )
     assert member.status_code == 201, member.text
     for path in ("customer_organizations/org", "customer_teams/team", "customer_members/member"):
@@ -440,7 +440,7 @@ def test_lists_filter_parents_and_link_pages_and_reject_unknown_parameters() -> 
     (
         ("customer_organizations", {"customer_org_id": "duplicate"}),
         ("customer_teams", {"customer_team_id": "duplicate", "parent_org_id": "org"}),
-        ("customer_members", {"customer_member_id": "duplicate", "parent_team_id": "team"}),
+        ("customer_members", {"customer_member_id": "duplicate", "parent_team_ids": ["team"]}),
     ),
 )
 def test_duplicate_id_conflicts(entity: str, payload: dict[str, str]) -> None:
@@ -454,8 +454,8 @@ def test_duplicate_id_conflicts(entity: str, payload: dict[str, str]) -> None:
 
 @pytest.mark.parametrize("entity", ("customer_teams", "customer_members"))
 def test_missing_parent_is_404(entity: str) -> None:
-    field: Final = "parent_org_id" if entity == "customer_teams" else "parent_team_id"
-    response: Final = client().post("/management/v1/" + entity, json={field: "missing"})
+    parent: Final = {"parent_org_id": "missing"} if entity == "customer_teams" else {"parent_team_ids": ["missing"]}
+    response: Final = client().post("/management/v1/" + entity, json=parent)
     assert response.status_code == 404, response.text
 
 
@@ -482,7 +482,7 @@ def test_partial_member_override_updates_preserve_other_fields_and_never_change_
         "/management/v1/customer_members",
         json={
             "customer_member_id": "member",
-            "parent_team_id": "team",
+            "parent_team_ids": ["team"],
         },
     )
     assert created.status_code == 201, created.text
@@ -567,7 +567,7 @@ def test_per_model_rate_limits_round_trip_at_every_level_and_override_the_templa
         "/management/v1/customer_members",
         json={
             "customer_member_id": "member",
-            "parent_team_id": "team",
+            "parent_team_ids": ["team"],
             "budget_override": {"model_rpm_limit": {"model-a": 1}},
         },
     )
@@ -591,7 +591,7 @@ def test_budget_edits_at_every_level_drop_the_cached_member_hierarchy() -> None:
     family(http)
     assert (
         http.post(
-            "/management/v1/customer_members", json={"customer_member_id": "m", "parent_team_id": "team"}
+            "/management/v1/customer_members", json={"customer_member_id": "m", "parent_team_ids": ["team"]}
         ).status_code
         == 201
     )
@@ -619,7 +619,7 @@ def test_organization_list_counts_all_members_and_searches_before_paginating() -
     family(http)
     for identifier in ("member-a", "member-b"):
         created: Final = http.post(
-            "/management/v1/customer_members", json={"customer_member_id": identifier, "parent_team_id": "team"}
+            "/management/v1/customer_members", json={"customer_member_id": identifier, "parent_team_ids": ["team"]}
         )
         assert created.status_code == 201, created.text
     second_team: Final = http.post(
@@ -627,7 +627,7 @@ def test_organization_list_counts_all_members_and_searches_before_paginating() -
     )
     assert second_team.status_code == 201, second_team.text
     third_member: Final = http.post(
-        "/management/v1/customer_members", json={"customer_member_id": "member-c", "parent_team_id": "second-team"}
+        "/management/v1/customer_members", json={"customer_member_id": "member-c", "parent_team_ids": ["second-team"]}
     )
     assert third_member.status_code == 201, third_member.text
     other: Final = http.post(
@@ -673,7 +673,7 @@ def test_budget_reset_at_is_read_from_the_governing_budget_row() -> None:
     assert team.json()["budget_reset_at"] is None
     on_template: Final = http.post(
         "/management/v1/customer_members",
-        json={"customer_member_id": "on-template", "parent_team_id": "windowed-team"},
+        json={"customer_member_id": "on-template", "parent_team_ids": ["windowed-team"]},
     )
     assert on_template.status_code == 201, on_template.text
     assert on_template.json()["budget_reset_at"] is not None
@@ -681,7 +681,7 @@ def test_budget_reset_at_is_read_from_the_governing_budget_row() -> None:
         "/management/v1/customer_members",
         json={
             "customer_member_id": "overridden",
-            "parent_team_id": "windowed-team",
+            "parent_team_ids": ["windowed-team"],
             "budget_override": {"max_budget": 5, "budget_duration": "1d"},
             "budget_override_expires_at": "2099-01-01T00:00:00Z",
         },
@@ -693,7 +693,7 @@ def test_budget_reset_at_is_read_from_the_governing_budget_row() -> None:
         "/management/v1/customer_members",
         json={
             "customer_member_id": "expired-override",
-            "parent_team_id": "windowed-team",
+            "parent_team_ids": ["windowed-team"],
             "budget_override": {"max_budget": 5, "budget_duration": "1d"},
             "budget_override_expires_at": "2000-01-01T00:00:00Z",
         },
@@ -766,20 +766,54 @@ def test_member_carries_its_teams_organization_and_another_organization_is_refus
     http: Final = client()
     family(http)
     created: Final = http.post(
-        "/management/v1/customer_members", json={"customer_member_id": "member", "parent_team_id": "team"}
+        "/management/v1/customer_members", json={"customer_member_id": "member", "parent_team_ids": ["team"]}
     )
     assert created.status_code == 201, created.text
     assert created.json()["parent_org_id"] == "org"
     explicit: Final = http.post(
         "/management/v1/customer_members",
-        json={"customer_member_id": "second", "parent_team_id": "team", "parent_org_id": "org"},
+        json={"customer_member_id": "second", "parent_team_ids": ["team"], "parent_org_id": "org"},
     )
     assert explicit.status_code == 201, explicit.text
     other: Final = http.post("/management/v1/customer_organizations", json={"customer_org_id": "other"})
     assert other.status_code == 201, other.text
     wrong: Final = http.post(
         "/management/v1/customer_members",
-        json={"customer_member_id": "third", "parent_team_id": "team", "parent_org_id": "other"},
+        json={"customer_member_id": "third", "parent_team_ids": ["team"], "parent_org_id": "other"},
     )
     assert wrong.status_code == 404, wrong.text
     assert wrong.json()["type"].endswith("parent-not-found")
+
+
+def test_member_in_two_teams_is_listed_under_each_and_teams_from_another_organization_are_refused() -> None:
+    http: Final = client()
+    family(http)
+    second: Final = http.post(
+        "/management/v1/customer_teams", json={"customer_team_id": "second", "parent_org_id": "org"}
+    )
+    assert second.status_code == 201, second.text
+    created: Final = http.post(
+        "/management/v1/customer_members",
+        json={"customer_member_id": "member", "parent_team_ids": ["team", "second", "team"]},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["parent_team_ids"] == ["team", "second"]
+    assert created.json()["parent_org_id"] == "org"
+    for team_id in ("team", "second"):
+        listed: Final = http.get("/management/v1/customer_members", params={"parent_team_id": team_id})
+        assert [member["customer_member_id"] for member in listed.json()["data"]] == ["member"], team_id
+    blocked: Final = http.delete("/management/v1/customer_teams/second")
+    assert blocked.status_code == 409, blocked.text
+    other: Final = http.post("/management/v1/customer_organizations", json={"customer_org_id": "other"})
+    assert other.status_code == 201, other.text
+    foreign: Final = http.post(
+        "/management/v1/customer_teams", json={"customer_team_id": "foreign", "parent_org_id": "other"}
+    )
+    assert foreign.status_code == 201, foreign.text
+    mixed: Final = http.post(
+        "/management/v1/customer_members",
+        json={"customer_member_id": "mixed", "parent_team_ids": ["team", "foreign"], "budget_override": {"max_budget": 1}},
+    )
+    assert mixed.status_code == 404, mixed.text
+    fetched: Final = http.get("/management/v1/customer_organizations/org")
+    assert fetched.json()["member_count"] == 1

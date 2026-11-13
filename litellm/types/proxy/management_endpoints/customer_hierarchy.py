@@ -79,8 +79,8 @@ class MemberPatch(BaseModel):
 
 class MemberCreate(MemberPatch):
     customer_member_id: str | None = None
-    parent_org_id: str | None = Field(default=None, description="Must match the parent team's organization when set")
-    parent_team_id: str
+    parent_org_id: str | None = Field(default=None, description="Must match the parent teams' organization when set")
+    parent_team_ids: tuple[str, ...] = Field(min_length=1, description="Teams the member belongs to, first is default")
 
 
 class AuditFields(BaseModel):
@@ -118,7 +118,7 @@ class Team(AuditFields):
 class CustomerMember(AuditFields):
     customer_member_id: str
     parent_org_id: str
-    parent_team_id: str
+    parent_team_ids: tuple[str, ...]
     budget_id: str | None = None
     budget_override_id: str | None = None
     budget_override: Budget | None = None

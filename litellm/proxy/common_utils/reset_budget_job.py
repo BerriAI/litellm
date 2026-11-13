@@ -662,7 +662,7 @@ class ResetBudgetJob:
             return
         table: Final = CustomerMemberRepository(self.prisma_client, use_writer=True).table
         parents: Final = (
-            {"parent_team_id": {"in": list(identities)}}  # bounded-ok: one RESET_BUDGET_JOB_BATCH_SIZE page
+            {"parent_team_ids": {"has_some": list(identities)}}  # bounded-ok: one RESET_BUDGET_JOB_BATCH_SIZE page
             if entity == "team"
             else {"parent_org_id": {"in": list(identities)}}  # bounded-ok: one RESET_BUDGET_JOB_BATCH_SIZE page
         )

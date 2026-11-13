@@ -62,6 +62,7 @@ model LiteLLM_CustomerOrganizationTable {
   created_by String
   updated_at DateTime @default(now()) @updatedAt
   updated_by String
+  @@index([spend])
 }
 
 model LiteLLM_CustomerTeamTable {
@@ -75,12 +76,12 @@ model LiteLLM_CustomerTeamTable {
   budget_override_id String?
   budget_override LiteLLM_BudgetTable? @relation("CustomerTeamBudgetOverride", fields: [budget_override_id], references: [budget_id], onDelete: Restrict)
   budget_override_expires_at DateTime?
-  members LiteLLM_CustomerMemberTable[]
   created_at DateTime @default(now())
   created_by String
   updated_at DateTime @default(now()) @updatedAt
   updated_by String
   @@index([parent_org_id])
+  @@index([spend])
 }
 
 model LiteLLM_CustomerMemberTable {
@@ -89,8 +90,7 @@ model LiteLLM_CustomerMemberTable {
   alias String?
   parent_org_id String
   parent_org LiteLLM_CustomerOrganizationTable @relation(fields: [parent_org_id], references: [customer_org_id])
-  parent_team_id String
-  parent_team LiteLLM_CustomerTeamTable @relation(fields: [parent_team_id], references: [customer_team_id])
+  parent_team_ids String[] @default([])
   budget_id String?
   budget LiteLLM_BudgetTable? @relation("CustomerMemberBudget", fields: [budget_id], references: [budget_id], onDelete: Restrict)
   budget_override_id String?
@@ -101,8 +101,7 @@ model LiteLLM_CustomerMemberTable {
   updated_at DateTime @default(now()) @updatedAt
   updated_by String
   @@index([parent_org_id])
-  @@index([parent_team_id])
-  @@index([budget_id])
+  @@index([spend])
 }
 
 // Models on proxy

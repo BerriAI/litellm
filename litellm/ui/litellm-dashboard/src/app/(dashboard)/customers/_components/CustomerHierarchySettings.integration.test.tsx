@@ -33,7 +33,7 @@ const organization: Organization = {
 const member: Member = {
   ...audit,
   customer_member_id: "member-1",
-  parent_team_id: "team-1",
+  parent_team_ids: ["team-1"],
   alias: "Member One",
   budget_id: "template-1",
   budget_override: { max_budget: 20 },

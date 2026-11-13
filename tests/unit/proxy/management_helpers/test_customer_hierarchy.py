@@ -29,6 +29,10 @@ def matches_where(row: Mapping[str, object], where: Mapping[str, object]) -> boo
         if isinstance(value, Mapping):
             if "in" in value:
                 return row.get(key) in value["in"]
+            if "has" in value:
+                return value["has"] in TypeAdapter(tuple[str, ...]).validate_python(row.get(key) or ())
+            if "has_some" in value:
+                return bool(set(value["has_some"]) & set(TypeAdapter(tuple[str, ...]).validate_python(row.get(key) or ())))
             if "not" in value:
                 return not matches_where(row, {key: value["not"]})
             if "contains" in value:
@@ -146,7 +150,7 @@ class Database:
             connection.row_factory = sqlite3.Row
             connection.executescript(
                 'CREATE TABLE "LiteLLM_CustomerTeamTable" (customer_team_id TEXT, parent_org_id TEXT);'
-                'CREATE TABLE "LiteLLM_CustomerMemberTable" (customer_member_id TEXT, parent_team_id TEXT);'
+                'CREATE TABLE "LiteLLM_CustomerMemberTable" (customer_member_id TEXT, parent_org_id TEXT);'
             )
             connection.executemany(
                 'INSERT INTO "LiteLLM_CustomerTeamTable" VALUES (?, ?)',
@@ -158,7 +162,7 @@ class Database:
             connection.executemany(
                 'INSERT INTO "LiteLLM_CustomerMemberTable" VALUES (?, ?)',
                 tuple(
-                    (row.model_dump()["customer_member_id"], row.model_dump()["parent_team_id"])
+                    (row.model_dump()["customer_member_id"], row.model_dump()["parent_org_id"])
                     for row in self.litellm_customermembertable.rows.values()
                 ),
             )
