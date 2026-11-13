@@ -42,7 +42,6 @@ def _router(host: ScriptedHost, **settings: object) -> Router:  # kwargs-ok: rou
         build_router_config(
             {
                 "model_list": [deployment("group", "only")],
-                "service_tier_fallbacks": True,
                 "num_retries": 0,
                 "allowed_fails": 0,
                 "cooldown_time": 60,
@@ -120,12 +119,23 @@ def test_sync_completion_retries_default_tier() -> None:
 
 
 @pytest.mark.asyncio
-async def test_flag_off_keeps_original_failure() -> None:
+async def test_explicit_false_keeps_original_failure() -> None:
     host: Final = ScriptedHost({"*": (RateLimitError("busy", "openai", "model"), None)})
     router: Final = _router(host, service_tier_fallbacks=False)
     with pytest.raises(RateLimitError):
         await router.acompletion(model="group", messages=[{"role": "user", "content": "hello"}], service_tier="flex")
     assert len(host.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_default_router_downgrades_flex_failure() -> None:
+    host: Final = ScriptedHost({"*": (RateLimitError("busy", "openai", "model"), None)})
+    router: Final = Router.from_config(build_router_config({"model_list": [deployment("group", "only")]}), host)
+    response: Final = await router.acompletion(
+        model="group", messages=[{"role": "user", "content": "hello"}], service_tier="flex"
+    )
+    assert tuple(call.kwargs.get("service_tier") for call in host.calls) == ("flex", None)
+    assert (get_hidden_params(response) or {})["additional_headers"]["x-litellm-service-tier"] == "default"
 
 
 @pytest.mark.asyncio

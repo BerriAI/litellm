@@ -148,7 +148,7 @@ class RoutingGroup(LiteLLMBaseModel):
 
 class RouterConfig(LiteLLMBaseModel):
     model_list: list[ModelConfig]
-    service_tier_fallbacks: bool = False
+    service_tier_fallbacks: bool = True
 
     redis_url: str | None = None
     redis_host: str | None = None

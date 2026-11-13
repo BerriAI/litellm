@@ -112,7 +112,7 @@ def test_router_general_settings_default_to_async_only_and_pass_through_off(make
 
 def test_settings_as_dict_of_a_default_router(make_core: MakeCore) -> None:
     assert dict(_one(make_core).settings().as_dict()) == {
-        "service_tier_fallbacks": False,
+        "service_tier_fallbacks": True,
         "routing_strategy_args": {},
         "routing_strategy": "simple-shuffle",
         "allowed_fails": 3,

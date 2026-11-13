@@ -78,7 +78,7 @@ def _router_init(
     default_priority: int | None = None,
     ## RELIABILITY ##
     num_retries: int | None = None,
-    service_tier_fallbacks: bool = False,
+    service_tier_fallbacks: bool = True,
     max_fallbacks: int | None = None,  # max fallbacks to try before exiting the call. Defaults to 5.
     timeout: float | None = None,
     stream_timeout: float | None = None,
@@ -137,7 +137,7 @@ def _router_init(
         redis_port (Optional[int]): Port of the Redis server. Defaults to None.
         redis_password (Optional[str]): Password of the Redis server. Defaults to None.
         cache_responses (Optional[bool]): Flag to enable caching of responses. Defaults to False.
-        service_tier_fallbacks (bool): Retry eligible flex failures on the default tier. Defaults to False.
+        service_tier_fallbacks (bool): Retry eligible flex failures on the default tier. Defaults to True.
         cache_kwargs (dict): Additional kwargs to pass to RedisCache. Defaults to {}.
         caching_groups (Optional[List[tuple]]): List of model groups for caching across model groups. Defaults to None.
         client_ttl (int): Time-to-live for cached clients in seconds. Defaults to 3600.

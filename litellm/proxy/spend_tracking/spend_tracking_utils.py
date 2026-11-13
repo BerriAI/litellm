@@ -205,6 +205,7 @@ def _get_router_metadata_for_spend_log(
 _STAMPED_METADATA_KEYS: Final = frozenset(
     (
         "router_metadata",
+        "service_tier_fallback",
         "azure_spillover",
         "autorouter_savings",
         "autorouter_savings_estimate",
@@ -233,6 +234,13 @@ class _UpstreamProviderMetadata(TypedDict, total=False):
 def _stored_user_email(metadata: Mapping[str, object]) -> str | None:
     email: Final = metadata.get("user_api_key_user_email")
     return email if isinstance(email, str) and email.strip() else None
+
+
+def _stored_service_tier_fallback(metadata: Mapping[object, object]) -> Mapping[str, str] | None:
+    marker: Final = as_str_mapping(metadata.get("service_tier_fallback"))
+    if marker is None:
+        return None
+    return {key: value for key, value in marker.items() if isinstance(value, str)}
 
 
 _CUSTOMER_METADATA_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
@@ -348,6 +356,7 @@ def _get_spend_logs_metadata(
             {key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key not in _STAMPED_METADATA_KEYS}
         ),
         **_stored_customer_identity(customer_metadata),
+        service_tier_fallback=_stored_service_tier_fallback(customer_metadata),
         **upstream_provider_metadata,
         autorouter_savings=autorouter_savings,
         autorouter_savings_estimate=autorouter_savings_estimate,

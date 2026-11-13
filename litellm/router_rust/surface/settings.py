@@ -33,7 +33,7 @@ CONTINUATION_SETTING: Final = "enable_mid_stream_fallback_continuation"
 # with their constructor defaults. ``max_retries`` has none: it exists once a changeset sets it.
 PLAIN_DEFAULTS: Final[Mapping[str, object]] = MappingProxyType(
     {
-        "service_tier_fallbacks": False,
+        "service_tier_fallbacks": True,
         "retry_policy": None,
         "model_group_retry_policy": {},
         "enable_weighted_failover": False,

@@ -3870,6 +3870,7 @@ class SpendLogsRouterMetadata(TypedDict):
 
 
 class SpendLogsMetadata(TypedDict):
+    service_tier_fallback: ReadOnly[NotRequired[Mapping[str, str] | None]]
     user_api_key_customer_org_id: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_org_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_team_id: ReadOnly[NotRequired[str | None]]
