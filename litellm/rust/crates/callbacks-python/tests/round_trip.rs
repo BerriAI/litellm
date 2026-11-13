@@ -165,3 +165,93 @@ fn a_native_callback_runs_at_its_list_position_between_two_legacy_entries() {
         [r#"attempt_ended Some("gpt") Some("native/gpt") Some("call-1")"#]
     );
 }
+
+struct Panicking(Manifest);
+
+impl Callback for Panicking {
+    fn manifest(&self) -> &Manifest {
+        &self.0
+    }
+
+    fn request_state(&self) -> Option<RequestState> {
+        panic!("no state for this request")
+    }
+
+    fn handle<'a>(&'a self, input: &'a HookInput) -> BoxFuture<'a, HookOutput> {
+        Box::pin(async move {
+            let usage = input.fields.raw(Field::Usage).ok().flatten().cloned();
+            panic!("usage was {usage:?}")
+        })
+    }
+}
+
+#[rstest::rstest]
+fn a_panicking_native_callback_raises_a_runtime_error_python_can_contain() {
+    let panicking = Arc::new(Panicking(Manifest {
+        selection: Selection::named("native_panicking"),
+        subscriptions: vec![Subscription {
+            reads: FieldSet::of(&[Field::Usage]),
+            ..Subscription::on(Hook::AttemptEnded)
+        }],
+        has_request_state: true,
+    }));
+    let script = CString::new(
+        r#"
+import asyncio
+
+def raised(run):
+    try:
+        run()
+    except BaseException as error:
+        return (type(error).__name__, isinstance(error, Exception), str(error))
+    return None
+
+async def handle():
+    return await native.handle("attempt_ended", {}, None, None)
+
+handled = raised(lambda: asyncio.run(handle()))
+state = raised(native.request_state)
+"#,
+    )
+    .unwrap();
+    Python::initialize();
+    let (handled, state) = Python::attach(|py| {
+        let locals = PyDict::new(py);
+        locals
+            .set_item(
+                "native",
+                Bound::new(py, NativeCallback::new(panicking).unwrap()).unwrap(),
+            )
+            .unwrap();
+        if let Err(error) = py.run(&script, Some(&locals), Some(&locals)) {
+            error.display(py);
+            panic!("the panic script failed");
+        }
+        let item = |name: &str| {
+            locals
+                .get_item(name)
+                .unwrap()
+                .unwrap()
+                .extract::<(String, bool, String)>()
+                .unwrap()
+        };
+        (item("handled"), item("state"))
+    });
+
+    assert_eq!(
+        handled,
+        (
+            "RuntimeError".to_owned(),
+            true,
+            "the native callback panicked: usage was None".to_owned()
+        )
+    );
+    assert_eq!(
+        state,
+        (
+            "RuntimeError".to_owned(),
+            true,
+            "the native callback panicked: no state for this request".to_owned()
+        )
+    );
+}

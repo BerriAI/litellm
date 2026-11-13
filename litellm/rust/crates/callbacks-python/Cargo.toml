@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+futures-util.workspace = true
 litellm-callbacks.workspace = true
 litellm-host-python.workspace = true
 
@@ -15,5 +16,4 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-futures-util.workspace = true
 rstest.workspace = true

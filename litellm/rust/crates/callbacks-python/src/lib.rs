@@ -1,5 +1,6 @@
-use std::sync::Arc;
+use std::{any::Any, panic::AssertUnwindSafe, sync::Arc};
 
+use futures_util::FutureExt;
 use litellm_callbacks::{
     CallFacts, Callback, Field, FieldValues, Hook, HookInput, ManifestError, RequestState,
 };
@@ -47,6 +48,20 @@ impl NativeCallback {
     }
 }
 
+fn panic_error(payload: Box<dyn Any + Send>) -> PyErr {
+    let message = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("panic from Rust code");
+    PyRuntimeError::new_err(format!("the native callback panicked: {message}"))
+}
+
+fn contained<T>(run: impl FnOnce() -> PyResult<T>) -> PyResult<T> {
+    std::panic::catch_unwind(AssertUnwindSafe(run))
+        .unwrap_or_else(|payload| Err(panic_error(payload)))
+}
+
 fn named<T: serde::de::DeserializeOwned>(name: &str) -> PyResult<T> {
     serde_json::from_value(Value::String(name.to_owned()))
         .map_err(|_| PyValueError::new_err(format!("{name} is not a known name")))
@@ -58,8 +73,8 @@ impl NativeCallback {
         &self.manifest
     }
 
-    fn request_state(&self) -> Option<NativeRequestState> {
-        self.callback.request_state().map(NativeRequestState)
+    fn request_state(&self) -> PyResult<Option<NativeRequestState>> {
+        contained(|| Ok(self.callback.request_state().map(NativeRequestState)))
     }
 
     #[pyo3(signature = (hook, fields, call, state, /))]
@@ -71,6 +86,27 @@ impl NativeCallback {
         call: Option<&Bound<'py, PyAny>>,
         state: Option<PyRef<'py, NativeRequestState>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let input = contained(|| self.input(hook, fields, call, state))?;
+        let callback = Arc::clone(&self.callback);
+        run_async_value(py, async move {
+            let handled = AssertUnwindSafe(async move { callback.handle(&input).await })
+                .catch_unwind()
+                .await
+                .map_err(panic_error)?;
+            let verdict = handled.map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            Ok(Pythonized(verdict))
+        })
+    }
+}
+
+impl NativeCallback {
+    fn input<'py>(
+        &self,
+        hook: &str,
+        fields: &Bound<'py, PyDict>,
+        call: Option<&Bound<'py, PyAny>>,
+        state: Option<PyRef<'py, NativeRequestState>>,
+    ) -> PyResult<HookInput> {
         let hook: Hook = named(hook)?;
         let subscription = self
             .callback
@@ -82,19 +118,11 @@ impl NativeCallback {
             let field: Field = named(&name.extract::<String>()?)?;
             values.insert(field, json_from_py(&value)?);
         }
-        let input = HookInput {
+        Ok(HookInput {
             hook,
             fields: values,
             call: call.map(from_py::<CallFacts>).transpose()?,
             state: state.map(|state| Arc::clone(&state.0)),
-        };
-        let callback = Arc::clone(&self.callback);
-        run_async_value(py, async move {
-            let verdict = callback
-                .handle(&input)
-                .await
-                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-            Ok(Pythonized(verdict))
         })
     }
 }
