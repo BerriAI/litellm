@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -163,12 +164,17 @@ class CustomerBudgetAlerting:
 
     @staticmethod
     @with_service_target("customer_budget_alerts")
-    async def emit(event: CustomerBudgetEvent, cache: CustomerBudgetClaims, *, ttl: float = 86400) -> None:
+    async def emit(event: CustomerBudgetEvent, cache: CustomerBudgetClaims) -> None:
         callbacks: Final = CustomerBudgetAlerting.callbacks()
         if not callbacks:
             return
         identity: Final = json.dumps((event.event, event.scope, event.entity_id, event.period))
         key: Final = "customer_budget_alerts:" + hashlib.sha256(identity.encode()).hexdigest()
+        ttl: Final = (
+            100 * 365 * 24 * 60 * 60
+            if event.period == "lifetime"
+            else max(1, math.ceil((datetime.fromisoformat(event.period) - event.timestamp).total_seconds()))
+        )
         if await cache.async_increment_cache(key=key, value=1, ttl=ttl) != 1:
             return
         await asyncio.gather(*(CustomerBudgetAlerting._deliver(callback, event) for callback in callbacks))

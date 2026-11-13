@@ -224,6 +224,37 @@ async def test_no_customer_budget_does_not_send_an_alert(
     assert receiver.call_count == 0
 
 
+@pytest.mark.parametrize("reset", (None, _NOW + timedelta(days=30, microseconds=1)))
+@pytest.mark.asyncio
+async def test_crossings_do_not_repeat_after_a_day_or_near_the_end_of_the_budget_period(
+    alerts: DualCache, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, reset: datetime | None
+) -> None:
+    receiver: Final = respx_mock.post(_URL).respond(200)
+    database: Final = _database(
+        {
+            "org": _Record(
+                {
+                    "customer_org_id": "org",
+                    "spend": 2.0,
+                    "budget_reset_at": reset,
+                    "budget": {"max_budget": 1.0, "soft_budget": 0.5},
+                }
+            )
+        }
+    )
+    last_instant: Final = reset - timedelta(microseconds=1) if reset else _NOW + timedelta(days=365)
+    for instant in (_NOW, _NOW + timedelta(days=2), last_instant):
+        monkeypatch.setattr("time.time", instant.timestamp)
+        await CustomerBudgetAlerting.detect_committed_batch(
+            {"customer_org_list_transactions": {"org": 1.0}}, database, alerts, now=instant
+        )
+    assert receiver.call_count == 2
+    assert tuple(_PAYLOAD.validate_json(call.request.content)["event"] for call in receiver.calls) == (
+        "soft_budget_crossed",
+        "budget_crossed",
+    )
+
+
 class _BrokenCallback(CustomLogger):
     async def async_on_customer_budget_event(self, event: CustomerBudgetEvent) -> None:
         raise RuntimeError("callback unavailable")
