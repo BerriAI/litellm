@@ -1,0 +1,518 @@
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final
+
+from pydantic import TypeAdapter
+
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY
+from litellm.integrations.custom_logger_v2.enums import Field
+from litellm.integrations.custom_logger_v2.slots import HookArgs, Slot, derived, mapped
+from litellm.types.integrations.custom_logger_v2 import (
+    AttemptTiming,
+    BudgetPlan,
+    BudgetReservation,
+    Cost,
+    Deployment,
+    EstimatedOutputTokens,
+    GuardrailEntry,
+    KeyIdentity,
+    KeyLimits,
+    LoggedRequest,
+    McpToolCall,
+    ModelInfo,
+    Outcome,
+    OutputCap,
+    RateLimitState,
+    RateLimitStatuses,
+    Usage,
+    UsageRecord,
+    coerce_record,
+    coerce_value,
+)
+
+_ABSENT: Final = object()
+_TAGS: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
+_TEXT: Final[TypeAdapter[str]] = TypeAdapter(str)
+_ENTRIES: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+_GUARDRAILS: Final[TypeAdapter[tuple[GuardrailEntry, ...]]] = TypeAdapter(tuple[GuardrailEntry, ...])
+_LIMITER_HEADER_PREFIX: Final = "x-ratelimit-"
+
+
+def member(source: object, name: str) -> object:
+    if isinstance(source, Mapping):
+        return source.get(name)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped legacy mapping
+    return getattr(source, name, None)
+
+
+def mapping(source: object) -> Mapping[str, object] | None:
+    return source if isinstance(source, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # untyped legacy mapping
+
+
+def auth_of(args: HookArgs) -> object:
+    return args.auth if args.auth is not None else getattr(args.logging_obj, "v2_auth", None)
+
+
+def _metadata_value(source: object, name: str) -> object:
+    return member(mapping(source) or {}, name)
+
+
+def key_identity(args: HookArgs) -> KeyIdentity | None:
+    auth: Final = auth_of(args)
+    if auth is None:
+        return None
+    team_metadata: Final = getattr(auth, "team_metadata", None)
+    return coerce_record(
+        KeyIdentity,
+        {
+            "key_hash": getattr(auth, "token", None),
+            "api_key": getattr(auth, "api_key", None),
+            "key_alias": getattr(auth, "key_alias", None),
+            "key_name": getattr(auth, "key_name", None),
+            "user_id": getattr(auth, "user_id", None),
+            "user_email": getattr(auth, "user_email", None),
+            "team_id": getattr(auth, "team_id", None),
+            "team_alias": getattr(auth, "team_alias", None),
+            "org_id": getattr(auth, "org_id", None),
+            "org_alias": getattr(auth, "organization_alias", None),
+            "project_id": getattr(auth, "project_id", None),
+            "project_alias": getattr(auth, "project_alias", None),
+            "end_user_id": getattr(auth, "end_user_id", None),
+            "agent_id": getattr(auth, "agent_id", None),
+            "invoked_agent_id": getattr(auth, "invoked_agent_id", None),
+            "team_priority": _metadata_value(team_metadata, "priority"),
+            "key_priority": _metadata_value(getattr(auth, "metadata", None), "priority"),
+            "model_preferences": _metadata_value(team_metadata, "model_preferences"),
+        },
+    )
+
+
+def _estimated_output_tokens(auth: object, model: object) -> EstimatedOutputTokens:
+    key_metadata: Final = getattr(auth, "metadata", None)
+    team_metadata: Final = getattr(auth, "team_metadata", None)
+    per_model: Final = "default_estimated_output_tokens_per_model"
+    default: Final = "default_estimated_output_tokens"
+    return coerce_record(
+        EstimatedOutputTokens,
+        {
+            "key_per_model": _metadata_value(_metadata_value(key_metadata, per_model), str(model)),
+            "key_default": _metadata_value(key_metadata, default),
+            "team_per_model": _metadata_value(_metadata_value(team_metadata, per_model), str(model)),
+            "team_default": _metadata_value(team_metadata, default),
+        },
+    )
+
+
+_LIMIT_ATTRIBUTES: Final = (
+    "rpm_limit",
+    "tpm_limit",
+    "max_parallel_requests",
+    "budget_throttle_pct",
+    "user_rpm_limit",
+    "user_tpm_limit",
+    "team_rpm_limit",
+    "team_tpm_limit",
+    "team_member_rpm_limit",
+    "team_member_tpm_limit",
+    "end_user_rpm_limit",
+    "end_user_tpm_limit",
+    "organization_rpm_limit",
+    "organization_tpm_limit",
+)
+
+
+def key_limits(args: HookArgs) -> KeyLimits | None:
+    auth: Final = auth_of(args)
+    if auth is None:
+        return None
+    metadata: Final = getattr(auth, "metadata", None)
+    model: Final = member(args.request, "model")
+    return coerce_record(
+        KeyLimits,
+        {
+            **{name: getattr(auth, name, None) for name in _LIMIT_ATTRIBUTES},
+            "rpm_limit_type": _metadata_value(metadata, "rpm_limit_type"),
+            "tpm_limit_type": _metadata_value(metadata, "tpm_limit_type"),
+            "estimated_output_tokens": _estimated_output_tokens(auth, model) if isinstance(model, str) else None,
+        },
+    )
+
+
+def _plan(raw: object) -> BudgetPlan | None:
+    if isinstance(raw, BudgetPlan):
+        return raw
+    members: Final = mapping(raw)
+    if members is None:
+        return coerce_value(BudgetPlan.__name__, TypeAdapter(BudgetPlan), raw)
+    return coerce_record(BudgetPlan, members)
+
+
+def claim_budget_plan(args: HookArgs) -> BudgetPlan | None:
+    auth: Final = args.auth
+    raw: Final[object] = getattr(auth, "budget_plan", None)
+    if raw is None:
+        return None
+    setattr(auth, "budget_plan", None)  # noqa: B010  # claim once: the fallback loop runs pre_call again with this auth
+    return _plan(raw)
+
+
+def budget_reservation(args: HookArgs) -> BudgetReservation | None:
+    members: Final = mapping(getattr(args.auth, "budget_reservation", None))
+    return None if members is None else coerce_record(BudgetReservation, members)
+
+
+def _record_members(value: object) -> Mapping[str, object]:
+    if isinstance(value, BudgetReservation):
+        return value.model_dump(mode="json", exclude_none=True)
+    members: Final = mapping(value)
+    if members is None:
+        raise TypeError("a budget_reservation write must be a mapping of reservation members")
+    return MappingProxyType({key: item for key, item in members.items() if item is not None})
+
+
+def write_budget_reservation(args: HookArgs, value: object) -> None:
+    members: Final = _record_members(value)
+    current: Final = getattr(args.auth, "budget_reservation", None)
+    if isinstance(current, dict):
+        current.update(members)  # pyright: ignore[reportUnknownMemberType]  # the shared reservation dict
+        return
+    setattr(args.auth, "budget_reservation", dict(members))  # noqa: B010  # the auth model types it as a dict
+
+
+def usage_record(source: object) -> UsageRecord | None:
+    if source is None:
+        return None
+    prompt_details: Final = member(source, "prompt_tokens_details")
+    completion_details: Final = member(source, "completion_tokens_details")
+    return coerce_record(
+        UsageRecord,
+        {
+            "prompt_tokens": member(source, "prompt_tokens"),
+            "completion_tokens": member(source, "completion_tokens"),
+            "total_tokens": member(source, "total_tokens"),
+            "cached_tokens": member(prompt_details, "cached_tokens"),
+            "prompt_audio_tokens": member(prompt_details, "audio_tokens"),
+            "cache_write_tokens": member(prompt_details, "cache_write_tokens"),
+            "cache_creation_tokens": member(prompt_details, "cache_creation_tokens"),
+            "reasoning_tokens": member(completion_details, "reasoning_tokens"),
+            "completion_audio_tokens": member(completion_details, "audio_tokens"),
+            "cache_read_input_tokens": member(source, "cache_read_input_tokens"),
+            "cache_creation_input_tokens": member(source, "cache_creation_input_tokens"),
+            "duration_seconds": member(source, "duration_seconds"),
+            "output_image_count": member(source, "output_image_count"),
+        },
+    )
+
+
+def payload_of(args: HookArgs) -> Mapping[str, object] | None:
+    return mapping(member(args.request, "standard_logging_object"))
+
+
+def payload_metadata(args: HookArgs) -> Mapping[str, object]:
+    return mapping(member(payload_of(args), "metadata")) or {}
+
+
+def _logged_usage(payload: Mapping[str, object] | None) -> UsageRecord | None:
+    if payload is None:
+        return None
+    details: Final = mapping(member(mapping(payload.get("metadata")), "usage_object")) or {}
+    return usage_record(
+        {**details, **{name: payload.get(name) for name in ("prompt_tokens", "completion_tokens", "total_tokens")}}
+    )
+
+
+def _socket_session(args: HookArgs) -> UsageRecord | None:
+    if member(args.request, "call_type") != "aresponses_websocket":
+        return None
+    from litellm.proxy.hooks.rate_limiter_utils import socket_session_usage
+
+    return usage_record(socket_session_usage(mapping(args.request) or {}, args.result))
+
+
+def usage(args: HookArgs) -> Usage | None:
+    request: Final = args.request
+    streamed: Final = member(request, "async_complete_streaming_response")
+    return coerce_record(
+        Usage,
+        {
+            "response": usage_record(member(args.result, "usage")),
+            "streamed": usage_record(member(streamed, "usage")),
+            "combined": usage_record(member(request, "combined_usage_object")),
+            "upstream": usage_record(member(request, "_litellm_upstream_reported_usage")),
+            "socket_session": _socket_session(args),
+            "logged": _logged_usage(payload_of(args)),
+        },
+    )
+
+
+def combined_usage(args: HookArgs) -> Usage | None:
+    combined: Final = usage_record(member(args.request, "combined_usage_object"))
+    return None if combined is None else Usage(combined=combined)
+
+
+def outcome(args: HookArgs) -> Outcome | None:
+    return args.outcome
+
+
+def _zero_cost(diagnostic: object) -> object:
+    members: Final = mapping(diagnostic)
+    return diagnostic if members is None else {"reason": members.get("reason")}
+
+
+def cost(args: HookArgs) -> Cost | None:
+    payload: Final = payload_of(args)
+    if payload is None:
+        return None
+    return coerce_record(
+        Cost,
+        {
+            "response_cost": payload.get("response_cost"),
+            "zero_cost": _zero_cost(payload.get("zero_cost_diagnostic")),
+        },
+    )
+
+
+def request_tags(args: HookArgs) -> tuple[str, ...] | None:
+    return coerce_value("request_tags", _TAGS, member(payload_of(args), "request_tags"))
+
+
+def _guardrail_entry(entry: object) -> object:
+    entry_mapping: Final = mapping(entry)
+    if entry_mapping is None:
+        return entry
+    mode: Final = entry_mapping.get("guardrail_mode")
+    return {
+        "modes": (mode,) if isinstance(mode, str) else mode,
+        "duration": entry_mapping.get("duration"),
+    }
+
+
+def guardrail_info(args: HookArgs) -> tuple[GuardrailEntry, ...] | None:
+    raw: Final = member(payload_of(args), "guardrail_information")
+    single: Final = mapping(raw)
+    entries: Final = coerce_value("guardrail_info", _ENTRIES, raw if single is None else (single,))
+    return (
+        None if entries is None else coerce_value("guardrail_info", _GUARDRAILS, tuple(map(_guardrail_entry, entries)))
+    )
+
+
+def litellm_params(args: HookArgs) -> Mapping[str, object]:
+    return mapping(member(args.request, "litellm_params")) or {}
+
+
+def litellm_metadata(args: HookArgs) -> Mapping[str, object]:
+    params: Final = litellm_params(args)
+    return mapping(params.get("litellm_metadata")) or mapping(params.get("metadata")) or {}
+
+
+def deployment(args: HookArgs) -> Deployment | None:
+    params: Final = litellm_params(args)
+    metadata: Final = litellm_metadata(args)
+    model_info: Final = metadata.get("model_info")
+    info_members: Final = mapping(model_info)
+    original: Final = {**metadata, **(mapping(params.get("metadata")) or {})}.get("original_model_group")
+    return coerce_record(
+        Deployment,
+        {
+            "model_info": model_info
+            if info_members is None
+            else coerce_record(ModelInfo, {name: info_members.get(name) for name in ("id", "tpm", "rpm")}),
+            "provider": params.get("custom_llm_provider"),
+            "tpm": params.get("tpm"),
+            "rpm": params.get("rpm"),
+            "original_model_group": original if isinstance(original, str) else None,
+            "params_present": bool(params),
+        },
+    )
+
+
+def attempt_timing(args: HookArgs) -> AttemptTiming | None:
+    request: Final = mapping(args.request) or {}
+    hidden: Final = mapping(member(payload_of(args), "hidden_params")) or {}
+    return coerce_record(
+        AttemptTiming,
+        {
+            "start": args.start_time,
+            "end": args.end_time,
+            "api_call_start": request.get("api_call_start_time"),
+            "completion_start": request.get("completion_start_time"),
+            "completion_start_present": "completion_start_time" in request,
+            "queue_seconds": _metadata_value(litellm_params(args).get("metadata"), "queue_time_seconds"),
+            "overhead_ms": hidden.get("litellm_overhead_time_ms"),
+        },
+    )
+
+
+def model_group(args: HookArgs) -> object:
+    params: Final = litellm_params(args)
+    name: Final = "litellm_metadata" if params.get("litellm_metadata") is not None else "metadata"
+    return _metadata_value(params.get(name), "model_group")
+
+
+def rate_limit_state(args: HookArgs) -> RateLimitState | None:
+    group: Final = model_group(args)
+    metadata: Final = litellm_params(args).get("metadata")
+    hidden: Final = member(payload_of(args), "hidden_params")
+    headers: Final = member(mapping(hidden), "additional_headers")
+    header_map: Final = mapping(headers)
+    return coerce_record(
+        RateLimitState,
+        {
+            "key_model_group": group,
+            "key_remaining_requests": _metadata_value(metadata, f"litellm-key-remaining-requests-{group}"),
+            "key_remaining_tokens": _metadata_value(metadata, f"litellm-key-remaining-tokens-{group}"),
+            "limiter_headers": None
+            if header_map is None
+            else {key: value for key, value in header_map.items() if key.startswith(_LIMITER_HEADER_PREFIX)},
+            "provider_remaining_requests": member(header_map, "x_ratelimit_remaining_requests"),
+            "provider_remaining_tokens": member(header_map, "x_ratelimit_remaining_tokens"),
+            "hidden_params_present": isinstance(hidden, Mapping),
+            "additional_headers_present": header_map is not None,
+        },
+    )
+
+
+def logged_request(args: HookArgs) -> LoggedRequest | None:
+    payload: Final = payload_of(args)
+    if payload is None:
+        return None
+    from litellm.litellm_core_utils.service_tier_utils import get_service_tier_from_standard_logging_payload
+
+    metadata: Final = payload_metadata(args)
+    return coerce_record(
+        LoggedRequest,
+        {
+            "client_ip": metadata.get("requester_ip_address"),
+            "user_agent": metadata.get("user_agent"),
+            "service_tier": get_service_tier_from_standard_logging_payload(payload),  # pyright: ignore[reportArgumentType]  # the payload is a TypedDict at runtime
+            "stream": payload.get("stream"),
+        },
+    )
+
+
+def mcp_tool_call(args: HookArgs) -> McpToolCall | None:
+    call: Final = mapping(payload_metadata(args).get("mcp_tool_call_metadata"))
+    if call is None:
+        return None
+    return coerce_record(McpToolCall, {"name": call.get("name"), "server_name": call.get("mcp_server_name")})
+
+
+def log_id(args: HookArgs) -> str | None:
+    return coerce_value("log_id", _TEXT, member(payload_of(args), "id"))
+
+
+def cold_storage_object_key(args: HookArgs) -> str | None:
+    return coerce_value("cold_storage_object_key", _TEXT, payload_metadata(args).get("cold_storage_object_key"))
+
+
+def payload_copy(
+    args: HookArgs,
+) -> dict[str, object] | None:  # mutable-ok: the shallow copy handed to Rust by reference
+    payload: Final = payload_of(args)
+    return None if payload is None else dict(payload)
+
+
+RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
+    {
+        Field.key_identity: KeyIdentity,
+        Field.deployment: Deployment,
+        Field.request_tags: tuple[str, ...],
+        Field.guardrail_info: tuple[GuardrailEntry, ...],
+        Field.outcome: Outcome,
+        Field.usage: Usage,
+        Field.cost: Cost,
+        Field.key_limits: KeyLimits,
+        Field.budget_plan: BudgetPlan,
+        Field.budget_reservation: BudgetReservation,
+        Field.rate_limit_statuses: RateLimitStatuses,
+        Field.output_cap: OutputCap,
+        Field.attempt_timing: AttemptTiming,
+        Field.rate_limit_state: RateLimitState,
+        Field.logged_request: LoggedRequest,
+        Field.mcp_tool_call: McpToolCall,
+        Field.log_id: str,
+        Field.cold_storage_object_key: str,
+    }
+)
+
+LOGGING_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
+    {
+        Field.key_identity: derived(key_identity),
+        Field.deployment: derived(deployment),
+        Field.request_tags: derived(request_tags),
+        Field.guardrail_info: derived(guardrail_info),
+        Field.usage: derived(usage),
+        Field.cost: derived(cost),
+        Field.attempt_timing: derived(attempt_timing),
+        Field.rate_limit_state: derived(rate_limit_state),
+        Field.logged_request: derived(logged_request),
+        Field.mcp_tool_call: derived(mcp_tool_call),
+        Field.log_id: derived(log_id),
+        Field.cold_storage_object_key: derived(cold_storage_object_key),
+    }
+)
+ATTEMPT_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
+    {
+        **LOGGING_SLOTS,
+        Field.outcome: derived(outcome),
+        Field.standard_logging_payload_ref: derived(payload_copy),
+    }
+)
+AUTH_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType({Field.key_identity: derived(key_identity)})
+POST_CALL_FAILURE_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
+    {**AUTH_SLOTS, Field.usage: derived(combined_usage)}
+)
+PRE_CALL_AUTH_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
+    {
+        **AUTH_SLOTS,
+        Field.key_limits: derived(key_limits),
+        Field.budget_plan: derived(claim_budget_plan),
+        Field.budget_reservation: mapped(budget_reservation, write_budget_reservation),
+    }
+)
+
+
+def call_internal_origin(args: HookArgs) -> str | None:
+    origin: Final = litellm_metadata(args).get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+    return origin if isinstance(origin, str) else None
+
+
+def call_connection_id(args: HookArgs) -> str | None:
+    connection: Final = _metadata_value(
+        litellm_params(args).get("litellm_metadata"), RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY
+    )
+    return connection if isinstance(connection, str) else None
+
+
+__all__ = [
+    "ATTEMPT_SLOTS",
+    "AUTH_SLOTS",
+    "LOGGING_SLOTS",
+    "POST_CALL_FAILURE_SLOTS",
+    "PRE_CALL_AUTH_SLOTS",
+    "RECORD_TYPES",
+    "attempt_timing",
+    "auth_of",
+    "budget_reservation",
+    "call_connection_id",
+    "call_internal_origin",
+    "claim_budget_plan",
+    "combined_usage",
+    "cost",
+    "deployment",
+    "guardrail_info",
+    "key_identity",
+    "key_limits",
+    "log_id",
+    "logged_request",
+    "mapping",
+    "mcp_tool_call",
+    "member",
+    "model_group",
+    "payload_copy",
+    "payload_of",
+    "rate_limit_state",
+    "request_tags",
+    "usage",
+    "usage_record",
+    "write_budget_reservation",
+]

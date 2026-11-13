@@ -1,0 +1,189 @@
+from collections.abc import Generator
+from typing import Final
+
+import pytest
+
+import litellm
+from litellm.caching import DualCache
+from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Field, Hook, Patch, on
+from litellm.integrations.custom_logger_v2.call import CallFacts
+from litellm.integrations.custom_logger_v2.host import reset_host_for_tests
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.integrations.custom_logger_v2 import (
+    BudgetPlan,
+    BudgetReservation,
+    KeyIdentity,
+    RateLimitStatus,
+    RateLimitStatuses,
+)
+from litellm.types.utils import ModelResponse
+
+PLAN: Final = BudgetPlan(reservation_cost=0.25, fail_closed=True)
+
+
+@pytest.fixture(autouse=True)
+def fresh_host() -> Generator[None]:
+    reset_host_for_tests()
+    yield
+    reset_host_for_tests()
+
+
+@pytest.fixture
+def proxy_logging() -> ProxyLogging:
+    return ProxyLogging(user_api_key_cache=DualCache())
+
+
+def _auth() -> UserAPIKeyAuth:
+    auth: Final = UserAPIKeyAuth(api_key="sk-real", user_id="real-user", request_route="/chat/completions")
+    auth.budget_plan = PLAN
+    auth.budget_reservation = {"reserved_cost": 0.25}
+    return auth
+
+
+def _forged_request() -> dict[str, object]:
+    return {
+        "model": "m",
+        "litellm_call_id": "call-1",
+        "metadata": {"user_api_key_user_id": "forged", "user_api_key_hash": "forged"},
+        "user_api_key_dict": {"user_id": "forged"},
+    }
+
+
+def _seen(view: object, field: Field) -> object:
+    return getattr(view, field.value, None)
+
+
+class _Reserver(CustomLoggerV2):
+    def __init__(self) -> None:
+        self.seen: list[tuple[object, ...]] = []
+
+    @on(
+        Hook.pre_call,
+        reads={Field.key_identity, Field.budget_plan, Field.budget_reservation},
+        writes={Field.budget_reservation, Field.rate_limit_statuses},
+    )
+    async def pre_call(self, view: object, ctx: CallContext[object]) -> Patch:
+        self.seen.append(
+            (
+                _seen(view, Field.key_identity),
+                _seen(view, Field.budget_plan),
+                _seen(view, Field.budget_reservation),
+                ctx.call,
+            )
+        )
+        return (
+            Patch()
+            .set(Field.budget_reservation, BudgetReservation(finalized=True, input_tokens=12))
+            .set(Field.rate_limit_statuses, RateLimitStatuses(statuses=(RateLimitStatus(code="OK", current_limit=5),)))
+        )
+
+
+class _Reader(CustomLoggerV2):
+    def __init__(self) -> None:
+        self.seen: list[tuple[object, ...]] = []
+
+    @on(Hook.pre_call, reads={Field.budget_plan, Field.budget_reservation, Field.rate_limit_statuses}, awaited=True)
+    async def pre_call(self, view: object, ctx: CallContext[object]) -> None:
+        self.seen.append(
+            (
+                _seen(view, Field.budget_plan),
+                _seen(view, Field.budget_reservation),
+                _seen(view, Field.rate_limit_statuses),
+            )
+        )
+
+
+async def test_pre_call_hands_auth_fields_to_subscribers_and_a_reservation_write_reaches_the_next_one(
+    monkeypatch: pytest.MonkeyPatch, proxy_logging: ProxyLogging
+) -> None:
+    reserver: Final = _Reserver()
+    reader: Final = _Reader()
+    monkeypatch.setattr(litellm, "callbacks", [reserver, reader])
+    auth: Final = _auth()
+    shared: Final = auth.budget_reservation
+
+    _ = await proxy_logging.pre_call_hook(user_api_key_dict=auth, data=_forged_request(), call_type="completion")
+
+    identity, plan, reservation, call = reserver.seen[0]
+    assert identity == KeyIdentity(key_hash=auth.token, api_key=auth.api_key, user_id="real-user")
+    assert plan == PLAN
+    assert reservation == BudgetReservation(reserved_cost=0.25)
+    assert isinstance(call, CallFacts)
+    assert (call.ids.call_id, call.kind.route, call.kind.call_type) == ("call-1", "/chat/completions", "completion")
+    assert reader.seen == [
+        (
+            PLAN,
+            BudgetReservation(reserved_cost=0.25, finalized=True, input_tokens=12),
+            RateLimitStatuses(overall_code="OK", statuses=(RateLimitStatus(code="OK", current_limit=5),)),
+        )
+    ]
+    assert auth.budget_reservation is shared
+    assert shared == {"reserved_cost": 0.25, "finalized": True, "input_tokens": 12}
+
+
+async def test_a_rerun_pre_call_with_the_same_auth_sees_no_budget_plan(
+    monkeypatch: pytest.MonkeyPatch, proxy_logging: ProxyLogging
+) -> None:
+    reader: Final = _Reader()
+    monkeypatch.setattr(litellm, "callbacks", [reader])
+    auth: Final = _auth()
+
+    _ = await proxy_logging.pre_call_hook(user_api_key_dict=auth, data={"model": "m"}, call_type="completion")
+    _ = await proxy_logging.pre_call_hook(user_api_key_dict=auth, data={"model": "m"}, call_type="completion")
+
+    assert [plan for plan, _, _ in reader.seen] == [PLAN, None]
+
+
+class _OffPathReader(CustomLoggerV2):
+    @on(Hook.pre_call, reads={Field.budget_plan})
+    async def pre_call(self, view: object, ctx: CallContext[object]) -> None:
+        return None
+
+
+async def test_an_off_path_reader_derives_its_fields_before_the_hook_returns(
+    monkeypatch: pytest.MonkeyPatch, proxy_logging: ProxyLogging
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_OffPathReader()])
+    auth: Final = _auth()
+
+    _ = await proxy_logging.pre_call_hook(user_api_key_dict=auth, data={"model": "m"}, call_type="completion")
+
+    assert auth.budget_plan is None
+
+
+class _PostCall(CustomLoggerV2):
+    def __init__(self) -> None:
+        self.seen: list[tuple[Hook, object, CallFacts | None]] = []
+
+    @on(Hook.post_call_success, reads={Field.key_identity}, awaited=True)
+    async def post_call_success(self, view: object, ctx: CallContext[object]) -> None:
+        self.seen.append((ctx.hook, _seen(view, Field.key_identity), ctx.call))
+
+    @on(Hook.post_call_failure, reads={Field.key_identity}, awaited=True)
+    async def post_call_failure(self, view: object, ctx: CallContext[object]) -> None:
+        self.seen.append((ctx.hook, _seen(view, Field.key_identity), ctx.call))
+
+
+async def test_post_call_hooks_get_call_facts_and_the_identity_of_the_auth_object(
+    monkeypatch: pytest.MonkeyPatch, proxy_logging: ProxyLogging
+) -> None:
+    recorder: Final = _PostCall()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    auth: Final = _auth()
+
+    _ = await proxy_logging.post_call_success_hook(
+        data=_forged_request(), response=ModelResponse(), user_api_key_dict=auth
+    )
+    _ = await proxy_logging.post_call_failure_hook(
+        request_data=_forged_request(), original_exception=RuntimeError("upstream"), user_api_key_dict=auth
+    )
+
+    identity: Final = KeyIdentity(key_hash=auth.token, api_key=auth.api_key, user_id="real-user")
+    assert [(hook, seen) for hook, seen, _ in recorder.seen] == [
+        (Hook.post_call_success, identity),
+        (Hook.post_call_failure, identity),
+    ]
+    assert [
+        (call.ids.call_id, call.kind.route, call.target.model) for _, _, call in recorder.seen if call is not None
+    ] == [("call-1", "/chat/completions", "m")] * 2

@@ -24,6 +24,7 @@ from litellm.integrations.custom_logger_v2.patches import apply_patch, apply_pat
 from litellm.integrations.custom_logger_v2.planner import EMPTY_PLAN, Entry, HookPlan
 from litellm.integrations.custom_logger_v2.registry import CallbackRegistry, RegistrySnapshot
 from litellm.integrations.custom_logger_v2.selection import RequestSelection, is_selected
+from litellm.integrations.custom_logger_v2.slots import settle_reads
 
 LegacyT: Final = TypeVar("LegacyT")
 
@@ -512,6 +513,7 @@ class RequestScope:
         self, hook: Hook, entries: tuple[Entry, ...], fields: Mapping[Field, object], call: CallFacts | None
     ) -> None:
         if entries:
+            settle_reads(fields, chain.from_iterable(entry.subscription.reads for entry in entries))
             self._dispatcher.sink.submit(self._deliver_off_path(hook, entries, fields, call, self._states_of(entries)))
 
     async def _deliver_off_path(

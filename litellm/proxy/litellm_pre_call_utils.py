@@ -1437,6 +1437,11 @@ class _HoldsV2Scope(Protocol):
     v2_scope: RequestScope | None
 
 
+@runtime_checkable
+class _HoldsV2Auth(Protocol):
+    v2_auth: object
+
+
 def bind_v2_request_scope(
     data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, request_headers: Mapping[str, str]
 ) -> RequestScope | None:
@@ -1451,6 +1456,8 @@ def bind_v2_request_scope(
     logging_obj: Final = data.get("litellm_logging_obj")
     if isinstance(logging_obj, _HoldsV2Scope):
         logging_obj.v2_scope = scope
+    if isinstance(logging_obj, _HoldsV2Auth):
+        logging_obj.v2_auth = user_api_key_dict
     return scope
 
 
