@@ -808,7 +808,7 @@ async def acompletion(
         prompt_management_logger, AnthropicCacheControlHook
     )
 
-    prompt_hook_result: Final = (
+    prompt_hook_result: Final[tuple[str, list[AllMessageValues], Mapping[str, object]] | None] = (
         await litellm_logging_obj.async_get_chat_completion_prompt(
             model=model,
             messages=messages,
@@ -848,7 +848,7 @@ async def acompletion(
         verbose_logger.debug("🔄 NO SHARED SESSION: acompletion called without shared_session")
 
     # Adjusted to use explicit arguments instead of *args and **kwargs
-    caller_completion_kwargs: Final = {
+    caller_completion_kwargs: Final[Mapping[str, object]] = {
         "model": model,
         "messages": messages,
         "functions": functions,
@@ -897,9 +897,7 @@ async def acompletion(
         "enable_json_schema_validation": enable_json_schema_validation,
     }
     request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
-    prompt_params: Final = cast(  # cast-ok: prompt hooks return a bare dict keyed by param name
-        "Mapping[str, object]", prompt_hook_result[2] if prompt_hook_result is not None else {}
-    )
+    prompt_params: Final[Mapping[str, object]] = prompt_hook_result[2] if prompt_hook_result is not None else {}
     prompt_overrides: Final = {
         key: value
         for key, value in prompt_params.items()
