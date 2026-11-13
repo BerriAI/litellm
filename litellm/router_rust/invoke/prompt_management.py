@@ -76,7 +76,7 @@ async def prompt_management_acompletion(
         core.shaping,
         deployment,
         kwargs,  # pyright: ignore[reportUnknownArgumentType]  # the request kwargs
-        cache=core.routing_cache,
+        usage=core.router_usage,
         splits_stream_timeout=True,
     )
     params: Final = as_dict(deployment.get("litellm_params"))

@@ -21,5 +21,5 @@ pub use error::{Error, ErrorKind};
 pub use memory::{Clock, system_clock};
 pub use number::Number;
 pub use remote::Remote;
-pub use request::{Pending, RequestRedis, Send};
+pub use request::{DeadlineTag, Pending, RequestRedis, Send};
 pub use value::{FromValue, IntoValue};
