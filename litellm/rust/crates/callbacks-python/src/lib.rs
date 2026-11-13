@@ -12,6 +12,9 @@ use pyo3::{
 };
 use serde_json::Value;
 
+pub mod payload;
+mod pyjson;
+
 #[pyclass(frozen, name = "NativeCallback")]
 pub struct NativeCallback {
     callback: Arc<dyn Callback>,
@@ -87,12 +90,17 @@ impl NativeCallback {
         state: Option<PyRef<'py, NativeRequestState>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let input = contained(|| self.input(hook, fields, call, state))?;
+        let render_loop = matches!(input.fields.payload(), Ok(Some(_)))
+            .then(|| payload::running_loop(py))
+            .flatten();
         let callback = Arc::clone(&self.callback);
         run_async_value(py, async move {
-            let handled = AssertUnwindSafe(async move { callback.handle(&input).await })
-                .catch_unwind()
-                .await
-                .map_err(panic_error)?;
+            let handled = payload::on_render_loop(
+                render_loop,
+                AssertUnwindSafe(async move { callback.handle(&input).await }).catch_unwind(),
+            )
+            .await
+            .map_err(panic_error)?;
             let verdict = handled.map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
             Ok(Pythonized(verdict))
         })
@@ -116,6 +124,10 @@ impl NativeCallback {
         let mut values = FieldValues::new(subscription.reads);
         for (name, value) in fields {
             let field: Field = named(&name.extract::<String>()?)?;
+            if field.by_reference() {
+                values.set_payload(payload::stash(value.unbind()));
+                continue;
+            }
             values.insert(field, json_from_py(&value)?);
         }
         Ok(HookInput {
