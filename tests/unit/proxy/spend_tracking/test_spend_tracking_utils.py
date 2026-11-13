@@ -1618,7 +1618,9 @@ def test_get_response_for_spend_logs_payload_strips_null_bytes(mock_should_store
 _GITHUB_TOKEN: Final = "ghp_" + "a1B2c3D4e5" * 3 + "F6g7H8"
 
 
-@pytest.mark.parametrize("prefix,serialized", (("\u2022", True), ("\u00e9", True), ("\U0001f600", True), ("\u2022", False)))
+@pytest.mark.parametrize(
+    "prefix,serialized", (("\u2022", True), ("\u00e9", True), ("\U0001f600", True), ("\u2022", False))
+)
 def test_payload_masks_tokens_after_json_unicode_escapes(
     monkeypatch: pytest.MonkeyPatch, prefix: str, serialized: bool
 ) -> None:
@@ -1693,7 +1695,10 @@ async def test_token_redaction_thread_and_inline_payloads_match(
     monkeypatch.setattr(
         proxy_server,
         "general_settings",
-        {"store_prompts_in_spend_logs": True, **({"redact_tokens_in_spend_logs": redact} if redact is not None else {})},
+        {
+            "store_prompts_in_spend_logs": True,
+            **({"redact_tokens_in_spend_logs": redact} if redact is not None else {}),
+        },
     )
     loop_thread: Final = threading.get_ident()
     monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
@@ -1763,9 +1768,10 @@ def test_stored_request_masks_a_token_returned_in_an_anthropic_tool_result(
 
     assert secret not in stored
     assert secret[:12] not in stored
-    assert "export TOKEN=REDACTED_BY_LITELM" in json.loads(json.loads(stored)["messages"][0]["content"][0]["content"])[
-        "stdout"
-    ]
+    assert (
+        "export TOKEN=REDACTED_BY_LITELM"
+        in json.loads(json.loads(stored)["messages"][0]["content"][0]["content"])["stdout"]
+    )
 
 
 def test_stored_response_masks_a_token_in_a_tool_call_argument(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1780,7 +1786,12 @@ def test_stored_response_masks_a_token_in_a_tool_call_argument(monkeypatch: pyte
             "response": {
                 "content": [
                     {"type": "text", "text": "Cloning now"},
-                    {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {"cmd": f"git clone https://{_GITHUB_TOKEN}@github.com/o/r"}},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "bash",
+                        "input": {"cmd": f"git clone https://{_GITHUB_TOKEN}@github.com/o/r"},
+                    },
                 ]
             }
         },
@@ -1798,7 +1809,9 @@ def test_stored_request_masks_a_token_kept_in_the_head_of_a_truncated_string(mon
     monkeypatch.setattr(proxy_server, "general_settings", {})
     long_text: Final = f"{_GITHUB_TOKEN} " + "x" * 10_000
 
-    stored: Final = _sanitize_request_body_for_spend_logs_payload({"text": long_text}, max_string_length_prompt_in_db=200)
+    stored: Final = _sanitize_request_body_for_spend_logs_payload(
+        {"text": long_text}, max_string_length_prompt_in_db=200
+    )
 
     assert stored["text"].startswith("REDACTED_BY_LITELM x")
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored["text"]
@@ -4822,9 +4835,7 @@ def test_get_logging_payload_uses_recovered_combined_usage_on_failure():
     assert payload["total_tokens"] == 31
 
 
-def _fallback_after_a_failed_follow_up(
-    cache_hit: bool, request_params: Mapping[str, object] = MappingProxyType({})
-):
+def _fallback_after_a_failed_follow_up(cache_hit: bool, request_params: Mapping[str, object] = MappingProxyType({})):
     from litellm.litellm_core_utils.hidden_params import set_hidden_param
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.utils import ModelResponse, Usage
@@ -5545,7 +5556,9 @@ def test_get_spend_logs_id_prefers_the_response_id_for_batch_and_file_calls(call
     ],
     ids=["charged", "free", "unpriced", "non_finite"],
 )
-def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(status_call_type, response_cost, status_id):
+def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(
+    status_call_type, response_cost, status_id
+):
     """A custom provider charges the video on the poll that sees it completed, so that poll needs
     a row apart from the create row, which answers with the same video id and would drop it on the
     skip_duplicates insert. A poll that charges nothing keeps the bare id, so it still lands on the
@@ -5566,7 +5579,10 @@ def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(st
             start_time=datetime.datetime.now(timezone.utc),
             end_time=datetime.datetime.now(timezone.utc),
         )
-        for call_type, call_id, cost in (("avideo_generation", "call-1", 0.42), (status_call_type, "call-2", response_cost))
+        for call_type, call_id, cost in (
+            ("avideo_generation", "call-1", 0.42),
+            (status_call_type, "call-2", response_cost),
+        )
     )
 
     assert create["request_id"] == "video_abc"
@@ -7568,6 +7584,7 @@ def test_spend_logs_payload(model_id: str | None):
     expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {
         "is_silent_experiment",
         "upstream_provider",
+        "user_api_key_asserted_customer",
     }
 
     assert "metadata" in payload
@@ -8672,3 +8689,31 @@ def test_spend_log_metadata_retention_drops_accounting_inputs_it_was_not_told_to
     parsed: Final = json.loads(str(stored["metadata"]))
     assert "user_api_key_alias" not in parsed
     assert parsed == {"usage_object": metadata["usage_object"], "status": metadata["status"]}
+
+
+@pytest.mark.parametrize("asserted", (False, True))
+def test_spend_log_keeps_asserted_customer_without_claiming_resolved_customer_ids(asserted: bool) -> None:
+    assertion: Final = {
+        "customer_org_alias": "customer-a",
+        "customer_member_id": "member-a",
+        "key_customer_org_id": "org-a",
+    }
+    start: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(
+        kwargs={
+            "call_type": "acompletion",
+            "litellm_call_id": "asserted-customer-call",
+            "litellm_params": {
+                "metadata": {"user_api_key_asserted_customer": assertion} if asserted else {},
+            },
+        },
+        response_obj={"id": "asserted-customer-response"},
+        start_time=start,
+        end_time=start,
+    )
+    metadata: Final = json.loads(payload["metadata"])
+    assert metadata.get("user_api_key_asserted_customer") == (assertion if asserted else None)
+    assert ("user_api_key_asserted_customer" in metadata) is asserted
+    assert payload.get("customer_org_id") is None
+    assert payload.get("customer_team_id") is None
+    assert payload.get("customer_member_id") is None

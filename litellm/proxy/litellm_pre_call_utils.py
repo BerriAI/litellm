@@ -96,6 +96,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.common_utils.customer_usage import (
     CUSTOMER_USAGE_METADATA_KEY,
+    CustomerUsageAttribution,
     CustomerUsageDatabase,
     CustomerUsageFailure,
     customer_usage_fields,
@@ -646,6 +647,35 @@ def _serves_through_db_outage() -> bool:
     from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
     return PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+
+
+async def _resolve_customer_usage_for_request(
+    *,
+    metadata: Mapping[str, object],
+    key_metadata: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    database: CustomerUsageDatabase | None,
+    ledger_enabled: bool,
+) -> CustomerUsageAttribution | CustomerUsageFailure | None:
+    from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+
+    try:
+        return await resolve_customer_usage(
+            metadata=metadata,
+            key_metadata=key_metadata,
+            administrator=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            database=database,
+            ledger_enabled=ledger_enabled,
+        )
+    except Exception as error:
+        if (
+            user_api_key_dict.customer_identity_assertion is not None
+            and user_api_key_dict.via_virtual_key
+            and _serves_through_db_outage()
+            and PrismaDBExceptionHandler.is_database_connection_error(error, authenticated_customer_hierarchy=True)
+        ):
+            return None
+        raise
 
 
 def _tag_budgets_unavailable(message: str) -> ProxyException:
@@ -3011,10 +3041,10 @@ async def add_litellm_data_to_request(
 
     _customer_metadata: Final = customer_usage_fields(_REQUEST_FIELDS.validate_python(data)[_metadata_variable_name])
     _customer_key_metadata: Final = customer_usage_key_fields(user_api_key_dict)
-    _customer_usage: Final = await resolve_customer_usage(
+    _customer_usage: Final = await _resolve_customer_usage_for_request(
         metadata=_customer_metadata,
         key_metadata=_customer_key_metadata,
-        administrator=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+        user_api_key_dict=user_api_key_dict,
         database=require_attributes(
             prisma_client.db,
             CustomerUsageDatabase,

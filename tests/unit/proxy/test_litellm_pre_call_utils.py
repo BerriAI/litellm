@@ -13,6 +13,7 @@ import pytest
 from botocore.credentials import Credentials
 from fastapi import Request
 from opentelemetry.trace import INVALID_SPAN, NonRecordingSpan, SpanContext
+from prisma.engine import utils as prisma_engine_utils
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
@@ -67,6 +68,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
+from litellm.types.proxy.auth.customer_hierarchy import CustomerIdentityAssertion
 from litellm.types.utils import CredentialItem
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -11801,8 +11803,11 @@ def test_pre_call_served_model_applies_aliases_in_request_preparation_order(
 def test_request_served_model_ignores_a_malformed_alias_like_request_preparation_does(
     token_fields: dict[str, object], expected: str
 ) -> None:
-    from litellm.proxy.litellm_pre_call_utils import _update_model_if_key_alias_exists, _update_model_if_team_alias_exists
-    from litellm.proxy.litellm_pre_call_utils import request_served_model
+    from litellm.proxy.litellm_pre_call_utils import (
+        _update_model_if_key_alias_exists,
+        _update_model_if_team_alias_exists,
+        request_served_model,
+    )
 
     valid_token: Final = UserAPIKeyAuth(**token_fields)
     prepared: Final[dict[str, object]] = {"model": "requested"}  # mutable-ok: the rewrite functions edit the body
@@ -11822,3 +11827,71 @@ def test_stale_team_alias_bypass_flag_is_read_once_per_process(monkeypatch: pyte
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
 
     assert (first, pre_call_utils._stale_team_alias_bypass_enabled()) == (True, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/responses", "/v1/chat/completions", "/v1/messages"))
+@pytest.mark.parametrize(
+    ("allow_outage", "verified", "asserted", "code"),
+    (
+        (True, True, True, "P1001"),
+        (True, True, True, "P1017"),
+        (False, True, True, "P1001"),
+        (True, False, True, "P1001"),
+        (True, True, False, "P1001"),
+        (True, True, True, "P2002"),
+    ),
+)
+async def test_customer_outage_admitted_by_auth_also_passes_request_enrichment(
+    monkeypatch: pytest.MonkeyPatch, path: str, allow_outage: bool, verified: bool, asserted: bool, code: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request, get_metadata_variable_name
+
+    with pytest.raises(AttributeError) as decoder_error:
+        prisma_engine_utils.handle_response_errors(
+            None,
+            [{"user_facing_error": {"error_code": code, "message": "database unavailable", "meta": None}}],
+        )
+    table: Final = SimpleNamespace(find_unique=AsyncMock(side_effect=decoder_error.value))
+    database: Final = SimpleNamespace(
+        litellm_customerorganizationtable=table,
+        litellm_customerteamtable=table,
+        litellm_customermembertable=table,
+    )
+    settings: Final = {"allow_requests_on_db_unavailable": allow_outage}
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database))
+    monkeypatch.setattr(proxy_server, "general_settings", settings)
+    assertion: Final = CustomerIdentityAssertion(
+        customer_org_alias="customer-a", customer_member_id="member-1", key_customer_org_id="org-1"
+    )
+    auth: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"customer_org_id": "org-1"},
+        customer_identity_assertion=assertion if asserted else None,
+    )
+    auth.via_virtual_key = verified
+    request: Final = Request({"type": "http", "path": path, "method": "POST", "headers": (), "query_string": b""})
+    data: Final = {"model": "usage-model"}
+    if not (allow_outage and verified and asserted and code in ("P1001", "P1017")):
+        with pytest.raises(AttributeError) as rejected:
+            await add_litellm_data_to_request(
+                data=data,
+                request=request,
+                user_api_key_dict=auth,
+                proxy_config=proxy_server.ProxyConfig(),
+                general_settings=settings,
+            )
+        assert rejected.value is decoder_error.value
+        return
+    enriched: Final = await add_litellm_data_to_request(
+        data=data,
+        request=request,
+        user_api_key_dict=auth,
+        proxy_config=proxy_server.ProxyConfig(),
+        general_settings=settings,
+    )
+    metadata: Final = enriched[get_metadata_variable_name(request)]
+    assert metadata["user_api_key_asserted_customer"] == assertion.metadata()
+    assert metadata["user_api_key_customer_org_id"] is None
+    assert metadata["user_api_key_customer_member_id"] is None

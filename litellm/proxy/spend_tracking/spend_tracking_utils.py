@@ -343,7 +343,7 @@ def _get_spend_logs_metadata(
         **(SilentExperimentFlag(is_silent_experiment=True) if is_silent_experiment else SilentExperimentFlag()),
         billed_retry_attempt=billed_retry_attempt,
         user_api_key_user_email=_stored_user_email(metadata),
-        **_asserted_customer_metadata(metadata),
+        **_asserted_customer_metadata(_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata) or {}),
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
