@@ -22,6 +22,7 @@ import { RotateCcw } from "lucide-react";
 import { z } from "zod";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useDisableLiteAdmin } from "@/app/(dashboard)/hooks/useDisableLiteAdmin";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useProxySettingsQuery } from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import { ChatComposer } from "@/app/(dashboard)/playground/components/chat_ui/ChatComposer";
 import { EndpointType, isModeCompatibleWithEndpoint } from "@/components/chat_ui/mode_endpoint_mapping";
@@ -56,7 +57,9 @@ function useLiteAdminSession() {
   const auth = useAuthorized();
   const [disabled] = useDisableLiteAdmin(auth.userId);
   const sessionReady = !auth.isLoading && auth.isAuthorized;
+  const { data: uiSettings } = useUISettings({ staleTime: 0, refetchInterval: 30_000, enabled: sessionReady });
   const admin = auth.premiumUser === true && !auth.isViewOnly && isProxyAdminRole(auth.userRole);
+  if (!uiSettings || uiSettings.values?.disable_aria === true) return null;
   if (!sessionReady || (admin && disabled)) return null;
   if (!auth.token || !auth.accessToken || !auth.userId) return null;
   const access: LiteAdminSession["access"] = admin

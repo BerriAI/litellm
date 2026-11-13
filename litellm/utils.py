@@ -10243,7 +10243,7 @@ class ProviderConfigManager:
         if provider == LlmProviders.TYPESAFE:
             return litellm.TypeSafeDecisionsConfig()
         if provider == LlmProviders.NACE:
-            return litellm.NaceDecisionsConfig()
+            return litellm.NaceDecisionsConfig(model=model)
         if provider == LlmProviders.OPENROUTER:
             return litellm.OpenRouterDecisionsConfig()
         if provider == LlmProviders.FIREWORKS_AI:

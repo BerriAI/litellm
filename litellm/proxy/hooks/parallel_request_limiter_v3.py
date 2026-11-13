@@ -581,6 +581,10 @@ class BorrowingTeamModelHold:
     descriptor: RateLimitDescriptor | None
     reserved_tokens: int = 0
     window: ReservationWindowIdentity | None = None
+    cap: RateLimitDescriptor | None = None
+    cap_reserved_tokens: int = 0
+    cap_window: ReservationWindowIdentity | None = None
+    share: RateLimitDescriptor | None = None
 
 
 @dataclass(slots=True)
@@ -631,6 +635,10 @@ class RequestRateLimiterStash:
     borrowing_team_model_limit: RateLimitDescriptor | None = None
     borrowing_team_model_reserved_tokens: int = 0
     borrowing_team_model_reserved_window: ReservationWindowIdentity | None = None
+    borrowing_team_model_share: RateLimitDescriptor | None = None
+    borrowing_team_model_cap: RateLimitDescriptor | None = None
+    borrowing_team_model_cap_reserved_tokens: int = 0
+    borrowing_team_model_cap_reserved_window: ReservationWindowIdentity | None = None
     borrowing_team_model_fallback_limits: Mapping[str, BorrowingTeamModelHold] = field(
         default_factory=lambda: MappingProxyType({})
     )
@@ -2685,6 +2693,50 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             },
         )
 
+    def _customer_hierarchy_rate_limit_descriptors(
+        self, user_api_key_dict: UserAPIKeyAuth
+    ) -> tuple[RateLimitDescriptor, ...]:
+        """One descriptor per customer org, team and member level that carries a TPM or RPM limit."""
+        scopes: Final = user_api_key_dict.customer_hierarchy.scopes if user_api_key_dict.customer_hierarchy else ()
+        return tuple(
+            RateLimitDescriptor(
+                key=scope.key,
+                value=scope.entity_id,
+                rate_limit={
+                    "requests_per_unit": scope.rpm_limit,
+                    "tokens_per_unit": scope.tpm_limit,
+                    "window_size": self.window_size,
+                },
+            )
+            for scope in scopes
+            if scope.rpm_limit is not None or scope.tpm_limit is not None
+        )
+
+    def _customer_hierarchy_model_rate_limit_descriptors(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+    ) -> tuple[RateLimitDescriptor, ...]:
+        """The ``model_per_customer_*`` descriptors for every level whose budget limits this model group."""
+        model: Final = self._rate_limited_model(requested_model)
+        if model is None or user_api_key_dict.customer_hierarchy is None:
+            return ()
+        limits: Final = tuple(
+            (scope, model.limit_in(scope.model_tpm_limit), model.limit_in(scope.model_rpm_limit))
+            for scope in user_api_key_dict.customer_hierarchy.scopes
+        )
+        return tuple(
+            RateLimitDescriptor(
+                key=f"model_per_{scope.key}",
+                value=f"{scope.entity_id}:{model.group}",
+                rate_limit={
+                    "requests_per_unit": rpm_limit,
+                    "tokens_per_unit": tpm_limit,
+                    "window_size": self.window_size,
+                },
+            )
+            for scope, tpm_limit, rpm_limit in limits
+            if tpm_limit is not None or rpm_limit is not None
+        )
+
     def _end_user_model_rate_limit_descriptor(
         self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
     ) -> RateLimitDescriptor | None:
@@ -3193,6 +3245,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
+        descriptors.extend(self._customer_hierarchy_rate_limit_descriptors(user_api_key_dict))
+
         # Model rate limits
         requested_model: Final = data.get("model", None)
         model_candidates: Final = expand_model_latest_alias(requested_model if isinstance(requested_model, str) else "")
@@ -3204,6 +3258,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             if (end_user_model := self._end_user_model_rate_limit_descriptor(user_api_key_dict, candidate)) is not None:
                 descriptors.append(end_user_model)
+            descriptors.extend(self._customer_hierarchy_model_rate_limit_descriptors(user_api_key_dict, candidate))
 
         # Per-request-tag rate limits scoped to this key
         self._add_tag_per_key_rate_limit_descriptor(
@@ -4784,12 +4839,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             targets.append(("end_user", user_api_key_end_user_id))
         if user_api_key_organization_id:
             targets.append(("organization", user_api_key_organization_id))
+        customer_scope_owners: Final = (
+            ("customer_org", standard_logging_metadata.get("user_api_key_customer_org_id")),
+            ("customer_team", standard_logging_metadata.get("user_api_key_customer_team_id")),
+            ("customer_member", standard_logging_metadata.get("user_api_key_customer_member_id")),
+        )
+        targets.extend((scope, owner) for scope, owner in customer_scope_owners if owner)
         model_scope_owners: Final = (
             ("model_per_key", user_api_key),
             ("model_per_team", user_api_key_team_id),
             ("model_per_end_user", f"{user_api_key_end_user_id}" if user_api_key_end_user_id else None),
             ("model_per_organization", user_api_key_organization_id),
             ("model_per_project", user_api_key_project_id),
+            *((f"model_per_{scope}", owner) for scope, owner in customer_scope_owners),
         )
         if model_group:
             for group in dict.fromkeys(model_groups or (model_group,)):

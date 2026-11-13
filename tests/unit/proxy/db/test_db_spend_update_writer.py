@@ -21,11 +21,11 @@ from redis.exceptions import DataError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-
 from litellm._service_logger import ServiceTypes
 from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import (
+    _SPEND_TABLE_COMMIT_ORDER,
     _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
     DBSpendUpdateWriter,
@@ -43,7 +43,6 @@ from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
-
 
 
 @pytest.fixture(autouse=True)
@@ -1073,6 +1072,88 @@ async def test_commit_spend_updates_to_db_increments_agent_spend():
     call_kwargs = mock_batcher.litellm_agentstable.update_many.call_args[1]
     assert call_kwargs["where"] == {"agent_id": agent_id}
     assert call_kwargs["data"] == {"spend": {"increment": response_cost}}
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_increments_every_customer_hierarchy_table():
+    """Spend a request ran under a customer member lands on the member, its team and its organization rows."""
+    db_writer = DBSpendUpdateWriter()
+    mock_batcher = MagicMock()
+    mock_transaction = AsyncMock()
+    mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+    mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
+    committed: list[str] = []
+
+    with patch("litellm.proxy.utils.raise_failed_update_spend_exception"):
+        await db_writer._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+            db_spend_update_transactions={
+                **{name: {} for name in _SPEND_TABLE_COMMIT_ORDER},
+                "customer_org_list_transactions": {"org-1": 0.5},
+                "customer_team_list_transactions": {"team-1": 0.5},
+                "customer_member_list_transactions": {"member-1": 0.5},
+            },
+            on_table_committed=committed.append,
+        )
+
+    for table, column, entity_id in (
+        ("litellm_customerorganizationtable", "customer_org_id", "org-1"),
+        ("litellm_customerteamtable", "customer_team_id", "team-1"),
+        ("litellm_customermembertable", "customer_member_id", "member-1"),
+    ):
+        update_many = getattr(mock_batcher, table).update_many
+        update_many.assert_called_once_with(where={column: entity_id}, data={"spend": {"increment": 0.5}})
+    assert committed[-3:] == [
+        "customer_org_list_transactions",
+        "customer_team_list_transactions",
+        "customer_member_list_transactions",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_update_customer_hierarchy_db_enqueues_one_increment_per_level():
+    from litellm.types.proxy.auth.customer_hierarchy import customer_hierarchy_ids_from_request
+
+    db_writer = DBSpendUpdateWriter()
+    ids = customer_hierarchy_ids_from_request(
+        {
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_customer_member_id": "member-1",
+                    "user_api_key_customer_team_id": "team-1",
+                    "user_api_key_customer_org_id": "org-1",
+                }
+            }
+        }
+    )
+    assert ids is not None
+    assert (
+        customer_hierarchy_ids_from_request({"litellm_params": {"metadata": {"user_api_key_customer_member_id": "m"}}})
+        is None
+    )
+
+    await db_writer._update_customer_hierarchy_db(response_cost=0.25, customer_hierarchy=ids, prisma_client=MagicMock())
+    queued = await db_writer.spend_update_queue.flush_all_updates_from_in_memory_queue()
+    assert {(item["entity_type"], item["entity_id"], item["response_cost"]) for item in queued} == {
+        (Litellm_EntityType.CUSTOMER_ORG, "org-1", 0.25),
+        (Litellm_EntityType.CUSTOMER_TEAM, "team-1", 0.25),
+        (Litellm_EntityType.CUSTOMER_MEMBER, "member-1", 0.25),
+    }
+    aggregated = db_writer.spend_update_queue.get_aggregated_db_spend_update_transactions(queued)
+    assert aggregated["customer_member_list_transactions"] == {"member-1": 0.25}
+    assert aggregated["customer_team_list_transactions"] == {"team-1": 0.25}
+    assert aggregated["customer_org_list_transactions"] == {"org-1": 0.25}
 
 
 def _team_member_flush_fixtures() -> tuple[AsyncMock, MagicMock]:
@@ -2526,7 +2607,7 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
     # Return all-None tuple (no data to commit); the pipeline yields 6 slots
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, None)
+        return_value=(None, None, None, None, None, None, None, None)
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
 
@@ -2607,7 +2688,7 @@ async def test_commit_with_redis_requeues_all_on_db_failure():
 
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(db_spend, daily_user, None, None, None, None, None)
+        return_value=(db_spend, daily_user, None, None, None, None, None, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -2662,7 +2743,7 @@ async def test_commit_with_redis_only_requeues_failed_category():
 
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(db_spend, daily_user, None, None, None, None, None)
+        return_value=(db_spend, daily_user, None, None, None, None, None, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -2710,7 +2791,7 @@ async def test_commit_with_redis_no_requeue_on_success():
 
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(db_spend, None, None, None, None, None, None)
+        return_value=(db_spend, None, None, None, None, None, None, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -3343,7 +3424,7 @@ async def test_window_spend_queue_is_handed_to_the_redis_buffer():
     db_writer = DBSpendUpdateWriter()
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, None)
+        return_value=(None, None, None, None, None, None, None, None)
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
     db_writer.pod_lock_manager = AsyncMock()
@@ -3373,7 +3454,7 @@ async def test_window_spend_transactions_from_redis_are_committed_by_the_lock_wi
     )
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, window_transactions)
+        return_value=(None, None, None, None, None, None, window_transactions, None)
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
     db_writer.pod_lock_manager = AsyncMock()
@@ -3631,7 +3712,7 @@ async def test_failed_window_spend_commit_from_redis_is_restored_to_redis():
     )
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, window_transactions)
+        return_value=(None, None, None, None, None, None, window_transactions, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -3666,7 +3747,7 @@ async def test_failed_per_entity_increment_from_redis_restores_only_what_may_sti
     )
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(db_spend_transactions, None, None, None, None, None, None)
+        return_value=(db_spend_transactions, None, None, None, None, None, None, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -3726,8 +3807,7 @@ async def test_failed_per_entity_increment_from_redis_restores_only_what_may_sti
 
     restores = mock_redis_update_buffer.restore_transactions_to_redis.await_args_list
     assert [
-        {name: rows for name, rows in call.kwargs["db_spend_update_transactions"].items() if rows}
-        for call in restores
+        {name: rows for name, rows in call.kwargs["db_spend_update_transactions"].items() if rows} for call in restores
     ] == ([{"key_list_transactions": {"key-1": 1.5}}] if safe_to_resend else [])
     mock_batcher.litellm_teamtable.update_many.assert_called_once()
     mock_batcher.litellm_usertable.update_many.assert_called_once()
@@ -3750,7 +3830,7 @@ async def test_failed_window_spend_commit_from_redis_is_restored_only_when_safe_
     )
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, window_transactions)
+        return_value=(None, None, None, None, None, None, window_transactions, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -3914,6 +3994,9 @@ async def test_commit_spend_updates_to_db_reports_each_completed_table():
         call("tag_list_transactions"),
         call("model_access_group_list_transactions"),
         call("agent_list_transactions"),
+        call("customer_org_list_transactions"),
+        call("customer_team_list_transactions"),
+        call("customer_member_list_transactions"),
     ]
 
 
@@ -5859,7 +5942,9 @@ async def test_completed_spend_survives_error_log_suppression(
 
 @pytest.mark.parametrize("ledger_enabled", [False, True])
 @pytest.mark.asyncio
-async def test_request_error_counts_survive_the_ledger_path_switch(monkeypatch: pytest.MonkeyPatch, ledger_enabled: bool):
+async def test_request_error_counts_survive_the_ledger_path_switch(
+    monkeypatch: pytest.MonkeyPatch, ledger_enabled: bool
+):
     from litellm.proxy import proxy_server
     from litellm.proxy.db import db_spend_update_writer as writer_module
     from litellm.proxy.db.request_error_tracking import RequestErrorAccumulator
@@ -5874,20 +5959,40 @@ async def test_request_error_counts_survive_the_ledger_path_switch(monkeypatch: 
     monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
     now = datetime(2026, 11, 2, tzinfo=timezone.utc)
     await DBSpendUpdateWriter().update_database(
-        token="key", user_id="user", team_id=None, org_id=None, end_user_id=None,
+        token="key",
+        user_id="user",
+        team_id=None,
+        org_id=None,
+        end_user_id=None,
         kwargs={
-            "model": "ledger-test", "call_type": "acompletion", "litellm_call_id": "failed-request",
-            "litellm_params": {"metadata": {
-                "user_api_key": "key", "user_api_key_user_id": "user", "status": "failure",
-                "error_information": {"error_code": "503"},
-            }},
+            "model": "ledger-test",
+            "call_type": "acompletion",
+            "litellm_call_id": "failed-request",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "key",
+                    "user_api_key_user_id": "user",
+                    "status": "failure",
+                    "error_information": {"error_code": "503"},
+                }
+            },
         },
-        completion_response=None, start_time=now, end_time=now, response_cost=0,
+        completion_response=None,
+        start_time=now,
+        end_time=now,
+        response_cost=0,
     )
     await drain_logging_tasks()
-    assert accumulator.drain() == {RequestErrorKey(
-        date="2026-11-02", api_key=prisma.spend_log_transactions[0]["api_key"], team_id="", user_id="user", model_group="ledger-test", status_code=503,
-    ): 1}
+    assert accumulator.drain() == {
+        RequestErrorKey(
+            date="2026-11-02",
+            api_key=prisma.spend_log_transactions[0]["api_key"],
+            team_id="",
+            user_id="user",
+            model_group="ledger-test",
+            status_code=503,
+        ): 1
+    }
 
 
 @pytest.mark.asyncio
@@ -6053,9 +6158,7 @@ async def test_a_billed_row_in_a_caller_session_adds_its_spend_to_that_sessions_
         pytest.param(_CALLER_SESSION, 0.0, id="free-row"),
     ],
 )
-async def test_a_row_without_a_caller_session_or_cost_adds_nothing(
-    litellm_params: Mapping[str, object], spend: float
-):
+async def test_a_row_without_a_caller_session_or_cost_adds_nothing(litellm_params: Mapping[str, object], spend: float):
     writer, totals = _session_writer()
 
     await _record_spend_row(writer, spend, litellm_params)

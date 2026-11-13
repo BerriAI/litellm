@@ -2525,7 +2525,7 @@ async def test_refresh_cached_team_broadcasts_team_and_alias_invalidations(
 async def test_refresh_cached_team_flushes_redis_set_before_broadcast(monkeypatch) -> None:
     from litellm.caching.redis_batch import request_redis_batch_scope
     from litellm.proxy.management_endpoints import team_endpoints
-    from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
+    from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
     from tests.unit.redis.stores.auth_cache_double import shared_cache
 
     natives: Final = FakeNatives()

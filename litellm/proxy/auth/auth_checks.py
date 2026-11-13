@@ -3248,7 +3248,7 @@ async def cache_team_object(
     if team_table.team_alias:
         alias_key: Final = f"team_alias:{team_table.team_alias}"
         try:
-            pipelined_delete: Final = await user_api_key_cache.async_delete_cache_pre_call(alias_key)
+            pipelined_delete: Final = user_api_key_cache.declare_delete(alias_key)
             if pipelined_delete is None:
                 await user_api_key_cache.async_delete_cache(key=alias_key)
             else:
@@ -5620,12 +5620,15 @@ async def can_key_call_resolved_model(
     valid_token: UserAPIKeyAuth,
     llm_router: RegistryReader | None,
 ) -> None:
+    from litellm.proxy.auth.customer_hierarchy_auth import check_customer_hierarchy_model_access
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
 
+    if valid_token.customer_hierarchy is not None:
+        check_customer_hierarchy_model_access(valid_token.customer_hierarchy, model, llm_router)
     skip_key_model_check: Final = valid_token.config or (
         isinstance(valid_token.models, list) and SpecialModelNames.all_team_models.value in valid_token.models
     )

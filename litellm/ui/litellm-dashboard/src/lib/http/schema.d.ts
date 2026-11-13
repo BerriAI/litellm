@@ -9608,6 +9608,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/customer_members/daily/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Customer Member Daily Activity
+         * @description Get paginated daily customer member activity with model, provider, key and member breakdowns. Filters accept comma-separated member IDs. Proxy admins only.
+         */
+        get: operations["customer_member_daily_activity_management_v1_customer_members_daily_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/customer_members/{customer_member_id}": {
         parameters: {
             query?: never;
@@ -9654,6 +9674,46 @@ export interface paths {
          * @description Create a customer organization with resolved budgets. Proxy admins only.
          */
         post: operations["create_customer_organization_management_v1_customer_organizations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_organizations/daily/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Customer Organization Daily Activity
+         * @description Get paginated daily customer organization activity with model, provider, key and organization breakdowns. Filters accept comma-separated organization IDs. Proxy admins only.
+         */
+        get: operations["customer_organization_daily_activity_management_v1_customer_organizations_daily_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_organizations/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Customer Organization Daily Activity Aggregated
+         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key filters apply before aggregation. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
+         */
+        get: operations["customer_organization_daily_activity_aggregated_management_v1_customer_organizations_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9750,6 +9810,26 @@ export interface paths {
          * @description Create a customer team with resolved budgets. Proxy admins only.
          */
         post: operations["create_customer_team_management_v1_customer_teams_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_teams/daily/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Customer Team Daily Activity
+         * @description Get paginated daily customer team activity with model, provider, key and team breakdowns. Filters accept comma-separated team IDs. Proxy admins only.
+         */
+        get: operations["customer_team_daily_activity_management_v1_customer_teams_daily_activity_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -29366,6 +29446,14 @@ export interface components {
             budget_duration?: string | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -29524,6 +29612,14 @@ export interface components {
             is_default: boolean;
             /** Max Budget */
             max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Name */
             name: string;
             /** Rpm Limit */
@@ -33048,6 +33144,20 @@ export interface components {
              */
             type: "custom";
         };
+        /**
+         * CustomerHierarchyAuth
+         * @description The levels a request is charged to. A request that named only an organization alias has no team or member.
+         */
+        CustomerHierarchyAuth: {
+            /** Customer Member Id */
+            customer_member_id?: string | null;
+            /** Customer Org Id */
+            customer_org_id: string;
+            /** Customer Team Id */
+            customer_team_id?: string | null;
+            /** Scopes */
+            scopes: components["schemas"]["CustomerScopeAuth"][];
+        };
         /** CustomerMember */
         CustomerMember: {
             /** Alias */
@@ -33057,10 +33167,10 @@ export interface components {
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
+            /** Budget Override Id */
+            budget_override_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
-            /** Budget Template Id */
-            budget_template_id?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -33118,6 +33228,40 @@ export interface components {
             spend: number;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * CustomerScopeAuth
+         * @description One level of the customer hierarchy a request runs under, with the limits its budget row grants.
+         */
+        CustomerScopeAuth: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Entity Id */
+            entity_id: string;
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "customer_org" | "customer_team" | "customer_member";
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * CyberArkConfig
@@ -40325,11 +40469,11 @@ export interface components {
         MemberCreate: {
             /** Alias */
             alias?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
-            /** Budget Template Id */
-            budget_template_id?: string | null;
             /** Customer Member Id */
             customer_member_id?: string | null;
             /** Parent Team Id */
@@ -40339,11 +40483,11 @@ export interface components {
         MemberPatch: {
             /** Alias */
             alias?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
-            /** Budget Template Id */
-            budget_template_id?: string | null;
         };
         /** MemoryCreateRequest */
         MemoryCreateRequest: {
@@ -42233,6 +42377,12 @@ export interface components {
              */
             default_budgets: components["schemas"]["OrganizationBudget"][];
             /**
+             * Member Count
+             * @description Current registered members across all customer teams
+             * @default 0
+             */
+            member_count: number;
+            /**
              * Spend
              * @default 0
              */
@@ -42269,6 +42419,14 @@ export interface components {
             is_default: boolean;
             /** Max Budget */
             max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Name */
             name: string;
             /** Rpm Limit */
@@ -49917,6 +50075,14 @@ export interface components {
             is_default?: boolean | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Name */
             name?: string | null;
             /** Rpm Limit */
@@ -52440,6 +52606,7 @@ export interface components {
             created_by?: string | null;
             /** Created By User */
             created_by_user?: unknown | null;
+            customer_hierarchy?: components["schemas"]["CustomerHierarchyAuth"] | null;
             /** End User Id */
             end_user_id?: string | null;
             /** End User Max Budget */
@@ -68072,6 +68239,44 @@ export interface operations {
             };
         };
     };
+    customer_member_daily_activity_management_v1_customer_members_daily_activity_get: {
+        parameters: {
+            query?: {
+                customer_member_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                page?: number;
+                page_size?: number;
+                exclude_customer_member_ids?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_customer_member_management_v1_customer_members__customer_member_id__get: {
         parameters: {
             query?: never;
@@ -68172,6 +68377,8 @@ export interface operations {
             query?: {
                 page?: number;
                 page_size?: number;
+                /** @description Case-insensitive substring of the customer ID or alias */
+                q?: string;
             };
             header?: never;
             path?: never;
@@ -68219,6 +68426,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    customer_organization_daily_activity_management_v1_customer_organizations_daily_activity_get: {
+        parameters: {
+            query?: {
+                customer_org_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                page?: number;
+                page_size?: number;
+                exclude_customer_org_ids?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    customer_organization_daily_activity_aggregated_management_v1_customer_organizations_daily_activity_aggregated_get: {
+        parameters: {
+            query: {
+                /** @description First UTC calendar day, YYYY-MM-DD, inclusive */
+                start_date: string;
+                /** @description Last UTC calendar day, YYYY-MM-DD, inclusive, at most 400 days after start */
+                end_date: string;
+                /** @description Comma-separated IDs for up to 100 visible customer organizations */
+                customer_org_ids: string;
+                model?: string | null;
+                api_key?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
                 };
             };
             /** @description Validation Error */
@@ -68481,6 +68764,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Team"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    customer_team_daily_activity_management_v1_customer_teams_daily_activity_get: {
+        parameters: {
+            query?: {
+                customer_team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                page?: number;
+                page_size?: number;
+                exclude_customer_team_ids?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
                 };
             };
             /** @description Validation Error */

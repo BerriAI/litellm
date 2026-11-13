@@ -25,7 +25,10 @@ describe("BudgetModal", () => {
     createMock.mockResolvedValue(undefined);
   });
 
-  it("submits the spend limit and reset period alongside the rate limits", async () => {
+  it.each([
+    ["per month", "30d"],
+    ["per year", "12mo"],
+  ])("submits the spend limit %s alongside the rate limits", async (label, duration) => {
     const user = userEvent.setup();
     renderModal();
 
@@ -33,7 +36,7 @@ describe("BudgetModal", () => {
     expect(resetPeriod()).toBeVisible();
     fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "budget-alpha" } });
     fireEvent.change(screen.getByLabelText(/^Spend limit/), { target: { value: "42.567" } });
-    await chooseSelectOption(user, resetPeriod(), "per month");
+    await chooseSelectOption(user, resetPeriod(), label);
     fireEvent.change(screen.getByLabelText("Tokens per minute"), { target: { value: "500" } });
     fireEvent.change(screen.getByLabelText("Requests per minute"), { target: { value: "7" } });
     fireEvent.change(screen.getByLabelText("Batch tokens per day"), { target: { value: "90000" } });
@@ -43,7 +46,7 @@ describe("BudgetModal", () => {
     const expected = {
       budget_id: "budget-alpha",
       max_budget: 42.57,
-      budget_duration: "30d",
+      budget_duration: duration,
       tpm_limit: 500,
       rpm_limit: 7,
       tpd_limit: 90000,
