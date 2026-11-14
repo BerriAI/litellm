@@ -66,6 +66,7 @@ from litellm.integrations.otel.plumbing.context import (
     resolve_request_span_context,
     resolve_service_span_context,
     set_request_baggage,
+    set_request_metadata,
     set_request_root_span,
 )
 from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
@@ -427,6 +428,14 @@ class OpenTelemetryV2(CustomLogger):
         self._close_llm_call(kwargs, start_time, end_time)
         self._record_failure_metrics(kwargs, start_time, end_time)
 
+    async def async_log_failed_attempt(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
+        self._close_llm_call(kwargs, start_time, end_time)
+
     def _seed_identity_baggage(self, identity: RequestIdentity, model: str | None, context: Context) -> Context:
         """Seed authenticated request-identity Baggage onto ``context`` so the Baggage
         processor stamps team/key/metadata onto the span. Identity is read from the
@@ -757,6 +766,7 @@ class OpenTelemetryV2(CustomLogger):
         """
         try:
             identity: Final = RequestIdentity.from_user_api_key_auth(user_api_key_dict, request_metadata)
+            set_request_metadata(identity.metadata)
             bag: Final = promoted_baggage(
                 identity,
                 model,
@@ -1043,10 +1053,12 @@ def emit_guardrail_span(entry: "StandardLoggingGuardrailInformation") -> None:
         pass
 
 
-def seed_request_identity(user_api_key_dict: object, model: str | None = None) -> None:
+def seed_request_identity(user_api_key_dict: object, model: str | None = None, request_data: object = None) -> None:
     logger: Final = _registered_v2_logger()
     if logger is not None:
-        logger.seed_request_identity(user_api_key_dict, model=model)
+        logger.seed_request_identity(
+            user_api_key_dict, model=model, request_metadata=metadata_from_request_data(request_data)
+        )
 
 
 def fan_out_provider() -> ApiTracerProvider:

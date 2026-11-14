@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,8 +16,10 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
 )
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.vector_stores.search_query import with_caller_query_params
 from litellm.proxy.vector_store_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
+    build_request_data_from_managed_vector_store,
     index_create,
     index_list,
 )
@@ -3103,6 +3106,83 @@ def test_vector_store_search_rejects_caller_opensearch_index_name_only_on_opense
     assert fake_search.await_count == expected_searches
 
 
+def test_vector_store_search_accepts_a_query_image_without_a_query():
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    query_image: Final = {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}
+    store: Final = {
+        "vector_store_id": "kb",
+        "custom_llm_provider": "bedrock",
+        "litellm_params": {"vector_store_id": "kb", "custom_llm_provider": "bedrock"},
+    }
+    registry: Final = MagicMock()
+    registry.get_litellm_managed_vector_store_from_registry.return_value = store
+    fake_search: Final = AsyncMock(
+        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="", data=[])
+    )
+    mock_auth: Final = UserAPIKeyAuth(user_id="test_internal_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    original_overrides: Final = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+    try:
+        with (
+            patch("litellm.vector_stores.main.asearch", new=fake_search),  # test-quality-ok: the search boundary under test
+            patch.object(litellm, "vector_store_registry", registry),  # test-quality-ok: seeds the store under test
+            patch(  # test-quality-ok: store access is not under test, so the request reaches the search boundary
+                "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+                new=AsyncMock(return_value=True),
+            ),
+        ):
+            router: Final = litellm.Router(model_list=[])
+            with patch("litellm.proxy.proxy_server.llm_router", router):  # test-quality-ok: router built over the fake search
+                response: Final = TestClient(app).post("/v1/vector_stores/kb/search", json={"query_image": query_image})
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200, response.json()
+    assert fake_search.await_args.kwargs["query_image"] == query_image
+
+
+@pytest.mark.parametrize("retrieval_query_param", ["retrievalQuery", "retrieval_query"])
+def test_a_stored_raw_retrieval_query_never_reaches_the_search_request(retrieval_query_param: str):
+    request_data: Final = build_request_data_from_managed_vector_store(
+        {
+            "vector_store_id": "kb",
+            "custom_llm_provider": "bedrock",
+            "litellm_params": {"aws_region_name": "us-west-2", retrieval_query_param: {"text": "from the store"}},
+        }
+    )
+
+    assert request_data == {"custom_llm_provider": "bedrock", "aws_region_name": "us-west-2"}
+
+
+@pytest.mark.parametrize("retrieval_query_param", ["retrievalQuery", "retrieval_query"])
+def test_a_raw_retrieval_query_in_a_stores_extra_body_never_reaches_the_search_request(retrieval_query_param: str):
+    request_data: Final = build_request_data_from_managed_vector_store(
+        {
+            "vector_store_id": "kb",
+            "custom_llm_provider": "bedrock",
+            "litellm_params": {"extra_body": {retrieval_query_param: {"text": "from the store"}, "kept": "value"}},
+        }
+    )
+
+    assert request_data == {"custom_llm_provider": "bedrock", "extra_body": {"kept": "value"}}
+
+
+@pytest.mark.parametrize("caller_param", ["query_image", "retrievalQuery", "retrieval_query"])
+def test_a_callers_query_survives_a_stores_own_extra_body(caller_param: str):
+    caller_value: Final = {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}
+    request_data: Final = with_caller_query_params(
+        {"custom_llm_provider": "bedrock", "extra_body": {"retrievalConfiguration": "from the store"}},
+        {caller_param: caller_value, "retrievalConfiguration": "from the caller", "other": "from the caller"},
+    )
+
+    assert request_data["extra_body"] == {"retrievalConfiguration": "from the store", caller_param: caller_value}
+
+
 class TestConfigOwnedVectorStores:
     """Stores declared under ``vector_store_registry`` in config.yaml are owned by the config file"""
 
@@ -3450,3 +3530,131 @@ def test_proxy_vector_store_writes_send_only_the_callers_metadata_when_the_raw_b
     assert response.status_code == 200, response.text
     assert len(sent_bodies) == 1
     assert sent_bodies[0].get("metadata") == CALLERS_METADATA
+
+
+class _RecordingManagedVectorStores:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def acreate_vector_store(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(kwargs)
+        return {"id": "vs_managed", "object": "vector_store"}
+
+
+def _vector_store_create_request(body: dict[str, object]) -> Request:
+    encoded = json.dumps(body).encode()
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": encoded, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/vector_stores",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+
+def _install_managed_vector_stores(
+    monkeypatch: pytest.MonkeyPatch, managed: _RecordingManagedVectorStores
+) -> MagicMock:
+    from litellm.proxy import proxy_server
+
+    llm_router = MagicMock()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.get_proxy_hook.side_effect = lambda name: managed if name == "managed_vector_stores" else None
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging_obj)
+    monkeypatch.setattr(proxy_server, "llm_router", llm_router)
+    return llm_router
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target_model_names", "expected_targets"),
+    [("embed-a, embed-b", ["embed-a", "embed-b"]), (["embed-a"], ["embed-a"])],
+    ids=["comma_separated_string", "list"],
+)
+async def test_vector_store_create_with_target_model_names_creates_a_managed_store(
+    monkeypatch: pytest.MonkeyPatch, target_model_names: object, expected_targets: list[str]
+) -> None:
+    from fastapi import Response
+
+    from litellm.proxy.vector_store_endpoints.endpoints import vector_store_create
+
+    managed = _RecordingManagedVectorStores()
+    llm_router = _install_managed_vector_stores(monkeypatch, managed)
+
+    response = await vector_store_create(
+        request=_vector_store_create_request({"name": "docs", "target_model_names": target_model_names}),
+        fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+    )
+
+    assert response == {"id": "vs_managed", "object": "vector_store"}
+    (call,) = managed.calls
+    assert call["target_model_names_list"] == expected_targets
+    assert call["llm_router"] is llm_router
+    assert call["create_request"]["name"] == "docs"
+    assert "target_model_names" not in call["create_request"]
+
+
+@pytest.mark.asyncio
+async def test_vector_store_create_rejects_target_model_names_that_are_not_a_string_or_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import Response
+
+    from litellm.proxy.vector_store_endpoints.endpoints import vector_store_create
+
+    managed = _RecordingManagedVectorStores()
+    _install_managed_vector_stores(monkeypatch, managed)
+
+    with pytest.raises(HTTPException) as raised:
+        await vector_store_create(
+            request=_vector_store_create_request({"name": "docs", "target_model_names": 5}),
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert raised.value.status_code == 400
+    assert managed.calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_vector_store_persists_submitted_metadata_as_json() -> None:
+    from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
+    from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+    stored_row = MagicMock()
+    stored_row.model_dump = MagicMock(return_value={"vector_store_id": "vs_owned", "team_id": "team-A"})
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=stored_row)
+    mock_prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(return_value=stored_row)
+
+    with (
+        patch(
+            "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.vector_store_registry", None),
+    ):
+        await update_vector_store(
+            data=VectorStoreUpdateRequest(
+                vector_store_id="vs_owned",
+                vector_store_metadata={"owner": "search-team", "tier": 2},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="owner", team_id="team-A"),
+        )
+
+    written = mock_prisma_client.db.litellm_managedvectorstorestable.update.await_args.kwargs["data"]
+    assert json.loads(written["vector_store_metadata"]) == {"owner": "search-team", "tier": 2}

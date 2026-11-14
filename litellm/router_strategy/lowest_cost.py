@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.deployment_pricing import (
     str_keyed,
 )
 from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
+from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
 
 
 def _deployment_cost_map_rates(deployment: object) -> tuple[float | None, float | None]:
@@ -51,7 +52,7 @@ class LowestCostLoggingHandler(CustomLogger):
     def __init__(self, router_cache: DualCache, routing_args: dict = {}):
         self.router_cache = router_cache
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
@@ -127,7 +128,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 "litellm.router_strategy.lowest_cost.py::log_success_event(): Exception occured - %s", e
             )
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
@@ -203,7 +204,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def async_get_available_deployments(
         self,
         model_group: str,

@@ -279,6 +279,7 @@ class RustHealthCallbacks:
             is_caller_scoped_auth_failure,
             is_caller_timeout_408,
             is_failure_outside_selected_deployment,
+            is_message_thread_not_found,
             is_response_lookup_not_found,
             is_video_lookup_not_found,
         )
@@ -290,6 +291,7 @@ class RustHealthCallbacks:
             or (isinstance(exception, Exception) and is_background_response_poll_not_found(exception, litellm_params))
             or is_video_lookup_not_found(exception, logged)
             or is_response_lookup_not_found(exception, logged)
+            or is_message_thread_not_found(exception)
             or is_caller_timeout_408(logged, status)  # pyright: ignore[reportArgumentType]  # the status as raised
             or is_caller_scoped_auth_failure(self._deployment_of(deployment_id), status)  # pyright: ignore[reportArgumentType]  # see above
         )
@@ -297,6 +299,33 @@ class RustHealthCallbacks:
             "outside_deployment": outside,
             "caller_scoped": _is_per_user_provider_request(logged) or self.per_user_deployment(deployment_id),
         }
+
+    def blocked_failure_exempt(self, exception: BaseException, kwargs: Mapping[str, object], generic: bool) -> bool:
+        """The exits of ``_trigger_cooldown_for_failed_deployment`` for a failure the request's shared
+        logging object does not log: the selection tag is not one of them; a stream stall and a
+        generic call's 404 are."""
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.router_utils.cooldown_handlers import (
+            cast_exception_status_to_int,
+            is_advisor_orchestration_failure,
+            is_caller_timeout_408,
+            is_stream_stall,
+        )
+        from litellm.router_utils.fallback_event_handlers import (
+            _REQUEST_SCOPED_STATUS_CODES,  # pyright: ignore[reportPrivateUsage]  # the fallback path's own rule
+        )
+
+        exception_status: Final[object] = getattr(exception, "status_code", "")
+        logging_obj: Final = kwargs.get("litellm_logging_obj")
+        details: Final[Mapping[str, object]] = (
+            logging_obj.model_call_details if isinstance(logging_obj, Logging) else {}
+        )
+        return (
+            (isinstance(exception, Exception) and is_advisor_orchestration_failure(exception))
+            or is_stream_stall(exception)
+            or (generic and cast_exception_status_to_int(exception_status) in _REQUEST_SCOPED_STATUS_CODES)  # pyright: ignore[reportArgumentType]  # the status as raised
+            or is_caller_timeout_408(details, exception_status, ended=datetime.now())  # pyright: ignore[reportArgumentType]  # noqa: DTZ005  # see logged_call
+        )
 
     def trigger_fallback_cooldown(
         self, kwargs: Mapping[str, object], exception: object, generic: bool, *, own_loop: bool = False
@@ -476,14 +505,15 @@ class RustHealthCallbacks:
     ) -> str | None:
         """``sync_deployment_callback_on_success``, for a sync stream that ended."""
         from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import deployment_successes_key
 
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return None
         target: Final = _success_target(kwargs)
         if target is None:
             return None
-        key: Final = self._drive_sync_steps(self._handle.count_success(target[0], callbacks)).get("key")
-        return key if isinstance(key, str) else None
+        counted: Final = self._drive_sync_steps(self._handle.count_success(target[0], callbacks)).get("counted")
+        return deployment_successes_key(target[0]) if counted is True else None
 
     async def repin_after_success(self, kwargs: Mapping[str, object], completion_response: object) -> None:
         """The session re-pin ``deployment_callback_on_success`` runs for a success logged against a

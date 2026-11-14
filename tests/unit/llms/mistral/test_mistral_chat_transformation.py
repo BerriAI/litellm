@@ -740,6 +740,25 @@ class TestMistralEmptyContentHandling:
         assert MistralConfig._is_empty_assistant_message(message) is False
 
 
+@pytest.mark.parametrize("body", [[], "ok"])
+def test_transform_response_rejects_a_body_that_is_not_a_json_object(body: object) -> None:
+    logging_obj: Final = MagicMock()
+    logging_obj.model_call_details = {}
+
+    with pytest.raises(AttributeError, match=f"^'{type(body).__name__}' object has no attribute 'get'$"):
+        MistralConfig().transform_response(
+            model="mistral/mistral-large-latest",
+            raw_response=httpx.Response(200, json=body),
+            model_response=ModelResponse(),
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+
 class TestMistralFileHandling:
     """Test suite for Mistral file handling functionality."""
 
