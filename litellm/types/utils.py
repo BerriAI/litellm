@@ -4710,6 +4710,7 @@ class LlmProviders(str, Enum):
     TYPESAFE = "typesafe"
     PARALLEL_AI = "parallel_ai"
     NACE = "nace"
+    TURION = "turion"
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"
     BESPOKE = "bespoke"

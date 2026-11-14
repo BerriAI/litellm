@@ -92,6 +92,9 @@ _PROVIDERS: Final = (
     _Provider("typesafe", "typesafe/jev-1.13.0", "/v1/systemone", "jev-1.13.0", _API_KEY, False, "typesafe/jev-1.13.0"),
     _Provider("nace", "nace/drex-v2.0", "/v1/systemone", "drex-v2.0", _API_KEY, False, "nace/drex-v2.0"),
     _Provider(
+        "turion", "turion/turion-jev-31b", "/v1/systemone", "turion-jev-31b", _API_KEY, False, "turion/turion-jev-31b"
+    ),
+    _Provider(
         "openrouter",
         "openrouter/typesafe/jev-1.13",
         "/alpha/decisions",

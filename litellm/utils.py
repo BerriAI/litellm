@@ -10395,6 +10395,7 @@ class ProviderConfigManager:
             LlmProviders.AZURE_AI,
             LlmProviders.EU_JEV,
             LlmProviders.PARALLEL_AI,
+            LlmProviders.TURION,
         ):
             configs: Final = {
                 LlmProviders.EMPIRIOLABS: litellm.EmpirioLabsDecisionsConfig,
@@ -10403,6 +10404,7 @@ class ProviderConfigManager:
                 LlmProviders.AZURE_AI: litellm.AzureAIDecisionsConfig,
                 LlmProviders.EU_JEV: litellm.EuJevDecisionsConfig,
                 LlmProviders.PARALLEL_AI: litellm.ParallelAIDecisionsConfig,
+                LlmProviders.TURION: litellm.TurionDecisionsConfig,
             }
             return configs[provider]()
         return None
@@ -10411,6 +10413,8 @@ class ProviderConfigManager:
     def get_provider_extraction_config(model: str, provider: LlmProviders) -> BaseExtractionConfig | None:
         if provider == LlmProviders.CLOUDFLARE:
             return litellm.CloudflareExtractionConfig()
+        if provider == LlmProviders.TURION:
+            return litellm.TurionExtractionConfig()
         return None
 
     @staticmethod
