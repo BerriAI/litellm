@@ -27,6 +27,7 @@ from integration._support.client import (
     list_value,
     object_value,
     string_value,
+    until_asserted,
 )
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.responses_ws_peer import (
@@ -376,21 +377,26 @@ def test_a_refused_turn_s_failure_row_leaves_the_socket_s_parallel_slot_held_unt
                 await asyncio.wait_for(connection.wait_closed(), timeout=20)
                 return received, connection.close_code
 
-        async def second_socket_while_the_first_is_open() -> tuple[tuple[dict[str, JsonValue], ...], int | None]:
+        async def second_socket_while_the_first_is_open() -> None:
             async with _socket(limited, key, deployment.name) as holding:
                 completed(await _say(holding, deployment.name))
                 await _until(lambda: _deployment_spend(deployment), lambda spent: spent > TURN_SPEND / 2)
                 _assert_refused(await _say(holding, deployment.name))
                 await asyncio.to_thread(_failure_rows, limited, key)
-                return await opened_once()
+                with pytest.raises(websockets.exceptions.InvalidStatus):
+                    await opened_once()
 
-        over_limit, over_limit_close = asyncio.run(second_socket_while_the_first_is_open())
-        reopened, reopened_close = eventually(
-            lambda: asyncio.run(opened_once()), lambda outcome: outcome[1] != 1008, seconds=15
-        )
+        def reopened_once_the_slot_frees() -> tuple[tuple[dict[str, JsonValue], ...], int | None]:
+            try:
+                received, close_code = asyncio.run(opened_once())
+            except websockets.exceptions.InvalidStatus as refused:
+                raise AssertionError(refused) from refused
+            assert close_code != 1008, received
+            return received, close_code
 
-        assert [event.get("type") for event in over_limit] == ["error"], over_limit
-        assert over_limit_close == 1008, over_limit
+        asyncio.run(second_socket_while_the_first_is_open())
+        reopened, reopened_close = until_asserted(reopened_once_the_slot_frees, seconds=15)
+
         _assert_refused(reopened)
         assert reopened_close == 1011, reopened
         assert deployment.forwarded_turns() == 1
