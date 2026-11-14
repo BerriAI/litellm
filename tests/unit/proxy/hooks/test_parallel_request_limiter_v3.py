@@ -2412,17 +2412,6 @@ async def test_redis_batch_rate_limiter_returns_values_in_caller_order():
     assert results == [(str(now), 1), (str(now), 2), (str(now), 1)]
 
 
-def test_default_hash_tag_grouping_resolver_uses_litellm_setting(monkeypatch: pytest.MonkeyPatch):
-    redis: Final = _ScriptedRedis()
-    handler: Final = _handler_with_redis(redis)
-
-    monkeypatch.setattr(litellm, "force_redis_hash_tag_grouping", True)
-    assert handler._slot_groups(_GROUPING_COUNTERS) == ((0, 2), (1,))
-
-    monkeypatch.setattr(litellm, "force_redis_hash_tag_grouping", False)
-    assert handler._slot_groups(_GROUPING_COUNTERS) == ((0, 1, 2),)
-
-
 async def _admit(handler, auth, data=None):
     await handler.async_pre_call_hook(
         user_api_key_dict=auth,
@@ -2537,43 +2526,6 @@ async def test_fail_closed_tpm_rejection_releases_the_parallel_slot_it_acquired(
         )
     ]
     assert get_or_create_request_stash().parallel_slot is None
-
-
-@pytest.mark.asyncio
-async def test_fail_closed_rate_limit_enforcement_is_read_from_general_settings(monkeypatch):
-    from litellm.proxy import proxy_server
-
-    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-settings"), rpm_limit=2)
-
-    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
-    with pytest.raises(HTTPException) as exc:
-        await _admit(_handler_with_redis(_unreachable_redis()), auth)
-    assert exc.value.status_code == 503
-
-    monkeypatch.delitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement")
-    await _admit(_handler_with_redis(_unreachable_redis()), auth)
-
-
-@pytest.mark.parametrize(
-    "configured_value, rejects",
-    [(True, True), ("true", True), (False, False), ("false", False), ("sometimes", False)],
-    ids=["bool_true", "string_true", "bool_false", "string_false", "not_a_boolean"],
-)
-@pytest.mark.asyncio
-async def test_fail_closed_rate_limit_enforcement_coerces_the_general_settings_value(
-    monkeypatch, configured_value, rejects
-):
-    from litellm.proxy import proxy_server
-
-    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-coerced"), rpm_limit=2)
-    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", configured_value)
-
-    if not rejects:
-        await _admit(_handler_with_redis(_unreachable_redis()), auth)
-        return
-    with pytest.raises(HTTPException) as exc:
-        await _admit(_handler_with_redis(_unreachable_redis()), auth)
-    assert exc.value.status_code == 503
 
 
 @pytest.mark.parametrize(

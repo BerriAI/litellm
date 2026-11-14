@@ -5,6 +5,7 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 import asyncio
 import contextvars
 import logging
+import socket
 import time
 from collections.abc import AsyncGenerator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -22,6 +23,7 @@ import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -40,6 +42,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.hooks.parallel_request_limiter_v3_native import policy
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     ParallelSlotAcquisition,
@@ -5689,6 +5692,70 @@ async def _admit(handler, auth, data=None):
         data=data if data is not None else {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]},
         call_type="acompletion",
     )
+
+
+def _handler_with_unreachable_redis():
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    handler = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=RedisCache(host="127.0.0.1", port=port)))
+    )
+    assert handler.rate_limits.has_redis
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_rate_limit_enforcement_is_read_from_general_settings(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-settings"), rpm_limit=2)
+
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
+    with pytest.raises(HTTPException) as exc:
+        await _admit(_handler_with_unreachable_redis(), auth)
+    assert exc.value.status_code == 503
+
+    monkeypatch.delitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement")
+    await _admit(_handler_with_unreachable_redis(), auth)
+
+
+@pytest.mark.parametrize(
+    "configured_value, rejects",
+    [(True, True), ("true", True), (False, False), ("false", False), ("sometimes", False)],
+    ids=["bool_true", "string_true", "bool_false", "string_false", "not_a_boolean"],
+)
+@pytest.mark.asyncio
+async def test_fail_closed_rate_limit_enforcement_coerces_the_general_settings_value(
+    monkeypatch, configured_value, rejects
+):
+    from litellm.proxy import proxy_server
+
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-coerced"), rpm_limit=2)
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", configured_value)
+
+    if not rejects:
+        await _admit(_handler_with_unreachable_redis(), auth)
+        return
+    with pytest.raises(HTTPException) as exc:
+        await _admit(_handler_with_unreachable_redis(), auth)
+    assert exc.value.status_code == 503
+
+
+def test_default_hash_tag_grouping_resolver_uses_litellm_setting(monkeypatch: pytest.MonkeyPatch):
+    handler: Final = _handler_with_unreachable_redis()
+    scopes: Final = tuple(counter.scope for counter in _GROUPING_COUNTERS)
+
+    def slot_groups() -> tuple[tuple[int, ...], ...]:
+        force: Final = policy(handler)["force_grouping"]
+        assert isinstance(force, bool)
+        return handler.rate_limits.slot_groups(scopes, force)
+
+    monkeypatch.setattr(litellm, "force_redis_hash_tag_grouping", True)
+    assert slot_groups() == ((0, 2), (1,))
+
+    monkeypatch.setattr(litellm, "force_redis_hash_tag_grouping", False)
+    assert slot_groups() == ((0, 1, 2),)
 
 
 async def _read_only_check(handler, auth):
