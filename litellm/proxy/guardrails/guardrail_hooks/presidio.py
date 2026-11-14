@@ -991,6 +991,23 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         return filtered_results
 
+    def _exclude_restored_request_values(
+        self,
+        text: str,
+        analyze_results: list[PresidioAnalyzeResponseItem],
+        request_data: dict,
+    ) -> list[PresidioAnalyzeResponseItem]:
+        restored_values: Final = set(((request_data.get("metadata") or {}).get("pii_tokens") or {}).values())
+        if not restored_values:
+            return analyze_results
+
+        def _span_is_restored(item: PresidioAnalyzeResponseItem) -> bool:
+            start: Final = item.get("start")
+            end: Final = item.get("end")
+            return start is not None and end is not None and text[start:end] in restored_values
+
+        return [item for item in analyze_results if not _span_is_restored(item)]
+
     def raise_exception_if_blocked_entities_detected(
         self, analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse
     ) -> None:
@@ -1051,6 +1068,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 # Blocked Entities check
                 ####################################################
                 self.raise_exception_if_blocked_entities_detected(analyze_results=analyze_results)
+
+                if output_parse_pii is False and isinstance(analyze_results, list):
+                    analyze_results = self._exclude_restored_request_values(
+                        text=text,
+                        analyze_results=analyze_results,
+                        request_data=request_data,
+                    )
 
                 # Then anonymize the text using the analysis results
                 anonymized_text: Final = await self.anonymize_text(
