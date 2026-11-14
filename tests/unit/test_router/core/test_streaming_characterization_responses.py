@@ -9,6 +9,7 @@ Scripted streams are ``BaseResponsesAPIStreamingIterator`` subclasses
 completion-bridge iterator does.
 """
 
+import asyncio
 from collections.abc import Callable, Mapping
 from typing import Final
 
@@ -157,6 +158,35 @@ async def test_a_mid_stream_error_before_output_falls_back_and_drops_the_primary
     assert host.deployments_called() == ["a", "b"]
     assert host.calls[1].kwargs["input"] == "hi"
     assert host.calls[1].model_group == "b"
+
+
+async def test_a_mid_stream_fallback_does_not_repeat_a_silent_experiment(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", responses_stream(Event(CREATED), Event(IN_PROGRESS), error=cut()))
+    host.answer("openai/b", fallback_ok())
+    host.answer("openai/s", "shadow-result")
+    core: Final = make_core(
+        model_list=[
+            deployment("a", "a", silent_model="s"),
+            deployment("b", "b", silent_model="s"),
+            deployment("s", "s"),
+        ],
+        fallbacks=[{"a": ["b"]}],
+        num_retries=0,
+    )
+    stream: Final = await open_stream(core)
+    assert (await collect_event_types(stream))[-1] == COMPLETED
+    pending: Final = tuple(
+        task for task in asyncio.all_tasks() if task.get_coro().__qualname__.endswith("_run_generic_silent")
+    )
+    await asyncio.gather(*pending)
+
+    assert host.deployments_called().count("a") == 1
+    assert host.deployments_called().count("b") == 1
+    assert host.deployments_called().count("s") == 1
+    shadow: Final = next(call for call in host.calls if call.deployment_id == "s")
+    assert shadow.kwargs["stream"] is False
 
 
 async def test_a_mid_stream_error_before_output_without_fallbacks_flushes_held_events_then_raises(
