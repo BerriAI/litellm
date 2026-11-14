@@ -968,6 +968,16 @@ def needs_parameters_json_schema(parameters: Mapping[str, JsonValue]) -> bool:
     return any(_root_cannot_be_vertex_parameters(schema) for schema in chain)
 
 
+def _is_union(schema: Mapping[str, JsonValue]) -> bool:
+    return "anyOf" in schema or "oneOf" in schema
+
+
+def has_bare_root_union(json_schema: Mapping[str, JsonValue]) -> bool:
+    defs: Final = json_schema.get("$defs")
+    chain: Final = _root_ref_chain(json_schema, defs if isinstance(defs, dict) else {})
+    return any(map(_is_union, chain)) and not any("properties" in schema for schema in chain)
+
+
 def parameters_json_schema_for(parameters: Mapping[str, object]) -> Mapping[str, JsonValue] | None:
     if "$ref" not in parameters and not _root_cannot_be_vertex_parameters(parameters):
         return None

@@ -107,6 +107,7 @@ from ..common_utils import (
     VertexAIError,
     build_json_schema,
     build_vertex_schema,
+    has_bare_root_union,
     parameters_json_schema_for,
     supports_response_json_schema,
     with_integer_enums_that_fit,
@@ -563,8 +564,13 @@ class _CallerTool(_CallerFunction, total=False):
     function: ReadOnly[_CallerFunction]
 
 
+class _ToolChoiceParam(TypedDict, total=False):
+    tool_choice: ReadOnly[object]
+
+
 _CALLER_TOOL: Final = TypeAdapter(_CallerTool)
 _CALLER_TOOLS: Final = TypeAdapter(tuple[object, ...])
+_TOOL_CHOICE_PARAM: Final = TypeAdapter(_ToolChoiceParam)
 
 
 def _caller_parameters(tool: object) -> Mapping[str, object] | None:
@@ -575,16 +581,19 @@ def _caller_parameters(tool: object) -> Mapping[str, object] | None:
     return caller_tool.get("function", caller_tool).get("parameters")
 
 
-def _parameters_json_schema(tool: object) -> Mapping[str, JsonValue] | None:
+def _parameters_json_schema(tool: object, forced_function_names: frozenset[str]) -> Mapping[str, JsonValue] | None:
     parameters: Final = _caller_parameters(tool)
-    return None if parameters is None else parameters_json_schema_for(parameters)
+    json_schema: Final = None if parameters is None else parameters_json_schema_for(parameters)
+    if json_schema is None or declared_function_name(tool) not in forced_function_names:
+        return json_schema
+    return None if has_bare_root_union(json_schema) else json_schema
 
 
 def _parameters_json_schemas(
-    tools: object, allow_parameters_json_schema: bool
+    tools: object, allow_parameters_json_schema: bool, forced_function_names: frozenset[str]
 ) -> tuple[Mapping[str, JsonValue] | None, ...]:
     return tuple(
-        _parameters_json_schema(tool) if allow_parameters_json_schema else None
+        _parameters_json_schema(tool, forced_function_names) if allow_parameters_json_schema else None
         for tool in _CALLER_TOOLS.validate_python(tools)
     )
 
@@ -719,6 +728,16 @@ def _forced_function_names(name: str, tools: JsonValue) -> tuple[str, ...]:
         _qualified_names_of(name, tool, declarable, declared) for tool, declared in declared_by_tool
     )
     return tuple(qualified) or (name,)
+
+
+def _function_names_forced_by(tool_choice: object, tools: JsonValue) -> frozenset[str]:
+    match tool_choice:
+        case "required":
+            return frozenset(chain.from_iterable(_names_each_tool_declares(_listed(tools))))
+        case {"function": {"name": str() as name}}:
+            return frozenset(_forced_function_names(name, tools))
+        case _:
+            return frozenset()
 
 
 class VertexAIBaseConfig:
@@ -1264,6 +1283,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         send_integer_enums: bool = False,
         allow_parameters_json_schema: bool = True,
         outside_declarations: JsonValue = None,
+        tool_choice: object = None,
     ) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
@@ -1294,7 +1314,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # remove 'additionalProperties' from tools
         schema_value: Final[JsonValue] = deepcopy(cast(JsonValue, value))  # cast-ok: tools are JSON request data
         parameters_json_schemas: Final = _parameters_json_schemas(
-            _with_namespace_members_inlined(schema_value, outside_declarations), allow_parameters_json_schema
+            _with_namespace_members_inlined(schema_value, outside_declarations),
+            allow_parameters_json_schema,
+            _function_names_forced_by(tool_choice, [*_listed(schema_value), *_listed(outside_declarations)]),
         )
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
@@ -1950,6 +1972,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         optional_params,
                         allow_parameters_json_schema=allow_parameters_json_schema,
                         outside_declarations=request_params.get("functions" if param == "tools" else "tools"),
+                        tool_choice=_TOOL_CHOICE_PARAM.validate_python(request_params).get("tool_choice"),
                     ),
                     allow_integer_enums and self._is_gemini_3_or_newer(model),
                 )

@@ -3033,6 +3033,63 @@ def test_vertex_sends_a_union_root_legacy_function_schema_unchanged_as_parameter
     ]
 
 
+_ROOT_ONE_OF: Final = {"oneOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}
+
+
+@pytest.mark.parametrize(
+    ("lookup_parameters", "tool_choice", "expected_field"),
+    [
+        (_ROOT_ONE_OF, "required", "parameters"),
+        (_ROOT_ONE_OF, {"type": "function", "function": {"name": "lookup"}}, "parameters"),
+        (
+            {"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"anyOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}}},
+            "required",
+            "parameters",
+        ),
+        (
+            {"type": "object", "properties": _LOOKUP_PROPERTIES, "anyOf": [{"required": ["a"]}, {"required": ["b"]}]},
+            "required",
+            "parametersJsonSchema",
+        ),
+        (_ROOT_ONE_OF, {"type": "function", "function": {"name": "weather"}}, "parametersJsonSchema"),
+        (_ROOT_ONE_OF, "auto", "parametersJsonSchema"),
+        (
+            {"allOf": [{"type": "object", "properties": _LOOKUP_PROPERTIES}, {"required": ["b"]}]},
+            "required",
+            "parametersJsonSchema",
+        ),
+    ],
+    ids=[
+        "required",
+        "named-union-tool",
+        "required-root-ref-to-union",
+        "required-root-properties-beside-union",
+        "named-other-tool",
+        "auto",
+        "required-root-all-of",
+    ],
+)
+def test_vertex_keeps_a_union_root_tool_on_parameters_when_the_call_can_be_forced_to_it(
+    lookup_parameters: Mapping[str, object], tool_choice: str | dict[str, object], expected_field: str
+) -> None:
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tool_choice": tool_choice,
+            "tools": [
+                {"type": "function", "function": {"name": "lookup", "parameters": deepcopy(lookup_parameters)}},
+                {"type": "function", "function": {"name": "weather", "parameters": deepcopy(_WEATHER_PARAMETERS)}},
+            ],
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+    lookup, weather = request_params["tools"][0]["function_declarations"]
+
+    assert {field for field in ("parameters", "parametersJsonSchema") if field in lookup} == {expected_field}
+    assert weather == {"name": "weather", "parameters": _WEATHER_VERTEX_PARAMETERS}
+
+
 @pytest.mark.parametrize(
     ("model", "expected_level"),
     [
