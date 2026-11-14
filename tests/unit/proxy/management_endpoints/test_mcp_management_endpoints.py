@@ -315,6 +315,89 @@ async def test_mcp_publication_updates_runtime_only_after_successful_save(
         save.assert_awaited_once_with(new_config=expected_config)
 
 
+def _server_in_access_groups(server_id: str, access_groups: list[str]) -> MCPServer:
+    return MCPServer(
+        server_id=server_id,
+        name=server_id,
+        url=f"https://{server_id}.example.com/mcp",
+        transport=MCPTransport.http,
+        access_groups=access_groups,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller,expected_groups",
+    (
+        pytest.param(
+            UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="granted-key",
+                object_permission=LiteLLM_ObjectPermissionTable(
+                    object_permission_id="granted-permission", mcp_servers=["granted-server"]
+                ),
+            ),
+            ["shared-group"],
+            id="key_granted_one_server_sees_only_its_groups",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="unrelated-key"),
+            [],
+            id="unrelated_key_sees_no_groups",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="admin-key"),
+            ["pending-group", "private-group", "shared-group"],
+            id="proxy_admin_sees_whole_registry",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="scoped-admin-key",
+                object_permission=LiteLLM_ObjectPermissionTable(
+                    object_permission_id="scoped-admin-permission", mcp_servers=["granted-server"]
+                ),
+            ),
+            ["pending-group", "private-group", "shared-group"],
+            id="admin_with_scoped_key_still_sees_whole_registry",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, api_key="view-only-key"),
+            ["pending-group", "private-group", "shared-group"],
+            id="view_only_admin_sees_whole_registry",
+        ),
+    ),
+)
+async def test_mcp_access_group_listing_is_scoped_to_the_caller(
+    caller: UserAPIKeyAuth, expected_groups: list[str]
+) -> None:
+    manager: Final = MCPServerManager()
+    manager.config_mcp_servers = {
+        server.server_id: server
+        for server in (
+            _server_in_access_groups("granted-server", ["shared-group"]),
+            _server_in_access_groups("private-server", ["private-group"]),
+        )
+    }
+    pending_submission: Final = generate_mock_mcp_server_db_record(server_id="pending-server").model_copy(
+        update={"mcp_access_groups": ["pending-group"], "approval_status": "pending_review"}
+    )
+    prisma_client: Final = MagicMock()
+    prisma_client.writer_db = prisma_client.db
+    prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[pending_submission])
+    prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+
+    with (
+        patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+        patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        listing: Final = await mgmt_endpoints.get_mcp_access_groups(user_api_key_dict=caller)
+
+    assert listing == {"access_groups": expected_groups}
+
+
 class TestMCPCredentialsTokenExchangeProfile:
     """token_exchange_profile must be a declared MCPCredentials field so the management API can
     persist the entra_obo profile. An undeclared key is silently stripped by pydantic when the

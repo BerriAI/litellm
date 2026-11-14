@@ -1120,35 +1120,38 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
-        Get all available MCP access groups from the database AND config
+        Get the MCP access groups the caller can see. Admins get every group in the config and DB registry,
+        everyone else only the groups on servers they can access
         """
-        from litellm.proxy.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
+        access_groups: Final = (
+            await _registered_mcp_access_groups()
+            if user_api_key_has_admin_view(user_api_key_dict)
+            else frozenset(
+                chain.from_iterable(
+                    server.mcp_access_groups for server in await _resolve_accessible_mcp_servers(user_api_key_dict)
+                )
+            )
         )
+        return {"access_groups": sorted(access_groups)}
+
+    async def _registered_mcp_access_groups() -> frozenset[str]:
         from litellm.proxy.proxy_server import prisma_client
 
-        access_groups: Final = set()
-
-        # Get from config-loaded servers
-        for server in global_mcp_server_manager.config_mcp_servers.values():
-            if server.access_groups:
-                access_groups.update(server.access_groups)
-
-        # Get from DB
-        if prisma_client is not None:
-            try:
-                mcp_servers: Final[Sequence[prisma_models.LiteLLM_MCPServerTable]] = await MCPServerRepository(
-                    prisma_client
-                ).table.find_many()
-                for server in mcp_servers:
-                    if hasattr(server, "mcp_access_groups") and server.mcp_access_groups:
-                        access_groups.update(server.mcp_access_groups)
-            except Exception as e:
-                verbose_proxy_logger.debug("Error getting MCP access groups: %s", e)
-
-        # Convert to sorted list
-        access_groups_list: Final = sorted(list(access_groups))
-        return {"access_groups": access_groups_list}
+        config_groups: Final = frozenset(
+            chain.from_iterable(
+                server.access_groups or [] for server in global_mcp_server_manager.config_mcp_servers.values()
+            )
+        )
+        if prisma_client is None:
+            return config_groups
+        try:
+            db_servers: Final[Sequence[prisma_models.LiteLLM_MCPServerTable]] = await MCPServerRepository(
+                prisma_client
+            ).table.find_many()
+        except Exception as e:
+            verbose_proxy_logger.debug("Error getting MCP access groups: %s", e)
+            return config_groups
+        return config_groups | frozenset(chain.from_iterable(server.mcp_access_groups for server in db_servers))
 
     @router.get(
         "/network/client-ip",
