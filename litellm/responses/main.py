@@ -102,6 +102,7 @@ else:
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import is_openai_compatible_endpoint
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.types.litellm_params import prompt_management_applied
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
@@ -1009,9 +1010,13 @@ async def aresponses(
         prompt_variables: Final = cast(dict | None, kwargs.get("prompt_variables", None))
         original_model: Final = model
 
-        if isinstance(
-            litellm_logging_obj, LiteLLMLoggingObj
-        ) and litellm_logging_obj.should_run_prompt_management_hooks(prompt_id=prompt_id, non_default_params=kwargs):
+        if (
+            isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+            and not prompt_management_applied(
+                cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+            )
+            and litellm_logging_obj.should_run_prompt_management_hooks(prompt_id=prompt_id, non_default_params=kwargs)
+        ):
             client_input: Final = ResponsesAPIRequestUtils.responses_input_to_chat_messages(input)
             with _prompt_management_sees_a_provisional_message_list(
                 kwargs,
@@ -1189,8 +1194,10 @@ def _apply_prompt_management_to_responses_call(
 
     client_input: Final = ResponsesAPIRequestUtils.responses_input_to_chat_messages(input)
 
-    if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
-        prompt_id=prompt_id, non_default_params=kwargs
+    if (
+        isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+        and not prompt_management_applied(kwargs)
+        and litellm_logging_obj.should_run_prompt_management_hooks(prompt_id=prompt_id, non_default_params=kwargs)
     ):
         with _prompt_management_sees_a_provisional_message_list(
             kwargs,

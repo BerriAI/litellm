@@ -3,6 +3,7 @@ models and KWARG_ARTIFACTS into all_litellm_params."""
 
 from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
+from enum import Enum
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
@@ -58,6 +59,20 @@ ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
 ADDRESSED_COMPARISON_RESPONSE_ID_FIELD: Final = "_litellm_addressed_comparison_response_id"
 STREAM_USAGE_INJECTED_FIELD: Final = "_litellm_stream_usage_injected"
 PROMPT_MANAGEMENT_APPLIED_FIELD: Final = "_litellm_prompt_management_applied"
+
+
+class PromptManagement(Enum):
+    APPLIED = "applied"
+
+
+PROMPT_MANAGEMENT_APPLIED: Final[Mapping[str, PromptManagement]] = MappingProxyType(
+    {PROMPT_MANAGEMENT_APPLIED_FIELD: PromptManagement.APPLIED}
+)
+
+
+def prompt_management_applied(request_kwargs: Mapping[str, object]) -> bool:
+    return request_kwargs.get(PROMPT_MANAGEMENT_APPLIED_FIELD) is PromptManagement.APPLIED
+
 
 WIRE_NAME: Final = "wire_name"
 
@@ -353,7 +368,9 @@ class CallState:
     cache_key: str | None = None
     stream_response: "Mapping[str, ModelResponse] | None" = None
     context_compaction_state: "CompactionState | None" = field(default=None, metadata=wire("_context_compaction_state"))
-    prompt_management_applied: bool | None = field(default=None, metadata=wire(PROMPT_MANAGEMENT_APPLIED_FIELD))
+    prompt_management_applied: PromptManagement | None = field(
+        default=None, metadata=wire(PROMPT_MANAGEMENT_APPLIED_FIELD)
+    )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
