@@ -13,6 +13,7 @@ from openai import NOT_GIVEN, AsyncOpenAI, NotGiven, OpenAI
 import litellm
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str
+from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
 from .common_utils import (
@@ -21,6 +22,7 @@ from .common_utils import (
     OpenAIError,
     OpenAIHTTPClient,
     is_openai_backed_api_base,
+    ssl_verify_from_params,
 )
 
 if TYPE_CHECKING:
@@ -167,6 +169,34 @@ def _config_value(litellm_params: Mapping[str, object] | None, param_key: str, e
     return param_value or normalize_nonempty_secret_str(get_secret_str(env_name))
 
 
+def _sync_http_client_for_call(
+    ssl_verify: VerifyTypes | None,
+    factory: Callable[[], httpx.Client | None] | None,
+) -> httpx.Client:
+    if ssl_verify is not None:
+        configured: Final = BaseOpenAILLM.get_sync_http_client(ssl_verify=ssl_verify)
+        if configured is not None:
+            return configured
+    supplied: Final = None if factory is None else factory()
+    if supplied is not None:
+        return supplied
+    return OpenAIHTTPClient()
+
+
+def _async_http_client_for_call(
+    ssl_verify: VerifyTypes | None,
+    factory: Callable[[], httpx.AsyncClient | None] | None,
+) -> httpx.AsyncClient:
+    if ssl_verify is not None:
+        configured: Final = BaseOpenAILLM.get_async_http_client(ssl_verify=ssl_verify)
+        if configured is not None:
+            return configured
+    supplied: Final = None if factory is None else factory()
+    if supplied is not None:
+        return supplied
+    return OpenAIAsyncHTTPClient()
+
+
 def build_openai_client(
     api_key: str | None,
     api_base: str | None,
@@ -180,17 +210,15 @@ def build_openai_client(
         api_key=api_key, api_base=api_base, litellm_params=litellm_params
     )
     retries: Final = _max_retries_or_sdk_default(max_retries)
+    ssl_verify: Final = ssl_verify_from_params(litellm_params)
     if workload_identity_config is None:
-        static_key_http_client: Final = (
-            None if static_key_http_client_factory is None else static_key_http_client_factory()
-        )
         return OpenAI(
             api_key=openai_static_api_key(api_key),
             base_url=api_base,
             timeout=timeout,
             max_retries=retries,
             organization=organization,
-            http_client=static_key_http_client or OpenAIHTTPClient(),
+            http_client=_sync_http_client_for_call(ssl_verify, static_key_http_client_factory),
         )
     cache_params: Final = _client_cache_params(
         is_async=False,
@@ -199,13 +227,14 @@ def build_openai_client(
         timeout=timeout,
         max_retries=retries,
         organization=organization,
+        ssl_verify=ssl_verify,
     )
     cached: Final = BaseOpenAILLM.get_cached_openai_client(
         client_initialization_params=cache_params, client_type="openai"
     )
     if isinstance(cached, OpenAI):
         return cached
-    process_http_client: Final = BaseOpenAILLM.get_sync_http_client()
+    process_http_client: Final = BaseOpenAILLM.get_sync_http_client(ssl_verify=ssl_verify)
     client: Final = OpenAI(
         workload_identity=workload_identity_config.to_sdk_workload_identity(),
         base_url=api_base,
@@ -236,17 +265,15 @@ def build_async_openai_client(
         api_key=api_key, api_base=api_base, litellm_params=litellm_params
     )
     retries: Final = _max_retries_or_sdk_default(max_retries)
+    ssl_verify: Final = ssl_verify_from_params(litellm_params)
     if workload_identity_config is None:
-        static_key_http_client: Final = (
-            None if static_key_http_client_factory is None else static_key_http_client_factory()
-        )
         return AsyncOpenAI(
             api_key=openai_static_api_key(api_key),
             base_url=api_base,
             timeout=timeout,
             max_retries=retries,
             organization=organization,
-            http_client=static_key_http_client or OpenAIAsyncHTTPClient(),
+            http_client=_async_http_client_for_call(ssl_verify, static_key_http_client_factory),
         )
     cache_params: Final = _client_cache_params(
         is_async=True,
@@ -255,13 +282,14 @@ def build_async_openai_client(
         timeout=timeout,
         max_retries=retries,
         organization=organization,
+        ssl_verify=ssl_verify,
     )
     cached: Final = BaseOpenAILLM.get_cached_openai_client(
         client_initialization_params=cache_params, client_type="openai"
     )
     if isinstance(cached, AsyncOpenAI):
         return cached
-    process_http_client: Final = BaseOpenAILLM.get_async_http_client()
+    process_http_client: Final = BaseOpenAILLM.get_async_http_client(ssl_verify=ssl_verify)
     client: Final = AsyncOpenAI(
         workload_identity=workload_identity_config.to_sdk_workload_identity(),
         base_url=api_base,
@@ -286,6 +314,7 @@ def _client_cache_params(
     timeout: float | httpx.Timeout | None | NotGiven,
     max_retries: int,
     organization: str | None,
+    ssl_verify: VerifyTypes | None,
 ) -> dict[str, object]:
     return {
         "api_key": None,
@@ -295,6 +324,7 @@ def _client_cache_params(
         "timeout": timeout,
         "max_retries": max_retries,
         "organization": organization,
+        "ssl_verify": ssl_verify,
     }
 
 

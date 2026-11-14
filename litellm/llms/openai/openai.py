@@ -72,6 +72,7 @@ from .common_utils import (
     is_openai_backed_api_base,
     is_output_token_limit_error,
     model_dump_provider_response,
+    ssl_verify_from_params,
     upstream_error_response,
 )
 from .workload_identity import (
@@ -443,6 +444,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         workload_identity_config: Final = resolve_openai_workload_identity_config(
             api_key=api_key, api_base=api_base, litellm_params=litellm_params
         )
+        ssl_verify: Final = ssl_verify_from_params(litellm_params)
         client_initialization_params: Final[dict] = locals()
         if client is None:
             if not isinstance(max_retries, int):
@@ -459,7 +461,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 if isinstance(cached_client, OpenAI) or isinstance(cached_client, AsyncOpenAI):
                     return cached_client
             if is_async:
-                async_http_client: Final = OpenAIChatCompletion._get_async_http_client(shared_session=shared_session)
+                async_http_client: Final = OpenAIChatCompletion._get_async_http_client(
+                    shared_session=shared_session,
+                    ssl_verify=ssl_verify,
+                )
                 http_client: httpx.Client | httpx.AsyncClient | None = async_http_client
                 _new_client: OpenAI | AsyncOpenAI = (
                     AsyncOpenAI(
@@ -481,7 +486,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     )
                 )
             else:
-                sync_http_client: Final = OpenAIChatCompletion._get_sync_http_client()
+                sync_http_client: Final = OpenAIChatCompletion._get_sync_http_client(ssl_verify=ssl_verify)
                 http_client = sync_http_client
                 _new_client = (
                     OpenAI(

@@ -4424,6 +4424,24 @@ def test_api_base_override_keeps_the_deployments_riva_offline_mode() -> None:
     assert (out["api_base"], out["riva_offline"]) == ("caller-riva:50051", True)
 
 
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        {"model": "gpt-4", "ssl_verify": False},
+        {"model": "gpt-4", "ssl_verify": "False"},
+        {"model": "gpt-4", "extra_body": {"ssl_verify": "/var/ca.pem"}},
+    ],
+)
+def test_request_body_ssl_verify_is_rejected(request_body: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="ssl_verify is not allowed in request body"):
+        is_request_body_safe(
+            request_body=request_body,
+            general_settings={},
+            llm_router=None,
+            model="gpt-4",
+        )
+
+
 class TestIsRequestBodySafeBlocksRivaUseSsl:
     """``use_ssl`` is rejected as a request-body param unless the admin
     opted in proxy-wide or per-deployment."""

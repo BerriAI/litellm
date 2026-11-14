@@ -562,6 +562,10 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "nvcf_function_id",
     "use_ssl",
     "riva_offline",
+    # TLS trust is pinned on the deployment. Request kwargs merge after that
+    # config, so a body value disables verification or selects a CA file on
+    # the proxy host while the proxy still sends the deployment key.
+    "ssl_verify",
     # Per-deployment opt-in that hands the whole call to the Rust core. It is a
     # deployment decision, not a request one: the Rust path uses its own client
     # rather than the one the deployment configured, and reports no post_call,
