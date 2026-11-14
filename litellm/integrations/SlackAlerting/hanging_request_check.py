@@ -52,7 +52,7 @@ class AlertingHangingRequestCheck:
 
     async def add_request_to_hanging_request_check(
         self,
-        request_data: dict | None = None,
+        request_data: dict[str, Any] | None = None,
     ):
         """
         Add a request to the hanging request cache. This is the list of request_ids that gets periodicall checked for hanging requests
@@ -60,7 +60,14 @@ class AlertingHangingRequestCheck:
         if request_data is None:
             return
 
-        request_metadata: Final = get_litellm_metadata_from_kwargs(kwargs=request_data)
+        # The proxy registers the request before the call, so the key metadata is
+        # still at the top level of the request body, not under `litellm_params`.
+        request_metadata: Final = (
+            get_litellm_metadata_from_kwargs(kwargs=request_data)
+            or request_data.get("litellm_metadata")
+            or request_data.get("metadata")
+            or {}
+        )
         model: Final = request_data.get("model", "")
         api_base: str | None = None
 
