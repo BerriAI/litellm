@@ -76,6 +76,41 @@ async def test_role_routes_require_roles_write(method: str) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["PUT", "DELETE"])
+async def test_dataplane_bound_role_writer_can_list_but_cannot_mutate_fleet_roles(method: str) -> None:
+    store: Final = MemoryStore()
+    stream: Final = MemoryStream()
+    rig: Final = container(store, stream, roles={"delegator": {"scopes": ["roles:write", "usage:read"]}})
+    rig.runtime_config.ready = True
+    codec: Final = SessionTokenCodec(MASTER_KEY, rig.settings.session_issuer, timedelta(minutes=5), rig.policy)
+    delegator: Final = build_principal(
+        rig.policy, "delegator", None, frozenset({"delegator"}), None, frozenset({"us"}), "session"
+    )
+    headers: Final = {"Authorization": f"Bearer {codec.mint(delegator)}"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(rig, Licensed())), base_url="http://cp"
+    ) as client:
+        created: Final = await client.put("/api/v1/roles/analyst", headers=HEADERS, json={"scopes": ["usage:read"]})
+        assert created.status_code == 200, created.text
+        rows: Final = store.rows
+        entries: Final = stream.entries
+        listed: Final = await client.get("/api/v1/roles", headers=headers)
+        result: Final = await client.request(
+            method,
+            "/api/v1/roles/analyst",
+            headers=headers,
+            **({"json": {"scopes": []}} if method == "PUT" else {}),
+        )
+    assert listed.status_code == 200, listed.text
+    assert result.status_code == 403, result.text
+    assert result.json()["detail"] == "Runtime writes require a fleet-wide dataplane binding."
+    assert store.rows == rows
+    assert stream.entries == entries
+    assert rig.audit_log.recent(1)[0].decision == "denied"
+    assert rig.audit_log.recent(1)[0].status == 403
+
+
+@pytest.mark.asyncio
 async def test_role_escalation_is_rejected_even_through_an_inherited_role() -> None:
     stream: Final = MemoryStream()
     store: Final = MemoryStore()

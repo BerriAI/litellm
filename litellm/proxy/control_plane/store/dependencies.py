@@ -31,8 +31,8 @@ async def audited_write(
             raise ControlPlaneException(service_unavailable("Audit sink backpressure, try again shortly."))
         if principal.missing_scopes(frozenset(Scope(scope) for scope in security_scopes.scopes)):
             raise ControlPlaneException(forbidden("Missing runtime write scope."))
-        if Scope.DATAPLANES_WRITE.value in security_scopes.scopes and not principal.dataplanes.all:
-            raise ControlPlaneException(forbidden("Dataplane writes require a fleet-wide dataplane binding."))
+        if not principal.dataplanes.all:
+            raise ControlPlaneException(forbidden("Runtime writes require a fleet-wide dataplane binding."))
         yield principal
     except ControlPlaneException as error:
         audit.record(
