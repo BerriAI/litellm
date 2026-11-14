@@ -12,7 +12,10 @@ use crate::{
         py_positive_number,
     },
     labels::{LabelValues, Settings, tag_match_error},
-    pyfmt::{is_py_number, py_number, py_str, py_truthy, py_type_name},
+    pyfmt::{
+        ascii_decimal_digits, is_py_number, py_float_int, py_number, py_str, py_truthy,
+        py_type_name,
+    },
     store::Op,
 };
 
@@ -758,7 +761,8 @@ pub fn set_deployment_state(
 }
 
 fn py_float_text(text: &str) -> Option<f64> {
-    let trimmed = text.trim();
+    let digits = ascii_decimal_digits(text);
+    let trimmed = digits.trim();
     let lowered = trimmed.to_ascii_lowercase();
     let unsigned = lowered.trim_start_matches(['+', '-']);
     if matches!(unsigned, "inf" | "infinity" | "nan") {
@@ -783,7 +787,7 @@ fn py_float_text(text: &str) -> Option<f64> {
 
 fn gauge_reading(value: &Value) -> Option<f64> {
     match value {
-        _ if is_py_number(value) => py_number(value),
+        _ if is_py_number(value) => py_float_int(value),
         Value::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
         Value::String(text) => py_float_text(text),
         _ => None,

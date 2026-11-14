@@ -1,4 +1,5 @@
 use serde_json::Value;
+use unicode_general_category::{GeneralCategory, get_general_category};
 
 pub const OPAQUE_KEY: &str = "$py";
 pub const NUMBER_KEY: &str = "$num";
@@ -194,6 +195,40 @@ pub fn py_number(value: &Value) -> Option<f64> {
     }
 }
 
+pub fn py_float_int(value: &Value) -> Option<f64> {
+    let number = py_number(value)?;
+    (number.is_finite() || !is_py_int(value)).then_some(number)
+}
+
+fn is_decimal_digit(character: char) -> bool {
+    get_general_category(character) == GeneralCategory::DecimalNumber
+}
+
+fn decimal_value(character: char) -> u32 {
+    let mut code = u32::from(character);
+    let mut position = 0;
+    while let Some(previous) = code.checked_sub(1).and_then(char::from_u32) {
+        if !is_decimal_digit(previous) {
+            break;
+        }
+        position += 1;
+        code -= 1;
+    }
+    position % 10
+}
+
+pub fn ascii_decimal_digits(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_ascii() || !is_decimal_digit(character) {
+                character
+            } else {
+                char::from_digit(decimal_value(character), 10).unwrap_or(character)
+            }
+        })
+        .collect()
+}
+
 pub fn py_big_int(value: &Value) -> Option<i128> {
     tagged_number(value)
         .filter(|text| is_int_text(text))
@@ -238,6 +273,30 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[rstest]
+    #[case("12.5", "12.5")]
+    #[case("\u{0661}\u{0662}.\u{0665}", "12.5")]
+    #[case("\u{06F9}\u{0966}", "90")]
+    #[case("\u{1D7CE}\u{1D7D8}\u{1D7E2}", "000")]
+    #[case("\u{00B2}", "\u{00B2}")]
+    fn unicode_decimal_digits_read_as_their_ascii_digit(
+        #[case] text: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(ascii_decimal_digits(text), expected);
+    }
+
+    #[rstest]
+    #[case(json!({"$num": "1".to_owned() + &"0".repeat(400)}), None)]
+    #[case(json!({"$num": "inf"}), Some(f64::INFINITY))]
+    #[case(json!(7), Some(7.0))]
+    fn an_int_too_large_for_a_float_has_no_float_reading(
+        #[case] value: Value,
+        #[case] expected: Option<f64>,
+    ) {
+        assert_eq!(py_float_int(&value), expected);
+    }
 
     #[rstest]
     #[case(0.0, "0.0")]
