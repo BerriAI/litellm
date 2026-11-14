@@ -982,6 +982,7 @@ class OpenAIChatCompletionDeveloperMessage(TypedDict, total=False):
 
 class ChatCompletionSystemMessage(OpenAIChatCompletionSystemMessage, total=False):
     cache_control: ChatCompletionCachedContent
+    output_config: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
 class ChatCompletionDeveloperMessage(OpenAIChatCompletionDeveloperMessage, total=False):

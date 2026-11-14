@@ -1106,6 +1106,24 @@ def test_translate_anthropic_messages_to_openai_drops_midturn_system_cache_contr
     ]
 
 
+@pytest.mark.parametrize("keep_output_config", [True, False])
+@pytest.mark.parametrize(
+    "system_content",
+    ["Use the corrected result.", [{"type": "text", "text": "Use the corrected result."}]],
+    ids=["string", "blocks"],
+)
+def test_translate_anthropic_messages_to_openai_keeps_system_output_config_only_when_asked(
+    keep_output_config: bool, system_content: object
+):
+    messages = [{"role": "system", "content": system_content, "output_config": {"effort": "medium"}}]
+
+    (system_message,) = LiteLLMAnthropicMessagesAdapter(
+        keep_output_config=keep_output_config
+    ).translate_anthropic_messages_to_openai(messages=messages, model="gpt-4o")
+
+    assert system_message.get("output_config") == ({"effort": "medium"} if keep_output_config else None)
+
+
 @pytest.mark.parametrize(
     "system_content",
     [

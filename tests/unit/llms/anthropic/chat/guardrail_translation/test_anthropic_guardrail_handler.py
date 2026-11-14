@@ -3496,3 +3496,41 @@ def test_request_sent_to_a_model_never_carries_tool_failure_marker() -> None:
         anthropic_message_request=FAILED_TOOL_RESULT_REQUEST  # pyright: ignore[reportArgumentType]  # a JSON request in the Anthropic shape
     )
     assert "is_error" not in json.dumps(request["messages"], default=str)
+
+
+@pytest.mark.parametrize("is_error", [True, False])
+async def test_structured_rewrite_keeps_tool_failure_and_system_output_config(is_error: bool) -> None:
+    data: Final = {
+        "model": "claude-sonnet",
+        "max_tokens": 16,
+        "messages": [
+            {"role": "user", "content": "inspect files POISON"},
+            {"role": "system", "content": "# Environment", "output_config": {"effort": "medium"}},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_01", "name": "Bash", "input": {"command": "cat a"}}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01",
+                        "content": "cat: a: missing",
+                        "is_error": is_error,
+                    },
+                    {"type": "text", "text": "what failed?"},
+                ],
+            },
+        ],
+    }
+
+    await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=StructuredMessagesRewritingGuardrail()
+    )
+
+    messages: Final = data["messages"]
+    assert messages[0]["content"] == [{"type": "text", "text": "inspect files [BLOCKED]"}]
+    assert messages[1] == {"role": "system", "content": "# Environment", "output_config": {"effort": "medium"}}
+    (tool_result,) = [block for block in messages[3]["content"] if block["type"] == "tool_result"]
+    assert tool_result["is_error"] is is_error

@@ -494,9 +494,12 @@ _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.va
 
 
 class LiteLLMAnthropicMessagesAdapter:
-    def __init__(self, *, keep_cache_control: bool = False, keep_tool_errors: bool = False) -> None:
+    def __init__(
+        self, *, keep_cache_control: bool = False, keep_tool_errors: bool = False, keep_output_config: bool = False
+    ) -> None:
         self.keep_cache_control: Final = keep_cache_control
         self.keep_tool_errors: Final = keep_tool_errors
+        self.keep_output_config: Final = keep_output_config
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
@@ -1043,7 +1046,7 @@ class LiteLLMAnthropicMessagesAdapter:
         """Translate an in-sequence system entry without changing its role or position."""
         content: Final = message.get("content")
         if isinstance(content, str):
-            return ChatCompletionSystemMessage(role="system", content=content) if content else None
+            return self._system_message(message, content) if content else None
         if not isinstance(content, list):
             return None
         text_parts: Final[list[ChatCompletionTextObject]] = []  # mutable-ok: API message payload
@@ -1056,7 +1059,17 @@ class LiteLLMAnthropicMessagesAdapter:
             text_obj = ChatCompletionTextObject(type="text", text=text)
             self._add_cache_control_if_applicable(block, text_obj, model)
             text_parts.append(self._add_prompt_cache_breakpoint_if_present(block, text_obj))
-        return ChatCompletionSystemMessage(role="system", content=text_parts) if text_parts else None
+        return self._system_message(message, text_parts) if text_parts else None
+
+    def _system_message(
+        self,
+        message: AnthropicMessagesSystemMessageParam,
+        content: str | list[ChatCompletionTextObject],
+    ) -> ChatCompletionSystemMessage:
+        output_config: Final = message.get("output_config")
+        if self.keep_output_config and output_config is not None:
+            return ChatCompletionSystemMessage(role="system", content=content, output_config=output_config)
+        return ChatCompletionSystemMessage(role="system", content=content)
 
     def _add_system_message_to_messages(
         self,
