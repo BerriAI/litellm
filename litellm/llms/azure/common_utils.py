@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from types import MappingProxyType
@@ -25,6 +26,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
+_FOUNDRY_PROJECT_V1_BASE_PATH: Final = re.compile(r"/api/projects/[^/]+/openai/v1/?$")
 
 
 class _AzureAdTokenJson(TypedDict, total=False):
@@ -579,9 +581,15 @@ class BaseAzureLLM(BaseOpenAILLM):
 
                 v1_api_key = _async_v1_api_key
 
+            v1_base: Final = httpx.URL(api_base or "")
+            v1_trimmed: Final = str(v1_base.copy_with(query=None)).rstrip("/")
+            v1_root: Final = (
+                v1_trimmed if v1_trimmed.endswith("/openai/v1") else f"{v1_trimmed.removesuffix('/openai')}/openai/v1"
+            )
             v1_params: Final[_AzureV1ClientParams] = {
                 "api_key": v1_api_key,
-                "base_url": f"{api_base}/openai/v1/",
+                "base_url": f"{v1_root}/",
+                "default_query": dict(v1_base.params.remove("api-version")),
             }
             if "timeout" in azure_client_params:
                 v1_params["timeout"] = azure_client_params["timeout"]
@@ -899,6 +907,24 @@ class BaseAzureLLM(BaseOpenAILLM):
         if api_version is None:
             return False
         return api_version in {"preview", "latest", "v1"}
+
+    @staticmethod
+    def is_foundry_project_v1_base(api_base: str | None) -> bool:
+        return api_base is not None and _FOUNDRY_PROJECT_V1_BASE_PATH.search(httpx.URL(api_base).path) is not None
+
+    @staticmethod
+    def is_api_version_opt_out(api_version: str | None) -> bool:
+        return api_version is not None and api_version.lower() == "none"
+
+    @classmethod
+    def opt_out_client_api_version(cls, api_version: str | None) -> str | None:
+        return "v1" if cls.is_api_version_opt_out(api_version) else api_version
+
+    @classmethod
+    def chat_client_api_version(cls, api_base: str | None, api_version: str | None) -> str | None:
+        if cls.is_foundry_project_v1_base(api_base):
+            return "v1"
+        return cls.opt_out_client_api_version(api_version)
 
     def _resolve_env_var(
         self, litellm_params: Mapping[str, str | None], param_key: str, env_var_key: str

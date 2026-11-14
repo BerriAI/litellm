@@ -51129,6 +51129,19 @@
         "supports_tool_choice": true,
         "supports_response_schema": true
     },
+    "vercel_ai_gateway/openai/gpt-6-luna-decisions": {
+        "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-08,
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_above_272k_tokens": 2e-07,
+        "litellm_provider": "vercel_ai_gateway",
+        "max_input_tokens": 1050000,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://ai-gateway.vercel.sh/v1/models"
+    },
     "vercel_ai_gateway/openai/o1": {
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 7.5e-06,
@@ -51250,6 +51263,56 @@
         "max_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 8e-06
+    },
+    "vercel_ai_gateway/typesafe-ai/jev": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "vercel_ai_gateway",
+        "max_input_tokens": 32000,
+        "metadata": {
+            "notes": "Vercel AI Gateway model list entry typesafe-ai/jev, read 2026-11-09: input 0.000000042 per token, output 0, context window 32000. A direct /v1/decisions probe with a 768x768 input_image answered 200 on 2026-11-10, while a 96x96 one answered 400 invalid request body."
+        },
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://ai-gateway.vercel.sh/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_box_questions": true,
+        "supports_vision": true
+    },
+    "vercel_ai_gateway/typesafe-ai/jev-1.13.0": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "vercel_ai_gateway",
+        "max_input_tokens": 32000,
+        "metadata": {
+            "notes": "Vercel AI Gateway model list entry typesafe-ai/jev-1.13.0, read 2026-11-09: input 0.000000042 per token, output 0, context window 32000. Direct /v1/decisions probes on 2026-11-10 asking whether a 768x768 picture is a smooth gradient answered 0.99 for a gradient and 0.12 for solid gray."
+        },
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://ai-gateway.vercel.sh/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_vision": true
+    },
+    "vercel_ai_gateway/typesafe-ai/jev-1.14.0": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "vercel_ai_gateway",
+        "max_input_tokens": 32000,
+        "metadata": {
+            "notes": "Vercel AI Gateway model list entry typesafe-ai/jev-1.14.0, read 2026-11-09: input 0.000000042 per token, output 0, context window 32000. Direct /v1/decisions probes on 2026-11-10 asking whether a 768x768 picture is a smooth gradient answered 0.84 for a gradient and 0.13 for solid gray."
+        },
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://ai-gateway.vercel.sh/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_box_questions": true,
+        "supports_vision": true
     },
     "vercel_ai_gateway/vercel/v0-1.0-md": {
         "input_cost_per_token": 3e-06,
