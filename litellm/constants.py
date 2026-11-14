@@ -1307,39 +1307,14 @@ empower_models: Final = set(
     ]
 )
 
-together_ai_models: Final[set[str]] = set(
-    [
-        # llama llms - chat
-        "togethercomputer/llama-2-70b-chat",
-        # llama llms - language / instruct
-        "togethercomputer/llama-2-70b",
-        "togethercomputer/LLaMA-2-7B-32K",
-        "togethercomputer/Llama-2-7B-32K-Instruct",
-        "togethercomputer/llama-2-7b",
-        # falcon llms
-        "togethercomputer/falcon-40b-instruct",
-        "togethercomputer/falcon-7b-instruct",
-        # alpaca
-        "togethercomputer/alpaca-7b",
-        # chat llms
-        "HuggingFaceH4/starchat-alpha",
-        # code llms
-        "togethercomputer/CodeLlama-34b",
-        "togethercomputer/CodeLlama-34b-Instruct",
-        "togethercomputer/CodeLlama-34b-Python",
-        "defog/sqlcoder",
-        "NumbersStation/nsql-llama-2-7B",
-        "WizardLM/WizardCoder-15B-V1.0",
-        "WizardLM/WizardCoder-Python-34B-V1.0",
-        # language llms
-        "NousResearch/Nous-Hermes-Llama2-13b",
-        "Austism/chronos-hermes-13b",
-        "upstage/SOLAR-0-70b-16bit",
-        "WizardLM/WizardLM-70B-V1.0",
-    ]
-)
-# supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
+together_ai_models: Final[set[str]] = set()  # mutable-ok: filled from the cost map at import and on reload
 
+TOGETHER_AI_API_KEY_ENV_VARS: Final = (
+    "TOGETHER_API_KEY",
+    "TOGETHER_AI_API_KEY",
+    "TOGETHERAI_API_KEY",
+    "TOGETHER_AI_TOKEN",
+)
 
 featherless_ai_models: Final[set] = set(
     [
@@ -2374,10 +2349,12 @@ PTU_PRUNE_SKEW_GRACE_SECONDS: Final[int] = 300
 # was never observed (e.g. proxy restart); expiry returns the tokens to the caller.
 BATCH_ENQUEUED_TOKEN_TTL_SECONDS: Final[int] = 8 * 24 * 60 * 60
 
-# Key/team metadata field that opts batches into enqueued-token limiting. Only proxy
-# admins may write it: when present it replaces the standard RPM/TPM checks for
-# batch submissions.
+# Key/team metadata field that opts batches into enqueued-token limiting, and its
+# per-model project counterpart. Only proxy admins may write them. A key or team limit
+# replaces the standard batch rate-limit checks. A project limit on the model the batch
+# routes to replaces the per-minute checks, and daily caps still apply.
 BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
+MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "model_batch_enqueued_token_limit"
 MAX_BATCH_FILE_RECORDS_KEY: Final = "max_batch_file_records"
 MAX_BATCH_FILE_UPLOADS_PER_DAY_KEY: Final = "max_batch_file_uploads_per_day"
 MAX_FILE_DOWNLOADS_PER_MINUTE_KEY: Final = "max_file_downloads_per_minute"

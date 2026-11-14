@@ -15,9 +15,14 @@ from pydantic import (
     Field,
     Json,
     JsonValue,
+    ModelWrapValidatorHandler,
     NonNegativeInt,
     PositiveInt,
+    PrivateAttr,
     TypeAdapter,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
     field_validator,
     model_validator,
 )
@@ -25,6 +30,7 @@ from typing_extensions import (
     NotRequired,
     ReadOnly,
     Required,
+    Self,
     TypedDict,
 )
 
@@ -2888,7 +2894,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     allowed_routes: list | None = Field(None, description="Proxy API Endpoints you want users to be able to access")
     allowed_client_side_s3_buckets: tuple[str, ...] | None = Field(
         None,
-        description="S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches. Any other bucket is rejected unless client-side credentials are allowed",
+        description="S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches, and the buckets of the s3:// image and file URLs a non-admin key sends. Any other bucket is rejected unless client-side credentials are allowed",
     )
     allowed_client_side_s3_endpoint_urls: tuple[str, ...] | None = Field(
         None,
@@ -3357,6 +3363,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     models: list[str] = []
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
+    budget_limits: tuple[BudgetLimitEntry, ...] | None = None
     metadata: dict | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -3514,6 +3521,7 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     blocked: bool | None = None
     budget_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
+    _sent_metadata: bool = PrivateAttr(default=True)
 
     @model_validator(mode="before")
     @classmethod
@@ -3528,6 +3536,18 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
                 values["metadata"][field] = values.get(field)
                 values.pop(field)
         return values
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def remember_whether_metadata_was_sent(cls, values: object, handler: ModelWrapValidatorHandler[Self]) -> Self:
+        sent_metadata: Final = not isinstance(values, Mapping) or "metadata" in values
+        request: Final = handler(values)
+        request._sent_metadata = sent_metadata
+        return request
+
+    @property
+    def sent_metadata(self) -> bool:
+        return self._sent_metadata
 
 
 class DeleteProjectRequest(LiteLLMPydanticObjectBase):
@@ -3616,6 +3636,13 @@ class LiteLLM_SpendLogs_ResponseObject(LiteLLMPydanticObjectBase):
     response: list[LiteLLM_SpendLogs | Any] | None = None
 
 
+def _none_when_invalid(value: object, handler: ValidatorFunctionWrapHandler) -> object:
+    try:
+        return handler(value)
+    except ValidationError:
+        return None
+
+
 class TokenCountRequest(LiteLLMPydanticObjectBase):
     model: str
     prompt: str | None = None
@@ -3630,7 +3657,14 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     """
 
     tools: list[dict] | None = None
+    tool_choice: Annotated[JsonValue, WrapValidator(_none_when_invalid)] = None
+    additional_drop_params: Annotated[JsonValue, WrapValidator(_none_when_invalid)] = None
     system: Any | None = None
+    thinking: JsonValue = None
+    reasoning_effort: JsonValue = None
+    parallel_tool_calls: JsonValue = None
+    response_format: JsonValue = None
+    web_search_options: JsonValue = None
 
 
 from litellm.types.integrations.slack_alerting import CallInfo as CallInfo  # noqa: E402, PLC0414  # public re-export
@@ -4676,7 +4710,7 @@ class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
     Headers a user can pass that will get added to litellm metadata for the request
     """
 
-    spend_logs_metadata: dict | None
+    spend_logs_metadata: ReadOnly[object]
     agent_id: str | None
     trace_id: str | None
     session_id: str | None

@@ -32,6 +32,7 @@ model LiteLLM_BudgetTable {
   budget_limits Json?
   cap_policy String?
   budget_reset_at DateTime?
+  budget_reset_count Int @default(0)
   allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
   temp_budget_increase Float?
   temp_budget_expiry DateTime?
@@ -69,6 +70,7 @@ model LiteLLM_CustomerOrganizationTable {
 
 model LiteLLM_CustomerTeamTable {
   spend Float @default(0.0)
+  spend_reset_window String?
   customer_team_id String @id @default(uuid())
   alias String?
   parent_org_id String
@@ -88,6 +90,7 @@ model LiteLLM_CustomerTeamTable {
 
 model LiteLLM_CustomerMemberTable {
   spend Float @default(0.0)
+  spend_reset_window String?
   customer_member_id String @id @default(uuid())
   alias String?
   parent_org_id String
@@ -383,6 +386,7 @@ model LiteLLM_DeletedTeamTable {
 
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
+    budget_limits Json?
     verified_subjects LiteLLM_VerifiedSubject[]
 		user_id    String @id
     user_alias String? 
@@ -756,6 +760,7 @@ model LiteLLM_EndUserTable {
   user_id String @id
   alias    String? // admin-facing alias
   spend      Float    @default(0.0)
+  spend_reset_window String?
   allowed_model_region String? // require all user requests to use models in this specific region
   default_model String? // use along with 'allowed_model_region'. if no available model in region, default to this model.
   models String[] @default([])

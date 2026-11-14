@@ -126,6 +126,7 @@ from litellm.utils import (
     validate_and_fix_openai_messages,
 )
 from litellm.litellm_core_utils.model_cost_table import publish
+from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 
 
 @pytest.mark.parametrize("root_base_model", [42, ["gemini-3.5-flash"], {"model": "gemini-3.5-flash"}])
@@ -9798,6 +9799,82 @@ def test_validate_environment_ollama_failed():
         assert kv["missing_keys"] == ["OLLAMA_API_BASE"]
 
 
+def _live_together_ai_cost_map_rows() -> frozenset[str]:
+    return frozenset(
+        key
+        for key, value in litellm.model_cost.items()
+        if value.get("litellm_provider") == "together_ai" and not is_hidden_as_retired(value)
+    )
+
+
+def _resolves_to_a_provider(model: str) -> bool:
+    try:
+        litellm.get_llm_provider(model=model)
+    except litellm.BadRequestError:
+        return False
+    return True
+
+
+_TOGETHER_AI_KEY_NAMES: Final = ("TOGETHER_API_KEY", "TOGETHER_AI_API_KEY", "TOGETHERAI_API_KEY", "TOGETHER_AI_TOKEN")
+
+
+@pytest.mark.parametrize("together_ai_key_name", _TOGETHER_AI_KEY_NAMES)
+def test_validate_environment_takes_any_together_ai_key_name_for_bare_and_prefixed_together_ai_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    together_ai_key_name: str,
+) -> None:
+    claimed_by_other_providers: Final = frozenset(
+        itertools.chain.from_iterable(
+            models for provider, models in litellm.models_by_provider.items() if provider != "together_ai"
+        )
+    )
+    bare_ids: Final = frozenset(
+        key.removeprefix("together_ai/") for key in _live_together_ai_cost_map_rows() if key.startswith("together_ai/")
+    )
+    unresolved_bare_ids: Final = tuple(
+        sorted(bare_id for bare_id in bare_ids - claimed_by_other_providers if not _resolves_to_a_provider(bare_id))
+    )
+    bare_and_prefixed_ids: Final = (
+        *unresolved_bare_ids,
+        *(f"together_ai/{bare_id}" for bare_id in unresolved_bare_ids),
+    )
+
+    for key_name in _TOGETHER_AI_KEY_NAMES:
+        monkeypatch.delenv(key_name, raising=False)
+    without_key: Final = {model: validate_environment(model=model) for model in bare_and_prefixed_ids}
+    monkeypatch.setenv(together_ai_key_name, "together-test-key")
+    with_key: Final = {model: validate_environment(model=model) for model in bare_and_prefixed_ids}
+
+    assert unresolved_bare_ids
+    assert without_key == dict.fromkeys(
+        bare_and_prefixed_ids, {"keys_in_environment": False, "missing_keys": ["TOGETHERAI_API_KEY"]}
+    )
+    assert with_key == dict.fromkeys(bare_and_prefixed_ids, {"keys_in_environment": True, "missing_keys": []})
+
+
+def test_validate_environment_keeps_the_wandb_key_check_for_bare_ids_wandb_shares_with_together_ai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared_bare_ids: Final = tuple(sorted(model for model in litellm.wandb_models if not _resolves_to_a_provider(model)))
+    monkeypatch.setattr(
+        litellm,
+        "together_ai_models",
+        frozenset((*litellm.together_ai_models, *(f"together_ai/{model}" for model in shared_bare_ids))),
+    )
+
+    for key_name in (*_TOGETHER_AI_KEY_NAMES, "WANDB_API_KEY"):
+        monkeypatch.delenv(key_name, raising=False)
+    without_key: Final = {model: validate_environment(model=model) for model in shared_bare_ids}
+    monkeypatch.setenv("WANDB_API_KEY", "wandb-test-key")
+    with_key: Final = {model: validate_environment(model=model) for model in shared_bare_ids}
+
+    assert shared_bare_ids
+    assert without_key == dict.fromkeys(
+        shared_bare_ids, {"keys_in_environment": False, "missing_keys": ["WANDB_API_KEY"]}
+    )
+    assert with_key == dict.fromkeys(shared_bare_ids, {"keys_in_environment": True, "missing_keys": []})
+
+
 def test_get_supported_openai_params() -> None:
     assert isinstance(get_supported_openai_params("gpt-4"), list)
 
@@ -11184,6 +11261,32 @@ def test_get_valid_models_returns_static_fireworks_models_without_endpoint_check
     assert set(actual_models) == expected_models
     assert actual_models
     assert expected_models <= set(env_inferred_models)
+
+
+def test_get_valid_models_lists_each_live_together_ai_model_once_under_its_cost_map_key() -> None:
+    listed: Final = get_valid_models(check_provider_endpoint=False, custom_llm_provider="together_ai")
+    listed_bare_ids: Final = {model.removeprefix("together_ai/") for model in listed}
+    live_rows: Final = {key for key in _live_together_ai_cost_map_rows() if key.startswith("together_ai/")}
+
+    assert listed
+    assert len(listed_bare_ids) == len(listed)
+    assert set(listed) == live_rows
+
+
+@pytest.mark.parametrize("together_ai_key_name", _TOGETHER_AI_KEY_NAMES)
+def test_get_valid_models_infers_together_ai_from_any_together_ai_key_name(
+    monkeypatch: pytest.MonkeyPatch,
+    together_ai_key_name: str,
+) -> None:
+    for key_name in _TOGETHER_AI_KEY_NAMES:
+        monkeypatch.delenv(key_name, raising=False)
+    without_key: Final = [model for model in get_valid_models() if model.startswith("together_ai/")]
+    monkeypatch.setenv(together_ai_key_name, "together-test-key")
+    with_key: Final = [model for model in get_valid_models() if model.startswith("together_ai/")]
+
+    assert with_key
+    assert without_key == []
+    assert sorted(with_key) == sorted(get_valid_models(custom_llm_provider="together_ai"))
 
 
 def test_get_valid_models_uses_the_litellm_params_anthropic_api_key() -> None:

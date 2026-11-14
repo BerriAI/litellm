@@ -966,7 +966,11 @@ def test_s3_v2_slow_sink_ramps_concurrency_and_drains_the_backlog(gateway: Gatew
             owned_proxy(
                 gateway,
                 tmp_path,
-                {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "1", "DEFAULT_S3_BATCH_SIZE": "5000"},
+                {
+                    "DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "1",
+                    "DEFAULT_S3_BATCH_SIZE": "5000",
+                    "LOGGING_WORKER_MAX_TIME_PER_COROUTINE": "600",
+                },
                 config=config,
             ) as candidate,
             candidate.scenario() as scenario,
