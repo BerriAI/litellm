@@ -16,6 +16,7 @@ mod python_settings;
 mod redis;
 mod router;
 mod routes;
+mod s3_log;
 mod secrets;
 mod tokenizer;
 
@@ -97,6 +98,8 @@ mod _native {
     use crate::routes::token_counter::TokenCounter;
     #[pymodule_export]
     use crate::routes::traces::trace_encode_error;
+    #[pymodule_export]
+    use crate::s3_log::NativeS3Log;
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
     use crate::tokenizer::HuggingFaceEncoding;
@@ -201,6 +204,7 @@ mod tests {
                 "process_state_started",
                 "reserve_process_for_forking",
                 "unsupported_tls_settings",
+                "NativeS3Log",
             ];
             #[cfg(feature = "huggingface")]
             expected.push("HuggingFaceEncoding");

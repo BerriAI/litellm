@@ -9,8 +9,8 @@ use std::{future::Future, pin::Pin, sync::Arc};
 use aws_credential_types::Credentials;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_sigv4::http_request::{
-    SignableBody, SignableRequest, SignatureLocation, SigningInstructions, SigningParams,
-    SigningSettings, sign,
+    PercentEncodingMode, SignableBody, SignableRequest, SignatureLocation, SigningInstructions,
+    SigningParams, SigningSettings, UriPathNormalizationMode, sign,
 };
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
@@ -38,9 +38,14 @@ pub struct AwsAuthService {
 
 impl Default for AwsAuthService {
     fn default() -> Self {
-        Self::new(Arc::new(NativeProviderLoader))
+        Self::new(Arc::new(NativeProviderLoader {
+            token: None,
+            policy: None,
+        }))
     }
 }
+
+pub type WebIdentityTokenResolver = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
 
 impl AwsAuthService {
     fn new(loader: Arc<dyn ProviderLoader>) -> Self {
@@ -52,6 +57,16 @@ impl AwsAuthService {
                 .build(),
             loader,
         }
+    }
+
+    pub fn for_web_identity(
+        resolver: WebIdentityTokenResolver,
+        session_policy: Option<String>,
+    ) -> Self {
+        Self::new(Arc::new(NativeProviderLoader {
+            token: Some(resolver),
+            policy: session_policy,
+        }))
     }
 }
 
@@ -81,11 +96,19 @@ trait ProviderLoader: Send + Sync {
     fn load(&self, config: AwsAuthConfig, flow: AwsAuthFlow) -> ProviderFuture<'_>;
 }
 
-struct NativeProviderLoader;
+struct NativeProviderLoader {
+    token: Option<WebIdentityTokenResolver>,
+    policy: Option<String>,
+}
 
 impl ProviderLoader for NativeProviderLoader {
     fn load(&self, config: AwsAuthConfig, flow: AwsAuthFlow) -> ProviderFuture<'_> {
-        Box::pin(build_provider(config, flow))
+        Box::pin(build_provider(
+            config,
+            flow,
+            self.token.clone(),
+            self.policy.clone(),
+        ))
     }
 }
 
@@ -271,6 +294,16 @@ impl AwsAuthService {
         self.fresh_credentials(&resolved, &flow).await
     }
 
+    pub async fn invalidate_credentials(
+        &self,
+        config: AwsAuthConfig,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) {
+        self.credentials
+            .invalidate(&config.with_environment(env_lookup))
+            .await;
+    }
+
     /// The credentials botocore's default chain finds in `region`, without LiteLLM's Bedrock settings
     /// (`AWS_ROLE_NAME`, `AWS_PROFILE_NAME`, `AWS_SESSION_NAME`) that `resolve_credentials` also reads.
     pub async fn default_chain_credentials(&self, region: &str) -> Result<Credentials, Error> {
@@ -347,6 +380,8 @@ impl AwsAuthFlow {
 async fn build_provider(
     resolved: AwsAuthConfig,
     flow: AwsAuthFlow,
+    token_resolver: Option<WebIdentityTokenResolver>,
+    policy: Option<String>,
 ) -> Result<SharedCredentialsProvider, Error> {
     match flow {
         AwsAuthFlow::SessionToken {
@@ -417,8 +452,10 @@ async fn build_provider(
             role,
             session_name,
         } => Ok(SharedCredentialsProvider::new(WebIdentityProvider {
+            policy,
             client: aws_sdk_sts::Client::new(&sdk_config(resolved).await),
             token,
+            token_resolver,
             role,
             session_name,
         })),
@@ -448,12 +485,25 @@ async fn sdk_config(config: AwsAuthConfig) -> aws_types::SdkConfig {
     loader.load().await
 }
 
-#[derive(Debug)]
 struct WebIdentityProvider {
     client: aws_sdk_sts::Client,
     token: SecretValue,
+    token_resolver: Option<WebIdentityTokenResolver>,
+    policy: Option<String>,
     role: String,
     session_name: String,
+}
+
+impl std::fmt::Debug for WebIdentityProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WebIdentityProvider")
+            .field("token", &self.token)
+            .field("policy", &self.policy)
+            .field("role", &self.role)
+            .field("session_name", &self.session_name)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ProvideCredentials for WebIdentityProvider {
@@ -464,12 +514,31 @@ impl ProvideCredentials for WebIdentityProvider {
         Self: 'a,
     {
         aws_credential_types::provider::future::ProvideCredentials::new(async {
-            let response = self
+            let token = match &self.token_resolver {
+                Some(resolve) => {
+                    let resolve = Arc::clone(resolve);
+                    let reference = self.token.expose().to_owned();
+                    tokio::task::spawn_blocking(move || resolve(&reference))
+                        .await
+                        .map_err(|error| error.to_string())
+                        .and_then(|token| token)
+                        .map_err(|message| {
+                            CredentialsError::provider_error(std::io::Error::other(message))
+                        })?
+                }
+                None => self.token.expose().to_owned(),
+            };
+            let request = self
                 .client
                 .assume_role_with_web_identity()
                 .role_arn(&self.role)
                 .role_session_name(&self.session_name)
-                .web_identity_token(self.token.expose())
+                .web_identity_token(token);
+            let request = match &self.policy {
+                Some(policy) => request.policy(policy).duration_seconds(3600),
+                None => request,
+            };
+            let response = request
                 .send()
                 .await
                 .map_err(CredentialsError::provider_error)?;
@@ -603,6 +672,32 @@ pub fn sign_headers(
             Ok((name, value))
         })
         .collect()
+}
+
+pub fn sign_s3_headers(
+    method: &str,
+    url: &str,
+    body: &[u8],
+    headers: &[(String, String)],
+    scope: SigningScope<'_>,
+) -> Result<Vec<(String, String)>, Error> {
+    let mut settings = SigningSettings::default();
+    settings.percent_encoding_mode = PercentEncodingMode::Single;
+    settings.uri_path_normalization_mode = UriPathNormalizationMode::Disabled;
+    let instructions = sign_request(
+        method,
+        url,
+        headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str())),
+        body,
+        settings,
+        scope,
+    )?;
+    Ok(instructions
+        .headers()
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .collect())
 }
 
 pub fn presign_url(

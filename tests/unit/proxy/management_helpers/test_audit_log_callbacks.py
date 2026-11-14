@@ -22,6 +22,7 @@ from litellm.proxy.management_helpers.audit_logs import (
     is_audit_logging_enabled,
 )
 from litellm.types.utils import StandardAuditLogPayload
+from tests.unit.integrations.s3_v3_rust_support import scripted_bucket
 
 
 @pytest.fixture(autouse=True)
@@ -313,16 +314,25 @@ class TestAuditLogTaskDoneCallback:
 
 
 class TestS3LoggerAuditLogEvent:
-    @pytest.mark.asyncio
-    async def test_queues_audit_log_with_correct_s3_key(self):
-        with patch("litellm.integrations.s3_v2.S3Logger.__init__", return_value=None):
-            from litellm.integrations.s3_v2 import S3Logger
+    @staticmethod
+    def _logger(monkeypatch: pytest.MonkeyPatch, endpoint: str, s3_path: str | None):
+        from litellm.integrations.s3_v2 import S3Logger
 
-            logger = S3Logger()
-            logger.s3_path = "my-prefix"
-            logger.log_queue = []
-            logger.batch_size = 100
-            logger.max_queue_size = 100
+        monkeypatch.setattr(litellm, "s3_callback_params", None)
+        return S3Logger(
+            s3_bucket_name="audit-bucket",
+            s3_region_name="us-east-1",
+            s3_endpoint_url=endpoint,
+            s3_aws_access_key_id="test-key",
+            s3_aws_secret_access_key="test-secret",
+            s3_path=s3_path,
+            s3_batch_size=100,
+        )
+
+    @pytest.mark.asyncio
+    async def test_queues_audit_log_with_correct_s3_key(self, monkeypatch: pytest.MonkeyPatch):
+        with scripted_bucket() as bucket:
+            logger = self._logger(monkeypatch, bucket.url, "my-prefix")
 
             audit_log = StandardAuditLogPayload(
                 id="audit-123",
@@ -338,25 +348,26 @@ class TestS3LoggerAuditLogEvent:
 
             await logger.async_log_audit_log_event(audit_log)
 
-            assert len(logger.log_queue) == 1
-            element = logger.log_queue[0]
-            assert element.s3_object_key.startswith("my-prefix/audit_logs/")
-            assert "audit-123" in element.s3_object_key
-            assert element.s3_object_key.endswith(".json")
-            assert element.s3_object_download_filename == "audit-audit-123.json"
-            assert element.payload["id"] == "audit-123"
-            assert element.payload["action"] == "created"
+            queued = logger.sink.queued_keys()
+            assert len(queued) == 1
+            s3_object_key = queued[0]
+            assert s3_object_key.startswith("my-prefix/audit_logs/")
+            assert "audit-123" in s3_object_key
+            assert s3_object_key.endswith(".json")
+
+            await logger.flush_queue()
+
+            put = bucket.puts()[0]
+            assert put.path == f"/audit-bucket/{s3_object_key}"
+            assert put.headers["content-disposition"] == 'inline; filename="audit-audit-123.json"'
+            payload = json.loads(put.body)
+            assert payload["id"] == "audit-123"
+            assert payload["action"] == "created"
 
     @pytest.mark.asyncio
-    async def test_s3_key_format_no_path(self):
-        with patch("litellm.integrations.s3_v2.S3Logger.__init__", return_value=None):
-            from litellm.integrations.s3_v2 import S3Logger
-
-            logger = S3Logger()
-            logger.s3_path = None
-            logger.log_queue = []
-            logger.batch_size = 100
-            logger.max_queue_size = 100
+    async def test_s3_key_format_no_path(self, monkeypatch: pytest.MonkeyPatch):
+        with scripted_bucket() as bucket:
+            logger = self._logger(monkeypatch, bucket.url, None)
 
             audit_log = StandardAuditLogPayload(
                 id="audit-456",
@@ -372,10 +383,10 @@ class TestS3LoggerAuditLogEvent:
 
             await logger.async_log_audit_log_event(audit_log)
 
-            assert len(logger.log_queue) == 1
-            element = logger.log_queue[0]
-            assert element.s3_object_key.startswith("audit_logs/")
-            assert "audit-456" in element.s3_object_key
+            queued = logger.sink.queued_keys()
+            assert len(queued) == 1
+            assert queued[0].startswith("audit_logs/")
+            assert "audit-456" in queued[0]
 
 
 class TestS3AuditCallbackParamsDecoupling:

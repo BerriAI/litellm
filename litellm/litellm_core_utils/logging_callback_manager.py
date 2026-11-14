@@ -536,7 +536,7 @@ class LoggingCallbackManager:
             if not isinstance(callback, str)
         )
 
-    def _get_callback_string(self, callback: CustomLogger | Callable[..., object] | str) -> str:
+    def _get_callback_string(self, callback: CustomLogger | CustomLoggerV2 | Callable[..., object] | str) -> str:
         from litellm.integrations.opentelemetry import OpenTelemetry
         from litellm.litellm_core_utils.custom_logger_registry import (
             CustomLoggerRegistry,
@@ -547,7 +547,7 @@ class LoggingCallbackManager:
             return callback
         elif isinstance(callback, OpenTelemetry) and callback.callback_name is not None:
             return callback.callback_name
-        elif isinstance(callback, CustomLogger):
+        elif isinstance(callback, CustomLogger | CustomLoggerV2):
             # Try to get the string representation from the registry
             callback_str: Final = CustomLoggerRegistry.get_callback_str_from_class_type(type(callback))
             return callback_str if callback_str is not None else type(callback).__name__

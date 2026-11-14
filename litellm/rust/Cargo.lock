@@ -3730,6 +3730,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks-s3-log"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures-util",
+ "litellm-auth-aws",
+ "litellm-callbacks",
+ "litellm-http",
+ "litellm-s3",
+ "litellm-secret-value",
+ "md-5",
+ "rand 0.8.7",
+ "reqwest",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "litellm-circuit-breaker"
 version = "0.1.0"
 dependencies = [
@@ -4435,7 +4461,10 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-cache",
  "litellm-cache-response",
+ "litellm-callbacks",
  "litellm-callbacks-legacy-python",
+ "litellm-callbacks-python",
+ "litellm-callbacks-s3-log",
  "litellm-circuit-breaker",
  "litellm-core-utils",
  "litellm-error",
@@ -4672,11 +4701,15 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
+ "bytes",
  "http 1.4.2",
+ "hyper 1.12.0",
+ "litellm-auth-aws",
  "litellm-http",
  "reqwest",
  "rstest",
  "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]

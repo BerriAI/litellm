@@ -7,7 +7,6 @@ from urllib.parse import urlparse
 import pytest
 
 import litellm
-from litellm.integrations.s3_v2 import S3Logger
 from litellm.litellm_core_utils.aws_partition import (
     AwsPartition,
     contains_aws_arn,
@@ -100,14 +99,6 @@ def _agentcore_model(region: str) -> str:
     return f"agentcore/{get_aws_arn_prefix(region)}bedrock-agentcore:{region}:111122223333:runtime/my-agent"
 
 
-def _s3_object_url(region: str) -> str:
-    logger = S3Logger.__new__(S3Logger)
-    logger.s3_endpoint_url = None
-    logger.s3_bucket_name = "audit-bucket"
-    logger.s3_region_name = region
-    return logger._build_object_url("2025-01-01/key.json")
-
-
 ENDPOINT_BUILDERS: Final = {
     "bedrock_runtime_default": lambda region: BaseAWSLLM()._select_default_endpoint_url("runtime", region),
     "bedrock_agent_default": lambda region: BaseAWSLLM()._select_default_endpoint_url("agent", region),
@@ -158,7 +149,6 @@ ENDPOINT_BUILDERS: Final = {
         api_base=None,
         litellm_params={"aws_region_name": region},
     ),
-    "s3_object_url": _s3_object_url,
 }
 
 

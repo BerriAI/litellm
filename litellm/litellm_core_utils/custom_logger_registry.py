@@ -46,7 +46,7 @@ from litellm.integrations.opik.opik import OpikLogger
 from litellm.integrations.pointfive import PointFiveLogger
 from litellm.integrations.posthog import PostHogLogger
 from litellm.integrations.prometheus import PrometheusLogger
-from litellm.integrations.s3_v2 import S3Logger
+from litellm.integrations.s3_v3 import S3Logger
 from litellm.integrations.sqs import SQSLogger
 from litellm.integrations.ternary.ternary_logger import TernaryLogger
 from litellm.integrations.vantage.vantage_logger import VantageLogger

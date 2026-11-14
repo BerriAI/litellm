@@ -20,6 +20,7 @@ from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.timing import assert_enforced_within
 from integration._support.wire import Reply, Request, Wire, wire_server
 
+
 BUCKET: Final = "integration-bucket"
 PREFIX: Final = "integration-logs"
 REQUESTS: Final = 64
@@ -121,7 +122,6 @@ BATCH_KEY: Final = re.compile(
 )
 
 
-@pytest.mark.covers("other.observability.s3_v2.flush_bounds_concurrent_puts_to_default_ceiling_and_keeps_every_log")
 def test_s3_v2_flush_bounds_concurrent_puts_to_the_default_ceiling(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3fan" + uuid.uuid4().hex[:8]
     sink: Final = S3Sink()
@@ -144,7 +144,6 @@ def test_s3_v2_flush_bounds_concurrent_puts_to_the_default_ceiling(gateway: Gate
     assert len({put.target for put in puts}) == REQUESTS
 
 
-@pytest.mark.covers("other.observability.s3_v2.configured_bound_and_env_backed_false_keeps_per_request_objects")
 def test_s3_v2_honors_configured_bound_and_env_backed_false_batch_flag(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3cap" + uuid.uuid4().hex[:8]
     sink: Final = S3Sink()
@@ -173,7 +172,6 @@ def test_s3_v2_honors_configured_bound_and_env_backed_false_batch_flag(gateway: 
     assert frozenset(json.loads(put.body)["id"] for put in puts) == ids
 
 
-@pytest.mark.covers("other.observability.s3_v2.batch_file_upload_writes_one_ndjson_object_per_flush")
 def test_s3_v2_batch_file_upload_writes_one_jsonl_object_per_flush(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3jsonl" + uuid.uuid4().hex[:8]
     sink: Final = S3Sink()
@@ -196,7 +194,6 @@ def test_s3_v2_batch_file_upload_writes_one_jsonl_object_per_flush(gateway: Gate
     assert len(lines) == REQUESTS
 
 
-@pytest.mark.covers("other.observability.s3_v2.batch_file_upload_keeps_team_prefix_in_object_key")
 def test_s3_v2_batch_file_upload_keeps_team_alias_prefix(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3team" + uuid.uuid4().hex[:8]
     team_alias: Final = f"alpha-{uuid.uuid4().hex[:8]}"
@@ -223,7 +220,6 @@ def test_s3_v2_batch_file_upload_keeps_team_alias_prefix(gateway: Gateway, tmp_p
     assert len(lines) == REQUESTS
 
 
-@pytest.mark.covers("other.observability.s3_v2.upstream_failure_events_land_alongside_successes")
 def test_s3_v2_upstream_failure_events_land_alongside_successes(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3fail" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink()
@@ -276,7 +272,6 @@ def test_s3_v2_upstream_failure_events_land_alongside_successes(gateway: Gateway
     assert all("synthetic upstream rejection" in json.dumps(payload["error_information"]) for payload in failures)
 
 
-@pytest.mark.covers("other.observability.s3_v2.invalid_or_empty_bound_falls_back_to_default_ceiling")
 @pytest.mark.parametrize(
     ("bad", "warns"),
     [
@@ -313,7 +308,6 @@ def test_s3_v2_invalid_or_empty_bound_falls_back_to_default_ceiling(
     assert frozenset(payload["id"] for payload in payloads) == ids
 
 
-@pytest.mark.covers("other.observability.s3_v2.sink_rejection_requeues_and_delivers_every_id_once")
 def test_s3_v2_sink_rejection_requeues_and_delivers_every_id_once(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3deny" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink(fail_status=503, delay_seconds=0.2)
@@ -632,7 +626,6 @@ def test_s3_v2_default_config_retries_access_denied_and_every_event_lands(gatewa
     )
 
 
-@pytest.mark.covers("other.observability.s3_v2.batch_retry_resends_identical_key_and_body")
 def test_s3_v2_batch_retry_resends_identical_key_and_body(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3retry" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink(fail_status=500, delay_seconds=0.2)
@@ -658,7 +651,6 @@ def test_s3_v2_batch_retry_resends_identical_key_and_body(gateway: Gateway, tmp_
     assert len(payloads) == REQUESTS
 
 
-@pytest.mark.covers("other.observability.s3_v2.unknown_model_rejection_keeps_other_requests_logging")
 def test_s3_v2_unknown_model_rejection_keeps_other_requests_logging(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3ghost" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink()
@@ -690,7 +682,6 @@ def test_s3_v2_unknown_model_rejection_keeps_other_requests_logging(gateway: Gat
     assert all(payload["status"] == "failure" for payload in extras), extras
 
 
-@pytest.mark.covers("other.observability.s3_v2.batch_flag_ignored_when_s3_v2_is_cold_storage_logger")
 def test_s3_v2_batch_flag_ignored_when_s3_v2_is_cold_storage_logger(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3cold" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink()
@@ -734,7 +725,6 @@ def test_s3_v2_batch_flag_ignored_when_s3_v2_is_cold_storage_logger(gateway: Gat
     assert payloads[0]["id"] == request_id
 
 
-@pytest.mark.covers("other.observability.s3_v2.identical_requests_land_distinct_objects")
 def test_s3_v2_identical_requests_land_distinct_objects(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3same" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink()
@@ -766,7 +756,6 @@ def test_s3_v2_identical_requests_land_distinct_objects(gateway: Gateway, tmp_pa
     assert all(payload["id"] == marker for payload in payloads)
 
 
-@pytest.mark.covers("other.observability.s3_v2.two_workers_bound_and_deliver_every_id")
 def test_s3_v2_two_workers_bound_and_deliver_every_id(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3work" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink()
@@ -788,7 +777,6 @@ def test_s3_v2_two_workers_bound_and_deliver_every_id(gateway: Gateway, tmp_path
     assert frozenset(payload["id"] for payload in payloads) == ids
 
 
-@pytest.mark.covers("other.observability.s3_v2.slow_sink_never_duplicates_or_stalls_readiness")
 def test_s3_v2_slow_sink_never_duplicates_or_stalls_readiness(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3slow" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink(delay_seconds=1.5)
@@ -817,7 +805,6 @@ def test_s3_v2_slow_sink_never_duplicates_or_stalls_readiness(gateway: Gateway, 
     assert len(payloads) == REQUESTS
 
 
-@pytest.mark.covers("other.observability.s3_v2.worker_kill_mid_burst_keeps_surviving_deliveries")
 def test_s3_v2_worker_kill_mid_burst_keeps_surviving_deliveries(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3kill" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink()
@@ -874,7 +861,6 @@ def test_s3_v2_worker_kill_mid_burst_keeps_surviving_deliveries(gateway: Gateway
     assert landed <= frozenset(burst) | frozenset(after), "an id that was never sent landed"
 
 
-@pytest.mark.covers("other.observability.s3_v2.sigterm_mid_burst_loses_only_inflight_without_duplicates")
 def test_s3_v2_sigterm_mid_burst_loses_only_inflight_without_duplicates(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3term" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink()

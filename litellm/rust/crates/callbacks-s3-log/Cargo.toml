@@ -1,0 +1,33 @@
+[package]
+name = "litellm-callbacks-s3-log"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+litellm-auth-aws.workspace = true
+litellm-callbacks.workspace = true
+litellm-http.workspace = true
+litellm-s3.workspace = true
+litellm-secret-value.workspace = true
+
+base64.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+md-5 = "0.11.0"
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
+rstest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+wiremock.workspace = true

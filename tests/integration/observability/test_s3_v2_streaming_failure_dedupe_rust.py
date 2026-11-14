@@ -14,6 +14,7 @@ from integration._support.client import Gateway, JsonValue, Scenario, eventually
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 
+
 Surface = Literal["chat", "messages", "responses"]
 SURFACES: Final[tuple[Surface, ...]] = ("chat", "messages", "responses")
 FAILURE_BODY: Final[bytes] = json.dumps(
@@ -77,9 +78,7 @@ def _responses_stream_id(response: httpx.Response) -> str:
         if line.startswith("data: {")
     )
     completed: Final = tuple(
-        object_value(event["response"])
-        for event in events
-        if event.get("type") == "response.completed"
+        object_value(event["response"]) for event in events if event.get("type") == "response.completed"
     )
     assert len(completed) == 1, events
     response_id: Final = completed[0]["id"]
@@ -137,13 +136,11 @@ def _assert_one_payload(
         return_last_on_timeout=True,
     )
     assert len(payloads) == 1, (
-        f"expected one {status} payload after {upstream_posts} upstream POSTs, "
-        f"observed {len(payloads)} payloads"
+        f"expected one {status} payload after {upstream_posts} upstream POSTs, observed {len(payloads)} payloads"
     )
-    assert (
-        _request_key(payloads[0], response, marker) == response.headers.get("x-litellm-call-id")
-        or marker in json.dumps(payloads[0])
-    ), f"payload did not match request id or marker: {payloads[0]!r}"
+    assert _request_key(payloads[0], response, marker) == response.headers.get(
+        "x-litellm-call-id"
+    ) or marker in json.dumps(payloads[0]), f"payload did not match request id or marker: {payloads[0]!r}"
     return payloads
 
 
@@ -337,9 +334,7 @@ def test_failure_burst_through_sink_outage_lands_each_request_once(
             with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
                 responses: Final = tuple(pool.map(call, jobs))
 
-            upstream_requests: Final = tuple(
-                request for request in upstream.drain() if request.method == "POST"
-            )
+            upstream_requests: Final = tuple(request for request in upstream.drain() if request.method == "POST")
             route_counts: Final = Counter(request.target for request in upstream_requests)
             expected_route_counts: Final = {
                 _surface_target(surface): 2 * requests_per_variant * 3 for surface in SURFACES
@@ -358,8 +353,7 @@ def test_failure_burst_through_sink_outage_lands_each_request_once(
             rejected: Final = sink.attempts - len(sink.store)
             assert rejected >= 1, f"expected at least one rejected sink upload, rejected={rejected}"
             assert len(sink.store) == 0, (
-                f"expected all sink uploads to fail before recovery, rejected={rejected}, "
-                f"attempts={sink.attempts}"
+                f"expected all sink uploads to fail before recovery, rejected={rejected}, attempts={sink.attempts}"
             )
             sink.fail_until = 0.0
             payloads: Final = eventually(
