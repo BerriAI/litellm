@@ -11,11 +11,13 @@ litellm-cache.workspace = true
 litellm-cache-memory.workspace = true
 litellm-python-compat.workspace = true
 litellm-redis-client.workspace = true
+parking_lot.workspace = true
 sha2.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 litellm-circuit-breaker.workspace = true

@@ -1,4 +1,4 @@
-import React, { useId, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "@/lib/toast";
 import { CircleCheck, CircleHelp, Inbox, X } from "lucide-react";
@@ -109,6 +109,9 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
   const [ingestResults, setIngestResults] = useState<RAGIngestResponse[]>([]);
   const [providerParams, setProviderParams] = useState<Record<string, unknown>>({});
   const documentsInputId = useId();
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => () => clearTimeout(resetTimer.current), []);
 
   const isSupportedDocument = (file: File): boolean => {
     if (!ACCEPTED_DOCUMENT_TYPES.includes(file.type)) {
@@ -249,7 +252,9 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
       }
 
       // Clear documents after successful creation
-      setTimeout(() => {
+      clearTimeout(resetTimer.current);
+      resetTimer.current = setTimeout(() => {
+        resetTimer.current = undefined;
         setDocuments([]);
         setIngestResults([]);
       }, 3000);

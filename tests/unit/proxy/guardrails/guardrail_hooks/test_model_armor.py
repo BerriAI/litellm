@@ -3,13 +3,11 @@ import base64
 import io
 import json
 from collections.abc import Iterator, Sequence
-from typing import cast
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-import pytest
-
-
 import httpx
+import pytest
 from fastapi import HTTPException
 
 import litellm
@@ -17,13 +15,18 @@ import litellm.types.utils
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, MaskedHTTPStatusError
-from litellm.proxy.guardrails.anthropic_sse import anthropic_sse_error_frames
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.anthropic_sse import anthropic_sse_error_frames
 from litellm.proxy.guardrails.guardrail_hooks.model_armor import ModelArmorGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
+    FileScanPlan,
+    plan_file_scans,
+)
 from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
     ModelArmorAPIError,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import AllMessageValues
 
 
 @pytest.mark.asyncio
@@ -2668,6 +2671,44 @@ async def test_pre_call_blocks_unresolvable_file_id_reference():
 
     assert exc_info.value.status_code == 400
     assert "could not scan" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "s3://listed-bucket/report.pdf",
+        " S3://listed-bucket/report.pdf ",
+        "gs://listed-bucket/report.pdf",
+        "https://example.com/report.pdf",
+        "http://example.com/report.pdf",
+    ],
+)
+async def test_pre_call_blocks_remote_document_without_format_or_filename(uri: str) -> None:
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": [{"type": "file", "file": {"file_data": uri}}]}
+    ]
+    assert plan_file_scans(messages) == FileScanPlan(attachments=(), unscannable_count=1)
+
+    guardrail: Final = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        fail_on_error=True,
+    )
+    data: Final = {"messages": messages, "metadata": {"guardrails": ["model-armor-test"]}}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "could not scan" in str(exc_info.value.detail)
+    assert data["metadata"]["_model_armor_status"] == "blocked"
 
 
 @pytest.mark.asyncio

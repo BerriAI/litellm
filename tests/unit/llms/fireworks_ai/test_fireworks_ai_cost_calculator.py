@@ -365,6 +365,17 @@ def test_an_unknown_fireworks_model_still_falls_back_to_the_parameter_size_bucke
     assert prompt_cost > 0
 
 
+@pytest.mark.parametrize("size", ["0p6b", "1p5b", "3p8b"])
+def test_an_unknown_fireworks_model_with_a_fractional_size_falls_back_to_its_own_size_bucket(size: str):
+    usage: Final = _usage(prompt_tokens=100, cached_tokens=0, completion_tokens=10)
+
+    fractional_cost: Final = cost_per_token(model=f"accounts/acme/models/not-in-the-map-{size}", usage=usage)
+    whole_cost: Final = cost_per_token(model="accounts/acme/models/not-in-the-map-1b", usage=usage)
+
+    assert fractional_cost == whole_cost
+    assert fractional_cost[0] > 0
+
+
 _TIERED_INPUT_PATTERN: Final = re.compile(r"^input_cost_per_token_above_(\d+)k_tokens$")
 
 

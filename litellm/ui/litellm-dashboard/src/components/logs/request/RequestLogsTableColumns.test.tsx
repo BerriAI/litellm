@@ -35,6 +35,30 @@ const logEntry = (overrides: Partial<LogEntry>): LogEntry => ({
 
 const noopDeps = { onKeyHashClick: vi.fn(), onSessionClick: vi.fn() };
 
+describe("Customer column", () => {
+  it("shows recognized customer names instead of IDs", () => {
+    renderRows([
+      logEntry({
+        metadata: {
+          user_api_key_customer_org_id: "org-id",
+          user_api_key_customer_org_alias: "Org display",
+          user_api_key_customer_member_id: "member-id",
+          user_api_key_customer_member_alias: "Member display",
+        },
+      }),
+    ]);
+    const cell = screen.getByRole("cell", { name: /Member display/ });
+    expect(cell).toHaveTextContent("Org display");
+    expect(cell).toHaveTextContent("Recognized");
+    expect(cell).not.toHaveTextContent("member-id");
+  });
+
+  it("shows a legacy customer as asserted", () => {
+    renderRows([logEntry({ end_user: "legacy-customer" })]);
+    expect(screen.getByRole("cell", { name: /legacy-customer.*Asserted/ })).toHaveTextContent("legacy-customer");
+  });
+});
+
 function renderRows(rows: LogEntry[], deps = noopDeps) {
   render(
     <DataTable

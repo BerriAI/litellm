@@ -49,6 +49,9 @@ pub(crate) enum Repr {
     #[error("must be a JSON object")]
     #[strum_discriminants(strum(serialize = "not_an_object"))]
     NotAnObject,
+    #[error("a host table cannot serve a top-level value that is not a JSON object")]
+    #[strum_discriminants(strum(serialize = "unservable_value"))]
+    UnservableValue,
     #[error("invalid value")]
     #[strum_discriminants(strum(serialize = "invalid"))]
     Invalid(#[source] serde_json::Error),
@@ -138,9 +141,11 @@ impl Error {
 
     pub fn rejects(&self) -> Rejects {
         match self.repr() {
-            Repr::Json(_) | Repr::Empty | Repr::BelowMinimum { .. } | Repr::Shrunk { .. } => {
-                Rejects::Document
-            }
+            Repr::Json(_)
+            | Repr::Empty
+            | Repr::BelowMinimum { .. }
+            | Repr::Shrunk { .. }
+            | Repr::UnservableValue => Rejects::Document,
             Repr::NotAnObject
             | Repr::Invalid(_)
             | Repr::UnknownBlockKey
@@ -174,6 +179,7 @@ impl Error {
             Repr::Empty | Repr::BelowMinimum { .. } | Repr::Shrunk { .. } => true,
             Repr::Json(_)
             | Repr::NotAnObject
+            | Repr::UnservableValue
             | Repr::Invalid(_)
             | Repr::UnknownBlockKey
             | Repr::UnknownTimezone { .. }
@@ -213,6 +219,7 @@ impl Error {
             | Repr::BelowMinimum { .. }
             | Repr::Shrunk { .. }
             | Repr::NotAnObject
+            | Repr::UnservableValue
             | Repr::UnknownBlockKey
             | Repr::UnknownTimezone { .. }
             | Repr::DuplicatePrice { .. }
@@ -397,6 +404,7 @@ mod tests {
     #[case::below_minimum(Repr::BelowMinimum { actual: 1, minimum: 2 }, Rejects::Document)]
     #[case::shrunk(Repr::Shrunk { actual: 1, reference: 3, ratio: 0.5 }, Rejects::Document)]
     #[case::not_an_object(Repr::NotAnObject, Rejects::Row)]
+    #[case::unservable_value(Repr::UnservableValue, Rejects::Document)]
     #[case::invalid(Repr::Invalid(serde_json::from_str::<Value>("x").unwrap_err()), Rejects::Row)]
     #[case::unknown_block_key(Repr::UnknownBlockKey, Rejects::Row)]
     #[case::missing_provider(Repr::MissingProvider, Rejects::Nothing)]

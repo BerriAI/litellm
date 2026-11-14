@@ -4456,6 +4456,8 @@ export interface ConnectFlowStatus {
   connected: boolean | null;
   requested_scopes?: string[];
   servers: { server_id: string; server_name: string; connected: boolean }[] | null;
+  selectable?: false;
+  required_server_ids?: string[];
 }
 
 /**

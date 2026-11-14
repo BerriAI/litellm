@@ -90,6 +90,14 @@ def _get_user_agent(request: Request) -> str | None:
     return request.headers.get("user-agent")
 
 
+def _get_spend_logs_metadata(request: Request) -> Mapping[str, object] | None:
+    if "headers" not in request.scope:
+        return None
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    return as_str_mapping(LiteLLMProxyRequestSetup.get_spend_logs_metadata_from_request_headers(request.headers))
+
+
 def _with_client_context(
     request_data: dict[str, object], requester_ip: str | None, user_agent: str | None
 ) -> dict[str, object]:
@@ -106,6 +114,27 @@ def _with_client_context(
     if not stamped:
         return request_data
     return {**request_data, key: {**base, **stamped}}
+
+
+def _metadata_bucket(request_data: Mapping[str, object], key: str) -> Mapping[str, object]:
+    metadata: Final = request_data.get(key)
+    return metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
+
+
+def _with_spend_logs_metadata(
+    request_data: dict[str, object], route: str, spend_logs_metadata: Mapping[str, object] | None
+) -> dict[str, object]:
+    """The failure spend row reads `metadata` on every route, while callbacks on
+    `litellm_metadata` routes read that bucket, so the header goes into both."""
+    if spend_logs_metadata is None:
+        return request_data
+    from litellm.proxy.litellm_pre_call_utils import metadata_variable_name_for_request
+
+    keys: Final = frozenset(("metadata", metadata_variable_name_for_request(route, request_data)))
+    return {
+        **request_data,
+        **{key: {**_metadata_bucket(request_data, key), "spend_logs_metadata": spend_logs_metadata} for key in keys},
+    }
 
 
 def _escape_control_chars(value: str) -> str:
@@ -254,7 +283,11 @@ class UserAPIKeyAuthExceptionHandler:
 
             # Allow callbacks to transform the error response
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
-                request_data=_with_client_context(request_context, requester_ip, user_agent),
+                request_data=_with_spend_logs_metadata(
+                    _with_client_context(request_context, requester_ip, user_agent),
+                    normalize_request_route(route),
+                    _get_spend_logs_metadata(request),
+                ),
                 original_exception=e,
                 user_api_key_dict=user_api_key_dict,
                 error_type=ProxyErrorTypes.auth_error,

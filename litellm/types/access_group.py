@@ -51,6 +51,7 @@ class AccessGroupResponse(LiteLLMBaseModel):
     assigned_key_ids: list[str]
     access_mcp_servers: tuple[AccessGroupResource, ...]
     access_agents: tuple[AccessGroupResource, ...]
+    access_vector_stores: tuple[AccessGroupResource, ...]
     assigned_teams: tuple[AccessGroupResource, ...]
     assigned_keys: tuple[AccessGroupResource, ...]
     created_at: datetime

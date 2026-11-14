@@ -1,10 +1,13 @@
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime, timezone
+from types import ModuleType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from redis.exceptions import RedisError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
@@ -12,6 +15,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import DailyTagSpendTransaction
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
+from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import ToolDiscoveryQueue
 from litellm.proxy.proxy_server import ProxyStartupEvent
 
 
@@ -572,8 +576,6 @@ async def test_restore_transactions_to_redis_noop_when_empty(redis_update_buffer
 @pytest.mark.asyncio
 async def test_restore_transactions_to_redis_swallows_redis_error(redis_update_buffer, mock_redis_cache):
     """A Redis failure during restore must not propagate to the caller's finally block."""
-    from redis.exceptions import RedisError
-
     mock_redis_cache.async_rpush_pipeline = AsyncMock(side_effect=RedisError("redis down"))
 
     await redis_update_buffer.restore_transactions_to_redis(
@@ -909,11 +911,10 @@ async def test_store_spend_logs_in_redis_is_off_unless_transaction_buffering_is_
 
 
 @pytest.mark.asyncio
-async def test_tool_discoveries_go_back_on_the_queue_when_the_redis_push_fails():
-    from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import ToolDiscoveryQueue
-
+@pytest.mark.parametrize("failure", [ConnectionError("redis down"), RedisError("redis down")])
+async def test_tool_discoveries_go_back_on_the_queue_when_the_redis_push_fails(failure: Exception):
     redis_cache = MagicMock()
-    redis_cache.async_rpush_pipeline = AsyncMock(side_effect=ConnectionError("redis down"))
+    redis_cache.async_rpush_pipeline = AsyncMock(side_effect=failure)
     queue = ToolDiscoveryQueue()
     queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
     queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
@@ -921,3 +922,18 @@ async def test_tool_discoveries_go_back_on_the_queue_when_the_redis_push_fails()
     await RedisUpdateBuffer(redis_cache=redis_cache).store_tool_discoveries_in_redis(queue)
 
     assert queue.flush() == [{"tool_name": "get_weather", "origin": "user_defined", "call_count": 2}]
+
+
+@pytest.mark.asyncio
+async def test_buffer_without_redis_installed_skips_redis_work_when_no_cache_is_configured(
+    import_without_redis_installed: Callable[[str], ModuleType],
+):
+    module: Final = import_without_redis_installed("litellm.proxy.db.db_transaction_queue.redis_update_buffer")
+    buffer: Final[RedisUpdateBuffer] = module.RedisUpdateBuffer(redis_cache=None)
+    queue: Final = ToolDiscoveryQueue()
+    queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+
+    await buffer.restore_transactions_to_redis(db_spend_update_transactions={"key_list_transactions": {"key1": 1.0}})
+    await buffer.store_tool_discoveries_in_redis(queue)
+
+    assert queue.flush() == [{"tool_name": "get_weather", "origin": "user_defined", "call_count": 1}]

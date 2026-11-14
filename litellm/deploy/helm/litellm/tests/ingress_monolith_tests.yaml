@@ -41,6 +41,7 @@ tests:
   - it: componentized mode still splits traffic across ui, gateway and backend Services
     set:
       ingress.enabled: true
+      ingress.controller: nginx
     asserts:
       - equal:
           path: spec.rules[0].http.paths[0].backend.service.name

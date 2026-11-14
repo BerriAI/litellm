@@ -1,14 +1,18 @@
 import json
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
+import openai
 import pytest
 import respx
 
 import litellm
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.vector_stores.transformation import BedrockVectorStoreConfig
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.vector_stores import VectorStoreSearchResponse
 
 
 def test_transform_search_request():
@@ -377,6 +381,55 @@ async def test_bedrock_search_with_credentials_managed_registry(
 
     assert search_response["data"][0]["score"] == 0.9
     assert search_response["data"][0]["content"][0]["text"] == "Mock search result"
+
+
+async def _search_knowledge_base(
+    asynchronous: bool, respond: MagicMock, extra_headers: Mapping[str, object]
+) -> VectorStoreSearchResponse:
+    request_kwargs: Final = {
+        "vector_store_id": "T37J8R4WTM",
+        "query": "what happens after we add a model",
+        "custom_llm_provider": "bedrock",
+        "aws_access_key_id": "test_access_key",
+        "aws_secret_access_key": "test_secret_key",
+        "aws_region_name": "us-east-1",
+        "extra_headers": extra_headers,
+    }
+    if asynchronous:
+        return await litellm.vector_stores.asearch(
+            **request_kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+        )
+    with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+        return litellm.vector_stores.search(**request_kwargs, client=HTTPHandler(client=transport))
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_a_null_extra_header_still_searches_the_knowledge_base(asynchronous: bool) -> None:
+    respond: Final = MagicMock(return_value=httpx.Response(200, json=BEDROCK_RETRIEVE_RESPONSE))
+
+    response: Final = await _search_knowledge_base(
+        asynchronous, respond, {"x-trace-id": None, "x-gateway-key": "gateway-secret"}
+    )
+
+    assert response["data"][0]["content"][0]["text"] == "Mock search result"
+    (call,) = respond.call_args_list
+    request: Final = call.args[0]
+    assert str(request.url) == BEDROCK_RETRIEVE_URL
+    assert "AWS4-HMAC-SHA256 Credential=test_access_key" in request.headers["authorization"]
+    assert request.headers["x-gateway-key"] == "gateway-secret"
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_a_non_string_extra_header_error_does_not_echo_its_value(asynchronous: bool) -> None:
+    respond: Final = MagicMock(return_value=httpx.Response(200, json=BEDROCK_RETRIEVE_RESPONSE))
+
+    with pytest.raises(openai.APIError) as error:
+        await _search_knowledge_base(asynchronous, respond, {"x-tenant-pin": 918273645})
+
+    assert "918273645" not in str(error.value)
+    respond.assert_not_called()
 
 
 def _image_search_body(media_type: str, extra_body: dict[str, object] | None) -> dict[str, object]:

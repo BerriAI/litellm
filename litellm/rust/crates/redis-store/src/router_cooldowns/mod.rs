@@ -191,14 +191,10 @@ impl RouterCooldowns {
             memory.delete(&key)?;
             return Ok(false);
         }
-        let remaining = Duration::from_secs_f64(remaining);
-        if memory.expires_at(&key)? > Some(now + remaining + CORRECTION_SLACK) {
-            memory.delete(&key)?;
-            memory.set(
-                &key,
-                cooldown.clone(),
-                Some(remaining.min(MAX_CORRECTED_TTL)),
-            )?;
+        let remaining = Duration::try_from_secs_f64(remaining).unwrap_or(Duration::MAX);
+        let ends = now.saturating_add(remaining);
+        if memory.expires_at(&key)? > Some(ends.saturating_add(CORRECTION_SLACK)) {
+            memory.refresh(&key, cooldown.clone(), remaining.min(MAX_CORRECTED_TTL))?;
         }
         Ok(true)
     }

@@ -1150,6 +1150,13 @@
               "title": "Access Vector Store Ids",
               "type": "array"
             },
+            "access_vector_stores": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Access Vector Stores",
+              "type": "array"
+            },
             "assigned_key_ids": {
               "items": {
                 "type": "string"
@@ -1249,6 +1256,7 @@
             "assigned_key_ids",
             "access_mcp_servers",
             "access_agents",
+            "access_vector_stores",
             "assigned_teams",
             "assigned_keys",
             "created_at",
@@ -39622,6 +39630,14 @@
               "title": "Flow",
               "type": "string"
             },
+            "server": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Server",
+              "type": "array"
+            },
             "team_id": {
               "anyOf": [
                 {
@@ -42197,7 +42213,7 @@
       },
       "/authorize/complete": {
         "post": {
-          "description": "Finish an aggregate connect flow: mint the gateway authorization code for the\nsigned-in user and hand it back to the DCR client, by 303 redirect (default) or, for\na loopback client on a different machine, as a copyable callback URL\n(``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an\nanonymous or bad-flow request just 400s. The native-client consent page adds\n``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.",
+          "description": "Finish an aggregate connect flow: mint the gateway authorization code for the\nsigned-in user and hand it back to the DCR client, by 303 redirect (default) or, for\na loopback client on a different machine, as a copyable callback URL\n(``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an\nanonymous or bad-flow request just 400s. The native-client consent page adds\n``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.\nEach ``server`` field is the id of a server the connect page shows as on.",
           "operationId": "authorize_complete_authorize_complete_post",
           "requestBody": {
             "content": {

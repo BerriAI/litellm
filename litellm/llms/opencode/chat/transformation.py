@@ -6,7 +6,9 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.url_utils import ensure_api_route
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicModelResponseIterator
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, JsonModeRequest
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
@@ -20,7 +22,7 @@ from litellm.llms.opencode.common_utils import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, Usage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -107,7 +109,41 @@ class OpenCodeGoChatConfig(_GoReportedCostMixin, OpenAILikeChatConfig):
         return [f"opencode_go/{entry['id']}" for entry in models if isinstance(entry.get("id"), str)]
 
 
+class _GoMessagesResponseIterator(AnthropicModelResponseIterator, BaseModelResponseIterator):
+    http_response: httpx.Response | None = None
+
+    def _handle_usage(self, anthropic_usage_chunk: Mapping[str, object]) -> Usage:
+        usage: Final = super()._handle_usage(anthropic_usage_chunk)
+        reported_usage: Final = {key: value for key, value in self._cumulative_usage.items() if key == "opencode"}
+        return usage.model_copy(update=reported_usage)
+
+    def close(self) -> None:
+        BaseModelResponseIterator.close(self)
+
+    async def aclose(self) -> None:
+        if self.sync_stream:
+            self.close()
+            return
+        await BaseModelResponseIterator.aclose(self)
+
+
 class OpenCodeGoMessagesChatConfig(_GoReportedCostMixin, AnthropicConfig):
+    def get_model_response_iterator_for_request(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None,
+        optional_params: Mapping[str, object],
+        logging_obj: "Logging | None" = None,
+    ) -> object:
+        iterator: Final = _GoMessagesResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+            response_format_schema=JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None,
+        )
+        return iter(iterator) if sync_stream else iterator
+
     @property
     def custom_llm_provider(self) -> str:
         return "opencode_go"

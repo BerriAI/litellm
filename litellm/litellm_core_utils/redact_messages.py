@@ -223,6 +223,7 @@ def _redact_choice_content(choice):
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
         _drop_field_when_present(choice.message, "reasoning_items")
+        _drop_field_when_present(choice.message, "audio")
         _redact_provider_specific_fields(choice.message)
         _redact_tool_calls(getattr(choice.message, "tool_calls", None))
         _redact_function_call(getattr(choice.message, "function_call", None))
@@ -234,6 +235,7 @@ def _redact_choice_content(choice):
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
         _drop_field_when_present(choice.delta, "reasoning_items")
+        _drop_field_when_present(choice.delta, "audio")
         _redact_provider_specific_fields(choice.delta)
         _redact_tool_calls(getattr(choice.delta, "tool_calls", None))
         _redact_function_call(getattr(choice.delta, "function_call", None))

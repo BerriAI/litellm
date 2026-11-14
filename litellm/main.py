@@ -233,10 +233,12 @@ from litellm.utils import (
 from ._logging import WarningLogger, verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
     normalize_drop_params,
     safe_deep_copy,
+    without,
 )
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
@@ -807,27 +809,29 @@ async def acompletion(
         prompt_management_logger, AnthropicCacheControlHook
     )
 
-    if (
-        isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+    prompt_hook_result: Final = (
+        cast(  # cast-ok: the hook returns a bare dict of request params
+            "tuple[str, list[AllMessageValues], Mapping[str, object]]",
+            await litellm_logging_obj.async_get_chat_completion_prompt(
+                model=model,
+                messages=messages,
+                non_default_params=kwargs,
+                prompt_id=prompt_id,
+                prompt_variables=kwargs.get("prompt_variables", None),
+                prompt_management_logger=prompt_management_logger,
+                tools=tools,
+                prompt_label=kwargs.get("prompt_label", None),
+                prompt_version=kwargs.get("prompt_version", None),
+                request_kwargs=kwargs,
+            ),
+        )
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj)
         and prompt_management_logger is not None
         and not each_fallback_writes_its_own_cache_dialect
-    ):
-        (
-            model,
-            messages,
-            _,
-        ) = await litellm_logging_obj.async_get_chat_completion_prompt(
-            model=model,
-            messages=messages,
-            non_default_params=kwargs,
-            prompt_id=prompt_id,
-            prompt_variables=kwargs.get("prompt_variables", None),
-            prompt_management_logger=prompt_management_logger,
-            tools=tools,
-            prompt_label=kwargs.get("prompt_label", None),
-            prompt_version=kwargs.get("prompt_version", None),
-            request_kwargs=kwargs,
-        )
+        else None
+    )
+    if prompt_hook_result is not None:
+        model, messages, _ = prompt_hook_result
         #########################################################
         # if the chat completion logging hook removed all tools,
         # set tools to None
@@ -896,8 +900,14 @@ async def acompletion(
         "shared_session": shared_session,
         "enable_json_schema_validation": enable_json_schema_validation,
     }
+    request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
+    prompt_params: Final[Mapping[str, object]] = prompt_hook_result[2] if prompt_hook_result is not None else {}
+    prompt_overrides: Final = {
+        key: value
+        for key, value in prompt_params.items()
+        if key not in request_kwargs or request_kwargs[key] is not value
+    }
     if custom_llm_provider is None:
-        request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -936,7 +946,9 @@ async def acompletion(
     try:
         # Use a partial function to pass your keyword arguments
         kwargs.pop("acompletion", None)
-        func: Final = partial(completion, **completion_kwargs, **kwargs)
+        func: Final = partial(
+            completion, **{**completion_kwargs, **prompt_overrides}, **without(request_kwargs, *prompt_overrides)
+        )
 
         # Add the context to the function
         ctx: Final = contextvars.copy_context()
@@ -977,7 +989,7 @@ async def acompletion(
                     messages=messages,
                     optional_params={
                         k: v
-                        for k, v in completion_kwargs.items()
+                        for k, v in {**completion_kwargs, **prompt_overrides}.items()
                         if v is not None
                         and k
                         not in (
@@ -1010,7 +1022,7 @@ async def acompletion(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
-            completion_kwargs=completion_kwargs,
+            completion_kwargs={**completion_kwargs, **prompt_overrides},
             extra_kwargs=kwargs,
         )
 
@@ -6074,7 +6086,7 @@ def completion(
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
         )
         allowed_openai_params: Final[list[str] | None] = (
-            [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
+            [*allowed_openai_param_names(kwargs.get("allowed_openai_params")), "reasoning_effort"]
             if bridges_to_responses_api
             or reasoning_effort_needs_allowing(
                 chat_reasoning.effort,
@@ -6717,6 +6729,16 @@ def _is_not_resent_failure(error: BaseException) -> bool:
     return isinstance(error, Exception) and not is_resent_failure(error)
 
 
+class _RetryCallState(Protocol):
+    kwargs: Mapping[str, object]
+
+
+def _carry_failed_attempt(retry_state: _RetryCallState) -> None:
+    logging_obj: Final = retry_state.kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.carry_failed_attempt_usage()
+
+
 def completion_with_retries(*args, **kwargs):
     """
     Executes a litellm.completion() with 3 retries
@@ -6736,12 +6758,14 @@ def completion_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.Retrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -6767,12 +6791,14 @@ async def acompletion_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.AsyncRetrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -6800,12 +6826,14 @@ def responses_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.Retrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -6832,12 +6860,14 @@ async def aresponses_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.AsyncRetrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -8400,7 +8430,7 @@ async def aadapter_generate_content(
 
     coro: Final = cast(
         Coroutine[object, object, dict[str, object] | AsyncIterator[bytes]],
-        GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True),
+        GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True, custom_logging_obj=None),
     )
     return await coro
 

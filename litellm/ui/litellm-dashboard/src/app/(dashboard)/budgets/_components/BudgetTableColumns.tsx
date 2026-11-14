@@ -44,6 +44,30 @@ function BudgetDurationCell({ value }: { value: string | null | undefined }) {
   return <span className="whitespace-nowrap">{getBudgetDurationLabel(value)}</span>;
 }
 
+function BudgetLimitsCell({ budget }: { budget: budgetItem }) {
+  const { t } = useTranslation();
+  const periodLabel = (duration: string) => {
+    if (duration === "1mo") return t("budgets.form.resetOptions.perMonth");
+    if (duration === "12mo") return t("budgets.form.resetOptions.perYear");
+    return getBudgetDurationLabel(duration);
+  };
+  return (
+    <div className="space-y-1 text-right tabular-nums">
+      {(budget.max_budget != null || !budget.budget_limits?.length) && (
+        <MoneyCell value={budget.max_budget} decimals={2} showZero emptyText={t("budgets.table.cells.unlimited")} />
+      )}
+      {budget.budget_limits?.map((limit) => (
+        <div key={limit.budget_duration} className="whitespace-nowrap">
+          {t("budgets.table.cells.windowLimit", {
+            amount: limit.max_budget,
+            period: periodLabel(limit.budget_duration),
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 interface BudgetRowActionsProps {
   budget: budgetItem;
   onEditClick: (budget: budgetItem) => void;
@@ -112,9 +136,7 @@ export const getBudgetTableColumns = (
     meta: { title: t("budgets.table.columns.maxBudget"), numeric: true },
     header: ({ column }) => <DataTableSortHeader column={column} title={t("budgets.table.columns.maxBudget")} />,
     size: 120,
-    cell: ({ row }) => (
-      <MoneyCell value={row.original.max_budget} decimals={2} showZero emptyText={t("budgets.table.cells.unlimited")} />
-    ),
+    cell: ({ row }) => <BudgetLimitsCell budget={row.original} />,
   },
   {
     id: "tpm_limit",

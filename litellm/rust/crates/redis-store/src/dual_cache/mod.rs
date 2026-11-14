@@ -3,10 +3,9 @@ mod increment;
 mod read;
 mod write;
 
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
+
+use parking_lot::Mutex;
 
 pub use self::batch_read::TierPolicy;
 pub(crate) use self::{
@@ -14,7 +13,7 @@ pub(crate) use self::{
     increment::PipelineIncrement,
 };
 use crate::{
-    memory::{Clock, Memory, lock},
+    memory::{Clock, Memory},
     remote::RemoteSlot,
 };
 
@@ -86,13 +85,13 @@ impl<V: Clone, R> DualCache<V, R> {
     }
 
     pub(crate) fn default_in_memory_ttl(&self) -> Option<Duration> {
-        *lock(&self.default_in_memory_ttl)
+        *self.default_in_memory_ttl.lock()
     }
 
     /// `DualCache.update_cache_ttl` and `update_in_memory_max_size` together: both apply in place,
     /// and the entries memory already holds stay.
     pub(crate) fn reconfigure(&self, memory: MemorySettings) {
-        *lock(&self.default_in_memory_ttl) = memory.ttl;
+        *self.default_in_memory_ttl.lock() = memory.ttl;
         self.memory.update_max_size(memory.entries);
     }
 }
@@ -100,10 +99,7 @@ impl<V: Clone, R> DualCache<V, R> {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{
-            Arc,
-            atomic::{AtomicU64, Ordering},
-        },
+        sync::{Arc, atomic::Ordering},
         time::Duration,
     };
 
@@ -111,7 +107,9 @@ mod tests {
     use tokio::runtime::Handle;
 
     use super::{DualCache, MemorySettings, PipelineIncrement};
-    use crate::{Clock, Number, RequestRedis, memory::Counter, remote::RemoteSlot};
+    use crate::{
+        Clock, Number, RequestRedis, memory::Counter, remote::RemoteSlot, test_support::clock,
+    };
 
     #[derive(Clone, Debug, PartialEq)]
     enum Entry {
@@ -132,13 +130,6 @@ mod tests {
                 Self::Text => None,
             }
         }
-    }
-
-    fn clock() -> (Clock, Arc<AtomicU64>) {
-        let seconds = Arc::new(AtomicU64::new(1_000));
-        let read = seconds.clone();
-        let clock: Clock = Arc::new(move || Duration::from_secs(read.load(Ordering::SeqCst)));
-        (clock, seconds)
     }
 
     fn without_redis<V: Clone>(
@@ -253,6 +244,23 @@ mod tests {
 
         assert_eq!(cache.memory().get("kept").unwrap(), Some(Number::Int(1)));
         assert_eq!(cache.memory().get("short").unwrap(), None);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reconfigure_applies_the_new_capacity_to_the_next_write() {
+        let (now, _) = clock();
+        let cache = without_redis(None, now);
+        cache.set("first", Number::Int(1), None).await.unwrap();
+
+        cache.reconfigure(MemorySettings {
+            entries: Some(1),
+            ttl: None,
+        });
+        cache.set("second", Number::Int(2), None).await.unwrap();
+
+        assert_eq!(cache.memory().len().unwrap(), 1);
+        assert_eq!(cache.memory().get("second").unwrap(), Some(Number::Int(2)));
     }
 
     // async_increment_cache_pipeline_post_call: InMemoryCache.async_increment_pipeline raises at the

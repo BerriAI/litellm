@@ -286,8 +286,13 @@ def test_unmatched_entities_return_the_standard_empty_response() -> None:
 RANGE: Final = {"start_date": "2024-01-01", "end_date": "2024-01-31"}
 
 
+@dataclass(frozen=True, slots=True)
 class ActivityDatabase(Database):
+    organization_id: str = "org-a"
+
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if [self.organization_id] not in args:
+            return ()
         if "GROUPING SETS" in query:
             values: Final = {
                 **asdict(_grouping_row(63, spend=500)),
@@ -300,7 +305,7 @@ class ActivityDatabase(Database):
             return (
                 {
                     **asdict(_grouping_row(63, spend=500)),
-                    "entity_id": "org-a",
+                    "entity_id": self.organization_id,
                     "api_key_rolled": 1,
                     "prompt_tokens": 3000,
                     "completion_tokens": 2000,
@@ -324,6 +329,19 @@ def test_aggregated_activity_returns_complete_database_totals_as_one_page() -> N
     assert body["results"][0]["breakdown"]["entities"]["org-a"]["metrics"]["spend"] == 500
 
 
+@pytest.mark.parametrize("organization_id", ("org,a", " org-a ", "org/a?b=c"))
+def test_exact_organization_filter_preserves_the_complete_identifier(organization_id: str) -> None:
+    response: Final = client(database=ActivityDatabase(Table(), organization_id=organization_id)).get(
+        "/management/v1/customer_organizations/daily/activity/aggregated",
+        params={**RANGE, "customer_org_id": organization_id},
+    )
+    assert response.status_code == 200, response.text
+    body: Final = response.json()
+    assert body["metadata"]["total_spend"] == 500
+    assert set(body["results"][0]["breakdown"]["entities"]) == {organization_id}
+    assert body["results"][0]["breakdown"]["entities"][organization_id]["metrics"]["spend"] == 500
+
+
 @pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))
 def test_non_admins_cannot_read_customer_usage(role: LitellmUserRoles) -> None:
     response: Final = client(role=role).get(
@@ -335,6 +353,9 @@ def test_non_admins_cannot_read_customer_usage(role: LitellmUserRoles) -> None:
 @pytest.mark.parametrize(
     "params,status",
     (
+        (RANGE, 400),
+        ({**RANGE, "customer_org_id": "org-a", "customer_org_ids": "org-b"}, 400),
+        ({**RANGE, "customer_org_id": ""}, 422),
         ({**RANGE, "customer_org_ids": ""}, 422),
         ({**RANGE, "customer_org_ids": ",".join(str(index) for index in range(101))}, 422),
         ({"start_date": "2020-01-01", "end_date": "2024-01-01", "customer_org_ids": "org-a"}, 400),

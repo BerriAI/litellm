@@ -119,13 +119,13 @@ jobs:
       - name: Install the Rust gateway
         if: matrix.suite == 'management' || matrix.suite == 'management-replica'
         timeout-minutes: 15
-        working-directory: packaging/litellm-proxy
+        working-directory: litellm/packaging/litellm-proxy
         env:
           CARGO_INCREMENTAL: "0"
         run: |
           uv run --no-project --with maturin==1.15.0 maturin build --profile dev --strip --out "$RUNNER_TEMP/gateway-dist"
-          uv pip install --no-deps --python ../../.venv/bin/python "$RUNNER_TEMP"/gateway-dist/*.whl
-          test -x ../../.venv/bin/litellm-gateway
+          uv pip install --no-deps --python ../../../.venv/bin/python "$RUNNER_TEMP"/gateway-dist/*.whl
+          test -x ../../../.venv/bin/litellm-gateway
 
       - name: Install redis-server 7.2.16
         timeout-minutes: 3

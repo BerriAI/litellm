@@ -11766,6 +11766,55 @@ def test_caller_tags_reach_litellm_metadata_whether_metadata_is_a_dict_or_a_json
     assert data["metadata"] == caller_metadata
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/chat/completions", "/v1/responses"))
+@pytest.mark.parametrize("assigned", (False, True))
+async def test_customer_window_policy_is_stamped_from_auth_not_requester_metadata(path, assigned):
+    from litellm.models.budget import BudgetLimit
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.proxy.auth.customer_hierarchy import (
+        CustomerHierarchyAuth,
+        CustomerScopeAuth,
+        customer_budget_scopes_from_request,
+        customer_budget_scopes_metadata,
+    )
+
+    hierarchy: Final = CustomerHierarchyAuth(
+        customer_org_id="admitted-org",
+        scopes=(
+            CustomerScopeAuth(
+                key="customer_org",
+                entity_id="admitted-org",
+                budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=10),),
+            ),
+        ),
+    )
+    forged: Final = {
+        "user_api_key_customer_org_id": "admitted-org",
+        "user_api_key_customer_budget_scopes": customer_budget_scopes_metadata(
+            hierarchy.model_copy(
+                update={
+                    "scopes": (
+                        CustomerScopeAuth(
+                            key="customer_org",
+                            entity_id="admitted-org",
+                            budget_limits=(BudgetLimit(budget_duration="12mo", max_budget=9999),),
+                        ),
+                    )
+                }
+            )
+        ),
+    }
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-4o-mini", "metadata": dict(forged), "litellm_metadata": dict(forged)},
+        request=_make_request_mock(path, {}),
+        user_api_key_dict=UserAPIKeyAuth(customer_hierarchy=hierarchy if assigned else None),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+    assert customer_budget_scopes_from_request({"litellm_params": updated}) == (hierarchy.scopes if assigned else None)
+
+
 @pytest.mark.parametrize(
     ("model", "global_aliases", "key_aliases", "group_alias", "expected"),
     [

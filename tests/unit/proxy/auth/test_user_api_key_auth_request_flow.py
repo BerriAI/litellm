@@ -5108,6 +5108,38 @@ async def test_centralized_common_checks_enforce_personal_budget_on_proxy_admin_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("duration", ["1h", "30d"])
+async def test_centralized_common_checks_enforce_window_budget_on_proxy_admin_token(duration: str) -> None:
+    db_user: Final = LiteLLM_UserTable.model_validate(
+        {
+            "user_id": "admin-user",
+            "user_role": "internal_user",
+            "budget_limits": [{"budget_duration": duration, "max_budget": 0.0}],
+        }
+    )
+    token: Final = UserAPIKeyAuth(api_key="sk-test", user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(litellm.BudgetExceededError) as rejection:
+        await _run_checks_for_cached_user(db_user, token)
+    assert (rejection.value.max_budget, rejection.value.current_cost) == (0.0, 0.0)
+    assert f"over {duration} budget" in str(rejection.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", [LITELLM_PROXY_MASTER_KEY_ALIAS, "sk-ui-session"])
+async def test_centralized_common_checks_admin_name_ignores_its_row_window_budget(api_key: str) -> None:
+    db_user: Final = LiteLLM_UserTable.model_validate(
+        {
+            "user_id": "admin",
+            "user_role": "proxy_admin",
+            "budget_limits": [{"budget_duration": "1h", "max_budget": 0.0}],
+        }
+    )
+    token: Final = UserAPIKeyAuth(api_key=api_key, user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await _run_checks_for_cached_user(db_user, token)
+    assert token.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("row_models", [["no-default-models"], ["claude-haiku-4-5"]])
 async def test_centralized_common_checks_proxy_admin_token_ignores_row_model_list(row_models):
     """A proxy_admin token keeps every model when its DB row carries a personal
@@ -7338,6 +7370,54 @@ async def test_centralized_common_checks_skips_public_routes():
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+class _CustomerTablesOffLimits:
+    """Prisma stand-in whose customer tables fail the test the moment anything reads them."""
+
+    class _Db:
+        def __getattr__(self, name: str) -> MagicMock:
+            assert not name.startswith("litellm_customer"), f"public route read {name}"
+            return MagicMock()
+
+    db = _Db()
+
+
+@pytest.mark.asyncio
+async def test_authorizing_a_public_route_ignores_the_customer_headers():
+    """A credential-free GET / carrying both customer headers must not look up, register or charge a customer:
+    the builder served it without a key, so nothing on it is trusted."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+
+    token = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "query_string": b"",
+            "headers": [(b"x-litellm-customer-org-alias", b"acme"), (b"x-litellm-customer-member-id", b"user-7")],
+        }
+    )
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": _CustomerTablesOffLimits(),
+        "llm_model_list": None,
+        "user_model": None,
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        recovered = await _authorize_authenticated_request(
+            user_api_key_auth_obj=token, request=request, request_data={}, route="/", api_key=""
+        )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert (recovered, token.customer_hierarchy) == (None, None)
 
 
 @pytest.mark.asyncio
@@ -11182,7 +11262,8 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         assert request_data["model"] == "gpt-4o"
 
     @pytest.mark.asyncio
-    async def test_fallback_skips_candidates_without_pricing(self, monkeypatch: pytest.MonkeyPatch):
+    @pytest.mark.parametrize("route", ["/v1/chat/completions", "/queue/chat/completions"])
+    async def test_fallback_skips_candidates_without_pricing(self, monkeypatch: pytest.MonkeyPatch, route: str):
         valid_token: Final = UserAPIKeyAuth(
             user_id="user-1",
             team_id="team-1",
@@ -11209,7 +11290,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
                 request=request,
                 llm_model_list=None,
                 llm_router=router,
-                route="/v1/chat/completions",
+                route=route,
             )
 
         _assert_budget_exceeded_values(exc_info.value)

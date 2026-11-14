@@ -1,7 +1,7 @@
 """The shared Responses API config contract."""
 
 import asyncio, importlib, json
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 
 import httpx
 import pytest
@@ -1016,7 +1016,7 @@ def _openai_stream_cut_mid_tool_call(preamble: str, *, announce_item: bool = Tru
         "type": "error", "sequence_number": 3,
         "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
     }
-    return _sse(*((text, item_added, arguments, error) if announce_item else (text, arguments, error)))
+    return _sse(*((text,) if preamble else ()), *((item_added,) if announce_item else ()), arguments, error)
 
 
 def _anthropic_stream_cut_mid_tool_call(preamble: str, tool_block: Mapping[str, object] | None = None) -> httpx.Response:
@@ -1038,12 +1038,13 @@ def _anthropic_stream_cut_mid_tool_call(preamble: str, tool_block: Mapping[str, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("announce_item", [True, False], ids=["announced_item", "arguments_only"])
+@pytest.mark.parametrize("preamble", ["Let me look that up. ", ""], ids=["after_text", "without_text"])
 async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream_began_a_tool_call(
-    announce_item: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    announce_item: bool, preamble: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=_openai_stream_cut_mid_tool_call("Let me look that up. ", announce_item=announce_item)
+        return_value=_openai_stream_cut_mid_tool_call(preamble, announce_item=announce_item)
     )
     fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
         return_value=_anthropic_stream("It is sunny in Paris.")
@@ -1420,3 +1421,116 @@ async def test_responses_in_stream_error_event_falls_back_only_when_retriable(
             assert calls == ["primary-model"]
     finally:
         router.discard()
+
+
+def _openai_response(model: str, status: str) -> Mapping[str, object]:
+    return {
+        "id": f"resp_{model}",
+        "object": "response",
+        "created_at": 0,
+        "status": status,
+        "model": model,
+        "output": [],
+    }
+
+
+def _openai_created(model: str) -> Mapping[str, object]:
+    return {"type": "response.created", "sequence_number": 0, "response": _openai_response(model, "in_progress")}
+
+
+_INTERRUPTED: Final = {"code": "server_error", "message": "interrupted"}
+_IN_STREAM_FAILURES: Final = (
+    {"type": "error", "error": {"type": "server_error", **_INTERRUPTED}},
+    {"type": "response.failed", "response": {**_openai_response("primary-model", "failed"), "error": _INTERRUPTED}},
+)
+_COMPLETED_TOOL_CALL: Final = {
+    "type": "response.output_item.done",
+    "output_index": 0,
+    "item": {
+        "type": "function_call",
+        "id": "fc_primary",
+        "call_id": "call_primary",
+        "name": "shell",
+        "arguments": '{"command": "echo run"}',
+        "status": "completed",
+    },
+}
+_SHELL_TOOL: Final = {"type": "function", "name": "shell", "parameters": {"type": "object"}}
+
+
+def _upstream_streaming(*primary_events: Mapping[str, object]) -> Callable[[httpx.Request], httpx.Response]:
+    def upstream(request: httpx.Request) -> httpx.Response:
+        model: Final = json.loads(request.content)["model"]
+        if model == "primary-model":
+            return _sse(*({**event, "sequence_number": index} for index, event in enumerate(primary_events)))
+        return _sse(_openai_created(model), _openai_completed(model))
+
+    return upstream
+
+
+def _requested_models(route: respx.Route) -> list[str]:
+    return [json.loads(call.request.content)["model"] for call in route.calls]
+
+
+def _openai_primary_with_fallback() -> Router:
+    return Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": f"openai/{name}-model", "api_key": "sk-test"}}
+            for name in ("primary", "fallback")
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", _IN_STREAM_FAILURES, ids=["error_event", "response_failed"])
+async def test_responses_fallback_surfaces_the_primary_error_once_a_completed_tool_call_was_delivered(
+    failure: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=_upstream_streaming(_openai_created("primary-model"), _COMPLETED_TOOL_CALL, failure)
+    )
+    router: Final = _openai_primary_with_fallback()
+    try:
+        stream: Final = await router.aresponses(
+            model="primary", input="Run echo run.", stream=True, tools=[_SHELL_TOOL], tool_choice="required"
+        )
+        assert isinstance(stream, AsyncIterator)
+        events: Final = aiter(stream)
+        created: Final = await anext(events)
+        done: Final = await anext(events)
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            await anext(events)
+    finally:
+        router.discard()
+    assert created.type == ResponsesAPIStreamEvents.RESPONSE_CREATED
+    assert done.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+    assert getattr(getattr(done, "item"), "call_id") == "call_primary"
+    assert _requested_models(route) == ["primary-model"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", _IN_STREAM_FAILURES, ids=["error_event", "response_failed"])
+async def test_responses_fallback_takes_over_a_stream_that_failed_before_any_output_item(
+    failure: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=_upstream_streaming(_openai_created("primary-model"), failure)
+    )
+    router: Final = _openai_primary_with_fallback()
+    try:
+        stream: Final = await router.aresponses(
+            model="primary", input="Run echo run.", stream=True, tools=[_SHELL_TOOL], tool_choice="required"
+        )
+        events: Final = [event async for event in stream]
+    finally:
+        router.discard()
+    assert [event.type for event in events] == [
+        ResponsesAPIStreamEvents.RESPONSE_CREATED,
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+    ]
+    assert getattr(getattr(events[0], "response"), "model") == "fallback-model"
+    assert _requested_models(route) == ["primary-model", "fallback-model"]

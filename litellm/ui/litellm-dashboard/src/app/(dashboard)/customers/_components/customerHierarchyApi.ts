@@ -42,11 +42,12 @@ export const resolveCustomerHierarchy = async (request: HierarchyRequest): Promi
     scope.team ? info<Team>("customer_teams", scope.team, request) : null,
     scope.member ? info<Member>("customer_members", scope.member, request) : null,
   ]);
-  const team = requestedTeam ?? (member ? await info<Team>("customer_teams", member.parent_team_id, request) : null);
+  const team =
+    requestedTeam ?? (member ? await info<Team>("customer_teams", member.parent_team_ids[0], request) : null);
   assertScope(organization.customer_org_id === scope.org);
   assertScope(!team || team.parent_org_id === scope.org);
   assertScope(!scope.team || team?.customer_team_id === scope.team);
   assertScope(!member || member.customer_member_id === scope.member);
-  assertScope(!member || member.parent_team_id === team?.customer_team_id);
+  assertScope(!member || (team !== null && member.parent_team_ids.includes(team.customer_team_id)));
   return { organization, team, member };
 };

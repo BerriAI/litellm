@@ -10,6 +10,7 @@ import pytest
 from litellm.litellm_core_utils.dot_notation_indexing import (
     get_nested_value,
     delete_nested_value,
+    delete_nested_values,
 )
 
 
@@ -139,3 +140,19 @@ class TestDeleteNestedValue:
     def test_delete_accepts_a_read_only_mapping(self):
         payload: Final = MappingProxyType({"tags": ["a"], "secret": ["s"]})
         assert delete_nested_value(payload, "secret") == {"tags": ["a"]}
+
+
+def test_delete_nested_values_removes_every_path_and_leaves_the_input_untouched():
+    payload: Final = MappingProxyType(
+        {
+            "tools": [{"name": "t1", "secret": "s1"}, {"name": "t2", "secret": "s2"}],
+            "meta": {"keep": 1, "drop": 2},
+            "top": "x",
+        }
+    )
+    result: Final = delete_nested_values(
+        payload, ("tools[*].secret", "meta.drop", "top", "top", "missing.path", "tools[9].name")
+    )
+    assert result == {"tools": [{"name": "t1"}, {"name": "t2"}], "meta": {"keep": 1}}
+    assert payload["tools"] == [{"name": "t1", "secret": "s1"}, {"name": "t2", "secret": "s2"}]
+    assert payload["meta"] == {"keep": 1, "drop": 2}
