@@ -67,6 +67,8 @@ class _GatedAsyncConnection(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         await self._connections.refuse_if_due(request)
+        if request.url.scheme == "https":
+            await _emit(request, "http2.send_request_headers.started", {})
         self.hosts = self.hosts | {request.url.netloc.decode()}
         self.in_flight += 1
         self.peak = max(self.peak, self.in_flight)
@@ -477,7 +479,7 @@ async def test_async_spread_passes_connection_events_on_to_the_callers_own_trace
     trace: Final = _TraceRecorder()
     async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(_AsyncConnections(gate), UNCAPPED)) as client:
         assert (await client.get(URL, extensions={"trace": trace})).status_code == 200
-    assert trace.events == ("http2.receive_remote_settings.complete",)
+    assert trace.events == ("http2.send_request_headers.started", "http2.receive_remote_settings.complete")
 
 
 class _TeHeaderRecorder(httpx.AsyncBaseTransport):
@@ -702,6 +704,23 @@ async def test_async_spread_moves_off_a_connection_whose_only_stream_was_closed_
 
         assert (await client.get(URL)).text == "ok"
         assert [connection.served for connection in connections.opened] == [1, 1]
+        assert connections.opened[0].closed
+
+
+@pytest.mark.asyncio
+async def test_async_spread_moves_off_a_connection_whose_only_stream_was_cancelled_while_awaiting_its_response():
+    gate: Final = asyncio.Event()
+    connections: Final = _AsyncConnections(gate, advertised=MappingProxyType({"search.example": 1}))
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, UNCAPPED)) as client:
+        cancelled: Final = asyncio.create_task(client.get(URL))
+        await _until(lambda: connections.in_flight() == 1)
+        cancelled.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+
+        gate.set()
+        assert (await client.get(URL)).text == "ok"
+        assert [connection.served for connection in connections.opened] == [0, 1]
         assert connections.opened[0].closed
 
 

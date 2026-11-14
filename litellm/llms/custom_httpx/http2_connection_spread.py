@@ -17,6 +17,7 @@ HTTP2_STREAMS_PER_CONNECTION: Final = 100
 HTTP2_CONNECTIONS_PER_LANE: Final = 2
 _REMOTE_SETTINGS_RECEIVED: Final = "http2.receive_remote_settings.complete"
 _HTTP1_REQUEST_STARTED: Final = "http11.send_request_headers.started"
+_HTTP2_STREAM_OPENED: Final = "http2.send_request_headers.started"
 
 _Origin: TypeAlias = tuple[str, str, int | None]
 _Trace: TypeAlias = Callable[[str, Mapping[str, object]], Awaitable[None]]
@@ -289,9 +290,11 @@ def _headers_for_lane(request: httpx.Request) -> tuple[tuple[bytes, bytes], ...]
     return tuple((name, value) for name, value in request.headers.raw if _allowed_over_http2(name, value))
 
 
-def _tracer(origin: _OriginLanes, lane: _Lane, caller_trace: object) -> _Trace:
+def _tracer(origin: _OriginLanes, lane: _Lane, stream_opened: asyncio.Event, caller_trace: object) -> _Trace:
     async def trace(event: str, info: Mapping[str, object]) -> None:
         origin.observe(event, info, lane)
+        if event == _HTTP2_STREAM_OPENED:
+            stream_opened.set()
         if not callable(caller_trace):
             return
         outcome: Final = caller_trace(event, info)
@@ -301,7 +304,9 @@ def _tracer(origin: _OriginLanes, lane: _Lane, caller_trace: object) -> _Trace:
     return trace
 
 
-def _for_lane(request: httpx.Request, origin: _OriginLanes | None, lane: _Lane) -> httpx.Request:
+def _for_lane(
+    request: httpx.Request, origin: _OriginLanes | None, lane: _Lane, stream_opened: asyncio.Event
+) -> httpx.Request:
     caller_trace: Final[object] = request.extensions.get("trace")
     return httpx.Request(
         request.method,
@@ -310,7 +315,7 @@ def _for_lane(request: httpx.Request, origin: _OriginLanes | None, lane: _Lane) 
         stream=request.stream,
         extensions=request.extensions
         if origin is None
-        else {**request.extensions, "trace": _tracer(origin, lane, caller_trace)},
+        else {**request.extensions, "trace": _tracer(origin, lane, stream_opened, caller_trace)},
     )
 
 
@@ -349,11 +354,14 @@ class AsyncHTTP2ConnectionSpread(httpx.AsyncBaseTransport):
     async def _send_on_a_lane(self, request: httpx.Request, origin: _OriginLanes | None) -> httpx.Response:
         placement: Final = self._lanes.acquire(origin)
         lane: Final = placement.lane
+        stream_opened: Final = asyncio.Event()
         try:
             await self._lanes.close_dropped()
-            response: Final = await lane.transport.handle_async_request(_for_lane(request, placement.origin, lane))
+            response: Final = await lane.transport.handle_async_request(
+                _for_lane(request, placement.origin, lane, stream_opened)
+            )
         except BaseException:
-            lane.release(closed_before_its_end=False)
+            lane.release(closed_before_its_end=stream_opened.is_set())
             raise
         stream: Final = response.stream
         if not isinstance(stream, httpx.AsyncByteStream):
