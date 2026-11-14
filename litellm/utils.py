@@ -1334,14 +1334,15 @@ def function_setup(
                 for callback in all_callbacks:
                     # check if callback is a string - e.g. "lago", "openmeter"
                     if isinstance(callback, str):
-                        callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
+                        from litellm.litellm_core_utils.litellm_logging import init_custom_logger_compatible_class
+
+                        callback = init_custom_logger_compatible_class(
                             callback,
                             internal_usage_cache=None,
                             llm_router=None,
                         )
                         if callback is None or any(
-                            type(cb) is type(callback)
-                            or (isinstance(cb, CustomLoggerV2) and _same_v2_callback(cb, callback))
+                            type(cb) is type(callback) or _same_v2_callback(cb, callback)
                             for cb in litellm._async_success_callback
                         ):  # don't double add a callback
                             continue

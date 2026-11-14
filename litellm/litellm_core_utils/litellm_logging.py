@@ -730,7 +730,7 @@ class _ParamsLookup(Protocol):
 
 
 class _DisabledCallbacksLookup(Protocol):
-    get_disabled_callbacks: Callable[[dict[str, object], StandardCallbackDynamicParams], list[str] | None]
+    get_disabled_callbacks: Callable[[dict[str, object], StandardCallbackDynamicParams], Sequence[object] | None]
 
 
 class _HiddenParamsSlot(Protocol):
