@@ -9481,13 +9481,17 @@ async def test_legacy_login_page_hides_credentials_hint_when_ui_password_set():
 
 
 @pytest.mark.asyncio
-async def test_saml_callback_blocked_when_admin_ui_disabled():
+async def test_saml_callback_blocked_when_admin_ui_disabled() -> None:
     """An IdP-initiated assertion must not mint a UI session when the admin UI is
     disabled; the ACS enforces DISABLE_ADMIN_UI like the SP-initiated login route."""
     from litellm.proxy.management_endpoints.ui_sso import saml_callback
 
+    request: Final = Request(
+        {"type": "http", "headers": [(b"content-type", b"application/x-www-form-urlencoded")]},
+        receive=AsyncMock(return_value={"type": "http.request", "body": b"SAMLResponse=unused", "more_body": False}),
+    )
     with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "true"}):
-        response = await saml_callback(SimpleNamespace(cookies={}))
+        response = await saml_callback(request)
 
     assert response.status_code == 200
     assert "Admin UI is Disabled" in response.body.decode()

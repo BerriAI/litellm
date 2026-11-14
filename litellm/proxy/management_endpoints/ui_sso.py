@@ -1214,7 +1214,7 @@ async def google_login(
         return await SAMLAuthHandler.build_login_redirect(
             request=request,
             cache=saml_sso_cache,
-            relay_state=return_to,
+            relay_state=cli_state or return_to,
         )
 
     # Check if we should use SSO handler
@@ -2423,6 +2423,7 @@ async def saml_metadata(request: Request):
 @router.post("/sso/saml/callback", tags=["experimental"], include_in_schema=False)
 async def saml_callback(request: Request):
     """Assertion Consumer Service. Validates the IdP assertion and issues a UI session."""
+    from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
     from litellm.proxy.proxy_server import (
         general_settings,
         jwt_handler,
@@ -2431,7 +2432,12 @@ async def saml_callback(request: Request):
         saml_sso_cache,
     )
 
-    if is_admin_ui_disabled():
+    post_data: Final = await SAMLAuthHandler.read_acs_post_data(request)
+    cli_relay_state: Final = post_data.get("RelayState")
+    is_cli_login: Final = isinstance(cli_relay_state, str) and cli_relay_state.startswith(
+        f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"
+    )
+    if is_admin_ui_disabled() and not is_cli_login:
         return admin_ui_disabled()
 
     if prisma_client is None:
@@ -2444,11 +2450,27 @@ async def saml_callback(request: Request):
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    post_data: Final = await SAMLAuthHandler.read_acs_post_data(request)
     if "SAMLResponse" not in post_data:
         raise HTTPException(status_code=400, detail="Missing SAMLResponse in callback request.")
 
-    user, retained = await SAMLAuthHandler.handle_acs(request=request, cache=saml_sso_cache, post_data=post_data)
+    user, retained = await SAMLAuthHandler.handle_acs(
+        request=request, cache=saml_sso_cache, post_data=post_data, require_sp_initiated=is_cli_login
+    )
+
+    if is_cli_login and isinstance(cli_relay_state, str):
+        cli_state_parts: Final = cli_relay_state.split(":", 2)
+        return await cli_sso_callback(
+            request=request,
+            key=cli_state_parts[1],
+            prefill_user_code=(
+                cli_state_parts[2]
+                if len(cli_state_parts) > 2 and _cli_sso_verification_uri_complete_enabled()
+                else None
+            ),
+            result=user,
+            received_response=None,
+            sso_assertion=retained,
+        )
 
     ui_access_mode: Final = general_settings.get("ui_access_mode", None)
     relay_state: Final = post_data.get("RelayState")
