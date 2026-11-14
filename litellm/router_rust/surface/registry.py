@@ -99,6 +99,7 @@ from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_usage import RouterUsage, RouterUsageStore, UsageCounter
 from litellm.responses.bridge_check import keep_registered_mode
 from litellm.router_api import RouterRegistry, deployment_id
+from litellm.router_config import detached
 from litellm.router_rust.invoke.shaping import ROUTER_CLIENTS_TARGET
 from litellm.router_rust.surface.indexes import HostedIndexes
 from litellm.router_rust.surface.model_info import HostModelInfo
@@ -235,7 +236,7 @@ class _Build:
 
 
 def _creating(model_list: Sequence[object]) -> _Build:
-    raw: Final[list[UntypedEntry]] = copy.deepcopy(list(model_list))  # pyright: ignore[reportAssignmentType]  # model_list entries  # mutable-ok: a deep copy the build consumes
+    raw: Final[list[UntypedEntry]] = [copy.deepcopy(detached(entry)) for entry in model_list]  # pyright: ignore[reportAssignmentType]  # model_list entries  # mutable-ok: a deep copy the build consumes
     return _Build(path="create", raw=raw)
 
 

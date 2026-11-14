@@ -936,6 +936,24 @@ def test_ProxyConfig__load_yaml_file_raises_on_missing_file():
         pc._load_yaml_file("/no/such/file.yaml")
 
 
+def test_ProxyConfig__load_yaml_file_detaches_yaml_anchors(tmp_path):
+    f = tmp_path / "anchors.yaml"
+    f.write_text(
+        "model_list:\n"
+        "  - model_name: sonnet\n"
+        "    model_info: &shared\n"
+        "      mode: chat\n"
+        "      tags: [a]\n"
+        "  - model_name: opus\n"
+        "    model_info: *shared\n"
+    )
+    result = ProxyConfig()._load_yaml_file(str(f))
+    first, second = result["model_list"][0]["model_info"], result["model_list"][1]["model_info"]
+    assert first == second
+    assert first is not second
+    assert first["tags"] is not second["tags"]
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._get_config_from_file
 # ---------------------------------------------------------------------------
@@ -959,6 +977,22 @@ async def test_ProxyConfig__get_config_from_file_missing_path_raises():
     pc = ProxyConfig()
     with pytest.raises(Exception, match="Config file not found"):
         await pc._get_config_from_file(config_file_path="/no/such/file.yaml")
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__get_config_from_file_detaches_yaml_anchors(tmp_path):
+    f = tmp_path / "anchors.yaml"
+    f.write_text(
+        "model_list:\n"
+        "  - model_name: sonnet\n"
+        "    model_info: &shared\n"
+        "      mode: chat\n"
+        "  - model_name: opus\n"
+        "    model_info: *shared\n"
+    )
+    result = await ProxyConfig()._get_config_from_file(config_file_path=str(f))
+    assert result["model_list"][0]["model_info"] == {"mode": "chat"}
+    assert result["model_list"][0]["model_info"] is not result["model_list"][1]["model_info"]
 
 
 # ---------------------------------------------------------------------------
