@@ -1108,6 +1108,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://inference.runanywhere.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
+    "https://www.flonno.com/v1",
     "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
 ]
 
@@ -1158,6 +1159,7 @@ openai_compatible_providers: Final[list[str]] = [
     "parasail",  # Parasail - JSON-configured provider
     "libertai",  # LibertAI - JSON-configured provider
     "featherless_ai",
+    "flonno",
     "nscale",
     "nebius",
     "dashscope",
