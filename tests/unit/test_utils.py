@@ -10540,6 +10540,13 @@ def test_logprobs_type():
     assert logprobs.top_logprobs is None
 
 
+def test_get_valid_models_lists_a_json_provider_keyed_by_its_own_env_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VISPARK_API_KEY", raising=False)
+    monkeypatch.setenv("VISPARK_LAB_API_KEY", "sk-vispark")
+
+    assert "vispark/vision-small" in get_valid_models()
+
+
 @respx.mock
 def test_get_valid_models_openai_proxy(monkeypatch: pytest.MonkeyPatch, reset_mock_cache: None) -> None:
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-9876")
