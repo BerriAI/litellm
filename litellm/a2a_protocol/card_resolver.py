@@ -6,7 +6,7 @@ Extends the A2A SDK's card resolver to support multiple well-known paths.
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.exceptions import A2AAgentCardDiscoveryError
@@ -14,22 +14,42 @@ from litellm.constants import LOCALHOST_URL_PATTERNS
 from litellm.litellm_core_utils.core_helpers import has_attributes
 
 if TYPE_CHECKING:
+    from a2a.client import A2ACardResolver as _BaseA2ACardResolver
     from a2a.types import AgentCard
 
-# Runtime imports with availability check
-_A2ACardResolver: Any = None
+
+class _FallbackA2ACardResolver:
+    """Fallback base class when optional a2a-sdk is not installed."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self.base_url: str = str(kwargs.get("base_url") or "")
+        self.httpx_client: object = kwargs.get("httpx_client")
+
+    async def get_agent_card(
+        self,
+        relative_card_path: str | None = None,
+        http_kwargs: Mapping[str, object] | None = None,
+    ) -> "AgentCard":
+        raise ImportError(
+            "The 'a2a' package is required for A2A agent invocation. Install it with: pip install a2a-sdk"
+        )
+
+
+if not TYPE_CHECKING:
+    try:
+        from a2a.client import A2ACardResolver as _BaseA2ACardResolver
+    except ImportError:
+        _BaseA2ACardResolver = _FallbackA2ACardResolver
+
+_A2ACardResolver = _BaseA2ACardResolver
 AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent-card.json"
-PREV_AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent.json"
+PREV_AGENT_CARD_WELL_KNOWN_PATH: Final = "/.well-known/agent.json"
 FOUNDRY_AGENT_CARD_PATH: Final = "/agentCard/v1.0"
 AGENT_CARD_PATH_PARAM: Final = "agent_card_path"
 A2A_PROTOCOL_VERSION_PARAM: Final = "a2a_protocol_version"
 
 try:
-    from a2a.client import A2ACardResolver as _A2ACardResolver
-    from a2a.utils.constants import (
-        AGENT_CARD_WELL_KNOWN_PATH,
-        PREV_AGENT_CARD_WELL_KNOWN_PATH,
-    )
+    from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
 except ImportError:
     pass
 
@@ -166,11 +186,17 @@ def set_agent_card_url(agent_card: "AgentCard", url: str) -> None:
     """Set the agent endpoint URL on the resolved SDK card."""
     normalized: Final = url.rstrip("/") + "/"
     if hasattr(agent_card, "url"):
-        agent_card.url = normalized
+        try:
+            setattr(agent_card, "url", normalized)
+        except (AttributeError, TypeError):
+            pass
 
     interfaces: Final = getattr(agent_card, "supported_interfaces", None)
     if interfaces:
-        interfaces[0].url = normalized
+        try:
+            setattr(interfaces[0], "url", normalized)
+        except (AttributeError, TypeError):
+            pass
 
 
 def fix_agent_card_url(agent_card: "AgentCard", base_url: str) -> "AgentCard":
@@ -193,18 +219,25 @@ def fix_agent_card_url(agent_card: "AgentCard", base_url: str) -> "AgentCard":
     if card_url and is_localhost_or_internal_url(card_url):
         # Normalize base_url to ensure it ends with /
         fixed_url: Final = base_url.rstrip("/") + "/"
-        agent_card.url = fixed_url
+        if hasattr(agent_card, "url"):
+            try:
+                setattr(agent_card, "url", fixed_url)
+            except (AttributeError, TypeError):
+                pass
 
     interfaces: Final = _supported_interfaces(agent_card)
     if interfaces:
         interface_url: Final = _url_of(interfaces[0])
         if interface_url and is_localhost_or_internal_url(interface_url):
-            interfaces[0].url = base_url.rstrip("/") + "/"
+            try:
+                setattr(interfaces[0], "url", base_url.rstrip("/") + "/")
+            except (AttributeError, TypeError):
+                pass
 
     return agent_card
 
 
-class LiteLLMA2ACardResolver(_A2ACardResolver):
+class LiteLLMA2ACardResolver(_BaseA2ACardResolver):
     """
     Custom A2A card resolver that supports multiple well-known paths.
 
