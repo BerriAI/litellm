@@ -66,6 +66,7 @@ from litellm.cost_calculator import (
     BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
+    billed_flat_cost,
     declared_cost_map_pricing,
     get_response_cost_from_hidden_params,
     get_usage_object,
@@ -933,6 +934,7 @@ class Logging(LiteLLMLoggingBaseClass):
     custom_cost_per_second: float | None = None
     custom_model_info: ModelInfo | None = None
     a2a_agent_cost_params: Mapping[str, object] | None = None
+    a2a_agent_id: str | None = None
     replaced_global_callback_keys: frozenset[str] = frozenset()
     stream_options = None
     litellm_request_debug: bool = False
@@ -1493,6 +1495,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def bill_as_a2a_agent(self, agent_id: str, cost_params: Mapping[str, object]) -> None:
         self.a2a_agent_cost_params = cost_params
+        self.a2a_agent_id = agent_id
         self.model_call_details["agent_id"] = agent_id
 
     def record_agentic_loop_params(self, params: AgenticLoopParams) -> None:
@@ -2430,11 +2433,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         if self.a2a_agent_cost_params is not None:
-            from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
-
-            return A2ACostCalculator.agent_cost(
-                self.a2a_agent_cost_params, get_usage_object(completion_response=priced_result)
-            )
+            return self._a2a_agent_response_cost(self.a2a_agent_cost_params, priced_result)
 
         result_hidden_params: Final = getattr(priced_result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
         if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
@@ -2578,6 +2577,36 @@ class Logging(LiteLLMLoggingBaseClass):
         return None
 
     _response_cost_calculator = response_cost_calculator
+
+    def _a2a_agent_response_cost(self, cost_params: Mapping[str, object], priced_result: object) -> float | None:
+        from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
+
+        try:
+            agent_cost: Final = A2ACostCalculator.agent_cost(
+                cost_params, get_usage_object(completion_response=priced_result)
+            )
+        except ValueError as e:
+            self.model_call_details["response_cost_failure_debug_information"] = (
+                StandardLoggingModelCostFailureDebugInformation(
+                    error_str=str(e),
+                    traceback_str=_get_traceback_str_for_error(str(e)),
+                    model=self.model,
+                )
+            )
+            return None
+        provider: Final[object] = self.model_call_details.get("custom_llm_provider")
+        billed_cost: Final = billed_flat_cost(
+            base_cost=agent_cost,
+            custom_llm_provider=provider if isinstance(provider, str) else None,
+            model=self.model,
+            litellm_logging_obj=self,
+        )
+        additional_response_cost: Final[object] = self.model_call_details.get("additional_response_cost")
+        return self._recorded_response_cost(
+            billed_cost + additional_response_cost
+            if isinstance(additional_response_cost, (int, float)) and additional_response_cost > 0
+            else billed_cost
+        )
 
     def _recorded_response_cost(self, cost: float | None) -> float | None:
         if cost is None or finite_cost(cost) is not None:

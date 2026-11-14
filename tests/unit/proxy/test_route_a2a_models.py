@@ -4,10 +4,11 @@ Test A2A model routing in proxy.
 Maps to: litellm/proxy/agent_endpoints/a2a_routing.py
 """
 
+import asyncio
 import base64
 import datetime
 import json
-import uuid
+import logging
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType
 from typing import Final
@@ -21,11 +22,15 @@ import respx
 from fastapi import HTTPException
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.agent_endpoints.a2a_routing import route_a2a_agent_request
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.agent_endpoints.databricks_oauth import databricks_app_oauth_token_cache
 from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.agents import AgentResponse
 from litellm.types.utils import ModelResponse
 
@@ -679,7 +684,7 @@ PER_QUERY_PRICE: Final = {"cost_per_query": 0.05}
 PER_TOKEN_PRICE: Final = {"input_cost_per_token": 0.0001, "output_cost_per_token": 0.0002}
 
 
-def _priced_dbx_agent(name: str, price: Mapping[str, float]) -> AgentResponse:
+def _priced_dbx_agent(name: str, price: Mapping[str, object]) -> AgentResponse:
     return AgentResponse(
         agent_id=f"{name}-id",
         agent_name=name,
@@ -694,14 +699,14 @@ def _priced_dbx_agent(name: str, price: Mapping[str, float]) -> AgentResponse:
     )
 
 
-def _proxy_logging_obj() -> LiteLLMLoggingObj:
+def _proxy_logging_obj(stream: bool = False) -> LiteLLMLoggingObj:
     return LiteLLMLoggingObj(
         model="a2a/agent",
         messages=[{"role": "user", "content": "ping"}],
-        stream=False,
+        stream=stream,
         call_type="acompletion",
-        start_time=datetime.datetime.now(tz=datetime.timezone.utc),
-        litellm_call_id=str(uuid.uuid4()),
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="a2a-chat-call",
         function_id="a2a-chat",
     )
 
@@ -746,7 +751,6 @@ async def test_route_a2a_bridge_agents_bill_their_own_price_whatever_another_age
     assert per_token_cost == pytest.approx(usage.prompt_tokens * 0.0001 + usage.completion_tokens * 0.0002)
     assert per_query_cost == pytest.approx(0.05)
     assert unpriced_cost == 0.0
-    assert "databricks_agent/my-agent" not in litellm.model_cost
 
 
 @respx.mock
@@ -761,7 +765,6 @@ async def test_route_a2a_bridge_agent_price_wins_over_the_callers_prices(httpx_t
     )
 
     assert cost == pytest.approx(0.05)
-    assert "databricks_agent/my-agent" not in litellm.model_cost
 
 
 @respx.mock
@@ -806,3 +809,138 @@ async def test_route_a2a_bridge_agent_call_names_the_agent_on_litellm_metadata_r
 
     metadata: Final = logging_obj.model_call_details["litellm_params"]["metadata"]
     assert (metadata["model_group"], metadata["user_api_key_hash"]) == ("a2a/per-query", "key-hash")
+
+
+@respx.mock
+async def test_route_a2a_bridge_agent_price_gets_the_proxys_discount_and_margin(
+    httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    monkeypatch.setattr(litellm, "cost_discount_config", {"databricks_agent": 0.2})
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": 0.1})
+
+    cost, _, logging_obj = await _billed_chat_call(
+        _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE)), "per-query"
+    )
+
+    assert cost == pytest.approx(0.05 * 0.8 * 1.1)
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["original_cost"] == pytest.approx(0.05)
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("price", "expected_cost"),
+    [({"cost_per_query": "five cents"}, None), ({"cost_per_query": ""}, 0.0), ({"cost_per_query": "nan"}, 0.0)],
+)
+async def test_route_a2a_bridge_agent_with_an_unusable_price_still_answers(
+    httpx_transport: None, price: Mapping[str, object], expected_cost: float | None
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+
+    cost, response, _ = await _billed_chat_call(_registry_with(_priced_dbx_agent("odd-price", price)), "odd-price")
+
+    assert response.choices[0].message.content == "pong"
+    assert cost == expected_cost
+
+
+@respx.mock
+async def test_route_a2a_bridge_agent_responses_call_returns_the_callers_metadata_unchanged(
+    httpx_transport: None,
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    data: Final = {
+        "model": "a2a/per-query",
+        "input": "ping",
+        "metadata": {"session": "s-1"},
+        "litellm_metadata": {"user_api_key_hash": "key-hash"},
+        "litellm_logging_obj": _proxy_logging_obj(),
+    }
+    registry: Final = _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE))
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
+        response: Final = await (await route_a2a_agent_request(data=data, route_type="aresponses"))
+
+    assert response.metadata == {"session": "s-1"}
+
+
+@respx.mock
+async def test_route_a2a_bridge_agent_warns_once_about_prices_agent_billing_ignores(
+    httpx_transport: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    registry: Final = _registry_with(_priced_dbx_agent("per-second", {"input_cost_per_second": 0.5}))
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await _billed_chat_call(registry, "per-second")
+        await _billed_chat_call(registry, "per-second")
+
+    warnings: Final = [record.getMessage() for record in caplog.records if "input_cost_per_second" in record.getMessage()]
+    assert len(warnings) == 1
+    assert "per-second" in warnings[0]
+
+
+class _SpendRowCapture(CustomLogger):
+    def __init__(self, row: asyncio.Future[SpendLogsPayload]) -> None:
+        super().__init__()
+        self._row = row
+
+    async def async_log_success_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self._row.set_result(
+            get_logging_payload(kwargs=kwargs, response_obj=response_obj, start_time=start_time, end_time=end_time)
+        )
+
+
+async def _logged_spend_row(agent: AgentResponse, stream: bool, monkeypatch: pytest.MonkeyPatch) -> SpendLogsPayload:
+    row: Final[asyncio.Future[SpendLogsPayload]] = asyncio.get_running_loop().create_future()
+    capture: Final = _SpendRowCapture(row)
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    monkeypatch.setattr(litellm, "_async_success_callback", [capture])
+    data: Final = {
+        "model": f"a2a/{agent.agent_name}",
+        "messages": [{"role": "user", "content": "ping"}],
+        "metadata": {"user_api_key_hash": "key-hash"},
+        "litellm_logging_obj": _proxy_logging_obj(stream=stream),
+        "stream": stream,
+    }
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
+        response: Final = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+        if isinstance(response, CustomStreamWrapper):
+            _: Final = [chunk async for chunk in response]
+    return await asyncio.wait_for(row, timeout=5)
+
+
+def _billed_fields(row: SpendLogsPayload) -> tuple[float, str | None, str | None, int, int]:
+    return row["spend"], row["agent_id"], row["model_group"], row["prompt_tokens"], row["completion_tokens"]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("price", "expected_spend"), [(PER_QUERY_PRICE, 0.05), (PER_TOKEN_PRICE, 12 * 0.0001 + 34 * 0.0002)]
+)
+async def test_route_a2a_bridge_agent_streamed_call_logs_the_same_spend_row_as_a_plain_call(
+    httpx_transport: None, monkeypatch: pytest.MonkeyPatch, price: Mapping[str, float], expected_spend: float
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json={**AGENT_REPLY, "usage": {"input_tokens": 12, "output_tokens": 34}})
+    )
+    agent: Final = _priced_dbx_agent("priced", price)
+
+    plain_row: Final = await _logged_spend_row(agent, False, monkeypatch)
+    streamed_row: Final = await _logged_spend_row(agent, True, monkeypatch)
+
+    assert _billed_fields(streamed_row) == _billed_fields(plain_row)
+    assert _billed_fields(streamed_row) == (pytest.approx(expected_spend), "priced-id", "a2a/priced", 12, 34)

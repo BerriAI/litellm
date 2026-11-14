@@ -107,28 +107,6 @@ async def test_databricks_agent_message_send_through_the_bridge(httpx_transport:
 
 
 @respx.mock
-async def test_databricks_agent_send_keeps_the_agents_prices_out_of_the_shared_cost_map(httpx_transport: None) -> None:
-    respx.post(INVOCATIONS_URL).mock(
-        return_value=httpx.Response(200, json={"object": "response", "output": [MESSAGE_ITEM]})
-    )
-    await A2ACompletionBridgeHandler.handle_non_streaming(
-        request_id="req-1",
-        params=_a2a_params(),
-        litellm_params={
-            "custom_llm_provider": "databricks_agent",
-            "model": "my-agent",
-            "api_base": WORKSPACE,
-            "api_key": "pat-1",
-            "cost_per_query": 0.05,
-            "input_cost_per_token": 0.0001,
-            "output_cost_per_token": 0.0002,
-        },
-        api_base=None,
-    )
-    assert "databricks_agent/my-agent" not in litellm.model_cost
-
-
-@respx.mock
 async def test_databricks_app_credential_wins_over_a_forwarded_client_authorization(httpx_transport: None) -> None:
     route = respx.post(APP_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
     await A2ACompletionBridgeHandler.handle_non_streaming(

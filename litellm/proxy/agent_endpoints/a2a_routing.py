@@ -6,6 +6,7 @@ Looks up agents in the registry and injects their API base URL.
 """
 
 from collections.abc import Mapping
+from functools import lru_cache
 from typing import Any, Final
 
 from fastapi import HTTPException
@@ -13,7 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.a2a_protocol.cost_calculator import a2a_cost_params
+from litellm.a2a_protocol.cost_calculator import A2A_COST_PARAM_KEYS, a2a_cost_params
 from litellm.a2a_protocol.litellm_completion_bridge.handler import (
     AGENT_PRICING_PARAMS,
     agent_completion_kwargs,
@@ -34,6 +35,7 @@ _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _AGENT_PINNED_KWARGS: Final = ("api_base", "api_key")
 _AGENT_LAYERED_KWARGS: Final = ("custom_inputs", "extra_body")
 _CLIENT_DROPPED_KWARGS: Final = frozenset({"api_base", "base_url"}) | AGENT_PRICING_PARAMS
+_UNBILLED_AGENT_PRICING_PARAMS: Final = AGENT_PRICING_PARAMS - frozenset(A2A_COST_PARAM_KEYS)
 _PROXY_HEADER_PREFIX: Final = "x-litellm-"
 
 
@@ -184,6 +186,10 @@ async def route_a2a_agent_request(
         logging_obj: Final = data.get("litellm_logging_obj")
         if isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.bill_as_a2a_agent(agent_id=agent.agent_id, cost_params=a2a_cost_params(litellm_params))
+        _warn_once_about_unbilled_prices(
+            agent_name,
+            tuple(sorted(key for key in _UNBILLED_AGENT_PRICING_PARAMS if litellm_params.get(key) is not None)),
+        )
         return _call_route(route_type, _bridge_agent_request(data, agent, bridge_auth.litellm_params))
 
     # Get API base URL from agent config
@@ -212,12 +218,21 @@ def _bridge_agent_request(
 
 
 def _model_group(data: Mapping[str, object]) -> Mapping[str, object]:
-    metadata_by_key: Final = {key: as_str_mapping(data.get(key)) for key in ("metadata", "litellm_metadata")}
-    return {
-        key: {**metadata, "model_group": data.get("model")}
-        for key, metadata in metadata_by_key.items()
-        if metadata is not None
-    }
+    metadata_key: Final = "litellm_metadata" if "litellm_metadata" in data else "metadata"
+    metadata: Final = as_str_mapping(data.get(metadata_key))
+    return {} if metadata is None else {metadata_key: {**metadata, "model_group": data.get("model")}}
+
+
+@lru_cache(maxsize=1024)
+def _warn_once_about_unbilled_prices(agent_name: str, unbilled_keys: tuple[str, ...]) -> None:
+    if not unbilled_keys:
+        return
+    verbose_proxy_logger.warning(
+        "[A2A] Agent '%s' sets %s, which agent billing ignores. Agents bill only %s.",
+        agent_name,
+        ", ".join(unbilled_keys),
+        ", ".join(A2A_COST_PARAM_KEYS),
+    )
 
 
 def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:

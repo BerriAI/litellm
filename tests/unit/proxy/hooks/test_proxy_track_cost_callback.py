@@ -20,6 +20,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.litellm_core_utils.batch_utils import POLLED_BATCH_COST_IS_FINAL_KWARG, POLLED_BATCH_ID_KWARG
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.redact_messages import perform_redaction
 from litellm.proxy._types import ProxyException, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
@@ -850,6 +851,41 @@ async def test_async_post_call_failure_hook_keeps_a_guardrail_verdict_recorded_a
     logged_guardrails: Final = json.loads(row["metadata"])["guardrail_information"]
     assert [entry["guardrail_name"] for entry in logged_guardrails] == expected_guardrail_names
     assert failure_snapshot["guardrail_information"] == snapshot_guardrail_information
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_names_the_agent_a_failed_call_was_billed_to():
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="a2a/my-agent",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="failed-agent-call",
+        function_id="a2a-chat",
+    )
+    logging_obj.bill_as_a2a_agent(agent_id="my-agent-id", cost_params={"cost_per_query": 0.05})
+
+    await ProxyDBLogger(spend_writer=lambda: writer).async_post_call_failure_hook(
+        request_data={
+            "model": "a2a/my-agent",
+            "messages": [{"role": "user", "content": "ping"}],
+            "stream": True,
+            "litellm_logging_obj": logging_obj,
+        },
+        original_exception=Exception("agent endpoint returned 500"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        end_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    assert row["agent_id"] == "my-agent-id"
 
 
 @pytest.mark.asyncio

@@ -39,7 +39,7 @@ def a2a_cost_params(litellm_params: Mapping[str, object] | None) -> Mapping[str,
 
 def _price(cost_params: Mapping[str, object], key: str) -> float | None:
     value: Final = cost_params.get(key)
-    return None if value is None else _PRICE.validate_python(value)
+    return None if value is None or value == "" else _PRICE.validate_python(value)
 
 
 def _custom_response_cost(model_call_details: Mapping[str, object]) -> float | None:

@@ -25,6 +25,9 @@ from litellm.litellm_core_utils.core_helpers import (
     get_parent_otel_span_from_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import (
+    Logging as LiteLLMLoggingObj,
+)
+from litellm.litellm_core_utils.litellm_logging import (
     StandardLoggingPayloadSetup,
     UsageObservation,
 )
@@ -311,6 +314,12 @@ def _billed_failed_attempts(request_data: Mapping[str, object]) -> tuple[BilledF
         return ()
     lifted: Final = cast("tuple[object, ...]", attempts)  # cast-ok: lifted by _failure_fields_to_lift, checked below
     return tuple(attempt for attempt in lifted if isinstance(attempt, BilledFailedAttempt))
+
+
+def _billed_agent_fields(request_data: Mapping[str, object]) -> Mapping[str, object]:
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    agent_id: Final = logging_obj.a2a_agent_id if isinstance(logging_obj, LiteLLMLoggingObj) else None
+    return {} if agent_id is None else {"agent_id": agent_id}
 
 
 def _failure_spend_rows(
@@ -632,7 +641,10 @@ class _ProxyDBLogger(CustomLogger):
             original_exception=original_exception,
             start_time=actual_start_time,
             spend_rows=_failure_spend_rows(
-                cast("Mapping[str, object]", request_data),  # cast-ok: request dict, copied per row below
+                {
+                    **cast("Mapping[str, object]", request_data),  # cast-ok: request dict, copied per row below
+                    **_billed_agent_fields(request_fields),
+                },
                 recovered_response_cost,
                 failure_snapshot_with_late_guardrails,
                 self._deployment_lookup,

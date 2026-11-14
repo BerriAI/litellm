@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.databricks.common_utils import DatabricksException
+from litellm.types.llms.openai import ChatCompletionUsageBlock
 from litellm.types.utils import GenericStreamingChunk, Usage
 
 
@@ -35,6 +36,14 @@ class AgentUsage(BaseModel):
             prompt_tokens=self.input_tokens,
             completion_tokens=self.output_tokens,
             total_tokens=self.total_tokens if self.total_tokens is not None else self.input_tokens + self.output_tokens,
+        )
+
+    def to_usage_block(self) -> ChatCompletionUsageBlock:
+        usage: Final = self.to_usage()
+        return ChatCompletionUsageBlock(
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
         )
 
 
@@ -74,12 +83,25 @@ def _text_chunk(text: str) -> GenericStreamingChunk:
     return GenericStreamingChunk(text=text, is_finished=False, finish_reason="", usage=None, index=0, tool_use=None)
 
 
+def _whole_response_chunk(response: AgentResponse) -> GenericStreamingChunk:
+    return GenericStreamingChunk(
+        text=output_text(response.output),
+        is_finished=True,
+        finish_reason="stop",
+        usage=None if response.usage is None else response.usage.to_usage_block(),
+        index=0,
+        tool_use=None,
+    )
+
+
 class DatabricksAgentResponsesIterator(BaseModelResponseIterator):
     _streamed_item_ids: frozenset[str] = frozenset()
     _emitted_text: bool = False
     _last_text_item_id: str | None = None
 
     def chunk_parser(self, chunk: Mapping[str, object]) -> GenericStreamingChunk:
+        if "output" in chunk:
+            return _whole_response_chunk(AgentResponse.model_validate(chunk))
         event: Final = _StreamEvent.model_validate(chunk)
         if event.type == "response.output_text.delta":
             if event.item_id is not None:
