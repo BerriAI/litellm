@@ -22,6 +22,7 @@ from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase
 from .transformation import (
     cached_messages_end_on_supported_turn,
+    reject_unusable_tool_call_arguments,
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
 )
@@ -357,6 +358,7 @@ class ContextCachingEndpoints(VertexBase):
                 MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
             )
             return messages, optional_params, None
+        reject_unusable_tool_call_arguments(cached_messages, model, custom_llm_provider, drop_params)
 
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
@@ -517,6 +519,7 @@ class ContextCachingEndpoints(VertexBase):
                 MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
             )
             return messages, optional_params, None
+        reject_unusable_tool_call_arguments(cached_messages, model, custom_llm_provider, drop_params)
 
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
