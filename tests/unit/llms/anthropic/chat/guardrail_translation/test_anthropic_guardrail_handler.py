@@ -8,6 +8,7 @@ with guardrail transformations, specifically testing edge cases with empty choic
 import json
 import logging
 import re
+from copy import deepcopy
 from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
 
@@ -1050,6 +1051,95 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert [tool["name"] for tool in data["tools"] if "name" in tool] == ["get_weather"]
 
     @pytest.mark.asyncio
+    async def test_unmodified_guardrail_tools_keep_client_tools_verbatim(self):
+        """Regression for #50055: tools the guardrail did not change reach the provider
+        verbatim, never through the lossy rebuild that drops ``web_search_*`` server tools
+        and renames nameless tools like ``mcp_toolset`` to ``litellm_unnamed_tool_0``."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+        client_tools = [
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 1},
+            {"type": "mcp_toolset", "mcp_server_name": "github"},
+            {"name": "Read", "description": "d", "input_schema": {"type": "object", "properties": {}}},
+            {
+                "name": "mcp__atlassian__create_confluence_footer_comment_with_a_very_long_name_x",
+                "description": "d",
+                "defer_loading": True,
+                "input_schema": {"type": "object", "properties": {}},
+            },
+        ]
+        data = {
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "search the docs"}],
+            "tools": deepcopy(client_tools),
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["tools"] == client_tools
+
+    @pytest.mark.asyncio
+    async def test_guardrail_tool_change_is_still_written_back(self):
+        class DropLastTool(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Any | None = None,
+            ) -> GenericGuardrailAPIInputs:
+                rewritten = inputs.copy()
+                rewritten["tools"] = list(inputs.get("tools") or [])[:-1]
+                return rewritten
+
+        handler = AnthropicMessagesHandler()
+        guardrail = DropLastTool(guardrail_name="drop-last-tool")
+        data = {
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [
+                {"name": "safe_tool", "description": "d", "input_schema": {"type": "object", "properties": {}}},
+                {"name": "dropped_tool", "description": "d", "input_schema": {"type": "object", "properties": {}}},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [tool.get("name") for tool in data["tools"]] == ["safe_tool"]
+
+    @pytest.mark.asyncio
+    async def test_guardrail_in_place_tool_reorder_is_still_written_back(self):
+        class InPlaceReorderingGuardrail(CustomGuardrail):
+            """Mutates the tools list it was handed in place and hands back the same object."""
+
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Any | None = None,
+            ) -> GenericGuardrailAPIInputs:
+                tools = inputs.get("tools")
+                if tools is not None:
+                    tools[:] = tools[::-1]
+                return inputs
+
+        handler = AnthropicMessagesHandler()
+        guardrail = InPlaceReorderingGuardrail(guardrail_name="in-place-reorder")
+        data = {
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [
+                {"name": "tool_a", "description": "d", "input_schema": {"type": "object", "properties": {}}},
+                {"name": "tool_b", "description": "d", "input_schema": {"type": "object", "properties": {}}},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [tool.get("name") for tool in data["tools"]] == ["tool_b", "tool_a"]
+
+    @pytest.mark.asyncio
     async def test_midturn_system_correction_is_guardrailed_when_top_level_system_is_skipped(
         self,
     ):
@@ -1951,8 +2041,9 @@ class TestAnthropicMessagesHandlerInputProcessing:
         not properly converted back, causing API errors.
 
         The guardrail converts tools to OpenAI format for processing, then they need to be
-        converted back to Anthropic format. Native Anthropic tools should be preserved as-is,
-        while regular tools should be converted to type="custom".
+        converted back to Anthropic format. Since #50055, a guardrail that returns the tools
+        unchanged skips that round trip entirely, so every tool, native or regular, reaches
+        the provider exactly as the client sent it.
         """
         handler = AnthropicMessagesHandler()
         guardrail = MockPassThroughGuardrail(guardrail_name="test")
@@ -1996,10 +2087,10 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert tools[0]["type"] == "tool_search_tool_regex_20251119"
         assert tools[0]["name"] == "tool_search_tool_regex"
 
-        # Second tool should be converted to Anthropic custom tool format
-        assert tools[1]["type"] == "custom"
+        # Second tool reaches the provider verbatim, top-level defer_loading included (#50055)
         assert tools[1]["name"] == "get_weather"
         assert tools[1]["description"] == "Get the weather at a specific location"
+        assert tools[1]["defer_loading"] is True
         assert "input_schema" in tools[1]
 
 
