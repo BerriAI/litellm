@@ -1,39 +1,41 @@
-from typing import Literal, TypedDict
+from typing import Literal
+
+from typing_extensions import ReadOnly, TypedDict
 
 S3PartitionGranularity = Literal["day", "hour"]
 
 
 class S3LoggerSettings(TypedDict, total=False):
-    s3_bucket_name: str | None
-    s3_path: str | None
-    s3_region_name: str | None
-    s3_api_version: str | None
-    s3_use_ssl: bool
-    s3_verify: bool | str | None
-    s3_endpoint_url: str | None
-    s3_aws_access_key_id: str | None
-    s3_aws_secret_access_key: str | None
-    s3_aws_session_token: str | None
-    s3_aws_session_name: str | None
-    s3_aws_profile_name: str | None
-    s3_aws_role_name: str | None
-    s3_aws_web_identity_token: str | None
-    s3_aws_sts_endpoint: str | None
-    s3_flush_interval: int | None
-    s3_batch_size: int | None
-    s3_config: object
-    s3_use_team_prefix: bool
-    s3_strip_base64_files: bool
-    s3_use_key_prefix: bool
-    s3_use_virtual_hosted_style: bool
-    s3_server_side_encryption: str | None
-    s3_sse_kms_key_id: str | None
-    s3_log_prompts_only: bool | None
-    s3_partition_granularity: str | None
-    s3_max_concurrent_uploads: int
-    s3_max_queue_size: int | None
-    s3_max_retry_age_seconds: int | None
-    s3_drop_on_terminal_error: bool
-    s3_adaptive_concurrency: bool
-    s3_max_adaptive_concurrency: int | None
-    s3_batch_file_upload: bool
+    s3_bucket_name: ReadOnly[str | None]
+    s3_path: ReadOnly[str | None]
+    s3_region_name: ReadOnly[str | None]
+    s3_api_version: ReadOnly[str | None]
+    s3_use_ssl: ReadOnly[bool]
+    s3_verify: ReadOnly[bool | str | None]
+    s3_endpoint_url: ReadOnly[str | None]
+    s3_aws_access_key_id: ReadOnly[str | None]
+    s3_aws_secret_access_key: ReadOnly[str | None]
+    s3_aws_session_token: ReadOnly[str | None]
+    s3_aws_session_name: ReadOnly[str | None]
+    s3_aws_profile_name: ReadOnly[str | None]
+    s3_aws_role_name: ReadOnly[str | None]
+    s3_aws_web_identity_token: ReadOnly[str | None]
+    s3_aws_sts_endpoint: ReadOnly[str | None]
+    s3_flush_interval: ReadOnly[int | None]
+    s3_batch_size: ReadOnly[int | None]
+    s3_config: ReadOnly[object]
+    s3_use_team_prefix: ReadOnly[bool]
+    s3_strip_base64_files: ReadOnly[bool]
+    s3_use_key_prefix: ReadOnly[bool]
+    s3_use_virtual_hosted_style: ReadOnly[bool]
+    s3_server_side_encryption: ReadOnly[str | None]
+    s3_sse_kms_key_id: ReadOnly[str | None]
+    s3_log_prompts_only: ReadOnly[bool | None]
+    s3_partition_granularity: ReadOnly[str | None]
+    s3_max_concurrent_uploads: ReadOnly[int]
+    s3_max_queue_size: ReadOnly[int | None]
+    s3_max_retry_age_seconds: ReadOnly[int | None]
+    s3_drop_on_terminal_error: ReadOnly[bool]
+    s3_adaptive_concurrency: ReadOnly[bool]
+    s3_max_adaptive_concurrency: ReadOnly[int | None]
+    s3_batch_file_upload: ReadOnly[bool]
