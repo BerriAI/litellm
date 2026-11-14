@@ -66,6 +66,7 @@ from litellm.types.llms.openai import (
     ResponseIncompleteEvent,
     ResponseInProgressEvent,
     ResponseInputParam,
+    ResponsePartAddedEvent,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
@@ -1269,20 +1270,26 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._cached_reasoning_item_id = mint_reasoning_item_id()
             self._reasoning_item_id = self._cached_reasoning_item_id
 
-            self._pending_response_events.append(
-                OutputItemAddedEvent(
-                    type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-                    output_index=self._reasoning_index(),
-                    item=BaseLiteLLMOpenAIResponseObject(
-                        **{
-                            "id": self._cached_reasoning_item_id,
-                            "type": "reasoning",
-                            "status": "in_progress",
-                            "summary": None,
-                        }
-                    ),
-                )
+            event = OutputItemAddedEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                output_index=self._reasoning_index(),
+                item=BaseLiteLLMOpenAIResponseObject(
+                    **{
+                        "id": self._cached_reasoning_item_id,
+                        "type": "reasoning",
+                        "status": "in_progress",
+                        "summary": [],
+                    }
+                ),
             )
+            part_added_event: Final = ResponsePartAddedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_PART_ADDED,
+                item_id=self._cached_reasoning_item_id,
+                output_index=self._reasoning_index(),
+                sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
+                part={"type": "summary_text", "text": ""},
+            )
+            self._pending_response_events.extend([event, part_added_event])
             return
 
         # Tool-first
