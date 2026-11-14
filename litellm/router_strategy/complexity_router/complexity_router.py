@@ -2804,7 +2804,10 @@ class ComplexityRouter(CustomLogger):
             {"role": "user", "content": user_content},
         ]
         content, classifier_cost = await self._call_classifier_model(
-            messages_for_call, request_kwargs, encrypted_task=encrypted_task
+            messages_for_call,
+            request_kwargs,
+            max_output_tokens=llm_config.max_output_tokens,
+            encrypted_task=encrypted_task,
         )
         try:
             raw_tier: Final = _LabeledTierClassification.model_validate_json(extract_classifier_json(content)).tier
