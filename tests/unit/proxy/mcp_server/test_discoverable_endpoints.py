@@ -13756,6 +13756,8 @@ async def test_signed_oauth_callback_honors_credential_write_policy(
         "foreign_unscoped",
         "foreign_configured",
         "encrypted",
+        "cli_session",
+        "expired_encrypted",
         "invalid_encrypted",
         "envelope",
         "master",
@@ -13775,7 +13777,8 @@ async def test_identity_bound_authorize_preserves_presented_jwt_permissions(
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy import proxy_server
     from litellm.proxy._types import JWTIssuerConfig, MCPTransport, UserAPIKeyAuth, hash_token
-    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+    from litellm.proxy.auth.auth_checks import LITELLM_SESSION_TOKEN_PREFIX, ExperimentalUIJWTToken
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_bearer_token
     from litellm.proxy.mcp_server import discoverable_endpoints, mcp_server_manager
     from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
 
@@ -13850,6 +13853,21 @@ async def test_identity_bound_authorize_preserves_presented_jwt_permissions(
             LiteLLM_UserTable(user_id="jwt-owner", user_role="internal_user"),
         )
         if credential == "encrypted"
+        else ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+            LiteLLM_UserTable(user_id="jwt-owner", user_role="internal_user"),
+        )
+        if credential == "cli_session"
+        else encrypt_bearer_token(
+            UserAPIKeyAuth(
+                token="ui-token",
+                user_id="jwt-owner",
+                team_id="litellm-dashboard",
+                user_role="internal_user",
+                expires=datetime.now(timezone.utc) - timedelta(seconds=60),
+            ).model_dump_json(exclude_none=True),
+            LITELLM_SESSION_TOKEN_PREFIX,
+        )
+        if credential == "expired_encrypted"
         else jwt.encode({"iss": "https://idp.example.test"}, "wrong-signing-key-at-least-32-bytes", algorithm="HS256")
         if credential == "bad_signature"
         else jwt.encode({"sub": "jwt-owner"}, signing_key, algorithm="RS256")
@@ -13882,7 +13900,9 @@ async def test_identity_bound_authorize_preserves_presented_jwt_permissions(
     )
     redirect: Final = urlparse(response.headers["location"])
     query: Final = parse_qs(redirect.query)
-    if allowed and credential in ("jwt", "key", "foreign_unscoped", "foreign_configured"):
+    if (
+        allowed and credential in ("jwt", "key", "foreign_unscoped", "foreign_configured", "cli_session")
+    ) or credential == "encrypted":
         assert redirect.hostname == "upstream.example.test"
         assert query["nonce"] and response.headers.get("set-cookie")
         assert all(call.args[0].user_id == "jwt-owner" for call in manager.get_allowed_mcp_servers.await_args_list)
@@ -15708,3 +15728,169 @@ def test_root_metadata_owned_by_a_resolved_oauth2_server_never_lists_the_gateway
     assert JWT_BEARER_GRANT_TYPE not in document["grant_types_supported"]
     assert document["grant_types_supported"] == ["authorization_code", "refresh_token"]
     assert document["token_endpoint_auth_methods_supported"] == ["client_secret_post"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("header", ["Authorization", "x-litellm-api-key"])
+@pytest.mark.parametrize("token_kind", ["cli_session", "ui_session"])
+async def test_browser_cookie_scoped_managed_authorize_exchanges_with_litellm_session_token(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: "MockRouter",
+    header: str,
+    token_kind: str,
+) -> None:
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlsplit
+
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+    from litellm.proxy.mcp_server import db, mcp_server_manager
+    from litellm.proxy.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    handler, _ = jwt_oauth_identity
+    monkeypatch.setenv("LITELLM_SALT_KEY", "session-token-oauth-exchange-salt")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    server: Final = _cimd_oauth_server().model_copy(update={"client_id": "scope-client"})
+    global_mcp_server_manager.registry[server.server_id] = server
+    user: Final = LiteLLM_UserTable(user_id="jwt-owner", user_role="internal_user")
+    handler.user_api_key_cache.set_cache("jwt-owner", user)
+    manager: Final = MagicMock()
+    manager.get_allowed_mcp_servers = AsyncMock(return_value=[server.server_id])
+    manager.invalidate_user_oauth_token_cache = AsyncMock()
+    manager.get_mcp_server_by_id = MagicMock(return_value=server)
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    table: Final = proxy_server.prisma_client.db.litellm_mcpusercredentials
+    table.find_unique = AsyncMock(return_value=None)
+    table.upsert = AsyncMock()
+
+    cookie: Final = _browser_session_cookie(
+        monkeypatch, "jwt-owner", signing_key="browser-session-test-signing-key-123456789"
+    )
+    started: Final = await endpoints.authorize_with_server(
+        _token_request({"Cookie": f"token={cookie}"}),
+        server,
+        "scope-client",
+        "http://127.0.0.1:9/cb",
+        scope="tools.read",
+        code_challenge="challenge",
+        code_challenge_method="S256",
+    )
+    state: Final = parse_qs(urlsplit(started.headers["location"]).query)["state"][0]
+    cookies: Final = SimpleCookie()
+    cookies.load(started.headers["set-cookie"])
+    callback_request: Final = _token_request(
+        {"Cookie": "; ".join(f"{name}={value.value}" for name, value in cookies.items())}
+    )
+    returned: Final = await endpoints.callback(
+        callback_request, code="provider-code", state=state, error=None, iss=None
+    )
+    code: Final = parse_qs(urlsplit(returned.headers["location"]).query)["code"][0]
+    assert code.startswith(endpoints._MANAGED_AUTH_CODE_PREFIX)
+
+    session_token: Final = (
+        ExperimentalUIJWTToken.get_cli_jwt_auth_token(user)
+        if token_kind == "cli_session"
+        else ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(user)
+    )
+    upstream: Final = respx_mock.post(server.token_url).respond(
+        200,
+        json={
+            "access_token": "new-access",
+            "token_type": "Bearer",
+            "refresh_token": "new-refresh",
+            "scope": "tools.read",
+        },
+    )
+    exchanged: Final = await endpoints.exchange_token_with_server(
+        _token_request({header: f"Bearer {session_token}"}),
+        server,
+        "authorization_code",
+        client_id="scope-client",
+        code=code,
+        code_verifier="verifier",
+        redirect_uri="http://127.0.0.1:9/cb",
+        client_secret=None,
+    )
+    assert exchanged.status_code == 200
+    assert parse_qs(upstream.calls[0].request.content.decode())["code"] == ["provider-code"]
+    table.upsert.assert_awaited_once()
+    assert table.upsert.call_args.kwargs["where"] == {
+        "user_id_server_id": {"user_id": "jwt-owner", "server_id": server.server_id}
+    }
+    saved: Final = db.decode_oauth_payload(table.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
+    assert saved is not None and saved.get("access_token") == "new-access"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rejection",
+    ["wrong_user", "expired", "blocked", "tampered", "scim_inactive", "removed_team_member", "ui_login_disabled"],
+)
+async def test_browser_cookie_scoped_managed_code_rejects_invalid_or_mismatched_session_token(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: "MockRouter",
+    rejection: str,
+) -> None:
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy._types import LiteLLM_TeamTable, Member, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import LITELLM_SESSION_TOKEN_PREFIX
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_bearer_token
+    from litellm.proxy.mcp_server import discoverable_endpoints as endpoints
+
+    handler, _ = jwt_oauth_identity
+    monkeypatch.setenv("LITELLM_SALT_KEY", "session-token-rejection-salt")
+    if rejection == "ui_login_disabled":
+        monkeypatch.setenv("EXPERIMENTAL_UI_LOGIN", "false")
+    if rejection == "scim_inactive":
+        handler.user_api_key_cache.set_cache(
+            "jwt-owner", LiteLLM_UserTable(user_id="jwt-owner", metadata={"scim_active": False})
+        )
+    if rejection == "removed_team_member":
+        handler.user_api_key_cache.set_cache(
+            "team_id:team-1",
+            LiteLLM_TeamTable(
+                team_id="team-1", models=[], members_with_roles=[Member(user_id="someone-else", role="user")]
+            ),
+        )
+
+    server: Final = _cimd_oauth_server().model_copy(update={"client_id": "scope-client"})
+    payload: Final = endpoints._ManagedAuthorizationCode(
+        upstream_code="provider-code",
+        mcp_server_id=server.server_id,
+        issuer=server.issuer,
+        requested_scope="tools.read",
+        scope_user_id="jwt-owner",
+    )
+    code: Final = endpoints._MANAGED_AUTH_CODE_PREFIX + endpoints.encrypt_value_helper(payload.model_dump_json())
+
+    session: Final = UserAPIKeyAuth(
+        token="cli-session-test",
+        user_id="other-user" if rejection == "wrong_user" else "jwt-owner",
+        team_id="team-1" if rejection == "removed_team_member" else None,
+        user_role="internal_user",
+        blocked=rejection == "blocked",
+        expires=datetime.now(timezone.utc) + timedelta(seconds=-60 if rejection == "expired" else 600),
+        is_session_token=True,
+    )
+    session_token: Final = (
+        f"{LITELLM_SESSION_TOKEN_PREFIX}tampered"
+        if rejection == "tampered"
+        else encrypt_bearer_token(session.model_dump_json(exclude_none=True), LITELLM_SESSION_TOKEN_PREFIX)
+    )
+    with pytest.raises(HTTPException) as raised:
+        await endpoints.exchange_token_with_server(
+            _token_request({"Authorization": f"Bearer {session_token}"}),
+            server,
+            "authorization_code",
+            code=code,
+            redirect_uri="http://127.0.0.1:9/cb",
+            client_id="scope-client",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+    assert raised.value.status_code == 400
+    assert respx_mock.calls.call_count == 0
