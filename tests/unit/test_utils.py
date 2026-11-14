@@ -9852,6 +9852,31 @@ def test_validate_environment_takes_any_together_ai_key_name_for_bare_and_prefix
     assert with_key == dict.fromkeys(bare_and_prefixed_ids, {"keys_in_environment": True, "missing_keys": []})
 
 
+def test_validate_environment_keeps_the_wandb_key_check_for_bare_ids_wandb_shares_with_together_ai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    together_ai_bare_ids: Final = frozenset(key.removeprefix("together_ai/") for key in _live_together_ai_cost_map_rows())
+    shared_bare_ids: Final = tuple(
+        sorted(
+            bare_id
+            for bare_id in together_ai_bare_ids & frozenset(litellm.wandb_models)
+            if not _resolves_to_a_provider(bare_id)
+        )
+    )
+
+    for key_name in (*_TOGETHER_AI_KEY_NAMES, "WANDB_API_KEY"):
+        monkeypatch.delenv(key_name, raising=False)
+    without_key: Final = {model: validate_environment(model=model) for model in shared_bare_ids}
+    monkeypatch.setenv("WANDB_API_KEY", "wandb-test-key")
+    with_key: Final = {model: validate_environment(model=model) for model in shared_bare_ids}
+
+    assert shared_bare_ids
+    assert without_key == dict.fromkeys(
+        shared_bare_ids, {"keys_in_environment": False, "missing_keys": ["WANDB_API_KEY"]}
+    )
+    assert with_key == dict.fromkeys(shared_bare_ids, {"keys_in_environment": True, "missing_keys": []})
+
+
 def test_get_supported_openai_params() -> None:
     assert isinstance(get_supported_openai_params("gpt-4"), list)
 
@@ -11248,6 +11273,22 @@ def test_get_valid_models_lists_each_live_together_ai_model_once_under_its_cost_
     assert listed
     assert len(listed_bare_ids) == len(listed)
     assert set(listed) == live_rows
+
+
+@pytest.mark.parametrize("together_ai_key_name", _TOGETHER_AI_KEY_NAMES)
+def test_get_valid_models_infers_together_ai_from_any_together_ai_key_name(
+    monkeypatch: pytest.MonkeyPatch,
+    together_ai_key_name: str,
+) -> None:
+    for key_name in _TOGETHER_AI_KEY_NAMES:
+        monkeypatch.delenv(key_name, raising=False)
+    without_key: Final = [model for model in get_valid_models() if model.startswith("together_ai/")]
+    monkeypatch.setenv(together_ai_key_name, "together-test-key")
+    with_key: Final = [model for model in get_valid_models() if model.startswith("together_ai/")]
+
+    assert with_key
+    assert without_key == []
+    assert sorted(with_key) == sorted(get_valid_models(custom_llm_provider="together_ai"))
 
 
 def test_get_valid_models_uses_the_litellm_params_anthropic_api_key() -> None:

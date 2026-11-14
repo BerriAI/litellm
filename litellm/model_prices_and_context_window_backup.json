@@ -72543,6 +72543,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/essentialai/rnj-1-instruct": {
+        "deprecation_date": "2026-11-14",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "together_ai",
         "mode": "chat",
