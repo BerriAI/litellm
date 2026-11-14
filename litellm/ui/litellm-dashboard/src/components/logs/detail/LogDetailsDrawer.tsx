@@ -4,6 +4,9 @@ import { Bot, Check, Copy, Sparkles, Wrench } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { toast } from "@/lib/toast";
+import { getLocalStorageItem, setLocalStorageItem } from "@/utils/localStorageUtils";
 import { LogEntry } from "../types";
 import { AutoRouterIcon, useIsAutoRoutedModelGroup } from "@/components/shared/table_cells";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
@@ -34,6 +37,7 @@ export interface LogDetailsDrawerProps {
 }
 
 const SIDEBAR_WIDTH_PX = 224;
+const SESSION_SORT_PREFERENCE_KEY = "litellm_session_logs_default_sort";
 
 // Session logs are fetched page-by-page from the paginated backend and
 // accumulated so the drawer can show the whole session. page_size is the
@@ -132,6 +136,7 @@ export function LogDetailsDrawer({
   const isSessionMode = Boolean(sessionId);
   const [selectedSessionRequestId, setSelectedSessionRequestId] = useState<string | null>(null);
   const [sessionSortMode, setSessionSortMode] = useState<SessionLogSortMode>("duration");
+  const [defaultSessionSortMode, setDefaultSessionSortMode] = useState<SessionLogSortMode>("duration");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
 
@@ -229,12 +234,26 @@ export function LogDetailsDrawer({
   useEffect(() => {
     if (open) {
       setIsSidebarCollapsed(false);
+      if (isSessionMode) {
+        const storedMode = getLocalStorageItem(SESSION_SORT_PREFERENCE_KEY);
+        const defaultMode = storedMode === "start_time" ? "start_time" : "duration";
+        setDefaultSessionSortMode(defaultMode);
+        setSessionSortMode(defaultMode);
+      }
     } else {
       if (isSessionMode) setSelectedSessionRequestId(null);
-      setSessionSortMode("duration");
       setCopiedLeftPanelId(false);
     }
-  }, [open, isSessionMode]);
+  }, [open, isSessionMode, sessionId]);
+
+  const saveDefaultSessionSort = () => {
+    setLocalStorageItem(SESSION_SORT_PREFERENCE_KEY, sessionSortMode);
+    if (getLocalStorageItem(SESSION_SORT_PREFERENCE_KEY) !== sessionSortMode) {
+      toast.error(t("logs.detail.drawer.saveDefaultSortFailed"));
+      return;
+    }
+    setDefaultSessionSortMode(sessionSortMode);
+  };
 
   // Keyboard navigation
   const { selectNextLog, selectPreviousLog } = useKeyboardNavigation({
@@ -409,6 +428,18 @@ export function LogDetailsDrawer({
                         {t("logs.detail.drawer.sortStartTime")}
                       </TabsTrigger>
                     </TabsList>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="mt-1 w-full text-[11px]"
+                      disabled={sessionSortMode === defaultSessionSortMode}
+                      onClick={saveDefaultSessionSort}
+                      title={t("logs.detail.drawer.defaultSortHint")}
+                    >
+                      {sessionSortMode === defaultSessionSortMode
+                        ? t("logs.detail.drawer.defaultSortSaved")
+                        : t("logs.detail.drawer.setDefaultSort")}
+                    </Button>
                   </Tabs>
                 )}
               </div>

@@ -14450,6 +14450,10 @@
         "truncated": "Showing most recent {{shown}} of {{total}}",
         "sortDuration": "Duration",
         "sortStartTime": "Start time",
+        "saveDefaultSortFailed": "Couldn't save the default sort in this browser",
+        "defaultSortHint": "Use this order when opening sessions in this browser",
+        "defaultSortSaved": "Default in this browser",
+        "setDefaultSort": "Set as default",
         "tokens": "{{count}} tok",
         "failure": "Failure",
         "success": "Success"
