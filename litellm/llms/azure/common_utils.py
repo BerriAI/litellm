@@ -19,7 +19,6 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.single_flight import SingleFlight, single_flight_lru_cache
-from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
 from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIHTTPClient
@@ -822,9 +821,10 @@ class BaseAzureLLM(BaseOpenAILLM):
 
             v1_base: Final = httpx.URL(api_base or "")
             v1_query: Final = v1_base.params.remove("api-version")
+            v1_root: Final = add_path_to_api_base(api_base=str(v1_base.copy_with(query=None)), ending_path="openai/v1")
             v1_params: Final[_AzureV1ClientParams] = {
                 "api_key": v1_api_key,
-                "base_url": f"{ensure_api_route(str(v1_base.copy_with(query=None)), 'openai/v1')}/",
+                "base_url": f"{v1_root}/",
                 "default_query": dict(v1_query),
             }
             if "timeout" in azure_client_params:
