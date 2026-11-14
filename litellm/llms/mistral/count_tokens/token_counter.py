@@ -1,6 +1,6 @@
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final
 from urllib.parse import urlparse
@@ -165,10 +165,35 @@ def _is_system_turn(message: Mapping[str, object]) -> bool:
     return message.get("role") in ("system", "developer")
 
 
+def _is_text_block(block: object) -> bool:
+    match block:
+        case {"type": "text"}:
+            return True
+        case _:
+            return False
+
+
+def _joined_run(is_text: bool, run: Iterable[object]) -> tuple[object, ...]:
+    blocks: Final = tuple(run)
+    return ({"type": "text", "text": "".join(map(_part_text, blocks))},) if is_text else blocks
+
+
+def _with_chat_text_joins(message: Mapping[str, object]) -> Mapping[str, object]:
+    if not isinstance(message.get("content"), list):
+        return message
+    runs: Final = groupby(parts_of(message.get("content")), key=_is_text_block)
+    blocks: Final = tuple(chain.from_iterable(_joined_run(is_text, run) for is_text, run in runs))
+    match blocks:
+        case ({"type": "text", "text": str(text)},):
+            return {**message, "content": text}
+        case _:
+            return {**message, "content": list(blocks)}
+
+
 def _chat_message_items(message: Mapping[str, object], keeps_reasoning: bool) -> tuple[Mapping[str, object], ...]:
     if _is_system_turn(message):
         return ({"role": "system", "content": _system_text(message.get("content"))},)
-    items, _ = OpenAICountTokensConfig.messages_to_responses_input((message,))
+    items, _ = OpenAICountTokensConfig.messages_to_responses_input((_with_chat_text_joins(message),))
     file_parts: Final = _file_id_parts(message)
     sent_items: Final = (
         tuple({**item, "content": [*_input_content_parts(item.get("content")), *file_parts]} for item in items)

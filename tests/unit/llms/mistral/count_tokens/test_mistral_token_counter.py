@@ -930,3 +930,47 @@ async def test_count_tokens_sends_each_system_message_where_chat_sends_it(monkey
         ],
         False,
     )
+
+
+def _text_of(item: object, keys: tuple[str, ...]) -> object:
+    fields: Final = decoded_json_object(item)
+    return next((fields[key] for key in keys if fields.get(key)), None)
+
+
+def _texts(items: list[object], *keys: str) -> list[object]:
+    return list(filter(None, (_text_of(item, keys) for item in items)))
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_joins_text_blocks_the_way_mistral_chat_does(monkeypatch: pytest.MonkeyPatch) -> None:
+    messages: Final[list[dict[str, object]]] = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "Summarize the plan"}, {"type": "text", "text": " for the release."}],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": "Ship the "}, {"type": "text", "text": "fix."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Look it "}, {"type": "text", "text": "up."}]},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": '{"q": "plan"}'}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "text", "text": "Release "}, {"type": "text", "text": "on Monday."}],
+        },
+    ]
+    chat_sent: Final = _chat_messages("mistral-large-4", messages, {})
+    counted: Final = await _sent_count_body(monkeypatch, "mistral-large-4", messages)
+
+    counted_input: Final = counted["input"]
+    assert isinstance(counted_input, list)
+    assert _texts(counted_input, "content", "output") == _texts(chat_sent, "content") == [
+        "Summarize the plan for the release.",
+        "Ship the fix.",
+        "Look it up.",
+        "Release on Monday.",
+    ]
