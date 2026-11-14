@@ -534,9 +534,7 @@ jobs:
         run: uv run --no-sync python ./tests/code_coverage_tests/check_provider_folders_documented.py
 
       - name: check_provider_endpoints_support_generated
-        run: |
-          if [ -d litellm/scripts ]; then SCRIPTS_DIR=litellm/scripts; else SCRIPTS_DIR=scripts; fi
-          uv run --no-sync python "$SCRIPTS_DIR/generate_provider_endpoints_support.py" --check
+        run: uv run --no-sync python litellm/scripts/generate_provider_endpoints_support.py --check
 
       - name: test_generate_provider_endpoints_support
         run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_generate_provider_endpoints_support.py
