@@ -45,7 +45,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.routing import BaseRoute, Match, Route
 from starlette.types import Scope
 from starlette.websockets import WebSocketState
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, assert_never
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import (
     ConnectionClosedError,
@@ -204,6 +204,7 @@ from .upstream_usage_headers import (
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter()
 
@@ -212,6 +213,7 @@ pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 _DECODED_JSON: Final = TypeAdapter(object)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
+_REQUEST_BODY_VIEW: Final = TypeAdapter(Mapping[str, object])
 _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
 
 
@@ -1693,62 +1695,9 @@ async def pass_through_request(
         _managed_id_provider: Final = resolve_passthrough_managed_id_provider(custom_llm_provider)
 
         if proxy_general_settings.get("passthrough_managed_object_ids", False) and _managed_id_provider is not None:
-            verbose_proxy_logger.debug(
-                "pass_through_endpoint: managed-id input rewrite enabled for route=%s method=%s",
-                request.url.path,
-                request.method,
+            url, requested_query_params, _parsed_body = await _resolve_managed_ids_for_upstream(
+                request, url, requested_query_params, _parsed_body, _managed_id_provider, user_api_key_dict
             )
-            _passthrough_managed_hook = proxy_logging_obj.get_proxy_hook("managed_files")
-            if _passthrough_managed_hook is not None:
-                from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
-                    rewrite_body_ids,
-                    rewrite_path_ids,
-                    rewrite_query_ids,
-                )
-                from litellm.proxy.proxy_server import (
-                    prisma_client as _passthrough_prisma,
-                )
-
-                _original_path: Final = url.path
-                _original_query_params: Final = requested_query_params
-                _original_body: Final = _parsed_body
-                _new_path: Final = await rewrite_path_ids(
-                    url.path,
-                    _managed_id_provider,
-                    user_api_key_dict,
-                    _passthrough_prisma,
-                    _passthrough_managed_hook,
-                )
-                if _new_path != url.path:
-                    url = url.copy_with(path=_new_path)
-                requested_query_params = await rewrite_query_ids(
-                    requested_query_params,
-                    _managed_id_provider,
-                    user_api_key_dict,
-                    _passthrough_prisma,
-                    _passthrough_managed_hook,
-                )
-                _parsed_body = await rewrite_body_ids(
-                    _parsed_body,
-                    _managed_id_provider,
-                    user_api_key_dict,
-                    _passthrough_prisma,
-                    _passthrough_managed_hook,
-                )
-                verbose_proxy_logger.debug(
-                    "pass_through_endpoint: managed-id input rewrite results path_changed=%s query_changed=%s body_changed=%s route=%s method=%s",
-                    _new_path != _original_path,
-                    requested_query_params is not _original_query_params,
-                    _parsed_body is not _original_body,
-                    request.url.path,
-                    request.method,
-                )
-            else:
-                verbose_proxy_logger.debug(
-                    "pass_through_endpoint: managed-id input rewrite skipped (managed_files hook not available) route=%s method=%s",
-                    request.url.path,
-                    request.method,
-                )
 
         # Apply default query parameters if provided, regardless of merge_query_params setting
         if default_query_params or merge_query_params:
@@ -3846,6 +3795,93 @@ def _own_streamed_managed_ids(
     )
 
 
+async def refuse_unissued_response_ids(
+    path: str,
+    body: Mapping[str, object],
+    managed_id_provider: str,
+    prisma_client: "PrismaClient | None",
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy.hooks.responses_id_security import (
+        UNMANAGED_RESPONSE_ID_DETAIL,
+        proxy_signing_key,
+        unmanaged_response_ids_allowed,
+    )
+    from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+        addressed_response_id_issuance,
+    )
+    from litellm.proxy.proxy_server import general_settings_view
+
+    if unmanaged_response_ids_allowed(general_settings_view(), proxy_signing_key(), user_api_key_dict):
+        return
+    issuance: Final = await addressed_response_id_issuance(path, body, managed_id_provider, prisma_client)
+    match issuance:
+        case "issued":
+            return
+        case "unissued":
+            raise HTTPException(status_code=403, detail=UNMANAGED_RESPONSE_ID_DETAIL)
+        case "unverified":
+            raise HTTPException(
+                status_code=503,
+                detail="The proxy could not check who owns this response id because its database lookup failed. "
+                "Retry the request.",
+            )
+        case _:
+            assert_never(issuance)
+
+
+async def _resolve_managed_ids_for_upstream(
+    request: Request,
+    url: httpx.URL,
+    query_params: dict[str, object] | None,
+    body: dict[str, object] | None,
+    managed_id_provider: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> tuple[httpx.URL, dict[str, object] | None, dict[str, object] | None]:
+    from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+        rewrite_body_ids,
+        rewrite_path_ids,
+        rewrite_query_ids,
+    )
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj
+
+    verbose_proxy_logger.debug(
+        "pass_through_endpoint: managed-id input rewrite enabled for route=%s method=%s",
+        request.url.path,
+        request.method,
+    )
+    managed_files_hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+    if managed_files_hook is None:
+        verbose_proxy_logger.debug(
+            "pass_through_endpoint: managed-id input rewrite skipped (managed_files hook not available) route=%s method=%s",
+            request.url.path,
+            request.method,
+        )
+        return url, query_params, body
+
+    await refuse_unissued_response_ids(
+        url.path, _REQUEST_BODY_VIEW.validate_python(body or {}), managed_id_provider, prisma_client, user_api_key_dict
+    )
+    new_path: Final = await rewrite_path_ids(
+        url.path, managed_id_provider, user_api_key_dict, prisma_client, managed_files_hook
+    )
+    new_query_params: Final = await rewrite_query_ids(
+        query_params, managed_id_provider, user_api_key_dict, prisma_client, managed_files_hook
+    )
+    new_body: Final = await rewrite_body_ids(
+        body, managed_id_provider, user_api_key_dict, prisma_client, managed_files_hook
+    )
+    verbose_proxy_logger.debug(
+        "pass_through_endpoint: managed-id input rewrite results path_changed=%s query_changed=%s body_changed=%s route=%s method=%s",
+        new_path != url.path,
+        new_query_params is not query_params,
+        new_body is not body,
+        request.url.path,
+        request.method,
+    )
+    return (url if new_path == url.path else url.copy_with(path=new_path)), new_query_params, new_body
+
+
 def _should_buffer_passthrough_response(response: httpx.Response) -> bool:
     """
     Decide from the response headers whether the body must be read into memory.
@@ -4433,14 +4469,6 @@ class YieldsToConfiguredPassThroughRoute(APIRoute):
         return (Match.NONE, {}) if configured else (match, child_scope)
 
 
-def _get_combined_pass_through_endpoints(
-    pass_through_endpoints: list[dict] | list[PassThroughGenericEndpoint],
-    config_pass_through_endpoints: list[dict],
-):
-    """Get combined pass-through endpoints from db + config"""
-    return pass_through_endpoints + config_pass_through_endpoints
-
-
 async def _register_pass_through_endpoint(
     endpoint: dict[str, object] | PassThroughGenericEndpoint,
     app: FastAPI,
@@ -4572,9 +4600,7 @@ async def initialize_pass_through_endpoints(
     combined_pass_through_endpoints: list[dict | PassThroughGenericEndpoint]
 
     if config_passthrough_endpoints is not None:
-        combined_pass_through_endpoints = _get_combined_pass_through_endpoints(
-            pass_through_endpoints, config_passthrough_endpoints
-        )
+        combined_pass_through_endpoints = pass_through_endpoints + config_passthrough_endpoints
     else:
         combined_pass_through_endpoints = pass_through_endpoints
 
