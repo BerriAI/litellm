@@ -115,7 +115,7 @@ def _input_tokens(
     instructions: Final = raw_instructions if isinstance(raw_instructions, str) else None
     input_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # its input type is untyped
         input=text_input,  # pyright: ignore[reportArgumentType]  # str | list, as the request carries it
-        responses_api_request={"instructions": instructions} if instructions is not None else {},
+        responses_api_request={"instructions": instructions, "tools": extras.get("tools")},
         only_since_compaction=True,
     )
     return counter(model=tokenizer_model, messages=input_messages, tools=_tools(extras))

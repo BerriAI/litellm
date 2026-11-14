@@ -546,3 +546,27 @@ def pbkdf2_on_event_loop(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
 
     monkeypatch.setattr(hashlib, "pbkdf2_hmac", recording_pbkdf2)
     return on_event_loop
+
+
+def _per_token_priced(model_name: str, backend: str, input_cost: float, output_cost: float) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": backend,
+            "api_key": "sk-fixture",
+            "input_cost_per_token": input_cost,
+            "output_cost_per_token": output_cost,
+        },
+    }
+
+
+@pytest.fixture
+def free_and_paid_router() -> "litellm.Router":
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            _per_token_priced("free-model", "openai/free-backend", 0.0, 0.0),
+            _per_token_priced("paid-model", "openai/paid-backend", 1e-6, 2e-6),
+        ]
+    )

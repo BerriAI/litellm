@@ -5,15 +5,18 @@ Similar to litellm/litellm_core_utils/exception_mapping_utils.py but for Anthrop
 """
 
 import json
+from collections.abc import Mapping
 from typing import Final
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
 from .exceptions import AnthropicErrorDetail, AnthropicErrorResponse, AnthropicErrorType
 
 _PARSED_ERROR_BODY: Final = TypeAdapter(object)
+_ERROR_DETAILS: Final = TypeAdapter(Mapping[str, object])
+_JSON_DECODER: Final = json.JSONDecoder()
 
 # HTTP status code -> Anthropic error type
 # Source: https://platform.claude.com/docs/en/api/errors
@@ -166,12 +169,41 @@ class AnthropicExceptionMapping:
         else:
             message = raw_message
 
-        return AnthropicExceptionMapping.create_error_response(
+        response: Final = AnthropicExceptionMapping.create_error_response(
             status_code=status_code,
             message=message,
             request_id=request_id,
             error_type=error_type,
         )
+        details: Final = AnthropicExceptionMapping.embedded_error_details(raw_message)
+        if details is None:
+            return response
+        with_details: Final[AnthropicErrorResponse] = {**response, "error": {**response["error"], "details": details}}
+        return with_details
+
+    @staticmethod
+    def embedded_error_details(raw_message: str) -> Mapping[str, object] | None:
+        """
+        ``error.details`` of the Anthropic error body quoted inside ``raw_message``, when there is one.
+
+        litellm wraps an upstream error as ``"<Exception> - {upstream json}\n\nLiteLLM: ..."``. Anthropic
+        puts machine-readable codes such as ``thread_not_found`` under ``error.details``, and the SDKs
+        branch on them, so the code is lifted next to the wrapped message instead of staying only inside it.
+        """
+        start: Final = raw_message.find("{")
+        if start < 0:
+            return None
+        try:
+            embedded, _ = _JSON_DECODER.raw_decode(raw_message, start)
+        except ValueError:
+            return None
+        try:
+            envelope: Final = _ERROR_DETAILS.validate_python(embedded, strict=True)
+            error: Final = _ERROR_DETAILS.validate_python(envelope.get("error"), strict=True)
+            details: Final = _ERROR_DETAILS.validate_python(error.get("details"), strict=True)
+        except ValidationError:
+            return None
+        return details if envelope.get("type") == "error" else None
 
 
 class AnthropicErrorSseFrame(str):

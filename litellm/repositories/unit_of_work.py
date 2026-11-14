@@ -20,7 +20,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import isfinite, ulp
-from typing import Final, Protocol, runtime_checkable
+from typing import Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 from litellm.repositories.prisma_protocols import BatchTable, PrismaBatch
 
@@ -163,6 +163,70 @@ class TeamSpendResetWrites:
             where={"team_id": team_id, "budget_reset_at": expected_reset_at},
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
+
+
+CustomerSpendEntity: TypeAlias = Literal["member", "team", "org"]
+
+_CUSTOMER_RESET_QUERIES: Final = {
+    "member": 'UPDATE "LiteLLM_CustomerMemberTable"'
+    + _SPEND_RESET_SET
+    + " WHERE customer_member_id = $1"
+    + _SPEND_RESET_WHERE,
+    "team": 'UPDATE "LiteLLM_CustomerTeamTable"'
+    + _SPEND_RESET_SET
+    + " WHERE customer_team_id = $1"
+    + _SPEND_RESET_WHERE,
+    "org": 'UPDATE "LiteLLM_CustomerOrganizationTable"'
+    + _SPEND_RESET_SET
+    + " WHERE customer_org_id = $1"
+    + _SPEND_RESET_WHERE,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerSpendResetWrites:
+    entity: CustomerSpendEntity
+    table: BatchTable
+    batch: PrismaBatch
+
+    def queue_spend_reset(
+        self,
+        identity: str,
+        budget_reset_at: datetime | None,
+        spend_decrement: float,
+        expected_reset_at: datetime | None,
+        spend_after_reset: float = 0.0,
+    ) -> None:
+        if _queue_guarded_spend_reset(
+            self.batch,
+            _CUSTOMER_RESET_QUERIES[self.entity],
+            identity,
+            budget_reset_at,
+            spend_decrement,
+            expected_reset_at,
+            spend_after_reset,
+        ):
+            return
+        self.table.update_many(
+            where={f"customer_{self.entity}_id": identity, "budget_reset_at": expected_reset_at},
+            data=_spend_reset_data(budget_reset_at, spend_decrement),
+        )
+
+
+@asynccontextmanager
+async def customer_spend_reset_unit_of_work(
+    new_batch: Callable[[], PrismaBatch], entity: CustomerSpendEntity
+) -> AsyncGenerator[CustomerSpendResetWrites, None]:
+    batch: Final = new_batch()
+    table: Final = (
+        batch.litellm_customermembertable
+        if entity == "member"
+        else batch.litellm_customerteamtable
+        if entity == "team"
+        else batch.litellm_customerorganizationtable
+    )
+    yield CustomerSpendResetWrites(entity=entity, table=table, batch=batch)
+    await batch.commit()
 
 
 @runtime_checkable

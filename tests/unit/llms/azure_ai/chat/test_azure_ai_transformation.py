@@ -231,14 +231,15 @@ def test_azure_model_router_stream_chunks_report_selected_model(respx_mock: resp
     assert [chunk.model for chunk in chunks] == ["gpt-4.1-nano-2025-04-14", "gpt-4.1-nano-2025-04-14"]
 
 
+@pytest.mark.parametrize("model", ["gpt-4.1-mini", "DeepSeek-V4.1-Flash-1017"])
 @pytest.mark.respx(assert_all_called=True)
-def test_azure_ai_completion_cost_uses_response_usage(respx_mock: respx.MockRouter) -> None:
+def test_azure_ai_completion_cost_uses_response_usage(respx_mock: respx.MockRouter, model: str) -> None:
     api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
     response_body: Final = {
         "id": "chatcmpl-azure-ai",
         "object": "chat.completion",
         "created": 1700000000,
-        "model": "gpt-4.1-mini",
+        "model": model,
         "choices": [
             {
                 "index": 0,
@@ -251,18 +252,18 @@ def test_azure_ai_completion_cost_uses_response_usage(respx_mock: respx.MockRout
     route: Final = respx_mock.post(url__startswith=api_url).mock(return_value=Response(200, json=response_body))
     messages: Final = [{"role": "user", "content": "hello"}]
     response: Final = litellm.completion(
-        model="azure_ai/gpt-4.1-mini",
+        model=f"azure_ai/{model}",
         messages=messages,
         api_base="https://example-resource.services.ai.azure.com/models",
         api_key="azure-ai-test-key",
         api_version="2024-05-01-preview",
     )
     request_body: Final = json.loads(route.calls[0].request.content)
-    model_info: Final = litellm.get_model_info(model="gpt-4.1-mini", custom_llm_provider="azure_ai")
+    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="azure_ai")
     expected_cost: Final = 11 * model_info["input_cost_per_token"] + 3 * model_info["output_cost_per_token"]
 
     assert route.call_count == 1
-    assert request_body == {"model": "gpt-4.1-mini", "messages": messages}
+    assert request_body == {"model": model, "messages": messages}
     assert response.choices[0].message.content == "hello"
     assert response._hidden_params["response_cost"] == pytest.approx(expected_cost, rel=1e-9)
     assert litellm.completion_cost(completion_response=response) == pytest.approx(expected_cost, rel=1e-9)

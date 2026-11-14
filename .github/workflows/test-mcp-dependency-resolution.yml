@@ -10,17 +10,17 @@ on:
       - "uv.lock"
       - "uv.toml"
       - ".python-version"
-      - "rust-toolchain.toml"
-      - "litellm-rust/**"
+      - "litellm/rust/rust-toolchain.toml"
+      - "litellm/rust/**"
       - "litellm/__init__.py"
       - "litellm/_version.py"
       - "litellm/_lazy_imports_registry.py"
-      - "scripts/build_core_distribution.py"
+      - "litellm/scripts/build_core_distribution.py"
       - "litellm/proxy/proxy_server.py"
       - "litellm/**/*mcp*"
       - "litellm/**/*mcp*/**"
       - "litellm/integrations/arize/**"
-      - "scripts/check_mcp_sdk_install.py"
+      - "litellm/scripts/check_mcp_sdk_install.py"
       - "tests/base_sdk_tests/**"
       - ".github/workflows/test-mcp-dependency-resolution.yml"
       - ".github/actions/detect-changes/**"
@@ -28,7 +28,7 @@ on:
       - ".github/actions/cache-cargo-build/**"
       - ".github/scripts/detect_changes.sh"
       - ".github/scripts/uv_sync_with_retries.sh"
-      - ".circleci/scripts/classify_changes.sh"
+      - ".github/scripts/ci/classify_changes.sh"
 
 permissions:
   contents: read
@@ -91,7 +91,7 @@ jobs:
               checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py")
               (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" -I "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_sdk_http.py")
             else
-              checker=("$GITHUB_WORKSPACE/scripts/check_mcp_sdk_install.py" --extra "$extra")
+              checker=("$GITHUB_WORKSPACE/litellm/scripts/check_mcp_sdk_install.py" --extra "$extra")
             fi
             (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" "${checker[@]}")
           done
@@ -115,7 +115,7 @@ jobs:
             if [ "$extra" = core ]; then
               checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py")
             else
-              checker=("$GITHUB_WORKSPACE/scripts/check_mcp_sdk_install.py" --extra "$extra")
+              checker=("$GITHUB_WORKSPACE/litellm/scripts/check_mcp_sdk_install.py" --extra "$extra")
             fi
             (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-lowest-$extra/bin/python" "${checker[@]}")
           done
@@ -147,15 +147,16 @@ jobs:
       - name: Build the core wheel and source distribution
         run: >-
           uv run --no-project --with coverage==7.14.0 python -m coverage run --rcfile=/dev/null
-          --branch --include="*/scripts/build_core_distribution.py"
-          scripts/build_core_distribution.py --out-dir dist/core
+          --branch --include="*/litellm/scripts/build_core_distribution.py"
+          litellm/scripts/build_core_distribution.py --out-dir dist/core
       - name: Verify metadata, resources, and independent source rebuild
         env:
           CORE_DISTRIBUTION_DIR: ${{ github.workspace }}/dist/core
         run: >-
           uv run --no-project --with pytest==9.0.3 --with pytest-cov==5.0.0 --with coverage==7.14.0 --with 'tomli==2.4.1; python_version < "3.11"'
-          python -m pytest tests/base_sdk_tests/test_core_distribution.py -v
-          --cov-config=/dev/null --cov=scripts.build_core_distribution --cov-branch --cov-append --cov-report=
+          python -m coverage run --rcfile=/dev/null --append --branch
+          --include="*/litellm/scripts/build_core_distribution.py"
+          -m pytest tests/base_sdk_tests/test_core_distribution.py -v
       - name: Verify isolated core installations
         run: |
           wheel=$(realpath dist/core/litellm_core-*.whl)

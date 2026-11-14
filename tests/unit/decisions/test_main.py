@@ -23,6 +23,7 @@ from botocore.credentials import Credentials
 from respx.models import Call
 
 import litellm
+from litellm._version import version as litellm_version
 from litellm.constants import AWS_SIGNING_MAX_THREADS
 from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
@@ -1603,14 +1604,16 @@ _DEDICATED_DECIDER_PROVIDERS: Final[tuple[str, ...]] = tuple(
 
 
 @pytest.mark.parametrize("provider", _DEDICATED_DECIDER_PROVIDERS)
-def test_every_dedicated_decider_provider_ships_an_evaluation_mode_cost_map_entry(provider: str) -> None:
+def test_every_dedicated_decider_provider_ships_a_decisions_mode_cost_map_entry(provider: str) -> None:
     evaluation_entries: Final = tuple(
         name
         for name, info in litellm.model_cost.items()
-        if isinstance(info, Mapping) and info.get("litellm_provider") == provider and info.get("mode") == "evaluation"
+        if isinstance(info, Mapping)
+        and info.get("litellm_provider") == provider
+        and info.get("mode") in ("evaluation", "decisions")
     )
 
-    assert evaluation_entries, f"a {provider} decider would be health-checked as chat without a mode: evaluation entry"
+    assert evaluation_entries, f"a {provider} decider would be health-checked as chat without a Decisions mode entry"
 
 
 @pytest.mark.asyncio
@@ -2154,8 +2157,17 @@ _IMAGE_REFUSALS: Final[tuple[tuple[str, Mapping[str, object], str], ...]] = (
 )
 
 
+@pytest.mark.parametrize(
+    ("model", "url"),
+    (
+        ("perplexity/pplx-decider-v1-27b", _PERPLEXITY_DECISIONS_URL),
+        ("nace/drex-v2.0", "https://console.nace.ai/v1/systemone"),
+    ),
+)
 @pytest.mark.parametrize(("api", "request_kwargs", "param"), _IMAGE_REFUSALS, ids=_PREDICATE_REQUEST_IDS)
 def test_images_are_refused_before_http_when_the_provider_cannot_take_them(
+    model: str,
+    url: str,
     api: str,
     request_kwargs: Mapping[str, object],
     param: str,
@@ -2163,29 +2175,39 @@ def test_images_are_refused_before_http_when_the_provider_cannot_take_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
 
     with pytest.raises(litellm.UnsupportedParamsError, match=rf"\['{param}'\].*drop_params") as caught:
-        getattr(litellm, api)(model="perplexity/pplx-decider-v1-27b", api_key="caller-key", **request_kwargs)
+        getattr(litellm, api)(model=model, api_key="caller-key", **request_kwargs)
 
     assert caught.value.status_code == 400
     assert not route.called
 
 
+@pytest.mark.parametrize(
+    ("model", "url"),
+    (
+        ("perplexity/pplx-decider-v1-27b", _PERPLEXITY_DECISIONS_URL),
+        ("nace/drex-v2.0", "https://console.nace.ai/v1/systemone"),
+    ),
+)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("api", "request_kwargs"), _image_requests(_PNG_DATA_URL), ids=_PREDICATE_REQUEST_IDS)
 async def test_images_are_dropped_from_the_wire_under_drop_params(
-    api: str, request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    model: str,
+    url: str,
+    api: str,
+    request_kwargs: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
 
-    await getattr(litellm, f"a{api}")(
-        model="perplexity/pplx-decider-v1-27b", api_key="caller-key", drop_params=True, **request_kwargs
-    )
+    await getattr(litellm, f"a{api}")(model=model, api_key="caller-key", drop_params=True, **request_kwargs)
 
     assert json.loads(route.calls[0].request.content) == {
-        "model": "pplx-decider-v1-27b",
+        "model": model.split("/", 1)[1],
         "state": _SCREEN_TEXT,
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
@@ -4900,3 +4922,137 @@ def test_hosted_vllm_systemone_maps_image_rejection_to_bad_request(
 
     assert caught.value.status_code == 400
     assert route.call_count == 1
+
+
+_NACE_SYSTEMONE_URL: Final = "https://console.nace.ai/v1/systemone"
+_DREX_MAX_RESPONSE: Final[Mapping[str, object]] = {**_RESPONSE, "model": "drex-max"}
+
+
+@pytest.fixture
+def nace_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NACE_API_KEY", "nace-key")
+    monkeypatch.delenv("NACE_API_BASE", raising=False)
+    monkeypatch.delenv("NACE_BASE_URL", raising=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("nace_account")
+async def test_input_images_reach_nace_drex_max_as_a_top_level_images_array(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_NACE_SYSTEMONE_URL).respond(json=_DREX_MAX_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="nace/drex-max",
+        input=(
+            *_screen_messages(_PNG_DATA_URL),
+            {"role": "user", "content": [{"type": "input_image", "image_url": "data:image/webp;base64,BB=="}]},
+            {"role": "user", "content": "Order 1234."},
+        ),
+        questions=_PREDICATE_QUESTIONS,
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "drex-max",
+        "state": f"{_SCREEN_TEXT}\n\nOrder 1234.",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        "images": [_PNG_DATA_URL, "data:image/webp;base64,BB=="],
+    }
+    assert isinstance(response, OpenAIDecisionResponse)
+
+
+@pytest.mark.usefixtures("nace_account")
+@pytest.mark.parametrize(
+    "nace_model", ["drex-max", "drex-max-v1.1", "drex-v1.0", "drex-v1.5", "drex-latest", "drex-unlisted"]
+)
+def test_systemone_images_reach_nace_as_data_urls(nace_model: str, respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_NACE_SYSTEMONE_URL).respond(json={**_DREX_MAX_RESPONSE, "model": nace_model})
+
+    response: Final = litellm.systemone(
+        model=f"nace/{nace_model}",
+        state="Inspect Image 1 and Image 2.",
+        questions=_SYSTEMONE_PREDICATE,
+        images=[_PNG_DATA_URL, {"content_type": "image/webp", "base64": "BB=="}],
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": nace_model,
+        "state": "Inspect Image 1 and Image 2.",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        "images": [_PNG_DATA_URL, "data:image/webp;base64,BB=="],
+    }
+    assert isinstance(response, DecisionsResponse)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("nace_account")
+@pytest.mark.parametrize(("api", "request_kwargs"), _image_requests(_REMOTE_IMAGE_URL), ids=_PREDICATE_REQUEST_IDS)
+@pytest.mark.parametrize("use_async", (False, True), ids=("sync", "async"))
+async def test_nace_remote_images_are_rejected_without_fetching_or_provider_calls(
+    api: str,
+    request_kwargs: Mapping[str, object],
+    use_async: bool,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    image_route: Final = respx_mock.get(_REMOTE_IMAGE_URL).respond(content=b"image")
+    route: Final = respx_mock.post(_NACE_SYSTEMONE_URL).respond(json=_DREX_MAX_RESPONSE)
+
+    if use_async:
+        with pytest.raises(litellm.BadRequestError, match="inline base64 images or data URLs"):
+            await getattr(litellm, f"a{api}")(model="nace/drex-max", **request_kwargs)
+    else:
+        with pytest.raises(litellm.BadRequestError, match="inline base64 images or data URLs"):
+            getattr(litellm, api)(model="nace/drex-max", **request_kwargs)
+
+    assert not image_route.called
+    assert not route.called
+
+
+@pytest.mark.usefixtures("nace_account")
+def test_nace_refuses_a_ninth_image_before_http(respx_mock: respx.MockRouter) -> None:
+    """Drex Max takes up to 8 images per request (console.nace.ai/docs/drex/guides/drex-max, read 2026-10-26)."""
+    route: Final = respx_mock.post(_NACE_SYSTEMONE_URL).respond(json=_DREX_MAX_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="at most 8 images per request, got 9") as caught:
+        litellm.systemone(
+            model="nace/drex-max",
+            state="Inspect the images.",
+            questions=_SYSTEMONE_PREDICATE,
+            images=[_PNG_DATA_URL] * 9,
+        )
+
+    assert caught.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("nace_account")
+async def test_nace_requests_identify_the_litellm_version(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_NACE_SYSTEMONE_URL).respond(json=_DREX_MAX_RESPONSE)
+
+    await litellm.adecisions(
+        model="nace/drex-max",
+        input="Order 1234.",
+        questions=_PREDICATE_QUESTIONS,
+        extra_headers={"X-Nace-Client": "caller/9", "X-Other": "kept"},
+    )
+
+    sent: Final = route.calls[0].request.headers
+    assert sent["x-nace-client"] == f"litellm/{litellm_version}"
+    assert re.fullmatch(r"litellm/[A-Za-z0-9 ._@+-]+", sent["x-nace-client"])
+    assert len(sent["x-nace-client"]) <= 64
+    assert sent["x-other"] == "kept"
+
+
+@pytest.mark.asyncio
+async def test_other_decisions_providers_do_not_get_the_nace_client_header(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model="openrouter/nace/drex-test-alias", input="Order 1234.", questions=_PREDICATE_QUESTIONS
+    )
+
+    assert "x-nace-client" not in route.calls[0].request.headers

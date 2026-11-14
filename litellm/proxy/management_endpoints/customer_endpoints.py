@@ -235,7 +235,7 @@ async def unblock_user(data: BlockUsers):
     ```
     """
     try:
-        from enterprise.enterprise_hooks.blocked_user_list import (
+        from litellm.enterprise.enterprise_hooks.blocked_user_list import (
             ENTERPRISE_BlockedUserList,
         )
     except ImportError:
@@ -353,7 +353,6 @@ async def new_end_user(
     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
-    - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
@@ -387,7 +386,7 @@ async def new_end_user(
         --header 'Content-Type: application/json' \
         --data '{
             "user_id" : "ishaan-jaff-3",
-            "allowed_region": "eu",
+            "allowed_model_region": "eu",
             "budget_id": "free_tier",
             "models": ["gpt-4o-mini"],
             "default_model": "azure/gpt-3.5-turbo-eu"
@@ -816,7 +815,12 @@ async def delete_end_user(
     See below for all params 
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client, spend_counter_store
+    from litellm.proxy.proxy_server import (
+        invalidate_spend_counter,
+        prisma_client,
+        set_spend_counter_with_floor_and_broadcast,
+        spend_counter_store,
+    )
 
     try:
         if prisma_client is None:
@@ -846,9 +850,11 @@ async def delete_end_user(
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
 
             await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
-            await drop_committed_spend(
-                spend_counter_store, tuple(end_user_counter(user_id) for user_id in data.user_ids)
-            )
+            counter_keys: Final = tuple(end_user_counter(user_id) for user_id in data.user_ids)
+            for counter_key in counter_keys:
+                await invalidate_spend_counter(counter_key=counter_key)
+                await set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
+            await drop_committed_spend(spend_counter_store, counter_keys)
 
             return DeleteCustomersResponse(
                 deleted_customers=response,

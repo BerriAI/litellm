@@ -206,7 +206,19 @@ class _ObjectPermissionTxClient(Protocol):
 
 
 class _BudgetTxClient(Protocol):
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> "PrismaBudgetTable | None": ...
+    async def update(
+        self, *, where: Mapping[str, object], data: Mapping[str, object]
+    ) -> "PrismaBudgetTable | None": ...
+
+
+class _OrganizationTxClient(Protocol):
+    async def update(
+        self,
+        *,
+        where: Mapping[str, object],
+        data: Mapping[str, object],
+        include: Mapping[str, object] | None = None,
+    ) -> "PrismaOrganizationTable | None": ...
 
 
 class _TransactionTables(Protocol):
@@ -217,7 +229,7 @@ class _TransactionTables(Protocol):
     def litellm_budgettable(self) -> "_BudgetTxClient": ...
 
     @property
-    def litellm_organizationtable(self) -> "_OrganizationTableClient": ...
+    def litellm_organizationtable(self) -> "_OrganizationTxClient": ...
 
 
 class _TransactionManager(Protocol):
@@ -228,6 +240,7 @@ class _TransactionManager(Protocol):
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: "TracebackType | None",
+        /,
     ) -> bool | None: ...
 
 

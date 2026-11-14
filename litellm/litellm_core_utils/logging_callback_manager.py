@@ -428,6 +428,9 @@ class LoggingCallbackManager:
 
     _get_all_callbacks = get_all_callbacks
 
+    def get_failure_callbacks(self) -> tuple[CustomLogger | Callable[..., object] | str, ...]:
+        return (*litellm.failure_callback, *litellm._async_failure_callback)
+
     def remove_callback_from_all_lists(self, obj: object, require_self: bool = False) -> None:
         """
         Remove a callback object from every callback list it may have been
@@ -489,7 +492,7 @@ class LoggingCallbackManager:
         """
         # Get callback lists
         success_callbacks: Final = set(litellm.success_callback + litellm._async_success_callback)
-        failure_callbacks: Final = set(litellm.failure_callback + litellm._async_failure_callback)
+        failure_callbacks: Final = set(self.get_failure_callbacks())
         general_callbacks: Final = set(litellm.callbacks)
 
         # Get all unique callbacks

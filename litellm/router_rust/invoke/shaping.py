@@ -52,7 +52,7 @@ from litellm.types.router import Deployment, GenericLiteLLMParams, LiteLLM_Param
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
 
 if TYPE_CHECKING:
-    from litellm.caching.dual_cache import DualCache
+    from litellm.redis.stores.router_usage import RouterUsage
     from litellm.router_python_host import PythonHost
 
 # The SDK-client and max_parallel_requests reads of the routing cache: process-local, so the family
@@ -404,7 +404,7 @@ def update_kwargs_with_deployment(
     deployment: Mapping[str, object],
     kwargs: MutableMapping[str, object],  # mutable-ok: the request kwargs the Python router mutates in place
     *,
-    cache: "DualCache | None",
+    usage: "RouterUsage | None",
     function_name: str | None = None,
     splits_stream_timeout: bool = False,
     opens_responses_socket: bool = False,
@@ -467,8 +467,8 @@ def update_kwargs_with_deployment(
     if isinstance(other_bucket_metadata, Mapping) and KUBERNETES_POD_ROUTING_KEY in other_bucket_metadata:
         kwargs[other_bucket] = {**as_dict(other_bucket_metadata), KUBERNETES_POD_ROUTING_KEY: routing}  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
 
-    if cache is not None:
-        refund_stale_reservation_before_retry(cache, kwargs)  # pyright: ignore[reportArgumentType]  # the request's kwargs dict
+    if usage is not None:
+        refund_stale_reservation_before_retry(usage, kwargs)  # pyright: ignore[reportArgumentType]  # the request's kwargs dict
     set_io_token_rate_limit_request_kwargs(
         kwargs,  # pyright: ignore[reportArgumentType]  # the request's kwargs dict
         store_in_context=deployment_has_io_token_limits(deployment),  # pyright: ignore[reportArgumentType]  # a deployment record

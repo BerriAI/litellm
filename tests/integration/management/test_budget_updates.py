@@ -36,7 +36,8 @@ def test_shortening_budget_duration_moves_reset_at_onto_the_new_schedule(gateway
 
 BUDGET_COLUMNS: Final = (
     "budget_id, max_budget, soft_budget, max_parallel_requests, tpm_limit, rpm_limit, tpd_limit, model_max_budget, "
-    "budget_duration, allowed_models, temp_budget_increase, temp_budget_expiry, created_by, updated_by"
+    "model_tpm_limit, model_rpm_limit, budget_duration, allowed_models, temp_budget_increase, temp_budget_expiry, "
+    "created_by, updated_by"
 )
 VOLATILE_INFO_FIELDS: Final = frozenset({"created_at", "updated_at", "budget_reset_at"})
 UNLOADED_RELATIONS: Final[dict[str, JsonValue]] = dict.fromkeys(
@@ -128,6 +129,8 @@ def test_partial_update_keeps_sibling_budget_fields(gateway: Gateway) -> None:
             "rpm_limit": 60,
             "tpd_limit": 100000,
             "model_max_budget": {"openai/gpt-4o-mini": {"max_budget": 1.0, "budget_duration": "1d"}},
+            "model_tpm_limit": None,
+            "model_rpm_limit": None,
             "budget_duration": "30d",
             "allowed_models": [],
             "temp_budget_increase": None,

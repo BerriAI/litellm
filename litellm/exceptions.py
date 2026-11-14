@@ -369,6 +369,10 @@ class MalformedRequestFieldError(BadRequestError):
     pass
 
 
+class MissingMessageRoleError(MalformedRequestFieldError):
+    pass
+
+
 class UnsupportedEndpointError(BadRequestError):
     pass
 
@@ -1285,7 +1289,10 @@ class MidStreamFallbackError(ServiceUnavailableError):
         self.model = model
         self.llm_provider = llm_provider
         self.original_exception = original_exception
-        self.litellm_debug_info = litellm_debug_info
+        inherited_debug_info: Final[object] = getattr(original_exception, "litellm_debug_info", None)
+        self.litellm_debug_info = litellm_debug_info or (
+            inherited_debug_info if isinstance(inherited_debug_info, str) else None
+        )
         self.max_retries = max_retries
         self.num_retries = num_retries
         self.generated_content = generated_content

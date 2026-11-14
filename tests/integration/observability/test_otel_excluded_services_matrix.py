@@ -346,8 +346,11 @@ def _db_systems(spans: tuple[Span, ...]) -> set[str]:
 
 
 def _post_auth_datastore_spans(spans: tuple[Span, ...]) -> tuple[Span, ...]:
-    auth_ids: Final = frozenset(span["span_id"] for span in spans if span["name"].startswith("auth "))
-    return tuple(span for span in spans if _db_systems((span,)) and span["parent_span_id"] not in auth_ids)
+    return tuple(
+        span
+        for span in spans
+        if _db_systems((span,)) and span["attributes"].get("litellm.team.id") is not None
+    )
 
 
 def _names(spans: tuple[Span, ...]) -> list[str]:

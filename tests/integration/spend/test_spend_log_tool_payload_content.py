@@ -481,6 +481,71 @@ def test_stored_messages_keep_tool_use_input(gateway: Gateway, tmp_path: Path) -
         assert _json_object(observed[0].body)["messages"][1]["content"][0]["input"] == tool_input
 
 
+def test_stored_messages_mask_a_github_token_inside_tool_output(gateway: Gateway, tmp_path: Path) -> None:
+    github_token: Final = f"ghp_{uuid4().hex}Ab12"
+    tool_output: Final = json.dumps(
+        {"stdout": f"Cloning into 'r'...\nremote: https://x-access-token:{github_token}@github.com/o/r.git\ndone"}
+    )
+    clone_command: Final = f"git push https://{github_token}@github.com/o/r HEAD"
+    response_body: Final = {
+        "id": f"msg-github-token-{uuid4()}",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [{"type": "tool_use", "id": "toolu_02", "name": "bash", "input": {"cmd": clone_command}}],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 8, "output_tokens": 4},
+    }
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        return Reply(body=json.dumps(response_body).encode())
+
+    with (
+        wire_server(_answering_model_listing(respond)) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
+        isolated.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
+        response: Final = isolated.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "max_tokens": 64,
+                "messages": [
+                    {"role": "user", "content": "Clone the repo."},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "tool_use", "id": "toolu_01", "name": "bash", "input": {"cmd": "git clone"}}
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_output}],
+                    },
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        caller_response: Final = _json_object(response.content)
+        assert _objects(caller_response["content"])[0]["input"] == {"cmd": clone_command}
+        observed: Final = _provider_calls(wire.drain())
+        assert len(observed) == 1
+        assert _json_object(observed[0].body)["messages"][2]["content"][0]["content"] == tool_output
+        row: Final = _stored_row(string_value(caller_response["id"]))
+        stored_request: Final = object_value(row["proxy_server_request"])
+        stored_response: Final = object_value(row["response"])
+        assert github_token not in json.dumps(row)
+        assert json.loads(string_value(stored_request["messages"][2]["content"][0]["content"])) == {
+            "stdout": f"Cloning into 'r'...\nremote: https://x-access-token:{REDACTED}@github.com/o/r.git\ndone"
+        }
+        stored_arguments: Final = stored_response["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+        assert json.loads(string_value(stored_arguments)) == {"cmd": f"git push https://{REDACTED}@github.com/o/r HEAD"}
+
+
 def test_previous_response_id_replay_sends_real_tool_payloads(gateway: Gateway, tmp_path: Path) -> None:
     function_arguments: Final = {"sort_key": "created_at", "access_level": "admin"}
     function_output: Final = {

@@ -189,7 +189,7 @@ def test_rules_for_other_routes_and_constrained_python_rules_skip_projection() -
         RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, providers=frozenset({"other"})),
         RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, models=frozenset({"other"})),
         RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, targets=frozenset({Target.CHAT_COMPLETIONS})),
-        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.SAFEGUARDS_CLASSIFIER})),
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.STREAMING})),
     ),
     ids=("providers", "models", "targets", "features"),
 )

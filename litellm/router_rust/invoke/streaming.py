@@ -42,6 +42,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from collections.abc import Set as AbstractSet
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -629,8 +630,8 @@ def continuation_routing(core: "RustCore", request: Mapping[str, object]) -> Map
     registry: Final = core.registry()
     excluded: Final = [
         deployment.model_info.id
-        for record in registry.all()
-        if (deployment := registry.deployment(str(_record_id(record)))) is not None
+        for record_id in _record_ids(registry.all())
+        if (deployment := registry.deployment(str(record_id))) is not None
         and not deployment_can_continue(deployment.model_dump(exclude_none=True))
     ]
     return {"body": {CONTINUATION_EXCLUDED_IDS: excluded}}
@@ -641,13 +642,21 @@ def _record_id(record: Mapping[str, object]) -> object:
     return model_info.get("id") if isinstance(model_info, Mapping) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a plain record
 
 
+def _record_ids(records: Iterable[Mapping[str, object]]) -> Iterator[object]:
+    return (_record_id(record) for record in records)
+
+
+def _record_model_names(records: Iterable[Mapping[str, object]]) -> AbstractSet[object]:
+    return {record.get("model_name") for record in records}
+
+
 def _names_deployment_that_cannot_continue(core: "RustCore", target: object) -> bool:
     from litellm.router_utils.fallback_event_handlers import fallback_target_name
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import deployment_can_continue
 
     name: Final = fallback_target_name(target)
     registry: Final = core.registry()
-    model_names: Final = {record.get("model_name") for record in registry.all()}
+    model_names: Final = _record_model_names(registry.all())
     if name is None or name in model_names or not registry.has_deployment(name):
         return False
     deployment: Final = registry.deployment(name)

@@ -10,6 +10,7 @@ import litellm.litellm_core_utils.duration_parser as duration_parser
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     duration_in_seconds_from,
+    get_annual_budget_window_start,
     get_budget_window_start,
     get_next_standardized_reset_time,
 )
@@ -193,6 +194,79 @@ class TestStandardizedResetTime(unittest.TestCase):
         expected = datetime(2023, 3, 13, 0, 0, 0, tzinfo=eastern)
         result = get_next_standardized_reset_time("1d", pre_spring, "US/Eastern")
         self.assertEqual(result, expected)
+
+
+@pytest.mark.parametrize(
+    "now, zone, reset_time, expected",
+    [
+        (
+            datetime(2026, 11, 12, tzinfo=timezone.utc),
+            "UTC",
+            time(0),
+            datetime(2027, 1, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2028, 2, 29, tzinfo=timezone.utc),
+            "UTC",
+            time(0),
+            datetime(2029, 1, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, tzinfo=timezone.utc),
+            "UTC",
+            time(0),
+            datetime(2028, 1, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, 8, tzinfo=timezone.utc),
+            "UTC",
+            time(12),
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, 12, tzinfo=timezone.utc),
+            "UTC",
+            time(12),
+            datetime(2028, 1, 1, 12, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2027, 1, 1, 2, tzinfo=timezone.utc),
+            "America/New_York",
+            time(0),
+            datetime(2027, 1, 1, tzinfo=ZoneInfo("America/New_York")),
+        ),
+    ],
+)
+def test_annual_reset_and_window_start(
+    now: datetime, zone: str, reset_time: time, expected: datetime
+) -> None:
+    reset: Final = get_next_standardized_reset_time("12mo", now, zone, reset_time)
+    assert reset == expected
+    assert get_budget_window_start("12mo", reset) == expected.replace(year=expected.year - 1)
+
+
+@pytest.mark.parametrize(
+    "zone,reset_at,expected",
+    (
+        ("UTC", "2029-01-01T00:00:00+00:00", "2028-01-01T00:00:00+00:00"),
+        ("UTC", "2101-01-01T00:00:00+00:00", "2100-01-01T00:00:00+00:00"),
+        ("America/New_York", "2029-01-01T00:00:00-05:00", "2028-01-01T05:00:00+00:00"),
+        ("Asia/Kathmandu", "2029-01-01T12:30:00+05:45", "2028-01-01T06:45:00+00:00"),
+        ("Pacific/Apia", "2012-01-01T00:00:00+14:00", "2011-01-01T10:00:00+00:00"),
+    ),
+)
+@pytest.mark.parametrize("storage", ("offset", "utc", "naive_utc"))
+def test_annual_window_survives_timestamp_storage(
+    zone: str, reset_at: str, expected: str, storage: str
+) -> None:
+    reset: Final = datetime.fromisoformat(reset_at)
+    stored: Final = {
+        "offset": reset,
+        "utc": reset.astimezone(timezone.utc),
+        "naive_utc": reset.astimezone(timezone.utc).replace(tzinfo=None),
+    }[storage]
+
+    assert get_annual_budget_window_start(stored, zone) == datetime.fromisoformat(expected)
 
 
 class TestResetTimeOfDay(unittest.TestCase):

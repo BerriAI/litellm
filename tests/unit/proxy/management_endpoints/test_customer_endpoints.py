@@ -10,11 +10,15 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
+import litellm
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
     LitellmUserRoles,
     ProxyException,
 )
+from litellm.proxy.auth.auth_checks import check_end_user_budget
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.management_endpoints.customer_endpoints import _should_update_field, router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
@@ -26,6 +30,7 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
     DeleteCustomersResponse,
     UnblockUsersResponse,
 )
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 app = FastAPI()
 
@@ -250,20 +255,47 @@ def test_delete_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     assert response_json["error"]["code"] == "404"
 
 
-def test_delete_customer_drops_its_committed_spend_so_a_recreated_customer_starts_from_its_own_row(
-    monkeypatch, mock_prisma_client, mock_user_api_key_auth
-):
-    from types import SimpleNamespace
-
-    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
-
-    spend: Final = FakeSpendCounters(
-        redis=None,
-        memory={"spend:committed:end_user:cust-gone": 7.0, "spend:committed:end_user:cust-stays": 3.0},
-    )
+@pytest.fixture(autouse=True)
+def spend_counters(monkeypatch: pytest.MonkeyPatch) -> FakeSpendCounters:
+    """A fresh spend counter store and floor cache per test, so no counter a delete writes outlives its test."""
+    spend: Final = FakeSpendCounters(redis={})
     monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", DualCache())
+    return spend
+
+
+def _over_budget_customers(spend: FakeSpendCounters) -> None:
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    assert spend.redis is not None
+    for user_id, spent in (("cust-gone", 7.0), ("cust-stays", 3.0)):
+        spend.redis[f"spend:end_user:{user_id}"] = spent
+        spend.redis[f"spend:committed:end_user:{user_id}"] = spent
+        spend_counter_cache.in_memory_cache.set_cache(key=f"spend_db_floor:spend:end_user:{user_id}", value=spent)
+
+
+async def _check_budget_of_new_customer(user_id: str) -> None:
+    await check_end_user_budget(
+        end_user_obj=LiteLLM_EndUserTable(
+            user_id=user_id, blocked=False, spend=0.0, litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0)
+        ),
+        route="/chat/completions",
+    )
+
+
+@pytest.mark.parametrize("fail_closed", [False, True])
+@pytest.mark.asyncio
+async def test_a_deleted_customer_recreated_under_the_same_id_is_admitted_while_others_stay_over_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    spend_counters: FakeSpendCounters,
+    fail_closed: bool,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"fail_closed_budget_enforcement": fail_closed})
+    _over_budget_customers(spend_counters)
     mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
-        return_value=[SimpleNamespace(user_id="cust-gone")]
+        return_value=[LiteLLM_EndUserTable(user_id="cust-gone", blocked=False)]
     )
     mock_prisma_client.db.litellm_endusertable.delete_many = AsyncMock(return_value=1)
 
@@ -271,8 +303,79 @@ def test_delete_customer_drops_its_committed_spend_so_a_recreated_customer_start
         "/customer/delete", json={"user_ids": ["cust-gone"]}, headers={"Authorization": "Bearer test-key"}
     )
 
-    assert response.status_code == 200
-    assert spend.memory == {"spend:committed:end_user:cust-stays": 3.0}
+    assert response.status_code == 200, response.text
+    await _check_budget_of_new_customer("cust-gone")
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await _check_budget_of_new_customer("cust-stays")
+    assert exc_info.value.current_cost == 3.0
+    assert spend_counters.redis is not None
+    assert "spend:committed:end_user:cust-gone" not in spend_counters.redis
+    assert spend_counters.redis["spend:committed:end_user:cust-stays"] == 3.0
+
+
+@pytest.mark.parametrize(
+    ("existing", "delete_error"),
+    [
+        pytest.param([], None, id="customer-missing"),
+        pytest.param(
+            [LiteLLM_EndUserTable(user_id="cust-gone", blocked=False)], RuntimeError("db down"), id="db-fails"
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_failed_customer_delete_keeps_its_spend_enforced(
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    spend_counters: FakeSpendCounters,
+    existing: list[LiteLLM_EndUserTable],
+    delete_error: Exception | None,
+) -> None:
+    _over_budget_customers(spend_counters)
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=existing)
+    mock_prisma_client.db.litellm_endusertable.delete_many = AsyncMock(side_effect=delete_error, return_value=1)
+
+    response: Final = client.post(
+        "/customer/delete", json={"user_ids": ["cust-gone"]}, headers={"Authorization": "Bearer test-key"}
+    )
+
+    assert response.status_code >= 400
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await _check_budget_of_new_customer("cust-gone")
+    assert exc_info.value.current_cost == 7.0
+
+
+@pytest.mark.parametrize(
+    ("failing", "redis_down"),
+    [
+        pytest.param(frozenset({"set"}), False, id="redis-rejects-writes"),
+        pytest.param(frozenset(), True, id="redis-down"),
+    ],
+)
+@pytest.mark.parametrize("fail_closed", [False, True])
+@pytest.mark.asyncio
+async def test_a_recreated_customer_is_admitted_when_redis_rejects_the_counter_reset(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    failing: frozenset[str],
+    redis_down: bool,
+    fail_closed: bool,
+) -> None:
+    spend: Final = FakeSpendCounters(redis={}, failing=failing, fail=redis_down)
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"fail_closed_budget_enforcement": fail_closed})
+    _over_budget_customers(spend)
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
+        return_value=[LiteLLM_EndUserTable(user_id="cust-gone", blocked=False)]
+    )
+    mock_prisma_client.db.litellm_endusertable.delete_many = AsyncMock(return_value=1)
+
+    response: Final = client.post(
+        "/customer/delete", json={"user_ids": ["cust-gone"]}, headers={"Authorization": "Bearer test-key"}
+    )
+
+    assert response.status_code == 200, response.text
+    await _check_budget_of_new_customer("cust-gone")
 
 
 def test_error_schema_consistency(mock_prisma_client, mock_user_api_key_auth):

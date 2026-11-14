@@ -1,19 +1,30 @@
+from datetime import datetime, timezone
 from typing import Final
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from starlette.requests import Request
+from starlette.routing import Route
 
 import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
+    Litellm_EntityType,
+    ProxyErrorTypes,
+    ProxyException,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import (
     _run_post_custom_auth_checks,
     update_valid_token_with_end_user_params,
 )
+from litellm.proxy.hooks.model_max_budget_limiter import (
+    PROXY_VirtualKeyModelMaxBudgetLimiter,
+    model_budget_spend_cache_key,
+)
+from litellm.types.videos.utils import encode_video_id_with_provider
 
 
 @pytest.mark.asyncio
@@ -451,3 +462,147 @@ def test_apply_budget_limits_copies_per_model_limits_onto_end_user_params():
         "end_user_model_tpm_limit": {"gpt-4o": 400000},
         "end_user_model_rpm_limit": {"gpt-4o": 200},
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model, key_aliases, run_common_checks, expect_enforced",
+    [
+        ("free-key", {"free-key": "free-model"}, True, False),
+        ("free-model", {"free-model": "paid-model"}, True, True),
+        ("free-key", {"free-key": "free-model"}, False, True),
+    ],
+)
+async def test_custom_auth_judges_the_zero_cost_waiver_by_the_key_alias_target(
+    requested_model: str,
+    key_aliases: dict[str, str],
+    run_common_checks: bool,
+    expect_enforced: bool,
+    free_and_paid_router: litellm.Router,
+) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        token="test_token",
+        aliases=key_aliases,
+        end_user_id="end-user",
+        end_user_model_max_budget={requested_model: {"budget_limit": 1.0, "time_period": "1d"}},
+    )
+    limiter: Final = MagicMock()
+    limiter.is_end_user_within_model_budget = AsyncMock(
+        side_effect=litellm.BudgetExceededError(current_cost=5.0, max_budget=1.0)
+    )
+    http_request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [],
+            "query_string": b"",
+            "route": Route("/v1/chat/completions", endpoint=lambda request: None),
+        }
+    )
+
+    async def run() -> UserAPIKeyAuth:
+        return await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=http_request,
+            request_data={"model": requested_model},
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+        )
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", free_and_paid_router),
+        patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter),
+        patch("litellm.proxy.proxy_server.general_settings", {"custom_auth_run_common_checks": run_common_checks}),
+    ):
+        if expect_enforced:
+            with pytest.raises(litellm.BudgetExceededError):
+                await run()
+            assert limiter.is_end_user_within_model_budget.await_args.kwargs["model"] == requested_model
+        else:
+            result: Final = await run()
+            assert result.token == "test_token"
+            limiter.is_end_user_within_model_budget.assert_not_awaited()
+
+
+_VIDEO_ID: Final = encode_video_id_with_provider(video_id="video_raw", provider="openai", model_id="sora-2")
+
+
+async def _post_custom_auth_video_request(
+    valid_token: UserAPIKeyAuth, method: str, template: str, request_data: dict[str, object]
+) -> UserAPIKeyAuth:
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    await limiter.dual_cache.async_set_cache(
+        key=model_budget_spend_cache_key(
+            entity_type=Litellm_EntityType.KEY, entity_id=valid_token.token, budget_model="sora-2", budget_duration="1d"
+        ),
+        value=0.4,
+    )
+    path: Final = template.format(video_id=_VIDEO_ID)
+    http_request: Final = Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "headers": [],
+            "query_string": b"",
+            "route": Route(template, endpoint=lambda request: None),
+        }
+    )
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        return await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=http_request,
+            request_data=request_data,
+            route=path,
+            parent_otel_span=None,
+        )
+
+
+def _exhausted_model_budget_token() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(token="test_token", model_max_budget={"sora-2": {"max_budget": 0.3, "budget_duration": "1d"}})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "template",
+    ["/v1/videos/{video_id}", "/videos/{video_id}", "/v1/videos/{video_id}/content", "/videos/{video_id}/content"],
+)
+async def test_custom_auth_exhausted_model_budget_still_retrieves_an_already_paid_video(template: str) -> None:
+    result: Final = await _post_custom_auth_video_request(
+        _exhausted_model_budget_token(), "GET", template, {"video_id": _VIDEO_ID}
+    )
+
+    assert result.token == "test_token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method, template, request_data",
+    [
+        ("POST", "/v1/videos", {"model": "sora-2"}),
+        ("POST", "/v1/videos/{video_id}/remix", {"video_id": _VIDEO_ID}),
+        ("GET", "/v1/videos", {"model": "sora-2"}),
+    ],
+)
+async def test_custom_auth_exhausted_model_budget_still_blocks_video_requests_other_than_retrieval(
+    method: str, template: str, request_data: dict[str, object]
+) -> None:
+    with pytest.raises(litellm.BudgetExceededError):
+        await _post_custom_auth_video_request(_exhausted_model_budget_token(), method, template, request_data)
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_video_retrieval_still_rejects_an_expired_token() -> None:
+    expired_token: Final = _exhausted_model_budget_token().model_copy(
+        update={"expires": datetime(2000, 1, 1, tzinfo=timezone.utc)}
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _post_custom_auth_video_request(expired_token, "GET", "/v1/videos/{video_id}", {"video_id": _VIDEO_ID})
+
+    assert exc_info.value.type == ProxyErrorTypes.expired_key

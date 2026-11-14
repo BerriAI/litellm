@@ -4938,6 +4938,10 @@ def test_output_item_done_with_stream_map_keeps_empty_delta():
             },
             {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_weather"}]},
         ),
+        (
+            {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_weather"}]},
+            {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_weather"}]},
+        ),
     ],
 )
 async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(

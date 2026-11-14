@@ -652,3 +652,32 @@ def test_gemini_embedding(respx_mock: respx.MockRouter) -> None:
     expected_prompt_tokens: Final = litellm.token_counter(model="gemini/gemini-embedding-001", text="Hello, world!")
     assert response.usage.prompt_tokens == expected_prompt_tokens
     assert response.usage.total_tokens == expected_prompt_tokens
+
+
+def test_gemini_embedding_sends_extra_body_fields_on_each_request(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
+    ).mock(return_value=httpx.Response(200, json={"embeddings": [{"values": [0.1, 0.2]}]}))
+
+    litellm.embedding(
+        model="gemini/gemini-embedding-001",
+        input="Hello, world!",
+        api_key="gemini-test-key",
+        extra_body={
+            "title": "Greeting",
+            "taskType": "RETRIEVAL_DOCUMENT",
+            "outputDimensionality": 256,
+            "documentOcr": True,
+        },
+    )
+
+    assert json.loads(route.calls.last.request.content)["requests"] == [
+        {
+            "model": "models/gemini-embedding-001",
+            "content": {"parts": [{"text": "Hello, world!"}]},
+            "title": "Greeting",
+            "taskType": "RETRIEVAL_DOCUMENT",
+            "outputDimensionality": 256,
+            "documentOcr": True,
+        }
+    ]

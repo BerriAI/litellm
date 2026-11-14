@@ -27,7 +27,7 @@ from litellm.redis.stores.spend_counters import (
 )
 from litellm.redis.store_settings import RedisStoreSettings
 from litellm.rust_bridge._native import NativeRedisClient, NativeRedisStoreError, NativeSpendCounters, SpendRead
-from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
+from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
 
 from .spend_counters_double import FakeSettlement, FakeSpendCounters
 

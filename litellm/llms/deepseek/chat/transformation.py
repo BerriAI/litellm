@@ -34,6 +34,9 @@ def _warn_on_dropped_budget(thinking: object, model: str) -> None:
 
 
 class DeepSeekChatConfig(OpenAIGPTConfig):
+    def _flattens_content_lists(self) -> bool:
+        return True
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         """
         DeepSeek reasoner models support thinking parameter.
