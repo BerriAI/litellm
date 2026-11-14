@@ -15,6 +15,7 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS, ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, iter_items
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     calls_through_openai_sdk,
     get_llm_provider,
@@ -77,13 +78,35 @@ def deployment_sets_litellm_param(deployment_litellm_params: Mapping[str, object
     return field is None or value != field.default  # pyright: ignore[reportAny]  # pydantic types a field default as Any
 
 
-def _is_provider_setting_the_drop_list_removes(deployment_litellm_params: Mapping[str, object], name: str) -> bool:
+def _is_provider_setting_the_drop_list_removes(name: str) -> bool:
     return (
         name in LiteLLM_Params.model_fields
         and name not in all_litellm_params
         and name not in OPENAI_CHAT_COMPLETION_PARAMS
-        and deployment_sets_litellm_param(deployment_litellm_params, name)
     )
+
+
+def _with_its_credential_values(deployment_litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    credential_name: Final = deployment_litellm_params.get("litellm_credential_name")
+    credential: Final = (
+        CredentialAccessor.find_credential(credential_name) if isinstance(credential_name, str) else None
+    )
+    if credential is None:
+        return deployment_litellm_params
+    return {
+        **deployment_litellm_params,
+        **{
+            key: value
+            for key, value in credential.credential_values.items()
+            if deployment_litellm_params.get(key) is None
+        },
+    }
+
+
+def _listed_names(drop_list: object) -> tuple[str, ...]:
+    if drop_list.__class__ is not list:
+        return ()
+    return tuple(name for name in iter_items(drop_list) if isinstance(name, str))
 
 
 def _sends_extra_settings_in_the_request_body(deployment_litellm_params: Mapping[str, object]) -> bool:
@@ -95,24 +118,28 @@ def _sends_extra_settings_in_the_request_body(deployment_litellm_params: Mapping
     return provider is not None and calls_through_openai_sdk(provider)
 
 
-def drop_listed_deployment_settings(deployment_litellm_params: Mapping[str, object]) -> frozenset[str]:
-    drop_list: Final = deployment_litellm_params.get("additional_drop_params")
-    if drop_list.__class__ is not list:
-        return frozenset()
-    settings: Final = frozenset(
+def drop_listed_deployment_settings(
+    deployment_litellm_params: Mapping[str, object], router_drop_list: object = None
+) -> frozenset[str]:
+    named: Final = frozenset(
         name
-        for name in iter_items(drop_list)
-        if isinstance(name, str) and _is_provider_setting_the_drop_list_removes(deployment_litellm_params, name)
+        for name in chain(
+            _listed_names(deployment_litellm_params.get("additional_drop_params")), _listed_names(router_drop_list)
+        )
+        if _is_provider_setting_the_drop_list_removes(name)
     )
-    if not settings or _sends_extra_settings_in_the_request_body(deployment_litellm_params):
+    if not named:
         return frozenset()
-    return settings
+    params: Final = _with_its_credential_values(deployment_litellm_params)
+    if _sends_extra_settings_in_the_request_body(params):
+        return frozenset()
+    return frozenset(name for name in named if deployment_sets_litellm_param(params, name))
 
 
 def drop_list_keeping_deployment_settings(
-    deployment_litellm_params: Mapping[str, object], drop_list: object
+    deployment_litellm_params: Mapping[str, object], drop_list: object, router_drop_list: object = None
 ) -> tuple[str, ...] | None:
-    kept: Final = drop_listed_deployment_settings(deployment_litellm_params)
+    kept: Final = drop_listed_deployment_settings(deployment_litellm_params, router_drop_list)
     if not kept or drop_list.__class__ is not list:
         return None
     return tuple(name for name in iter_items(drop_list) if isinstance(name, str) and name not in kept)
