@@ -4,6 +4,7 @@ import itertools
 import json
 import logging
 import math
+import sys
 import time
 from collections.abc import (
     AsyncGenerator,
@@ -11,6 +12,7 @@ from collections.abc import (
     Awaitable,
     Callable,
     Coroutine,
+    Generator,
     Iterable,
     Iterator,
     Mapping,
@@ -45,6 +47,7 @@ from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.requests import empty_receive
 from starlette.types import Receive, Scope, Send
 from typing_extensions import Never
 
@@ -2383,6 +2386,35 @@ async def await_llm_call_cancelling_on_disconnect(
         monitor.cancel()
 
 
+def _cancellation_requests(task: "asyncio.Task[object]") -> int:
+    return task.cancelling() if sys.version_info >= (3, 11) else 0
+
+
+@contextlib.contextmanager
+def _cancelling_pre_call_hooks_on_disconnect(
+    request: Request, general_settings: Mapping[str, object]
+) -> Generator[None, None, None]:
+    """Cancels the request's own task, so context variables the hooks set still reach the rest of the request,
+    and cancels it once, so a hook's shielded cleanup is not interrupted again."""
+    request_task: Final = asyncio.current_task()
+    if request_task is None or not general_settings.get("cancel_on_disconnect") or request.receive is empty_receive:
+        yield
+        return
+    requests_before: Final = _cancellation_requests(request_task)
+    disconnect_event: Final = asyncio.Event()
+    monitor: Final = asyncio.create_task(_cancel_llm_call_on_client_disconnect(request, request_task, disconnect_event))
+    try:
+        yield
+    except asyncio.CancelledError:
+        if disconnect_event.is_set() and _cancellation_requests(request_task) <= requests_before + 1:
+            raise HTTPException(status_code=499, detail=_CLIENT_DISCONNECT_DETAIL)
+        raise
+    finally:
+        monitor.cancel()
+        if disconnect_event.is_set() and sys.version_info >= (3, 11):
+            _ = request_task.uncancel()
+
+
 def _timing_values(
     *,
     hidden_params: Mapping[str, object],
@@ -3264,12 +3296,13 @@ class ProxyBaseLLMRequestProcessing:
         prefetch_model = self.data.get("model")
         if llm_router is not None and isinstance(prefetch_model, str):
             RoutingContext(llm_router).arm_read_prefetch(prefetch_model, self.data)
-        self.data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            data=self.data,
-            call_type=route_type,
-            skip_guardrails=skip_guardrails,
-        )
+        with _cancelling_pre_call_hooks_on_disconnect(request, _REQUEST_FIELDS.validate_python(general_settings)):
+            self.data = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                data=self.data,
+                call_type=route_type,
+                skip_guardrails=skip_guardrails,
+            )
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
             tags_before_guardrails=self._tags_before_guardrails,

@@ -4,6 +4,7 @@ import copy
 import datetime
 import gzip
 import json
+import sys
 import time
 from base64 import urlsafe_b64encode
 from collections.abc import AsyncIterable, Awaitable, Coroutine, Mapping
@@ -19,6 +20,7 @@ import pytest
 import respx
 from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.types import Message, Receive
 
 import litellm
 from litellm._uuid import uuid
@@ -6827,6 +6829,192 @@ class TestCancelOnDisconnect:
             await asyncio.Event().wait()
 
         return Request(scope={"type": "http", "headers": []}, receive=receive)
+
+    def _pre_call_logic(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        hook: CustomLogger,
+        cancel_on_disconnect: bool,
+        receive: Receive | None = None,
+    ) -> Coroutine[object, object, tuple[dict[str, object], LiteLLMLoggingObj]]:
+        from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+        monkeypatch.setattr(litellm, "callbacks", [hook])
+        scope: Final = {"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []}
+        return ProxyBaseLLMRequestProcessing(
+            data={"model": "openai/test-model", "messages": [{"role": "user", "content": "hello"}]}
+        ).common_processing_pre_call_logic(
+            request=Request(scope) if receive is None else Request(scope, receive),
+            general_settings={"cancel_on_disconnect": cancel_on_disconnect},
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            proxy_config=RealProxyConfig(),
+            route_type="acompletion",
+        )
+
+    @pytest.mark.parametrize("enabled", [True, False])
+    async def test_disconnect_cancels_a_waiting_pre_call_hook(
+        self, monkeypatch: pytest.MonkeyPatch, enabled: bool
+    ) -> None:
+        entered: Final = asyncio.Event()
+        release: Final = asyncio.Event()
+        cancelled: Final = asyncio.Event()
+        messages: Final[asyncio.Queue[Message]] = asyncio.Queue()
+
+        class WaitingHook(CustomLogger):
+            async def async_pre_call_hook(
+                self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+            ) -> dict[str, object]:
+                entered.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+                return data
+
+        task: Final = asyncio.create_task(self._pre_call_logic(monkeypatch, WaitingHook(), enabled, messages.get))
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            messages.put_nowait({"type": "http.disconnect"})
+            if enabled:
+                with pytest.raises(HTTPException) as exc_info:
+                    await asyncio.wait_for(task, 5)
+                assert exc_info.value.status_code == 499
+                assert cancelled.is_set()
+            else:
+                release.set()
+                data, _ = await asyncio.wait_for(task, 5)
+                assert data["model"] == "openai/test-model"
+                assert not cancelled.is_set()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_disconnect_cancels_the_pre_call_hook_once_so_its_shielded_cleanup_finishes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        entered: Final = asyncio.Event()
+        cleaned_up: Final = asyncio.Event()
+        cancelled_at: Final[list[str]] = []
+        messages: Final[asyncio.Queue[Message]] = asyncio.Queue()
+
+        async def cleanup() -> None:
+            for _ in range(10):
+                await asyncio.sleep(0)
+            cleaned_up.set()
+
+        class CleaningUpHook(CustomLogger):
+            async def async_pre_call_hook(
+                self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+            ) -> dict[str, object]:
+                entered.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled_at.append("admission wait")
+                    try:
+                        await asyncio.shield(cleanup())
+                    except asyncio.CancelledError:
+                        cancelled_at.append("cleanup")
+                        raise
+                    raise
+                return data
+
+        async def request() -> int:
+            with pytest.raises(HTTPException) as exc_info:
+                await self._pre_call_logic(monkeypatch, CleaningUpHook(), True, messages.get)
+            assert exc_info.value.status_code == 499
+            request_task: Final = asyncio.current_task()
+            assert request_task is not None
+            return request_task.cancelling() if sys.version_info >= (3, 11) else 0
+
+        task: Final = asyncio.create_task(request())
+        await asyncio.wait_for(entered.wait(), 5)
+        messages.put_nowait({"type": "http.disconnect"})
+
+        assert await asyncio.wait_for(task, 5) == 0
+        assert cancelled_at == ["admission wait"]
+        assert cleaned_up.is_set()
+
+    @pytest.mark.parametrize(
+        "disconnects",
+        [
+            False,
+            pytest.param(True, marks=pytest.mark.skipif(sys.version_info < (3, 11), reason="needs Task.cancelling")),
+        ],
+    )
+    async def test_cancellation_from_elsewhere_during_the_pre_call_hook_is_not_answered_as_a_disconnect(
+        self, monkeypatch: pytest.MonkeyPatch, disconnects: bool
+    ) -> None:
+        entered: Final = asyncio.Event()
+        disconnect_seen: Final = asyncio.Event()
+        messages: Final[asyncio.Queue[Message]] = asyncio.Queue()
+
+        class StillCleaningUpHook(CustomLogger):
+            async def async_pre_call_hook(
+                self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+            ) -> dict[str, object]:
+                entered.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    if not disconnects:
+                        raise
+                    disconnect_seen.set()
+                    await asyncio.Event().wait()
+                return data
+
+        task: Final = asyncio.create_task(self._pre_call_logic(monkeypatch, StillCleaningUpHook(), True, messages.get))
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            if disconnects:
+                messages.put_nowait({"type": "http.disconnect"})
+                await asyncio.wait_for(disconnect_seen.wait(), 5)
+            task.cancel()
+
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 5)
+        finally:
+            while not task.done():
+                task.cancel()
+                await asyncio.sleep(0)
+
+    async def test_pre_call_hook_context_changes_reach_the_request_while_watching_for_disconnect(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        set_by_hook: Final = contextvars.ContextVar("set-by-pre-call-hook", default="unset")
+
+        class ContextSettingHook(CustomLogger):
+            async def async_pre_call_hook(
+                self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+            ) -> dict[str, object]:
+                await asyncio.sleep(0)
+                set_by_hook.set("set")
+                return data
+
+        messages: Final[asyncio.Queue[Message]] = asyncio.Queue()
+
+        await self._pre_call_logic(monkeypatch, ContextSettingHook(), True, messages.get)
+
+        assert set_by_hook.get() == "set"
+
+    async def test_pre_call_hook_of_a_request_without_a_receive_channel_is_not_watched(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class YieldingHook(CustomLogger):
+            async def async_pre_call_hook(
+                self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+            ) -> dict[str, object]:
+                for _ in range(3):
+                    await asyncio.sleep(0)
+                return data
+
+        with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+            data, _ = await self._pre_call_logic(monkeypatch, YieldingHook(), True)
+
+        assert data["model"] == "openai/test-model"
+        assert "cancel_on_disconnect" not in caplog.text
 
     async def test_monitor_cancels_llm_call_and_sets_event_on_disconnect(self):
         request = self._request(

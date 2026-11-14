@@ -8403,6 +8403,71 @@ async def test_request_capacity_finishes_admission_and_release_despite_repeated_
         pass
 
 
+class _SlotRegistryRedis:
+    """Holds each acquired slot from the moment the acquire script runs, before its reply reaches the limiter."""
+
+    def __init__(self) -> None:
+        self.slots: Final[dict[str, set[object]]] = {}
+        self.acquired: Final = asyncio.Event()
+        self.deliver_reply: Final = asyncio.Event()
+        self.fakes: Final = FakeRateLimits(parallel_acquire_script=self._acquire, parallel_release_script=self._release)
+
+    async def _acquire(self, keys: list[str], args: list[object]) -> list[object]:
+        slot_id: Final = args[2]
+        for index, (key, limit) in enumerate(zip(keys, args[::3])):
+            in_flight = len(self.slots.get(key, ()))
+            if in_flight >= int(str(limit)):
+                return [1, index + 1, in_flight, limit]
+        for key in keys:
+            self.slots.setdefault(key, set()).add(slot_id)
+        self.acquired.set()
+        await self.deliver_reply.wait()
+        return [0, *[len(self.slots[key]) for key in keys]]
+
+    async def _release(self, keys: list[str], args: list[object]) -> list[int]:
+        for key, slot_id in zip(keys, args):
+            self.slots.get(key, set()).discard(slot_id)
+        return [len(self.slots.get(key, ())) for key in keys]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_cancelled_before_its_acquire_reply_arrives_leaves_the_slot_free():
+    redis = _SlotRegistryRedis()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), rate_limit_store=redis.fakes.store()
+    )
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-cancelled-admission"), max_parallel_requests=1)
+
+    async def disconnected_request() -> None:
+        try:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=auth, cache=DualCache(), data={"model": "test-model"}, call_type=""
+            )
+        except asyncio.CancelledError:
+            await handler.async_post_call_failure_hook(
+                request_data={},
+                original_exception=HTTPException(status_code=499, detail="Client disconnected the request"),
+                user_api_key_dict=auth,
+            )
+            raise
+
+    task = asyncio.create_task(disconnected_request())
+    await asyncio.wait_for(redis.acquired.wait(), timeout=2)
+    task.cancel()
+    await asyncio.sleep(0)
+    redis.deliver_reply.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2)
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth, cache=DualCache(), data={"model": "test-model"}, call_type=""
+    )
+
+    held = get_request_stash().parallel_slot
+    assert held is not None
+    assert list(redis.slots.values()) == [{held["slot_id"]}]
+
+
 @pytest.mark.asyncio
 async def test_request_capacity_rejection_keeps_existing_redis_mirror():
     cache = DualCache()

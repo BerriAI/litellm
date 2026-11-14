@@ -4039,6 +4039,38 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if response["overall_code"] == "OK":
             await self._release_parallel_request_slots(acquisition, user_api_key_dict.parent_otel_span)
 
+    async def _release_request_capacity_despite_cancellation(
+        self,
+        admission: asyncio.Task[RateLimitResponse],
+        acquisition: ParallelSlotAcquisition,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        cleanup: Final = asyncio.create_task(
+            self._release_request_capacity_when_admitted(admission, acquisition, user_api_key_dict)
+        )
+        cancellation: asyncio.CancelledError | None = None  # rebind-ok: retain cancellation until cleanup finishes
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError as exc:
+                cancellation = exc
+        cleanup.result()
+        if cancellation is not None:
+            raise cancellation
+
+    async def _admit_releasing_capacity_on_cancellation(
+        self,
+        admission: asyncio.Task[RateLimitResponse],
+        acquisition: ParallelSlotAcquisition,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> RateLimitResponse:
+        """A cancelled caller never records the slot its admission may already hold, so nothing could release it."""
+        try:
+            return await asyncio.shield(admission)
+        except asyncio.CancelledError:
+            await self._release_request_capacity_despite_cancellation(admission, acquisition, user_api_key_dict)
+            raise
+
     async def async_fallback_target_allowed(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -4100,18 +4132,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._handle_rate_limit_error(response, descriptors, model)
             yield
         finally:
-            cleanup: Final = asyncio.create_task(
-                self._release_request_capacity_when_admitted(admission, acquisition, user_api_key_dict)
-            )
-            cancellation: asyncio.CancelledError | None = None  # rebind-ok: retain cancellation until cleanup finishes
-            while not cleanup.done():
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError as exc:
-                    cancellation = exc
-            cleanup.result()
-            if cancellation is not None:
-                raise cancellation
+            await self._release_request_capacity_despite_cancellation(admission, acquisition, user_api_key_dict)
 
     @with_service_target(RATE_LIMITS_TARGET)
     @total_timeout_held()
@@ -4188,7 +4209,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     if (d.get("rate_limit") or {}).get("max_parallel_requests") is not None
                 )
             )
-            parallel_slot_id: Final = uuid.uuid4().hex if parallel_gauges else None
+            parallel_slot: Final = (
+                ParallelSlotAcquisition(slot_id=uuid.uuid4().hex, gauges=parallel_gauges) if parallel_gauges else None
+            )
 
             first_pass_descriptors: Final = (
                 descriptors
@@ -4197,12 +4220,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     d for d in descriptors if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
                 )
             )
-            response: Final = await self.should_rate_limit(
+            admission: Final = self.should_rate_limit(
                 descriptors=first_pass_descriptors,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 skip_tpm_check=self.tpm_reservation_enabled,
-                parallel_slot_id=parallel_slot_id,
+                parallel_slot_id=None if parallel_slot is None else parallel_slot["slot_id"],
                 skip_parallel_check=reuses_request_slot,
+            )
+            response: Final = await (
+                admission
+                if parallel_slot is None
+                else self._admit_releasing_capacity_on_cancellation(
+                    asyncio.create_task(admission), parallel_slot, user_api_key_dict
+                )
             )
 
             if response["overall_code"] == "OVER_LIMIT":
@@ -4214,11 +4244,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             else:
                 if not reuses_request_slot:
                     stash.rate_limit_response = response
-                if parallel_slot_id is not None:
-                    stash.parallel_slot = ParallelSlotAcquisition(
-                        slot_id=parallel_slot_id,
-                        gauges=parallel_gauges,
-                    )
+                if parallel_slot is not None:
+                    stash.parallel_slot = parallel_slot
 
             # ----------------------------------------------------------------
             # TPM token reservation
