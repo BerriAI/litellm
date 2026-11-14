@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use litellm_host_python::{PythonFileReader, py_bytes};
 use litellm_inference_ocr::types::OcrDocumentInput;
 use pyo3::{
-    exceptions::PyValueError,
+    exceptions::{PyKeyError, PyValueError},
     prelude::*,
     sync::PyOnceLock,
-    types::{PyBytes, PyString, PyType},
+    types::{PyBytes, PyMapping, PyString, PyType},
 };
 
 /// A `type='file'` document as projected: paths and bytes are typed inputs already; a
@@ -39,10 +39,14 @@ fn optional_field<'py>(
     document: Borrowed<'_, 'py, PyAny>,
     key: &str,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
-    if !document.contains(key)? {
+    if document.cast::<PyMapping>().is_ok() && !document.contains(key)? {
         return Ok(None);
     }
-    document.get_item(key).map(Some)
+    match document.get_item(key) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.is_instance_of::<PyKeyError>(document.py()) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 impl FromPyObject<'_, '_> for FileDocumentInput {
@@ -110,25 +114,31 @@ mod tests {
         }
     }
 
+    const DEFAULTING_DICT: &std::ffi::CStr = c"class Document(dict):
+    def __missing__(self, key):
+        return Document()
+    def __getattr__(self, name):
+        return self[name]";
+
+    const ITEM_LOOKUP_ONLY: &std::ffi::CStr = c"class Document:
+    def __init__(self, items=()):
+        self._items = dict(items)
+    def __getitem__(self, key):
+        return self._items[key]";
+
     #[rstest::rstest]
     #[case::without_mime_type(c"{'file': b'abc'}", None)]
     #[case::with_mime_type(c"{'file': b'abc', 'mime_type': 'image/png'}", Some("image/png"))]
-    fn a_dict_answering_missing_keys_reads_only_the_keys_it_holds(
+    fn a_document_yields_only_the_keys_the_caller_set(
+        #[values(DEFAULTING_DICT, ITEM_LOOKUP_ONLY)] class: &std::ffi::CStr,
         #[case] items: &std::ffi::CStr,
         #[case] mime_type: Option<&str>,
     ) {
         Python::initialize();
         Python::attach(|py| {
-            let locals = eval(
-                py,
-                c"class Defaulting(dict):
-    def __missing__(self, key):
-        return Defaulting()
-    def __getattr__(self, name):
-        return self[name]",
-            );
+            let locals = eval(py, class);
             let document = locals
-                .get_item("Defaulting")
+                .get_item("Document")
                 .unwrap()
                 .unwrap()
                 .call1((py.eval(items, None, None).unwrap(),))
@@ -142,7 +152,7 @@ mod tests {
                 }
             );
             let error = locals
-                .get_item("Defaulting")
+                .get_item("Document")
                 .unwrap()
                 .unwrap()
                 .call0()
