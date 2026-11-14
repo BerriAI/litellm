@@ -10,6 +10,14 @@ pub enum Error {
         #[source]
         source: Source,
     },
+    #[error(
+        "the AWS web identity token must name a secret or an oidc/ provider, not an environment variable"
+    )]
+    WebIdentityTokenReference,
+    #[error("the AWS web identity token reference resolved to no token")]
+    MissingWebIdentityToken,
+    #[error("could not read the AWS web identity token")]
+    WebIdentityToken(#[source] Source),
     #[error("AWS web identity response had no credentials")]
     MissingWebIdentityCredentials,
     #[error("AWS web identity response had an invalid expiration")]

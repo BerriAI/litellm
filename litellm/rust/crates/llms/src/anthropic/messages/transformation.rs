@@ -1211,6 +1211,7 @@ mod tests {
                     },
                     drop_params: true,
                     drops_unsupported_params: false,
+                    global_drop_params: false,
                 }
             );
             return;

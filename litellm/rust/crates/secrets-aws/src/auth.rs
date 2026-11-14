@@ -49,6 +49,8 @@ impl Credentials {
                 profile_name: settings.aws_profile_name.clone(),
                 web_identity_token: settings.aws_web_identity_token.as_ref().cloned(),
                 sts_endpoint: settings.aws_sts_endpoint.clone(),
+                session_tags: None,
+                session_policy: None,
             },
             environment,
         }

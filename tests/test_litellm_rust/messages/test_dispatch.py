@@ -254,6 +254,48 @@ def test_only_requests_that_pass_through_to_a_messages_api_reach_a_messages_targ
     assert result is (native_result if passes_through else python_result)
 
 
+BEDROCK_INVOKE_MODEL: Final = "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+
+@pytest.mark.parametrize(
+    ("model", "target"),
+    (
+        pytest.param(BEDROCK_INVOKE_MODEL, Target.BEDROCK_INVOKE, id="invoke"),
+        pytest.param(
+            "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0", Target.BEDROCK_INVOKE, id="explicit-invoke"
+        ),
+        pytest.param(
+            "bedrock/us-west-2/us.anthropic.claude-sonnet-4-5-20250929-v1:0", Target.BEDROCK_INVOKE, id="regional"
+        ),
+        pytest.param("bedrock/claude_platform/claude-sonnet-4-5", Target.MESSAGES, id="claude-platform"),
+        pytest.param("bedrock/mantle/anthropic.claude-sonnet-5", Target.MESSAGES, id="mantle"),
+        pytest.param("bedrock_mantle/anthropic.claude-sonnet-5", Target.MESSAGES, id="bedrock-mantle"),
+        pytest.param(
+            "bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0", Target.CHAT_COMPLETIONS, id="converse"
+        ),
+        pytest.param("bedrock/us.meta.llama3-2-11b-instruct-v1:0", Target.CHAT_COMPLETIONS, id="non-claude"),
+    ),
+)
+def test_only_claude_on_bedrock_invoke_model_reaches_a_bedrock_invoke_target_rule(model: str, target: Target) -> None:
+    python_result: Final = response(model)
+    native_result: Final = response(model)
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: fallback
+        return python_result
+
+    result: Final = _DISPATCH.run(
+        (16, MESSAGES, model),
+        {},
+        python=python,
+        binding=messages_binding(lambda request: native_result),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
+        rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, targets=frozenset({Target.BEDROCK_INVOKE})),),
+    )
+
+    assert dispatch.messages_target(model, None, None, None) is target
+    assert result is (native_result if target is Target.BEDROCK_INVOKE else python_result)
+
+
 DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}]
 CLASSIFIER_SETTINGS: Final = {"safeguards_classifier_model": "gpt-oss-120b"}
 
@@ -756,6 +798,49 @@ async def test_anthropic_runs_on_rust_without_the_opt_in(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
+async def test_bedrock_invoke_runs_on_rust_without_the_opt_in(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], asynchronous: bool
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
+        pytest.fail("bedrock invoke has no Python Messages path")
+
+    with rebound(dispatch, "_PYTHON_MESSAGES", python), rebound(dispatch, "_PYTHON_AMESSAGES", python):
+        result: Final = await _public(asynchronous, BEDROCK_INVOKE_MODEL, {})
+
+    assert isinstance(result, dict)
+    assert shipped_native == ["async" if asynchronous else "sync"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    (
+        pytest.param("bedrock/claude_platform/claude-sonnet-4-5", id="claude-platform"),
+        pytest.param("bedrock/mantle/anthropic.claude-sonnet-5", id="mantle"),
+        pytest.param("bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0", id="converse"),
+    ),
+)
+async def test_other_bedrock_messages_keep_python(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], model: str
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    python_result: Final = response(model)
+
+    async def apython(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        return python_result
+
+    with rebound(dispatch, "_PYTHON_AMESSAGES", apython):
+        result: Final = await _public(True, model, {})
+
+    assert result is python_result
+    assert shipped_native == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
 @pytest.mark.parametrize(
     "model", ("anthropic/parity-tool-model", "anthropic/claude-sonnet-4-5"), ids=("non-claude", "claude")
 )
@@ -926,6 +1011,8 @@ async def test_other_providers_keep_python_for_the_same_features(
     ("model", "refused"),
     (
         pytest.param("anthropic/claude-sonnet-4-5", True, id="anthropic"),
+        pytest.param(BEDROCK_INVOKE_MODEL, True, id="bedrock-invoke"),
+        pytest.param("bedrock/mantle/anthropic.claude-sonnet-5", False, id="bedrock-mantle"),
         pytest.param("deepseek/deepseek-v4-flash", False, id="deepseek"),
     ),
 )

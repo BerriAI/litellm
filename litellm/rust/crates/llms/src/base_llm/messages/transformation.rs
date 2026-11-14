@@ -49,6 +49,36 @@ pub trait BaseMessagesConfig: Sync {
         Ok(request)
     }
 
+    fn transform_request_with_headers(
+        &self,
+        request: MessagesRequest,
+        context: &MessagesTransformContext,
+        headers: Headers,
+    ) -> Result<(MessagesRequest, Headers), Error> {
+        Ok((
+            self.transform_anthropic_messages_request(request, context)?,
+            headers,
+        ))
+    }
+
+    fn native_output_fallback(
+        &self,
+        _request: &MessagesRequest,
+        _context: &MessagesTransformContext,
+    ) -> Option<MessagesTransformContext> {
+        None
+    }
+
+    fn retries_without_native_output(
+        &self,
+        _status: u16,
+        _error_text: &str,
+        _request_body: &Value,
+        _model: &str,
+    ) -> bool {
+        false
+    }
+
     fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
         ToolCustomField::Keep
     }

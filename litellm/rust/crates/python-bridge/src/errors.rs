@@ -53,10 +53,11 @@ fn provider_rejection(rejection: &(dyn StdError + 'static)) -> Option<String> {
     }
     match rejection.downcast_ref::<litellm_llms::ErrorDetail>() {
         Some(
-            detail @ litellm_llms::ErrorDetail::InvalidChoice {
+            detail @ (litellm_llms::ErrorDetail::InvalidChoice {
                 field: "reasoning effort",
                 ..
-            },
+            }
+            | litellm_llms::ErrorDetail::UnsupportedBedrockWebSearchTool { .. }),
         ) => Some(format!("litellm.BadRequestError: {detail}")),
         Some(
             detail @ (litellm_llms::ErrorDetail::InvalidReasoningEffort { .. }

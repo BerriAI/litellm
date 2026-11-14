@@ -13,6 +13,7 @@ pub type MessagesOutput = HostedCompletion<MessagesBody>;
 /// The upstream response as the caller sees it at stream hand-off, before any chunk.
 pub struct MessagesStreamHead {
     pub headers: Vec<(String, String)>,
+    pub detached_drain: Option<litellm_host::protocol::DetachedDrain>,
 }
 
 pub struct Messages;
@@ -24,6 +25,10 @@ impl Protocol for Messages {
     type HostCall = Infallible;
     type Chunk = Bytes;
     type StreamHead = MessagesStreamHead;
+
+    fn detached_drain(head: &MessagesStreamHead) -> Option<litellm_host::protocol::DetachedDrain> {
+        head.detached_drain
+    }
 }
 
 pub type MessagesMachine = HostedMachine<Messages>;
@@ -66,6 +71,7 @@ impl litellm_inference::caching::StreamCachable for Messages {
         Some(litellm_host::call::CallOutput::Stream {
             head: MessagesStreamHead {
                 headers: Vec::new(),
+                detached_drain: None,
             },
             chunks: Box::pin(futures_util::stream::iter([Ok(data)])),
         })

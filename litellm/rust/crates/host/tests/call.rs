@@ -6,6 +6,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
+    time::Duration,
 };
 
 use futures_util::{StreamExt, stream};
@@ -13,7 +14,7 @@ use litellm_host::{
     call::{CallOutput, HostedCompletion, hosted_call},
     lifecycle::{CallEvent, CallObserver, observe_call, observe_unary},
     machine::{Machine, MachineFault, MachineStep},
-    protocol::{HostRequest, Protocol},
+    protocol::{DetachedDrain, HostRequest, Protocol},
 };
 use rstest::{fixture, rstest};
 
@@ -92,6 +93,86 @@ async fn delivery_obeys_demand_and_distinguishes_detachment(
     assert_eq!(completed, expected);
     assert_eq!(polls.load(Ordering::SeqCst), expected_polls);
     assert_eq!(delivered, (0..expected_polls).collect::<Vec<_>>());
+}
+
+struct DrainingProtocol;
+
+impl Protocol for DrainingProtocol {
+    type Response = &'static str;
+    type Error = TestError;
+    type Request = usize;
+    type HostCall = Infallible;
+    type Chunk = usize;
+    type StreamHead = Option<DetachedDrain>;
+
+    fn detached_drain(head: &Option<DetachedDrain>) -> Option<DetachedDrain> {
+        *head
+    }
+}
+
+#[rstest]
+#[case::draining(
+    Some(DetachedDrain { timeout: Duration::from_secs(5), limit: 4 }),
+    vec![0, 1, 2]
+)]
+#[case::no_drain(None, vec![0])]
+#[case::no_free_slot(Some(DetachedDrain { timeout: Duration::from_secs(5), limit: 0 }), vec![0])]
+#[tokio::test]
+async fn a_draining_stream_delivers_the_rest_after_the_caller_detaches(
+    #[case] drain: Option<DetachedDrain>,
+    #[case] expected: Vec<usize>,
+) {
+    let mut machine =
+        hosted_call::<DrainingProtocol, _, _>(3, None, move |count, _, _, _| async move {
+            Ok(CallOutput::Stream {
+                head: drain,
+                chunks: stream::iter((0..count).map(Ok)).boxed(),
+            })
+        });
+    let mut delivered = Vec::new();
+    let completed = loop {
+        match machine.resume().await.unwrap() {
+            MachineStep::Suspended(HostRequest::Stream(StreamDelivery::Open(_, reply))) => {
+                reply.send(ControlFlow::Continue(()));
+            }
+            MachineStep::Suspended(HostRequest::Stream(StreamDelivery::Chunk(chunk, reply))) => {
+                delivered.push(chunk);
+                reply.send(ControlFlow::Break(()));
+            }
+            MachineStep::Complete(result) => break result,
+            _ => panic!("unexpected operation"),
+        }
+    };
+    assert_eq!(completed, HostedCompletion::Detached);
+    assert_eq!(delivered, expected);
+}
+
+#[tokio::test]
+async fn a_detached_drain_stops_at_its_timeout() {
+    let mut machine =
+        hosted_call::<DrainingProtocol, _, _>(0, None, move |_, _, _, _| async move {
+            let pending = stream::iter([Ok(0)]).chain(stream::pending());
+            Ok(CallOutput::Stream {
+                head: Some(DetachedDrain {
+                    timeout: Duration::from_millis(50),
+                    limit: 4,
+                }),
+                chunks: pending.boxed(),
+            })
+        });
+    let completed = loop {
+        match machine.resume().await.unwrap() {
+            MachineStep::Suspended(HostRequest::Stream(StreamDelivery::Open(_, reply))) => {
+                reply.send(ControlFlow::Continue(()));
+            }
+            MachineStep::Suspended(HostRequest::Stream(StreamDelivery::Chunk(_, reply))) => {
+                reply.send(ControlFlow::Break(()));
+            }
+            MachineStep::Complete(result) => break result,
+            _ => panic!("unexpected operation"),
+        }
+    };
+    assert_eq!(completed, HostedCompletion::Detached);
 }
 
 #[derive(Default)]

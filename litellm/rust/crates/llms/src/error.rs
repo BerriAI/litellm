@@ -214,6 +214,10 @@ pub enum ErrorDetail {
         #[source]
         cause: Source,
     },
+    #[error(
+        "Bedrock does not support Anthropic's server-side web search tool (tool type '{tool_type}', model '{model}'). To use web search with this model, enable LiteLLM's web search interception so the proxy executes the search instead: https://docs.litellm.ai/docs/integrations/websearch_interception. Alternatively, remove the web_search tool from the request."
+    )]
+    UnsupportedBedrockWebSearchTool { tool_type: String, model: String },
     #[error("{operation} failed: {detail}")]
     RemoteFailure {
         operation: &'static str,

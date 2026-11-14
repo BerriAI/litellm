@@ -328,13 +328,23 @@ async fn a_forwarded_client_header_does_not_enter_the_bedrock_signature() {
 }
 
 #[rstest]
-#[case::authorization("Authorization")]
-#[case::amz_date("x-amz-date")]
-#[case::security_token("x-amz-security-token")]
-#[case::date("Date")]
+#[case::authorization("Authorization", Some("forged"), false, None)]
+#[case::amz_date("x-amz-date", None, false, Some("x-amz-date"))]
+#[case::security_token(
+    "x-amz-security-token",
+    None,
+    true,
+    Some("x-amz-date;x-amz-security-token")
+)]
+#[case::date("Date", None, false, Some("content-type;date;host"))]
 #[tokio::test]
-async fn rejects_a_forwarded_header_the_signer_computes(#[case] forwarded: &str) {
-    let upstream = wiremock::MockServer::start().await;
+async fn a_forwarded_header_the_signer_computes_is_sent_as_python_sends_it(
+    #[case] forwarded: &str,
+    #[case] authorization: Option<&str>,
+    #[case] kept: bool,
+    #[case] signed_headers: Option<&str>,
+) {
+    let upstream = upstream([bedrock_response()]).await;
     let base = upstream.uri();
     let call = ChatCompletionsRequest {
         api_key: None,
@@ -351,11 +361,27 @@ async fn rejects_a_forwarded_header_the_signer_computes(#[case] forwarded: &str)
             }),
         )
     };
-    let error = complete(call)
-        .await
-        .expect_err("conflicting signing headers fail");
-    assert!(error.declined().is_some(), "{error:?}");
-    assert!(received(&upstream).await.is_empty());
+    complete(call).await.expect("call succeeds");
+
+    let sent = only_request(&upstream).await;
+    let signature = sent.header("authorization").expect("an authorization");
+    match authorization {
+        Some(expected) => assert_eq!(signature, expected),
+        None => {
+            assert!(signature.starts_with("AWS4-HMAC-SHA256"));
+            assert_eq!(sent.header(forwarded) == Some("forged"), kept);
+            assert!(signed_headers.is_some_and(|names| signature.contains(names)));
+        }
+    }
+    let dated_by_date = forwarded == "Date";
+    assert_eq!(
+        (
+            sent.header("x-amz-date")
+                .is_some_and(|date| date != "forged"),
+            sent.header("date").is_some_and(|date| date != "forged"),
+        ),
+        (!dated_by_date, dated_by_date)
+    );
 }
 
 #[rstest]

@@ -133,6 +133,7 @@ where
     native: NativeMachine<M>,
     start: Option<StartMachine<ProtocolOf<H>, M>>,
     streaming: bool,
+    detached: bool,
 }
 
 impl<H, M, L> CallBody<H, M, L>
@@ -342,7 +343,13 @@ where
                         Ok::<_, PyErr>(chunk)
                     })?
                 };
-                reply.send(self.caller.yield_chunk(chunk).await);
+                if self.detached {
+                    reply.send(std::ops::ControlFlow::Break(()));
+                    return Ok(());
+                }
+                let flow = self.caller.yield_chunk(chunk).await;
+                self.detached = flow.is_break();
+                reply.send(flow);
                 Ok(())
             }
         }
@@ -645,6 +652,7 @@ where
                 native: NativeMachine::new(asynchronous),
                 start: Some(Box::new(start)),
                 streaming: false,
+                detached: false,
             }
             .run()
         }

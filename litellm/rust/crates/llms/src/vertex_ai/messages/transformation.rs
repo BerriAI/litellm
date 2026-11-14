@@ -719,6 +719,7 @@ mod tests {
                 },
                 drop_params: false,
                 drops_unsupported_params: false,
+                global_drop_params: false,
             },
         );
         assert_eq!(body["system"], json!("be terse"));
@@ -737,6 +738,7 @@ mod tests {
             },
             drop_params: false,
             drops_unsupported_params: false,
+            global_drop_params: false,
         }
     }
 
