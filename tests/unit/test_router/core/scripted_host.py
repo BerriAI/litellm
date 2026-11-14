@@ -18,7 +18,10 @@ from typing import Final
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.agentic_followup_failure import mark_agentic_followup_failure
+from litellm.litellm_core_utils.agentic_followup_failure import (
+    mark_agentic_followup_failure,
+    mark_failure_after_tool_calls_sent,
+)
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 from litellm.router_config import RouterDynamicConfig, build_router_config
 from litellm.router_core import RouterCore
@@ -141,6 +144,12 @@ def server_error(model: str = "gpt-4o") -> litellm.InternalServerError:
 def agentic_followup_failure(error: Exception) -> Exception:
     """``error`` as an agentic follow-up raises it, after the first call was served."""
     mark_agentic_followup_failure(error, ())
+    return error
+
+
+def tool_call_sent_failure(error: Exception) -> Exception:
+    """``error`` as an MCP tool loop raises it, after a tool call was handed to its server."""
+    mark_failure_after_tool_calls_sent(error)
     return error
 
 

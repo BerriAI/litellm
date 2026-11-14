@@ -374,6 +374,9 @@ pub struct AttemptError {
     /// (`is_agentic_followup_failure`): never retried, since a retry reruns every paid round. The
     /// failure keeps its own class, which decides its fallbacks and cooldown as for any failure.
     pub agentic_followup: bool,
+    /// An MCP tool call was handed to its server before the failure (`sent_tool_calls_before`):
+    /// never retried and never fallen back, since another attempt runs the tool again.
+    pub tool_calls_sent: bool,
     /// One of `deployment_callback_on_failure`'s early exits holds: the failure says nothing about
     /// the deployment, so it is neither counted nor cooled down (a failed request still counts
     /// against the minute's requests, which `async_deployment_callback_on_failure` does apart).
@@ -403,6 +406,7 @@ impl AttemptError {
             recorded: false,
             names_provider: false,
             agentic_followup: false,
+            tool_calls_sent: false,
             outside_deployment: false,
             caller_scoped: false,
             status_absent: false,

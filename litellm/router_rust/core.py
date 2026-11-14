@@ -47,7 +47,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     prepare_response_for_header_attachment,
 )
-from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
+from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure, sent_tool_calls_before
 from litellm.litellm_core_utils.attempt_settlement import (
     ATTEMPT_SETTLEMENT_GRACE_SECONDS,
     RoutedAttempt,
@@ -563,7 +563,13 @@ def attempt_failure(error: BaseException) -> Mapping[str, object]:
         "classes": [cls.__name__ for cls in type(error).__mro__],
         "llm_provider": bool(getattr(error, "llm_provider", "")),
         "agentic_followup": is_agentic_followup_failure(error),
+        "tool_calls_sent": _sent_tool_calls(error),
     }
+
+
+def _sent_tool_calls(error: BaseException) -> bool:
+    wrapped: Final[object] = getattr(error, "original_exception", None)
+    return sent_tool_calls_before(error) or (isinstance(wrapped, BaseException) and sent_tool_calls_before(wrapped))
 
 
 def total_tokens(response: object) -> int:

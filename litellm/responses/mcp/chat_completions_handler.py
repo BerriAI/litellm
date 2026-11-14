@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 )
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.mcp_tool_dispatch import ToolDispatch
 from litellm.responses.mcp.chat_stream_round_billing import ChatStreamRoundBilling, engaged_round_billing
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
@@ -696,21 +697,23 @@ async def acompletion_with_mcp(
         )
         return initial_response
 
-    with first_round_billed_on_failure(logging_obj, initial_response):
-        tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
-            tool_server_map=tool_server_map,
-            tool_calls=tool_calls,
-            served_tools=deduplicated_mcp_tools,
-            user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=mcp_auth_header,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            oauth2_headers=oauth2_headers,
-            raw_headers=raw_headers,
-            litellm_call_id=context.litellm_call_id,
-            litellm_trace_id=context.litellm_trace_id,
-            request_tags=request_tags,
-            guardrail_context=context.guardrail_context,
-        )
+    tool_dispatch: Final = ToolDispatch()
+    with first_round_billed_on_failure(logging_obj, initial_response), tool_dispatch.failures_not_replayed():
+        with tool_dispatch.recording():
+            tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+                tool_server_map=tool_server_map,
+                tool_calls=tool_calls,
+                served_tools=deduplicated_mcp_tools,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                litellm_call_id=context.litellm_call_id,
+                litellm_trace_id=context.litellm_trace_id,
+                request_tags=request_tags,
+                guardrail_context=context.guardrail_context,
+            )
 
         if not tool_results:
             _add_mcp_metadata_to_response(

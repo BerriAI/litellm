@@ -38,6 +38,14 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.utils import ModelResponse, StandardLoggingPayload, Usage
+from tests._support.mcp_ledger_gateway import (
+    LEDGER_MODEL,
+    LEDGER_TOOLS,
+    Ledger,
+    ModelUpstream,
+    ledger_router,
+    serve_ledger,
+)
 
 
 class MockUserAPIKeyAuth:
@@ -3748,3 +3756,30 @@ async def test_bridged_stream_auto_execute_bills_nothing_for_a_round_served_from
     assert [(row["response_cost"], row["cache_hit"]) for row in both_cached.logged] == [(0.0, True)]
     assert client.usage is not None
     assert client.usage.cost == pytest.approx(_bridged_round_cost(470, 4))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_calls", "continuation_fails"),
+    [(1, True), (2, True), (1, False)],
+    ids=["one_tool_continuation_fails", "two_tools_continuation_fails", "continuation_succeeds"],
+)
+async def test_a_responses_continuation_after_a_sent_mcp_tool_call_never_runs_the_tool_again(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tool_calls: int, continuation_fails: bool
+) -> None:
+    ledger: Final = Ledger()
+    auth: Final = serve_ledger(monkeypatch, ledger)
+    upstream: Final = ModelUpstream(tool_calls=tool_calls, continuation_fails=continuation_fails)
+    router: Final = ledger_router(respx_mock, monkeypatch, upstream)
+    request: Final = router.aresponses(
+        model=LEDGER_MODEL,
+        input="write alpha",
+        tools=list(LEDGER_TOOLS),
+        litellm_metadata={"user_api_key_auth": auth},
+    )
+
+    with pytest.raises(litellm.InternalServerError) if continuation_fails else nullcontext():
+        await request
+
+    assert ledger.calls == tool_calls
+    assert (upstream.initial_calls, upstream.continuation_calls) == (1, 1)

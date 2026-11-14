@@ -51,6 +51,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 # Add the parent directory to the path so we can import litellm
 import litellm.mcp_client.client as mcp_client_module
+from litellm.litellm_core_utils.mcp_tool_dispatch import ToolDispatch
 from litellm.mcp_client.client import (
     MCPClient,
     MCPSigV4Auth,
@@ -5304,3 +5305,67 @@ async def test_a_skipped_validation_passes_the_upstreams_result_through_unchange
 
     assert isinstance(result, CallToolResult)
     assert result.structured_content == {"n": "not-an-integer"}
+
+
+def _answering_with_an_error(
+    method: str, upstream: Callable[[httpx2.Request], httpx2.Response]
+) -> Callable[[httpx2.Request], httpx2.Response]:
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        received: Final = upstream(request)
+        if request.method != "POST":
+            return received
+        payload: Final = json.loads(request.content)
+        if payload.get("method") != method:
+            return received
+        return httpx2.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": payload["id"], "error": {"code": -32603, "message": "upstream failed"}},
+        )
+
+    return respond
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failing_method", "sent"),
+    [(None, True), ("tools/call", True), ("initialize", False)],
+    ids=["answered", "failed_after_the_upstream_got_it", "session_never_opened"],
+)
+async def test_a_tool_call_is_recorded_as_sent_exactly_when_the_upstream_receives_it(
+    failing_method: str | None, sent: bool
+) -> None:
+    methods_seen: Final[queue.SimpleQueue[str]] = queue.SimpleQueue()
+    upstream: Final = count_tool_upstream({"n": 1}, methods_seen)
+    client: Final = _MockTransportClient(
+        upstream if failing_method is None else _answering_with_an_error(failing_method, upstream),
+        server_url="https://upstream.example/mcp",
+        transport_type=MCPTransport.http,
+        skip_tool_output_validation=True,
+    )
+    dispatch: Final = ToolDispatch()
+
+    with dispatch.recording():
+        await client.call_tool(CallToolRequestParams(name="count", arguments={}))
+
+    assert dispatch.sent is sent
+    assert ("tools/call" in methods_received(methods_seen)) is sent
+
+
+@pytest.mark.asyncio
+async def test_a_tool_call_on_a_session_opened_outside_the_request_is_recorded_for_that_request() -> None:
+    app: Final = _stateful_upstream()
+    dispatch: Final = ToolDispatch()
+    async with app.router.lifespan_context(app):
+        client: Final = _StatefulUpstreamClient(app, server_url="http://upstream/mcp", transport_type=MCPTransport.http)
+        session: Final = client.open_persistent_session()
+        try:
+            with dispatch.recording():
+                result: Final = await client.call_tool(
+                    CallToolRequestParams(name="select_project", arguments={"name": "a"}), persistent_session=session
+                )
+        finally:
+            session.close()
+        await asyncio.wait_for(session.wait_closed(), 5)
+
+    assert result.is_error is False
+    assert dispatch.sent

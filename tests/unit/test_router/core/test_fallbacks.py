@@ -6,7 +6,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, MidStreamFallbackError
 from litellm.router_api import ChangeSet
 from litellm.router_core import RouterCore
 from litellm.types.utils import Usage
@@ -21,6 +21,7 @@ from tests.unit.test_router.core.scripted_host import (
     rate_limit,
     server_error,
     timeout,
+    tool_call_sent_failure,
 )
 from tests.unit.test_router.core.streaming_helpers import request_logging
 
@@ -774,6 +775,40 @@ async def test_a_fallback_hop_carries_the_superseded_attempt_usage(make_core: Ma
     await complete(core, litellm_logging_obj=logging_obj)
 
     assert logging_obj.model_call_details["failed_attempts_usage"] == ((usage, 0.0),)
+
+
+@pytest.mark.asyncio
+async def test_a_failure_after_an_mcp_tool_call_was_sent_neither_retries_nor_falls_back(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = build(make_core, fallbacks=[{"a": ["b"]}], num_retries=3)
+    host.answer("openai/a", lambda **_: tool_call_sent_failure(server_error()))
+
+    with pytest.raises(litellm.InternalServerError):
+        await complete(core)
+
+    assert host.deployments_called("acompletion") == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_an_error_wrapping_a_failure_after_a_sent_mcp_tool_call_neither_retries_nor_falls_back(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = build(make_core, fallbacks=[{"a": ["b"]}], num_retries=3)
+    host.answer(
+        "openai/a",
+        lambda **_: MidStreamFallbackError(
+            message="wrapped",
+            model="a",
+            llm_provider="openai",
+            original_exception=tool_call_sent_failure(server_error()),
+        ),
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError):
+        await complete(core)
+
+    assert host.deployments_called("acompletion") == ["a"]
 
 
 # --- when no fallback runs -----------------------------------------------------------------------

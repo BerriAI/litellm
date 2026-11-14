@@ -218,6 +218,12 @@ fn agentic_followup() -> AttemptError {
     failed
 }
 
+fn tool_calls_sent() -> AttemptError {
+    let mut failed = agentic_followup();
+    failed.tool_calls_sent = true;
+    failed
+}
+
 #[rstest]
 #[tokio::test]
 async fn a_rate_limit_retries_in_the_same_group(config: RouterConfig) {
@@ -890,6 +896,54 @@ async fn a_failed_agentic_followup_is_not_retried_but_still_falls_back(config: R
     assert_eq!(response.deployment_id, "b1");
     assert_eq!(host.retries(), 0);
     assert_eq!(host.selected().len(), 2);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_failure_after_a_tool_call_was_sent_neither_retries_nor_falls_back(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![tool_calls_sent()]));
+    let router = router(
+        config,
+        json!({"num_retries": 3, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(matches!(refused, Err(Error::Attempt(failed)) if failed.tool_calls_sent));
+    assert_eq!(host.retries(), 0);
+    assert_eq!(host.selected().len(), 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_fallback_hop_that_sent_a_tool_call_ends_the_whole_fallback_walk() {
+    let host = Arc::new(ScriptedHost::scripted(vec![
+        ("primary", vec![server_error()]),
+        ("backup", vec![tool_calls_sent()]),
+    ]));
+    let router = router(
+        tiers(false),
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup", "context"]}]}),
+        host.clone(),
+    );
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(matches!(refused, Err(Error::Attempt(failed)) if failed.tool_calls_sent));
+    assert_eq!(host.selected(), ["p1", "b1"]);
+    assert!(host.events.lock().contains(&RouterEvent::OrderChainFailed {
+        level: 0,
+        last_hop: true
+    }));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_sent_tool_call_is_not_retried_even_without_the_agentic_mark(config: RouterConfig) {
+    let mut sent = server_error();
+    sent.tool_calls_sent = true;
+    let host = Arc::new(ScriptedHost::failing("primary", vec![sent]));
+    let router = router(config, json!({"num_retries": 3}), host.clone());
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(matches!(refused, Err(Error::Attempt(failed)) if failed.tool_calls_sent));
+    assert_eq!(host.retries(), 0);
 }
 
 #[rstest]

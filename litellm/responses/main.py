@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.mcp_tool_dispatch import ToolDispatch
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     update_responses_input_with_model_file_ids,
     update_responses_tools_with_model_file_ids,
@@ -472,7 +473,8 @@ async def aresponses_api_with_mcp(
     # If auto-execute tools is True, then we need to execute the tool calls
     #########################################################
     if should_auto_execute and isinstance(response, ResponsesAPIResponse):
-        with first_round_billed_on_failure(logging_obj, response):
+        tool_dispatch: Final = ToolDispatch()
+        with first_round_billed_on_failure(logging_obj, response), tool_dispatch.failures_not_replayed():
             tool_calls: Final = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
                 LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response=response),
                 tool_choice_in_effect,
@@ -494,23 +496,24 @@ async def aresponses_api_with_mcp(
                 )
 
                 tool_trace_id: Final = _request_trace_id(request_kwargs)
-                tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
-                    tool_server_map=tool_server_map,
-                    served_tools=original_mcp_tools,
-                    tool_calls=tool_calls,
-                    user_api_key_auth=user_api_key_auth,
-                    mcp_auth_header=mcp_auth_header,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    oauth2_headers=oauth2_headers,
-                    raw_headers=raw_headers_from_request,
-                    litellm_call_id=_request_call_id(request_kwargs),
-                    litellm_trace_id=tool_trace_id,
-                    request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
-                    guardrail_context=MCPRequestContext.resolve_guardrail_context(
-                        MappingProxyType({**kwargs, "metadata": metadata, "model": model})
-                    ),
-                    request_trace_id=_langfuse_request_trace_id(request_kwargs, tool_trace_id),
-                )
+                with tool_dispatch.recording():
+                    tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+                        tool_server_map=tool_server_map,
+                        served_tools=original_mcp_tools,
+                        tool_calls=tool_calls,
+                        user_api_key_auth=user_api_key_auth,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
+                        oauth2_headers=oauth2_headers,
+                        raw_headers=raw_headers_from_request,
+                        litellm_call_id=_request_call_id(request_kwargs),
+                        litellm_trace_id=tool_trace_id,
+                        request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
+                        guardrail_context=MCPRequestContext.resolve_guardrail_context(
+                            MappingProxyType({**kwargs, "metadata": metadata, "model": model})
+                        ),
+                        request_trace_id=_langfuse_request_trace_id(request_kwargs, tool_trace_id),
+                    )
 
                 if tool_results:
                     chains_on_first_round: Final = not LiteLLM_Proxy_MCP_Handler.is_persistence_disabled(

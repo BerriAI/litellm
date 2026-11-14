@@ -74,6 +74,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object
+from litellm.litellm_core_utils.mcp_tool_dispatch import active_tool_dispatch
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.mcp_client.client import (
@@ -6271,6 +6272,9 @@ class MCPServerManager:
         try:
             # Call the tool handler with the arguments
             # The handler is an async function that makes the HTTP request
+            tool_dispatch: Final = active_tool_dispatch()
+            if tool_dispatch is not None:
+                tool_dispatch.record_sent()
             handler_result: Final = await tool.handler(**arguments)
             return complete_call_tool_result(handler_outcome(handler_result), wire_compat)
 

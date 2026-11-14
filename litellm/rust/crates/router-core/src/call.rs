@@ -230,6 +230,12 @@ fn group_members(
     rows
 }
 
+fn sent_tool_calls(error: &Error) -> bool {
+    error
+        .attempt()
+        .is_some_and(|failure| failure.tool_calls_sent)
+}
+
 /// What `_maybe_run_weighted_failover` catches and defers to the regular fallbacks:
 /// `openai.APIError` (every litellm provider error, a failure the host reported no classes for
 /// among them), `RouterRateLimitError` and `RouterRateLimitErrorBasic`. Anything else propagates.
@@ -419,7 +425,9 @@ impl Core {
                 .await
             {
                 Ok(response) => return Ok(response),
-                Err(raised) if defers_to_regular_fallbacks(raised.as_ref().unwrap_or(&error)) => {}
+                Err(raised)
+                    if !raised.as_ref().is_some_and(sent_tool_calls)
+                        && defers_to_regular_fallbacks(raised.as_ref().unwrap_or(&error)) => {}
                 // Outside the `try` around the regular fallbacks: the level raises it as it is.
                 Err(raised) => {
                     self.host.observe(&RouterEvent::OrderChainFailed {
@@ -443,6 +451,13 @@ impl Core {
             .await
         {
             Ok(response) => return Ok(response),
+            Err(Some(raised)) if sent_tool_calls(&raised) => {
+                self.host.observe(&RouterEvent::OrderChainFailed {
+                    level: at.level,
+                    last_hop: true,
+                });
+                return Err(raised);
+            }
             Err(raised) => raised,
         };
         if !order_path {
@@ -650,6 +665,7 @@ impl Core {
                         response.attempted_fallbacks = hop;
                         return Ok(response);
                     }
+                    Err(raised) if sent_tool_calls(&raised) => return Err(Some(raised)),
                     Err(raised) => last_hop_error = Some(raised),
                 }
             }
@@ -738,6 +754,7 @@ impl Core {
         // pick raises (no Python exception stands behind it) has no fallback.
         retried_failure(error).is_none_or(|failure| {
             failure.kind == FailureKind::GuardrailIntervention
+                || failure.tool_calls_sent
                 || (!snapshot.settings.fallback_on_unsupported_params
                     && is_bad_request_without_fallback(&failure))
         })
@@ -929,7 +946,9 @@ impl Core {
         if matches!(
             &*failed.error,
             Error::Attempt(failure)
-                if failure.kind == FailureKind::GuardrailIntervention || failure.agentic_followup
+                if failure.kind == FailureKind::GuardrailIntervention
+                    || failure.agentic_followup
+                    || failure.tool_calls_sent
         ) {
             return Err(failed);
         }
@@ -1102,7 +1121,12 @@ impl Core {
                     response.max_retries = Some(num_retries);
                     return Ok(response);
                 }
-                Err(next) if next.error.attempt().is_some_and(|f| f.agentic_followup) => {
+                Err(next)
+                    if next
+                        .error
+                        .attempt()
+                        .is_some_and(|f| f.agentic_followup || f.tool_calls_sent) =>
+                {
                     return Err(next);
                 }
                 Err(next) => {
