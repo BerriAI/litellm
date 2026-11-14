@@ -248,12 +248,28 @@ def test_hook_retries_count_each_frame_once_across_concurrent_deliveries(connect
         responses: Final = tuple(executor.map(lambda _: connected.hook(body), range(20)))
     assert tuple(response.status_code for response in responses) == (200,) * 20
     assert connected.agents().data[0].request_count == 1
-    distinct: Final = connected.hook({**body, "request_id": "request-two", "type": "tool_call"})
-    assert distinct.status_code == 200, distinct.text
-    assert connected.agents().data[0].request_count == 2
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        distinct: Final = tuple(
+            executor.map(lambda index: connected.hook({**body, "request_id": f"distinct-{index}"}), range(5))
+        )
+    assert tuple(response.status_code for response in distinct) == (200,) * 5
+    assert connected.agents().data[0].request_count == 6
     other: Final = connected.hook({**body, "session_id": "other-bot"})
     assert other.status_code == 200, other.text
     assert connected.agents(search="other-bot").data[0].request_count == 1
+    created: Final = connected.gateway.request("POST", ROOT + "/sources")
+    assert created.status_code == 200, created.text
+    connection: Final = Connection.model_validate(created.json())
+    second: Final = Connected(connected.gateway, connection)
+    try:
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            retried: Final = tuple(executor.map(lambda _: second.hook(body), range(10)))
+        assert tuple(response.status_code for response in retried) == (200,) * 10
+        assert second.agents().data[0].request_count == 1
+        assert next(row for row in connected.agents().data if row.external_id == "bot").request_count == 6
+    finally:
+        deleted: Final = connected.gateway.request("DELETE", ROOT + "/sources/" + connection.source_id)
+        assert deleted.status_code == 200, deleted.text
 
 
 def test_hook_retry_window_evicts_old_ids_and_accepts_frames_without_ids(connected: Connected) -> None:
@@ -285,7 +301,18 @@ def test_spend_matches_email_rolls_up_teams_and_cascades_without_deleting_gatewa
     email: Final = f"{uuid.uuid4().hex}@example.test"
     with gateway.scenario() as scenario:
         team: Final = scenario.team()
+        other_team: Final = scenario.team()
         user: Final = scenario.user(user_email=email, teams=[team])
+        multi_email: Final = f"multi-{uuid.uuid4().hex}@example.test"
+        scenario.user(user_email=multi_email, teams=[team, other_team])
+        ambiguous_email: Final = f"ambiguous-{uuid.uuid4().hex}@example.test"
+        duplicate_users: Final = (scenario.user(), scenario.user())
+        for duplicate_user in duplicate_users:
+            write_rows(
+                'UPDATE "LiteLLM_UserTable" SET user_email=%s WHERE user_id=%s',
+                (ambiguous_email, duplicate_user),
+                database_url=gateway.database_url,
+            )
         daily_id: Final = str(uuid.uuid4())
         write_rows(
             'INSERT INTO "LiteLLM_DailyUserSpend" (id,user_id,date,api_key,spend,updated_at) VALUES (%s,%s,%s,%s,4.25,NOW())',
@@ -295,6 +322,8 @@ def test_spend_matches_email_rolls_up_teams_and_cascades_without_deleting_gatewa
         try:
             seed_spend(gateway, source_id, "matched", email.upper(), "2.50", now.date().isoformat())
             seed_spend(gateway, source_id, "unknown", "unknown@example.test", "1.75", now.date().isoformat())
+            seed_spend(gateway, source_id, "multi", multi_email, "0.000003", now.date().isoformat())
+            seed_spend(gateway, source_id, "ambiguous", ambiguous_email.upper(), "0.75", now.date().isoformat())
             seed_spend(gateway, source_id, "out-of-window", email, "999", (now - timedelta(days=40)).date().isoformat())
             response: Final = gateway.request("GET", ROOT + "/spend", params={"source_id": source_id, "days": "30"})
             assert response.status_code == 200, response.text
@@ -302,13 +331,20 @@ def test_spend_matches_email_rolls_up_teams_and_cascades_without_deleting_gatewa
             matched: Final = next(row for row in spend.members if row.vendor_user_id == "matched")
             assert matched.litellm_user_id == user
             assert matched.litellm_gateway_spend_usd == Decimal("4.25")
-            assert spend.totals.grok_cost_usd == Decimal("4.25")
+            assert spend.totals.grok_cost_usd == Decimal("5.000003")
             assert spend.totals.litellm_gateway_spend_usd == Decimal("4.25")
-            assert (spend.totals.tokens, spend.totals.requests) == (100, 4)
-            rollups: Final = {row.team_id: row for row in spend.teams}
-            assert rollups[team].grok_cost_usd == Decimal("2.50")
-            assert rollups[None].team_name == "Unassigned"
-            assert rollups[None].grok_cost_usd == Decimal("1.75")
+            assert (spend.totals.tokens, spend.totals.requests) == (200, 8)
+            rollups: Final = {row.team_name: row for row in spend.teams}
+            assert next(row for row in spend.teams if row.team_id == team).grok_cost_usd == Decimal("2.50")
+            assert rollups["Unassigned"].grok_cost_usd == Decimal("2.50")
+            assert rollups["Multiple teams"].grok_cost_usd == Decimal("0.000003")
+            assert {row.team_id for row in rollups["Multiple teams"].teams} == {team, other_team}
+            assert next(row for row in spend.members if row.vendor_user_id == "ambiguous").litellm_user_id is None
+            for rows in (spend.members, spend.teams):
+                assert sum(row.grok_cost_usd for row in rows) == spend.totals.grok_cost_usd
+                assert sum(row.litellm_gateway_spend_usd for row in rows) == spend.totals.litellm_gateway_spend_usd
+                assert sum(row.tokens for row in rows) == spend.totals.tokens
+                assert sum(row.requests for row in rows) == spend.totals.requests
             recorded: Final = connected.hook(frame())
             assert recorded.status_code == 200, recorded.text
             deleted: Final = gateway.request("DELETE", ROOT + f"/sources/{source_id}")

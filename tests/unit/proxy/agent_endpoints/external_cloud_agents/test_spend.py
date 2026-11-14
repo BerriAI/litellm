@@ -34,26 +34,37 @@ def test_rollup_counts_gateway_once_for_duplicate_email_matches_and_supports_mul
     assert result.totals == SpendTotals(
         grok_cost_usd=Decimal("4.60"), litellm_gateway_spend_usd=Decimal("4.20"), tokens=70, requests=6
     )
-    assert tuple(team.team_id for team in result.teams) == ("team-a", "team-b")
-    assert tuple(team.grok_cost_usd for team in result.teams) == (Decimal("2.30"),) * 2
-    assert tuple(team.litellm_gateway_spend_usd for team in result.teams) == (Decimal("2.10"),) * 2
+    assert len(result.teams) == 1
+    assert result.teams[0].team_name == "Multiple teams"
+    assert tuple(team.team_id for team in result.teams[0].teams) == ("team-a", "team-b")
+    assert result.teams[0].grok_cost_usd == result.totals.grok_cost_usd
+    assert result.teams[0].litellm_gateway_spend_usd == result.totals.litellm_gateway_spend_usd
+    assert sum(row.litellm_gateway_spend_usd for row in result.members) == result.totals.litellm_gateway_spend_usd
     assert sum(team.tokens for team in result.teams) == result.totals.tokens
     assert sum(team.requests for team in result.teams) == result.totals.requests
 
 
-def test_team_allocations_preserve_micro_usd_and_usage_remainders() -> None:
+def test_team_attribution_preserves_exact_cost_and_usage_without_splitting() -> None:
     result: Final = report(
         "source",
         30,
         NOW,
         (member(grok_cost_usd="0.000003", litellm_gateway_spend_usd="0.000005", tokens=3, requests=1),),
     )
-    assert tuple(team.grok_cost_usd for team in result.teams) == (Decimal("0.000002"), Decimal("0.000001"))
-    assert tuple(team.litellm_gateway_spend_usd for team in result.teams) == (Decimal("0.000003"), Decimal("0.000002"))
-    assert tuple(team.tokens for team in result.teams) == (2, 1)
-    assert tuple(team.requests for team in result.teams) == (1, 0)
+    assert tuple(team.grok_cost_usd for team in result.teams) == (Decimal("0.000003"),)
+    assert tuple(team.litellm_gateway_spend_usd for team in result.teams) == (Decimal("0.000005"),)
+    assert tuple(team.tokens for team in result.teams) == (3,)
+    assert tuple(team.requests for team in result.teams) == (1,)
     assert sum(team.grok_cost_usd for team in result.teams) == result.totals.grok_cost_usd
     assert sum(team.litellm_gateway_spend_usd for team in result.teams) == result.totals.litellm_gateway_spend_usd
+
+
+def test_single_team_member_is_attributed_wholly_to_that_team() -> None:
+    result: Final = report("source", 30, NOW, (member(team_ids=("team-a",), team_names=("Team A",)),))
+    assert len(result.teams) == 1
+    assert result.teams[0].team_id == "team-a"
+    assert result.teams[0].grok_cost_usd == result.totals.grok_cost_usd
+    assert result.teams[0].litellm_gateway_spend_usd == result.totals.litellm_gateway_spend_usd
 
 
 def test_unmatched_and_teamless_members_are_unassigned() -> None:

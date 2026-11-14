@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
-from itertools import groupby
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final
 
@@ -13,60 +13,41 @@ from litellm.proxy.agent_endpoints.external_cloud_agents.models import (
     MatchedSpend,
     MemberSpend,
     SpendReport,
+    SpendTeam,
     SpendTotals,
     TeamSpend,
 )
 
 
 def totals(rows: tuple[MemberSpend, ...]) -> SpendTotals:
-    gateways: Final = MappingProxyType(
-        {row.litellm_user_id: row.litellm_gateway_spend_usd for row in rows if row.litellm_user_id is not None}
-    )
     return SpendTotals(
         grok_cost_usd=sum((row.grok_cost_usd for row in rows), Decimal(0)),
-        litellm_gateway_spend_usd=sum(gateways.values(), Decimal(0)),
+        litellm_gateway_spend_usd=sum((row.litellm_gateway_spend_usd for row in rows), Decimal(0)),
         tokens=sum(row.tokens for row in rows),
         requests=sum(row.requests for row in rows),
     )
 
 
-def split_units(value: int, index: int, count: int) -> int:
-    quotient, remainder = divmod(value, count)
-    return quotient + int(index < remainder)
-
-
-def split_money(value: Decimal, index: int, count: int) -> Decimal:
-    exponent: Final = value.as_tuple().exponent
-    precision: Final = max(6, -exponent) if isinstance(exponent, int) else 6
-    return Decimal(split_units(int(value.scaleb(precision)), index, count)).scaleb(-precision)
-
-
-def allocated(row: MatchedSpend, index: int, count: int) -> MatchedSpend:
-    return row.model_copy(
-        update={
-            "grok_cost_usd": split_money(row.grok_cost_usd, index, count),
-            "litellm_gateway_spend_usd": split_money(row.litellm_gateway_spend_usd, index, count),
-            "tokens": split_units(row.tokens, index, count),
-            "requests": split_units(row.requests, index, count),
-        }
-    )
-
-
 def team_members(row: MatchedSpend) -> tuple[tuple[str, str, MatchedSpend], ...]:
-    if not row.team_ids:
+    if row.litellm_user_id is None or not row.team_ids:
         return (("", "Unassigned", row),)
     teams: Final = MappingProxyType(dict(zip(row.team_ids, row.team_names)))
-    return tuple(
-        (team_id, name, allocated(row, index, len(teams)))
-        for index, (team_id, name) in enumerate(sorted(teams.items()))
-    )
+    if len(teams) != 1:
+        return (("__multiple_teams__", "Multiple teams", row),)
+    team_id, name = next(iter(teams.items()))
+    return ((team_id, name, row),)
 
 
 def rollup(key: str, rows: tuple[tuple[str, str, MatchedSpend], ...]) -> TeamSpend:
     values: Final = totals(tuple(row[2] for row in rows))
+    memberships: Final = chain.from_iterable(zip(row[2].team_ids, row[2].team_names) for row in rows)
+    teams: Final = MappingProxyType(dict(memberships))
     return TeamSpend(
-        team_id=key or None,
+        team_id=None if key == "__multiple_teams__" else key or None,
         team_name=rows[0][1],
+        teams=tuple(SpendTeam(team_id=team_id, team_name=name) for team_id, name in sorted(teams.items()))
+        if key == "__multiple_teams__"
+        else (),
         grok_cost_usd=values.grok_cost_usd,
         litellm_gateway_spend_usd=values.litellm_gateway_spend_usd,
         tokens=values.tokens,
@@ -75,17 +56,26 @@ def rollup(key: str, rows: tuple[tuple[str, str, MatchedSpend], ...]) -> TeamSpe
 
 
 def report(source_id: str, days: int, end: datetime, rows: tuple[MatchedSpend, ...]) -> SpendReport:
-    pairs: Final = sum(map(team_members, rows), ())
+    primary: Final = MappingProxyType(
+        {row.litellm_user_id: row.vendor_user_id for row in reversed(sorted(rows, key=lambda row: row.vendor_user_id))}
+    )
+    members: Final = tuple(
+        row.model_copy(update={"litellm_gateway_spend_usd": Decimal(0)})
+        if row.litellm_user_id is None or primary[row.litellm_user_id] != row.vendor_user_id
+        else row
+        for row in rows
+    )
+    pairs: Final = tuple(chain.from_iterable(map(team_members, members)))
     return SpendReport(
         source_id=source_id,
         days=days,
         start_day=window_start(end, days).date(),
         end_day=end.date(),
-        members=tuple(MemberSpend.model_validate(row.model_dump()) for row in rows),
+        members=tuple(MemberSpend.model_validate(row.model_dump()) for row in members),
         teams=tuple(
             rollup(key, tuple(group)) for key, group in groupby(sorted(pairs, key=lambda p: p[0]), lambda p: p[0])
         ),
-        totals=totals(rows),
+        totals=totals(members),
     )
 
 

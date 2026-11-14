@@ -49653,9 +49653,19 @@ export interface components {
              * Format: date
              */
             start_day: string;
-            /** Teams */
+            /**
+             * Teams
+             * @description Members with exactly one team are attributed to that team. Multi-team members are grouped under Multiple teams with their memberships listed, without allocating spend across teams. Unmatched, ambiguous-email and teamless members are Unassigned. Gateway spend is counted once per LiteLLM user, on the lexicographically first vendor identity when several identities match that user.
+             */
             teams: components["schemas"]["TeamSpend"][];
             totals: components["schemas"]["SpendTotals"];
+        };
+        /** SpendTeam */
+        SpendTeam: {
+            /** Team Id */
+            team_id: string;
+            /** Team Name */
+            team_name: string;
         };
         /** SpendTotals */
         SpendTotals: {
@@ -50853,6 +50863,11 @@ export interface components {
             team_id: string | null;
             /** Team Name */
             team_name: string;
+            /**
+             * Teams
+             * @default []
+             */
+            teams: components["schemas"]["SpendTeam"][];
             /**
              * Tokens
              * @default 0

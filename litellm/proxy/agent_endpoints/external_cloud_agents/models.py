@@ -107,9 +107,15 @@ class MatchedSpend(MemberSpend):
     team_names: tuple[str, ...] = ()
 
 
+class SpendTeam(FrozenModel):
+    team_id: str
+    team_name: str
+
+
 class TeamSpend(SpendTotals):
     team_id: str | None
     team_name: str
+    teams: tuple[SpendTeam, ...] = ()
 
 
 class SpendReport(FrozenModel):
@@ -118,7 +124,12 @@ class SpendReport(FrozenModel):
     start_day: date
     end_day: date
     members: tuple[MemberSpend, ...]
-    teams: tuple[TeamSpend, ...]
+    teams: tuple[TeamSpend, ...] = Field(
+        description="Members with exactly one team are attributed to that team. Multi-team members are grouped "
+        "under Multiple teams with their memberships listed, without allocating spend across teams. "
+        "Unmatched, ambiguous-email and teamless members are Unassigned. Gateway spend is counted once per "
+        "LiteLLM user, on the lexicographically first vendor identity when several identities match that user."
+    )
     totals: SpendTotals
 
 

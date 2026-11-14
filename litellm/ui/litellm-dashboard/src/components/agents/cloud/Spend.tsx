@@ -8,7 +8,7 @@ import { Source, SpendReport, useCloudMutation, useCloudSpend } from "./hooks";
 import { CloudTable } from "./Table";
 
 const usd = (value: string | number) =>
-  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Number(value));
+  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", currencyDisplay: "code" }).format(Number(value));
 type Member = SpendReport["members"][number];
 type Team = SpendReport["teams"][number];
 
@@ -80,7 +80,18 @@ export default function Spend({ accessToken, source }: { accessToken: string; so
     ...numbers<Member>(),
   ];
   const teamColumns = [
-    { key: "team", heading: t("agents.external.team"), cell: (row: Team) => row.team_name },
+    {
+      key: "team",
+      heading: t("agents.external.team"),
+      cell: (row: Team) => (
+        <div>
+          <div className="font-medium">{row.team_name}</div>
+          {!!row.teams?.length && (
+            <div className="text-xs text-muted-foreground">{row.teams.map((team) => team.team_name).join(", ")}</div>
+          )}
+        </div>
+      ),
+    },
     ...numbers<Team>(),
   ];
   const error = [save.error, sync.error, remove.error, data.error].find(Boolean);
@@ -95,6 +106,11 @@ export default function Spend({ accessToken, source }: { accessToken: string; so
   ];
   return (
     <div className="space-y-6">
+      <div className="space-y-1 text-sm text-muted-foreground">
+        {data.data && <p>{t("agents.external.period", { start: data.data.start_day, end: data.data.end_day })}</p>}
+        <p>{t("agents.external.spendCoverage")}</p>
+        <p>{t("agents.external.teamAttribution")}</p>
+      </div>
       <div className="flex flex-wrap items-center gap-3">
         <label className="text-sm font-medium" htmlFor="cloud-spend-range">
           {t("agents.external.range")}
@@ -161,7 +177,7 @@ export default function Spend({ accessToken, source }: { accessToken: string; so
           {group === "member" ? (
             <CloudTable rows={members} columns={memberColumns} rowKey={(row) => row.vendor_user_id} />
           ) : (
-            <CloudTable rows={teams} columns={teamColumns} rowKey={(row) => row.team_id ?? "unassigned"} />
+            <CloudTable rows={teams} columns={teamColumns} rowKey={(row) => row.team_id ?? row.team_name} />
           )}
         </>
       )}

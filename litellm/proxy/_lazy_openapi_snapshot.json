@@ -16290,6 +16290,7 @@
               "type": "string"
             },
             "teams": {
+              "description": "Members with exactly one team are attributed to that team. Multi-team members are grouped under Multiple teams with their memberships listed, without allocating spend across teams. Unmatched, ambiguous-email and teamless members are Unassigned. Gateway spend is counted once per LiteLLM user, on the lexicographically first vendor identity when several identities match that user.",
               "items": {
                 "$ref": "#/components/schemas/TeamSpend"
               },
@@ -16310,6 +16311,24 @@
             "totals"
           ],
           "title": "SpendReport",
+          "type": "object"
+        },
+        "SpendTeam": {
+          "properties": {
+            "team_id": {
+              "title": "Team Id",
+              "type": "string"
+            },
+            "team_name": {
+              "title": "Team Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "team_id",
+            "team_name"
+          ],
+          "title": "SpendTeam",
           "type": "object"
         },
         "SpendTotals": {
@@ -16393,6 +16412,14 @@
             "team_name": {
               "title": "Team Name",
               "type": "string"
+            },
+            "teams": {
+              "default": [],
+              "items": {
+                "$ref": "#/components/schemas/SpendTeam"
+              },
+              "title": "Teams",
+              "type": "array"
             },
             "tokens": {
               "default": 0,

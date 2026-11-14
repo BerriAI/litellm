@@ -201,3 +201,29 @@ async def test_injected_base_url_can_redirect_billing_to_a_scripted_server() -> 
         result: Final = await fetch_page(client, vendor.key, window_start(NOW), NOW, base_url="http://127.0.0.1:19199/")
     assert not isinstance(result, Failure)
     assert str(vendor.requests[0].url).startswith("http://127.0.0.1:19199/v2/teams/billing-items?")
+
+
+@pytest.mark.asyncio
+async def test_admin_key_cannot_be_redirected_by_environment_or_request_input(
+    db: DatabaseDouble, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_EXTERNAL_CLOUD_AGENTS_BILLING_BASE_URL", "https://untrusted.example.test")
+    vendor: Final = Vendor((page(), page()))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(vendor.respond)) as client:
+        harness: Final = Harness(db, client)
+        with harness.client:
+            saved: Final = harness.client.put(
+                f"/v1/external_cloud_agents/sources/{harness.source_id}/admin_api_key",
+                params={"base_url": "https://untrusted.example.test"},
+                json={"api_key": vendor.key, "base_url": "https://untrusted.example.test"},
+            )
+            assert saved.status_code == 200, saved.text
+            synced: Final = harness.client.post(
+                f"/v1/external_cloud_agents/sources/{harness.source_id}/sync_spend",
+                json={"base_url": "https://untrusted.example.test"},
+            )
+            assert synced.status_code == 200, synced.text
+    assert len(vendor.requests) == 2
+    assert all(
+        str(request.url).startswith("https://api.cursor.com/v2/teams/billing-items?") for request in vendor.requests
+    )

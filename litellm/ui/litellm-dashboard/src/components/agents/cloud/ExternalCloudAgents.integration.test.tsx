@@ -42,12 +42,16 @@ const report: SpendReport = {
   ],
   teams: [
     {
-      team_id: "team",
-      team_name: "Platform",
+      team_id: null,
+      team_name: "Multiple teams",
       grok_cost_usd: "3.25",
       litellm_gateway_spend_usd: "4.75",
       tokens: 100,
       requests: 8,
+      teams: [
+        { team_id: "platform", team_name: "Platform" },
+        { team_id: "security", team_name: "Security" },
+      ],
     },
   ],
   totals: { grok_cost_usd: "3.25", litellm_gateway_spend_usd: "4.75", tokens: 100, requests: 8 },
@@ -152,12 +156,15 @@ describe("External Cloud Agents", () => {
     fireEvent.change(screen.getByLabelText("GrokBot Admin API key"), { target: { value: "vendor-key" } });
     fireEvent.click(screen.getByRole("button", { name: "Connect spend" }));
     expect(await screen.findByText("Member One")).toBeVisible();
-    expect(screen.getByText("$8.00")).toBeVisible();
+    expect(screen.getByText("USD 8.00")).toBeVisible();
+    expect(screen.getByText("Period 2026-08-20 to 2026-09-18 (UTC)")).toBeVisible();
+    expect(screen.getByText(/Spend covers members and teams only, not individual bots/)).toBeVisible();
     expect(server.requests.find((request) => request.method === "PUT")?.body).toBe(
       JSON.stringify({ api_key: "vendor-key" }),
     );
     fireEvent.click(screen.getByRole("button", { name: "By team" }));
-    expect(await screen.findByText("Platform")).toBeVisible();
+    expect(await screen.findByText("Multiple teams")).toBeVisible();
+    expect(screen.getByText("Platform, Security")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Remove key" }));
     expect(await screen.findByRole("heading", { name: "Add GrokBot spend" })).toBeVisible();
     expect(screen.getByLabelText("GrokBot Admin API key")).toHaveValue("");
