@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from fastapi import HTTPException
 from pydantic import Field, TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -39,6 +40,7 @@ from litellm.batches.batch_utils import (
 from litellm.constants import BATCH_TPD_DESCRIPTOR_SUFFIX, BATCH_TPD_WINDOW_SECONDS
 from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
@@ -59,10 +61,12 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_ITPM_DESCRIPTOR_KEY,
     PROJECT_OTPM_DESCRIPTOR_KEY,
-    ReservationAwareIncrementOperation,
+    ReservationWindowIdentity,
+    WindowGuardedIncrement,
     get_or_create_request_stash,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitScope
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -98,7 +102,12 @@ else:
 
 
 _BATCH_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 _WINDOW_START_ADAPTER: Final[TypeAdapter[int | float | str | None]] = TypeAdapter(int | float | str | None)
+
+
+class _FileContentFetchKwargs(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _batch_create_routing_model(data: Mapping[str, object]) -> str | None:
@@ -533,7 +542,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         custom_llm_provider: str,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth | None = None,
-    ) -> tuple[str, dict[str, Any]]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Map proxy-facing file IDs to provider file IDs and credentials.
 
@@ -835,9 +844,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             return None
         try:
             window_start: Final = _WINDOW_START_ADAPTER.validate_python(
-                await self.parallel_request_limiter.internal_usage_cache.async_get_cache(
-                    key=f"{{{descriptor_key}:{status.get('descriptor_value') or ''}}}:window",
-                    litellm_parent_otel_span=parent_otel_span,
+                await self.parallel_request_limiter.rate_limits.get(
+                    RateLimitScope(descriptor_key, status.get("descriptor_value") or "").window
                 ),
                 strict=True,
             )
@@ -849,8 +857,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self,
         descriptors: Sequence["RateLimitDescriptor"],
         tokens: int,
-        reservation_windows: frozenset[tuple[str, str, Literal["redis", "local"]]],
-    ) -> tuple[ReservationAwareIncrementOperation, ...]:
+        reservation_windows: frozenset[ReservationWindowIdentity],
+    ) -> tuple[WindowGuardedIncrement, ...]:
         """Refund operations for the daily token counters this batch charged.
 
         The v3 limiter's failure hook applies them when the submission fails
@@ -860,29 +868,22 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         """
         if tokens <= 0 or not reservation_windows:
             return ()
-        tpd_descriptors_by_counter: Final[Mapping[str, RateLimitDescriptor]] = MappingProxyType(
-            {
-                self.parallel_request_limiter.create_rate_limit_keys(
-                    descriptor["key"], descriptor["value"], "tokens"
-                ): descriptor
-                for descriptor in descriptors
-                if descriptor["key"].endswith(BATCH_TPD_DESCRIPTOR_SUFFIX)
-            }
+        tpd_counters: Final = frozenset(
+            RateLimitScope(descriptor["key"], descriptor["value"]).counter("tokens")
+            for descriptor in descriptors
+            if descriptor["key"].endswith(BATCH_TPD_DESCRIPTOR_SUFFIX)
         )
         return tuple(
-            ReservationAwareIncrementOperation(
-                key=counter_key,
-                increment_value=-tokens,
-                ttl=BATCH_TPD_WINDOW_SECONDS,
-                window_key=f"{{{descriptor['key']}:{descriptor['value']}}}:window",
+            WindowGuardedIncrement(
+                increment=CounterIncrement(counter=counter, amount=-tokens, ttl=BATCH_TPD_WINDOW_SECONDS),
                 expected_window_start=window_start,
                 reservation_backend=backend,
             )
-            for counter_key, window_start, backend in sorted(reservation_windows)
-            if (descriptor := tpd_descriptors_by_counter.get(counter_key)) is not None
+            for counter, window_start, backend in sorted(reservation_windows)
+            if counter in tpd_counters
         )
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def count_input_file_usage(
         self,
         file_id: str,
@@ -958,7 +959,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 file_content = await litellm.afile_content(
                     file_id=provider_file_id,
                     user_api_key_dict=user_api_key_dict,
-                    **fetch_kwargs,
+                    **_FileContentFetchKwargs(**fetch_kwargs),
                 )
 
             file_content_bytes: Final = getattr(file_content, "content", None)
@@ -991,7 +992,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             for raw_line in iter_batch_input_lines(file_content_bytes):
                 request_count += 1
                 try:
-                    entry = json.loads(raw_line)
+                    entry = _DECODED_JSON.validate_python(json.loads(raw_line))
                 except Exception:
                     entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                     entry_output_tokens = self.parallel_request_limiter.no_max_tokens_output_floor(
@@ -1014,7 +1015,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 output_tokens += entry_output_tokens
 
                 try:
-                    entry_total_tokens = count_entry_tokens(entry)
+                    entry_total_tokens = count_entry_tokens(decoded_json_object(entry))
                 except Exception:
                     entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                 total_tokens += entry_total_tokens
@@ -1118,7 +1119,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     },
                 ) from e
 
-        llm_model_list: Final = llm_router.model_list if llm_router is not None else None
+        llm_model_list: Final = llm_router.registry().all() if llm_router is not None else None
         for model in models:
             model_to_check = model
             try:
@@ -1241,7 +1242,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         return file_content
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,

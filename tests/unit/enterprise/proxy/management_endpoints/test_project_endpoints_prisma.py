@@ -1591,7 +1591,7 @@ def test_update_quota_rejects_wildcard_left_on_project():
 async def test_new_project_flag_on_access_group_model_returns_400(monkeypatch):
     """End-to-end: the router's access groups reach the check, so an access-group entry is rejected."""
     llm_router = mock.MagicMock()
-    llm_router.get_model_access_groups.return_value = {"prod-models": ["gpt-5.5"]}
+    llm_router.registry.return_value.access_groups.return_value = {"prod-models": ["gpt-5.5"]}
     _enforced_new_project_mocks(monkeypatch, team_models=["prod-models"], llm_router=llm_router)
     data = NewProjectRequest(
         team_id="test-team",
@@ -2363,3 +2363,51 @@ async def test_project_info_missing_project_is_404_even_for_org_admins(project_a
         )
 
     assert str(exc_info.value.code) == "404"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("create", "update"))
+async def test_project_writes_reject_an_unregistered_guardrail(monkeypatch, operation):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import ProxyException
+
+    team_row = MagicMock()
+    team_row.model_dump = lambda: {"team_id": "team-1"}
+    existing_row = MagicMock(team_id="team-1", budget_id=None, object_permission_id=None)
+    existing_row.metadata = {"guardrails": ["stale"]}
+
+    mock_prisma = MagicMock()
+    mock_prisma.jsonify_object = lambda data: data
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=existing_row)
+    mock_prisma.db.litellm_projecttable.create = AsyncMock()
+    mock_prisma.db.litellm_projecttable.update = AsyncMock()
+    mock_prisma.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY, user_id="1234")
+
+    write: Final = (
+        new_project(
+            data=NewProjectRequest(team_id="team-1", guardrails=["typo"]),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=admin,
+        )
+        if operation == "create"
+        else update_project(
+            data=UpdateProjectRequest(project_id="project-1", guardrails=["stale", "typo"]),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=admin,
+        )
+    )
+    with pytest.raises((HTTPException, ProxyException)) as exc:
+        await write
+
+    message: Final = str(getattr(exc.value, "message", None) or getattr(exc.value, "detail", ""))
+    assert "typo" in message
+    assert "stale" not in message
+    assert str(getattr(exc.value, "code", None) or getattr(exc.value, "status_code", "")) == "400"
+    mock_prisma.db.litellm_projecttable.create.assert_not_awaited()
+    mock_prisma.db.litellm_projecttable.update.assert_not_awaited()

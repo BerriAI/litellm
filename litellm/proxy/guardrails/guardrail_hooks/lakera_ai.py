@@ -22,6 +22,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -163,11 +164,11 @@ class lakeraAI_Moderation(CustomGuardrail):
             for message in data["messages"]:
                 role = message.get("role")
                 if role in stringified_roles:
-                    if "tool_calls" in message:
-                        tool_call_messages = [
-                            *tool_call_messages,
-                            *message["tool_calls"],
-                        ]
+                    tool_call_messages = [
+                        *tool_call_messages,
+                        *anthropic_server_tool_call_params(message),
+                        *(message.get("tool_calls") or ()),
+                    ]
                     if role == Role.SYSTEM.value:  # we need this for later
                         system_message = message
                         continue
@@ -185,10 +186,11 @@ class lakeraAI_Moderation(CustomGuardrail):
             if system_message is not None:
                 if not litellm.add_function_to_prompt:
                     content = system_message.get("content")
-                    function_input: Final = []
-                    for tool_call in tool_call_messages:
-                        if "function" in tool_call:
-                            function_input.append(tool_call["function"]["arguments"])
+                    function_input: Final[tuple[str, ...]] = tuple(
+                        tool_call["function"]["arguments"]
+                        for tool_call in tool_call_messages
+                        if "function" in tool_call
+                    )
 
                     if len(function_input) > 0:
                         content += " Function Input: " + " ".join(function_input)

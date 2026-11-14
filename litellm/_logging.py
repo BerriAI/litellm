@@ -11,7 +11,7 @@ from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
 from types import FrameType
-from typing import Final, TextIO
+from typing import Final, Protocol, TextIO
 from urllib.parse import unquote
 
 from pydantic import TypeAdapter
@@ -28,9 +28,11 @@ from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, safe_dumps, safe_json_structure
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.secret_redaction import (
+    REDACTED,
     python_redact_string,
     python_redact_structured_value,
     redact_internal_details,
+    redact_structured_value,
 )
 from litellm.litellm_core_utils.secret_redaction import (
     redact_string as redact_secret_string,
@@ -138,6 +140,32 @@ def redact_internal_details_from_client_message(value: str) -> str:
     if not _ENABLE_SECRET_REDACTION:
         return value
     return redact_internal_details(value)
+
+
+_CLIENT_FIELDS: Final = TypeAdapter(dict[str, object])
+_CLIENT_ITEMS: Final = TypeAdapter(list[object])
+
+
+def _redacted_client_field(key: str | None, value: object) -> object:
+    if isinstance(value, str):
+        return redact_internal_details(redact_structured_value(key, value))
+    if isinstance(value, dict):
+        return {
+            child_key: _redacted_client_field(child_key, child)
+            for child_key, child in _CLIENT_FIELDS.validate_python(value).items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redacted_client_field(key, child) for child in _CLIENT_ITEMS.validate_python(value)]
+    if not isinstance(value, (int, float)):
+        return value
+    text: Final = str(value)
+    return value if redact_structured_value(key, text) == text else REDACTED
+
+
+def redact_internal_details_from_client_fields(fields: Mapping[str, object]) -> object:
+    if not _ENABLE_SECRET_REDACTION:
+        return fields
+    return _redacted_client_field(None, dict(fields))
 
 
 def _substituted_color_message(record: logging.LogRecord) -> str | None:
@@ -661,7 +689,7 @@ class LevelRoutingStreamHandler(logging.StreamHandler):
 def _parse_env_flag(value: str | None) -> bool:
     """Strict opt-in parse for a boolean env var such as JSON_LOGS: only "true" (any case) enables it.
 
-    Matches the reader in litellm-proxy-extras/_logging.py. The previous
+    Matches the reader in litellm/proxy-extras/_logging.py. The previous
     bool(os.getenv(...)) treated any non-empty value, including "false" and "0",
     as enabled.
     """
@@ -907,6 +935,11 @@ else:
     )
 
     handler.setFormatter(formatter)
+
+
+class WarningLogger(Protocol):
+    def warning(self, msg: str, /, *args: object) -> None: ...
+
 
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 # Malformed virtual key rejections log through this child; LevelRoutingStreamHandler

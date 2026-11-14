@@ -260,6 +260,16 @@ Delete a credential:
 lite credentials delete <credential-name>
 ```
 
+#### Connect a GitHub Copilot Credential
+
+Connect your own GitHub Copilot account to a per-user GitHub Copilot credential, the same as the Connect button in the UI. Run it with your own virtual key, since the connection belongs to the user that key resolves to:
+
+```bash
+lite --api-key sk-your-key credentials connect <credential-name>
+```
+
+It prints a code and a GitHub link, then waits. Open the link, enter the code, and approve. The command exits 0 once GitHub confirms the login, and exits 1 if the code expires, the login is denied, or the GitHub account has no Copilot seat.
+
 ### Keys Management
 
 The CLI provides commands for managing API keys on your LiteLLM proxy server:
@@ -492,7 +502,7 @@ lite codex exec "summarize the repo"
 
 Each command resolves your LiteLLM key (logging in via SSO when none is stored and you are at a terminal; otherwise it expects `LITELLM_PROXY_API_KEY` or `--api-key`), checks the key against the proxy so bad credentials fail immediately instead of deep inside the agent, exports the environment variables the agent reads, then replaces itself with the agent process.
 
-The right variables are picked per agent. Claude Code gets `ANTHROPIC_BASE_URL` (the proxy root, so it appends `/v1/messages`) and `ANTHROPIC_AUTH_TOKEN`, with any stray `ANTHROPIC_API_KEY` cleared so the proxy token wins, and `ENABLE_TOOL_SEARCH=true` (unless you already set it) so Claude Code keeps tool search on even though the base URL is a proxy rather than a first-party Anthropic host. It also gets `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` (again unless you already set it) so Claude Code v2.1.129+ fills its `/model` picker from the proxy's `/v1/models`; Claude Code only lists entries whose id contains `claude` or `anthropic`, so the proxy lists every other group to Claude Code as `claude-router-<UTF-8 hex of the group name>` and marks a group whose input window reaches 1M with `[1m]`, and a request on such an id is served by the group. Older Claude Code versions ignore the variable. Export it as `0` to turn discovery off. Codex and OpenCode get `OPENAI_BASE_URL` (the proxy plus `/v1`) and `OPENAI_API_KEY`. Codex ignores `OPENAI_BASE_URL`, so it is additionally pointed at the proxy through a custom provider passed as `-c` config overrides (HTTP/SSE Responses transport, since the proxy does not speak the Responses WebSocket protocol). OpenCode additionally gets `OPENCODE_CONFIG_CONTENT` holding a generated `litellm` provider (`@ai-sdk/openai-compatible`, the proxy `/v1` URL, `{env:OPENAI_API_KEY}`) with one model entry per chat model your key can see on `/v1/models`, so its model picker mirrors the proxy without a hand-maintained `opencode.json`; OpenCode merges that over your own config files, and if you already export `OPENCODE_CONFIG_CONTENT` yours is left alone. When the list cannot be fetched, `lite opencode` says so on stderr and launches anyway. Codex gets the same list as a catalog file, `$CODEX_HOME/litellm-models.json` (default `~/.codex/`), passed as `-c model_catalog_json=<path>` so `/model` lists exactly the proxy's chat models; a proxy model the installed Codex already knows (`gpt-5.5`, say) keeps that Codex's own entry, reasoning levels and prompt included, and only its place in the picker comes from the proxy, while a model Codex does not know gets the plain entry Codex uses for an unknown `-m` slug. Before launching, `lite codex` asks the installed Codex for its own list and then has it read the written file back (both through `codex debug models`), and when the fetch, either of those or the write fails (Codex releases older than 0.130 have no such command) it says so on stderr and launches with Codex's built-in catalog, leaving a rejected file in place.
+The right variables are picked per agent. Claude Code gets `ANTHROPIC_BASE_URL` (the proxy root, so it appends `/v1/messages`) and `ANTHROPIC_AUTH_TOKEN`, with any stray `ANTHROPIC_API_KEY` cleared so the proxy token wins, and `ENABLE_TOOL_SEARCH=true` (unless you already set it) so Claude Code keeps tool search on even though the base URL is a proxy rather than a first-party Anthropic host. It also gets `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` (again unless you already set it) so Claude Code v2.1.129+ fills its `/model` picker from the proxy's `/v1/models`; Claude Code only lists entries whose id contains `claude` or `anthropic`, so the proxy lists every other group to Claude Code as `claude-router-<UTF-8 hex of the group name>` and marks a group whose input window reaches 1M with `[1m]`, and a request on such an id is served by the group. Older Claude Code versions ignore the variable. Export it as `0` to turn discovery off. Codex and OpenCode get `OPENAI_BASE_URL` (the proxy plus `/v1`) and `OPENAI_API_KEY`. Codex ignores `OPENAI_BASE_URL`, so it is additionally pointed at the proxy through a custom provider passed as `-c` config overrides (HTTP/SSE Responses transport, since the proxy does not speak the Responses WebSocket protocol). OpenCode additionally gets `OPENCODE_CONFIG_CONTENT` holding a generated `litellm` provider (`@ai-sdk/openai-compatible`, the proxy `/v1` URL, `{env:OPENAI_API_KEY}`) with one model entry per chat model your key can see on `/v1/models`, so its model picker mirrors the proxy without a hand-maintained `opencode.json`; OpenCode merges that over your own config files, and if you already export `OPENCODE_CONFIG_CONTENT` yours is left alone. When the list cannot be fetched, `lite opencode` says so on stderr and launches anyway. Codex gets the same list as a catalog file, `$CODEX_HOME/litellm-models.json` (default `~/.codex/`), passed as `-c model_catalog_json=<path>` so `/model` lists exactly the proxy's chat models; a proxy model the installed Codex already knows (`gpt-5.5`, say) keeps that Codex's own entry, reasoning levels and prompt included, and only its place in the picker comes from the proxy, while a model Codex does not know gets the plain entry Codex uses for an unknown `-m` slug, plus whichever reasoning levels its model group lists on `/model_group/info` the installed Codex can parse. Before launching, `lite codex` asks the installed Codex for its own list and then has it read the written file back (both through `codex debug models`), and when the fetch, either of those or the write fails (Codex releases older than 0.130 have no such command) it says so on stderr and launches with Codex's built-in catalog, leaving a rejected file in place.
 
 pi ignores base-URL environment variables entirely, so `lite pi` (kept out of the `lite --help` command listing for now, but fully functional) wires it up differently: before handoff it fetches the models your key can use from the proxy's `/v1/models` (plus each model's context window and output cap from `/model_group/info`, when available) and syncs them into a `litellm` provider entry in pi's `~/.pi/agent/models.json` (honoring `PI_CODING_AGENT_DIR`), then starts pi on that provider's first model via an injected `--model litellm/<id>`. Only that one provider entry is rewritten; the rest of the file, including any other custom providers, is left alone. The entry references the key as `$LITELLM_PROXY_API_KEY`, which the wrapper exports for the session, so the token itself never lands on disk and plain `pi` outside the wrapper simply shows the litellm models as unavailable. The entry also turns on pi's session header (`x-session-id`, sent by pi 0.80.7 and later), so every chat turn of one pi session shares one session id in the logs and sticks to one deployment when session affinity is on. A custom `pi --session-id` must be at least 8 letters, digits, `_`, or `-` for the proxy to read it. Your own flags come after the injected pin, so `lite pi --model litellm/<other-id>` wins, and inside the TUI the `/model` picker lists every synced litellm model.
 
@@ -579,7 +589,7 @@ The Codex undo receipt is kept in a private `.litellm` directory beside the reso
 `lite configure claude` wires Claude Code up persistently with a long-lived virtual key, a pinned model and an undo, and `lite unconfigure claude` puts things back:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/scripts/install.sh | sh
 lite --base-url https://your-proxy.example.com configure claude --api-key sk-... --model claude-auto
 claude
 ```
@@ -615,17 +625,17 @@ After upgrading the CLI, run `lite configure claude` to refresh `~/.litellm/stat
 `lite autoroute start` builds and runs a throwaway litellm proxy locally, so unlike the rest of this CLI it needs the proxy server runtime, not just the thin `litellm[cli]` client. Install `litellm[proxy]` (which ships the `lite` command too) with a single curl command -- no existing Python tooling required, `uv` is bootstrapped automatically if missing:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/scripts/install.sh | sh
 ```
 
 To QA an unreleased branch or commit instead of the latest PyPI release, set `LITELLM_CLI_REF`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch-or-commit>/scripts/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch-or-commit>/litellm/scripts/install.sh | \
   LITELLM_CLI_REF=<branch-or-commit> sh
 ```
 
-The thin `scripts/install-cli.sh` installs only `litellm[cli]`, which is enough for `lite login`, `lite claude`, and `lite up`, but not for `lite autoroute start`; running it against a `litellm[cli]` install fails fast with a message telling you to install the proxy runtime.
+The thin `litellm/scripts/install-cli.sh` installs only `litellm[cli]`, which is enough for `lite login`, `lite claude`, and `lite up`, but not for `lite autoroute start`; running it against a `litellm[cli]` install fails fast with a message telling you to install the proxy runtime.
 
 Point the CLI at your real proxy and key before running any `lite model-groups` or `lite autoroute` command -- like every other command in this CLI, they read `LITELLM_PROXY_URL`/`LITELLM_PROXY_API_KEY` (or `--base-url`/`--api-key`), no `lite login` required:
 

@@ -3,14 +3,14 @@ name: LiteLLM Rust DB
 on:
   push:
     paths:
-      - "litellm-rust/crates/db/**"
-      - "litellm-rust/Cargo.toml"
-      - "litellm-rust/Cargo.lock"
-      - "litellm-rust/clippy.toml"
-      - "litellm-proxy-extras/litellm_proxy_extras/migrations/**"
+      - "litellm/rust/crates/db/**"
+      - "litellm/rust/Cargo.toml"
+      - "litellm/rust/Cargo.lock"
+      - "litellm/rust/clippy.toml"
+      - "litellm/proxy-extras/litellm_proxy_extras/migrations/**"
       - "**/schema.prisma"
-      - ".cargo/**"
-      - "rust-toolchain.toml"
+      - "litellm/rust/.cargo/**"
+      - "litellm/rust/rust-toolchain.toml"
       - "pyproject.toml"
       - "uv.lock"
       - ".github/actions/setup-uv-with-retries/**"
@@ -20,14 +20,14 @@ on:
       - main
       - "litellm_**"
     paths:
-      - "litellm-rust/crates/db/**"
-      - "litellm-rust/Cargo.toml"
-      - "litellm-rust/Cargo.lock"
-      - "litellm-rust/clippy.toml"
-      - "litellm-proxy-extras/litellm_proxy_extras/migrations/**"
+      - "litellm/rust/crates/db/**"
+      - "litellm/rust/Cargo.toml"
+      - "litellm/rust/Cargo.lock"
+      - "litellm/rust/clippy.toml"
+      - "litellm/proxy-extras/litellm_proxy_extras/migrations/**"
       - "**/schema.prisma"
-      - ".cargo/**"
-      - "rust-toolchain.toml"
+      - "litellm/rust/.cargo/**"
+      - "litellm/rust/rust-toolchain.toml"
       - "pyproject.toml"
       - "uv.lock"
       - ".github/actions/setup-uv-with-retries/**"
@@ -42,6 +42,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   db-queries:
@@ -66,7 +67,7 @@ jobs:
       SQLX_OFFLINE: "false"
     defaults:
       run:
-        working-directory: litellm-rust
+        working-directory: litellm/rust
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -84,8 +85,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: litellm-rust
+          workspaces: litellm/rust
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install Python dependencies
         working-directory: .
@@ -93,13 +95,13 @@ jobs:
 
       - name: Deploy Prisma migrations
         working-directory: .
-        run: uv run --no-sync prisma migrate deploy --schema litellm-proxy-extras/litellm_proxy_extras/schema.prisma
+        run: uv run --no-sync prisma migrate deploy --schema litellm/proxy-extras/litellm_proxy_extras/schema.prisma
 
       - name: Install SQLx CLI
         run: cargo install sqlx-cli --version 0.9.0 --locked --no-default-features -F postgres
 
       - name: Check SQLx query metadata
-        working-directory: litellm-rust/crates/db
+        working-directory: litellm/rust/crates/db
         run: cargo sqlx prepare --check
 
       - name: Test database queries

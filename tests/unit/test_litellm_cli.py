@@ -9,7 +9,12 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm_cli.main import cli
+from litellm.cli.main import cli
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 _HELP_ARGV: Final = (
     ("--help",),
@@ -191,6 +196,32 @@ from litellm_cli.main import cli
 cli()
 """
 
+_PYPROJECT: Final = Path(__file__).resolve().parents[2] / "pyproject.toml"
+
+_RUN_ENTRY_POINT_HELP: Final = """
+import contextlib, io, json, sys
+from {module} import {function}
+imported_sdk = "litellm" in sys.modules
+sys.argv = ["litellm", "--help"]
+output = io.StringIO()
+with contextlib.redirect_stdout(output):
+    try:
+        {function}()
+    except SystemExit as stopped:
+        code = stopped.code
+    else:
+        code = 0
+print(json.dumps({{"imported_sdk": imported_sdk, "exit": code, "help": output.getvalue()}}))
+"""
+
+_WORKER_LOGGERS_UNDER_A_DEFAULT_LOG_CONFIG: Final = """
+import json, logging, os
+os.environ["LITELLM_WORKER_LOG_CONFIG"] = json.dumps({{"version": 1, "root": {{"level": "INFO"}}}})
+from litellm_cli.main import proxy_worker_app
+proxy_worker_app()
+print(json.dumps({{name: logging.getLogger(name).disabled for name in {names!r}}}))
+"""
+
 _COMMAND_MODULES_LOADED_BY: Final = """
 import json, sys
 from litellm_cli.main import cli
@@ -205,8 +236,16 @@ print(json.dumps({"modules": sorted(name[len(prefix):] for name in sys.modules i
 
 
 def _run(source: str, argv: tuple[str, ...], home: Path) -> dict[str, object]:
+    checkout: Final = str(_PYPROJECT.parent)
+    bootstrap: Final = (
+        "import pathlib,sys\n"
+        f"sys.path.insert(0, {checkout!r})\n"
+        f"sys.path.insert(0, str(pathlib.Path({checkout!r}) / '.github/packaging'))\n"
+        "from cli_package import editable_support\n"
+        f"exec(editable_support(pathlib.Path({checkout!r}) / 'litellm/cli')[0][1])\n"
+    )
     result: Final = subprocess.run(
-        [sys.executable, "-I", "-c", source, *argv],
+        [sys.executable, "-I", "-c", bootstrap + source, *argv],
         capture_output=True,
         text=True,
         timeout=120,
@@ -225,6 +264,23 @@ def cli_runs(tmp_path_factory: pytest.TempPathFactory) -> Mapping[str, dict[str,
             _RUN_EACH_ARGV.format(module="litellm.proxy.client.cli.main"), argv, tmp_path_factory.mktemp("full")
         ),
     }
+
+
+def test_litellm_command_imports_the_proxy_only_when_it_runs(tmp_path: Path):
+    module, _, function = tomllib.loads(_PYPROJECT.read_text())["project"]["scripts"]["litellm"].partition(":")
+    run: Final = _run(_RUN_ENTRY_POINT_HELP.format(module=module, function=function), (), tmp_path)
+    assert run["imported_sdk"] is False
+    assert run["exit"] == 0
+    assert "--num_workers" in str(run["help"])
+
+
+def test_a_worker_log_config_silences_the_sdk_loggers_but_not_the_ones_the_proxy_app_creates(tmp_path: Path):
+    disabled: Final = _run(
+        _WORKER_LOGGERS_UNDER_A_DEFAULT_LOG_CONFIG.format(names=("LiteLLM Proxy", "litellm.proxy.health_check")),
+        (),
+        tmp_path,
+    )
+    assert disabled == {"LiteLLM Proxy": True, "litellm.proxy.health_check": False}
 
 
 def test_lite_runs_commands_without_initializing_the_sdk(cli_runs: Mapping[str, dict[str, object]]):

@@ -14,6 +14,8 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -2476,9 +2478,9 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
     # Reset module-level cache to ensure test isolation
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
-    class _MockRouter:
-        model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
-        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
+    mock_router = route_entry_points_to_stubs(MagicMock())
+    mock_router.model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
+    mock_router.team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
 
     test_data = {"model": "gpt-4o"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -2487,7 +2489,7 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
         team_model_aliases={"gpt-4o": "model_name_team-1_legacy-uuid"},
     )
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         _update_model_if_team_alias_exists(
             data=test_data, user_api_key_dict=user_api_key_dict
         )
@@ -2502,9 +2504,9 @@ def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
     # Reset module-level cache to ensure test isolation
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
-    class _MockRouter:
-        model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
-        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
+    mock_router = route_entry_points_to_stubs(MagicMock())
+    mock_router.model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
+    mock_router.team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
 
     test_data = {"model": "gpt-4o"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -2514,7 +2516,7 @@ def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
     )
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true")
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         _update_model_if_team_alias_exists(
             data=test_data, user_api_key_dict=user_api_key_dict
         )
@@ -3714,3 +3716,55 @@ async def test_evict_config_param_clears_the_local_layer_and_survives_a_redis_ou
     await evict_config_param("router_settings", cache=cache)
 
     assert await cache.in_memory_cache.async_get_cache(_config_cache_key("router_settings")) is None
+
+
+@pytest.mark.asyncio
+async def test_query_raw_within_statement_timeout_has_postgres_cancel_the_read_at_30s() -> None:
+    from datetime import timedelta
+
+    from litellm.proxy.utils import query_raw_within_statement_timeout
+    from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_reads
+
+    prisma: Final = MagicMock()
+    transaction: Final = statement_timeout_reads(prisma, AsyncMock(return_value=[{"spend": 1.5}]))
+
+    rows: Final = await query_raw_within_statement_timeout(
+        prisma, 'SELECT spend FROM "LiteLLM_SpendLogs" WHERE "user" = $1', "u1"
+    )
+
+    assert rows == [{"spend": 1.5}]
+    assert transaction.statements == ("SET LOCAL statement_timeout = 30000",)
+    transaction.query_raw.assert_awaited_once_with('SELECT spend FROM "LiteLLM_SpendLogs" WHERE "user" = $1', "u1")
+    assert prisma.read_db.tx.call_args.kwargs["timeout"] > timedelta(seconds=30), "Prisma must outlive the Postgres cancel"
+
+
+@pytest.mark.asyncio
+async def test_query_raw_within_statement_timeout_reports_a_cancelled_read_as_503() -> None:
+    from litellm.proxy.utils import query_raw_within_statement_timeout
+    from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_error, statement_timeout_reads
+
+    prisma: Final = MagicMock()
+    statement_timeout_reads(prisma, AsyncMock(side_effect=statement_timeout_error()))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await query_raw_within_statement_timeout(prisma, "SELECT 1", what="Spend per user")
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == {"error": "Spend per user took longer than 30s. Pick a shorter date range"}
+
+
+@pytest.mark.asyncio
+async def test_query_raw_within_statement_timeout_leaves_other_database_errors_alone() -> None:
+    from prisma.errors import DataError
+
+    from litellm.proxy.utils import query_raw_within_statement_timeout
+    from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_reads
+
+    prisma: Final = MagicMock()
+    failure: Final = DataError(data={"user_facing_error": {"is_panic": False, "message": "relation does not exist"}})
+    statement_timeout_reads(prisma, AsyncMock(side_effect=failure))
+
+    with pytest.raises(DataError) as exc_info:
+        await query_raw_within_statement_timeout(prisma, "SELECT 1")
+
+    assert exc_info.value is failure
