@@ -1120,7 +1120,7 @@ impl Engine {
         else {
             return Ok(());
         };
-        let (share, priority) = {
+        let (share, idle_share, priority) = {
             let stash = stash.lock();
             let share = match hold {
                 Some(hold) => tightest_of(
@@ -1135,7 +1135,16 @@ impl Engine {
                     capped_idle_share(stash.borrowing_share.as_ref(), stash.borrowing_cap.as_ref()),
                 ),
             };
-            (share, stash.priority.clone())
+            (share, stash.borrowing_share.clone(), stash.priority.clone())
+        };
+        let share = match (share, hold) {
+            (Some(share), _) => Some(share),
+            (None, Some(hold)) => tightest(&[hold.share.as_ref()]),
+            (None, None) => {
+                let group = self.limiter.model_group(model_group).await?;
+                let on_model = format!("{team}:{group}");
+                tightest(&[idle_share.as_ref().filter(|share| share.value == on_model)])
+            }
         };
         let Some((descriptor, share_tokens)) = share else {
             return Ok(());

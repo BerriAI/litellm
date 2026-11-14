@@ -48,6 +48,7 @@ pub trait V3Limiter: Send + Sync {
     ) -> SeamFuture<'a, LimiterResponse>;
     fn apply<'a>(&'a self, operations: &'a [ReservationOp], trace: Trace) -> SeamFuture<'a, ()>;
     fn borrowing_limits<'a>(&'a self, model: &'a str) -> SeamFuture<'a, Option<BorrowingLimits>>;
+    fn model_group<'a>(&'a self, model: &'a str) -> SeamFuture<'a, String>;
     fn estimate_tokens<'a>(
         &'a self,
         tpm_share: i64,
@@ -184,6 +185,10 @@ impl<D: Delegate> V3Limiter for Delegated<D> {
 
     fn borrowing_limits<'a>(&'a self, model: &'a str) -> SeamFuture<'a, Option<BorrowingLimits>> {
         self.invoke("borrowing_limits", json!({"model": model}))
+    }
+
+    fn model_group<'a>(&'a self, model: &'a str) -> SeamFuture<'a, String> {
+        self.invoke("model_group", json!({"model": model}))
     }
 
     fn estimate_tokens<'a>(

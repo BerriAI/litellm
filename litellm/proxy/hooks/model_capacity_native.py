@@ -442,6 +442,11 @@ class CapacityDelegate:
         }
 
     @_seam
+    async def model_group(self, args: Mapping[str, object]) -> object:
+        model: Final = str(args["model"])
+        return (self.v3_limiter.rate_limited_model(model) or RateLimitedModel(requested=model, group=model)).group
+
+    @_seam
     async def estimate_tokens(self, args: Mapping[str, object]) -> object:
         live: Final = _live()
         data: Final = live.data
