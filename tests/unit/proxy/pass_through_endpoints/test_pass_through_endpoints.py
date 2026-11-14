@@ -82,6 +82,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
     pass_through_request,
     resolve_llm_passthrough_timeout,
+    ClientFrameGrant,
     WebsocketClientFrameGate,
     resolve_pass_through_request_timeout,
     set_env_variables_in_header,
@@ -8883,12 +8884,15 @@ async def test_vertex_live_setup_frame_resolves_an_access_group_grant_in_every_a
         ]
     )
     token: Final = UserAPIKeyAuth(token="hashed", models=["live-team"])
-    gate: Final = _build_vertex_live_client_frame_gate(llm_router=llm_router, authorize_model=_reauthorized_as(token))
+    gate: Final = _build_vertex_live_client_frame_gate(
+        llm_router=llm_router,
+        authorize_model=_reauthorized_as(token.model_copy(update={"matched_model_access_groups": ["live-team"]})),
+    )
 
     frame: Final = json.dumps({"setup": {"model": addressing.format(model=VERTEX_LIVE_GROUP)}})
-    denial: Final = await gate(frame, token)
+    verdict: Final = await gate(frame, token)
 
-    assert denial is None
+    assert verdict == ClientFrameGrant(access_groups=("live-team",))
 
 
 async def _run_vertex_live_route(
@@ -9158,6 +9162,44 @@ async def test_vertex_live_session_opened_with_a_binary_setup_frame_is_billed_at
     upstream_ws.send.assert_awaited_once()
     environment.logging_worker.ensure_initialized_and_enqueue.assert_called_once()
     assert environment.success_handler.call_args.kwargs["logging_obj"].model == "gemini-live-2.5-flash"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "connect_time_groups", [None, ["tier-b"]], ids=["no-model-at-connect", "other-model-at-connect"]
+)
+async def test_vertex_live_session_is_charged_to_the_access_groups_its_setup_model_was_granted_through(
+    connect_time_groups: list[str] | None,
+) -> None:
+    """
+    The setup frame's model is authorized after the relay built its logging metadata, so without carrying the groups
+    that authorization matched, a budgeted access group checks every Live session and is never charged for one
+    """
+    upstream_ws: Final = ScriptedFramesUpstreamWebSocket(
+        (
+            json.dumps({"setupComplete": {}}),
+            json.dumps({"serverContent": {"turnComplete": True}, "usageMetadata": {"totalTokenCount": 60}}),
+        )
+    )
+
+    async def client_frames() -> AsyncIterator[dict[str, str]]:
+        yield _setup_frame("gemini-live-2.5-flash")
+        await upstream_ws.sent_every_frame.wait()
+        yield {"type": "websocket.disconnect"}
+
+    session_token: Final = UserAPIKeyAuth(
+        token="hashed", models=["gemini-live-2.5-flash"], matched_model_access_groups=connect_time_groups
+    )
+    _, environment = await _run_vertex_live_gated_session(
+        _client_websocket(client_frames().__anext__),
+        upstream_ws,
+        session_token,
+        _vertex_live_router(),
+        _reauthorized_as(session_token.model_copy(update={"matched_model_access_groups": ["tier-a"]})),
+    )
+
+    metadata: Final = environment.success_handler.call_args.kwargs["litellm_params"]["metadata"]
+    assert metadata[MODEL_ACCESS_GROUP_METADATA_KEY] == ["tier-a"]
 
 
 class StreamingUpstreamWebSocket(ScriptedFramesUpstreamWebSocket):

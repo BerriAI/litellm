@@ -160,6 +160,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_websocket
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     STORED_PROMPT_PROBE_MODEL,
+    ClientFrameGrant,
     ClientFrameRefusal,
     HttpPassThroughEndpointHelpers,
     LoggedClientFrameRefusal,
@@ -4672,9 +4673,9 @@ async def _model_access_denial(
 VertexLiveModelAuthorizer: TypeAlias = Callable[[str], Awaitable[UserAPIKeyAuth]]
 
 
-async def _model_reauthorization_denial(
+async def _model_reauthorization(
     model: str, authorize_model: VertexLiveModelAuthorizer
-) -> LoggedClientFrameRefusal | None:
+) -> LoggedClientFrameRefusal | ClientFrameGrant:
     from litellm.proxy.spend_tracking.budget_reservation import release_or_invalidate_budget_reservation
 
     try:
@@ -4682,15 +4683,15 @@ async def _model_reauthorization_denial(
     except (ProxyException, HTTPException) as refusal:
         return LoggedClientFrameRefusal(_as_model_denial(refusal))
     await release_or_invalidate_budget_reservation(budget_reservation=model_auth.budget_reservation)
-    return None
+    return ClientFrameGrant(access_groups=tuple(model_auth.matched_model_access_groups or ()))
 
 
-async def _first_model_denial(
+async def _first_model_verdict(
     model_names: tuple[str, ...],
     valid_token: UserAPIKeyAuth,
     llm_router: Router | None,
     authorize_model: VertexLiveModelAuthorizer,
-) -> ClientFrameRefusal | None:
+) -> ClientFrameRefusal | ClientFrameGrant | None:
     """
     Every name runs the same deployment, so the first name the key may call is re-authorized and that answer
     stands, budget and pricing checks included. Only a key that may call none of them gets the first access denial
@@ -4698,19 +4699,19 @@ async def _first_model_denial(
     name: Final = model_names[0]
     access_denial: Final = await _model_access_denial(name, valid_token, llm_router)
     if access_denial is None:
-        return await _model_reauthorization_denial(name, authorize_model)
+        return await _model_reauthorization(name, authorize_model)
     if len(model_names) == 1:
         return access_denial
-    later_denial: Final = await _first_model_denial(model_names[1:], valid_token, llm_router, authorize_model)
-    return access_denial if isinstance(later_denial, ProxyException) else later_denial
+    later_verdict: Final = await _first_model_verdict(model_names[1:], valid_token, llm_router, authorize_model)
+    return access_denial if isinstance(later_verdict, ProxyException) else later_verdict
 
 
-async def _vertex_live_model_denial(
+async def _vertex_live_model_verdict(
     setup_model: str,
     valid_token: UserAPIKeyAuth,
     llm_router: Router | None,
     authorize_model: VertexLiveModelAuthorizer,
-) -> ClientFrameRefusal | None:
+) -> ClientFrameRefusal | ClientFrameGrant | None:
     """
     The setup rewriter runs a listed router alias as its target group, the way a request naming it does, and sends
     any other alias name to Vertex as written, so only a listed router alias grants anything here. A name the key may
@@ -4733,7 +4734,7 @@ async def _vertex_live_model_denial(
             if await _caller_has_model_limits(valid_token)
             else None
         )
-    return await _first_model_denial(model_names, valid_token, llm_router, authorize_model)
+    return await _first_model_verdict(model_names, valid_token, llm_router, authorize_model)
 
 
 _ALL_MODEL_ACCESS: Final = frozenset(
@@ -4816,18 +4817,18 @@ async def _caller_has_model_limits(valid_token: UserAPIKeyAuth) -> bool:
     )
 
 
-async def _vertex_live_setup_denial(
+async def _vertex_live_setup_verdict(
     setup_model: str | _UnreadableVertexLiveFrame,
     valid_token: UserAPIKeyAuth,
     llm_router: Router | None,
     authorize_model: VertexLiveModelAuthorizer,
-) -> ClientFrameRefusal | None:
+) -> ClientFrameRefusal | ClientFrameGrant | None:
     match setup_model:
         case str():
-            denial: Final = await _vertex_live_model_denial(setup_model, valid_token, llm_router, authorize_model)
-            if isinstance(denial, ProxyException):
-                log_model_access_denial(denial)
-            return denial
+            verdict: Final = await _vertex_live_model_verdict(setup_model, valid_token, llm_router, authorize_model)
+            if isinstance(verdict, ProxyException):
+                log_model_access_denial(verdict)
+            return verdict
         case _UnreadableVertexLiveFrame():
             return (
                 ProxyException(
@@ -4855,12 +4856,14 @@ def _build_vertex_live_client_frame_gate(
     which is a caller with no model allowlist and no agent, end user or team grant standing in for one
     """
 
-    async def gate(frame_data: str | bytes, valid_token: UserAPIKeyAuth, /) -> ClientFrameRefusal | None:
+    async def gate(
+        frame_data: str | bytes, valid_token: UserAPIKeyAuth, /
+    ) -> ClientFrameRefusal | ClientFrameGrant | None:
         model: Final = _vertex_live_setup_model(frame_data)
         if model is None:
             return None
         try:
-            return await _vertex_live_setup_denial(model, valid_token, llm_router, authorize_model)
+            return await _vertex_live_setup_verdict(model, valid_token, llm_router, authorize_model)
         except Exception:  # noqa: BLE001  # fail closed: a gate that cannot answer refuses, and says so in band
             verbose_proxy_logger.exception("Vertex AI Live passthrough: model access check failed for %s", model)
             return ProxyException(

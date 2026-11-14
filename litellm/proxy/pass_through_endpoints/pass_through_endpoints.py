@@ -2888,6 +2888,11 @@ class LoggedClientFrameRefusal:
 ClientFrameRefusal: TypeAlias = ProxyException | LoggedClientFrameRefusal
 
 
+@dataclass(frozen=True, slots=True)
+class ClientFrameGrant:
+    access_groups: tuple[str, ...]
+
+
 def _client_frame_denial(refusal: ClientFrameRefusal) -> ProxyException:
     match refusal:
         case LoggedClientFrameRefusal(denial=denial):
@@ -2897,15 +2902,17 @@ def _client_frame_denial(refusal: ClientFrameRefusal) -> ProxyException:
 
 
 class WebsocketClientFrameGate(Protocol):
-    """Authorize one client frame, returning the denial to report, one its check already reported, or ``None`` to
-    let it through.
+    """Authorize one client frame, returning the denial to report, one its check already reported, the access groups
+    a model the frame names was granted through, or ``None`` to let it through.
 
     A websocket passthrough authenticates before any frame arrives, so a protocol that names its model
     inside a frame has no model to authorize at connect time. The frame, not the extracted model, is the
     argument because where a model sits is part of each provider's wire protocol
     """
 
-    async def __call__(self, frame_data: str | bytes, valid_token: UserAPIKeyAuth, /) -> ClientFrameRefusal | None: ...
+    async def __call__(
+        self, frame_data: str | bytes, valid_token: UserAPIKeyAuth, /
+    ) -> ClientFrameRefusal | ClientFrameGrant | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -3166,6 +3173,10 @@ class _WebsocketTurnLedger:
         self.started = started
         self.logged_turns = 0
         self.unstarted_turns = 0
+        self.frame_grant: _TurnAuthorization | None = None
+
+    def grant_frame_access_groups(self, access_groups: tuple[str, ...]) -> None:
+        self.frame_grant = _TurnAuthorization(requested_model=None, access_groups=access_groups)
 
     def current(self, lane: str | None) -> _TurnAuthorization:
         oldest: Final = next(iter(self.queued_turns.get(lane, ())), None)
@@ -3250,18 +3261,18 @@ async def _relay_client_frame(
     upstream reader finish first, which cancels this task mid-close and loses the denial. A model gate's refusal is
     answered in band with the error event its protocol carries
     """
-    frame_refusal: Final = None if frame_gate is None else await frame_gate(checked_frame, valid_token)
-    if frame_refusal is not None:
-        return frame_refusal
+    frame_verdict: Final = None if frame_gate is None else await frame_gate(checked_frame, valid_token)
+    if frame_verdict is not None and not isinstance(frame_verdict, ClientFrameGrant):
+        return frame_verdict
     verdict: Final = await _client_frame_verdict(websocket, checked_frame, model_gate)
-    match verdict:
-        case _RefuseClientFrame(refusal=refusal):
-            await refuse_websocket(websocket, refusal)
-        case _ForwardClientFrame(starts_turn=True, turn=turn, lane=lane):
-            ledger.queue_turn(lane, turn)
-            await upstream_ws.send(forwarded_frame)
-        case _ForwardClientFrame():
-            await upstream_ws.send(forwarded_frame)
+    if isinstance(verdict, _RefuseClientFrame):
+        await refuse_websocket(websocket, verdict.refusal)
+        return verdict
+    if verdict.starts_turn:
+        ledger.queue_turn(verdict.lane, verdict.turn)
+    if isinstance(frame_verdict, ClientFrameGrant):
+        ledger.grant_frame_access_groups(frame_verdict.access_groups)
+    await upstream_ws.send(forwarded_frame)
     return verdict
 
 
@@ -3525,6 +3536,8 @@ async def websocket_passthrough_request(
         }
         if client_frame_model_gate is not None:
             _stamp_billed_turn(call_kwargs, ledger.current(lane))
+        elif ledger.frame_grant is not None:
+            _stamp_billed_turn(call_kwargs, ledger.frame_grant)
         success_kwargs: Final = {
             key: value for key, value in call_kwargs.items() if key not in _EXPLICIT_SUCCESS_KWARGS
         }
