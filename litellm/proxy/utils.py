@@ -1987,6 +1987,7 @@ def _failure_fields_to_lift(
         ("combined_usage_object", None if _usage_to_lift is None else _usage_to_lift[0]),
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
+        ("agent_id", _logging_obj.a2a_agent_id if isinstance(_logging_obj, Logging) else None),
         ("billed_failed_attempts", _earlier_attempts or None),
         ("_accounting_pricing_snapshot", _model_call_details.get("_accounting_pricing_snapshot")),
         ("_accounting_finalized_cost", _logging_obj.finalized_cost if isinstance(_logging_obj, Logging) else None),
