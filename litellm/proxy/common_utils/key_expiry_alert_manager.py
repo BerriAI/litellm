@@ -8,21 +8,23 @@ from typing import Final, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._internal_context import with_service_target
-from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.constants import (
     KEY_EXPIRY_ALERT_JOB_NAME,
     KEY_EXPIRY_ALERT_MAX_DAYS,
     LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS,
 )
 from litellm.proxy.common_utils.key_expiry_alerts import key_expiry_alert_days
-from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET, PodLockManager
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.integrations.key_expiring_email import VIRTUAL_KEY_EXPIRING_EMAIL_EVENT
 
 _METADATA: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _ROWS: Final = TypeAdapter(tuple[object, ...])
+# Redis family for the per-key send claims, named for the data like base_email's budget_alert_claims.
+_KEY_EXPIRY_ALERT_CLAIMS_TARGET: Final = "key_expiry_alert_claims"
 _EXPIRING_KEYS_SQL: Final = """
 SELECT token, key_alias, key_name, user_id, expires, metadata
 FROM "LiteLLM_VerificationToken"
@@ -76,6 +78,10 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _no_global_default() -> int | None:
+    return None
+
+
 class KeyExpiryAlertManager:
     def __init__(
         self,
@@ -83,7 +89,7 @@ class KeyExpiryAlertManager:
         cache: ExpiryAlertCache,
         email_logger: KeyExpiryEmailLogger,
         clock: Callable[[], datetime] = utc_now,
-        default_days: int | None = None,
+        default_days: Callable[[], int | None] = _no_global_default,
         pod_lock_manager: PodLockManager | None = None,
     ) -> None:
         self.prisma_client = prisma_client
@@ -93,7 +99,6 @@ class KeyExpiryAlertManager:
         self.clock = clock
         self.pod_lock_manager = pod_lock_manager
 
-    @with_service_target("key_expiry_alerts")
     async def process_alerts(self) -> None:
         """Entry point for the scheduled job: one pod runs it per clock window of one interval. Pods' timers fire at
         their own boot time plus jitter, so the lock is named after the window the run falls in (the same
@@ -119,19 +124,31 @@ class KeyExpiryAlertManager:
                 await lock.release_lock(cronjob_id=window_job)
                 raise
             return
-        try:
-            holder: Final = await lock.redis_cache.async_get_cache(  # pyright: ignore[reportUnknownMemberType]  # RedisCache.async_get_cache leaves its key parameter untyped
-                PodLockManager.get_redis_lock_key(window_job)
-            )
-        except RedisCircuitBreakerOpenError:
-            logger.warning("Key expiry alerts: Redis circuit breaker is open, running without the job lock.")
-            await self._send_due_alerts()
-            return
-        if holder is not None:
+        if await self._window_is_held(lock, window_job):
             logger.debug("Key expiry alerts: another pod already ran this window, skipping.")
             return
-        logger.warning("Key expiry alerts: could not take the job lock from Redis, running without it.")
         await self._send_due_alerts()
+
+    @with_service_target(POD_LOCK_TARGET)
+    async def _window_is_held(self, lock: PodLockManager, window_job: str) -> bool:
+        """True only when the window lock is readable and someone holds it, as reset_budget_job's _lease_is_held.
+
+        An unreadable lock (including an open circuit breaker) reports as unheld so this pod runs rather than
+        skipping; being wrong here costs a duplicate scan that the per-key claim keeps from emailing twice, and the
+        alternative can let a key expire unwarned.
+        """
+        if lock.redis_cache is None:
+            return False
+        try:
+            return (
+                await lock.redis_cache.async_get_cache(  # pyright: ignore[reportUnknownMemberType]  # RedisCache.async_get_cache leaves its key parameter untyped
+                    PodLockManager.get_redis_lock_key(window_job)
+                )
+                is not None
+            )
+        except Exception as exc:  # noqa: BLE001  # an unreadable lock must not skip the window
+            logger.warning("Key expiry alerts: could not read the job lock, running without it: %s", exc)
+            return False
 
     async def _send_due_alerts(self) -> None:
         try:
@@ -142,15 +159,16 @@ class KeyExpiryAlertManager:
             logger.debug("Enterprise package not installed, skipping key expiry alerts")
             return
 
-        if not (await get_email_settings(self.prisma_client)).get("Virtual Key Expiring", True):  # pyright: ignore[reportUnknownMemberType]  # litellm_enterprise is absent from the type-check venv
+        if not (await get_email_settings(self.prisma_client)).get(VIRTUAL_KEY_EXPIRING_EMAIL_EVENT, False):  # pyright: ignore[reportUnknownMemberType]  # litellm_enterprise is absent from the type-check venv
             return
+        default_days: Final = self.default_days()
         now: Final = self.clock().astimezone(timezone.utc)
         rows: Final = _ROWS.validate_python(
             await self.prisma_client.db.query_raw(
                 _EXPIRING_KEYS_SQL,
                 now,
                 now + timedelta(days=KEY_EXPIRY_ALERT_MAX_DAYS),
-                now + timedelta(days=self.default_days or 0),
+                now + timedelta(days=default_days or 0),
             )
         )
         keys: Final = tuple(key for row in rows if (key := _key_or_none(row)) is not None)
@@ -161,12 +179,14 @@ class KeyExpiryAlertManager:
         owner_emails: Final = {owner.user_id: owner.user_email for owner in owners if owner.user_email}
         for key in keys:
             try:
-                await self._process_key(key, now, owner_emails)
+                await self._process_key(key, now, owner_emails, default_days)
             except Exception:
                 logger.exception("Failed to process a key expiry alert")
 
-    @with_service_target("key_expiry_alerts")
-    async def _process_key(self, key: _ExpiryAlertKey, now: datetime, owner_emails: Mapping[str, str]) -> None:
+    @with_service_target(_KEY_EXPIRY_ALERT_CLAIMS_TARGET)
+    async def _process_key(
+        self, key: _ExpiryAlertKey, now: datetime, owner_emails: Mapping[str, str], default_days: int | None
+    ) -> None:
         if not key.user_id or key.expires is None:
             return
         expires: Final = key.expires.replace(tzinfo=timezone.utc) if key.expires.tzinfo is None else key.expires
@@ -177,7 +197,7 @@ class KeyExpiryAlertManager:
         days: Final = (
             key_expiry_alert_days(metadata["key_expiry_alert_days"])
             if "key_expiry_alert_days" in metadata
-            else self.default_days
+            else default_days
         )
         if days is None or remaining > timedelta(days=days):
             return

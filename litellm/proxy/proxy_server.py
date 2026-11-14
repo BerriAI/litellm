@@ -12382,20 +12382,7 @@ class ProxyStartupEvent:
                 KeyExpiryAlertManager,
                 KeyExpiryEmailLogger,
             )
-            from litellm.proxy.common_utils.key_expiry_alerts import (
-                KEY_EXPIRY_ALERT_DAYS_ERROR,
-                key_expiry_alert_days,
-            )
-
-            configured_expiry_days: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings).get(
-                "key_expiry_alert_days"
-            )
-            default_expiry_days: Final = key_expiry_alert_days(configured_expiry_days)
-            if configured_expiry_days is not None and default_expiry_days is None:
-                verbose_proxy_logger.error(
-                    "Key expiry alerts not scheduled: general_settings.%s", KEY_EXPIRY_ALERT_DAYS_ERROR
-                )
-                return None
+            from litellm.proxy.common_utils.key_expiry_alerts import configured_key_expiry_alert_days
 
             expiry_email_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
                 callback_type=BaseEmailLogger  # pyright: ignore[reportUnknownArgumentType]  # litellm_enterprise is absent from the type-check venv
@@ -12413,7 +12400,8 @@ class ProxyStartupEvent:
                 prisma_client=prisma_client,
                 cache=proxy_logging_obj.internal_usage_cache.dual_cache,
                 email_logger=expiry_email_logger,
-                default_days=default_expiry_days,
+                # read each run, like the performance alert and spend capture jobs, so a UI edit applies live
+                default_days=lambda: configured_key_expiry_alert_days(_current_general_settings()),
                 pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
             )
         except Exception:  # noqa: BLE001  # a setup failure must not stop later background jobs registering

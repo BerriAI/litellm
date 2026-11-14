@@ -102,6 +102,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     persist_deleted_verification_tokens,
     prepare_key_update_data,
     prepare_metadata_fields,
+    raise_on_invalid_key_expiry_alert_days,
     raise_on_invalid_key_logging_config,
     raise_on_logging_credential_change,
     reset_key_spend_fn,
@@ -24627,14 +24628,14 @@ def test_user_new_without_a_key_does_not_check_guardrail_names(spend_permission_
 
 @pytest.mark.parametrize("value", [1, 7, KEY_EXPIRY_ALERT_MAX_DAYS])
 def test_key_expiry_metadata_accepts_day_counts(value: int) -> None:
-    assert raise_on_invalid_key_logging_config({"key_expiry_alert_days": value}) is None
-    assert raise_on_invalid_key_logging_config({}) is None
+    assert raise_on_invalid_key_expiry_alert_days({"key_expiry_alert_days": value}) is None
+    assert raise_on_invalid_key_expiry_alert_days({}) is None
 
 
 @pytest.mark.parametrize("value", [None, "7", True, 7.0, {}, [], [7], [7, 1], 0, -1, KEY_EXPIRY_ALERT_MAX_DAYS + 1])
 def test_key_expiry_metadata_rejects_invalid_thresholds(value: object) -> None:
     with pytest.raises(HTTPException) as exc:
-        raise_on_invalid_key_logging_config({"key_expiry_alert_days": value})
+        raise_on_invalid_key_expiry_alert_days({"key_expiry_alert_days": value})
     assert exc.value.status_code == 400
     assert "key_expiry_alert_days" in str(exc.value.detail)
 

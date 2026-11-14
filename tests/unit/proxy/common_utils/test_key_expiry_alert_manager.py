@@ -36,6 +36,9 @@ def _key(**updates: object) -> dict[str, object]:
     }
 
 
+_EXPIRING_EMAILS_ON: Final = SimpleNamespace(param_value=json.dumps({"email_settings": {"Virtual Key Expiring": True}}))
+
+
 def _database(keys: tuple[dict[str, object], ...], email: str | None = "owner@example.com") -> SimpleNamespace:
     return SimpleNamespace(
         db=SimpleNamespace(
@@ -43,7 +46,7 @@ def _database(keys: tuple[dict[str, object], ...], email: str | None = "owner@ex
             litellm_usertable=SimpleNamespace(
                 find_many=AsyncMock(return_value=(SimpleNamespace(user_id="owner", user_email=email),))
             ),
-            litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
+            litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=_EXPIRING_EMAILS_ON)),
         )
     )
 
@@ -175,7 +178,7 @@ async def test_key_metadata_overrides_global_default(
 ) -> None:
     db: Final = _database((_key(metadata=json.dumps(metadata)),))
     email: Final = MagicMock(send_key_expiring_email=AsyncMock())
-    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW, default_days).process_alerts()
+    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW, lambda: default_days).process_alerts()
     assert email.send_key_expiring_email.await_count == int(sends)
 
 
@@ -187,7 +190,7 @@ async def test_key_created_without_metadata_follows_global_default(
 ) -> None:
     db: Final = _database((_key(metadata=stored_metadata),))
     email: Final = MagicMock(send_key_expiring_email=AsyncMock())
-    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW, default_days).process_alerts()
+    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW, lambda: default_days).process_alerts()
     assert email.send_key_expiring_email.await_count == sends
 
 
@@ -325,7 +328,7 @@ async def test_without_redis_the_job_runs_unlocked() -> None:
 async def test_global_default_widens_query_to_keys_without_metadata() -> None:
     db: Final = _database(())
     email: Final = MagicMock(send_key_expiring_email=AsyncMock())
-    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW, 7).process_alerts()
+    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW, lambda: 7).process_alerts()
     assert db.db.query_raw.call_args.args[3] == NOW + timedelta(days=7)
 
 
@@ -347,6 +350,16 @@ async def test_ineligible_keys_do_not_send(updates: dict[str, object]) -> None:
     manager: Final = KeyExpiryAlertManager(_database((_key(**updates),)), DualCache(), email, lambda: NOW)
     await manager.process_alerts()
     assert email.send_key_expiring_email.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_expiring_email_event_is_off_until_an_admin_turns_it_on() -> None:
+    db: Final = _database((_key(),))
+    db.db.litellm_config.find_unique.return_value = None
+    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
+    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW, lambda: 7).process_alerts()
+    db.db.query_raw.assert_not_awaited()
+    email.send_key_expiring_email.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -446,11 +459,44 @@ async def test_startup_built_job_waits_for_the_proxy_pod_lock_then_scans_with_th
 
 
 @pytest.mark.parametrize("value", [0, [7], "7"])
-def test_startup_skips_expiry_job_for_invalid_global_default(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
+@pytest.mark.asyncio
+async def test_invalid_global_default_is_logged_and_ignored_each_run(
+    monkeypatch: pytest.MonkeyPatch, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import ProxyStartupEvent
 
     _email_enabled_proxy(monkeypatch, {"key_expiry_alert_days": value})
-    assert ProxyStartupEvent._build_key_expiry_alert_manager() is None
+    db: Final = _database(())
+    monkeypatch.setattr(proxy_server, "prisma_client", db)
+    monkeypatch.setattr(proxy_server.proxy_logging_obj.db_spend_update_writer, "pod_lock_manager", None)
+    manager: Final = ProxyStartupEvent._build_key_expiry_alert_manager()
+    assert manager is not None
+    manager.clock = lambda: NOW
+    with caplog.at_level("ERROR"):
+        await manager.process_alerts()
+    _, start, _, default_end = db.db.query_raw.call_args.args
+    assert default_end == start
+    assert "general_settings.key_expiry_alert_days must be an integer between 1 and 365" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_general_settings_edit_applies_without_a_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    _email_enabled_proxy(monkeypatch, {"key_expiry_alert_days": 7})
+    db: Final = _database(())
+    monkeypatch.setattr(proxy_server, "prisma_client", db)
+    monkeypatch.setattr(proxy_server.proxy_logging_obj.db_spend_update_writer, "pod_lock_manager", None)
+    manager: Final = ProxyStartupEvent._build_key_expiry_alert_manager()
+    assert manager is not None
+    manager.clock = lambda: NOW
+    await manager.process_alerts()
+    monkeypatch.setattr(proxy_server, "general_settings", {"alerting": ["email"], "key_expiry_alert_days": 3})
+    await manager.process_alerts()
+    windows: Final = tuple(call.args[3] - call.args[1] for call in db.db.query_raw.await_args_list)
+    assert windows == (timedelta(days=7), timedelta(days=3))
 
 
 def test_startup_expiry_setup_failure_returns_none_instead_of_raising(monkeypatch: pytest.MonkeyPatch) -> None:
