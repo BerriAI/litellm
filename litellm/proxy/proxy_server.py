@@ -8200,19 +8200,20 @@ class ProxyConfig:
         router_model_ids: Final = registry.names(kind="ids")
         # Check for model IDs in llm_router not present in combined_id_list and delete them
 
-        kept_config_ids: Final[frozenset[str]] = (
-            frozenset(
-                model_id
-                for model_id in router_model_ids
-                if (deployment := registry.deployment(model_id)) is not None and deployment.model_info.db_model is False
-            )
-            if model_list is None
-            else frozenset()
+        config_model_names: Final[frozenset[str]] = frozenset(model.get("model_name") for model in model_list or ())
+        kept_config_ids: Final[frozenset[str]] = frozenset(
+            model_id
+            for model_id in router_model_ids
+            if model_id not in combined_id_list
+            and (deployment := registry.deployment(model_id)) is not None
+            and deployment.model_info.db_model is False
+            and (model_list is None or deployment.model_name in config_model_names)
         )
         if kept_config_ids:
             verbose_proxy_logger.warning(
-                "Config read in _delete_deployment returned no model_list. "
-                "Keeping %d config-defined deployments to avoid removing valid models.",
+                "Keeping %d config-defined deployments that the config read in _delete_deployment no longer "
+                "matches by id, because it has no model_list or still lists their model_name. "
+                "Config changes to them apply on restart.",
                 len(kept_config_ids),
             )
 

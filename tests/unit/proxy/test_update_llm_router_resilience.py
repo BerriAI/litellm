@@ -8,10 +8,15 @@ router, because the exception propagated up and was caught by the
 catch-all handler in _update_llm_router.
 """
 
-import pytest
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from litellm import Router
 from litellm.proxy.proxy_server import ProxyConfig
+from litellm.router_api import deployment_id
+from litellm.types.router import RouterGeneralSettings
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -412,3 +417,85 @@ class TestDeleteDeploymentKeepsConfigModelsOnEmptyConfigRead:
 
         assert router.get_model_ids() == []
         assert result == frozenset()
+
+
+class TestDeleteDeploymentKeepsEditedConfigModels:
+    @staticmethod
+    def _router(model_list: list[dict[str, object]]) -> Router:
+        return Router(
+            model_list=model_list,
+            router_general_settings=RouterGeneralSettings(async_only_mode=True),
+        )
+
+    @staticmethod
+    def _served(router: Router, model_name: str) -> frozenset[tuple[str, int | None]]:
+        return frozenset(
+            (d["model_info"]["id"], d["litellm_params"].get("max_retries"))
+            for d in router.registry().deployments(model_name) or ()
+        )
+
+    @staticmethod
+    async def _reconcile(router: Router, config_file_path: str) -> frozenset[str] | None:
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.user_config_file_path", config_file_path),
+        ):
+            return await ProxyConfig()._delete_deployment(db_models=[])
+
+    @pytest.mark.asyncio
+    async def test_edited_config_model_keeps_serving_old_params_while_removed_and_db_models_evict(self, tmp_path):
+        config_file_path: Final = str(tmp_path / "config.yaml")
+        (tmp_path / "config.yaml").write_text(
+            "model_list:\n"
+            "  - model_name: config-model\n"
+            "    litellm_params:\n"
+            "      model: gpt-4o-mini\n"
+            "      max_retries: 2\n"
+        )
+        router: Final = self._router(
+            [
+                {"model_name": "config-model", "litellm_params": {"model": "gpt-4o-mini", "max_retries": 1}},
+                {"model_name": "removed-model", "litellm_params": {"model": "gpt-4o-mini"}},
+                {
+                    "model_name": "config-model",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": "db-model-1", "db_model": True},
+                },
+            ]
+        )
+        (held_id,) = tuple(
+            d["model_info"]["id"]
+            for d in router.registry().deployments("config-model") or ()
+            if d["model_info"]["id"] != "db-model-1"
+        )
+
+        result: Final = await self._reconcile(router, config_file_path)
+
+        assert self._served(router, "config-model") == frozenset({(held_id, 1)})
+        assert frozenset(router.registry().names(kind="ids")) == frozenset({held_id})
+        assert result == frozenset(
+            {
+                held_id,
+                deployment_id(model_group="config-model", litellm_params={"model": "gpt-4o-mini", "max_retries": 2}),
+            }
+        )
+
+    @pytest.mark.asyncio
+    async def test_member_removed_from_a_still_listed_group_keeps_serving_until_restart(self, tmp_path):
+        config_file_path: Final = str(tmp_path / "config.yaml")
+        (tmp_path / "config.yaml").write_text(
+            "model_list:\n  - model_name: shared-group\n    litellm_params:\n      model: gpt-4o-mini\n"
+        )
+        router: Final = self._router(
+            [
+                {"model_name": "shared-group", "litellm_params": {"model": "gpt-4o-mini"}},
+                {"model_name": "shared-group", "litellm_params": {"model": "gpt-4o"}},
+            ]
+        )
+        held_ids: Final = frozenset(router.registry().names(kind="ids"))
+
+        result: Final = await self._reconcile(router, config_file_path)
+
+        assert len(held_ids) == 2
+        assert frozenset(router.registry().names(kind="ids")) == held_ids
+        assert result == held_ids
