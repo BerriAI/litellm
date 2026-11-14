@@ -11806,3 +11806,30 @@ def test_a_currency_and_rate_edit_is_stored_readable_beside_encrypted_credential
     assert params["api_key"] != "sk-upstream"
     rebuilt: Final = Deployment(model_name="huf-model", litellm_params=params)  # pyright: ignore[reportArgumentType]  # a stored row
     assert rebuilt.litellm_params.input_cost_per_token == pytest.approx(0.0008 * 1.10, rel=1e-15)
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [{"litellm_params": {"input_cost_per_token": True}}, {"model_info": {"output_cost_per_second": True}}],
+    ids=["litellm_params", "model_info"],
+)
+def test_a_boolean_price_on_a_currency_priced_model_is_refused_without_repeating_the_currency(patch):
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    with pytest.raises(HTTPException) as raised:
+        update_db_model(db_model=_huf_db_model(), updated_patch=updateDeployment.model_validate(patch))
+    assert raised.value.status_code == 400
+    assert "got a boolean" in str(raised.value.detail)
+
+
+def test_a_boolean_price_on_a_usd_model_keeps_the_legacy_coercion():
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    params, _ = _stored(
+        update_db_model(
+            db_model=Deployment(model_name="usd-model", litellm_params=LiteLLM_Params(model="openai/usd")),
+            updated_patch=updateDeployment.model_validate({"litellm_params": {"input_cost_per_token": True}}),
+        )
+    )
+
+    assert params["input_cost_per_token"] == 1.0

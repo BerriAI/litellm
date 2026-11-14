@@ -29,7 +29,7 @@ docker compose --profile seed run --rm seed
 
 `generate-env.sh` writes demo-only random keys to `.env`, which git ignores. The gateway listens on `127.0.0.1:4000` only (set `DEMO_PORT` to change it), and PostgreSQL, Redis and the mock are not published at all. Startup makes no model calls and opening the UI makes none either
 
-The seed script creates the three API deployments, a key `demo-currency-budget-key` with a $0.03 USD budget, a key `demo-currency-pricing-key` without a budget, and six synthetic requests on the budget key that spend $0.02528. It is safe to rerun. Models and keys are created only when missing, and each request is recorded on the budget key right after it is answered, so a rerun sends only the requests not yet recorded. To start over, use the cleanup below
+The seed script creates the three API deployments, a key `demo-currency-budget-key` with a $0.03 USD budget, a key `demo-currency-pricing-key` without a budget, and six synthetic requests on the budget key that spend $0.02528. Rerunning it after a successful run creates nothing and sends nothing. Models and keys are created only when missing, and each request is recorded on the budget key right after it is answered, so a rerun after a failure sends only the requests not yet recorded. If the seed stops between a request and its record, that one request is sent again on the next run and the budget key ends up $0.004 or $0.00432 higher than the walkthrough says. To get back to the exact figures, run the cleanup below and start again, which only touches this demo's own containers, volume and image
 
 The image is built with the CI Rust profile by default, the same one the verification used. Set `DEMO_MATURIN_PEP517_ARGS=""` before `docker compose up --build` for the release profile
 
@@ -68,7 +68,7 @@ docker image rm litellm-pricing-currency-demo:local
 rm .env
 ```
 
-This removes only this project's containers and network, its `litellm-pricing-currency-demo-postgres` volume, which is labeled disposable, and the locally built demo image. Docker's build cache is kept, and `docker builder prune` clears it if you want the space back
+This removes only this project's containers and network, its `litellm-pricing-currency-demo-postgres` volume, which is labeled disposable, and the locally built demo image. Docker's shared build cache is left as it is, since other builds on the machine use it too
 
 ## Configuring currency on your own deployments
 

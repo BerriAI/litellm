@@ -472,6 +472,16 @@ def pricing_configuration_error(litellm_params: Mapping[str, object], model_info
     return normalized.message if isinstance(normalized, PricingCurrencyError) else None
 
 
+def boolean_price_error(
+    boolean_prices: frozenset[str], litellm_params: Mapping[str, object], model_info: Mapping[str, object]
+) -> str | None:
+    """A float field reads ``true`` as 1.0, so prices sent as booleans are refused on a deployment with a currency,
+    whichever section sets the currency. Deployments without one keep the coercion they always had."""
+    if not boolean_prices or not configures_pricing_currency(litellm_params, model_info):
+        return None
+    return f"prices must be numbers, got a boolean for {', '.join(sorted(boolean_prices))}"
+
+
 def request_pricing_currency_error(kwargs: Mapping[str, object]) -> str | None:
     """Request-level custom prices are USD. A call that names another currency is refused rather than billed as if
     its prices were USD."""

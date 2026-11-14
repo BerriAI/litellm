@@ -72,7 +72,12 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
-from litellm.litellm_core_utils.pricing_currency import PRICING_SOURCE, frozen_pricing_snapshot, pricing_source_of
+from litellm.litellm_core_utils.pricing_currency import (
+    PRICING_SOURCE,
+    frozen_pricing_snapshot,
+    pricing_configuration_error,
+    pricing_source_of,
+)
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     declares_ptu,
@@ -1221,6 +1226,9 @@ class HostRegistry(HostModelInfo):
         access_windows_error: Final = access_windows_config_error(model_info, model_name=model_name)
         if access_windows_error is not None:
             raise ValueError(access_windows_error)
+        pricing_error: Final = pricing_configuration_error(litellm_params, model_info)
+        if pricing_error is not None:
+            raise ValueError(f"Invalid pricing for model '{model_name}': {pricing_error}")
         capacity_warning: Final = (
             ptu_capacity_warning(
                 model_name, MappingProxyType({"model_info": model_info, "litellm_params": litellm_params})

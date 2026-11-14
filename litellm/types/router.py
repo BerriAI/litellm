@@ -31,7 +31,11 @@ from pydantic import (
     ConfigDict,
     Field,
     JsonValue,
+    ModelWrapValidatorHandler,
+    PrivateAttr,
+    StrictFloat,
     StrictInt,
+    StrictStr,
     ValidationError,
     ValidationInfo,
     ValidatorFunctionWrapHandler,
@@ -44,7 +48,7 @@ from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_c
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from litellm.litellm_core_utils.pricing_currency import (
     PricingCurrencyError,
     needs_pricing_normalization,
@@ -68,18 +72,18 @@ from .utils import (
     API_KEY_SECRET_REFERENCE_REJECTION as _API_KEY_SECRET_REFERENCE_REJECTION,
 )
 from .utils import (
-    OIDC_SECRET_REFERENCE_PREFIX as _OIDC_SECRET_REFERENCE_PREFIX,
-)
-from .utils import (
-    AdminApiKeySecretReference as _AdminApiKeySecretReference,
-)
-from .utils import (
+    MONETARY_PRICING_FIELDS,
     CooldownDeploymentInfo,
     CustomPricingLiteLLMParams,
     MirroredPricingParams,
     ModelResponse,
-    PricingCurrencyParams,
     StandardLoggingRoutingDecision,
+)
+from .utils import (
+    OIDC_SECRET_REFERENCE_PREFIX as _OIDC_SECRET_REFERENCE_PREFIX,
+)
+from .utils import (
+    AdminApiKeySecretReference as _AdminApiKeySecretReference,
 )
 from .utils import (
     github_copilot_oauth_litellm_params as _github_copilot_oauth_litellm_params,
@@ -301,7 +305,7 @@ def _whole_float_as_int(value: object) -> object:
     return int(value) if isinstance(value, float) and value.is_integer() else value
 
 
-class ModelInfo(MirroredPricingParams, PricingCurrencyParams):
+class ModelInfo(MirroredPricingParams):
     enforce_supported_endpoints: bool | None = None
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
@@ -313,6 +317,9 @@ class ModelInfo(MirroredPricingParams, PricingCurrencyParams):
 
     base_model: str | None = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     pricing_provider: str | None = None  # provider whose cost-map rows price this deployment, else custom_llm_provider
+    pricing_currency: StrictStr | None = None
+    usd_per_currency_unit: StrictFloat | StrictInt | StrictStr | None = None
+    _boolean_prices: frozenset[str] = PrivateAttr(default_factory=frozenset)
     tier: Literal["free", "paid"] | None = None
 
     """
@@ -391,6 +398,17 @@ class ModelInfo(MirroredPricingParams, PricingCurrencyParams):
         if start is not None and end is not None and end <= start:
             raise ValueError("ptu_effective_to must be after ptu_effective_from")
         return self
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _record_boolean_prices(cls, data: object, handler: ModelWrapValidatorHandler["ModelInfo"]) -> "ModelInfo":
+        validated: Final = handler(data)
+        validated._boolean_prices = boolean_price_fields(data)
+        return validated
+
+    @property
+    def boolean_prices(self) -> frozenset[str]:
+        return self._boolean_prices
 
     model_config = ConfigDict(extra="allow")
 
@@ -599,7 +617,7 @@ def parse_daily_reset_time(value: str | None) -> datetime.timedelta:
     return datetime.timedelta(hours=parsed.hour, minutes=parsed.minute)
 
 
-class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams, PricingCurrencyParams):
+class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
     LiteLLM Params without 'model' arg (used across completion / assistants api)
     """
@@ -609,6 +627,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams, 
         def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: provider parameters vary by deployment
 
     custom_llm_provider: str | None = None
+    pricing_currency: StrictStr | None = None
+    usd_per_currency_unit: StrictFloat | StrictInt | StrictStr | None = None
+    _boolean_prices: frozenset[str] = PrivateAttr(default_factory=frozenset)
     responses_api_version: str | None = None
     tpm: int | None = None
     rpm: int | None = None
@@ -628,6 +649,20 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams, 
     organization: str | None = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     litellm_credential_name: str | None = None
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _record_boolean_prices(
+        cls, data: object, handler: ModelWrapValidatorHandler["GenericLiteLLMParams"]
+    ) -> "GenericLiteLLMParams":
+        validated: Final = handler(data)
+        validated._boolean_prices = boolean_price_fields(data)
+        return validated
+
+    @property
+    def boolean_prices(self) -> frozenset[str]:
+        return self._boolean_prices
+
     provider_affinity_header: str | None = None
 
     ## LOGGING PARAMS ##
@@ -919,6 +954,16 @@ class DeploymentTypedDict(TypedDict, total=False):
 
 
 SPECIAL_MODEL_INFO_PARAMS = tuple(MirroredPricingParams.model_fields)
+
+
+def boolean_price_fields(data: object) -> frozenset[str]:
+    """Price fields given as booleans, read before validation turns ``true`` into 1.0."""
+    section: Final = as_str_mapping(data)
+    if section is None:
+        return frozenset()
+    return frozenset(
+        field for field, value in section.items() if isinstance(value, bool) and field in MONETARY_PRICING_FIELDS
+    )
 
 
 def _usd_priced(

@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.pricing_currency import (
     USD_PRICING,
     NormalizedPricing,
     PricingCurrencyError,
+    boolean_price_error,
     frozen_pricing_snapshot,
     normalize_deployment_pricing,
     pricing_configuration_error,
@@ -379,24 +380,38 @@ def test_prices_in_both_sections_keep_litellm_params_precedence() -> None:
     )
 
 
-@pytest.mark.parametrize("section", [LiteLLM_Params, ModelInfo])
-def test_a_boolean_price_beside_a_currency_is_refused_before_float_coercion(section: type[pydantic.BaseModel]) -> None:
-    with pytest.raises(pydantic.ValidationError, match="got a boolean for input_cost_per_token"):
-        section.model_validate(
-            {
-                "id": "x",
-                "model": "openai/currency-demo",
-                "pricing_currency": "EUR",
-                "usd_per_currency_unit": 1.1,
-                "input_cost_per_token": True,
-            }
+@pytest.mark.parametrize(
+    ("litellm_params", "model_info"),
+    [
+        ({"pricing_currency": "EUR", "usd_per_currency_unit": 1.1, "input_cost_per_token": True}, {}),
+        ({"input_cost_per_token": True}, {"pricing_currency": "EUR", "usd_per_currency_unit": 1.1}),
+        ({"pricing_currency": "EUR", "usd_per_currency_unit": 1.1}, {"output_cost_per_token": True}),
+    ],
+    ids=["same-section", "currency-in-model-info", "price-in-model-info"],
+)
+def test_a_boolean_price_on_a_currency_deployment_is_refused_whichever_section_holds_it(
+    litellm_params: dict[str, object], model_info: dict[str, object]
+) -> None:
+    params: Final = LiteLLM_Params.model_validate({"model": "openai/m", **litellm_params})
+    info: Final = ModelInfo.model_validate({"id": "x", **model_info})
+    error: Final = boolean_price_error(params.boolean_prices | info.boolean_prices, litellm_params, model_info)
+    assert error is not None and "got a boolean" in error
+    with pytest.raises(ValueError, match="must be a finite, non-negative number"):
+        Router(
+            model_list=[
+                {
+                    "model_name": "g",
+                    "litellm_params": {"model": "openai/currency-demo", "api_key": "sk-test", **litellm_params},
+                    "model_info": model_info,
+                }
+            ]
         )
 
 
 def test_a_boolean_price_without_a_currency_keeps_the_legacy_coercion() -> None:
-    assert (
-        LiteLLM_Params.model_validate({"model": "openai/m", "input_cost_per_token": True}).input_cost_per_token == 1.0
-    )
+    params: Final = LiteLLM_Params.model_validate({"model": "openai/m", "input_cost_per_token": True})
+    assert params.input_cost_per_token == 1.0
+    assert boolean_price_error(params.boolean_prices, {"input_cost_per_token": True}, {}) is None
 
 
 @pytest.mark.parametrize("rate", [True, ["0.5"]])

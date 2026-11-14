@@ -419,9 +419,9 @@ from litellm.types.utils import (
     CAPTURE_MESSAGE_CONTENT_VAR,
     EXCLUDED_SERVICES_VAR,
     OTEL_DESTINATION_VARS,
+    PRICING_CURRENCY_SETTINGS,
     CustomPricingLiteLLMParams,
     LlmProviders,
-    PricingCurrencyParams,
     ProviderSpecificHeader,
     StandardCallbackDynamicParams,
     StandardLoggingUserAPIKeyMetadata,
@@ -616,9 +616,7 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_mess
 # fields are covered automatically. ``base_model`` selects which cost-map entry
 # prices the row, so a caller naming a cheaper model lowers their own spend.
 _CLIENT_PRICING_CONTROL_FIELDS: Final = (
-    frozenset(CustomPricingLiteLLMParams.model_fields.keys())
-    | frozenset(PricingCurrencyParams.model_fields)
-    | {"base_model"}
+    frozenset(CustomPricingLiteLLMParams.model_fields.keys()) | frozenset(PRICING_CURRENCY_SETTINGS) | {"base_model"}
 )
 # ``model_info`` carries the same pricing fields when read by
 # ``use_custom_pricing_for_model``; strip from metadata for the same reason.

@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.pricing_currency import (
     CURRENCY_FIELDS,
     PRICING_CURRENCY,
     USD_PER_CURRENCY_UNIT,
+    boolean_price_error,
     configures_pricing_currency,
     pricing_configuration_error,
     source_currency_view,
@@ -1611,7 +1612,15 @@ def update_db_model(
             merged_model_info.pop(field, None)
 
     _validate_ptu_model_info(merged_model_info)
-    pricing_error: Final = pricing_configuration_error(merged_litellm_params, merged_model_info)
+    sent_boolean_prices: Final = frozenset(
+        {
+            *(updated_patch.litellm_params.boolean_prices if updated_patch.litellm_params else ()),
+            *(updated_patch.model_info.boolean_prices if updated_patch.model_info else ()),
+        }
+    )
+    pricing_error: Final = boolean_price_error(
+        sent_boolean_prices, merged_litellm_params, merged_model_info
+    ) or pricing_configuration_error(merged_litellm_params, merged_model_info)
     if pricing_error is not None:
         raise HTTPException(status_code=400, detail={"error": pricing_error})
     ptu_pricing, ptu_released = _ptu_pricing_delta(
@@ -3288,9 +3297,11 @@ async def add_new_model(
                 else without_server_derived_pricing(configured_model_info)
             )
         )
-        pricing_error: Final = pricing_configuration_error(
-            configured_params, clean_model_info.model_dump(exclude_none=True)
-        )
+        pricing_error: Final = boolean_price_error(
+            model_params.litellm_params.boolean_prices | model_params.model_info.boolean_prices,
+            configured_params,
+            configured_info,
+        ) or pricing_configuration_error(configured_params, clean_model_info.model_dump(exclude_none=True))
         if pricing_error is not None:
             raise HTTPException(status_code=400, detail={"error": pricing_error})
         model_params.litellm_params = LiteLLM_Params.model_validate(
