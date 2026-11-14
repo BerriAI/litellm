@@ -348,3 +348,21 @@ async def test_sdk_embedding_rejects_non_string_batch(embedding_route: respx.Rou
             litellm.embedding(model="ollama/nomic-embed-text", input=[123], api_base="http://ollama.test")
 
     assert not embedding_route.called
+
+
+def test_ollama_embeddings_sends_extra_body_fields_at_the_documented_places(embedding_route: respx.Route) -> None:
+    response: Final = litellm.embedding(
+        model="ollama/nomic-embed-text",
+        input=["hello", "world"],
+        api_base="http://ollama.test",
+        extra_body={"truncate": False, "keep_alive": "5m", "options": {"num_ctx": 2048}},
+    )
+
+    assert json.loads(embedding_route.calls.last.request.content) == {
+        "model": "nomic-embed-text",
+        "input": ["hello", "world"],
+        "truncate": False,
+        "keep_alive": "5m",
+        "options": {"num_ctx": 2048},
+    }
+    assert response.data[0]["embedding"] == [0.1, 0.2]

@@ -9,8 +9,8 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import datetime
+import functools
 import inspect
-import json
 import sys
 import traceback
 import uuid
@@ -229,15 +229,19 @@ class StreamingLogBuilder(Protocol):
 
 
 class DeploymentHook(Protocol):
-    def __call__(self, kwargs: dict[str, object], call_type: str) -> Awaitable[object]: ...
+    def __call__(self, kwargs: dict[str, object], call_type: str, *, include_v2: bool) -> Awaitable[object]: ...
 
 
 class DeploymentSuccessHook(Protocol):
-    def __call__(self, request_data: dict[str, object], response: object, call_type: object) -> Awaitable[object]: ...
+    def __call__(
+        self, request_data: dict[str, object], response: object, call_type: object, *, include_v2: bool
+    ) -> Awaitable[object]: ...
 
 
 class DeploymentFailureHook(Protocol):
-    def __call__(self, request_data: Mapping[str, object], exception: Exception, call_type: str) -> Awaitable[None]: ...
+    def __call__(
+        self, request_data: Mapping[str, object], exception: Exception, call_type: str, *, include_v2: bool
+    ) -> Awaitable[None]: ...
 
 
 def update_logging(
@@ -266,22 +270,18 @@ def pre_call(
     logger.pre_call(input=input, api_key=api_key, additional_args=additional_args)
 
 
-def messages_input(body: Mapping[str, object], kwargs: Mapping[str, object]) -> Sequence[Mapping[str, str]]:
+@functools.cache
+def _messages_handler_parameters() -> tuple[str, ...]:
     from litellm.messages import anthropic_messages_handler
 
+    return tuple(inspect.signature(anthropic_messages_handler).parameters)
+
+
+def messages_input_order(body: Mapping[str, object], kwargs: Mapping[str, object]) -> tuple[str, ...]:
     # Python's Messages handler builds its body as messages, max_tokens, model, then its own parameters in
     # signature order and the caller's other keywords in their order, and logs that body as serialized
-    order: Final = (
-        "messages",
-        "max_tokens",
-        "model",
-        *inspect.signature(anthropic_messages_handler).parameters,
-        *kwargs,
-        *body,
-    )
-    return [
-        {"role": "user", "content": json.dumps({name: body[name] for name in dict.fromkeys(order) if name in body})}
-    ]
+    order: Final = ("messages", "max_tokens", "model", *_messages_handler_parameters(), *kwargs, *body)
+    return tuple(name for name in dict.fromkeys(order) if name in body)
 
 
 def post_call(
@@ -303,9 +303,9 @@ def wire_headers(headers: Sequence[tuple[str, str]]) -> httpx.Headers:
     return httpx.Headers([(name.encode(), value.encode()) for name, value in headers])
 
 
-def _sent_request(sent: tuple[str, Mapping[str, str], Mapping[str, object]]) -> httpx.Request:
+def _sent_request(sent: tuple[str, Mapping[str, str], bytes]) -> httpx.Request:
     url, headers, body = sent
-    return httpx.Request("POST", url, headers=list(headers.items()), content=json.dumps(body, default=str).encode())
+    return httpx.Request("POST", url, headers=list(headers.items()), content=body)
 
 
 def record_response(
@@ -313,11 +313,11 @@ def record_response(
     status: int,
     headers: Sequence[tuple[str, str]],
     body: str,
-    sent: tuple[str, Mapping[str, str], Mapping[str, object]] | None,
+    streamed: bool,
+    sent: tuple[str, Mapping[str, str], bytes] | None,
 ) -> None:
     """Stores the provider response the way Python's Messages handler does, for logging to replay."""
     request: Final = None if sent is None else _sent_request(sent)
-    streamed: Final = sent is not None and sent[2].get("stream") is True
     response: Final = (
         httpx.Response(status_code=status, stream=_UnreadBody(), request=request)
         if streamed
@@ -521,7 +521,7 @@ def before_deployment_call(kwargs: dict[str, object], call_type: str) -> Awaitab
     hook: Final = cast(  # cast-ok: bounded adapter for the untyped deployment hook
         DeploymentHook, utils.async_pre_call_deployment_hook
     )
-    return hook(kwargs, call_type)
+    return hook(kwargs, call_type, include_v2=True)
 
 
 def after_deployment_success(kwargs: dict[str, object], response: object, call_type: str) -> Awaitable[object]:
@@ -532,7 +532,12 @@ def after_deployment_success(kwargs: dict[str, object], response: object, call_t
         DeploymentSuccessHook, utils.async_post_call_success_deployment_hook
     )
     typed: Final = CallTypes(call_type)
-    return hook(kwargs, _messages_stream(response) if typed == CallTypes.anthropic_messages else response, typed)
+    return hook(
+        kwargs,
+        _messages_stream(response) if typed == CallTypes.anthropic_messages else response,
+        typed,
+        include_v2=True,
+    )
 
 
 def _messages_stream(response: object) -> object:
@@ -562,7 +567,7 @@ def after_deployment_failure(kwargs: dict[str, object], error: Exception, call_t
     hook: Final = cast(  # cast-ok: bounded adapter for the untyped deployment hook
         DeploymentFailureHook, utils.async_post_call_failure_deployment_hook
     )
-    return hook(kwargs, error, call_type)
+    return hook(kwargs, error, call_type, include_v2=True)
 
 
 _STREAM_HEADERS: Final = TypeAdapter(Mapping[str, str])

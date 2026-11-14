@@ -51,6 +51,7 @@ class _UrlFetcher(Protocol):
         headers: dict[str, str] | None = None,
         follow_redirects: bool = False,
         timeout: float | httpx.Timeout | None = None,
+        max_response_bytes: int | None = None,
     ) -> httpx.Response: ...
 
 
@@ -80,10 +81,11 @@ class _FetchOptions(TypedDict, total=False):
     headers: ReadOnly[dict[str, str]]
     follow_redirects: ReadOnly[bool]
     timeout: ReadOnly[float | httpx.Timeout | None]
+    max_response_bytes: ReadOnly[int | None]
 
 
 class _AsyncFetchOptions(_FetchOptions, total=False):
-    max_response_bytes: ReadOnly[int | None]
+    pass
 
 
 # Cloud-internal IPs that ``ip.is_global`` can report as public. Everything
