@@ -123,7 +123,7 @@ def test_non_standard_dict_keys_complex():
         assert result[0]["test"] == "test"
         assert result[1] == "GCCollector"
         assert result[2]["bad_key"] == "bad_value"
-        assert result[3] == {}
+        assert result[3] == {"GCCollector": "value"}  # non-str key is now stringified, not dropped
         assert result[4]["bad_key"] == "GCCollector"
         assert result[5][0] == "GCCollector"
         assert result[5][1] == "GCCollector"
@@ -250,15 +250,93 @@ def test_pydantic_base_model():
     assert result["healthy_endpoints"][1] == {"value": 1, "label": "one"}
 
 
-def test_safe_json_structure_keeps_tuples_and_drops_non_string_keys():
+def test_tuple_dict_keys_are_stringified_not_dropped():
+    """
+    Regression for #32250.
+
+    The OTel integration stores dedup markers in
+    metadata["_otel_internal"]["spans_logged"] using tuple keys:
+
+        spans_logged[("OpenTelemetry", id(self), *scope)] = True
+
+    Previously safe_dumps silently dropped all non-str dict keys, turning
+    spans_logged into {} in the serialized spend-log payload and causing
+    unbounded growth of the in-memory spend_log_transactions queue.
+
+    Non-str keys must now be converted via str() rather than discarded.
+    """
+    spans_logged = {
+        ("OpenTelemetry", 12345, "success"): True,
+        ("OpenTelemetry", 12346, "failure"): False,
+    }
+    metadata = {
+        "_otel_internal": {
+            "spans_logged": spans_logged,
+        }
+    }
+
+    result = json.loads(safe_dumps({"metadata": metadata}))
+    serialized_spans = result["metadata"]["_otel_internal"]["spans_logged"]
+
+    # Keys must be preserved as their string representation, not silently dropped.
+    assert serialized_spans != {}, "tuple keys must not be silently dropped"
+    assert len(serialized_spans) == 2
+
+    # Values must be preserved correctly.
+    values = list(serialized_spans.values())
+    assert True in values
+    assert False in values
+
+
+def test_integer_dict_keys_are_stringified():
+    """Integer keys are valid JSON only as strings; safe_dumps must stringify them."""
+    data = {1: "one", 2: "two", "three": 3}
+    result = json.loads(safe_dumps(data))
+    assert result["1"] == "one"
+    assert result["2"] == "two"
+    assert result["three"] == 3
+
+
+def test_dict_key_with_raising_str_uses_placeholder():
+    """A hashable key whose __str__ raises must not propagate the exception."""
+
+    class RaisingKey:
+        def __hash__(self):
+            return 7
+
+        def __eq__(self, other):
+            return self is other
+
+        def __str__(self):
+            raise RuntimeError("intentional __str__ failure")
+
+    data = {RaisingKey(): "value", "normal": 1}
+    result = json.loads(safe_dumps(data))
+    assert result.get("UnserializableKey") == "value", (
+        "key whose __str__ raises should fall back to 'UnserializableKey'"
+    )
+    assert result["normal"] == 1
+
+
+def test_safe_json_structure_keeps_tuples_and_stringifies_non_string_keys():
     data = {"models": ("a", "b"), "tags": {"y", "x"}, 1: "dropped", "nested": {"deep": ("c",)}}
 
     structure = safe_json_structure(data, value_transform=lambda key, value: value.upper())
 
     assert isinstance(structure, dict)
-    assert structure == {"models": ("A", "B"), "tags": ["X", "Y"], "nested": {"deep": ("C",)}}
+    assert structure == {
+        "models": ("A", "B"),
+        "tags": ["X", "Y"],
+        "1": "DROPPED",
+        "nested": {"deep": ("C",)},
+    }
     assert type(structure["models"]) is tuple
-    assert json.loads(safe_dumps(data)) == {"models": ["a", "b"], "tags": ["x", "y"], "nested": {"deep": ["c"]}}
+    assert json.loads(safe_dumps(data)) == {
+        "models": ["a", "b"],
+        "tags": ["x", "y"],
+        "1": "dropped",
+        "nested": {"deep": ["c"]},
+    }
 
 
 def test_integer_limit_clamps_both_signs_and_leaves_bools_and_floats_alone() -> None:

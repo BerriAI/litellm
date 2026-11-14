@@ -26,6 +26,19 @@ def _bounded(value: float | None, integer_limit: int | None) -> float | None:
     return max(-integer_limit, min(integer_limit, value))
 
 
+def _clean_dict_key(k: object) -> str:
+    """Strip NUL bytes from a string key, or stringify a non-str key (e.g. the tuples
+    the OTel integration uses as dedup keys) instead of dropping it, which caused
+    data loss in spend-log payloads."""
+    if isinstance(k, str):
+        return k.replace("\x00", "") if "\x00" in k else k
+    try:
+        str_k = str(k)
+    except Exception:  # noqa: BLE001 - key __str__ must never propagate
+        return "UnserializableKey"
+    return str_k.replace("\x00", "") if "\x00" in str_k else str_k
+
+
 def safe_json_structure(
     data: object,
     max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
@@ -68,9 +81,7 @@ def safe_json_structure(
         seen.add(id(obj))
         if isinstance(obj, dict):
             mapping_result: Final = {
-                (clean_k := k.replace("\x00", "") if "\x00" in k else k): _serialize(v, seen, depth + 1, clean_k)
-                for k, v in obj.items()
-                if isinstance(k, str)
+                (clean_k := _clean_dict_key(k)): _serialize(v, seen, depth + 1, clean_k) for k, v in obj.items()
             }
             seen.remove(id(obj))
             return mapping_result
