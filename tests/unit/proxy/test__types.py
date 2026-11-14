@@ -375,6 +375,22 @@ def test_an_audit_log_stores_a_list_of_changes_as_json_text_with_keys_masked(fie
 
 
 @pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_stores_a_double_encoded_value_as_an_object_with_keys_masked(field):
+    sent = {"team_id": "team-1", "key": SECRET, "key_alias": None}
+
+    log = _audit_log(**{field: json.dumps(json.dumps(sent))})
+
+    assert json.loads(getattr(log, field)) == {**sent, "key": SECRET_MASKED}
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_keeps_a_plain_string_value(field):
+    log = _audit_log(**{field: json.dumps("rotated by admin")})
+
+    assert json.loads(getattr(log, field)) == "rotated by admin"
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
 def test_an_audit_log_leaves_a_change_it_has_no_record_of_alone(field):
     assert getattr(_audit_log(**{field: None}), field) is None
 
