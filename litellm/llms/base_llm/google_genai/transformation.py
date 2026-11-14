@@ -83,6 +83,16 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         """
         return GENERATE_CONTENT_REQUEST_TOP_LEVEL_FIELDS
 
+    def transform_top_level_request_fields(
+        self,
+        request_fields: Mapping[str, object] | None,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object] | None:
+        return request_fields
+
+    def transform_caller_headers(self, headers: Mapping[str, object]) -> Mapping[str, object]:
+        return headers
+
     @abstractmethod
     def map_generate_content_optional_params(
         self,
