@@ -1197,6 +1197,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if _description is not None:
                 _tool["description"] = _description
 
+            if tool["function"].get("strict") is True:
+                _tool["strict"] = True
+
             returned_tool = _tool
 
         elif tool["type"].startswith("computer_"):
@@ -2446,6 +2449,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     headers,
                     ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
                 )
+            if tool.get("strict") is True:
+                self._ensure_beta_header(headers, ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value)
         if optional_params.get("context_management") is not None:
             self._ensure_context_management_beta_header(headers, optional_params["context_management"])
         output_config: Final = optional_params.get("output_config")
