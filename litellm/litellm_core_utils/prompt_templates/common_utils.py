@@ -183,6 +183,9 @@ from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
 from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
     split_concatenated_json_objects as split_concatenated_json_objects,  # noqa: PLC0414  # public compatibility re-export
 )
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+    tool_call_argument_count as tool_call_argument_count,  # noqa: PLC0414  # public compatibility re-export
+)
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     _image_part_url,  # pyright: ignore[reportPrivateUsage]  # Shared implementation for as_openai_image_part
 )

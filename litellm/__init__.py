@@ -487,6 +487,10 @@ prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
 prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
 prometheus_end_user_metrics_cleanup_interval_seconds: Optional[float] = 60.0
 prometheus_metrics_max_series_per_metric: Optional[int] = None
+# Distinct ``tool_name`` values ``litellm_model_tool_calls_total`` gives their own series, per worker
+# process; later names count under ``other`` until restart (a real tool named ``other`` shares that series).
+# It bounds names, not series: each name still splits by the metric's other labels. None disables the cap.
+prometheus_model_tool_name_max_values: Optional[int] = 1000
 prometheus_metrics_ttl_seconds: Optional[float] = None
 prometheus_metrics_cleanup_interval_seconds: Optional[float] = 60.0
 disable_add_prefix_to_prompt: bool = False  # used by anthropic, to disable adding prefix to prompt

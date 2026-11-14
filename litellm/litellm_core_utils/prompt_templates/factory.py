@@ -83,6 +83,7 @@ from .common_utils import (
     native_redacted_thinking_data,
     parse_tool_call_arguments,
     salvage_concatenated_tool_arguments,
+    tool_call_argument_count,
 )
 from .image_handling import convert_url_to_base64, is_pdf_media_type
 
@@ -6658,6 +6659,65 @@ def get_tool_calls_from_response(response: object, include_all_choices: bool = F
         if tool_calls:
             return list(tool_calls)
     return []
+
+
+def _tool_call_count(raw_arguments: object) -> int:
+    # A missing ``arguments`` field parses as ``{}`` on the parse path: one call.
+    if not isinstance(raw_arguments, str):
+        return 1
+    return tool_call_argument_count("{}" if raw_arguments == REDACTED_BY_LITELLM else raw_arguments)
+
+
+def _repeated_name(call: object) -> tuple[str | None, ...]:
+    return (_optional_tool_name(message_field(call, "name")),) * _tool_call_count(message_field(call, "arguments"))
+
+
+def _choice_tool_call_names(choice: object) -> tuple[str | None, ...]:
+    functions: Final = tuple(message_field(tool_call, "function") for tool_call in _choice_tool_calls(choice))
+    return tuple(
+        itertools.chain.from_iterable(_repeated_name(function) for function in functions if function is not None)
+    )
+
+
+def _chat_tool_call_names(response: object, include_all_choices: bool) -> tuple[str | None, ...]:
+    return tuple(
+        itertools.chain.from_iterable(
+            _choice_tool_call_names(choice) for choice in _selected_choices(response, include_all_choices)
+        )
+    )
+
+
+def _responses_api_tool_call_names(response: object) -> tuple[str | None, ...]:
+    return tuple(itertools.chain.from_iterable(_repeated_name(item) for item in _response_function_calls(response)))
+
+
+def _messages_api_tool_call_names(response: object) -> tuple[str | None, ...]:
+    content: Final = message_field(response, "content")
+    blocks: Final = parts_of(content)
+    if not isinstance(content, list):
+        return ()
+    return tuple(
+        _optional_tool_name(message_field(block, "name"))
+        for block in blocks
+        if message_field(block, "type") == "tool_use"
+    )
+
+
+def get_tool_call_names_from_response(response: object, include_all_choices: bool = False) -> tuple[str | None, ...]:
+    """
+    The ``name`` of every call ``get_tool_calls_from_response`` returns, in the
+    same order and with the same count, without parsing argument values into
+    objects or logging them. Usage counters (Prometheus, the spend-log tool
+    index) only need the names, and the parse path logs up to the full argument
+    text of a malformed call, which may hold prompt data.
+    """
+    chat_names: Final = _chat_tool_call_names(response, include_all_choices=include_all_choices)
+    if chat_names:
+        return chat_names
+    responses_names: Final = _responses_api_tool_call_names(response)
+    if responses_names:
+        return responses_names
+    return _messages_api_tool_call_names(response)
 
 
 def has_tool_with_name(tools: object, tool_name: str) -> bool:

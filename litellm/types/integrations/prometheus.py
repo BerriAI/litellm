@@ -231,6 +231,7 @@ class UserAPIKeyLabelNames(Enum):
     ORG_ALIAS = "org_alias"
     MCP_TOOL_NAME = "mcp_tool_name"
     MCP_SERVER_NAME = "mcp_server_name"
+    MODEL_TOOL_NAME = "tool_name"
     SERVICE_TIER = "service_tier"
     INPUT_SEQUENCE_LENGTH = "input_sequence_length"
 
@@ -258,6 +259,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_output_audio_tokens_metric",
     "litellm_video_duration_seconds_metric",
     "litellm_images_generated_metric",
+    "litellm_model_tool_calls_total",
     "litellm_deployment_successful_fallbacks",
     "litellm_deployment_failed_fallbacks",
     "litellm_dynamic_limiter_share_tokens",
@@ -681,6 +683,7 @@ class PrometheusMetricLabels:
 
     litellm_video_duration_seconds_metric = litellm_output_tokens_metric
     litellm_images_generated_metric = litellm_output_tokens_metric
+    litellm_model_tool_calls_total = litellm_output_tokens_metric + [UserAPIKeyLabelNames.MODEL_TOOL_NAME.value]
 
     litellm_deployment_state = [
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
@@ -944,6 +947,7 @@ class PrometheusMetricLabels:
             "litellm_output_tokens_metric",
             "litellm_video_duration_seconds_metric",
             "litellm_images_generated_metric",
+            "litellm_model_tool_calls_total",
         }
     )
     _input_sequence_length_metrics: ClassVar[frozenset[str]] = frozenset(
@@ -1127,6 +1131,7 @@ class UserAPIKeyLabelValues:
     org_alias: str | None = None
     mcp_tool_name: str | None = None
     mcp_server_name: str | None = None
+    tool_name: str | None = None
     service_tier: str | None = None
     input_sequence_length: str | None = None
 
