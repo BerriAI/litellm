@@ -927,7 +927,7 @@ from litellm.redis.stores.spend_counters import (
     user_counter,
 )
 from litellm.router import router_arguments
-from litellm.router_config import build_router_config
+from litellm.router_config import build_router_config, detached
 
 try:
     from litellm.proxy.enterprise_billing.billing_metrics import (
@@ -1537,6 +1537,7 @@ _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeaders
 _LITELLM_PARAMS_COPY: Final = TypeAdapter(dict[str, object])
 _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
 _UNTYPED_VALUE: Final = TypeAdapter(object)
+_YAML_DICT_ADAPTER: Final = TypeAdapter(dict[object, object])
 
 
 class _AiohttpConnectorKwargs(TypedDict, total=False):
@@ -5797,15 +5798,17 @@ def pin_complexity_router_model_id(model: dict) -> None:  # mutable-ok: out-para
     litellm_params: Final = model.get("litellm_params")
     if not isinstance(litellm_params, dict) or not isinstance(litellm_params.get("complexity_router_config"), dict):
         return
-    model_info = model.get("model_info")
-    if not isinstance(model_info, dict):
-        model_info = {}
-        model["model_info"] = model_info  # rebind-ok: out-param, stamped in place
-    if model_info.get("id") is None:
-        model_info["id"] = deployment_id(
-            model_group=model.get("model_name", ""),
-            litellm_params=litellm_params,
-        )
+    model_info: Final = model.get("model_info")
+    if isinstance(model_info, dict) and model_info.get("id") is not None:
+        return
+    pinned_id: Final = deployment_id(
+        model_group=model.get("model_name", ""),
+        litellm_params=litellm_params,
+    )
+    if isinstance(model_info, dict):
+        model["model_info"] = {**model_info, "id": pinned_id}  # rebind-ok: out-param, stamped in place
+        return
+    model["model_info"] = {"id": pinned_id}  # rebind-ok: out-param, stamped in place
 
 
 def resolve_classifier_plugin(
@@ -6237,15 +6240,19 @@ class ProxyConfig:
         _, file_extension = os.path.splitext(config_file_path)
         return file_extension.lower() == ".yaml" or file_extension.lower() == ".yml"
 
+    def _load_raw_yaml_file(self, file_path: str) -> object:
+        try:
+            with open(file_path, "r") as file:
+                parsed: Final = _UNTYPED_VALUE.validate_python(yaml.safe_load(file) or {})
+                return detached(parsed)
+        except Exception as e:
+            raise Exception(f"Error loading yaml file {file_path}: {e}")
+
     def _load_yaml_file(self, file_path: str) -> dict:
         """
         Load and parse a YAML file
         """
-        try:
-            with open(file_path, "r") as file:
-                return yaml.safe_load(file) or {}
-        except Exception as e:
-            raise Exception(f"Error loading yaml file {file_path}: {e}")
+        return _YAML_DICT_ADAPTER.validate_python(self._load_raw_yaml_file(file_path))
 
     async def _get_config_from_file(self, config_file_path: str | None = None) -> dict:
         """
@@ -6264,16 +6271,19 @@ class ProxyConfig:
         ## Yaml
         if os.path.exists(f"{file_path}"):
             with open(f"{file_path}", "r") as config_file:
-                config = yaml.safe_load(config_file)
+                loaded: Final = _UNTYPED_VALUE.validate_python(yaml.safe_load(config_file))
+                config = None if loaded is None else _YAML_DICT_ADAPTER.validate_python(detached(loaded))
         elif file_path is not None:
             raise Exception(f"Config file not found: {file_path}")
         else:
-            config = {
-                "model_list": [],
-                "general_settings": {},
-                "router_settings": {},
-                "litellm_settings": {},
-            }
+            config = _YAML_DICT_ADAPTER.validate_python(
+                {
+                    "model_list": [],
+                    "general_settings": {},
+                    "router_settings": {},
+                    "litellm_settings": {},
+                }
+            )
 
         if config is None:
             raise Exception("Config cannot be None or Empty.")
@@ -6314,7 +6324,7 @@ class ProxyConfig:
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"Included file not found: {file_path}")
             try:
-                return included_config_adapter.validate_python(self._load_yaml_file(file_path))
+                return included_config_adapter.validate_python(self._load_raw_yaml_file(file_path))
             except ValidationError as e:
                 raise ValueError(f"Included config file is not a YAML mapping: {file_path}") from e
 

@@ -66,18 +66,24 @@ class RouterDynamicConfig:
 _versions: Final = itertools.count(1)
 
 
-def detached(value: object) -> object:
+def detached(value: object, _ancestors: frozenset[int] = frozenset()) -> object:
     """``value`` with its plain containers (dict, list, tuple, set) copied, all the way down, so the
     caller's own objects can't change the router afterwards. Other objects (clients, caches,
     callbacks, pydantic models) are kept as they are."""
+    if value is None or isinstance(value, (str, int, float, bool, bytes)):
+        return value
+    value_id: Final = id(value)
+    if value_id in _ancestors:
+        return value
+    next_ancestors: Final = _ancestors | {value_id}
     if isinstance(value, dict):
-        return {key: detached(item) for key, item in value.items()}
+        return {key: detached(item, next_ancestors) for key, item in value.items()}
     if isinstance(value, list):
-        return [detached(item) for item in value]
+        return [detached(item, next_ancestors) for item in value]
     if isinstance(value, tuple) and type(value) is tuple:
-        return tuple(detached(item) for item in value)
+        return tuple(detached(item, next_ancestors) for item in value)
     if isinstance(value, set):
-        return {detached(item) for item in value}
+        return {detached(item, next_ancestors) for item in value}
     return value
 
 
