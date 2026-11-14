@@ -2121,6 +2121,13 @@ def test_wildcard_over_a_namespace_behind_a_custom_api_base_lists_the_bare_wildc
         ("friendliai", "FRIENDLI_API_BASE"),
         ("volcengine", "ARK_API_BASE"),
         ("databricks", "DATABRICKS_HOST"),
+        ("deepseek", "DEEPSEEK_ANTHROPIC_API_BASE"),
+        ("tencent", "TENCENT_ANTHROPIC_API_BASE"),
+        ("mistral", "MISTRAL_AZURE_API_BASE"),
+        ("chatgpt", "OPENAI_CHATGPT_API_BASE"),
+        ("xai", "XAI_OAUTH_API_BASE"),
+        ("gradient_ai", "GRADIENT_AI_AGENT_ENDPOINT"),
+        ("datarobot", "DATAROBOT_ENDPOINT"),
     ],
 )
 def test_wildcard_over_a_namespace_behind_a_gateway_set_in_the_env_lists_the_bare_wildcard_ids(
