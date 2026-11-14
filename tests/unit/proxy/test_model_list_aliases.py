@@ -7,14 +7,18 @@ next to its target and resolves by name.
 
 import json
 from collections.abc import Sequence
+from itertools import chain
 
 import pytest
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 from starlette.requests import Request
 
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Field, Hook, Patch, on
+from litellm.integrations.custom_logger_v2.enforcement import DeclaredView
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
@@ -37,6 +41,35 @@ class _ListingGate(CustomLogger):
         self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
     ) -> Sequence[str]:
         return [name for name in model_names if name not in self.hidden]
+
+
+_LISTED_NAMES: TypeAdapter[tuple[str, ...]] = TypeAdapter(tuple[str, ...])
+
+
+class _V2ListingGate(CustomLoggerV2):
+    def __init__(self, hidden: frozenset[str]) -> None:
+        super().__init__()
+        self.hidden = hidden
+
+    @on(Hook.list_models, reads={Field.model_list}, writes={Field.model_list})
+    async def list_models(self, view: DeclaredView, ctx: CallContext[object]) -> Patch:
+        names = _LISTED_NAMES.validate_python(view.model_list)
+        return Patch().set(Field.model_list, tuple(name for name in names if name not in self.hidden))
+
+
+_LISTING_GATES = pytest.mark.parametrize("gate", [_ListingGate, _V2ListingGate])
+
+
+class _ListingRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.offered: tuple[tuple[str, ...], ...] = ()
+
+    async def async_filter_listed_models(
+        self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
+    ) -> Sequence[str]:
+        self.offered = (*self.offered, tuple(model_names))
+        return model_names
 
 
 class _ListingAllowList(CustomLogger):
@@ -307,10 +340,16 @@ async def test_alias_to_a_model_the_listing_hides_is_not_described_by_it(
         ("model_name_team1_abc", "team-chat", ["gpt-4.1-mini", "fast", "model_name_team1_abc"]),
     ],
 )
+@_LISTING_GATES
 async def test_alias_to_a_model_a_listing_callback_hides_is_not_described_by_it(
-    router: Router, monkeypatch: pytest.MonkeyPatch, target: str, gated: str, models: list[str]
+    router: Router,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    gated: str,
+    models: list[str],
+    gate: type[_ListingGate | _V2ListingGate],
 ) -> None:
-    monkeypatch.setattr(litellm, "callbacks", [_ListingGate(frozenset({gated}))])
+    monkeypatch.setattr(litellm, "callbacks", [gate(frozenset({gated}))])
     ProxyLogging._callback_capabilities_cache.clear()
     caller = _team_member(models=models, team_model_aliases={"fast": target})
 
@@ -409,6 +448,16 @@ async def test_model_group_info_does_not_describe_an_alias_to_a_model_the_listin
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("models", [["gpt-4.1-mini", "paused"], ["gpt-4.1-mini", "fast", "paused"]])
+async def test_model_group_info_lists_a_paused_model_but_describes_no_alias_by_it(
+    router: Router, models: list[str]
+) -> None:
+    caller = _team_member(models=models, team_model_aliases={"fast": "paused"})
+
+    assert await _model_group_rows(caller) == await _model_group_rows(_team_member(models=models))
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("target", "gated", "models"),
     [
@@ -417,10 +466,16 @@ async def test_model_group_info_does_not_describe_an_alias_to_a_model_the_listin
         ("model_name_team1_abc", "team-chat", ["gpt-4.1-mini", "fast", "model_name_team1_abc"]),
     ],
 )
+@_LISTING_GATES
 async def test_model_group_info_hides_an_alias_whose_target_a_listing_callback_hides(
-    router: Router, monkeypatch: pytest.MonkeyPatch, target: str, gated: str, models: list[str]
+    router: Router,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    gated: str,
+    models: list[str],
+    gate: type[_ListingGate | _V2ListingGate],
 ) -> None:
-    monkeypatch.setattr(litellm, "callbacks", [_ListingGate(frozenset({gated}))])
+    monkeypatch.setattr(litellm, "callbacks", [gate(frozenset({gated}))])
     ProxyLogging._callback_capabilities_cache.clear()
     caller = _team_member(models=models, team_model_aliases={"fast": target})
 
@@ -437,3 +492,42 @@ async def test_model_group_info_keeps_every_group_an_allow_list_callback_allows_
     monkeypatch.setattr(litellm, "callbacks", [_ListingAllowList(frozenset(listed))])
     ProxyLogging._callback_capabilities_cache.clear()
     assert list(await _model_group_rows(caller)) == listed
+
+
+@pytest.mark.asyncio
+@_LISTING_GATES
+async def test_a_name_a_listing_callback_hides_stays_hidden_when_it_is_also_an_alias(
+    router: Router, monkeypatch: pytest.MonkeyPatch, gate: type[_ListingGate | _V2ListingGate]
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [gate(frozenset({"fast"}))])
+    ProxyLogging._callback_capabilities_cache.clear()
+    models = ["gpt-4.1-mini", "fast"]
+    caller = _team_member(models=models, team_model_aliases={"fast": "gpt-4.1-mini"})
+    unaliased = _team_member(models=models)
+
+    assert await _v1_models(caller) == await _v1_models(unaliased)
+    assert await _model_group_rows(caller) == await _model_group_rows(unaliased)
+    with pytest.raises(HTTPException) as retrieval:
+        await proxy_server.model_info(model_id="fast", user_api_key_dict=caller)
+    with pytest.raises(HTTPException) as unaliased_retrieval:
+        await proxy_server.model_info(model_id="fast", user_api_key_dict=unaliased)
+    assert retrieval.value.status_code == unaliased_retrieval.value.status_code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model_group", "offered"), [("gpt-4.1-mini", {"gpt-4.1-mini"}), ("fast", {"gpt-4.1"})])
+async def test_model_group_info_for_one_group_offers_listing_callbacks_only_the_names_it_reads(
+    router: Router, monkeypatch: pytest.MonkeyPatch, model_group: str, offered: set[str]
+) -> None:
+    recorder = _ListingRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    ProxyLogging._callback_capabilities_cache.clear()
+    caller = _team_member(
+        models=["gpt-4.1-mini", "gpt-4.1", "model_name_team1_abc"], team_model_aliases={"fast": "gpt-4.1"}
+    )
+
+    rows = await _model_group_rows(caller, model_group=model_group)
+
+    assert list(rows) == [model_group]
+    assert set(chain.from_iterable(recorder.offered)) == offered
+    assert rows[model_group] == (await _model_group_rows(caller))[model_group]
