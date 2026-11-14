@@ -1019,6 +1019,42 @@ async def test_anthropic_assistant_history_never_reaches_compression_service(gua
     assert result["messages"][1]["content"] == [{"type": "text", "text": table}]
 
 
+@pytest.mark.asyncio
+async def test_responses_retrieve_result_in_a_long_namespace_never_reaches_compression_service(
+    guardrail: HeadroomGuardrail,
+):
+    """The Responses bridge truncates a qualified tool name over 64 chars, which
+    drops the ``__headroom_retrieve`` suffix from the chat view, so the hold-back
+    has to pair the result with the call id read from the raw ``input``."""
+    from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
+
+    expansion: Final = "Recovered original content. " + "R" * 5000
+    responses_input: Final = [
+        {"type": "message", "role": "user", "content": "Earlier question. " + "A" * 5000},
+        {
+            "type": "function_call",
+            "call_id": "call_retrieve",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "namespace": "mcp__" + "s" * 45,
+            "arguments": json.dumps({"hash": "b573993006976af767214fac"}),
+        },
+        {"type": "function_call_output", "call_id": "call_retrieve", "output": expansion},
+        {"type": "message", "role": "assistant", "content": "The recovered content is a log."},
+        {"type": "message", "role": "user", "content": "Quote its first line."},
+    ]
+
+    def _echo(**kwargs):
+        return _make_compress_response(json.loads(json.dumps(kwargs["json"]["messages"])))
+
+    data: Final = {"model": "gpt-5.6", "input": json.loads(json.dumps(responses_input))}
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_echo) as post:
+        await OpenAIResponsesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    sent: Final = json.dumps(post.call_args.kwargs["json"]["messages"])
+    assert "Earlier question" in sent
+    assert expansion not in sent
+
+
 def test_has_headroom_retrieve_tool_recognizes_anthropic_native_shape():
     """By the time an Anthropic Messages API response reaches the agentic-loop
     gate, the OpenAI-shaped tool this guardrail injects (type: "function")

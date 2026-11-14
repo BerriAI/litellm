@@ -1106,6 +1106,63 @@ class TestLiteLLMCompletionResponsesConfig:
         assert len(declared_names[0]) <= 64
         assert result["tool_choice"] == {"type": "function", "function": {"name": declared_names[0]}}
 
+    def test_replayed_function_call_with_a_joined_name_past_64_characters_names_its_chat_tool(self) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        member: Final = "_get_document_tool_schemas"
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic/claude-haiku-5-5",
+            input=[
+                {"type": "message", "role": "user", "content": "Fetch the document tool schemas"},
+                {
+                    "type": "function_call",
+                    "name": f"{namespace}__{member}",
+                    "call_id": "call_flattened_history",
+                    "arguments": "{}",
+                },
+                {"type": "function_call_output", "call_id": "call_flattened_history", "output": "[]"},
+            ],
+            responses_api_request={
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "description": "Document control",
+                        "tools": [
+                            {"type": "function", "name": member, "parameters": {"type": "object", "properties": {}}}
+                        ],
+                    }
+                ]
+            },
+            custom_llm_provider="anthropic",
+        )
+
+        declared_names: Final = [tool["function"]["name"] for tool in result["tools"]]
+        replayed_names: Final = [
+            call["function"]["name"] for message in result["messages"] for call in message.get("tool_calls") or ()
+        ]
+        assert len(declared_names[0]) <= 64
+        assert replayed_names == declared_names
+
+    def test_transform_tools_rejects_a_top_level_function_named_like_a_namespace_member_past_64_characters(
+        self,
+    ) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        member: Final = "_get_document_tool_schemas"
+        with pytest.raises(
+            ValueError,
+            match=f"Top-level function names conflict with flattened namespace tools: {namespace}__{member}",
+        ):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[
+                    {"type": "function", "name": f"{namespace}__{member}", "parameters": {"type": "object"}},
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "tools": [{"type": "function", "name": member, "parameters": {"type": "object"}}],
+                    },
+                ]
+            )
+
     def test_transform_chat_completion_response_deferred_top_level_tool_call_has_namespace_equal_to_name(self):
         """A deferred top-level function (defer_loading=True) comes back with namespace == name,
         the shape the OpenAI Agents SDK reserves for it. Without it the SDK raises

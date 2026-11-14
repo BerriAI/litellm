@@ -16,12 +16,14 @@ from litellm.types.utils import LlmProviders
 
 _FIELDS: Final = TypeAdapter(dict[str, object])
 _PARAM_NAMES: Final = TypeAdapter(tuple[str, ...])
+_TOOLS: Final = TypeAdapter(tuple[object, ...])
 _CREDENTIALS: Final[TypeAdapter[str | Mapping[str, JsonValue] | None]] = TypeAdapter(
     str | Mapping[str, JsonValue] | None
 )
 _AUTH: Final = VertexBase()
 _MUSE_PREFIX: Final = "meta/muse-"
 _STORED_RESPONSE_PARAMS: Final = frozenset({"background", "conversation", "previous_response_id"})
+_MUSE_TOOL_TYPES: Final = frozenset({"function", "namespace"})
 _MUSE_PUBLISHER_PATH: Final = "/publishers/meta/v1"
 _MUSE_RESPONSES_PATH: Final = f"{_MUSE_PUBLISHER_PATH}/responses"
 MUSE_CHAT_PARAMS: Final = (
@@ -52,6 +54,16 @@ def is_vertex_muse_model(model: str | None) -> bool:
 
 def _reasoning_fields(reasoning: object) -> Mapping[str, object]:
     return _FIELDS.validate_python(reasoning) if isinstance(reasoning, Mapping) else {}
+
+
+def _keeps_muse_tool(tool: object) -> bool:
+    return not isinstance(tool, Mapping) or _FIELDS.validate_python(tool).get("type") in _MUSE_TOOL_TYPES
+
+
+def _muse_tools(tools: object) -> tuple[object, ...] | None:
+    if not isinstance(tools, list | tuple):
+        return None
+    return tuple(tool for tool in _TOOLS.validate_python(tools) if _keeps_muse_tool(tool))
 
 
 def _refused_reasoning_effort(model: str, reasoning: Mapping[str, object]) -> str | None:
@@ -189,9 +201,12 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 message=unsupported_reasoning_effort_message("reasoning.effort", refused_effort, model),
             )
         kept_reasoning: Final = {key: value for key, value in reasoning.items() if key != "effort"}
+        kept_tools: Final = (
+            _muse_tools(response_api_optional_request_params.get("tools")) if drops_unsupported else None
+        )
         dropped_params: Final = (
             (_STORED_RESPONSE_PARAMS if drops_unsupported else frozenset[str]())
-            | ({"tools"} if tool_choice == "none" else frozenset[str]())
+            | ({"tools"} if tool_choice == "none" or kept_tools == () else frozenset[str]())
             | ({"truncation"} if truncates else frozenset[str]())
             | ({"reasoning"} if refused_effort is not None else frozenset[str]())
         )
@@ -200,6 +215,7 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
         }
         normalized_params: Final = {
             **tool_params,
+            **({"tools": kept_tools} if kept_tools and "tools" in tool_params else {}),
             **({"tool_choice": "auto"} if tool_choice is not None else {}),
             **({"reasoning": kept_reasoning} if refused_effort is not None and kept_reasoning else {}),
         }

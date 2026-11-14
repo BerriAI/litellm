@@ -1522,13 +1522,13 @@ class LiteLLMCompletionResponsesConfig:
         sent_input: Final = _without_item_keys(
             read_input, _dropped_item_keys(item_cache_control, tool_call_provider_fields)
         )
+        request_tools: Final = LiteLLMCompletionResponsesConfig.request_tools(responses_api_request)
         convert_input: Final = partial(
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message,
             replay_reasoning=replay_reasoning,
             native_compaction=native_compaction,
-            self_named_namespace_members=LiteLLMCompletionResponsesConfig.self_named_namespace_members(
-                LiteLLMCompletionResponsesConfig.request_tools(responses_api_request)
-            ),
+            self_named_namespace_members=LiteLLMCompletionResponsesConfig.self_named_namespace_members(request_tools),
+            member_chat_names=LiteLLMCompletionResponsesConfig.member_chat_names(request_tools),
         )
         try:
             converted: Final = (
@@ -1711,6 +1711,7 @@ class LiteLLMCompletionResponsesConfig:
         replay_reasoning: bool = False,
         native_compaction: bool = False,
         self_named_namespace_members: frozenset[str] = frozenset(),
+        member_chat_names: Mapping[str, str] = MappingProxyType({}),
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
@@ -1738,6 +1739,7 @@ class LiteLLMCompletionResponsesConfig:
                         replay_reasoning=replay_reasoning,
                         native_compaction=native_compaction,
                         self_named_namespace_members=self_named_namespace_members,
+                        member_chat_names=member_chat_names,
                     )
                 )
 
@@ -2451,6 +2453,7 @@ class LiteLLMCompletionResponsesConfig:
         replay_reasoning: bool = False,
         native_compaction: bool = False,
         self_named_namespace_members: frozenset[str] = frozenset(),
+        member_chat_names: Mapping[str, str] = MappingProxyType({}),
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API input item into a Chat Completion message
@@ -2506,6 +2509,7 @@ class LiteLLMCompletionResponsesConfig:
                     Mapping[str, str], input_item
                 ),
                 self_named_namespace_members=self_named_namespace_members,
+                member_chat_names=member_chat_names,
             )
         elif input_item.get("type") == "compaction":
             return list(
@@ -2775,6 +2779,7 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_responses_api_function_call_to_chat_completion_message(
         function_call: Mapping[str, str],
         self_named_namespace_members: frozenset[str] = frozenset(),
+        member_chat_names: Mapping[str, str] = MappingProxyType({}),
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API function_call into a Chat Completion message with tool calls
@@ -2808,7 +2813,7 @@ class LiteLLMCompletionResponsesConfig:
         qualify: Final = bool(namespace) and not deferred_top_level and function_call.get("type") != "custom_tool_call"
         tool_call_id: Final = function_call.get("call_id") or function_call.get("id") or ""
         tool_call_function: Final = ChatCompletionToolCallFunctionChunk(
-            name=chat_member_name(namespace, raw_name) if qualify else raw_name,
+            name=chat_member_name(namespace, raw_name) if qualify else member_chat_names.get(raw_name, raw_name),
             arguments=serialize_tool_call_arguments(raw_arguments),
         )
         function_call_cache_control: Final = _input_item_cache_control(function_call)
@@ -3040,13 +3045,7 @@ class LiteLLMCompletionResponsesConfig:
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
         )
         flattened_namespace_names: Final = frozenset(
-            chat_member_name(f"{tool.get('name') or ''}", f"{namespace_tool.get('name') or ''}")
-            for tool in tools or ()
-            if tool.get("type") == "namespace"
-            for namespace_tools in (tool.get("tools"),)
-            if isinstance(namespace_tools, Sequence) and not isinstance(namespace_tools, (str, bytes))
-            for namespace_tool in namespace_tools
-            if isinstance(namespace_tool, Mapping) and namespace_tool.get("type") == "function"
+            chain.from_iterable(LiteLLMCompletionResponsesConfig.member_chat_names(tools).items())
         )
         conflicting_tool_names: Final = top_level_function_names & flattened_namespace_names
         if conflicting_tool_names:
@@ -3242,16 +3241,20 @@ class LiteLLMCompletionResponsesConfig:
         )
 
     @staticmethod
+    def member_chat_names(tools: ResponseTools) -> Mapping[str, str]:
+        return MappingProxyType(
+            {
+                qualified_member_name(namespace, member): chat_member_name(namespace, member)
+                for namespace, member in LiteLLMCompletionResponsesConfig._namespace_entries(tools)
+            }
+        )
+
+    @staticmethod
     def _chat_tool_choice(tool_choice: object, tools: ResponseTools) -> object:
         chat_tool_choice: Final = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
         match chat_tool_choice:
             case {"type": "function", "function": {"name": str(forced_name)}}:
-                chat_names: Final = MappingProxyType(
-                    {
-                        qualified_member_name(namespace, member): chat_member_name(namespace, member)
-                        for namespace, member in LiteLLMCompletionResponsesConfig._namespace_entries(tools)
-                    }
-                )
+                chat_names: Final = LiteLLMCompletionResponsesConfig.member_chat_names(tools)
                 return {"type": "function", "function": {"name": chat_names.get(forced_name, forced_name)}}
             case _:
                 return chat_tool_choice

@@ -19,6 +19,7 @@ MODELS: Final = ("muse-wonder-1.0", "muse-ember-1.0", "muse-spark-1.3")
 ENDPOINT: Final = (
     "https://aiplatform.googleapis.com/v1/projects/unit-project/locations/global/publishers/meta/v1/responses"
 )
+GATEWAY_ENDPOINT: Final = ENDPOINT.replace("https://aiplatform.googleapis.com", "https://vertex-gateway.example")
 ROOT: Final = Path(__file__).parents[5]
 CATALOG: Final = TypeAdapter(dict[str, dict[str, object]])
 FIELDS: Final = TypeAdapter(dict[str, object])
@@ -328,6 +329,46 @@ def test_muse_drop_params_preserves_disabled_tools_and_downgrades_forced_choices
     assert body.get("tools", []) == ([] if choice == "none" else [wire_tool])
 
 
+def _sent_tools(route: respx.Route, tools: list[dict[str, object]], drop_params: bool) -> object:
+    litellm.responses(
+        model="vertex_ai/meta/muse-ember-1.0",
+        input="Say hello",
+        tools=tools,
+        vertex_project="unit-project",
+        drop_params=drop_params,
+        num_retries=0,
+    )
+    return FIELDS.validate_json(route.calls.last.request.content).get("tools")
+
+
+@pytest.mark.parametrize(
+    "builtin",
+    [
+        {"type": "web_search", "external_web_access": False},
+        {"type": "custom", "name": "apply_patch", "description": "Apply a patch."},
+        {"type": "local_shell"},
+        {"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example", "require_approval": "never"},
+    ],
+)
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_muse_drop_params_omits_builtin_tools_vertex_refuses(
+    builtin: dict[str, object], drop_params: bool, respx_mock: respx.MockRouter
+) -> None:
+    accepted: Final = [
+        {"type": "function", "name": "get_time", "description": "Get the time.", "parameters": {"type": "object"}},
+        {
+            "type": "namespace",
+            "name": "docs",
+            "description": "Docs tools.",
+            "tools": [{"type": "function", "name": "lookup", "description": "Look up a page.", "parameters": {}}],
+        },
+    ]
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-ember-1.0")))
+    with_accepted: Final = _sent_tools(route, [builtin, *accepted], drop_params)
+    alone: Final = _sent_tools(route, [builtin], drop_params)
+    assert (with_accepted, alone) == ((accepted, None) if drop_params else ([builtin, *accepted], [builtin]))
+
+
 @pytest.mark.parametrize("choice", ["none", "required", {"type": "function", "name": "report_number"}])
 @pytest.mark.parametrize("model", MODELS)
 def test_muse_rejects_unsupported_tool_choices_before_contacting_vertex(
@@ -421,8 +462,8 @@ def test_muse_accepts_the_global_location(location: str | None, respx_mock: resp
         ("https://vertex-gateway.example/v1/", "https://vertex-gateway.example"),
         ("https://vertex-gateway.example/google-vertex/v1", "https://vertex-gateway.example/google-vertex"),
         ("https://vertex-gateway.example/google-vertex?tenant=a", "https://vertex-gateway.example/google-vertex"),
-        (ENDPOINT.removesuffix("/responses"), "https://aiplatform.googleapis.com"),
-        (ENDPOINT, "https://aiplatform.googleapis.com"),
+        (GATEWAY_ENDPOINT.removesuffix("/responses"), "https://vertex-gateway.example"),
+        (GATEWAY_ENDPOINT, "https://vertex-gateway.example"),
     ],
 )
 def test_muse_sends_a_custom_api_base_to_the_meta_responses_path(

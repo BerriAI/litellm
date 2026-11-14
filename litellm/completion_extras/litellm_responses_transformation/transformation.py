@@ -59,6 +59,7 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     responses_reasoning_items_from_thinking_blocks,
     thinking_blocks_from_reasoning_items,
 )
+from litellm.litellm_core_utils.tool_fields import qualified_member_name
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
@@ -513,10 +514,18 @@ def _top_level_namespaces(request: object) -> Iterator[object]:
     return (tool for tool in tools if _json_field(tool, "type") == "namespace")
 
 
+def _member_and_qualified_names(tool: object) -> tuple[str, ...]:
+    names: Final = tuple(chain.from_iterable(_tool_definition_name(member) for member in _namespace_members(tool)))
+    namespace: Final = _json_field(tool, "name") if _json_field(tool, "type") == "namespace" else None
+    qualified: Final = (
+        tuple(qualified_member_name(namespace, name) for name in names) if isinstance(namespace, str) else ()
+    )
+    return (*names, *qualified)
+
+
 def nested_tool_member_names(request: object) -> tuple[str, ...]:
     tools: Final = (*_top_level_namespaces(request), *additional_tools_in_input(_json_field(request, "input")))
-    members: Final = chain.from_iterable(_namespace_members(tool) for tool in tools)
-    return tuple(chain.from_iterable(_tool_definition_name(member) for member in members))
+    return tuple(chain.from_iterable(_member_and_qualified_names(tool) for tool in tools))
 
 
 def _loads_any_tool(message: object, names: frozenset[str]) -> bool:
