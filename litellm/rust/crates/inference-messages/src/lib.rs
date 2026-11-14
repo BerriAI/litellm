@@ -16,6 +16,7 @@ use litellm_auth::AuthServices;
 use litellm_host::interceptors::Interceptors;
 use litellm_inference::context::CallContext;
 use litellm_inference::provider::resolve_llm_provider;
+use litellm_llms_types::formats::messages::CountTokensResponse;
 use litellm_llms_types::recognized::Recognized;
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
@@ -183,6 +184,26 @@ impl MessagesRoute {
             }
             let secrets = self.secrets.resolve(config.config().secret_names()).await?;
             handler::execute(self, config, model, call, secrets, client_streams, &context)
+                .boxed()
+                .await
+        })
+        .await
+    }
+
+    #[tracing::instrument(name = "litellm.route", skip_all, fields(
+        route = "messages_count_tokens",
+        model = %call.body.model,
+        provider,
+        resolved_model,
+        stream = false,
+        outcome
+    ))]
+    pub async fn count_tokens(&self, call: MessagesCall) -> Result<CountTokensResponse, Error> {
+        litellm_inference::diagnostic::unary(async {
+            let (config, model, provider) = Self::provider(&call)?;
+            litellm_inference::diagnostic::provider(&model, provider);
+            let secrets = self.secrets.resolve(config.config().secret_names()).await?;
+            handler::count_tokens(self, config, model, call, secrets.as_ref())
                 .boxed()
                 .await
         })

@@ -1,4 +1,5 @@
-//! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it.
+//! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it, and
+//! `POST /v1/messages/count_tokens`, answered by the deployment's own count-tokens API.
 
 use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
@@ -12,7 +13,11 @@ use axum::{
 };
 use litellm_host_http::Sse;
 use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
-use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_llms_types::{
+    formats::messages::CountTokensResponse,
+    headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
+};
+use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
@@ -25,6 +30,14 @@ const OPENROUTER_API_HEADERS: [&str; 2] = [
 ];
 const ANTHROPIC_API_HEADER_PROVIDERS: &str =
     "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
+const PROVIDER_COUNT_SOURCE: &str = "provider";
+
+#[derive(Serialize)]
+struct SourcedCount {
+    #[serde(flatten)]
+    count: CountTokensResponse,
+    litellm_count_source: &'static str,
+}
 
 pub async fn create(
     State(gateway): State<Arc<Gateway>>,
@@ -65,6 +78,37 @@ async fn handle(
     let headers = crate::caching::CacheHeaders::default();
     let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
     Ok(headers.apply(response))
+}
+
+pub async fn count_tokens(
+    State(gateway): State<Arc<Gateway>>,
+    identity: AuthenticatedRequest,
+    RequestId(request_id): RequestId,
+    headers: HeaderMap,
+    body: Result<JsonObject, Error>,
+) -> impl IntoResponse {
+    let result = match body {
+        Ok(JsonObject(body)) => count(&gateway, &identity, &headers, body).await,
+        Err(error) => Err(error),
+    };
+    result
+        .map(Json)
+        .map_err(|error| (error.status(), Json(error.body(request_id.as_deref()))))
+}
+
+async fn count(
+    gateway: &Gateway,
+    identity: &AuthenticatedRequest,
+    headers: &HeaderMap,
+    body: Map<String, Value>,
+) -> Result<SourcedCount, Error> {
+    let deployment = request::resolve_deployment(gateway, "/v1/messages/count_tokens", &body)?;
+    request::authorize_model(identity, deployment, &body).await?;
+    let call = project(deployment, body, headers)?;
+    Ok(SourcedCount {
+        count: gateway.messages.count_tokens(call).await?,
+        litellm_count_source: PROVIDER_COUNT_SOURCE,
+    })
 }
 
 fn project(

@@ -235,6 +235,7 @@ async fn upload_audio_format_validation_matches_core(
 #[case::responses("/v1/responses", false)]
 #[case::deployment("/openai/deployments/public%2Fmodel/chat/completions", false)]
 #[case::messages("/v1/messages", true)]
+#[case::count_tokens("/v1/messages/count_tokens", true)]
 #[case::ocr("/v1/ocr", false)]
 #[case::transcription("/v1/audio/transcriptions", false)]
 #[tokio::test]

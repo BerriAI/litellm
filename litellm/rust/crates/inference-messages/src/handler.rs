@@ -22,8 +22,9 @@ use litellm_llms::base_llm::{
     },
 };
 use litellm_llms_types::formats::messages::{
-    MessagesOptionalParams, MessagesRequest, MessagesResponse,
+    CountTokensResponse, MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
+use litellm_llms_types::recognized::Recognized;
 use litellm_secrets::source::Secrets;
 use litellm_tracing::ByteChunk;
 use serde_json::{Map, Value};
@@ -43,6 +44,8 @@ use litellm_inference::{
     context::CallContext,
     outbound::{raw_leaf_body, serialized_outbound_request},
 };
+
+const UNCAPPED_MAX_TOKENS: u64 = u64::MAX;
 
 struct ProviderCall {
     identity: ProviderIdentity,
@@ -387,6 +390,125 @@ async fn provider_call(
         unencodable_request_header: shaping.settings.unencodable_request_header,
         ascii_request_headers: shaping.settings.ascii_request_headers,
     })
+}
+
+pub(super) async fn count_tokens(
+    route: &MessagesRoute,
+    provider: MessagesProvider,
+    model: String,
+    call: MessagesCall,
+    secrets: &(dyn Lookup + Send + Sync),
+) -> Result<CountTokensResponse, Error> {
+    let MessagesCall {
+        body,
+        api_key,
+        api_base,
+        litellm_params,
+        extra_headers,
+        provider_specific_header,
+        timeout,
+        shaping,
+        ..
+    } = call;
+    let connection_params = litellm_router_types::LitellmParams {
+        api_base: api_base.clone().or(litellm_params.api_base.clone()),
+        ..litellm_params
+    };
+    let config = provider.config();
+    let env_lookup = |key: &str| secrets.get(key);
+    let url = config
+        .get_count_tokens_url(api_base.as_deref(), &connection_params, &env_lookup)
+        .ok_or_else(|| {
+            Error::invalid_request(litellm_llms::ErrorDetail::UnsupportedOperation {
+                operation: "token counting",
+                provider: provider.as_str(),
+            })
+        })??;
+
+    let sanitized = config.shape_request(
+        MessagesRequest {
+            model: config.count_tokens_model(&model).to_string(),
+            params: body.params.countable(),
+            ..body
+        },
+        shaping.settings.shape_options(),
+    )?;
+    let trimmed =
+        without_additional_drop_params(sanitized, &shaping.settings.additional_drop_params)?;
+    let scoped =
+        get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
+    let forwarded = string_headers(Some(merge_messages_header_sources([
+        extra_headers.unwrap_or_default(),
+        scoped,
+    ])))?;
+    let validated = config.validate_environment(
+        forwarded,
+        api_key.as_deref(),
+        &trimmed.model,
+        &trimmed.params,
+        &connection_params,
+        &env_lookup,
+    )?;
+    let transformed = config.transform_anthropic_messages_request(
+        with_a_max_tokens(trimmed),
+        &MessagesTransformContext {
+            drops_unsupported_params: shaping.settings.drops_unsupported_params,
+            ..MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params)
+        },
+    )?;
+    let environment = ValidatedEnvironment {
+        headers: config.headers_for_url(
+            config.request_headers(
+                with_python_default_headers(validated.headers, config.default_headers()),
+                &transformed,
+            ),
+            &url,
+        ),
+        auth: validated.auth,
+    };
+    let authenticated =
+        resolve_auth(&route.auth, environment, &|key| std::env::var(key).ok()).await?;
+    let wire_body = MessagesRequest {
+        params: MessagesOptionalParams {
+            max_tokens: None,
+            ..transformed.params
+        },
+        ..transformed
+    };
+    let timeout = timeout
+        .or_else(|| shaping.settings.request_timeout())
+        .unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS));
+    let response = send(
+        &route.http,
+        authenticated,
+        &url,
+        Bytes::from(serde_json::to_vec(&wire_body).map_err(serialize_failure)?),
+        timeout,
+    )
+    .await?;
+    if !response.status().is_success() {
+        return Err(provider_failure(response, timeout, false).await?.into());
+    }
+    let text = read_body(response, timeout).await?;
+    serde_json::from_str(&text).map_err(|err| {
+        Error::invalid_response(litellm_llms::ErrorDetail::invalid(
+            "count_tokens response JSON",
+            err,
+        ))
+    })
+}
+
+fn with_a_max_tokens(request: MessagesRequest) -> MessagesRequest {
+    MessagesRequest {
+        params: MessagesOptionalParams {
+            max_tokens: request
+                .params
+                .max_tokens
+                .or(Some(Recognized::Known(UNCAPPED_MAX_TOKENS))),
+            ..request.params
+        },
+        ..request
+    }
 }
 
 fn with_requested_output_format(

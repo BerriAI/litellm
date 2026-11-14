@@ -19,6 +19,7 @@
 # references
 
 - https://platform.claude.com/docs/en/api/http/messages/create
+- https://platform.claude.com/docs/en/api/http/messages/count_tokens
 - https://platform.claude.com/docs/en/api/messages/create.md
 - https://platform.claude.com/docs/en/api/beta/messages/create.md
 - https://platform.claude.com/docs/en/build-with-claude/streaming.md
