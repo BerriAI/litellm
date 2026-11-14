@@ -6,7 +6,7 @@ import json
 import pathlib
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Final
+from typing import Final, NoReturn
 
 import httpx
 import pytest
@@ -14,7 +14,7 @@ import respx
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.caching.caching import DualCache
+from litellm.caching.caching import Cache, DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import litellm_logging
@@ -911,6 +911,11 @@ GATEWAY_CREDENTIAL_CARRIERS: Final = (
         },
         id="request-headers",
     ),
+    pytest.param(
+        "first-custom-model",
+        {"custom_llm_provider": "openai", "api_key": "gateway-key", "api_base": "https://gateway.example/v1"},
+        id="explicit-provider",
+    ),
 )
 
 
@@ -953,6 +958,30 @@ async def test_acompletion_fallback_to_another_provider_never_reuses_the_first_p
     assert str(fallback_request.url) == "https://api.anthropic.com/v1/messages"
     assert fallback_request.headers["x-api-key"] == "anthropic-env-key"
     assert not any("gateway-key" in value for value in fallback_request.headers.values())
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.asyncio
+async def test_acompletion_fallback_to_an_unprefixed_model_keeps_the_requests_provider_and_credentials(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://models.example/v1/chat/completions").mock(
+        side_effect=_replies((None, "fallback answer"))
+    )
+
+    response: Final = await python_acompletion(
+        model="first-custom-model",
+        custom_llm_provider="openai",
+        api_base="https://models.example/v1",
+        api_key="models-key",
+        messages=[{"role": "user", "content": "hello"}],
+        fallbacks=["second-custom-model"],
+    )
+
+    assert response.choices[0].message.content == "fallback answer"
+    assert _requested_models(route) == ("first-custom-model", "second-custom-model")
+    assert route.calls.last.request.headers["authorization"] == "Bearer models-key"
 
 
 @pytest.mark.timeout(30, method="thread")
@@ -1122,6 +1151,45 @@ def test_completion_with_fallbacks_runs_the_requested_guardrail_before_every_att
     assert [json.loads(call.request.content)["messages"] for call in route.calls] == [
         [{"role": "user", "content": "[REDACTED]"}]
     ] * 2
+
+
+class _RejectingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="reject", event_hook=GuardrailEventHooks.post_call)
+
+    async def async_post_call_success_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+    ) -> NoReturn:
+        raise ValueError("answer rejected")
+
+
+def _completion_checked_by_the_rejecting_guardrail() -> object:
+    return python_completion(
+        model="openai/first",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        fallbacks=["openai/second"],
+        guardrails=["reject"],
+    )
+
+
+@pytest.mark.timeout(30, method="thread")
+def test_completion_with_fallbacks_never_caches_an_answer_its_guardrail_rejected(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    monkeypatch.setattr(litellm, "callbacks", [_RejectingGuardrail()])
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=_replies(("rejected answer",) * 4)
+    )
+
+    with pytest.raises(Exception, match="answer rejected"):
+        _ = _completion_checked_by_the_rejecting_guardrail()
+    with pytest.raises(Exception, match="answer rejected"):
+        _ = _completion_checked_by_the_rejecting_guardrail()
+
+    assert _requested_models(route) == ("first", "second", "first", "second")
 
 
 @pytest.mark.timeout(30, method="thread")

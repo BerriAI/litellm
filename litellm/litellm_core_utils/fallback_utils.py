@@ -121,8 +121,9 @@ def _inherited_kwargs(
 ) -> Mapping[str, object]:
     if model == original_model:
         return base_kwargs
-    original_provider: Final = _provider_of(original_model, base_kwargs.get("custom_llm_provider"))
-    provider: Final = _provider_of(model, custom_llm_provider)
+    requested_provider: Final = base_kwargs.get("custom_llm_provider")
+    original_provider: Final = _provider_of(original_model, requested_provider)
+    provider: Final = _provider_of(model, custom_llm_provider) or _provider_of(model, requested_provider)
     switches_provider: Final = original_provider is None or original_provider != provider
     dropped: Final = (_MODEL_BOUND_PARAMS | _PROVIDER_BOUND_PARAMS) if switches_provider else _MODEL_BOUND_PARAMS
     return {key: value for key, value in base_kwargs.items() if key not in dropped}
@@ -186,15 +187,19 @@ async def async_completion_with_fallbacks(**kwargs: object) -> object:
         raise _all_attempts_failed(last_error) from last_error
 
 
+def _without_cache_writes(request: Mapping[str, object]) -> Mapping[str, object]:
+    return {**request, "cache": {**_REQUEST_KWARGS.validate_python(request.get("cache") or {}), "no-store": True}}
+
+
 def _completion_with_deployment_hooks(request_kwargs: Mapping[str, object]) -> object:
     from litellm.utils import async_post_call_success_deployment_hook, async_pre_call_deployment_hook
 
     request: Final = _REQUEST_KWARGS.validate_python(
         run_async_function(async_pre_call_deployment_hook, request_kwargs, CallTypes.completion.value, include_v2=True)
     )
-    response: Final = litellm.completion(**request)
     if request.get("stream"):
-        return response
+        return litellm.completion(**request)
+    response: Final = litellm.completion(**_without_cache_writes(request))
     return run_async_function(
         async_post_call_success_deployment_hook, request, response, CallTypes.completion, include_v2=True
     )
