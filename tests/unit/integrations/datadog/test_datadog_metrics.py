@@ -1,4 +1,8 @@
+import asyncio
+import gzip
+import json
 import time
+import zlib
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -125,9 +129,9 @@ async def test_add_metrics_from_log(clean_env):
 
     logger._add_metrics_from_log(log=payload, kwargs=kwargs, status_code="200")
 
-    # Should have 3 series: total_latency, llm_api_latency, request_count
+    # total_latency and llm_api_latency (each as gauge + distribution) plus request_count
     # (no overhead metric because payload has no hidden_params litellm_overhead_time_ms)
-    assert len(logger.log_queue) == 3
+    assert len(logger.log_queue) == 5
 
     metrics = {s["metric"]: s for s in logger.log_queue}
 
@@ -146,6 +150,63 @@ async def test_add_metrics_from_log(clean_env):
     assert count["type"] == 1  # count
     assert count["points"][0]["value"] == 1.0
     assert "status_code:200" in count["tags"]
+
+
+@pytest.mark.asyncio
+async def test_latency_metrics_also_emitted_as_distributions(clean_env):
+    """Each latency sample is queued as a `litellm_proxy.*` distribution point so Datadog can compute percentiles."""
+    logger = DatadogMetricsLogger(batch_size=100, start_periodic_flush=False)
+
+    now = datetime.now()
+    payload = StandardLoggingPayload(
+        custom_llm_provider="openai",
+        model="gpt-4o",
+        hidden_params={"litellm_overhead_time_ms": 250},
+    )
+    kwargs = {
+        "start_time": now - timedelta(seconds=2),
+        "api_call_start_time": now - timedelta(seconds=1),
+        "end_time": now,
+    }
+
+    logger._add_metrics_from_log(log=payload, kwargs=kwargs, status_code="200")
+
+    distributions = {s["metric"]: s for s in logger.log_queue if s["type"] == "distribution"}
+    assert set(distributions) == {
+        "litellm_proxy.request.total_latency",
+        "litellm_proxy.llm_api.latency",
+        "litellm_proxy.overhead.latency",
+    }
+
+    expected_seconds = {
+        "litellm_proxy.request.total_latency": 2.0,
+        "litellm_proxy.llm_api.latency": 1.0,
+        "litellm_proxy.overhead.latency": 0.25,
+    }
+    for metric, seconds in expected_seconds.items():
+        ((timestamp, values),) = distributions[metric]["points"]
+        assert timestamp == int(now.timestamp())
+        assert len(values) == 1
+        assert abs(values[0] - seconds) < 0.1
+        assert "provider:openai" in distributions[metric]["tags"]
+        assert "model_name:gpt-4o" in distributions[metric]["tags"]
+
+    assert "status_code:200" in distributions["litellm_proxy.request.total_latency"]["tags"]
+    assert not any(tag.startswith("status_code:") for tag in distributions["litellm_proxy.overhead.latency"]["tags"])
+
+
+@pytest.mark.asyncio
+async def test_extract_tags_omits_hostname_when_unset(clean_env, monkeypatch: pytest.MonkeyPatch):
+    """An unset HOSTNAME must not produce an empty `HOSTNAME:` tag."""
+    monkeypatch.delenv("HOSTNAME", raising=False)
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+
+    tags = logger._extract_tags(log=StandardLoggingPayload(model="gpt-4o"))
+
+    assert not any(tag.startswith("HOSTNAME") for tag in tags)
+
+    monkeypatch.setenv("HOSTNAME", "pod-abc")
+    assert "HOSTNAME:pod-abc" in logger._extract_tags(log=StandardLoggingPayload(model="gpt-4o"))
 
 
 @pytest.mark.asyncio
@@ -176,9 +237,9 @@ async def test_overhead_latency_metric_emitted(clean_env):
     metrics = {s["metric"]: s for s in logger.log_queue}
 
     # Overhead metric must be present
-    assert (
-        "litellm.overhead.latency" in metrics
-    ), f"Expected 'litellm.overhead.latency' in emitted metrics, got: {list(metrics.keys())}"
+    assert "litellm.overhead.latency" in metrics, (
+        f"Expected 'litellm.overhead.latency' in emitted metrics, got: {list(metrics.keys())}"
+    )
     overhead = metrics["litellm.overhead.latency"]
     assert overhead["type"] == 3  # gauge
     # 250 ms → 0.25 s
@@ -321,9 +382,7 @@ async def test_async_send_batch(clean_env):
     logger = DatadogMetricsLogger(start_periodic_flush=False)
     logger.async_client = AsyncMock()
     mock_request = Request("POST", "https://api.test.datadoghq.com/api/v2/series")
-    logger.async_client.post.return_value = Response(
-        202, json={"status": "ok"}, request=mock_request
-    )
+    logger.async_client.post.return_value = Response(202, json={"status": "ok"}, request=mock_request)
 
     # Manually add a metric series to the queue
     logger.log_queue = [
@@ -349,6 +408,317 @@ async def test_async_send_batch(clean_env):
     payload = json.loads(gzip.decompress(compressed).decode("utf-8"))
     assert len(payload["series"]) == 1
     assert payload["series"][0]["metric"] == "litellm.request.total_latency"
+
+
+@pytest.mark.asyncio
+async def test_async_send_batch_routes_distributions_to_v1_endpoint(clean_env):
+    """Distribution series go to /api/v1/distribution_points (deflate), gauges/counts stay on /api/v2/series."""
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+    logger.async_client = AsyncMock()
+    logger.async_client.post.return_value = Response(
+        202, json={"status": "ok"}, request=Request("POST", "https://api.test.datadoghq.com")
+    )
+
+    timestamp = int(time.time())
+    logger.log_queue = [
+        {
+            "metric": "litellm.request.total_latency",
+            "type": 3,
+            "points": [{"timestamp": timestamp, "value": 1.5}],
+            "tags": ["env:test"],
+        },
+        {
+            "metric": "litellm_proxy.request.total_latency",
+            "type": "distribution",
+            "points": ((timestamp, (1.5,)),),
+            "tags": ("env:test",),
+        },
+    ]
+
+    await logger.async_send_batch()
+
+    calls = {call.args[0]: call.kwargs for call in logger.async_client.post.call_args_list}
+    assert set(calls) == {
+        "https://api.test.datadoghq.com/api/v2/series",
+        "https://api.test.datadoghq.com/api/v1/distribution_points",
+    }
+
+    series_call = calls["https://api.test.datadoghq.com/api/v2/series"]
+    assert series_call["headers"]["Content-Encoding"] == "gzip"
+    series_payload = json.loads(gzip.decompress(series_call["content"]))
+    assert [s["metric"] for s in series_payload["series"]] == ["litellm.request.total_latency"]
+
+    distribution_call = calls["https://api.test.datadoghq.com/api/v1/distribution_points"]
+    assert distribution_call["headers"]["Content-Encoding"] == "deflate"
+    assert distribution_call["headers"]["DD-API-KEY"] == "test_api_key"
+    distribution_payload = json.loads(zlib.decompress(distribution_call["content"]))
+    assert distribution_payload == {
+        "series": [
+            {
+                "metric": "litellm_proxy.request.total_latency",
+                "type": "distribution",
+                "points": [[timestamp, [1.5]]],
+                "tags": ["env:test"],
+            }
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_send_batch_skips_v2_when_only_distributions_queued(clean_env):
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+    logger.async_client = AsyncMock()
+    logger.async_client.post.return_value = Response(
+        202, json={"status": "ok"}, request=Request("POST", "https://api.test.datadoghq.com")
+    )
+    logger.log_queue = [
+        {
+            "metric": "litellm_proxy.llm_api.latency",
+            "type": "distribution",
+            "points": ((int(time.time()), (0.4,)),),
+            "tags": ("env:test",),
+        }
+    ]
+
+    await logger.async_send_batch()
+
+    assert [call.args[0] for call in logger.async_client.post.call_args_list] == [
+        "https://api.test.datadoghq.com/api/v1/distribution_points"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_flush_retries_only_distributions_after_v1_failure(clean_env):
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+    logger.async_client = AsyncMock()
+    v2_url = "https://api.test.datadoghq.com/api/v2/series"
+    v1_url = "https://api.test.datadoghq.com/api/v1/distribution_points"
+    responses = {
+        v2_url: Response(202, json={"status": "ok"}, request=Request("POST", v2_url)),
+        v1_url: Response(503, json={"errors": ["down"]}, request=Request("POST", v1_url)),
+    }
+    timestamp = int(time.time())
+    late_count = {
+        "metric": "litellm.llm_api.request_count",
+        "type": 1,
+        "points": [{"timestamp": timestamp, "value": 1}],
+        "tags": ["env:test"],
+    }
+
+    def post(url, **_):
+        if url == v1_url and late_count not in logger.log_queue:
+            logger.log_queue.append(late_count)
+        return responses[url]
+
+    logger.async_client.post.side_effect = post
+
+    gauge = {
+        "metric": "litellm.request.total_latency",
+        "type": 3,
+        "points": [{"timestamp": timestamp, "value": 1.5}],
+        "tags": ["env:test"],
+    }
+    distribution = {
+        "metric": "litellm_proxy.request.total_latency",
+        "type": "distribution",
+        "points": ((timestamp, (1.5,)),),
+        "tags": ("env:test",),
+    }
+    logger.log_queue = [gauge, distribution]
+
+    await logger.flush_queue()
+
+    assert logger.log_queue == [distribution, late_count]
+
+    responses[v1_url] = Response(202, json={"status": "ok"}, request=Request("POST", v1_url))
+    await logger.flush_queue()
+
+    assert logger.log_queue == []
+    assert [call.args[0] for call in logger.async_client.post.call_args_list] == [v2_url, v1_url, v2_url, v1_url]
+    second_v2 = json.loads(gzip.decompress(logger.async_client.post.call_args_list[2].kwargs["content"]))
+    assert [s["metric"] for s in second_v2["series"]] == ["litellm.llm_api.request_count"]
+
+
+@pytest.mark.asyncio
+async def test_flush_keeps_only_the_newest_batch_of_rejected_distributions(clean_env):
+    logger = DatadogMetricsLogger(batch_size=2, start_periodic_flush=False)
+    logger.async_client = AsyncMock()
+    v1_url = "https://api.test.datadoghq.com/api/v1/distribution_points"
+    logger.async_client.post.return_value = Response(503, json={"errors": ["down"]}, request=Request("POST", v1_url))
+    timestamp = int(time.time())
+    distributions = [
+        {
+            "metric": "litellm_proxy.request.total_latency",
+            "type": "distribution",
+            "points": ((timestamp, (float(seconds),)),),
+            "tags": ("env:test",),
+        }
+        for seconds in range(3)
+    ]
+    logger.log_queue = list(distributions)
+
+    await logger.flush_queue()
+
+    assert logger.log_queue == distributions[1:]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("log_event", ("async_log_success_event", "async_log_failure_event"))
+async def test_rejected_distributions_do_not_count_toward_the_batch_size(clean_env, log_event):
+    """While Datadog rejects distributions, a request triggers a flush only once a batch of new metrics has
+    queued behind them, and once Datadog takes them every queued metric counts again."""
+    logger = DatadogMetricsLogger(batch_size=8, start_periodic_flush=False)
+    logger.async_client = AsyncMock()
+    v2_url = "https://api.test.datadoghq.com/api/v2/series"
+    v1_url = "https://api.test.datadoghq.com/api/v1/distribution_points"
+    responses = {
+        v2_url: Response(202, json={"status": "ok"}, request=Request("POST", v2_url)),
+        v1_url: Response(503, json={"errors": ["down"]}, request=Request("POST", v1_url)),
+    }
+    logger.async_client.post.side_effect = lambda url, **_: responses[url]
+    now = datetime.now()
+    kwargs = {
+        "standard_logging_object": StandardLoggingPayload(custom_llm_provider="openai", model="gpt-4o"),
+        "start_time": now - timedelta(seconds=1),
+        "api_call_start_time": now - timedelta(seconds=0.5),
+        "end_time": now,
+    }
+
+    async def posts_after_each_of(requests: int) -> list[int]:
+        posts = []
+        for _ in range(requests):
+            await getattr(logger, log_event)(kwargs, None, kwargs["start_time"], now)
+            posts.append(logger.async_client.post.call_count)
+        return posts
+
+    assert await posts_after_each_of(4) == [0, 2, 2, 4]
+
+    responses[v1_url] = Response(202, json={"status": "ok"}, request=Request("POST", v1_url))
+
+    assert await posts_after_each_of(4) == [4, 6, 6, 8]
+    assert logger.log_queue == []
+
+
+@pytest.mark.asyncio
+async def test_flush_keeps_the_whole_batch_when_the_series_upload_fails(clean_env):
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+    logger.async_client = AsyncMock()
+    v2_url = "https://api.test.datadoghq.com/api/v2/series"
+    v1_url = "https://api.test.datadoghq.com/api/v1/distribution_points"
+    responses = {
+        v2_url: Response(503, json={"errors": ["down"]}, request=Request("POST", v2_url)),
+        v1_url: Response(202, json={"status": "ok"}, request=Request("POST", v1_url)),
+    }
+    logger.async_client.post.side_effect = lambda url, **_: responses[url]
+    timestamp = int(time.time())
+    gauge = {
+        "metric": "litellm.request.total_latency",
+        "type": 3,
+        "points": [{"timestamp": timestamp, "value": 1.5}],
+        "tags": ["env:test"],
+    }
+    distribution = {
+        "metric": "litellm_proxy.request.total_latency",
+        "type": "distribution",
+        "points": ((timestamp, (1.5,)),),
+        "tags": ("env:test",),
+    }
+    logger.log_queue = [gauge, distribution]
+
+    await logger.flush_queue()
+
+    assert logger.log_queue == [gauge, distribution]
+
+    responses[v2_url] = Response(202, json={"status": "ok"}, request=Request("POST", v2_url))
+    await logger.flush_queue()
+
+    assert logger.log_queue == []
+    assert [call.args[0] for call in logger.async_client.post.call_args_list] == [v2_url, v2_url, v1_url]
+
+
+@pytest.mark.asyncio
+async def test_flush_cancelled_during_the_distribution_upload_resends_only_distributions(clean_env):
+    """A size-triggered flush runs under the logging worker's deadline; when it is cancelled after Datadog
+    took the series, the next flush must not count those series a second time."""
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+    logger.async_client = AsyncMock()
+    v2_url = "https://api.test.datadoghq.com/api/v2/series"
+    v1_url = "https://api.test.datadoghq.com/api/v1/distribution_points"
+    v1_hangs = asyncio.Event()
+    v1_hangs.set()
+
+    async def post(url, **_):
+        if url == v1_url and v1_hangs.is_set():
+            await asyncio.sleep(3600)
+        return Response(202, json={"status": "ok"}, request=Request("POST", url))
+
+    logger.async_client.post.side_effect = post
+    timestamp = int(time.time())
+    count = {
+        "metric": "litellm.llm_api.request_count",
+        "type": 1,
+        "points": [{"timestamp": timestamp, "value": 1}],
+        "tags": ["env:test"],
+    }
+    distribution = {
+        "metric": "litellm_proxy.request.total_latency",
+        "type": "distribution",
+        "points": ((timestamp, (1.5,)),),
+        "tags": ("env:test",),
+    }
+    logger.log_queue = [count, distribution]
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(logger.flush_queue(), timeout=0.1)
+
+    assert logger.log_queue == [distribution]
+
+    v1_hangs.clear()
+    await logger.flush_queue()
+
+    assert logger.log_queue == []
+    assert [call.args[0] for call in logger.async_client.post.call_args_list] == [v2_url, v1_url, v1_url]
+
+
+@pytest.mark.asyncio
+async def test_flush_keeps_metrics_queued_while_the_upload_was_in_flight(clean_env):
+    """A request finishing while a flush awaits Datadog rides the next flush instead of being cleared with the batch."""
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+    logger.async_client = AsyncMock()
+    timestamp = int(time.time())
+    late = {
+        "metric": "litellm_proxy.request.total_latency",
+        "type": "distribution",
+        "points": ((timestamp, (2.0,)),),
+        "tags": ("env:late",),
+    }
+
+    def post(url, **_):
+        if late not in logger.log_queue:
+            logger.log_queue.append(late)
+        return Response(202, json={"status": "ok"}, request=Request("POST", url))
+
+    logger.async_client.post.side_effect = post
+    logger.log_queue = [
+        {
+            "metric": "litellm.request.total_latency",
+            "type": 3,
+            "points": [{"timestamp": timestamp, "value": 1.5}],
+            "tags": ["env:test"],
+        }
+    ]
+
+    await logger.flush_queue()
+
+    assert logger.log_queue == [late]
+
+    await logger.flush_queue()
+
+    assert logger.log_queue == []
+    assert [call.args[0] for call in logger.async_client.post.call_args_list] == [
+        "https://api.test.datadoghq.com/api/v2/series",
+        "https://api.test.datadoghq.com/api/v1/distribution_points",
+    ]
 
 
 @pytest.mark.asyncio
