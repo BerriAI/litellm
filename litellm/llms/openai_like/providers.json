@@ -314,5 +314,11 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "tinker": {
+    "base_url": "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1",
+    "api_key_env": "TINKER_API_KEY",
+    "api_base_env": "TINKER_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
