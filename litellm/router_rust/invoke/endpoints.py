@@ -24,6 +24,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
+from litellm._uuid import uuid as ordered_uuid
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     add_retry_headers_to_response,
@@ -1997,7 +1998,7 @@ class RustEndpoints:
             return list(healthy) if isinstance(healthy, Sequence) else [healthy]
 
         await scheduler.wait_for_turn(
-            request=FlowItem(priority=priority, request_id=str(uuid.uuid4()), model_name=model),
+            request=FlowItem(priority=priority, request_id=str(ordered_uuid.uuid7()), model_name=model),
             timeout=self._core.resolved.timeout,  # pyright: ignore[reportArgumentType]  # the router timeout
             get_healthy_deployments=healthy_deployments,
         )
