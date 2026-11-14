@@ -87,7 +87,7 @@ class _DropParamsSetting(BaseModel):
     drop_params: object = None
 
 
-def _drops_params(litellm_params: GenericLiteLLMParams) -> bool:
+def drops_params(litellm_params: GenericLiteLLMParams) -> bool:
     setting: Final = _DropParamsSetting.model_validate(litellm_params)
     return litellm.drop_params is True or normalize_drop_params(setting.drop_params) is True
 
@@ -541,7 +541,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if tools is None or not any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
             return tools
         callers_own_search: Final = any(is_openai_tool_search_tool(tool) for tool in tools)
-        if callers_own_search or not _drops_params(litellm_params) or _runs_tool_search(model, tools):
+        if callers_own_search or not drops_params(litellm_params) or _runs_tool_search(model, tools):
             return tools_with_anthropic_tool_search_mapped(tools)
         verbose_logger.warning(
             "Dropping tool search under drop_params: OpenAI model '%s' cannot run it or no tool is deferred, so every "

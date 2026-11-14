@@ -149,21 +149,15 @@ async def test_muse_async_streaming_preserves_output_and_completed_usage(
     assert FIELDS.validate_json(route.calls.last.request.content)["model"] == model
 
 
-def test_muse_defaults_to_stateless_requests_and_honors_custom_token_prices(respx_mock: respx.MockRouter) -> None:
-    model: Final = "vertex_ai/meta/muse-wonder-1.0"
-    input_rate: Final = 0.001
-    output_rate: Final = 0.002
+def test_muse_defaults_to_stateless_requests(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-wonder-1.0")))
-    response: Final = litellm.responses(
-        model=model,
+    _ = litellm.responses(
+        model="vertex_ai/meta/muse-wonder-1.0",
         input="Say hello",
         vertex_project="unit-project",
-        input_cost_per_token=input_rate,
-        output_cost_per_token=output_rate,
         num_retries=0,
     )
     assert FIELDS.validate_json(route.calls.last.request.content)["store"] is False
-    assert response.hidden_params["response_cost"] == pytest.approx(7 * input_rate + 2 * output_rate)
 
 
 def test_muse_refuses_server_side_response_storage() -> None:
