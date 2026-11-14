@@ -1,6 +1,8 @@
 import asyncio
+import base64
 import copy
 import json
+import os
 import re
 import threading
 import time
@@ -10,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
@@ -48,6 +51,40 @@ COMPARED_HEADERS: Final = (
     "x-amz-security-token",
 )
 START: Final = datetime(2026, 11, 13, 9, 5, 7, 42)
+GOLDEN_FILE: Final = Path(__file__).parent / "s3_v2_golden" / "python_s3_v2.json"
+RECORDING: Final = os.environ.get("S3_V2_RECORD_GOLDEN") == "1"
+_RECORDED: Final[dict[str, object]] = {}
+_UNSET: Final = object()
+
+
+@dataclass(frozen=True)
+class Golden:
+    test: str
+    values: Mapping[str, object]
+
+    def python(self, label: str, value: object = _UNSET) -> object:
+        key: Final = f"{self.test}::{label}"
+        if not RECORDING:
+            return self.values[key]
+        assert value is not _UNSET, key
+        recorded: Final = json.loads(json.dumps(value))
+        _RECORDED[key] = recorded
+        return recorded
+
+
+@pytest.fixture(scope="session")
+def _golden_values() -> Iterator[Mapping[str, object]]:
+    values: Final = {} if RECORDING else json.loads(GOLDEN_FILE.read_text(encoding="utf-8"))
+    yield values
+    if RECORDING:
+        GOLDEN_FILE.write_text(
+            json.dumps(_RECORDED, indent=1, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+
+@pytest.fixture
+def golden(request: pytest.FixtureRequest, _golden_values: Mapping[str, object]) -> Golden:
+    return Golden(request.node.name, _golden_values)
 
 
 @dataclass
@@ -275,19 +312,97 @@ def _body_differences(python_body: bytes, rust_body: bytes) -> str:
     return "; ".join(differences) or f"at byte {at}: python {python_body[around]!r} != rust {rust_body[around]!r}"
 
 
-def _assert_same_puts(pair: tuple[FakeBucket, FakeBucket], count: int) -> None:
-    python_puts, rust_puts = pair[0].puts(), pair[1].puts()
+def _record(request: Received) -> dict[str, object]:
+    try:
+        body: object = {"body": request.body.decode("utf-8")}
+    except UnicodeDecodeError:
+        body = {"body_base64": base64.b64encode(request.body).decode()}
+    return {
+        "method": request.method,
+        "path": request.path,
+        "headers": {name: request.headers.get(name) for name in COMPARED_HEADERS},
+        "signed_headers": _signed_headers(request) if "authorization" in request.headers else None,
+        **body,
+    }
+
+
+def _records(requests: list[Received]) -> list[dict[str, object]]:
+    return sorted((_record(request) for request in requests), key=lambda record: str(record["path"]))
+
+
+def _body(record: Mapping[str, object]) -> bytes:
+    if "body_base64" in record:
+        return base64.b64decode(str(record["body_base64"]))
+    return str(record["body"]).encode("utf-8")
+
+
+def _python_puts(golden: Golden, pair: tuple[FakeBucket, FakeBucket], label: str = "puts") -> list[dict[str, object]]:
+    if RECORDING:
+        for put in pair[0].puts():
+            assert put.headers["authorization"] == _botocore_authorization(put, pair[0].port)
+    recorded: Final = golden.python(label, _records(pair[0].puts()) if RECORDING else _UNSET)
+    assert isinstance(recorded, list)
+    return recorded
+
+
+LIVE_BODY_FIELDS: Final = (
+    "id",
+    "litellm_call_id",
+    "trace_id",
+    "startTime",
+    "endTime",
+    "completionStartTime",
+    "response_time",
+)
+LIVE_RESPONSE_FIELDS: Final = ("id", "created")
+LIVE_HEADERS: Final = ("content-md5", "x-amz-content-sha256", "content-disposition")
+LIVE_KEY: Final = re.compile(r"\d{4}-\d\d-\d\d/time-\d\d-\d\d-\d\d-\d{6}_[^/]+\.json$")
+
+
+def _live_record(request: Received) -> dict[str, object]:
+    body: Final = json.loads(request.body)
+    assert isinstance(body, dict)
+    for name in LIVE_BODY_FIELDS:
+        if name in body:
+            body[name] = "<live>"
+    response: Final = body.get("response")
+    if isinstance(response, dict):
+        for name in LIVE_RESPONSE_FIELDS:
+            if name in response:
+                response[name] = "<live>"
+    return {
+        "path": LIVE_KEY.sub("<date>/time-<clock>_<id>.json", request.path),
+        "headers": {name: "<live>" if name in LIVE_HEADERS else request.headers.get(name) for name in COMPARED_HEADERS},
+        "signed_headers": _signed_headers(request),
+        "body_keys": list(body),
+        "body_json": body,
+    }
+
+
+def _assert_same_live_puts(golden: Golden, pair: tuple[FakeBucket, FakeBucket], count: int) -> None:
+    python_puts: Final = golden.python(
+        "live-puts", [_live_record(put) for put in pair[0].puts()] if RECORDING else _UNSET
+    )
+    rust_puts: Final = [_live_record(put) for put in pair[1].puts()]
+    assert isinstance(python_puts, list)
     assert len(python_puts) == len(rust_puts) == count
-    for python_put, rust_put in zip(
-        sorted(python_puts, key=lambda r: r.path), sorted(rust_puts, key=lambda r: r.path), strict=True
-    ):
-        assert rust_put.path == python_put.path
-        assert rust_put.body == python_put.body, _body_differences(python_put.body, rust_put.body)
+    for python_put, rust_put in zip(python_puts, rust_puts, strict=True):
+        assert rust_put == python_put
+    for put in pair[1].puts():
+        assert put.headers["authorization"] == _botocore_authorization(put, pair[1].port)
+
+
+def _assert_same_puts(golden: Golden, pair: tuple[FakeBucket, FakeBucket], count: int) -> None:
+    python_puts: Final = _python_puts(golden, pair)
+    rust_puts: Final = sorted(pair[1].puts(), key=lambda r: r.path)
+    assert len(python_puts) == len(rust_puts) == count
+    for python_put, rust_put in zip(python_puts, rust_puts, strict=True):
+        assert rust_put.path == python_put["path"]
+        assert rust_put.body == _body(python_put), _body_differences(_body(python_put), rust_put.body)
         for name in COMPARED_HEADERS:
-            assert rust_put.headers.get(name) == python_put.headers.get(name), name
-        assert _signed_headers(rust_put) == _signed_headers(python_put)
+            assert rust_put.headers.get(name) == python_put["headers"][name], name
+        assert _signed_headers(rust_put) == python_put["signed_headers"]
         assert rust_put.headers["authorization"] == _botocore_authorization(rust_put, pair[1].port)
-        assert python_put.headers["authorization"] == _botocore_authorization(python_put, pair[0].port)
 
 
 class _Model(BaseModel):
@@ -359,7 +474,7 @@ PARAM_GRID: Final = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("extra", PARAM_GRID)
 async def test_both_loggers_put_the_same_objects(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, extra: Mapping[str, object]
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, extra: Mapping[str, object]
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, extra)
     payloads: Final = [
@@ -384,17 +499,17 @@ async def test_both_loggers_put_the_same_objects(
     for payload in payloads:
         await _log(python_logger, rust_logger, payload)
     await _flush(python_logger, rust_logger)
-    _assert_same_puts(buckets, len(payloads))
+    _assert_same_puts(golden, buckets, len(payloads))
 
 
 @pytest.mark.asyncio
 async def test_a_missing_payload_logs_nothing(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {})
     await _log(python_logger, rust_logger, None)
     await _flush(python_logger, rust_logger)
-    _assert_same_puts(buckets, 0)
+    _assert_same_puts(golden, buckets, 0)
 
 
 @pytest.mark.asyncio
@@ -413,7 +528,7 @@ async def test_a_missing_payload_logs_nothing(
     ],
 )
 async def test_both_loggers_skip_and_count_the_same_bad_payloads(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, payload: object
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, payload: object
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {"s3_use_team_prefix": True})
     with (
@@ -423,16 +538,21 @@ async def test_both_loggers_skip_and_count_the_same_bad_payloads(
         await _log(python_logger, rust_logger, payload)
         await _flush(python_logger, rust_logger)
         await asyncio.sleep(0.2)
-    assert buckets[0].puts() == buckets[1].puts() == []
-    assert python_logger.log_queue == []
+    assert _python_puts(golden, buckets) == buckets[1].puts() == []
+    assert (
+        golden.python("queue", [element.s3_object_key for element in python_logger.log_queue] if RECORDING else _UNSET)
+        == []
+    )
     assert rust_logger.sink.queued_keys() == []
-    assert python_failures.call_count == rust_failures.call_count == 1
+    assert (
+        golden.python("failures", python_failures.call_count if RECORDING else _UNSET) == rust_failures.call_count == 1
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("granularity", ["day", "hour"])
 async def test_a_cold_storage_key_is_reused_when_it_matches(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, granularity: str
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, granularity: str
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {"s3_path": "cold"})
     monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
@@ -441,7 +561,7 @@ async def test_a_cold_storage_key_is_reused_when_it_matches(
     for response_id, key in (("chatcmpl-1", matching), ("chatcmpl-2", "elsewhere/x.json")):
         await _log(python_logger, rust_logger, _payload(response_id, metadata={"cold_storage_object_key": key}))
     await _flush(python_logger, rust_logger)
-    _assert_same_puts(buckets, 2)
+    _assert_same_puts(golden, buckets, 2)
     assert {r.path for r in buckets[1].puts()} == {
         f"/logs/{matching}",
         "/logs/cold/2026-11-13/time-09-05-07-000042_chatcmpl-2.json",
@@ -465,6 +585,7 @@ async def test_a_cold_storage_key_is_reused_when_it_matches(
     ],
 )
 async def test_both_loggers_keep_and_drop_the_same_failed_uploads(
+    golden: Golden,
     buckets: tuple[FakeBucket, FakeBucket],
     monkeypatch: pytest.MonkeyPatch,
     failures: list[tuple[str, int, str]],
@@ -476,19 +597,30 @@ async def test_both_loggers_keep_and_drop_the_same_failed_uploads(
     for response_id in ("a", "b", "c"):
         await _log(python_logger, rust_logger, _payload(response_id))
     await _flush(python_logger, rust_logger)
-    python_queue: Final = [element.s3_object_key for element in python_logger.log_queue]
+    python_queue: Final = golden.python(
+        "queue", [element.s3_object_key for element in python_logger.log_queue] if RECORDING else _UNSET
+    )
     assert rust_logger.sink.queued_keys() == python_queue
-    assert len(buckets[1].puts()) == len(buckets[0].puts())
+    assert len(buckets[1].puts()) == golden.python("put-count", len(buckets[0].puts()) if RECORDING else _UNSET)
     for bucket in buckets:
         bucket.failures.clear()
     await _flush(python_logger, rust_logger)
-    assert rust_logger.sink.queued_keys() == [element.s3_object_key for element in python_logger.log_queue] == []
-    assert sorted(r.path for r in buckets[1].puts()) == sorted(r.path for r in buckets[0].puts())
+    assert (
+        rust_logger.sink.queued_keys()
+        == golden.python(
+            "queue-after-recovery",
+            [element.s3_object_key for element in python_logger.log_queue] if RECORDING else _UNSET,
+        )
+        == []
+    )
+    assert sorted(r.path for r in buckets[1].puts()) == golden.python(
+        "put-paths", sorted(r.path for r in buckets[0].puts()) if RECORDING else _UNSET
+    )
 
 
 @pytest.mark.asyncio
 async def test_batch_files_hold_the_same_lines(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     python_logger, rust_logger = await _loggers(
         monkeypatch, buckets, {"s3_batch_file_upload": True, "s3_use_team_prefix": True}
@@ -496,20 +628,35 @@ async def test_batch_files_hold_the_same_lines(
     for response_id, team in (("a", "t1"), ("b", "t2"), ("c", "t1")):
         await _log(python_logger, rust_logger, _payload(response_id, metadata={"user_api_key_team_alias": team}))
     await _flush(python_logger, rust_logger)
-    python_puts, rust_puts = buckets[0].puts(), buckets[1].puts()
-    assert len(python_puts) == len(rust_puts) == 2
     name: Final = re.compile(r"/batch_\d\d-\d\d-\d\d_[0-9a-f]{32}\.jsonl$")
-    for python_put, rust_put in zip(
-        sorted(python_puts, key=lambda r: r.path), sorted(rust_puts, key=lambda r: r.path), strict=True
-    ):
-        assert name.sub("", rust_put.path) == name.sub("", python_put.path)
-        assert rust_put.body == python_put.body, _body_differences(python_put.body, rust_put.body)
-        assert rust_put.headers["content-type"] == python_put.headers["content-type"] == "application/x-ndjson"
+    python_puts: Final = golden.python(
+        "puts",
+        sorted(
+            (
+                {
+                    **_record(put),
+                    "path": name.sub("", put.path),
+                    "headers": {"content-type": put.headers["content-type"]},
+                }
+                for put in buckets[0].puts()
+            ),
+            key=lambda record: str(record["path"]),
+        )
+        if RECORDING
+        else _UNSET,
+    )
+    rust_puts: Final = buckets[1].puts()
+    assert isinstance(python_puts, list)
+    assert len(python_puts) == len(rust_puts) == 2
+    for python_put, rust_put in zip(python_puts, sorted(rust_puts, key=lambda r: r.path), strict=True):
+        assert name.sub("", rust_put.path) == python_put["path"]
+        assert rust_put.body == _body(python_put), _body_differences(_body(python_put), rust_put.body)
+        assert rust_put.headers["content-type"] == python_put["headers"]["content-type"] == "application/x-ndjson"
 
 
 @pytest.mark.asyncio
 async def test_audit_events_and_line_items_land_at_the_same_keys(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {"s3_path": "audit-base"})
     audit: Final = {"id": "audit-1", "action": "created", "before_value": None, "updated_at": "2026-11-13"}
@@ -524,44 +671,60 @@ async def test_audit_events_and_line_items_land_at_the_same_keys(
     }
     await python_logger.async_log_batch_line_items(line_items)  # pyright: ignore[reportArgumentType]  # see above
     await rust_logger.async_log_batch_line_items(line_items)  # pyright: ignore[reportArgumentType]  # see above
-    python_puts, rust_puts = buckets[0].puts(), buckets[1].puts()
-    assert len(python_puts) == len(rust_puts) == 2
     clock: Final = re.compile(r"/\d\d-\d\d-\d\d_")
+    date: Final = re.compile(r"/\d{4}-\d\d-\d\d/")
+    python_puts: Final = golden.python(
+        "puts",
+        [{**_record(put), "path": date.sub("/", clock.sub("/", put.path))} for put in buckets[0].puts()]
+        if RECORDING
+        else _UNSET,
+    )
+    rust_puts: Final = buckets[1].puts()
+    assert isinstance(python_puts, list)
+    assert len(python_puts) == len(rust_puts) == 2
     for python_put, rust_put in zip(python_puts, rust_puts, strict=True):
-        assert clock.sub("/", rust_put.path) == clock.sub("/", python_put.path)
-        assert re.sub(r"/\d{4}-\d\d-\d\d/", "/", rust_put.path) == re.sub(r"/\d{4}-\d\d-\d\d/", "/", python_put.path)
-        assert rust_put.body == python_put.body, _body_differences(python_put.body, rust_put.body)
+        assert date.sub("/", clock.sub("/", rust_put.path)) == python_put["path"]
+        assert rust_put.body == _body(python_put), _body_differences(_body(python_put), rust_put.body)
         for name in COMPARED_HEADERS:
-            assert rust_put.headers.get(name) == python_put.headers.get(name), name
+            assert rust_put.headers.get(name) == python_put["headers"][name], name
 
 
 @pytest.mark.asyncio
 async def test_cold_storage_reads_return_the_same_object(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {})
     await _log(python_logger, rust_logger, _payload())
     await _flush(python_logger, rust_logger)
     key: Final = "2026-11-13/time-09-05-07-000042_chatcmpl-1.json"
-    python_object: Final = await python_logger.get_proxy_server_request_from_cold_storage_with_object_key(key)
+    python_object: Final = golden.python(
+        "object",
+        await python_logger.get_proxy_server_request_from_cold_storage_with_object_key(key) if RECORDING else _UNSET,
+    )
     rust_object: Final = await rust_logger.get_proxy_server_request_from_cold_storage_with_object_key(key)
     assert python_object is not None
     assert rust_object == python_object
     assert await rust_logger.get_proxy_server_request_from_cold_storage_with_object_key("missing.json") is None
-    python_get, rust_get = buckets[0].received[-1], buckets[1].received[-1]
-    assert rust_get.headers["x-amz-content-sha256"] == python_get.headers["x-amz-content-sha256"]
-    assert _signed_headers(rust_get) == _signed_headers(python_get)
+    python_get: Final = golden.python("get", _record(buckets[0].received[-1]) if RECORDING else _UNSET)
+    assert isinstance(python_get, dict)
+    rust_get: Final = buckets[1].received[-1]
+    assert rust_get.headers["x-amz-content-sha256"] == python_get["headers"]["x-amz-content-sha256"]
+    assert _signed_headers(rust_get) == python_get["signed_headers"]
 
 
 @pytest.mark.asyncio
 async def test_the_native_logger_answers_the_python_helpers(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     python_logger, rust_logger = await _loggers(
         monkeypatch, buckets, {"s3_path": "p", "s3_partition_granularity": "hour"}
     )
-    assert rust_logger.s3_path == python_logger.s3_path == "p"
-    assert rust_logger.resolve_partition_granularity() == python_logger.resolve_partition_granularity() == "hour"
+    assert rust_logger.s3_path == golden.python("s3_path", python_logger.s3_path if RECORDING else _UNSET) == "p"
+    assert (
+        rust_logger.resolve_partition_granularity()
+        == golden.python("granularity", python_logger.resolve_partition_granularity() if RECORDING else _UNSET)
+        == "hour"
+    )
     selection: Final = type(rust_logger).selection
     assert selection is not None
     assert selection.name == "s3_v2"
@@ -570,7 +733,7 @@ async def test_the_native_logger_answers_the_python_helpers(
 
 @pytest.mark.asyncio
 async def test_stripping_base64_rewrites_the_shared_payload_the_same_way(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {"s3_strip_base64_files": True})
     original: Final = _payload(
@@ -587,14 +750,14 @@ async def test_stripping_base64_rewrites_the_shared_payload_the_same_way(
     )
     python_payload, rust_payload = copy.deepcopy(original), copy.deepcopy(original)
     await _log_each(python_logger, rust_logger, (python_payload, rust_payload))
-    assert rust_payload == python_payload != original
+    assert rust_payload == golden.python("payload", python_payload if RECORDING else _UNSET) != original
     await _flush(python_logger, rust_logger)
-    _assert_same_puts(buckets, 1)
+    _assert_same_puts(golden, buckets, 1)
 
 
 @pytest.mark.asyncio
 async def test_a_payload_changed_before_the_flush_is_stored_as_it_is_at_the_flush(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {})
     python_payload, rust_payload = _payload(), _payload()
@@ -603,25 +766,28 @@ async def test_a_payload_changed_before_the_flush_is_stored_as_it_is_at_the_flus
         payload["metadata"]["late"] = "written after the event"  # pyright: ignore[reportIndexIssue]  # metadata is the dict _payload builds
         payload["response_cost"] = 99.0
     await _flush(python_logger, rust_logger)
-    _assert_same_puts(buckets, 1)
+    _assert_same_puts(golden, buckets, 1)
     stored: Final = json.loads(buckets[1].puts()[0].body)
     assert stored["metadata"]["late"] == "written after the event"
     assert stored["response_cost"] == 0.000123
     assert rust_logger.sink.stashed() == 0
 
 
-def test_both_loggers_need_a_running_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_both_loggers_need_a_running_event_loop(golden: Golden, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "s3_callback_params", _params("http://127.0.0.1:9", {}))
+    errors: Final[dict[str, str]] = {}
     for flag in ("false", "true"):
         monkeypatch.setenv("LITELLM_NATIVE_S3_V2", flag)
         native_s3_v2_enabled.cache_clear()
-        with pytest.raises(RuntimeError, match="no running event loop"):
+        with pytest.raises(RuntimeError, match="no running event loop") as raised:
             new_s3_v2_logger()
+        errors[flag] = str(raised.value)
+    assert errors["true"] == golden.python("error", errors["false"] if RECORDING else _UNSET)
 
 
 @pytest.mark.asyncio
 async def test_the_native_logger_flushes_on_its_own_after_the_interval(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(s3_v3, "DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 0.05)
     _, rust_logger = await _loggers(monkeypatch, buckets, {})
@@ -644,6 +810,7 @@ async def test_the_native_logger_flushes_on_its_own_after_the_interval(
     ],
 )
 async def test_without_a_region_param_both_sign_with_the_same_environment_region(
+    golden: Golden,
     buckets: tuple[FakeBucket, FakeBucket],
     monkeypatch: pytest.MonkeyPatch,
     environment: Mapping[str, str],
@@ -661,13 +828,18 @@ async def test_without_a_region_param_both_sign_with_the_same_environment_region
         await _log(python_logger, rust_logger, _payload())
         await _flush(python_logger, rust_logger)
         await asyncio.sleep(0.2)
+    python_puts: Final = golden.python("put-count", len(buckets[0].puts()) if RECORDING else _UNSET)
+    python_failure_count: Final = golden.python("failures", python_failures.call_count if RECORDING else _UNSET)
+    if RECORDING and region is not None:
+        put = buckets[0].puts()[0]
+        assert put.headers["authorization"] == _botocore_authorization(put, buckets[0].port, region=region)
     if region is None:
-        assert buckets[0].puts() == buckets[1].puts() == []
-        assert python_failures.call_count == rust_failures.call_count == 1
+        assert python_puts == len(buckets[1].puts()) == 0
+        assert python_failure_count == rust_failures.call_count == 1
         return
-    for bucket in buckets:
-        put = bucket.puts()[0]
-        assert put.headers["authorization"] == _botocore_authorization(put, bucket.port, region=region)
+    assert python_puts == len(buckets[1].puts()) == 1
+    put: Final = buckets[1].puts()[0]
+    assert put.headers["authorization"] == _botocore_authorization(put, buckets[1].port, region=region)
 
 
 @dataclass
@@ -715,9 +887,15 @@ def sts() -> Iterator[FakeSts]:
     server.shutdown()
 
 
+def _sts_session(sts: FakeSts, values: object) -> object:
+    if not isinstance(values, list):
+        return values
+    return [str(value).replace(f"s3-{sts.port}", "s3-<sts-port>") for value in values]
+
+
 @pytest.mark.asyncio
 async def test_web_identity_assumes_the_role_with_the_same_session_policy(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, sts: FakeSts
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, sts: FakeSts
 ) -> None:
     for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_EXTERNAL_ID"):
         monkeypatch.delenv(name, raising=False)
@@ -734,24 +912,34 @@ async def test_web_identity_assumes_the_role_with_the_same_session_policy(
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, identity)
     await _log(python_logger, rust_logger, _payload())
     await _flush(python_logger, rust_logger)
+    compared: Final = ("Action", "RoleArn", "RoleSessionName", "WebIdentityToken", "DurationSeconds", "Policy")
     assert len(sts.calls) == 2
-    python_call, rust_call = sts.calls
-    for name in ("Action", "RoleArn", "RoleSessionName", "WebIdentityToken", "DurationSeconds", "Policy"):
-        assert rust_call.get(name) == python_call.get(name), name
+    python_call: Final = golden.python(
+        "sts-call",
+        {name: _sts_session(sts, sts.calls[0].get(name)) for name in compared} if RECORDING else _UNSET,
+    )
+    assert isinstance(python_call, dict)
+    rust_call: Final = sts.calls[-1]
+    for name in compared:
+        assert _sts_session(sts, rust_call.get(name)) == python_call[name], name
     assert rust_call["WebIdentityToken"] == ["oidc-token-value"]
-    assert json.loads(rust_call["Policy"][0]) == json.loads(S3Logger._web_identity_session_policy_document())
-    for bucket in buckets:
-        put = bucket.puts()[0]
-        assert put.headers["x-amz-security-token"] == "sts-token"
-        assert put.headers["authorization"] == _botocore_authorization(
-            put, bucket.port, credentials=("AKIDSTS", "sts-secret", "sts-token")
-        )
+    assert json.loads(rust_call["Policy"][0]) == json.loads(
+        str(golden.python("policy", S3Logger._web_identity_session_policy_document() if RECORDING else _UNSET))
+    )
+    python_put: Final = golden.python("put", _record(buckets[0].puts()[0]) if RECORDING else _UNSET)
+    assert isinstance(python_put, dict)
+    assert python_put["headers"]["x-amz-security-token"] == "sts-token"
+    put: Final = buckets[1].puts()[0]
+    assert put.headers["x-amz-security-token"] == "sts-token"
+    assert put.headers["authorization"] == _botocore_authorization(
+        put, buckets[1].port, credentials=("AKIDSTS", "sts-secret", "sts-token")
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("token", [True, 7, "abc", ""])
 async def test_a_web_identity_token_botocore_rejects_fails_both_before_sts(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, sts: FakeSts, token: object
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, sts: FakeSts, token: object
 ) -> None:
     for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_EXTERNAL_ID"):
         monkeypatch.delenv(name, raising=False)
@@ -780,15 +968,21 @@ async def test_a_web_identity_token_botocore_rejects_fails_both_before_sts(
         await _log(python_logger, rust_logger, _payload())
         await _flush(python_logger, rust_logger)
     assert sts.calls == []
-    assert buckets[0].puts() == buckets[1].puts() == []
-    assert python_failures.call_count == rust_failures.call_count == 1
-    assert rust_logger.sink.queued_keys() == [element.s3_object_key for element in python_logger.log_queue]
-    python_error: Final = next(
-        call.args[1] for call in python_errors.call_args_list if call.args[0] == "Error uploading to s3: %s"
+    assert _python_puts(golden, buckets) == buckets[1].puts() == []
+    assert golden.python("failures", python_failures.call_count if RECORDING else _UNSET) == rust_failures.call_count
+    assert rust_failures.call_count == 1
+    assert rust_logger.sink.queued_keys() == golden.python(
+        "queue", [element.s3_object_key for element in python_logger.log_queue] if RECORDING else _UNSET
+    )
+    python_error: Final = golden.python(
+        "error",
+        str(next(call.args[1] for call in python_errors.call_args_list if call.args[0] == "Error uploading to s3: %s"))
+        if RECORDING
+        else _UNSET,
     )
     with pytest.raises(ValueError, match=r"^Parameter validation failed:") as rust_error:
         s3_v3._Host().web_identity_token(reference)
-    assert str(rust_error.value) == str(python_error)
+    assert str(rust_error.value) == python_error
 
 
 @pytest.mark.asyncio
@@ -796,6 +990,7 @@ async def test_a_web_identity_token_botocore_rejects_fails_both_before_sts(
 @pytest.mark.parametrize("no_log", [None, True, "true"])
 @pytest.mark.parametrize("disabled_header", [None, "s3_v2", "langfuse, S3_V2"])
 async def test_the_native_opt_out_matches_should_run_callback(
+    golden: Golden,
     buckets: tuple[FakeBucket, FakeBucket],
     monkeypatch: pytest.MonkeyPatch,
     global_disable: bool,
@@ -824,7 +1019,13 @@ async def test_the_native_opt_out_matches_should_run_callback(
             "headers": {} if disabled_header is None else {"x-litellm-disable-callbacks": disabled_header}
         },
     }
-    expected: Final = logging_obj.should_run_callback(python_logger, litellm_params, "async_success_handler")
+    expected: Final = golden.python(
+        "should_run_callback",
+        logging_obj.should_run_callback(python_logger, litellm_params, "async_success_handler")
+        if RECORDING
+        else _UNSET,
+    )
+    assert isinstance(expected, bool)
     kwargs: Final = {
         "litellm_params": litellm_params,
         "standard_callback_dynamic_params": logging_obj.standard_callback_dynamic_params,
@@ -848,6 +1049,7 @@ async def _until_queued(python_logger: S3Logger, rust_logger: S3LoggerV3) -> Non
 @pytest.mark.parametrize("global_disable", [False, True])
 @pytest.mark.parametrize("no_log", [False, True])
 async def test_an_acompletion_reaches_both_loggers_alike(
+    golden: Golden,
     buckets: tuple[FakeBucket, FakeBucket],
     monkeypatch: pytest.MonkeyPatch,
     global_disable: bool,
@@ -868,7 +1070,7 @@ async def test_an_acompletion_reaches_both_loggers_alike(
     await _until_queued(python_logger, rust_logger)
     await _flush(python_logger, rust_logger)
     expected: Final = 0 if no_log and not global_disable else 1
-    _assert_same_puts(buckets, expected)
+    _assert_same_live_puts(golden, buckets, expected)
     assert all(put.path.startswith("/logs/team-a/") for put in buckets[1].puts())
 
 
@@ -883,7 +1085,7 @@ class _Mutating:
 
 @pytest.mark.asyncio
 async def test_a_payload_that_changes_while_it_is_rendered_is_kept_for_retry_by_both_loggers(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {})
     payloads: Final = (_payload("racing"), _payload("racing"))
@@ -899,10 +1101,13 @@ async def test_a_payload_that_changes_while_it_is_rendered_is_kept_for_retry_by_
         await _log(python_logger, rust_logger, _payload("steady"))
         await _flush(python_logger, rust_logger)
         await asyncio.sleep(0.2)
-    assert rust_logger.sink.queued_keys() == [element.s3_object_key for element in python_logger.log_queue]
+    assert rust_logger.sink.queued_keys() == golden.python(
+        "queue", [element.s3_object_key for element in python_logger.log_queue] if RECORDING else _UNSET
+    )
     assert len(rust_logger.sink.queued_keys()) == 1
-    assert python_failures.call_count == rust_failures.call_count == 1
-    _assert_same_puts(buckets, 1)
+    assert golden.python("failures", python_failures.call_count if RECORDING else _UNSET) == rust_failures.call_count
+    assert rust_failures.call_count == 1
+    _assert_same_puts(golden, buckets, 1)
     assert not rust_logger.periodic_flush_task.done()
 
 
@@ -945,7 +1150,7 @@ async def _settled(pair: tuple[FakeBucket, FakeBucket], python_logger: S3Logger,
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
 async def test_a_sync_completion_reaches_both_loggers_alike(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, stream: bool
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, stream: bool
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {})
     monkeypatch.setattr(litellm, "callbacks", [python_logger, rust_logger])
@@ -963,12 +1168,12 @@ async def test_a_sync_completion_reaches_both_loggers_alike(
 
     await asyncio.to_thread(call)
     await _settled(buckets, python_logger, rust_logger)
-    _assert_same_puts(buckets, 0)
+    _assert_same_puts(golden, buckets, 0)
 
 
 @pytest.mark.asyncio
 async def test_a_sync_line_delivery_is_skipped_by_the_native_logger(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, rust_logger = await _loggers(monkeypatch, buckets, {})
     await rust_logger.run_rust(
@@ -983,29 +1188,44 @@ async def test_a_sync_line_delivery_is_skipped_by_the_native_logger(
 
 @pytest.mark.asyncio
 async def test_readiness_and_the_callbacks_view_see_the_native_logger_as_s3_v2(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from litellm.proxy.proxy_server import _hidden_runtime_callback_names
 
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {})
-    for logger in (python_logger, rust_logger):
-        assert "S3Logger" in str(logger)
-        monkeypatch.setattr(litellm, "callbacks", [logger])
-        name = litellm.logging_callback_manager._get_callback_string(logger)
-        assert name in _hidden_runtime_callback_names(frozenset({"s3_v2"}))
+    if RECORDING:
+        monkeypatch.setattr(litellm, "callbacks", [python_logger])
+    python_view: Final = golden.python(
+        "callbacks-view",
+        {
+            "str-names-s3-logger": "S3Logger" in str(python_logger),
+            "hidden": litellm.logging_callback_manager._get_callback_string(python_logger)
+            in _hidden_runtime_callback_names(frozenset({"s3_v2"})),
+        }
+        if RECORDING
+        else _UNSET,
+    )
+    assert python_view == {"str-names-s3-logger": True, "hidden": True}
+    assert "S3Logger" in str(rust_logger)
+    monkeypatch.setattr(litellm, "callbacks", [rust_logger])
+    name: Final = litellm.logging_callback_manager._get_callback_string(rust_logger)
+    assert name in _hidden_runtime_callback_names(frozenset({"s3_v2"}))
 
 
 def _put_paths(bucket: FakeBucket) -> list[str]:
     return [request.path for request in bucket.puts()]
 
 
-def _queues(python_logger: S3Logger, rust_logger: S3LoggerV3) -> tuple[list[str], list[str]]:
-    return [element.s3_object_key for element in python_logger.log_queue], rust_logger.sink.queued_keys()
+def _queues(golden: Golden, python_logger: S3Logger, rust_logger: S3LoggerV3) -> tuple[object, list[str]]:
+    python_queue: Final = golden.python(
+        "queue", [element.s3_object_key for element in python_logger.log_queue] if RECORDING else _UNSET
+    )
+    return python_queue, rust_logger.sink.queued_keys()
 
 
 @pytest.mark.asyncio
 async def test_a_failed_acompletion_reaches_both_loggers_alike(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {"s3_use_key_prefix": True})
     monkeypatch.setattr(litellm, "callbacks", [python_logger, rust_logger])
@@ -1017,14 +1237,14 @@ async def test_a_failed_acompletion_reaches_both_loggers_alike(
             metadata={"user_api_key_alias": "key-a"},
         )
     await _settled(buckets, python_logger, rust_logger)
-    _assert_same_puts(buckets, 1)
+    _assert_same_live_puts(golden, buckets, 1)
     assert _put_paths(buckets[1])[0].startswith("/logs/key-a/")
     assert json.loads(buckets[1].puts()[0].body)["status"] == "failure"
 
 
 @pytest.mark.asyncio
 async def test_a_streamed_acompletion_reaches_both_loggers_alike(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {})
     monkeypatch.setattr(litellm, "callbacks", [python_logger, rust_logger])
@@ -1037,7 +1257,7 @@ async def test_a_streamed_acompletion_reaches_both_loggers_alike(
     async for _ in response:  # pyright: ignore[reportGeneralTypeIssues]  # a stream when stream=True
         pass
     await _settled(buckets, python_logger, rust_logger)
-    _assert_same_puts(buckets, 1)
+    _assert_same_live_puts(golden, buckets, 1)
 
 
 @pytest.mark.asyncio
@@ -1045,7 +1265,7 @@ async def test_a_streamed_acompletion_reaches_both_loggers_alike(
     ("wait", "kept"), [pytest.param(0.0, True, id="young"), pytest.param(1.2, False, id="expired")]
 )
 async def test_both_loggers_drop_an_upload_retrying_past_the_max_retry_age(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, wait: float, kept: bool
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, wait: float, kept: bool
 ) -> None:
     for bucket in buckets:
         bucket.failures.append(("_a\\.json", 404, ""))
@@ -1056,14 +1276,14 @@ async def test_both_loggers_drop_an_upload_retrying_past_the_max_retry_age(
     await asyncio.sleep(wait)
     await _log(python_logger, rust_logger, _payload("c"))
     await _flush(python_logger, rust_logger)
-    python_queue, rust_queue = _queues(python_logger, rust_logger)
+    python_queue, rust_queue = _queues(golden, python_logger, rust_logger)
     assert rust_queue == python_queue
     assert bool(rust_queue) is kept
 
 
 @pytest.mark.asyncio
 async def test_both_loggers_upload_in_the_same_order_with_requeued_items_last(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     for bucket in buckets:
         bucket.failures.extend([("_a\\.json", 404, ""), ("_b\\.json", 404, "")])
@@ -1071,14 +1291,14 @@ async def test_both_loggers_upload_in_the_same_order_with_requeued_items_last(
     for response_id in ("a", "b", "c"):
         await _log(python_logger, rust_logger, _payload(response_id))
     await _flush(python_logger, rust_logger)
-    python_queue, rust_queue = _queues(python_logger, rust_logger)
+    python_queue, rust_queue = _queues(golden, python_logger, rust_logger)
     assert rust_queue == python_queue
     for bucket in buckets:
         bucket.failures.clear()
     for response_id in ("d", "e"):
         await _log(python_logger, rust_logger, _payload(response_id))
     await _flush(python_logger, rust_logger)
-    assert _put_paths(buckets[1]) == _put_paths(buckets[0])
+    assert _put_paths(buckets[1]) == golden.python("put-paths", _put_paths(buckets[0]) if RECORDING else _UNSET)
     assert [path.rsplit("_", 1)[-1] for path in _put_paths(buckets[1])] == [
         "a.json",
         "b.json",
@@ -1095,7 +1315,7 @@ async def test_both_loggers_upload_in_the_same_order_with_requeued_items_last(
     ("adaptive", "peak"), [pytest.param(True, 3, id="adaptive"), pytest.param(False, 1, id="fixed")]
 )
 async def test_both_loggers_widen_the_adaptive_upload_limit_alike(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, adaptive: bool, peak: int
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, adaptive: bool, peak: int
 ) -> None:
     for bucket in buckets:
         bucket.delays.append((".", 0.05))
@@ -1107,14 +1327,14 @@ async def test_both_loggers_widen_the_adaptive_upload_limit_alike(
     for index in range(10):
         await _log(python_logger, rust_logger, _payload(f"r{index}"))
     await _flush(python_logger, rust_logger)
-    _assert_same_puts(buckets, 10)
-    assert buckets[1].peak == buckets[0].peak == peak
+    _assert_same_puts(golden, buckets, 10)
+    assert buckets[1].peak == golden.python("peak", buckets[0].peak if RECORDING else _UNSET) == peak
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("batch_size", "puts"), [(1, 2), (2, 2), (3, 0)])
 async def test_audit_events_flush_at_the_same_batch_size(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, batch_size: int, puts: int
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, batch_size: int, puts: int
 ) -> None:
     monkeypatch.setattr(s3_v3, "DEFAULT_S3_BATCH_SIZE", batch_size)
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {})
@@ -1123,14 +1343,18 @@ async def test_audit_events_flush_at_the_same_batch_size(
         audit = {"id": f"audit-{number}", "action": "created", "updated_at": "2026-11-13"}
         await python_logger.async_log_audit_log_event(audit)  # pyright: ignore[reportArgumentType]  # a partial audit payload is enough here
         await rust_logger.async_log_audit_log_event(audit)  # pyright: ignore[reportArgumentType]  # see above
-    assert len(buckets[1].puts()) == len(buckets[0].puts()) == puts
-    assert sorted(r.body for r in buckets[1].puts()) == sorted(r.body for r in buckets[0].puts())
+    python_bodies: Final = golden.python(
+        "bodies", sorted(r.body.decode() for r in buckets[0].puts()) if RECORDING else _UNSET
+    )
+    assert isinstance(python_bodies, list)
+    assert len(buckets[1].puts()) == len(python_bodies) == puts
+    assert sorted(r.body.decode() for r in buckets[1].puts()) == python_bodies
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["dropped-connection", "timeout"])
 async def test_both_loggers_keep_uploads_that_fail_in_transport(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, failure: str
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     import httpx
 
@@ -1150,13 +1374,16 @@ async def test_both_loggers_keep_uploads_that_fail_in_transport(
             await _log(python_logger, rust_logger, _payload(response_id))
         await _flush(python_logger, rust_logger)
         await asyncio.sleep(0.2)
-    python_queue, rust_queue = _queues(python_logger, rust_logger)
+    python_queue, rust_queue = _queues(golden, python_logger, rust_logger)
     assert rust_queue == python_queue
     assert [key.rsplit("_", 1)[-1] for key in rust_queue] == ["a.json"]
-    assert python_failures.call_count == rust_failures.call_count == 1
+    assert golden.python("failures", python_failures.call_count if RECORDING else _UNSET) == rust_failures.call_count
+    assert rust_failures.call_count == 1
     attempts: Final = 3 if failure == "timeout" else 6
-    for bucket in buckets:
-        assert [path.rsplit("_", 1)[-1] for path in _put_paths(bucket)].count("a.json") == attempts
+    python_paths: Final = golden.python("put-paths", sorted(_put_paths(buckets[0])) if RECORDING else _UNSET)
+    assert isinstance(python_paths, list)
+    assert [str(path).rsplit("_", 1)[-1] for path in python_paths].count("a.json") == attempts
+    assert [path.rsplit("_", 1)[-1] for path in _put_paths(buckets[1])].count("a.json") == attempts
 
 
 _NO_METADATA: Final = object()
@@ -1173,7 +1400,7 @@ _NO_METADATA: Final = object()
     ],
 )
 async def test_cold_storage_handles_odd_metadata_like_python(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, metadata: object, puts: int
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, metadata: object, puts: int
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {})
     monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
@@ -1189,8 +1416,9 @@ async def test_cold_storage_handles_odd_metadata_like_python(
         await _log(python_logger, rust_logger, payload)
         await _flush(python_logger, rust_logger)
         await asyncio.sleep(0.2)
-    _assert_same_puts(buckets, puts)
-    assert python_failures.call_count == rust_failures.call_count == 1 - puts
+    _assert_same_puts(golden, buckets, puts)
+    assert golden.python("failures", python_failures.call_count if RECORDING else _UNSET) == rust_failures.call_count
+    assert rust_failures.call_count == 1 - puts
     assert rust_logger.sink.stashed() == 0
 
 
@@ -1207,6 +1435,7 @@ AWARE_START: Final = datetime(2026, 11, 13, 23, 30, 0, 5, tzinfo=timezone(timede
     ],
 )
 async def test_both_loggers_name_the_object_from_the_same_start_time(
+    golden: Golden,
     buckets: tuple[FakeBucket, FakeBucket],
     monkeypatch: pytest.MonkeyPatch,
     start_time: datetime,
@@ -1224,27 +1453,33 @@ async def test_both_loggers_name_the_object_from_the_same_start_time(
         rust_logger, {"standard_logging_object": copy.deepcopy(payload), "start_time": logging_start}, start_time
     )
     await _flush(python_logger, rust_logger)
-    _assert_same_puts(buckets, 1)
+    _assert_same_puts(golden, buckets, 1)
     stamp: Final = start_time.strftime("%Y-%m-%d/%H/time-%H-%M-%S-%f")
     assert _put_paths(buckets[1]) == [f"/logs/{stamp}_chatcmpl-1.json"]
 
 
 @pytest.mark.asyncio
 async def test_cold_storage_reads_without_a_region_send_nothing_like_python(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {"s3_region_name": None})
     for bucket in buckets:
         bucket.objects["/logs/k.json"] = b'{"stored": 1}'
-    python_object: Final = await python_logger.get_proxy_server_request_from_cold_storage_with_object_key("k.json")
+    python_object: Final = golden.python(
+        "object",
+        await python_logger.get_proxy_server_request_from_cold_storage_with_object_key("k.json")
+        if RECORDING
+        else _UNSET,
+    )
     rust_object: Final = await rust_logger.get_proxy_server_request_from_cold_storage_with_object_key("k.json")
     assert rust_object is python_object is None
-    assert buckets[0].received == buckets[1].received == []
+    assert golden.python("received", _records(buckets[0].received) if RECORDING else _UNSET) == []
+    assert buckets[1].received == []
 
 
 @pytest.mark.asyncio
 async def test_params_json_cannot_hold_still_build_the_native_logger(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from botocore.config import Config
 
@@ -1253,7 +1488,7 @@ async def test_params_json_cannot_hold_still_build_the_native_logger(
     )
     await _log(python_logger, rust_logger, _payload())
     await _flush(python_logger, rust_logger)
-    _assert_same_puts(buckets, 1)
+    _assert_same_puts(golden, buckets, 1)
 
 
 class _AliasLookupFails(dict[str, object]):
@@ -1265,7 +1500,7 @@ class _AliasLookupFails(dict[str, object]):
 
 @pytest.mark.asyncio
 async def test_the_attempt_ended_hook_only_enqueues_while_s3_is_slow(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(s3_v3, "DEFAULT_S3_BATCH_SIZE", 1)
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {})
@@ -1282,14 +1517,14 @@ async def test_the_attempt_ended_hook_only_enqueues_while_s3_is_slow(
         await asyncio.sleep(0.02)
     await asyncio.sleep(0.2)
     assert hook_seconds < 1.0
-    assert len(python_logger.log_queue) == 1
+    assert golden.python("queue-length", len(python_logger.log_queue) if RECORDING else _UNSET) == 1
     assert len(rust_logger.sink.queued_keys()) == 2
-    assert buckets[0].puts() == buckets[1].puts() == []
+    assert _python_puts(golden, buckets) == buckets[1].puts() == []
 
 
 @pytest.mark.asyncio
 async def test_a_payload_whose_alias_lookup_fails_is_counted_and_released(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {"s3_use_team_prefix": True})
     with (
@@ -1299,26 +1534,27 @@ async def test_a_payload_whose_alias_lookup_fails_is_counted_and_released(
         await _log(python_logger, rust_logger, _payload(metadata=_AliasLookupFails(team="t")))
         await _flush(python_logger, rust_logger)
         await asyncio.sleep(0.2)
-    _assert_same_puts(buckets, 0)
-    assert python_failures.call_count == rust_failures.call_count == 1
+    _assert_same_puts(golden, buckets, 0)
+    assert golden.python("failures", python_failures.call_count if RECORDING else _UNSET) == rust_failures.call_count
+    assert rust_failures.call_count == 1
     assert rust_logger.sink.stashed() == 0
 
 
 @pytest.mark.asyncio
 async def test_prompts_only_adds_a_null_response_to_a_payload_without_one_like_python(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     python_logger, rust_logger = await _loggers(monkeypatch, buckets, {"s3_log_prompts_only": True})
     payload: Final = {key: value for key, value in _payload().items() if key != "response"}
     await _log(python_logger, rust_logger, payload)
     await _flush(python_logger, rust_logger)
-    _assert_same_puts(buckets, 1)
+    _assert_same_puts(golden, buckets, 1)
     assert list(json.loads(buckets[1].puts()[0].body))[-1] == "response"
 
 
 @pytest.mark.asyncio
 async def test_the_dispatched_native_strips_the_messages_before_the_payload_is_copied(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from litellm.litellm_core_utils import litellm_logging
 
@@ -1341,7 +1577,7 @@ async def test_the_dispatched_native_strips_the_messages_before_the_payload_is_c
     )
     await _until_queued(python_logger, rust_logger)
     await _flush(python_logger, rust_logger)
-    _assert_same_puts(buckets, 1)
+    _assert_same_puts(golden, buckets, 1)
     assert json.loads(buckets[1].puts()[0].body)["messages"] == [
         {"role": "user", "content": [{"type": "text", "text": "see [BASE64_REDACTED]"}]}
     ]
@@ -1368,12 +1604,12 @@ class _FalsyAlias:
     ],
 )
 async def test_a_falsy_alias_of_any_type_adds_no_prefix_like_python(
-    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, alias: object
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, alias: object
 ) -> None:
     python_logger, rust_logger = await _loggers(
         monkeypatch, buckets, {"s3_use_team_prefix": True, "s3_use_key_prefix": True}
     )
     await _log(python_logger, rust_logger, _payload(metadata={"user_api_key_team_alias": alias}))
     await _flush(python_logger, rust_logger)
-    _assert_same_puts(buckets, 1)
+    _assert_same_puts(golden, buckets, 1)
     assert _put_paths(buckets[1]) == ["/logs/2026-11-13/time-09-05-07-000042_chatcmpl-1.json"]
