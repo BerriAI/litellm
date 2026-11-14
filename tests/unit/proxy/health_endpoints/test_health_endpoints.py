@@ -6258,3 +6258,28 @@ async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
                 await call
             assert error.value.code == "403"
             assert len(upstream.calls) == 0
+
+
+@pytest.mark.parametrize(
+    "request_params, inherits",
+    [
+        (
+            {"model": "bedrock/us.anthropic.claude-sonnet-4-6", "model_id": "arn:aws:bedrock:us-east-1:1:profile/p"},
+            True,
+        ),
+        ({"model": "bedrock/us.anthropic.claude-sonnet-4-6", "api_base": "https://example.invalid"}, False),
+    ],
+    ids=["deployment-pinned model_id keeps the stored credentials", "a client api_base brings its own"],
+)
+def test_connection_probe_keeps_stored_credentials_behind_a_pinned_model_id(
+    request_params: dict[str, object], inherits: bool
+) -> None:
+    assert (
+        _health_endpoints_module._request_inherits_config_credentials(  # pyright: ignore[reportPrivateUsage]  # the decision under test
+            config_params={"model": "bedrock/us.anthropic.claude-sonnet-4-6", "aws_access_key_id": "AKIA"},
+            request_params=request_params,
+            allow_client_side_credentials=False,
+            selected_by_id=False,
+        )
+        is inherits
+    )

@@ -381,6 +381,16 @@ VERTEX_TARGET_PARAMS: Final[frozenset[str]] = frozenset(
 _ROUTES_THAT_NAME_THEIR_VERTEX_TARGET: Final[frozenset[str]] = frozenset(
     ("/vertex_ai/live", "/rag/ingest", "/v1/rag/ingest")
 )
+# Pick what runs upstream (Bedrock model or inference profile, SageMaker inference component, Vertex private
+# endpoint) while auth, logs and spend see the deployment's model, so only that deployment's opt-in unlocks them.
+DEPLOYMENT_MODEL_SELECTOR_PARAMS: Final[frozenset[str]] = frozenset(("model_id",))
+_UNLISTED_LLM_ROUTES: Final[frozenset[str]] = frozenset(("/queue/chat/completions",))
+
+
+def route_calls_an_llm(route: str | None) -> bool:
+    """Admin routes such as ``/health?model_id=`` take ``model_id`` as a deployment id. ``None`` is a body checked
+    with no route, which callers only do right before a provider call."""
+    return route is None or route in _UNLISTED_LLM_ROUTES or RouteChecks.is_llm_api_route(route)
 
 
 def _without_route_named_vertex_target(request_body: Mapping[str, object], route: str | None) -> Mapping[str, object]:
@@ -407,8 +417,8 @@ _TRANSCRIPTION_SESSION_ROUTES: Final[frozenset[str]] = frozenset(
 )
 _TRANSCRIPTION_SESSION_FIELDS: Final[frozenset[str]] = frozenset(("client_secret",))
 _TOKEN_INTROSPECTION_ROUTE: Final = "/introspect"
-_BANNED_PARAMS_ALLOWED_IN_METADATA: Final[frozenset[str]] = VERTEX_TARGET_PARAMS | frozenset(
-    _AZURE_ENTRA_CREDENTIAL_PARAMS
+_BANNED_PARAMS_ALLOWED_IN_METADATA: Final[frozenset[str]] = (
+    VERTEX_TARGET_PARAMS | frozenset(_AZURE_ENTRA_CREDENTIAL_PARAMS) | DEPLOYMENT_MODEL_SELECTOR_PARAMS
 )
 
 
@@ -541,6 +551,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "anthropic_workspace_id",
     "anthropic-workspace-id",
     "bedrock_tags",
+    *sorted(DEPLOYMENT_MODEL_SELECTOR_PARAMS),
     # Deployment-pinned AgentCore session: every new caller-chosen value provisions another microVM.
     "agentcore_runtime_session_id",
     # Provider-specific endpoint overrides that flow into the outbound
@@ -617,6 +628,9 @@ def _reject_secret_reference_in(params: Mapping[str, object]) -> None:
 
 _BANNED_METADATA_PARAMS: Final[tuple[str, ...]] = tuple(
     param for param in _BANNED_REQUEST_BODY_PARAMS if param not in _BANNED_PARAMS_ALLOWED_IN_METADATA
+)
+_BANNED_NON_LLM_ROUTE_PARAMS: Final[tuple[str, ...]] = tuple(
+    param for param in _BANNED_REQUEST_BODY_PARAMS if param not in DEPLOYMENT_MODEL_SELECTOR_PARAMS
 )
 
 
@@ -763,12 +777,15 @@ def _banned_param_error(param: str) -> ValueError:
         if setting is None
         else f" To allow specific values only, list them in `general_settings.{setting}`{team_hint}."
     )
+    opt_in: Final = (
+        f"listing `{param}` in `configurable_clientside_auth_params` on the deployment in your proxy config.yaml"
+        if param in DEPLOYMENT_MODEL_SELECTOR_PARAMS
+        else "either `general_settings.allow_client_side_credentials = true` (proxy-wide) or "
+        "`configurable_clientside_auth_params` on the deployment in your proxy config.yaml"
+    )
     return ValueError(
         f"Rejected Request: {param} is not allowed in request body. "
-        "Clientside passthrough requires explicit admin opt-in via "
-        "either `general_settings.allow_client_side_credentials = true` "
-        "(proxy-wide) or `configurable_clientside_auth_params` on the "
-        "deployment in your proxy config.yaml. "
+        f"Clientside passthrough requires explicit admin opt-in via {opt_in}. "
         f"Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997{allowlist_hint}",
     )
 
@@ -808,10 +825,11 @@ def _check_banned_params(
             continue
         if param in route_owned_params:
             continue
-        if general_settings.get("allow_client_side_credentials") is True:
-            # Proxy-wide opt-in: every banned param is permitted, exit
-            # entirely so the rest of the loop doesn't waste work.
-            return
+        if (
+            general_settings.get("allow_client_side_credentials") is True
+            and param not in DEPLOYMENT_MODEL_SELECTOR_PARAMS
+        ):
+            continue
         if (
             setting := _PROXY_ALLOWLIST_SETTING_BY_PARAM.get(param)
         ) is not None and _ClientSideStorageAllowlist.model_validate(general_settings).admits(setting, body[param]):
@@ -1015,6 +1033,9 @@ def is_request_body_safe(
     if "model_list" in request_body:
         raise ValueError("Rejected Request: model_list is not allowed in the request body.")
     manages_deployments: Final = route_manages_deployments(route)
+    body_banned_params: Final = (
+        _BANNED_REQUEST_BODY_PARAMS if route_calls_an_llm(route) else _BANNED_NON_LLM_ROUTE_PARAMS
+    )
     root_body: Final = _without_route_named_vertex_target(request_body, route)
     route_model: Final = _model_from_route_path(route) if route is not None else None
     also_requested_models: Final = (
@@ -1031,6 +1052,7 @@ def is_request_body_safe(
         manages_deployments=manages_deployments,
         mcp_server_fields_allowed=route_manages_mcp_servers(route),
         route_owned_params=_entra_params_owned_by_route(route),
+        banned_params=body_banned_params,
         opt_in_groups=opt_in_groups,
         defer_model_checks=defer_model_checks,
         defer_s3_buckets=defer_s3_buckets,
@@ -1043,6 +1065,7 @@ def is_request_body_safe(
                 general_settings,
                 llm_router,
                 manages_deployments=manages_deployments,
+                banned_params=body_banned_params,
                 opt_in_groups=opt_in_groups,
                 defer_model_checks=defer_model_checks,
                 defer_s3_buckets=defer_s3_buckets,
@@ -1080,6 +1103,7 @@ def is_request_body_safe(
                 general_settings,
                 llm_router,
                 manages_deployments=manages_deployments,
+                banned_params=body_banned_params,
                 opt_in_groups=opt_in_groups,
                 defer_model_checks=defer_model_checks,
                 defer_s3_buckets=defer_s3_buckets,
