@@ -1,9 +1,10 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import asyncio
+import threading
 from collections import deque
 from collections.abc import AsyncGenerator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 from pydantic import ConfigDict, field_validator
 
@@ -92,6 +93,11 @@ def _failure_status_and_message(exception: Exception) -> tuple[int, str]:
     return status_code, message
 
 
+@runtime_checkable
+class _Closeable(Protocol):
+    def close(self) -> None: ...
+
+
 def _anthropic_error_chunk(status_code: int, message: str) -> dict[str, object]:
     from litellm.anthropic_interface.exceptions.exception_mapping_utils import (
         AnthropicExceptionMapping,
@@ -145,6 +151,9 @@ class AnthropicResponsesStreamWrapper:
         self._chunk_queue: deque[dict[str, object]] = deque()
         self._refusal_text: str = ""
         self._sync_responses_iterator: Iterator[object] | None = None
+        self._sync_upstream_lock: Final = threading.Lock()
+        self._sync_upstream_closed = False
+        self._sync_upstream_to_close: _Closeable | None = None
 
     def _make_message_start(self) -> dict[str, object]:
         return {
@@ -468,7 +477,7 @@ class AnthropicResponsesStreamWrapper:
                     self._sync_responses_iterator = iter(self.responses_stream)
                 sync_iterator: Final = self._sync_responses_iterator
                 missing: Final = object()
-                while (event := await asyncio.to_thread(next, sync_iterator, missing)) is not missing:
+                while (event := await asyncio.to_thread(self._next_sync_event, sync_iterator, missing)) is not missing:
                     self._process_event(event)
                     if self._chunk_queue:
                         return self._chunk_queue.popleft()
@@ -504,6 +513,33 @@ class AnthropicResponsesStreamWrapper:
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         return partial_responses_incomplete_event_on_disconnect(self.responses_stream)
 
+    def _next_sync_event(self, sync_iterator: Iterator[object], missing: object) -> object:
+        try:
+            with self._sync_upstream_lock:
+                return missing if self._sync_upstream_closed else next(sync_iterator, missing)
+        finally:
+            if (upstream := self._sync_upstream_to_close) is not None:
+                self._close_sync_upstream_unless_reading(upstream)
+
+    async def aclose_upstream(self) -> None:
+        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import SupportsAclose
+
+        upstream: Final = self.responses_stream
+        if isinstance(upstream, SupportsAclose):
+            await upstream.aclose()
+        elif isinstance(upstream, _Closeable):
+            self._sync_upstream_to_close = upstream
+            self._close_sync_upstream_unless_reading(upstream)
+
+    def _close_sync_upstream_unless_reading(self, upstream: _Closeable) -> None:
+        if not self._sync_upstream_lock.acquire(blocking=False):
+            return
+        try:
+            self._sync_upstream_closed = True
+            upstream.close()
+        finally:
+            self._sync_upstream_lock.release()
+
 
 class AnthropicResponsesSSEByteStream:
     """
@@ -524,6 +560,7 @@ class AnthropicResponsesSSEByteStream:
 
     async def aclose(self) -> None:
         await self._frames.aclose()
+        await self._wrapper.aclose_upstream()
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         return self._wrapper.partial_response_on_disconnect()
