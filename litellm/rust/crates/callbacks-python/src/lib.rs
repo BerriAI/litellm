@@ -15,7 +15,6 @@ use serde_json::Value;
 
 mod hosted;
 pub mod payload;
-mod pyjson;
 
 #[pyclass(frozen, name = "RustCallback")]
 pub struct RustCallback {

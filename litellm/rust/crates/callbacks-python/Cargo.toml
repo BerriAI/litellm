@@ -10,6 +10,7 @@ futures-util.workspace = true
 litellm-callbacks.workspace = true
 litellm-coroutine.workspace = true
 litellm-host-python.workspace = true
+litellm-python-compat.workspace = true
 
 pyo3.workspace = true
 serde.workspace = true

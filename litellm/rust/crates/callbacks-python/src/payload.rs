@@ -15,7 +15,7 @@ use pyo3::{
 };
 use tokio::sync::oneshot;
 
-use crate::pyjson::{float_repr, write_str};
+use litellm_python_compat::json::{float_text, write_string};
 
 tokio::task_local! {
     static RENDER_LOOP: Option<Arc<Py<PyAny>>>;
@@ -211,8 +211,8 @@ impl<'py> Encoder<'py> {
 
     fn text(&self, text: &Bound<'py, PyString>, out: &mut Vec<u8>) -> PyResult<()> {
         match text.to_str() {
-            Ok(text) if text.contains('\0') => write_str(out, &text.replace('\0', "")),
-            Ok(text) => write_str(out, text),
+            Ok(text) if text.contains('\0') => write_string(out, &text.replace('\0', "")),
+            Ok(text) => write_string(out, text),
             Err(_) => self.raw(&text.call_method1("replace", ("\0", ""))?, out)?,
         }
         Ok(())
@@ -287,7 +287,7 @@ impl<'py> Encoder<'py> {
                 }
             }
         } else if let Ok(float) = value.cast::<PyFloat>() {
-            out.extend_from_slice(float_repr(float.value()).as_bytes());
+            out.extend_from_slice(float_text(float.value()).as_bytes());
         } else {
             return Ok(false);
         }
@@ -301,7 +301,7 @@ impl<'py> Encoder<'py> {
         out: &mut Vec<u8>,
     ) -> PyResult<()> {
         if depth > self.max_depth {
-            write_str(out, "MaxDepthExceeded");
+            write_string(out, "MaxDepthExceeded");
             return Ok(());
         }
         if self.scalar(value, out)? {
@@ -309,7 +309,7 @@ impl<'py> Encoder<'py> {
         }
         let identity = value.as_ptr() as usize;
         if self.seen.contains(&identity) {
-            write_str(out, "CircularReference Detected");
+            write_string(out, "CircularReference Detected");
             return Ok(());
         }
         if value.cast::<PySet>().is_ok() {
@@ -331,7 +331,7 @@ impl<'py> Encoder<'py> {
         } else {
             match value.str() {
                 Ok(text) => self.text(&text, out)?,
-                Err(_) => write_str(out, "Unserializable Object"),
+                Err(_) => write_string(out, "Unserializable Object"),
             }
             return Ok(());
         };

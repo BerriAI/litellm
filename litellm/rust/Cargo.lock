@@ -3720,6 +3720,7 @@ dependencies = [
  "litellm-callbacks",
  "litellm-coroutine",
  "litellm-host-python",
+ "litellm-python-compat",
  "pyo3",
  "rstest",
  "serde",
