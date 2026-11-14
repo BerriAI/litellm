@@ -3478,7 +3478,7 @@ async def test_bedrock_kimi_k3_count_adds_the_template_message_of_a_forced_tool_
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     messages_format: TokenCountMessagesFormat,
-    tools: list[dict],
+    tools: list[dict[str, object]],
     forced: dict[str, object],
     unforced: str | dict[str, object],
     drops_tool_choice: bool,
