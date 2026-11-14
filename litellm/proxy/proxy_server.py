@@ -19586,11 +19586,11 @@ async def async_queue_request(
         queued_priority, _ = router.health().split_priority(data["model"], data)
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
-            async def produce_queue_stream() -> StreamingResponse:
+            async def produce_queue_stream() -> StreamingResponse | JSONResponse:
                 queued_stream: Final = _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
                 data["litellm_logging_obj"] = getattr(queued_stream, "logging_obj", None)
-                return StreamingResponse(
-                    async_data_generator(
+                return await create_response(
+                    generator=async_data_generator(
                         user_api_key_dict=user_api_key_dict,
                         response=queued_stream,
                         request_data=data,
@@ -19598,6 +19598,7 @@ async def async_queue_request(
                     ),
                     media_type="text/event-stream",
                     headers={"x-litellm-priority": str(queued_priority)},
+                    request=request,
                 )
 
             async def audit_late_failure(exc: Exception) -> HTTPException | None:

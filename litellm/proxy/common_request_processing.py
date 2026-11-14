@@ -1241,18 +1241,18 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
 
     def __init__(
         self,
-        content: AsyncGenerator[str, None],
+        content: AsyncGenerator[str | bytes, None],
         *,
         media_type: str | None = None,
         headers: Mapping[str, str] | None = None,
         status_code: int = status.HTTP_200_OK,
-        upstream_generator: AsyncGenerator[str, None] | None = None,
+        upstream_generator: AsyncGenerator[str | bytes, None] | None = None,
     ) -> None:
         super().__init__(content, status_code=status_code, headers=headers, media_type=media_type)
         self._upstream_generator = upstream_generator
 
     @property
-    def upstream_generator(self) -> AsyncGenerator[str, None] | None:
+    def upstream_generator(self) -> AsyncGenerator[str | bytes, None] | None:
         """The upstream LLM stream, for a caller that has to run this response's cleanup itself."""
         return self._upstream_generator
 
@@ -1523,7 +1523,7 @@ _NO_GENERAL_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 async def create_response(
-    generator: AsyncGenerator[str, None] | Coroutine[object, object, AsyncGenerator[str, None]],
+    generator: AsyncGenerator[str | bytes, None] | Coroutine[object, object, AsyncGenerator[str | bytes, None]],
     media_type: str,
     headers: Mapping[str, str],
     default_status_code: int = status.HTTP_200_OK,
@@ -1541,7 +1541,7 @@ async def create_response(
     callers whose headers can only be known then. ``general_settings`` decides whether
     the first-chunk error body also carries the ``x-litellm-call-id`` header's value.
     """
-    first_chunk_value: str | None = None
+    first_chunk_value: str | bytes | None = None
     final_status_code = default_status_code
 
     try:
@@ -1634,7 +1634,7 @@ async def create_response(
             status_code=error_status,
         )
 
-    async def combined_generator() -> AsyncGenerator[str, None]:
+    async def combined_generator() -> AsyncGenerator[str | bytes, None]:
         if not _DD_STREAMING_TRACE_ENABLED:
             # Fast path: no per-chunk span object / context-manager overhead.
             if first_chunk_value is not None:

@@ -6,8 +6,9 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from queue import SimpleQueue
@@ -19,6 +20,7 @@ import pytest
 from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
+from starlette.requests import ClientDisconnect
 from starlette.types import Message
 
 from litellm import Router
@@ -376,6 +378,42 @@ class _QueueSuccessLogger(CustomLogger):
         self.responses.put(response_obj)
 
 
+_QUEUED_STREAM_SCOPE: Final = {
+    "type": "http",
+    "asgi": {"version": "3.0", "spec_version": "2.4"},
+    "http_version": "1.1",
+    "method": "POST",
+    "scheme": "http",
+    "server": ("testserver", 80),
+    "path": "/queue/chat/completions",
+    "root_path": "",
+    "headers": [(b"content-type", b"application/json")],
+    "query_string": b"",
+}
+
+
+def _queued_stream_request(after_body: Callable[[], Awaitable[Message]]) -> Request:
+    body: Final = json.dumps({"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": True})
+    body_read: Final = asyncio.Event()
+
+    async def receive() -> Message:
+        if body_read.is_set():
+            return await after_body()
+        body_read.set()
+        return {"type": "http.request", "body": body.encode(), "more_body": False}
+
+    return Request(_QUEUED_STREAM_SCOPE, receive)
+
+
+async def _still_connected() -> Message:
+    await asyncio.Event().wait()
+    return {"type": "http.disconnect"}
+
+
+async def _already_gone() -> Message:
+    return {"type": "http.disconnect"}
+
+
 async def test_a_queued_stream_the_client_abandons_bills_the_reply_it_already_streamed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -383,34 +421,60 @@ async def test_a_queued_stream_the_client_abandons_bills_the_reply_it_already_st
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=MagicMock()))
     logger: Final = _QueueSuccessLogger()
     monkeypatch.setattr(litellm, "callbacks", [logger])
-    body: Final = json.dumps({"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": True})
-
-    async def receive() -> Message:
-        return {"type": "http.request", "body": body.encode(), "more_body": False}
-
-    request: Final = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "scheme": "http",
-            "server": ("testserver", 80),
-            "path": "/queue/chat/completions",
-            "root_path": "",
-            "headers": [(b"content-type", b"application/json")],
-            "query_string": b"",
-        },
-        receive,
-    )
+    request: Final = _queued_stream_request(_still_connected)
     response: Final = await proxy_server.async_queue_request(
         request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth(api_key="sk-queue")
     )
     assert isinstance(response, StreamingResponse)
-    frames: Final = response.body_iterator
-    assert isinstance(frames, AsyncGenerator)
-    await anext(frames)
-    await anext(frames)
-    await frames.aclose()
+    delivered: Final = SimpleQueue[bytes]()
+
+    async def send_until_the_client_hangs_up(message: Message) -> None:
+        if message["type"] != "http.response.body":
+            return
+        if delivered.qsize() == 2:
+            raise OSError("client hung up")
+        delivered.put(bytes(message["body"]))
+
+    with pytest.raises(ClientDisconnect):
+        await response(_QUEUED_STREAM_SCOPE, request.receive, send_until_the_client_hangs_up)
 
     billed: Final = logger.responses.get_nowait()
     assert isinstance(billed, litellm.ModelResponse)
-    assert billed.choices[0].message.content == "queued"
+    billed_reply: Final = billed.choices[0].message.content
+    assert isinstance(billed_reply, str)
+    assert billed_reply
+    assert "queued partial reply".startswith(billed_reply)
+    assert billed_reply != "queued partial reply"
+
+
+async def test_a_queued_stream_the_client_leaves_before_its_first_chunk_gives_back_its_budget_hold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_closed: Final = asyncio.Event()
+
+    async def provider_still_thinking() -> AsyncGenerator[litellm.ModelResponseStream, None]:
+        try:
+            await asyncio.Event().wait()
+            yield litellm.ModelResponseStream()
+        finally:
+            provider_closed.set()
+
+    router: Final = MagicMock()
+    router.health.return_value.split_priority.return_value = (0, {})
+    router.health.return_value.priority_header_fields.return_value = {}
+    router.registry.return_value.deployments.return_value = []
+    router.schedule_acompletion = AsyncMock(return_value=provider_still_thinking())
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=MagicMock()))
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-queue", budget_reservation={"reserved_cost": 0.01, "input_cost": 0.0, "entries": []}
+    )
+
+    response: Final = await proxy_server.async_queue_request(
+        request=_queued_stream_request(_already_gone), fastapi_response=Response(), user_api_key_dict=auth
+    )
+
+    assert auth.budget_reservation is not None
+    assert auth.budget_reservation.get("finalized") is True
+    assert provider_closed.is_set()
+    assert not isinstance(response, StreamingResponse)
