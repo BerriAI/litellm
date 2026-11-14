@@ -400,6 +400,26 @@ def test_mask_credentials_in_payload_masks_a_root_model_string_as_one_string():
     assert result["api_key"].startswith("sk-r")
 
 
+@pytest.mark.parametrize("wrap", ["mapping", "sequence"])
+def test_mask_dict_does_not_return_secrets_nested_past_the_depth_cap(wrap):
+    """The depth cap bounds the walk, not who may see a secret: a credential buried deeper than
+    the cap must come back hidden, as `mask_credentials_in_payload` does, and not verbatim."""
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+    from litellm.litellm_core_utils.secret_redaction import REDACTED
+
+    secret: Final = "sk-deep-1234567890abcdef"
+    node: dict[str, object] = {"api_key": secret, "model": "gpt-5.4-mini"}
+    # A list costs one more level than a mapping, so push both shapes well past the cap.
+    for _ in range(2 * DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER + 1):
+        node = {"extra_body": node} if wrap == "mapping" else {"providers": [node]}
+
+    result: Final = SensitiveDataMasker().mask_dict({**node, "max_tokens": 17})
+
+    assert secret not in str(result)
+    assert REDACTED in str(result)
+    assert result["max_tokens"] == 17
+
+
 def test_mask_credentials_in_payload_hides_containers_past_the_depth_cap():
     from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
     from litellm.litellm_core_utils.secret_redaction import REDACTED
