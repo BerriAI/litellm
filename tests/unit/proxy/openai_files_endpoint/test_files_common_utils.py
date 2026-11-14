@@ -8,9 +8,12 @@ from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFi
 from litellm.caching.caching import DualCache
 from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_unified_file_ids,
+    canonical_provider_file_id,
+    encode_file_id_with_model,
     get_credentials_for_model,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
+    provider_file_id_spellings,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
@@ -652,3 +655,52 @@ async def test_batch_cancel_updates_database(caplog: pytest.LogCaptureFixture):
     assert "batch_processed" not in written
     assert json.loads(written["file_object"])["cancelled_at"] == 1234567999
     assert f"Updating batch {batch_id} status to cancelled after cancel" in caplog.messages
+
+
+@pytest.mark.parametrize(
+    ("file_id", "canonical"),
+    (
+        ("batch-out1", "batch-out1"),
+        ("files/batch-out1", "batch-out1"),
+        ("files%2Fbatch-out1", "batch-out1"),
+        ("batch-out1/", "batch-out1"),
+        ("/files/batch-out1/", "batch-out1"),
+        ("https://generativelanguage.googleapis.com/v1beta/files/batch-out1", "batch-out1"),
+        ("file-abc123", "file-abc123"),
+        ("s3://bucket/path/files/output.jsonl", "s3://bucket/path/files/output.jsonl"),
+        ("gs://bucket/prefix/predictions.jsonl", "gs://bucket/prefix/predictions.jsonl"),
+        (
+            "https://acct.blob.core.windows.net/uploads/0c4e.files%2Ffile-victim",
+            "https://acct.blob.core.windows.net/uploads/0c4e.files%2Ffile-victim",
+        ),
+        ("x://h/files/batch-out1", "x://h/files/batch-out1"),
+    ),
+)
+def test_canonical_provider_file_id_collapses_every_spelling_to_the_stored_id(file_id: str, canonical: str):
+    assert canonical_provider_file_id(file_id) == canonical
+
+
+def test_provider_file_id_spellings_unwraps_a_model_encoded_id_and_covers_the_stored_forms():
+    wrapped: Final = encode_file_id_with_model(file_id="batch-out1", model="gemini-deployment")
+
+    assert provider_file_id_spellings(wrapped) == (
+        wrapped,
+        "batch-out1",
+        "files/batch-out1",
+        "https://generativelanguage.googleapis.com/v1beta/files/batch-out1",
+    )
+    for spelling in ("batch-out1", "files%2Fbatch-out1", "batch-out1/"):
+        assert set(provider_file_id_spellings(spelling)) >= set(provider_file_id_spellings(wrapped)[1:]), spelling
+
+
+@pytest.mark.parametrize(
+    "respelling",
+    (
+        "HTTPS://generativelanguage.googleapis.com/v1beta/files/batch-out1",
+        "x://h/files/batch-out1",
+        "S3://b/files/batch-out1",
+        "x%3A%2F%2Fh%2Ffiles%2Fbatch-out1",
+    ),
+)
+def test_provider_file_id_spellings_reduce_any_scheme_the_way_gemini_does(respelling: str):
+    assert "batch-out1" in provider_file_id_spellings(respelling)

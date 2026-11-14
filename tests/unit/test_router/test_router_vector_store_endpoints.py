@@ -1,3 +1,4 @@
+import inspect
 import json
 from collections.abc import Iterator
 from typing import Final
@@ -160,3 +161,38 @@ async def test_avector_store_retrieve_and_delete_return_provider_responses() -> 
     assert delete_route.call_count == 1
     assert retrieved["id"] == "vs_test123"
     assert deleted["deleted"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retrieval_query_param", ["retrievalQuery", "retrieval_query"])
+@pytest.mark.parametrize("endpoint", ["avector_store_search", "vector_store_search"])
+async def test_a_deployments_raw_retrieval_query_never_reaches_a_routed_vector_store_search(
+    endpoint: str, retrieval_query_param: str
+) -> None:
+    from_deployment: Final = {"text": "from the deployment"}
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "kb-route",
+                "litellm_params": {
+                    "model": "bedrock/kb-route-model",
+                    "aws_access_key_id": "test-access-key",
+                    "aws_secret_access_key": "test-secret-key",
+                    "aws_region_name": "us-east-1",
+                    retrieval_query_param: from_deployment,
+                    "extra_body": {retrieval_query_param: from_deployment},
+                },
+            }
+        ]
+    )
+    with respx.mock(assert_all_called=True) as mock:
+        route: Final = mock.post(
+            "https://bedrock-agent-runtime.us-east-1.amazonaws.com/knowledgebases/kb-id/retrieve"
+        ).mock(return_value=httpx.Response(200, json={"retrievalResults": []}))
+        result: Final = getattr(router, endpoint)(
+            model="kb-route", vector_store_id="kb-id", query="caller text", custom_llm_provider="bedrock"
+        )
+        if inspect.isawaitable(result):
+            await result
+        sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["retrievalQuery"]["text"] == "caller text"

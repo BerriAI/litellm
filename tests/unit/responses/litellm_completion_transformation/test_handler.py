@@ -351,3 +351,29 @@ async def test_converse_turn_after_a_blank_user_turn_resends_the_messages_that_f
     assert isinstance(follow_up_messages, list) and isinstance(next_turn_messages, list)
     assert [message["role"] for message in next_turn_messages] == ["user", "assistant", "user", "assistant", "user"]
     assert next_turn_messages[: len(follow_up_messages)] == follow_up_messages
+
+
+@pytest.mark.asyncio
+async def test_bridged_turn_after_a_client_tool_search_reports_auto_for_an_allowed_tools_choice_it_dropped():
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    response = await litellm.aresponses(
+        model="azure_ai/claude-sonnet-4-6",
+        api_base="https://fake-foundry-resource.services.ai.azure.com",
+        api_key="fake-api-key",
+        input="Double it",
+        tools=[
+            {"type": "tool_search", "execution": "client"},
+            {"type": "function", "name": "get_time", "parameters": {"type": "object", "properties": {}}},
+        ],
+        tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+        drop_params=True,
+        client=client,
+    )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert "tool_choice" not in provider.request_body
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.tool_choice == "auto"

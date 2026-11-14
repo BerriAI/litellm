@@ -3,8 +3,10 @@ import uuid
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 from integration._support.client import Gateway
-from integration._support.process import owned_proxy
+from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 
 USER_KEY: Final = "sk-user-supplied-" + uuid.uuid4().hex
@@ -30,18 +32,13 @@ def _completion(request: Request) -> Reply:
     )
 
 
+def _deployment_params(upstream_url: str) -> dict[str, object]:
+    return {"model": "openai/gpt-4.1-mini", "api_base": upstream_url + "/v1", "api_key": USER_KEY}
+
+
 def _user_config(upstream_url: str) -> dict[str, object]:
     return {
-        "model_list": [
-            {
-                "model_name": "user-config-deployment",
-                "litellm_params": {
-                    "model": "openai/gpt-4.1-mini",
-                    "api_base": upstream_url + "/v1",
-                    "api_key": USER_KEY,
-                },
-            }
-        ],
+        "model_list": [{"model_name": "user-config-deployment", "litellm_params": _deployment_params(upstream_url)}],
         "num_retries": 0,
     }
 
@@ -93,6 +90,54 @@ def test_user_config_routes_to_the_user_supplied_deployment_when_opted_in(gatewa
         assert len(completions) == 1, outbound
         assert completions[0].headers["authorization"] == f"Bearer {USER_KEY}"
         assert json.loads(completions[0].body)["model"] == "gpt-4.1-mini"
+
+
+def _identity_in_deployment(upstream_url: str, identity_param: str) -> dict[str, object]:
+    return {
+        "model_list": [
+            {
+                "model_name": "user-config-deployment",
+                "litellm_params": {**_deployment_params(upstream_url), identity_param: "caller-chosen"},
+            }
+        ],
+        "num_retries": 0,
+    }
+
+
+def _identity_in_defaults(upstream_url: str, identity_param: str) -> dict[str, object]:
+    return {**_user_config(upstream_url), "default_litellm_params": {identity_param: "caller-chosen"}}
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_user_config_cannot_carry_a_server_owned_identity_param_even_when_opted_in(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    cases: Final = (
+        (_identity_in_deployment, "openai_identity_provider_id"),
+        (_identity_in_defaults, "openai_service_account_id"),
+    )
+    with wire_server(_completion) as upstream:
+        config: Final = _opt_in_config(tmp_path, upstream.url)
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            responses: Final = tuple(
+                (
+                    identity_param,
+                    candidate.request(
+                        "POST",
+                        "/v1/chat/completions",
+                        {
+                            "model": "user-config-deployment",
+                            "messages": [{"role": "user", "content": "user config identity"}],
+                            "user_config": placement(upstream.url, identity_param),
+                        },
+                    ),
+                )
+                for placement, identity_param in cases
+            )
+        for identity_param, response in responses:
+            assert response.status_code == 401, response.text
+            assert identity_param in response.text, response.text
+        assert tuple(request for request in upstream.drain() if request.target == "/v1/chat/completions") == ()
 
 
 def test_user_config_is_rejected_without_the_opt_in(gateway: Gateway) -> None:

@@ -66,6 +66,10 @@ if TYPE_CHECKING:
     from litellm.types.router import LiteLLM_Params
 
 
+class ResponsesWsFrameCheck(Protocol):
+    async def __call__(self, params: Mapping[str, object], /) -> str | None: ...
+
+
 class ProjectQuotaCallback(Protocol):
     async def enforce_project_io_token_quota_for_frame(
         self,
@@ -314,6 +318,7 @@ def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
 
 
 PRE_OUTPUT_LIFECYCLE_EVENT_TYPES: Final = frozenset({"response.created", "response.in_progress", "response.queued"})
+SEQUENCE_NUMBER_STAMPED_ON_EMISSION: Final = -1
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -1739,7 +1744,6 @@ def build_synthetic_response_events(
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed),
     ]
 
-    sequence_number = 0
     output_items: Final[Sequence[object]] = getattr(transformed, "output", []) or []
     for output_index, output_item in enumerate(output_items):
         output_item_payload = _dump_response_object(output_item)
@@ -1849,35 +1853,31 @@ def build_synthetic_response_events(
                             delta=summary_text[i : i + chunk_size],
                         )
                     )
-                sequence_number += 1
                 events.append(
                     openai_types.ReasoningSummaryTextDoneEvent(
                         type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
                         item_id=item_id,
                         output_index=output_index,
-                        sequence_number=sequence_number,
+                        sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
                         summary_index=summary_index,
                         text=summary_text,
                     )
                 )
-                sequence_number += 1
                 events.append(
                     openai_types.ReasoningSummaryPartDoneEvent(
                         type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
                         item_id=item_id,
                         output_index=output_index,
-                        sequence_number=sequence_number,
+                        sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
                         summary_index=summary_index,
                         part=openai_types.BaseLiteLLMOpenAIResponseObject(**summary_payload),
                     )
                 )
 
-        sequence_number += 1
         events.append(
             openai_types.OutputItemDoneEvent(
                 type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 output_index=output_index,
-                sequence_number=sequence_number,
                 item=openai_types.BaseLiteLLMOpenAIResponseObject(**output_item_payload),
             )
         )
@@ -1888,7 +1888,7 @@ def build_synthetic_response_events(
             response=transformed,
         )
     )
-    return events
+    return [event.model_copy(update={"sequence_number": number}) for number, event in enumerate(events)]
 
 
 # ---------------------------------------------------------------------------
@@ -2723,6 +2723,7 @@ class ManagedResponsesWebSocketHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
+        frame_check: ResponsesWsFrameCheck | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
@@ -2741,6 +2742,7 @@ class ManagedResponsesWebSocketHandler:
         self._connection_provider = self._resolve_provider(model) or custom_llm_provider
         self.first_message = first_message
         self.quota_callbacks: tuple[ProjectQuotaCallback, ...] = tuple(quota_callbacks) if quota_callbacks else ()
+        self.frame_check = frame_check
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: dict[str, object] = {k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS}
         # In-memory session history: response_id → full accumulated message list.
@@ -3144,6 +3146,12 @@ class ManagedResponsesWebSocketHandler:
                 verbose_logger.debug("ManagedResponsesWS: error sending warmup ack: %s", exc)
             return
 
+        call_kwargs: Final = self._build_base_call_kwargs(msg_obj)
+        refusal: Final = None if self.frame_check is None else await self.frame_check(call_kwargs)
+        if refusal is not None:
+            await self._send_error(refusal, "invalid_request_error")
+            return
+
         try:
             await _enforce_frame_project_quota(
                 self.quota_callbacks, self.user_api_key_dict, self.model_group or self.model, raw_message
@@ -3152,7 +3160,6 @@ class ManagedResponsesWebSocketHandler:
             await self._send_error(str(e), error_type="rate_limit_exceeded")
             return
 
-        call_kwargs: Final = self._build_base_call_kwargs(msg_obj)
         call_kwargs["stream"] = True
 
         # A frame that repeats the connection's public alias (model_group) must

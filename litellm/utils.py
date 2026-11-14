@@ -80,6 +80,11 @@ from litellm.constants import (
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    chat_allowed_tools_tool_choice,
+    is_allowed_tools_tool_choice,
+    parse_allowed_tools_tool_choice_or_refuse,
+)
 from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     normalize_drop_params,
@@ -4638,7 +4643,7 @@ def pre_process_non_default_params(
     remove_sensitive_keys: bool = False,
     add_provider_specific_params: bool = False,
     provider_config: BaseConfig | None = None,
-) -> dict:
+) -> dict[str, object]:
     """
     Pre-process non-default params to a standardized format
     """
@@ -5372,11 +5377,21 @@ def get_optional_params(
                 drop_params=bool(drop_params),
             )
     elif provider_config is not None:
-        optional_params = provider_config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=bool(drop_params),
+        optional_params = (
+            provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+                base_model=base_model,
+            )
+            if isinstance(provider_config, litellm.AzureAIStudioConfig)
+            else provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+            )
         )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
@@ -8837,6 +8852,7 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
 def validate_chat_completion_tool_choice(
     tool_choice: dict | str | None,
     model: str = "",
+    drop_params: bool = False,
 ) -> dict | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
@@ -8849,9 +8865,15 @@ def validate_chat_completion_tool_choice(
         tool_choice_type = tool_choice.get("type")
         if tool_choice_type in ("auto", "none", "required") and "function" not in tool_choice:
             return tool_choice_type
+        requested_choice: Final = cast(  # cast-ok: widening an untyped dict to object is always sound
+            object, tool_choice
+        )
+        if is_allowed_tools_tool_choice(requested_choice):
+            allowed_tools: Final = parse_allowed_tools_tool_choice_or_refuse(requested_choice, model, drop_params)
+            return None if allowed_tools is None else dict(chat_allowed_tools_tool_choice(allowed_tools))
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
-        if tool_choice.get("type") is None or tool_choice.get("function") is None:
+        if tool_choice_type is None or tool_choice.get("function") is None:
             raise BadRequestError(
                 message=f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec",
                 model=model,
@@ -9434,10 +9456,16 @@ class ProviderConfigManager:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
-        if provider == LlmProviders.OPENAI:
-            return litellm.OpenAIDecisionsConfig()
+        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE):
+            configs: Final = {
+                LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
+                LlmProviders.AZURE: litellm.AzureDecisionsConfig,
+            }
+            return configs[provider]()
         if provider == LlmProviders.AZURE_AI:
             return litellm.AzureAIDecisionsConfig()
+        if provider == LlmProviders.VERCEL_AI_GATEWAY:
+            return litellm.VercelAIGatewayDecisionsConfig()
         return None
 
     @staticmethod
@@ -9811,6 +9839,8 @@ class ProviderConfigManager:
     ) -> BaseLLMModelInfo | None:
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIConfig()
+        elif LlmProviders.BASETEN == provider:
+            return litellm.BasetenConfig()
         elif LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
         elif LlmProviders.GEMINI == provider:
@@ -9970,6 +10000,10 @@ class ProviderConfigManager:
             from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
 
             return MistralBatchesConfig()
+        elif LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.batches.transformation import GeminiBatchesConfig
+
+            return GeminiBatchesConfig()
         return None
 
     @staticmethod
