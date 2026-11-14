@@ -3408,7 +3408,9 @@ def _half_price_prompt_cost(
 ) -> float:
     details: Final = parse_prompt_tokens_details(usage)
     cache_creation_tokens: Final = details["cache_creation_tokens"]
-    base_input_tokens: Final = get_billable_input_tokens(usage) - cache_creation_tokens
+    # Clamped at 0: a provider may report cache creation outside `prompt_tokens`, so the
+    # subtraction can go negative and would be billed as a credit on the prompt cost.
+    base_input_tokens: Final = max(get_billable_input_tokens(usage) - cache_creation_tokens, 0)
     cache_read_cost_key: Final = get_service_tier_cost_key("cache_read_input_token_cost", None)
     half_cache_read_rate: Final = (get_cost_per_unit(model_info, cache_read_cost_key, 0.0) or 0.0) / 2
     cached_audio_rate: Final = _batch_or_half(
