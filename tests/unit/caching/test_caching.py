@@ -6,6 +6,7 @@ import re
 import traceback
 import uuid
 from datetime import timedelta
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -23,7 +24,12 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, RedisTimeoutLogThrottle
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheType, SemanticCacheScope
+from litellm.types.caching import (
+    EMBEDDING_CACHE_FORMAT_VERSION,
+    LiteLLMCacheType,
+    SemanticCachePrompt,
+    SemanticCacheScope,
+)
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
 _CACHING_TEST_MESSAGES: Final = [{"role": "user", "content": "who is ishaan 5222"}]
@@ -1112,6 +1118,187 @@ def test_completion_past_max_messages_is_neither_served_from_nor_written_to_the_
     assert answer(four, "four second") == "four first", "a 4-message repeat missed the cache"
     assert answer(five, "five first") == "five first"
     assert answer(five, "five second") == "five second", "a 5-message repeat was served from the cache"
+
+
+_LONG_SYSTEM_PROMPT: Final = {"role": "system", "content": "You are a support agent. " * 200}
+_QUESTION: Final = {"role": "user", "content": "how do I pay my bill?"}
+
+
+def _last_user_message_key(cache: Cache, *messages: Mapping[str, object]) -> str:
+    return cache.get_cache_key(model="gpt-4o-mini", messages=list(messages), metadata={"user_api_key": "hash-A"})
+
+
+def test_last_user_message_prompt_keys_the_bucket_on_everything_but_the_last_user_message() -> None:
+    cache: Final = _semantic_cache(semantic_cache_prompt=SemanticCachePrompt.LAST_USER_MESSAGE)
+    history: Final = ({"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello, how can I help?"})
+    question: Final = _QUESTION
+    other_question: Final = {"role": "user", "content": "can I talk to a human?"}
+
+    same_context: Final = _last_user_message_key(cache, _LONG_SYSTEM_PROMPT, *history, question)
+    assert same_context == _last_user_message_key(cache, _LONG_SYSTEM_PROMPT, *history, other_question)
+    assert same_context != _last_user_message_key(
+        cache, {"role": "system", "content": "Other agent."}, *history, question
+    )
+    assert same_context != _last_user_message_key(cache, _LONG_SYSTEM_PROMPT, history[0], question)
+    assert same_context != _last_user_message_key(cache, _LONG_SYSTEM_PROMPT, question)
+
+
+def test_all_messages_prompt_keeps_the_system_prompt_out_of_the_bucket() -> None:
+    question: Final = {"role": "user", "content": "how do I pay my bill?"}
+
+    for cache in (_semantic_cache(), _semantic_cache(semantic_cache_prompt="all_messages")):
+        assert _last_user_message_key(cache, _LONG_SYSTEM_PROMPT, question) == _last_user_message_key(
+            cache, {"role": "system", "content": "Other agent."}, question
+        )
+
+
+def test_last_user_message_prompt_does_not_change_exact_match_caches() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, semantic_cache_prompt=SemanticCachePrompt.LAST_USER_MESSAGE)
+    question: Final = {"role": "user", "content": "how do I pay my bill?"}
+
+    assert _last_user_message_key(cache, question) != _last_user_message_key(
+        cache, {"role": "user", "content": "can I talk to a human?"}
+    )
+    assert cache.should_use_cache(messages=[_LONG_SYSTEM_PROMPT]) is True
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        pytest.param({"messages": [_LONG_SYSTEM_PROMPT]}, False, id="system-only-skips-the-cache"),
+        pytest.param(
+            {"input": [{"type": "function_call_output", "call_id": "c1", "output": "ok"}]},
+            False,
+            id="tool-output-only-skips-the-cache",
+        ),
+        pytest.param(
+            {"messages": [_LONG_SYSTEM_PROMPT, {"role": "user", "content": "hi"}]}, True, id="user-turn-is-cached"
+        ),
+        pytest.param({"input": "one prompt"}, True, id="string-input-is-cached"),
+        pytest.param({"input": ["a", "b"]}, True, id="embedding-strings-are-cached"),
+    ],
+)
+def test_last_user_message_prompt_skips_requests_without_a_user_message(
+    kwargs: Mapping[str, object], expected: bool
+) -> None:
+    cache: Final = _semantic_cache(semantic_cache_prompt=SemanticCachePrompt.LAST_USER_MESSAGE)
+
+    assert cache.should_use_cache(**kwargs) is expected
+    assert _semantic_cache().should_use_cache(**kwargs) is True
+
+
+def test_semantic_cache_prompt_rejects_unknown_value() -> None:
+    with pytest.raises(ValueError, match="'first_user_message' is not a valid SemanticCachePrompt"):
+        _semantic_cache(semantic_cache_prompt="first_user_message")
+
+
+def _turns_sent_to(backend: MagicMock) -> tuple[object, ...]:
+    return tuple(
+        call.kwargs.get("messages", call.kwargs.get("input"))
+        for call in backend.mock_calls
+        if call[0] in ("get_cache", "set_cache")
+    )
+
+
+@pytest.mark.parametrize("semantic_cache_prompt", list(SemanticCachePrompt))
+def test_completion_embeds_only_the_last_user_message_and_serves_the_same_context(
+    monkeypatch: pytest.MonkeyPatch, semantic_cache_prompt: SemanticCachePrompt
+) -> None:
+    backend: Final = MagicMock(wraps=InMemoryCache())
+    monkeypatch.setattr(
+        litellm,
+        "cache",
+        Cache(type=LiteLLMCacheType.VALKEY_SEMANTIC, _backend=backend, semantic_cache_prompt=semantic_cache_prompt),
+    )
+    tag: Final = uuid.uuid4().hex
+    conversation: Final = [
+        _LONG_SYSTEM_PROMPT,
+        {"role": "user", "content": f"{tag} hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": f"{tag} how do I pay my bill?"},
+    ]
+
+    def answer(mock_response: str) -> str:
+        response: Final = litellm.completion(model="gpt-4o-mini", messages=conversation, mock_response=mock_response)
+        assert isinstance(response, litellm.ModelResponse), response
+        choice: Final = response.choices[0]
+        assert isinstance(choice, litellm.Choices), choice
+        return str(choice.message.content)
+
+    assert answer("first") == "first"
+    assert answer("second") == "first"
+    expected_turns: Final = (
+        [conversation[-1]] if semantic_cache_prompt == SemanticCachePrompt.LAST_USER_MESSAGE else conversation
+    )
+    assert _turns_sent_to(backend) == (expected_turns,) * 3
+
+
+def test_responses_input_embeds_only_the_last_user_item() -> None:
+    from openai.types.responses import ResponseFunctionToolCall
+
+    backend: Final = MagicMock(wraps=InMemoryCache())
+    cache: Final = Cache(
+        type=LiteLLMCacheType.VALKEY_SEMANTIC,
+        _backend=backend,
+        semantic_cache_prompt=SemanticCachePrompt.LAST_USER_MESSAGE,
+    )
+    tool_call: Final = ResponseFunctionToolCall(type="function_call", call_id="c1", name="ls", arguments="{}")
+    request: Final = {
+        "model": "gpt-4o-mini",
+        "instructions": "You are a support agent.",
+        "input": [
+            {"role": "user", "content": "list my files"},
+            tool_call,
+            {"type": "function_call_output", "call_id": "c1", "output": "a.txt"},
+            {"role": "user", "content": [{"type": "input_text", "text": "now delete a.txt"}]},
+        ],
+    }
+
+    cache.add_cache("done", **request)
+
+    assert _turns_sent_to(backend) == ([request["input"][-1]],)
+    assert cache.get_cache_key(**request) != cache.get_cache_key(**{**request, "input": request["input"][2:]})
+
+
+def test_last_user_message_prompt_keeps_turns_before_and_after_the_question_apart() -> None:
+    cache: Final = _semantic_cache(semantic_cache_prompt=SemanticCachePrompt.LAST_USER_MESSAGE)
+    earlier: Final = {"role": "user", "content": "hi"}
+    reply: Final = {"role": "assistant", "content": "hello, how can I help?"}
+
+    assert _last_user_message_key(cache, _LONG_SYSTEM_PROMPT, earlier, reply, _QUESTION) != _last_user_message_key(
+        cache, _LONG_SYSTEM_PROMPT, earlier, _QUESTION, reply
+    )
+
+
+def test_last_user_message_prompt_keys_the_bucket_on_the_question_attachments() -> None:
+    cache: Final = _semantic_cache(semantic_cache_prompt=SemanticCachePrompt.LAST_USER_MESSAGE)
+
+    def asking_about(image_url: str) -> Mapping[str, object]:
+        return {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is this?"},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ],
+        }
+
+    cat: Final = _last_user_message_key(cache, _LONG_SYSTEM_PROMPT, asking_about("https://example.com/cat.png"))
+    assert cat == _last_user_message_key(cache, _LONG_SYSTEM_PROMPT, asking_about("https://example.com/cat.png"))
+    assert cat != _last_user_message_key(cache, _LONG_SYSTEM_PROMPT, asking_about("https://example.com/dog.png"))
+
+
+def test_last_user_message_prompt_keys_the_bucket_on_the_current_turn_tool_calls() -> None:
+    cache: Final = _semantic_cache(semantic_cache_prompt=SemanticCachePrompt.LAST_USER_MESSAGE)
+    call: Final[Mapping[str, object]] = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "balance", "arguments": "{}"}}],
+    }
+    result: Final = {"role": "tool", "tool_call_id": "c1", "content": "R$ 10"}
+
+    assert _last_user_message_key(cache, _LONG_SYSTEM_PROMPT, _QUESTION) != _last_user_message_key(
+        cache, _LONG_SYSTEM_PROMPT, _QUESTION, call, result
+    )
 
 
 @respx.mock
