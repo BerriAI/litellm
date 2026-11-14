@@ -3271,6 +3271,12 @@ class PrometheusLogger(CustomLogger):
                 model_id=model_id,
                 api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
+                service_tier=(
+                    request_data.get("service_tier")
+                    if isinstance(request_data.get("service_tier"), str)
+                    and request_data.get("service_tier") in KNOWN_REQUEST_SERVICE_TIERS
+                    else None
+                ),
             )
             _label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
             PrometheusLogger._inc_labeled_counter(

@@ -520,6 +520,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
+        UserAPIKeyLabelNames.SERVICE_TIER.value,
         # ``rate_limit_category`` / ``rate_limit_type`` are appended in
         # ``get_labels()`` when ``litellm.prometheus_emit_rate_limit_labels``
         # is True. Kept opt-in so existing dashboards keyed on this metric's
