@@ -13,6 +13,7 @@ use litellm_host::interceptors::{
     Cost, ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext,
     ResponseHead, ResultSource, WireRequest,
 };
+use litellm_llms::anthropic::messages::thinking::without_thinking;
 use litellm_llms::base_llm::{
     auth::{Authenticated, ValidatedEnvironment, resolve_auth},
     messages::{
@@ -281,7 +282,7 @@ async fn provider_call(
         ..MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params)
     };
     let dropped_keys = top_level_paths(&shaping.settings.additional_drop_params);
-    let without_keys = without_additional_drop_params(sanitized, &dropped_keys)?;
+    let without_keys = without_dropped_keys(sanitized, &dropped_keys, &transform_context)?;
     let requested = requested_optional_params(without_keys, provider, &transform_context)?;
     let requested_params = serde_json::to_value(&requested.params).map_err(serialize_failure)?;
     let trimmed =
@@ -487,6 +488,24 @@ fn without_additional_drop_params(
     Ok(MessagesRequest {
         params: serde_json::from_value(trimmed).map_err(invalid_request)?,
         ..request
+    })
+}
+
+fn without_dropped_keys(
+    request: MessagesRequest,
+    keys: &[String],
+    context: &MessagesTransformContext,
+) -> Result<MessagesRequest, Error> {
+    let drops_sent_thinking =
+        request.params.thinking.is_some() && keys.iter().any(|key| key == "thinking");
+    let trimmed = without_additional_drop_params(request, keys)?;
+    Ok(if drops_sent_thinking {
+        MessagesRequest {
+            params: without_thinking(trimmed.params, &context.thinking),
+            ..trimmed
+        }
+    } else {
+        trimmed
     })
 }
 

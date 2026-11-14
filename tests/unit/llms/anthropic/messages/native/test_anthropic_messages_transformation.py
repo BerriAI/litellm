@@ -814,5 +814,5 @@ def test_a_request_without_a_thread_still_strips_advisor_blocks_when_the_tool_is
 )
 def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
     params: Final[dict[str, object]] = {"reasoning_effort": "none", "output_config": {"effort": "high"}}
-    AnthropicMessagesConfig._translate_reasoning_effort_to_anthropic(model, params, 1024, "anthropic")
+    AnthropicMessagesConfig()._translate_reasoning_effort_to_anthropic(model, params, 1024, "anthropic")
     assert params == ({"thinking": expected} if expected is not None else {})

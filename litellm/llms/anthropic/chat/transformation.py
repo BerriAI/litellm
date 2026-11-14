@@ -2,7 +2,7 @@ import copy
 import json
 import re
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, MutableMapping, Sequence
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
@@ -70,7 +70,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     place_mid_conversation_system,
     split_leading_system_run,
 )
-from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_non_string_reasoning_effort
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_non_string_reasoning_effort
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
@@ -147,6 +147,7 @@ from ..common_utils import (
     STOP_REASON_FIELDS,
     AnthropicError,
     AnthropicModelInfo,
+    drop_clear_thinking_edits_for_model,
     eager_input_streaming_flag,
     process_anthropic_headers,
     refusal_params,
@@ -280,6 +281,16 @@ def _tool_type(tool: object) -> str | None:
     match tool:
         case {"type": str() as tool_type}:
             return tool_type
+        case _:
+            return None
+
+
+def _requested_effort(reasoning_effort: object) -> str | None:
+    match reasoning_effort:
+        case str():
+            return reasoning_effort
+        case {"effort": str(effort)}:
+            return effort
         case _:
             return None
 
@@ -2055,6 +2066,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         #      via ``data = {**optional_params}`` and would 400 with
         #      ``Extra inputs are not permitted``).
 
+        requested_params: Final = cast(  # cast-ok: request_params is the untyped dict of the shared signature
+            Mapping[str, object], request_params
+        )
+
         for param, value in request_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value if isinstance(value, int) else max(1, int(round(value)))
@@ -2170,11 +2185,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # send. Coerce to the effort string before mapping — same
                 # shape-tolerance the GPT-5 path already implements in
                 # `_normalize_reasoning_effort_for_chat_completion`.
-                effort_value = value
-                if isinstance(effort_value, dict):
-                    effort_value = effort_value.get("effort")
-                if not isinstance(effort_value, str):
-                    warn_non_string_reasoning_effort(OPAQUE_VALUE.validate_python(value), model)
+                effort_value = _requested_effort(requested_params[param])
+                if effort_value is None:
+                    warn_non_string_reasoning_effort(requested_params[param], model)
                     continue
                 mapped_thinking = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort=effort_value,
@@ -2227,6 +2240,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 and (anthropic_tier := AnthropicConfig._map_service_tier(value, model, drop_params)) is not None
             ):
                 optional_params["service_tier"] = anthropic_tier  # rebind-ok: in-place fill is this method's contract
+
+        mapped_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared signature
+            MutableMapping[str, object], optional_params
+        )
+        thinking_changed: Final = mapped_params.get("thinking") != requested_params.get("thinking")
+        if thinking_changed or _requested_effort(requested_params.get("reasoning_effort")) is not None:
+            drop_clear_thinking_edits_for_model(mapped_params, model, self._resolved_provider)
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
@@ -2557,7 +2577,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and not any_assistant_message_has_thinking_blocks(capped_messages)
         ):
             if litellm.modify_params:
-                optional_params.pop("thinking", None)
+                mapped_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared signature
+                    MutableMapping[str, object], optional_params
+                )
+                mapped_params.pop("thinking", None)
+                drop_clear_thinking_edits_for_model(mapped_params, model, self._resolved_provider)
                 litellm.verbose_logger.warning(
                     "Dropping 'thinking' param because the last assistant message with tool_calls "
                     "has no thinking_blocks. The model won't use extended thinking for this turn."

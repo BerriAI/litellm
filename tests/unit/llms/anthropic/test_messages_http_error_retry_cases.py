@@ -46,6 +46,19 @@ class _RetryTable(TypedDict):
     cases: ReadOnly[tuple[_RetryCase, ...]]
 
 
+class _ClearThinkingRetryCase(TypedDict):
+    name: ReadOnly[str]
+    context_management: ReadOnly[object]
+    keeps_thinking: ReadOnly[bool]
+
+
+class _ClearThinkingRetryTable(TypedDict):
+    status: ReadOnly[int]
+    error_text: ReadOnly[str]
+    thinking: ReadOnly[Mapping[str, object]]
+    cases: ReadOnly[tuple[_ClearThinkingRetryCase, ...]]
+
+
 class _StrictRejectionCase(TypedDict):
     name: ReadOnly[str]
     status: ReadOnly[int]
@@ -86,6 +99,7 @@ class _Fixture(TypedDict):
     invalid_thinking_block_error: ReadOnly[tuple[_TextCase, ...]]
     thinking_binding_mismatch_error: ReadOnly[tuple[_TextCase, ...]]
     http_error_retry: ReadOnly[_RetryTable]
+    clear_thinking_retry: ReadOnly[_ClearThinkingRetryTable]
     claude_strict_tools_rejection: ReadOnly[tuple[_StrictRejectionCase, ...]]
     tools_without_strict: ReadOnly[tuple[_ToolsWithoutStrictCase, ...]]
     strict_tools_retry: ReadOnly[_StrictRetryTable]
@@ -93,6 +107,7 @@ class _Fixture(TypedDict):
 
 FIXTURE: Final = TypeAdapter(_Fixture).validate_json(FIXTURE_PATH.read_text())
 RETRY: Final = FIXTURE["http_error_retry"]
+CLEAR_THINKING_RETRY: Final = FIXTURE["clear_thinking_retry"]
 STRICT_RETRY: Final = FIXTURE["strict_tools_retry"]
 
 
@@ -128,7 +143,7 @@ def test_tools_without_strict_matches_the_shared_cases(case: _ToolsWithoutStrict
     )
 
 
-def _rejection(case: _RetryCase | _StrictRetryCase) -> httpx.HTTPStatusError:
+def _rejection(case: _RetryCase | _StrictRetryCase | _ClearThinkingRetryTable) -> httpx.HTTPStatusError:
     request: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
     return httpx.HTTPStatusError(
         "rejected",
@@ -155,6 +170,33 @@ def test_the_http_error_retry_matches_the_shared_cases(config: BaseAnthropicMess
 
     assert retried is case["retried"]
     assert transformed == (RETRY["stripped_request"] if case["stripped"] else body)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [AnthropicMessagesConfig(), DeepSeekAnthropicMessagesConfig()],
+    ids=["anthropic", "deepseek"],
+)
+@pytest.mark.parametrize("case", [pytest.param(case, id=case["name"]) for case in CLEAR_THINKING_RETRY["cases"]])
+def test_the_http_error_retry_keeps_thinking_for_a_clear_thinking_edit_like_the_shared_cases(
+    config: BaseAnthropicMessagesConfig, case: _ClearThinkingRetryCase
+) -> None:
+    body: Final = {
+        **copy.deepcopy(RETRY["request"]),
+        "thinking": CLEAR_THINKING_RETRY["thinking"],
+        "context_management": copy.deepcopy(case["context_management"]),
+    }
+    kept_thinking: Final = {"thinking": CLEAR_THINKING_RETRY["thinking"]} if case["keeps_thinking"] else {}
+
+    transformed: Final = config.transform_anthropic_messages_request_on_http_error(
+        e=_rejection(CLEAR_THINKING_RETRY), request_data=copy.deepcopy(body)
+    )
+
+    assert transformed == {
+        **RETRY["stripped_request"],
+        "context_management": case["context_management"],
+        **kept_thinking,
+    }
 
 
 @pytest.mark.parametrize(

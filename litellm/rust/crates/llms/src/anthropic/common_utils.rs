@@ -756,8 +756,23 @@ pub fn strip_thinking_blocks_from_anthropic_messages_request(request_body: Value
             .filter_map(without_thinking_value_blocks)
             .collect();
     }
-    body.shift_remove("thinking");
+    if !has_clear_thinking_edit(&body) {
+        body.shift_remove("thinking");
+    }
     Value::Object(body)
+}
+
+fn has_clear_thinking_edit(body: &serde_json::Map<String, Value>) -> bool {
+    body.get("context_management")
+        .and_then(|context_management| context_management.get("edits"))
+        .and_then(Value::as_array)
+        .is_some_and(|edits| {
+            edits.iter().any(|edit| {
+                edit.get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|edit_type| edit_type.starts_with("clear_thinking_"))
+            })
+        })
 }
 
 static CLAUDE_STRICT_TOOLS_REJECTION: LazyLock<Regex> = LazyLock::new(|| {
