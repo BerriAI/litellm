@@ -42,6 +42,7 @@ from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_logger_v2 import Abort, CallContext, CustomLoggerV2, Field, Hook, Patch, on
 from litellm.integrations.custom_logger_v2.host import V2Outcome
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_llm import CustomLLM, CustomLLMError
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
@@ -4815,6 +4816,81 @@ def test_append_system_prompt_messages():
     # Test case 6: None kwargs returns messages unchanged
     result = StandardLoggingPayloadSetup.append_system_prompt_messages(kwargs=None, messages=messages)
     assert result == messages
+
+
+_SYSTEM_BLOCKS: Final = ({"type": "text", "text": "You are a code reviewer.", "cache_control": {"type": "ephemeral"}},)
+_USER_TURN: Final = MappingProxyType({"role": "user", "content": "Say hi"})
+
+
+@pytest.mark.parametrize(
+    "system, messages",
+    [
+        ([], [dict(_USER_TURN)]),
+        (list(_SYSTEM_BLOCKS), [{"role": "system", "content": list(_SYSTEM_BLOCKS)}, dict(_USER_TURN)]),
+    ],
+    ids=["empty_block_list", "blocks_already_first"],
+)
+def test_logged_messages_gain_no_extra_system_entry(
+    system: list[dict[str, object]], messages: list[dict[str, object]]
+) -> None:
+    result: Final = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs={"system": system}, messages=messages
+    )
+    assert result == messages
+
+
+class _LoggedMessagesRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages: object = None
+        self.logged: asyncio.Event = asyncio.Event()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, StandardLoggingPayload], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.messages = kwargs["standard_logging_object"]["messages"]
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "system",
+    [
+        "You are a code reviewer.",
+        [{"type": "text", "text": "You are a code reviewer.", "cache_control": {"type": "ephemeral"}}],
+    ],
+    ids=["text", "content_blocks"],
+)
+async def test_anthropic_messages_system_prompt_reaches_logged_messages(system: str | list[dict[str, object]]) -> None:
+    recorder: Final = _LoggedMessagesRecorder()
+    user_turn: Final = {"role": "user", "content": "Say hi"}
+    reply: Final = {
+        "id": "msg_system_prompt_logging",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 5, "output_tokens": 1},
+    }
+    upstream: Final = AsyncHTTPHandler(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=reply, request=request))
+    )
+    try:
+        await litellm.anthropic.messages.acreate(
+            model="anthropic/claude-sonnet-5-5",
+            max_tokens=16,
+            system=system,
+            messages=[user_turn],
+            api_key="sk-test",
+            client=upstream,
+            callbacks=[recorder],
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+    finally:
+        await upstream.close()
+    assert recorder.messages == [{"role": "system", "content": system}, user_turn]
 
 
 @pytest.mark.asyncio
