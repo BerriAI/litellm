@@ -196,6 +196,83 @@ def test_completion_cost_uses_response_model_for_dynamic_routing(_local_model_co
     assert cost > 0, "Cost should be calculated using response model"
 
 
+_ROUTER_FEE_PER_INPUT_TOKEN: Final = 3e-07
+
+
+def _model_router_cost_map(routed_model_rows: Mapping[str, tuple[float, float]]) -> dict[str, dict[str, object]]:
+    fee_rows: Final = {
+        f"{provider}/model-router": {
+            "litellm_provider": provider,
+            "mode": "chat",
+            "input_cost_per_token": _ROUTER_FEE_PER_INPUT_TOKEN,
+            "output_cost_per_token": 0.0,
+        }
+        for provider in ("azure", "azure_ai")
+    }
+    routed_rows: Final = {
+        key: {
+            "litellm_provider": key.partition("/")[0],
+            "mode": "chat",
+            "input_cost_per_token": input_rate,
+            "output_cost_per_token": output_rate,
+        }
+        for key, (input_rate, output_rate) in routed_model_rows.items()
+    }
+    return {**fee_rows, **routed_rows}
+
+
+def _routed_response(served_model: str) -> ModelResponse:
+    response: Final = ModelResponse(
+        model=served_model, choices=[], usage=Usage(prompt_tokens=25, completion_tokens=10, total_tokens=35)
+    )
+    response._hidden_params = {"model": "model-router"}
+    return response
+
+
+@pytest.mark.parametrize(
+    ("routed_model_rows", "served_model", "billed_rates"),
+    [
+        ({"azure_ai/foundry-only-model": (2e-06, 5e-06)}, "foundry-only-model", (2e-06, 5e-06)),
+        (
+            {"azure/azure-priced-model": (1e-06, 4e-06), "azure_ai/azure-priced-model": (9e-06, 9e-06)},
+            "azure-priced-model",
+            (1e-06, 4e-06),
+        ),
+    ],
+)
+def test_azure_model_router_bills_the_routed_model_and_the_router_fee_once(
+    monkeypatch: pytest.MonkeyPatch,
+    routed_model_rows: Mapping[str, tuple[float, float]],
+    served_model: str,
+    billed_rates: tuple[float, float],
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _model_router_cost_map(routed_model_rows))
+
+    cost: Final = completion_cost(
+        completion_response=_routed_response(served_model), model="model-router", custom_llm_provider="azure"
+    )
+
+    input_rate, output_rate = billed_rates
+    assert cost == pytest.approx(25 * input_rate + 10 * output_rate + 25 * _ROUTER_FEE_PER_INPUT_TOKEN)
+
+
+def test_azure_and_azure_ai_model_routers_bill_a_foundry_only_routed_model_the_same(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _model_router_cost_map({"azure_ai/foundry-only-model": (2e-06, 5e-06)}))
+
+    azure_cost: Final = completion_cost(
+        completion_response=_routed_response("foundry-only-model"), model="model-router", custom_llm_provider="azure"
+    )
+    azure_ai_cost: Final = completion_cost(
+        completion_response=_routed_response("foundry-only-model"),
+        model="model-router",
+        custom_llm_provider="azure_ai",
+    )
+
+    assert azure_cost == pytest.approx(azure_ai_cost)
+
+
 def test_completion_cost_prefers_exact_route_price_over_capability_generalization(
     _local_model_cost_map: None,
     _claude_family_generalization: None,

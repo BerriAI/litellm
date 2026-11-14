@@ -1,15 +1,19 @@
+import re
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, Literal
+from urllib.parse import urlsplit
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
 from pydantic import TypeAdapter
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
@@ -23,6 +27,17 @@ else:
     LiteLLMLoggingObj = Any
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+_FOUNDRY_PROJECT_V1_RESPONSES_PATH: Final = re.compile(r"/api/projects/[^/]+/openai/v1/responses$")
+
+
+def _without_rejected_api_version(url: str, api_version: str | None) -> str:
+    parsed_url: Final = httpx.URL(url)
+    if not (
+        BaseAzureLLM.is_api_version_opt_out(api_version) or _FOUNDRY_PROJECT_V1_RESPONSES_PATH.search(parsed_url.path)
+    ):
+        return url
+    return str(parsed_url.copy_with(params=parsed_url.params.remove("api-version")))
 
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -180,11 +195,25 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
 
-        return BaseAzureLLM.get_base_azure_url(
-            api_base=api_base,
-            litellm_params=litellm_params,
-            route="/openai/responses",
-            default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
+        resolved_api_base: Final = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+        parsed_base: Final = urlsplit(resolved_api_base or "")
+        path: Final = parsed_base.path.rstrip("/")
+        raw_api_version: Final = _LITELLM_PARAMS.validate_python(litellm_params).get("api_version")
+        api_version: Final = raw_api_version if isinstance(raw_api_version, str) else None
+        explicit_v1_base: Final = path.endswith(("/openai/v1", "/openai/v1/responses")) or (
+            BaseAzureLLM.is_api_version_opt_out(api_version)
+        )
+        responses_path: Final = (
+            f"{path}/responses" if path.endswith("/openai/v1") else path.removesuffix("/openai/responses")
+        )
+        return _without_rejected_api_version(
+            BaseAzureLLM.get_base_azure_url(
+                api_base=parsed_base._replace(path=responses_path).geturl() if explicit_v1_base else resolved_api_base,
+                litellm_params=litellm_params,
+                route="/openai/v1/responses" if explicit_v1_base else "/openai/responses",
+                default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
+            ),
+            api_version,
         )
 
     def supports_native_websocket(self) -> bool:
@@ -206,7 +235,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         parsed_url: Final = httpx.URL(api_base)
         path = parsed_url.path.rstrip("/")
         # Strip existing /openai/responses path if the api_base already contains it
-        for suffix in ("/openai/v1/responses", "/openai/responses"):
+        for suffix in ("/openai/v1/responses", "/openai/responses", "/openai/v1"):
             if path.endswith(suffix):
                 path = path[: -len(suffix)]
                 break
