@@ -9855,13 +9855,11 @@ def test_validate_environment_takes_any_together_ai_key_name_for_bare_and_prefix
 def test_validate_environment_keeps_the_wandb_key_check_for_bare_ids_wandb_shares_with_together_ai(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    together_ai_bare_ids: Final = frozenset(key.removeprefix("together_ai/") for key in _live_together_ai_cost_map_rows())
-    shared_bare_ids: Final = tuple(
-        sorted(
-            bare_id
-            for bare_id in together_ai_bare_ids & frozenset(litellm.wandb_models)
-            if not _resolves_to_a_provider(bare_id)
-        )
+    shared_bare_ids: Final = tuple(sorted(model for model in litellm.wandb_models if not _resolves_to_a_provider(model)))
+    monkeypatch.setattr(
+        litellm,
+        "together_ai_models",
+        frozenset((*litellm.together_ai_models, *(f"together_ai/{model}" for model in shared_bare_ids))),
     )
 
     for key_name in (*_TOGETHER_AI_KEY_NAMES, "WANDB_API_KEY"):

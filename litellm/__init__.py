@@ -62,6 +62,7 @@ from litellm.constants import (
     huggingface_models,
     modelscope_models,
     empower_models,
+    together_ai_models,
     WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
@@ -624,7 +625,6 @@ bedrock_models: Set = set()
 bedrock_converse_models: Set = set(BEDROCK_CONVERSE_MODELS)
 fal_ai_models: Set = set()
 fireworks_ai_models: Set = set()
-together_ai_models: Final[set[str]] = set()  # mutable-ok: filled from the cost map at import and on reload
 baseten_models: Set[str] = set()
 fireworks_ai_embedding_models: Set = set()
 deepinfra_models: Set = set()

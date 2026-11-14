@@ -1307,6 +1307,8 @@ empower_models: Final = set(
     ]
 )
 
+together_ai_models: Final[set[str]] = set()  # mutable-ok: filled from the cost map at import and on reload
+
 TOGETHER_AI_API_KEY_ENV_VARS: Final = (
     "TOGETHER_API_KEY",
     "TOGETHER_AI_API_KEY",
