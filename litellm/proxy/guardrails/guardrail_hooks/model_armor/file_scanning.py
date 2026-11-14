@@ -86,6 +86,17 @@ class _FileBlock(LiteLLMBaseModel):
     file: _FileData
 
 
+class _ResponsesFileBlock(LiteLLMBaseModel):
+    """A Responses API `input_file` item: inline `file_data`, or a `file_id` / `file_url` reference."""
+
+    model_config = ConfigDict(extra="ignore")
+    type: Literal["input_file"]
+    file_data: str | None = None
+    file_url: str | None = None
+    file_id: str | None = None
+    filename: str | None = None
+
+
 class _DocumentSource(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     data: str | None = None
@@ -98,8 +109,8 @@ class _DocumentBlock(LiteLLMBaseModel):
     source: _DocumentSource
 
 
-_AttachmentBlock = Annotated[_FileBlock | _DocumentBlock, Field(discriminator="type")]
-_BLOCK_ADAPTER: Final[TypeAdapter[_FileBlock | _DocumentBlock]] = TypeAdapter(_AttachmentBlock)
+_AttachmentBlock = Annotated[_FileBlock | _DocumentBlock | _ResponsesFileBlock, Field(discriminator="type")]
+_BLOCK_ADAPTER: Final[TypeAdapter[_FileBlock | _DocumentBlock | _ResponsesFileBlock]] = TypeAdapter(_AttachmentBlock)
 
 
 def plan_file_scans(messages: Sequence[AllMessageValues]) -> FileScanPlan:
@@ -152,9 +163,17 @@ def _is_reference(block: _FileBlock | _DocumentBlock) -> bool:
 
 def _parse_block(block: object) -> _FileBlock | _DocumentBlock | None:
     try:
-        return _BLOCK_ADAPTER.validate_python(block)
+        parsed: Final = _BLOCK_ADAPTER.validate_python(block)
     except ValidationError:
         return None
+    if isinstance(parsed, _ResponsesFileBlock):
+        # Same shape as a chat `file` block; a file_url or file_id alone has no inline bytes, so it is
+        # classified as a reference and fails closed like its chat equivalent.
+        return _FileBlock(
+            type="file",
+            file=_FileData(file_data=parsed.file_data or parsed.file_url, filename=parsed.filename),
+        )
+    return parsed
 
 
 def _block_byte_data_type_and_data(
