@@ -33901,6 +33901,8 @@
     "github_copilot/claude-fable-5": {
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_read_input_token_cost": 1e-06,
+        "deprecation_date": "2026-12-14",
+        "deprecation_source": "https://github.blog/changelog/2026-11-13-upcoming-deprecation-of-selected-github-copilot-models-in-december",
         "input_cost_per_token": 1e-05,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 200000,
@@ -33908,6 +33910,7 @@
         "mode": "chat",
         "output_cost_per_token": 5e-05,
         "source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml",
+        "successor_model": "github_copilot/claude-fable-5.2",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/messages"
@@ -33948,12 +33951,15 @@
     "github_copilot/claude-haiku-4.5": {
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost": 1e-07,
+        "deprecation_date": "2026-12-14",
+        "deprecation_source": "https://github.blog/changelog/2026-11-13-upcoming-deprecation-of-selected-github-copilot-models-in-december",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 128000,
         "max_output_tokens": 16000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
+        "successor_model": "github_copilot/claude-haiku-5.5",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -34149,6 +34155,8 @@
     },
     "github_copilot/gemini-3.8-flash": {
         "cache_read_input_token_cost": 7.5e-08,
+        "deprecation_date": "2026-12-14",
+        "deprecation_source": "https://github.blog/changelog/2026-11-13-upcoming-deprecation-of-selected-github-copilot-models-in-december",
         "input_cost_per_token": 7.5e-07,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 200000,
@@ -34156,6 +34164,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.75e-06,
         "source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml",
+        "successor_model": "github_copilot/gemini-4-hydrogen",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -34553,6 +34562,8 @@
     },
     "github_copilot/kimi-k3": {
         "cache_read_input_token_cost": 3e-07,
+        "deprecation_date": "2026-12-14",
+        "deprecation_source": "https://github.blog/changelog/2026-11-13-upcoming-deprecation-of-selected-github-copilot-models-in-december",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 917504,
@@ -79539,6 +79550,8 @@
     },
     "github_copilot/gemini-4-argon": {
         "cache_read_input_token_cost": 1e-07,
+        "deprecation_date": "2026-12-14",
+        "deprecation_source": "https://github.blog/changelog/2026-11-13-upcoming-deprecation-of-selected-github-copilot-models-in-december",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 200000,
@@ -79546,6 +79559,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml",
+        "successor_model": "github_copilot/gemini-4-carbon",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -79975,6 +79989,8 @@
     "github_copilot/grok-4.6": {
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_200k_tokens": 1e-06,
+        "deprecation_date": "2026-12-14",
+        "deprecation_source": "https://github.blog/changelog/2026-11-13-upcoming-deprecation-of-selected-github-copilot-models-in-december",
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
         "litellm_provider": "github_copilot",
@@ -79984,6 +80000,7 @@
         "output_cost_per_token": 6e-06,
         "output_cost_per_token_above_200k_tokens": 1.2e-05,
         "source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml",
+        "successor_model": "github_copilot/grok-4.7",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
