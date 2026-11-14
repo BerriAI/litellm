@@ -1,3 +1,4 @@
+* @BerriAI/litellm-engineering
 /model_prices_and_context_window.json @mateo-berri @ryan-crabbe-berri @kerry-berri @joshua-berri
 /litellm/model_prices_and_context_window_backup.json @mateo-berri @ryan-crabbe-berri @kerry-berri @joshua-berri
 /litellm/scripts/ci_cd/cost_map_pins.json @mateo-berri @ryan-crabbe-berri @kerry-berri @joshua-berri
