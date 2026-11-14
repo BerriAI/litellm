@@ -187,6 +187,7 @@ from litellm.types.router import (
     GenericLiteLLMParams,
     LiteLLM_Params,
     ModelInfo,
+    server_owned_param_kind,
     updateDeployment,
     updateLiteLLMParams,
 )
@@ -2799,7 +2800,7 @@ class ModelManagementAuthChecks:
             raise ProxyException(
                 message=(
                     f"Only proxy admins can change the credentials of a deployment configured for "
-                    f"workload identity federation or OAuth token exchange, or holding an oidc/ api_key secret "
+                    f"{server_owned_param_kind(wif_fields[0])}, or holding an oidc/ api_key secret "
                     f"reference ({wif_fields[0]!r})."
                 ),
                 type=ProxyErrorTypes.auth_error.value,

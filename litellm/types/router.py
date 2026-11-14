@@ -1599,13 +1599,13 @@ def reject_server_owned_wif_fields(body: Mapping[str, object]) -> None:
     for param in _server_owned_wif_litellm_params:
         if param in submitted_names:
             raise ValueError(
-                f"Rejected Request: {param} is a server-owned {_server_owned_param_kind(param)} parameter "
+                f"Rejected Request: {param} is a server-owned {server_owned_param_kind(param)} parameter "
                 "and cannot be set in a request body. A proxy admin configures it on the deployment "
                 "or on a stored credential."
             )
 
 
-def _server_owned_param_kind(param: str) -> str:
+def server_owned_param_kind(param: str) -> str:
     if param in _github_copilot_oauth_litellm_params:
         return "GitHub Copilot authentication"
     return "workload identity federation or OAuth token exchange"

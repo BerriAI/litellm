@@ -62,11 +62,10 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
     declared: Final = declared_authenticating_provider(model, _optional_params.custom_llm_provider)
     if declared == "github_copilot":
         from litellm.llms.github_copilot.app_auth import app_config
-        from litellm.llms.github_copilot.per_user_auth import github_copilot_user_session_from
 
-        github_auth: Final = github_copilot_user_session_from(_optional_params) or app_config(_optional_params)
-        if github_auth is not None:
-            return github_auth.api_base
+        github_app: Final = app_config(_optional_params)
+        if github_app is not None:
+            return github_app.api_base
     if _optional_params.api_base is not None:
         return _optional_params.api_base
     extra_params: Final = _optional_params.model_extra

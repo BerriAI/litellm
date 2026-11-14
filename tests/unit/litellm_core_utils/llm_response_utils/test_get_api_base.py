@@ -7,6 +7,7 @@ import litellm
 from litellm.litellm_core_utils.llm_response_utils import get_api_base as get_api_base_module
 from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
 from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE
+from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -117,7 +118,8 @@ def test_base_url_alias_is_reported_as_the_api_base():
     )
 
 
-def test_github_app_deployment_reports_the_copilot_host_it_calls_over_a_configured_api_base(isolated_token_dirs):
+@pytest.mark.usefixtures("isolated_token_dirs")
+def test_github_app_deployment_reports_the_copilot_host_it_calls_over_a_configured_api_base():
     model: Final = "github_copilot/gpt-5.5"
     params: Final = {
         "api_base": "https://admin-set.internal/v1",
@@ -132,3 +134,13 @@ def test_github_app_deployment_reports_the_copilot_host_it_calls_over_a_configur
 
     assert called_api_base != params["api_base"]
     assert litellm.get_api_base(model=model, optional_params=params) == called_api_base
+
+
+@pytest.mark.usefixtures("isolated_token_dirs")
+def test_per_user_session_still_reports_the_configured_api_base():
+    params: Final = {
+        "api_base": "https://admin-set.internal/v1",
+        "github_copilot_user_session": GithubCopilotUserSession("user-token", "https://api.business.githubcopilot.com"),
+    }
+
+    assert litellm.get_api_base(model="github_copilot/gpt-5.5", optional_params=params) == params["api_base"]
