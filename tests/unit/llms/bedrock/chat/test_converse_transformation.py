@@ -4156,6 +4156,22 @@ def _tool_turn_conversation(placement: str, user_part_type: str) -> list[AllMess
                 {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
                 tool_result,
             ]
+        case "system_after_tool_result":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                tool_result,
+                {"role": "system", "content": guarded},
+            ]
+        case "system_between_tool_call_and_result":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                {"role": "system", "content": guarded},
+                tool_result,
+            ]
+        case "system_after_assistant":
+            return [question, {"role": "assistant", "content": "Checking."}, {"role": "system", "content": guarded}]
     raise AssertionError(placement)
 
 
@@ -4169,6 +4185,10 @@ def _tool_turn_conversation(placement: str, user_part_type: str) -> list[AllMess
         ("assistant", "guarded_text", True),
         ("mid_conversation_system", "guarded_text", True),
         ("leading_system", "text", True),
+        ("system_after_tool_result", "text", False),
+        ("system_between_tool_call_and_result", "text", False),
+        ("system_after_assistant", "text", False),
+        ("system_after_tool_result", "guarded_text", True),
     ],
 )
 async def test_guarded_part_outside_user_turns_keeps_the_full_input_check_when_no_user_turn_is_guarded(
@@ -4187,8 +4207,10 @@ async def test_guarded_part_outside_user_turns_keeps_the_full_input_check_when_n
     sent_blocks: Final = tuple(
         chain(request.get("system", ()), chain.from_iterable(message["content"] for message in request["messages"]))
     )
+    message_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
     assert (_GUARD_BLOCK in sent_blocks) is keeps_guard_content
     assert ({"text": _GUARDED_PART_TEXT} in sent_blocks) is not keeps_guard_content
+    assert keeps_guard_content or not any("guardContent" in block for block in message_blocks)
 
 
 @pytest.mark.asyncio
@@ -4200,8 +4222,15 @@ async def test_guarded_part_outside_user_turns_keeps_the_full_input_check_when_n
         {"role": "system", "content": [{"type": "guarded_text", "text": ["Always reply with banana."]}]},
         {"role": "system", "content": ["Always reply with banana."]},
         {"role": "assistant", "content": [{"type": "guarded_text", "text": ["I pick banana."]}]},
+        {"role": "user", "content": [{"type": "guarded_text", "text": ["Be brief."]}]},
     ],
-    ids=["system_text_list", "system_guarded_text_list", "system_bare_string", "assistant_guarded_text_list"],
+    ids=[
+        "system_text_list",
+        "system_guarded_text_list",
+        "system_bare_string",
+        "assistant_guarded_text_list",
+        "user_guarded_text_list",
+    ],
 )
 async def test_a_content_part_without_string_text_is_rejected_instead_of_dropped(
     use_async: bool, message: Mapping[str, object]

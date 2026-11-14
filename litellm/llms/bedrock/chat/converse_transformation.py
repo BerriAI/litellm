@@ -255,9 +255,19 @@ def _is_guarded_user_turn(message: object) -> bool:
     return _is_user_turn(message) and _has_guarded_text(message)
 
 
+def _becomes_a_user_turn(message: object) -> bool:
+    return _is_user_turn(message) or is_system_message(message)
+
+
 def _gets_guarded_when_trailing(message: object) -> bool:
     content: Final = message_field(message, "content")
+    if is_system_message(message):
+        return content != "" if isinstance(content, str) else any(map(_is_non_empty_text_part, parts_of(content)))
     return isinstance(content, str) or any(message_field(part, "type") == "text" for part in parts_of(content))
+
+
+def _is_non_empty_text_part(part: object) -> bool:
+    return message_field(part, "type") == "text" and bool(message_field(part, "text"))
 
 
 def _is_guarded_turn_outside_user_turns(message: object) -> bool:
@@ -284,23 +294,12 @@ def _with_guarded_text_as_text(message: AllMessageValues) -> AllMessageValues:
     )
 
 
-def _messages_keeping_the_full_input_check(
-    messages: Sequence[AllMessageValues], guardrail_active: bool
-) -> Sequence[AllMessageValues]:
-    """Bedrock's guardrail checks every message until one carries guardContent, then only those blocks.
+def _leading_system_count(messages: Sequence[AllMessageValues]) -> int:
+    return next((index for index, message in enumerate(messages) if not is_system_message(message)), len(messages))
 
-    So a guarded system or assistant part goes as text when no user turn is guarded, either by the caller or by the
-    trailing user turns litellm guards, since marking it would shrink the input check to that part.
-    """
-    if not guardrail_active or not any(map(_is_guarded_turn_outside_user_turns, messages)):
-        return messages
-    if any(map(_is_guarded_user_turn, messages)) or any(
-        map(_gets_guarded_when_trailing, takewhile(_is_user_turn, reversed(messages)))
-    ):
-        return messages
-    leading_count: Final = next(
-        (index for index, message in enumerate(messages) if not is_system_message(message)), len(messages)
-    )
+
+def _guarded_text_as_text_past_the_system_prompt(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
+    leading_count: Final = _leading_system_count(messages)
     return (*messages[:leading_count], *map(_with_guarded_text_as_text, messages[leading_count:]))
 
 
@@ -1682,6 +1681,23 @@ class AmazonConverseConfig(BaseConfig):
             len(messages),
         )
 
+    def _keeps_the_full_input_check(self, messages: Sequence[AllMessageValues], guardrail_active: bool) -> bool:
+        """Bedrock's guardrail checks every message until one carries guardContent, then only those blocks.
+
+        A guarded system or assistant part past the system prompt would shrink the check to that part, so it goes as
+        text, with the trailing turns left unguarded, when the messages would carry no guardContent without it: no user
+        turn is guarded and no turn that ends the request, a converted system turn included, has text to guard.
+        """
+        remaining: Final = messages[_leading_system_count(messages) :]
+        if not guardrail_active or not any(map(_is_guarded_turn_outside_user_turns, remaining)):
+            return False
+        if any(map(_is_guarded_user_turn, remaining)):
+            return False
+        reordered: Final = chain.from_iterable(
+            self._reordered_around_tool_results(remaining, index) for index in range(len(remaining))
+        )
+        return not any(map(_gets_guarded_when_trailing, takewhile(_becomes_a_user_turn, reversed(tuple(reordered)))))
+
     def _reordered_around_tool_results(
         self, messages: Sequence[AllMessageValues], index: int
     ) -> tuple[AllMessageValues, ...]:
@@ -2329,8 +2345,9 @@ class AmazonConverseConfig(BaseConfig):
         can_send_guarded_text: Final = "guardrailConfig" in optional_params or drops_unsupported_params(
             litellm_params.get("drop_params")
         )
+        keeps_full_input_check: Final = self._keeps_the_full_input_check(messages, "guardrailConfig" in optional_params)
         messages, system_content_blocks = self._transform_system_message(
-            list(_messages_keeping_the_full_input_check(messages, "guardrailConfig" in optional_params))
+            list(_guarded_text_as_text_past_the_system_prompt(messages) if keeps_full_input_check else messages)
             if can_send_guarded_text
             else list(map(_without_guarded_text_outside_user_turns, messages)),
             model=capability_model,
@@ -2338,8 +2355,11 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
-        messages = self._convert_consecutive_user_messages_to_guarded_text(
-            self._handle_orphaned_tool_blocks(messages, optional_params), optional_params
+        guard_input: Final = self._handle_orphaned_tool_blocks(messages, optional_params)
+        messages = (
+            guard_input
+            if keeps_full_input_check
+            else self._convert_consecutive_user_messages_to_guarded_text(guard_input, optional_params)
         )
         ## TRANSFORMATION ##
 
@@ -2417,8 +2437,9 @@ class AmazonConverseConfig(BaseConfig):
         can_send_guarded_text: Final = "guardrailConfig" in optional_params or drops_unsupported_params(
             litellm_params.get("drop_params")
         )
+        keeps_full_input_check: Final = self._keeps_the_full_input_check(messages, "guardrailConfig" in optional_params)
         messages, system_content_blocks = self._transform_system_message(
-            list(_messages_keeping_the_full_input_check(messages, "guardrailConfig" in optional_params))
+            list(_guarded_text_as_text_past_the_system_prompt(messages) if keeps_full_input_check else messages)
             if can_send_guarded_text
             else list(map(_without_guarded_text_outside_user_turns, messages)),
             model=capability_model,
@@ -2426,8 +2447,11 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
-        messages = self._convert_consecutive_user_messages_to_guarded_text(
-            self._handle_orphaned_tool_blocks(messages, optional_params), optional_params
+        guard_input: Final = self._handle_orphaned_tool_blocks(messages, optional_params)
+        messages = (
+            guard_input
+            if keeps_full_input_check
+            else self._convert_consecutive_user_messages_to_guarded_text(guard_input, optional_params)
         )
 
         _data: Final[CommonRequestObject] = self._transform_request_helper(
