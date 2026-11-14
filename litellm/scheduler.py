@@ -1,15 +1,20 @@
 import asyncio
 import enum
 import heapq
+import logging as _logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Final, TypeAlias
+from typing import Protocol as _Protocol
 
 from pydantic import TypeAdapter
 
 from litellm import print_verbose
 from litellm._internal_context import with_service_target
+from litellm._logging import verbose_logger as _verbose_logger
 from litellm.caching.caching import DualCache, RedisCache
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError as _RedisCircuitBreakerOpenError
+from litellm.caching.redis_cache import log_redis_failure as _log_redis_failure
 from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_POLLING_INTERVAL
 from litellm.exceptions import Timeout
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -28,6 +33,26 @@ class FlowItem(LiteLLMBaseModel):
     priority: int  # Priority between 0 and 255
     request_id: str
     model_name: str
+
+
+class _QueueCache(_Protocol):
+    async def async_get_cache(self, key: str, *, local_only: bool = False, raise_on_error: bool = False) -> object: ...
+
+    async def async_set_cache(self, key: str, value: object, *, local_only: bool = False) -> object: ...
+
+
+async def _read_queue(cache: _QueueCache, redis_cache: _QueueCache | None, key: str) -> object:
+    if redis_cache is None:
+        return await cache.async_get_cache(key=key, local_only=True)
+    from redis.exceptions import RedisError as _RedisError
+
+    try:
+        response: Final = await redis_cache.async_get_cache(key=key, raise_on_error=True)
+    except (_RedisError, _RedisCircuitBreakerOpenError) as error:
+        _log_redis_failure(_verbose_logger, _logging.ERROR, "Scheduler queue using local snapshot", error)
+        return await cache.async_get_cache(key=key, local_only=True)
+    await cache.async_set_cache(key=key, value=[] if response is None else response, local_only=True)
+    return response
 
 
 class Scheduler:
@@ -153,7 +178,7 @@ class Scheduler:
         """
         if self.cache is not None:
             _cache_key: Final = f"{SchedulerCacheKeys.queue.value}:{model_name}"
-            response: Final = await self.cache.async_get_cache(key=_cache_key)
+            response: Final = await _read_queue(self.cache, self.cache.redis_cache, _cache_key)
             if not isinstance(response, list):
                 return []
             return _QUEUE_ENTRIES.validate_python(response)

@@ -13,16 +13,22 @@ def is_fastapi_http_exception(e: Exception, block_status_codes: Collection[int])
 
 
 def enrich_http_exception_with_guardrail_context(exc: BaseException, callback: object) -> None:
+    if not hasattr(exc, "mcp_block_behavior"):
+        setattr(  # noqa: B010  # exception types do not declare per-deployment MCP context
+            exc, "mcp_block_behavior", getattr(callback, "mcp_block_behavior", None)
+        )
     try:
         from fastapi.exceptions import HTTPException
     except ImportError:
         return
     if not isinstance(exc, HTTPException):
         return
+    guardrail_name: Final[object] = getattr(callback, "guardrail_name", None)
     detail: Final = getattr(exc, "detail", None)
     if not isinstance(detail, dict):
+        if isinstance(guardrail_name, str):
+            setattr(exc, "guardrail_name", guardrail_name)  # noqa: B010  # HTTPException does not declare guardrail_name
         return
-    guardrail_name: Final[object] = getattr(callback, "guardrail_name", None)
     if guardrail_name:
         detail.setdefault("guardrail_name", guardrail_name)
     event_hook: Final[object] = getattr(callback, "event_hook", None)

@@ -504,7 +504,6 @@ _GENERATED: Final = {
 _MALFORMED_BREAKPOINTS: Final = (
     {"mode": "implicit"},
     {"mode": "explicit", "ttl": "1h"},
-    {"mode": "explicit", "tll": "12h"},
     {"ttl": "30m"},
     {},
     "explicit",

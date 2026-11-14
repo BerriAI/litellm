@@ -2,8 +2,8 @@
 Handler for transforming interactions API requests to litellm.responses requests.
 """
 
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterator
-from typing import Any, Final
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping
+from typing import Final
 
 import litellm
 from litellm.interactions.litellm_responses_transformation.streaming_iterator import (
@@ -72,6 +72,7 @@ class LiteLLMResponsesInteractionsHandler:
                 model=model,
                 input=input,
                 optional_params=optional_params,
+                custom_llm_provider=custom_llm_provider,
                 **kwargs,
             )
 
@@ -103,14 +104,16 @@ class LiteLLMResponsesInteractionsHandler:
         return LiteLLMResponsesInteractionsConfig.transform_responses_response_to_interactions_response(
             responses_response=responses_api_response,
             model=model,
+            custom_llm_provider=custom_llm_provider,
         )
 
     async def async_interactions_api_handler(
         self,
-        responses_request: dict[str, Any],
+        responses_request: Mapping[str, object],
         model: str,
         input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
+        custom_llm_provider: str | None = None,
         **kwargs,
     ) -> InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]:
         """Async handler for interactions API requests."""
@@ -127,7 +130,7 @@ class LiteLLMResponsesInteractionsHandler:
                 litellm_custom_stream_wrapper=responses_response,
                 request_input=input,
                 optional_params=optional_params,
-                custom_llm_provider=responses_request.get("custom_llm_provider"),
+                custom_llm_provider=custom_llm_provider,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
             )
 
@@ -138,4 +141,5 @@ class LiteLLMResponsesInteractionsHandler:
         return LiteLLMResponsesInteractionsConfig.transform_responses_response_to_interactions_response(
             responses_response=responses_api_response,
             model=model,
+            custom_llm_provider=custom_llm_provider,
         )

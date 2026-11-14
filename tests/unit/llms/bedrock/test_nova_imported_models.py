@@ -24,10 +24,8 @@ class TestGetBedrockRoute:
     def test_nova2_prefix_routes_to_converse(self):
         assert BedrockModelInfo.get_bedrock_route(NOVA2_MODEL) == "converse"
 
-    def test_plain_arn_routes_to_invoke(self):
-        # Without spec prefix, ARN doesn't match converse models
-        result = BedrockModelInfo.get_bedrock_route(f"bedrock/{NOVA_ARN}")
-        assert result == "invoke"
+    def test_plain_arn_without_an_invoke_provider_routes_to_converse(self):
+        assert BedrockModelInfo.get_bedrock_route(f"bedrock/{NOVA_ARN}") == "converse"
 
 
 class TestGetBedrockBaseModel:

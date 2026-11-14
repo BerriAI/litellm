@@ -6,7 +6,7 @@
         </p>
         <p align="center">Open Source AI Gateway for 100+ LLMs. Self-hosted. Enterprise-ready. Call any LLM in OpenAI format.</p>
         <p align="center">
-        <a href="https://render.com/deploy?repo=https://github.com/BerriAI/litellm" target="_blank" rel="nofollow"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" height="40"></a>
+        <a href="https://render.com/deploy?repo=https://github.com/BerriAI/litellm&amp;blueprintPath=litellm/deploy/render/render.yaml" target="_blank" rel="nofollow"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" height="40"></a>
         <a href="https://railway.com/deploy/RhvhdC?referralCode=7mRv9K&utm_medium=integration&utm_source=template&utm_campaign=generic"><img src="https://railway.com/button.svg" alt="Deploy on Railway" height="40"></a>
         <a href="https://console.aws.amazon.com/cloudshell/home" target="_blank" rel="nofollow"><img src="./.github/deploy-on-aws.png" alt="Deploy on AWS" height="40"></a>
         <a href="https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2FBerriAI%2Fterraform-google-litellm&cloudshell_git_branch=v1.105.0&cloudshell_workspace=examples%2Fdefault&cloudshell_tutorial=TUTORIAL.md&cloudshell_image=gcr.io/ds-artifacts-cloudshell/deploystack_custom_image&shellonly=true" target="_blank" rel="nofollow"><img src="./.github/deploy-on-gcp.png" alt="Deploy on GCP" height="40"></a>
@@ -99,7 +99,7 @@ proxy, CLI, and optional extras
 Build and install core from this checkout while its release integration is pending:
 
 ```shell
-python scripts/build_core_distribution.py --out-dir dist/core
+python litellm/scripts/build_core_distribution.py --out-dir dist/core
 python -m pip install dist/core/litellm_core-*.whl
 ```
 
@@ -141,12 +141,56 @@ response = client.chat.completions.create(
 )
 ```
 
-[**Docs: LLM Providers**](https://docs.litellm.ai/docs/providers)
+</details>
+
+<details>
+<summary><b>Auto Routing</b> - Choose a model for each prompt (Python SDK + AI Gateway)</summary>
+
+### Python SDK
+
+[**Docs: Autorouter SDK**](https://docs.litellm.ai/docs/autorouter_sdk)
+
+Install with `uv add litellm` and set `OPENAI_API_KEY` for the models below.
+
+```python
+import asyncio
+from litellm import Router
+
+router = Router(model_list=[
+    {"model_name": "fast", "litellm_params": {"model": "openai/gpt-6-luna"}},
+    {"model_name": "capable", "litellm_params": {"model": "openai/gpt-6.1-sol"}},
+    {"model_name": "auto", "litellm_params": {
+        "model": "auto_router/complexity_router",
+        "complexity_router_config": {
+            "classifier_type": "heuristic",
+            "tiers": {"SIMPLE": "fast", "MEDIUM": "fast",
+                      "COMPLEX": "capable", "REASONING": "capable"},
+            "return_raw_model_name": True,
+        },
+        "complexity_router_default_model": "capable",
+    }},
+])
+response = asyncio.run(router.acompletion(
+    model="auto", messages=[{"role": "user", "content": "What is 2+2?"}],
+))
+print(response.model, response.choices[0].message.content)
+```
+
+### AI Gateway (Proxy Server)
+
+[**Create an Auto Router**](https://docs.litellm.ai/docs/auto_router/setup), then call its model name. Replace `auto` and the URL below with yours, and set `LITELLM_API_KEY` to your virtual key.
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"auto","messages":[{"role":"user","content":"What is 2+2?"}]}'
+```
 
 </details>
 
 <details>
-<summary><b>Agents</b> - Invoke A2A Agents (Python SDK + AI Gateway)</summary>
+<summary><b>A2A</b> - Invoke A2A Agents (Python SDK + AI Gateway)</summary>
 
 [**Supported Providers**](https://docs.litellm.ai/docs/a2a#add-a2a-agents) - LangGraph, Vertex AI Agent Engine, Azure AI Foundry, Bedrock AgentCore, Pydantic AI
 
@@ -335,6 +379,7 @@ Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call th
 | [Bytez (`bytez`)](https://docs.litellm.ai/docs/providers/bytez) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Cerebras (`cerebras`)](https://docs.litellm.ai/docs/providers/cerebras) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Clarifai (`clarifai`)](https://docs.litellm.ai/docs/providers/clarifai) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
+| [CLF AI Gateway (`clf_ai_gateway`)](https://docs.litellm.ai/docs/providers/clf_ai_gateway) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Cloudflare AI Workers (`cloudflare`)](https://docs.litellm.ai/docs/providers/cloudflare_workers) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Codestral (`codestral`)](https://docs.litellm.ai/docs/providers/codestral) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Cognition (`cognition`)](https://docs.litellm.ai/docs/providers/cognition) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
@@ -353,7 +398,9 @@ Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call th
 | [Deepseek (`deepseek`)](https://docs.litellm.ai/docs/providers/deepseek) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Eden AI (`edenai`)](https://docs.litellm.ai/docs/providers/edenai) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |
 | [ElevenLabs (`elevenlabs`)](https://docs.litellm.ai/docs/providers/elevenlabs) | ✅ | ✅ | ✅ |  |  | ✅ | ✅ |  |  |  |
+| [EmpirioLabs AI (`empiriolabs`)](https://docs.litellm.ai/docs/providers/empiriolabs) | ✅ |  | ✅ |  |  |  |  |  |  |  |
 | [Empower (`empower`)](https://docs.litellm.ai/docs/providers/empower) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
+| [eu/jev Decisions API (`eu_jev`)](https://docs.litellm.ai/docs/pass_through/eu_jev) |  |  |  |  |  |  |  |  |  |  |
 | [Fal AI (`fal_ai`)](https://docs.litellm.ai/docs/providers/fal_ai) | ✅ | ✅ | ✅ |  | ✅ |  |  |  |  |  |
 | [Featherless AI (`featherless_ai`)](https://docs.litellm.ai/docs/providers/featherless_ai) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Fireworks AI (`fireworks_ai`)](https://docs.litellm.ai/docs/providers/fireworks_ai) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
@@ -398,6 +445,7 @@ Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call th
 | [OpenAI-like (`openai_like`)](https://docs.litellm.ai/docs/providers/openai_compatible) |  |  |  | ✅ |  |  |  |  |  |  |
 | [OpenRouter (`openrouter`)](https://docs.litellm.ai/docs/providers/openrouter) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [OVHCloud AI Endpoints (`ovhcloud`)](https://docs.litellm.ai/docs/providers/ovhcloud) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
+| [Parallel AI (`parallel_ai`)](https://docs.litellm.ai/docs/search/parallel_ai) |  |  |  |  |  |  |  |  |  |  |
 | [Perplexity AI (`perplexity`)](https://docs.litellm.ai/docs/providers/perplexity) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Petals (`petals`)](https://docs.litellm.ai/docs/providers/petals) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Pinstripes (`pinstripes`)](https://docs.litellm.ai/docs/providers/pinstripes) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
@@ -442,7 +490,7 @@ You can use LiteLLM through either the Proxy Server or Python SDK. Both give you
 <tr>
 <th style={{width: '14%'}}></th>
 <th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/simple_proxy">LiteLLM AI Gateway</a></strong></th>
-<th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/">LiteLLM Python SDK</a></strong></th>
+<th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/python_sdk">LiteLLM Python SDK</a></strong></th>
 </tr>
 </thead>
 <tbody>
@@ -478,7 +526,7 @@ Run the LiteLLM proxy as a production-ready componentized stack (gateway, backen
 
 ```bash
 git clone https://github.com/BerriAI/litellm.git
-cd litellm/terraform/litellm/aws/examples/default
+cd litellm/litellm/deploy/terraform/litellm/aws/examples/default
 cp terraform.tfvars.example terraform.tfvars   # edit region/tenant/env
 terraform init && terraform apply
 ```
@@ -531,7 +579,7 @@ Provider API keys live in AWS Secrets Manager; reference ARNs via `gateway_extra
 
 [![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.png)](https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2FBerriAI%2Fterraform-google-litellm&cloudshell_git_branch=v1.105.0&cloudshell_workspace=examples%2Fdefault&cloudshell_tutorial=TUTORIAL.md&cloudshell_image=gcr.io/ds-artifacts-cloudshell/deploystack_custom_image&shellonly=true)
 
-Real 1-click. Opens Cloud Shell, clones the [terraform-google-litellm](https://github.com/BerriAI/terraform-google-litellm) module mirror at the latest stable release (a small download instead of the full litellm repo), and walks you through `terraform apply` via a built-in [DeployStack tutorial](./terraform/litellm/gcp/examples/default/TUTORIAL.md). Pick the project, the tutorial sets up the Artifact Registry remote repo, writes `terraform.tfvars` from your answers, and runs apply
+Real 1-click. Opens Cloud Shell, clones the [terraform-google-litellm](https://github.com/BerriAI/terraform-google-litellm) module mirror at the latest stable release (a small download instead of the full litellm repo), and walks you through `terraform apply` via a built-in [DeployStack tutorial](./litellm/deploy/terraform/litellm/gcp/examples/default/TUTORIAL.md). Pick the project, the tutorial sets up the Artifact Registry remote repo, writes `terraform.tfvars` from your answers, and runs apply
 
 [Module page →](https://registry.terraform.io/modules/BerriAI/litellm/google/latest)
 
@@ -598,21 +646,21 @@ Provider API keys live in Secret Manager; reference resource IDs (e.g. `projects
 - Versioned object store for proxy state + file uploads
 - An auto-generated `LITELLM_MASTER_KEY` in your cloud's secret manager
 - A one-off migration job that runs `prisma migrate deploy` before the proxy starts
-- The same `proxy_config` surface as the [Helm chart](./helm/litellm/) — pass YAML as a typed map
+- The same `proxy_config` surface as the [Helm chart](./litellm/deploy/helm/litellm/) — pass YAML as a typed map
 
-The Terraform modules live at [`terraform/litellm/aws/`](./terraform/litellm/aws/) and [`terraform/litellm/gcp/`](./terraform/litellm/gcp/) in this repo; the registry entries are read-only mirrors updated on each release.
+The Terraform modules live at [`litellm/deploy/terraform/litellm/aws/`](./litellm/deploy/terraform/litellm/aws/) and [`litellm/deploy/terraform/litellm/gcp/`](./litellm/deploy/terraform/litellm/gcp/) in this repo; the registry entries are read-only mirrors updated on each release.
 
 ### Run in Developer Mode
 #### Services
 1. Setup .env file in root
-2. Run dependent services `docker-compose up db prometheus`
+2. Run dependent services `docker compose -f litellm/deploy/compose/docker-compose.yml up db prometheus`
 
 #### Backend
 1. Run `make bootstrap`
 2. Start proxy backend: `uv run python litellm/proxy/proxy_cli.py`
 
 #### Frontend
-1. Navigate to `ui/litellm-dashboard` (dependencies were already installed w/ `make bootstrap`)
+1. Navigate to `litellm/ui/litellm-dashboard` (dependencies were already installed w/ `make bootstrap`)
 2. Start dashboard: `npm run dev`
 
 ### Verify Docker Image Signatures
@@ -650,7 +698,7 @@ For companies that need better security, user management and professional suppor
 [Talk to founders](https://enterprise.litellm.ai/demo)
 
 This covers:
-- ✅ **Features under the [LiteLLM Commercial License](https://docs.litellm.ai/docs/proxy/enterprise):**
+- ✅ **Features under the [LiteLLM Commercial License](https://docs.litellm.ai/docs/enterprise):**
 - ✅ **Feature Prioritization**
 - ✅ **Custom Integrations**
 - ✅ **Professional Support - Dedicated discord + slack**
@@ -677,7 +725,7 @@ make test-unit      # Run unit tests
 make format-check   # Check formatting only
 ```
 
-For detailed contributing guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
+For detailed contributing guidelines, see [CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
 > **📖 Contributing to documentation?** The LiteLLM docs have moved to a separate repository: [BerriAI/litellm-docs](https://github.com/BerriAI/litellm-docs). Please open doc PRs there. Docs are served at [docs.litellm.ai](https://docs.litellm.ai).
 

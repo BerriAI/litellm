@@ -4,6 +4,7 @@ and ``_handle_logging_proxy_only_error``."""
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from datetime import datetime
 from types import MappingProxyType
@@ -53,6 +54,11 @@ def test_is_proxy_only_llm_api_truth_table(proxy_logging):
             error_type=ProxyErrorTypes.auth_error,
             route="/chat/completions",
         ),
+        "auth_short_circuit_on_queued_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=Exception("auth"),
+            error_type=ProxyErrorTypes.auth_error,
+            route="/queue/chat/completions",
+        ),
         "guardrail_raised_on_llm_route": proxy_logging._is_proxy_only_llm_api_error(
             original_exception=GuardrailRaisedException(guardrail_name="g", message="blocked"),
             route="/chat/completions",
@@ -63,6 +69,7 @@ def test_is_proxy_only_llm_api_truth_table(proxy_logging):
         "non_llm_route": False,
         "http_on_llm_route": True,
         "auth_short_circuit": True,
+        "auth_short_circuit_on_queued_route": True,
         "guardrail_raised_on_llm_route": True,
     }
 
@@ -1192,3 +1199,31 @@ async def test_handle_logging_proxy_only_path_flags_requests_that_died_before_re
         blocked_by_guardrail.get(REJECTED_BEFORE_REQUEST_SETUP_KEY) is REJECTED_BEFORE_REQUEST_SETUP,
         blocked_by_guardrail["litellm_call_id"],
     ) == (True, "client-supplied", False, "call-1")
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_on_a_responses_body_with_a_json_string_metadata_is_logged_against_the_key(
+    proxy_logging, monkeypatch
+):
+    from litellm.proxy import proxy_server
+
+    recorded: list[dict] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            recorded.append(kwargs)
+
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={"model": "internal-model", "input": "hi", "metadata": json.dumps({"tags": ["checkout"]})},
+        original_exception=litellm.BudgetExceededError(current_cost=1.0, max_budget=0.5),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-hashed", key_alias="checkout-key", request_route="/v1/responses"),
+        error_type=ProxyErrorTypes.auth_error,
+        route="/v1/responses",
+    )
+
+    assert len(recorded) == 1
+    assert recorded[0]["standard_logging_object"]["metadata"]["user_api_key_alias"] == "checkout-key"

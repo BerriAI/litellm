@@ -11,7 +11,8 @@ modules listed there. The lists hold what is used today and may only shrink:
   also fails, so the entry is removed in the same change.
 
 "Outside" means every non-test file under litellm/ and enterprise/ except
-litellm/router.py and the router's own modules. Uses from the router family
+litellm/router.py and the router's own modules (including every
+module under litellm/router_rust/, the Rust core's host-side glue). Uses from the router family
 (litellm/router_utils, litellm/router_strategy) are listed separately, because
 those modules become private parts of the router core in a later step.
 
@@ -19,7 +20,7 @@ Member uses are found the same way the boundary survey found them: attribute
 access on a receiver whose name looks like a router (llm_router,
 litellm_router_instance, router, ...) or on the Router class, plus
 getattr/setattr/hasattr with a constant name on such a receiver. Members
-include the container file endpoints Router.__init__ registers by name.
+include the endpoints the Rust core serves by name, container file endpoints included.
 
 Run: python tests/code_coverage_tests/router_surface_check.py [--write]
 --write regenerates the allowlist from the current tree (for shrinking it).
@@ -37,9 +38,25 @@ ALLOWLIST = os.path.join(os.path.dirname(__file__), "router_surface_allowlist.js
 
 ROUTER_FILES = {
     "litellm/router.py",
+    "litellm/router_api.py",
+    "litellm/router_config.py",
+    "litellm/router_core.py",
+    "litellm/router_python_host.py",
+    "litellm/router_rust/core.py",
+    "litellm/router_deprecated.py",
+    "litellm/router_host.py",
 }
-ROUTER_CLASS_FILES = ["litellm/router.py"]
-ROUTER_CLASS_NAMES = {"Router"}
+# The Rust core's host-side glue modules are part of the router.
+ROUTER_FILE_PREFIXES = ("litellm/router_rust/",)
+ROUTER_CLASS_FILES = ["litellm/router.py", "litellm/router_rust/core.py", "litellm/router_deprecated.py"]
+ROUTER_CLASS_NAMES = {"Router", "RustCore", "DeprecatedRouterMembers"}
+# The Rust core serves its endpoint methods by name (``RustCore.__getattr__``); these name lists hold them.
+ROUTER_ENDPOINT_LISTS = {
+    "litellm/router_rust/surface/legacy_members.py": {"_ROUTER_ENDPOINTS", "_ASSISTANTS_ENDPOINTS"},
+    "litellm/router_rust/invoke/endpoints.py": {"_DIRECT_ENDPOINTS"},
+}
+# ``RustEndpoints.member`` serves these methods by name, from its ``direct`` table.
+ROUTER_ENDPOINT_TABLE = "litellm/router_rust/invoke/endpoints.py"
 
 SCAN_ROOTS = ["litellm", "enterprise"]
 SKIP_DIRS = {
@@ -47,10 +64,9 @@ SKIP_DIRS = {
     "node_modules",
     ".venv",
     "__pycache__",
-    "litellm-rust",
+    "rust",
     "ui",
     "docs",
-    "cookbook",
     "tests",
     "test",
 }
@@ -59,7 +75,7 @@ RECEIVER = re.compile(
     r"(^|[._])(llm_router|router|litellm_router|litellm_router_instance|router_instance"
     r"|_router|proxy_router|llm_router_instance|router_obj|mock_router|Router)$"
 )
-# Router.__init__ registers these with setattr(self, name, ...), so they never appear as self.<name>.
+# The Rust core serves these by name too, so they never appear as self.<name>.
 CONTAINER_FILE_ENDPOINTS = "litellm/containers/endpoints.json"
 DYNAMIC_FUNCS = {"getattr", "setattr", "hasattr"}
 
@@ -98,6 +114,24 @@ def router_members() -> Set[str]:
                     and isinstance(node.ctx, ast.Store)
                 ):
                     members.add(node.attr)
+    for rel, names in ROUTER_ENDPOINT_LISTS.items():
+        with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        for node in tree.body:
+            target = node.target if isinstance(node, ast.AnnAssign) else None
+            if isinstance(target, ast.Name) and target.id in names and node.value is not None:
+                members.update(
+                    c.value for c in ast.walk(node.value) if isinstance(c, ast.Constant) and isinstance(c.value, str)
+                )
+    with open(os.path.join(ROOT, ROUTER_ENDPOINT_TABLE), encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "direct":
+            for table in ast.walk(node.value):
+                if isinstance(table, ast.Dict):
+                    members.update(
+                        k.value for k in table.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)
+                    )
     with open(os.path.join(ROOT, CONTAINER_FILE_ENDPOINTS), encoding="utf-8") as f:
         for endpoint in json.load(f)["endpoints"]:
             members.update((endpoint["name"], endpoint["async_name"]))
@@ -121,7 +155,7 @@ def scan() -> Dict[str, Dict[str, Set[str]]]:
     uses: Dict[str, Dict[str, Set[str]]] = {"outside": {}, "router_family": {}}
     imports: Dict[str, Set[str]] = {}
     for rel, path in _python_files():
-        if rel in ROUTER_FILES or _is_test(rel):
+        if rel in ROUTER_FILES or rel.startswith(ROUTER_FILE_PREFIXES) or _is_test(rel):
             continue
         with open(path, encoding="utf-8") as f:
             src = f.read()

@@ -2,32 +2,41 @@
 #    This tests the router's ability to pick deployment with lowest tpm using 'usage-based-routing-v2-v2'
 
 import asyncio
+import base64
 import importlib
+import io
 import os
 import time
 import traceback
 from typing import Dict, Final, Iterator
 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 from unittest.mock import patch
 
 import pytest
+from PIL import Image
 
 import litellm
 from litellm import Router
 from litellm._logging import verbose_logger
-from litellm.caching.caching import DualCache
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_usage import RouterUsageStore, UsageCounter
 from litellm.router_strategy.lowest_tpm_rpm_v2 import (
     LowestTPMLoggingHandler_v2 as LowestTPMLoggingHandler,
 )
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import DeploymentTypedDict, RouterRateLimitError
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
 
 ### UNIT TESTS FOR TPM/RPM ROUTING ###
+
+
+def _memory_usage() -> RouterUsageStore:
+    return RouterUsageStore(connect(None).router_usage())
+
 
 """
 - Given 2 deployments, make sure it's shuffling deployments correctly.
@@ -45,8 +54,8 @@ def restore_verbose_logger_level() -> Iterator[None]:
 def test_tpm_rpm_updated():
     from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
-    test_cache = DualCache()
-    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+    test_cache = _memory_usage()
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
     deployment = "azure/gpt-4.1-mini"
@@ -86,11 +95,11 @@ def test_tpm_rpm_updated():
     )
     dt = get_utc_datetime()
     current_minute = dt.strftime("%H-%M")
-    tpm_count_api_key = f"{deployment_id}:{deployment}:tpm:{current_minute}"
-    rpm_count_api_key = f"{deployment_id}:{deployment}:rpm:{current_minute}"
+    tpm_counter = UsageCounter.for_deployment(deployment_id, deployment, "tpm", current_minute)
+    rpm_counter = UsageCounter.for_deployment(deployment_id, deployment, "rpm", current_minute)
 
-    assert response_obj["usage"]["total_tokens"] == test_cache.get_cache(key=tpm_count_api_key)
-    assert 1 == test_cache.get_cache(key=rpm_count_api_key)
+    assert response_obj["usage"]["total_tokens"] == test_cache.get_local(tpm_counter)
+    assert 1 == test_cache.get_local(rpm_counter)
 
 
 # test_tpm_rpm_updated()
@@ -100,7 +109,7 @@ def test_tpm_rpm_updated():
 def test_get_available_deployments():
     from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
-    test_cache = DualCache()
+    test_cache = _memory_usage()
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
@@ -113,7 +122,7 @@ def test_get_available_deployments():
             "model_info": {"id": "5678"},
         },
     ]
-    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
     model_group = "gpt-3.5-turbo"
     ## DEPLOYMENT 1 ##
     total_tokens = 50
@@ -347,6 +356,55 @@ def test_router_skip_rate_limited_deployments():
         print(f"An exception occurred! {str(e)}")
 
 
+def _embedding_image_uri() -> str:
+    image: Final = io.BytesIO()
+    Image.new("RGB", (1024, 1024)).save(image, format="PNG", compress_level=0)
+    return f"data:image/png;base64,{base64.b64encode(image.getvalue()).decode()}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "routing_strategy",
+    ["usage-based-routing", "usage-based-routing-v2", "latency-based-routing", "cost-based-routing"],
+)
+@pytest.mark.parametrize(
+    ("litellm_params", "model_info", "admitted"),
+    [
+        ({"model": "vertex_ai/gemini-embedding-2"}, {}, True),
+        (
+            {"model": "openai/team-embedder", "api_base": "https://embedder.invalid"},
+            {"base_model": "vertex_ai/gemini-embedding-2"},
+            True,
+        ),
+        ({"model": "text-embedding-3-small"}, {}, False),
+    ],
+    ids=["image-model", "image-base-model", "text-model"],
+)
+async def test_deployment_tpm_counts_embedding_image_as_media_only_on_image_models(
+    routing_strategy: str, litellm_params: Dict[str, str], model_info: Dict[str, str], admitted: bool
+) -> None:
+    uri: Final = _embedding_image_uri()
+    assert len(uri) // 4 > 75_000
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "embedder",
+                "litellm_params": {**litellm_params, "tpm": 75_000},
+                "model_info": {**model_info, "id": f"embedder-{index}"},
+            }
+            for index in range(2)
+        ],
+        routing_strategy=routing_strategy,
+    )
+
+    if not admitted:
+        with pytest.raises((litellm.RateLimitError, RouterRateLimitError)):
+            await router.select("embedder", {}, input=[uri])
+        return
+    deployment: Final = await router.select("embedder", {}, input=[uri])
+    assert deployment["model_info"]["id"] in ("embedder-0", "embedder-1")
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_multiple_potential_deployments(sync_mode):
@@ -518,8 +576,8 @@ def test_return_potential_deployments():
     Assert deployment at limit is filtered out
     """
 
-    test_cache = DualCache()
-    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+    test_cache = _memory_usage()
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
 
     args: Dict = {
         "healthy_deployments": [
@@ -672,7 +730,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {

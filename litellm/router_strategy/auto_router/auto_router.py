@@ -6,17 +6,19 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Optional
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 from litellm.exceptions import Timeout as LiteLLMTimeout
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
 from litellm.litellm_core_utils.internal_call_metadata import (
     effective_turn_off_message_logging,
     forwarded_internal_call_metadata,
     parent_session_kwargs,
 )
+from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
@@ -29,15 +31,18 @@ if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
     from semantic_router.routers.base import Route
 
-    from litellm.router import Router
+    from litellm.router_api import RoutingContext
     from litellm.router_strategy.auto_router.litellm_encoder import LiteLLMRouterEncoder
     from litellm.types.router import PreRoutingHookResponse
 else:
-    Router = Any
+    RoutingContext = Any
     PreRoutingHookResponse = Any
     Route = Any
     SemanticRouter = Any
     LiteLLMRouterEncoder = Any
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _CallerMetadata(LiteLLMBaseModel):
@@ -55,13 +60,15 @@ class _SemanticMatchOutcome(NamedTuple):
 
 class AutoRouter(CustomLogger):
     DEFAULT_AUTO_SYNC_VALUE = "local"
+    litellm_router_instance: Final = RenamedRouterAttribute()  # deprecated: the router attribute before ``ctx``
 
+    @renamed_router_param("litellm_router_instance")
     def __init__(
         self,
         model_name: str,
         default_model: str,
         embedding_model: str,
-        litellm_router_instance: "Router",
+        ctx: "RoutingContext",
         auto_router_config_path: str | None = None,
         auto_router_config: str | None = None,
         max_input_chars: int = DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
@@ -75,7 +82,7 @@ class AutoRouter(CustomLogger):
             auto_router_config: The config to use for the auto-router. You can either use this or auto_router_config_path, not both.
             default_model: The default model to use if no route is found.
             embedding_model: The embedding model to use for the auto-router.
-            litellm_router_instance: The instance of the LiteLLM Router.
+            ctx: The routing context of the owning router.
             max_input_chars: Longest prompt, in characters, handed to the embedding model. Longer
                 prompts are cut to this length so an embedding context window far smaller than the
                 routed model's never fails the request.
@@ -95,9 +102,9 @@ class AutoRouter(CustomLogger):
         self.default_model = default_model
         self.embedding_model: str = embedding_model
         self.max_input_chars: int = max_input_chars
-        self.litellm_router_instance: Router = litellm_router_instance
+        self.ctx: Final = ctx
         self.encoder: LiteLLMRouterEncoder = LiteLLMRouterEncoder(
-            litellm_router_instance=litellm_router_instance,
+            ctx=ctx,
             model_name=embedding_model,
             max_input_chars=max_input_chars,
         )
@@ -120,14 +127,15 @@ class AutoRouter(CustomLogger):
         if self.auto_router_config is None:
             raise ValueError("No auto router config provided")
         auto_router_routes: Final[list[Route]] = []
-        loaded_config: Final = json.loads(self.auto_router_config)
-        for route in loaded_config.get("routes", []):
+        loaded_config: Final = decoded_json_object(_DECODED_JSON.validate_python(json.loads(self.auto_router_config)))
+        for route in iter_items(loaded_config.get("routes", [])):
+            route_config = decoded_json_object(route)
             auto_router_routes.append(
                 Route(
-                    name=route.get("name"),
-                    description=route.get("description"),
-                    utterances=route.get("utterances", []),
-                    score_threshold=route.get("score_threshold"),
+                    name=route_config.get("name"),
+                    description=route_config.get("description"),
+                    utterances=route_config.get("utterances", []),
+                    score_threshold=route_config.get("score_threshold"),
                 )
             )
         return auto_router_routes
@@ -201,6 +209,7 @@ class AutoRouter(CustomLogger):
         messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
+        call_type: str | None = None,
     ) -> Optional["PreRoutingHookResponse"]:
         """
         This hook is called before the routing decision is made.

@@ -21,6 +21,7 @@ from integration._support.client import (
     gateway_from_environment,
     list_value,
     object_value,
+    string_value,
 )
 from integration._support.database import read_rows, scratch_database, write_rows
 from integration._support.database_relay import dropped_connection_relay, plaintext_database_url
@@ -61,10 +62,10 @@ class Rig:
 
     @property
     def exact_tag(self) -> str:
-        return f"usecase-a-{self.marker}"
+        return f"app-a-{self.marker}"
 
-    def usecase_tag(self, value: str) -> str:
-        return f"usecase-{self.marker}:{value}"
+    def app_tag(self, value: str) -> str:
+        return f"app-{self.marker}:{value}"
 
     def tenant_tag(self, value: str) -> str:
         return f"tenant-{self.marker}:{value}"
@@ -195,7 +196,7 @@ def _routed_deployment(marker: str, provider: Wire, name: str, tag: str) -> dict
 
 def _mapped_models(marker: str, provider: Wire, upstream_url: str) -> list[JsonValue]:
     routed: Final = (
-        _routed_deployment(marker, provider, "tagged", f"usecase-a-{marker}"),
+        _routed_deployment(marker, provider, "tagged", f"app-a-{marker}"),
         _routed_deployment(marker, provider, "default", "default"),
     )
     realtime: Final[dict[str, JsonValue]] = {
@@ -221,8 +222,8 @@ def _mapped_models(marker: str, provider: Wire, upstream_url: str) -> list[JsonV
 
 def _mapped_rules(marker: str, *, tenant_required: bool) -> list[JsonValue]:
     return [
-        {"key": "entrypoint", "value": "a", "tag": f"usecase-a-{marker}"},
-        {"key": "entrypoint", "tag_prefix": f"usecase-{marker}:"},
+        {"key": "service", "value": "a", "tag": f"app-a-{marker}"},
+        {"key": "service", "tag_prefix": f"app-{marker}:"},
         {"key": "tenant", "tag_prefix": f"tenant-{marker}:", "required": tenant_required},
         {"key": "budgeted", "tag_prefix": f"budgeted-{marker}:", "require_budgeted_tag": True},
         {"key": "team+id", "tag_prefix": f"team-{marker}:"},
@@ -403,7 +404,7 @@ def test_mapped_baggage_tags_reach_spend_and_callbacks_but_not_requester_metadat
             ROUTE_PATHS[route],
             _inference_body(route, mapped.chat_model, f"baggage {tenant}", caller_tag),
             key=key,
-            headers={"baggage": f"entrypoint=a, tenant={tenant}"},
+            headers={"baggage": f"service=a, tenant={tenant}"},
         )
         assert response.status_code == 200, response.text
         assert len(mapped.provider.drain()) == 1
@@ -423,7 +424,7 @@ def test_json_string_metadata_gains_exactly_the_mapped_tags(optional: Rig) -> No
         key: Final = scenario.key()
         optional.provider.drain()
         plain: Final = _chat(optional, plain_key, None, fields=fields)
-        response: Final = _chat(optional, key, f"entrypoint=a,tenant={tenant}", fields=fields)
+        response: Final = _chat(optional, key, f"service=a,tenant={tenant}", fields=fields)
         assert (plain.status_code, response.status_code) == (200, 200), (plain.text, response.text)
         assert len(optional.provider.drain()) == 2
         assert _spend_tags(optional.proxy, key) == _spend_tags(optional.proxy, plain_key) | mapped_tags
@@ -494,7 +495,7 @@ def test_a2a_spend_row_carries_the_mapped_tags(mapped: Rig) -> None:
                 },
             },
             key=key,
-            headers={"baggage": f"entrypoint=a,tenant={tenant}"},
+            headers={"baggage": f"service=a,tenant={tenant}"},
         )
         assert sent.status_code == 200, sent.text
         assert {mapped.exact_tag, mapped.tenant_tag(tenant)} <= _spend_tags(mapped.proxy, key)
@@ -514,8 +515,8 @@ def test_spent_mapped_tag_budget_rejects_the_next_request_before_the_provider(
     mapped: Rig, key_fields: Mapping[str, JsonValue], fields: Mapping[str, JsonValue], headers: Mapping[str, str]
 ) -> None:
     entry: Final = uuid.uuid4().hex
-    tag: Final = mapped.usecase_tag(entry)
-    baggage: Final = f"entrypoint={entry},tenant={entry}"
+    tag: Final = mapped.app_tag(entry)
+    baggage: Final = f"service={entry},tenant={entry}"
     with mapped.proxy.scenario() as scenario:
         key: Final = scenario.key(**key_fields)
         mapped.proxy.post("/tag/new", {"name": tag, "max_budget": 0.0001})
@@ -528,7 +529,7 @@ def test_spent_mapped_tag_budget_rejects_the_next_request_before_the_provider(
         assert blocked.status_code == 422, blocked.text
         assert "budget" in blocked.text.lower(), blocked.text
         assert mapped.provider.drain() == ()
-        other: Final = _chat(mapped, key, f"entrypoint=other-{entry},tenant={entry}")
+        other: Final = _chat(mapped, key, f"service=other-{entry},tenant={entry}")
         assert other.status_code == 200, other.text
 
 
@@ -536,10 +537,10 @@ def test_required_mapping_rejects_a_request_without_its_baggage_value_before_the
     with mapped.proxy.scenario() as scenario:
         key: Final = scenario.key()
         mapped.provider.drain()
-        rejected: Final = _chat(mapped, key, "entrypoint=a")
+        rejected: Final = _chat(mapped, key, "service=a")
         assert rejected.status_code == 400, rejected.text
         assert mapped.provider.drain() == ()
-        admitted: Final = _chat(mapped, key, f"entrypoint=a,tenant={uuid.uuid4().hex}")
+        admitted: Final = _chat(mapped, key, f"service=a,tenant={uuid.uuid4().hex}")
         assert admitted.status_code == 200, admitted.text
 
 
@@ -561,6 +562,55 @@ def test_require_budgeted_tag_rejects_an_unbudgeted_mapped_tag_until_the_tag_has
         assert [response.status_code for response in budgeted] == [200] * WORKER_PROBES, [
             response.text for response in budgeted
         ]
+
+
+def _queue_chat(rig: Rig, baggage: str) -> httpx.Response:
+    return rig.proxy.request(
+        "POST",
+        "/queue/chat/completions",
+        {
+            "model": rig.chat_model,
+            "messages": [{"role": "user", "content": f"queued {uuid.uuid4().hex}"}],
+            "priority": 0,
+        },
+        headers={"baggage": baggage},
+    )
+
+
+def test_queued_chat_runs_the_baggage_mapper_like_chat_completions(mapped: Rig) -> None:
+    value: Final = uuid.uuid4().hex
+    mapped.provider.drain()
+    missing_required: Final = _queue_chat(mapped, "entrypoint=a")
+    assert missing_required.status_code == 400, missing_required.text
+    unbudgeted: Final = _queue_chat(mapped, f"budgeted={value},tenant={value}")
+    assert unbudgeted.status_code == 400, unbudgeted.text
+    assert mapped.provider.drain() == ()
+    admitted: Final = _queue_chat(mapped, f"entrypoint=a,tenant={value}")
+    assert admitted.status_code == 200, admitted.text
+    request_id: Final = string_value(JSON_OBJECT.validate_json(admitted.content)["id"])
+    rows: Final = eventually(
+        lambda: mapped.proxy.rows('SELECT request_tags FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (request_id,)),
+        lambda values: len(values) == 1,
+        seconds=70,
+    )
+    assert _caller_tags(rows[0]["request_tags"]) == {mapped.exact_tag, mapped.tenant_tag(value)}
+
+
+def test_spent_mapped_tag_budget_rejects_the_next_queued_request_before_the_provider(mapped: Rig) -> None:
+    entry: Final = uuid.uuid4().hex
+    tag: Final = mapped.usecase_tag(entry)
+    baggage: Final = f"entrypoint={entry},tenant={entry}"
+    with mapped.proxy.scenario() as scenario:
+        mapped.proxy.post("/tag/new", {"name": tag, "max_budget": 0.0001})
+        scenario.cleanups.callback(lambda: mapped.proxy.request("POST", "/tag/delete", {"name": tag}))
+        first: Final = _queue_chat(mapped, baggage)
+        assert first.status_code == 200, first.text
+        eventually(lambda: _queue_chat(mapped, baggage).status_code, lambda status: status != 200, seconds=70)
+        mapped.provider.drain()
+        blocked: Final = _queue_chat(mapped, baggage)
+        assert blocked.status_code == 422, blocked.text
+        assert "budget" in blocked.text.lower(), blocked.text
+        assert mapped.provider.drain() == ()
 
 
 def _routing_caller_tag(rig: Rig, caller_tag: CallerTag) -> tuple[Mapping[str, JsonValue], Mapping[str, str]]:
@@ -591,7 +641,7 @@ def test_mapped_tags_never_select_a_tag_routed_deployment(mapped: Rig, caller_ta
             _chat(
                 mapped,
                 key,
-                f"entrypoint=a,tenant={tenant}",
+                f"service=a,tenant={tenant}",
                 model=f"routed-{mapped.marker}",
                 fields=fields,
                 **headers,
@@ -604,8 +654,8 @@ def test_mapped_tags_never_select_a_tag_routed_deployment(mapped: Rig, caller_ta
 
 def test_mapped_tags_never_trigger_a_tag_scoped_policy_attachment(mapped: Rig) -> None:
     entry: Final = uuid.uuid4().hex
-    tag: Final = mapped.usecase_tag(entry)
-    baggage: Final = f"entrypoint={entry},tenant={entry}"
+    tag: Final = mapped.app_tag(entry)
+    baggage: Final = f"service={entry},tenant={entry}"
     proxy: Final = mapped.proxy
     with wire_server(lambda _request: Reply(body=GUARDRAIL_VERDICT)) as guardrail, proxy.scenario() as scenario:
         key: Final = scenario.key()
@@ -662,7 +712,7 @@ def test_required_mapping_refuses_websocket_inference_before_the_upstream(mapped
         upstream.get("/__observations").raise_for_status()
         status: Final = _handshake_status(
             f"ws{proxy_url.removeprefix('http')}/v1/realtime?model=realtime-{mapped.marker}",
-            {"Authorization": f"Bearer {key}", "baggage": f"entrypoint=a,tenant={uuid.uuid4().hex}"},
+            {"Authorization": f"Bearer {key}", "baggage": f"service=a,tenant={uuid.uuid4().hex}"},
         )
         assert status == 403, status
         observed: Final = list_value(JSON_OBJECT.validate_json(upstream.get("/__observations").content)["requests"])
@@ -706,7 +756,7 @@ def test_custom_passthrough_spend_row_carries_the_mapped_tags(mapped: Rig) -> No
             path,
             {"model": mapped.chat_model, "messages": [{"role": "user", "content": tenant}]},
             key=key,
-            headers={"baggage": f"entrypoint=a,tenant={tenant}"},
+            headers={"baggage": f"service=a,tenant={tenant}"},
         )
         assert response.status_code == 200, response.text
         assert {mapped.exact_tag, mapped.tenant_tag(tenant)} <= _spend_tags(mapped.proxy, key)
@@ -777,7 +827,7 @@ def test_passthrough_forwards_the_client_body_unchanged_while_its_spend_row_carr
         plain: Final = optional.proxy.request("POST", path, body, key=plain_key)
         plain_forwarded: Final = _forwarded_bodies(optional)
         response: Final = optional.proxy.request(
-            "POST", path, body, key=key, headers={"baggage": f"entrypoint=a,tenant={tenant}"}
+            "POST", path, body, key=key, headers={"baggage": f"service=a,tenant={tenant}"}
         )
         assert (plain.status_code, response.status_code) == (200, 200), (plain.text, response.text)
         assert plain_forwarded == (_upstream_body(entrypoint, body),)
@@ -929,7 +979,7 @@ def test_reject_clientside_metadata_tags_with_baggage(
 ) -> None:
     tenant: Final = uuid.uuid4().hex
     fields, headers = _rejected_client_tag(client_tag, f"caller-{tenant}")
-    baggage: Final = f"entrypoint=a,tenant={tenant}" if baggage_maps else f"region={tenant}"
+    baggage: Final = f"service=a,tenant={tenant}" if baggage_maps else f"region={tenant}"
     mapped_tags: Final = frozenset({rejecting.exact_tag, rejecting.tenant_tag(tenant)} if baggage_maps else ())
     with rejecting.proxy.scenario() as scenario:
         plain_key: Final = scenario.key()
@@ -952,7 +1002,7 @@ def test_plus_sign_rule_key_matches_either_wire_spelling_but_not_both(
     optional: Rig, baggage_keys: tuple[str, ...], maps_team: bool
 ) -> None:
     value: Final = uuid.uuid4().hex
-    baggage: Final = ",".join(("entrypoint=a", *(f"{baggage_key}={value}" for baggage_key in baggage_keys)))
+    baggage: Final = ",".join(("service=a", *(f"{baggage_key}={value}" for baggage_key in baggage_keys)))
     with optional.proxy.scenario() as scenario:
         key: Final = scenario.key()
         response: Final = _chat(optional, key, baggage)
@@ -991,7 +1041,7 @@ def test_baggage_mapping_a_deployment_tag_keeps_the_team_tag_guardrail_mode_firs
 @pytest.mark.parametrize("metadata", ["run-123", {"tags": "run-123"}], ids=["non_object", "string_tags"])
 @pytest.mark.parametrize(
     ("header_tag", "baggage"),
-    [(True, "region=sg"), (True, "entrypoint=a"), (False, "region=sg"), (False, "entrypoint=a")],
+    [(True, "region=sg"), (True, "service=a"), (False, "region=sg"), (False, "service=a")],
     ids=["header_tag_unmapped_baggage", "header_tag_mapped_baggage", "unmapped_baggage", "mapped_baggage"],
 )
 def test_malformed_metadata_keeps_its_status_under_baggage(

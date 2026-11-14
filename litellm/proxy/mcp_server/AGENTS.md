@@ -68,8 +68,11 @@ module materially harder to understand.
   behind a single generic branch unless tests prove every mode still behaves
   correctly.
 - Be especially careful with legacy `delegate_auth_to_upstream: true`. `auth_type: oauth2`
-  with `delegate_auth_to_upstream: true` is deprecated: LiteLLM admission is required
-  for matching MCP routes. Use `auth_type: oauth_delegate` for client-forwarded OAuth.
+  with `delegate_auth_to_upstream: true` is deprecated but still supported. A bare
+  `Authorization` that is a LiteLLM credential is validated and never forwarded. Any other
+  bearer is the upstream token: it is forwarded, and the caller is admitted as the JWT or
+  custom-auth user it also proves when that user is granted the server, else anonymously.
+  New servers should use `auth_type: true_passthrough` or `auth_type: oauth_delegate`.
   OAuth discovery endpoints stay public so clients can start the RFC 9728 flow.
 - Keep database-backed fields in sync across migrations, typed models under
   `litellm/types/mcp.py` or `litellm/types/mcp_server/`, config loading, this
