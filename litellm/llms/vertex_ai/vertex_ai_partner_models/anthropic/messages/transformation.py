@@ -291,6 +291,12 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         sanitize_vertex_anthropic_output_params(anthropic_messages_request, model)
 
+        # Vertex AI Claude prompt caching computes prefix cache hits sequentially.
+        # Place `messages` at the end so static prefixes (system, tools) precede
+        # dynamic conversation history across tool-calling loops (#50070).
+        if "messages" in anthropic_messages_request:
+            anthropic_messages_request["messages"] = anthropic_messages_request.pop("messages")
+
         return anthropic_messages_request
 
     def sign_request(

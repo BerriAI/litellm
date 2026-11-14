@@ -1229,3 +1229,34 @@ def test_beta_detection_preserves_unrecognized_thinking(thinking: object) -> Non
 
     assert params["thinking"] == thinking
     assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER not in headers.get("anthropic-beta", "").split(",")
+
+
+def test_vertex_anthropic_transform_messages_ordered_last_for_prompt_caching() -> None:
+    """Ensure messages is placed after static keys (system, tools) in the request body.
+    Vertex AI Claude prompt caching evaluates prefix cache hits sequentially;
+    ordering messages last allows static prefixes to hit across tool-loop rounds (#50070)."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    messages = [{"role": "user", "content": "hello"}]
+    optional_params = {
+        "system": [{"type": "text", "text": "You are a helper", "cache_control": {"type": "ephemeral"}}],
+        "tools": [{"name": "lookup", "description": "test tool"}],
+        "max_tokens": 1024,
+    }
+    litellm_params = GenericLiteLLMParams()
+    headers = {"anthropic-version": "vertex-2023-10-16"}
+
+    result = config.transform_anthropic_messages_request(
+        model="vertex_ai/claude-opus-5-5",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+    )
+
+    keys = list(result.keys())
+    assert "messages" in keys
+    assert keys[-1] == "messages"
+    if "system" in keys:
+        assert keys.index("system") < keys.index("messages")
+    if "tools" in keys:
+        assert keys.index("tools") < keys.index("messages")
