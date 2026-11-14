@@ -1,5 +1,5 @@
 import json
-from collections.abc import Coroutine, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Protocol
 from urllib.parse import urlparse
 
@@ -15,11 +15,18 @@ from litellm.litellm_core_utils.url_utils import (
 )
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
+    MaskedHTTPStatusError,
     get_async_httpx_client,
     get_httpx_client,
+    mask_sensitive_info,
 )
 from litellm.llms.vertex_ai.common_utils import VertexAIError, get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.request_labels import (
+    VERTEX_REQUEST_LABELS_MAX,
+    resolve_vertex_request_labels,
+    vertex_request_label_fields,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import graft_default_vertex_path
 from litellm.types.llms.openai import CreateBatchRequest
 from litellm.types.llms.vertex_ai import (
@@ -81,6 +88,23 @@ def _vertex_batch_list_payload(response: _VertexBatchListJsonSource) -> dict[str
     return response.json()
 
 
+def _proxy_identity_labels(litellm_params: Mapping[str, object]) -> Mapping[str, str]:
+    allowed_fields: Final = vertex_request_label_fields()
+    if not allowed_fields:
+        return {}
+    proxy_metadata: Final = {"litellm_metadata": litellm_params.get("litellm_metadata")}
+    return dict(resolve_vertex_request_labels(allowed_fields, None, proxy_metadata, VERTEX_REQUEST_LABELS_MAX))
+
+
+def _vertex_batch_create_error(error: httpx.HTTPStatusError) -> MaskedHTTPStatusError:
+    body: Final = mask_sensitive_info(error.response.text)
+    return MaskedHTTPStatusError(
+        httpx.HTTPStatusError(f"{error}\n{body}", request=error.request, response=error.response),
+        message=body,
+        text=body,
+    )
+
+
 class VertexAIBatchPrediction(VertexLLM):
     def __init__(self, gcs_bucket_name: str, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -97,6 +121,7 @@ class VertexAIBatchPrediction(VertexLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         custom_endpoint: bool | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> LiteLLMBatch | Coroutine[object, object, LiteLLMBatch]:
         if custom_endpoint:
             raise VertexAIError(
@@ -125,6 +150,7 @@ class VertexAIBatchPrediction(VertexLLM):
                 request=create_batch_data,
                 vertex_project=vertex_project or project_id,
                 vertex_location=vertex_location or "us-central1",
+                labels=_proxy_identity_labels(litellm_params or {}),
             )
         )
         vertex_batch_request: Final = self._resolve_fine_tuned_endpoint_model(
@@ -166,11 +192,19 @@ class VertexAIBatchPrediction(VertexLLM):
                 headers=headers,
             )
 
-        response: Final = sync_handler.post(
-            url=api_base,
-            headers=headers,
-            data=json.dumps(vertex_batch_request),
-        )
+        try:
+            response: Final = sync_handler.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(vertex_batch_request),
+            )
+        except httpx.HTTPStatusError as e:
+            litellm.verbose_logger.error(
+                "Vertex AI batch create failed: status=%s, body=%s",
+                e.response.status_code,
+                e.response.text[:1000],
+            )
+            raise _vertex_batch_create_error(e) from e
 
         payload_view: Final[_VertexBatchPayloadView] = {"payload": response.json()}
         _json_response: Final = payload_view["payload"]
@@ -266,13 +300,12 @@ class VertexAIBatchPrediction(VertexLLM):
                 data=json.dumps(vertex_batch_request),
             )
         except httpx.HTTPStatusError as e:
-            error_body: Final = e.response.text
             litellm.verbose_logger.error(
                 "Vertex AI batch create failed: status=%s, body=%s",
                 e.response.status_code,
-                error_body[:1000],
+                e.response.text[:1000],
             )
-            raise
+            raise _vertex_batch_create_error(e) from e
 
         payload_view: Final[_VertexBatchPayloadView] = {"payload": response.json()}
         _json_response: Final = payload_view["payload"]

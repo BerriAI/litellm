@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable, Iterable
 from typing import Final
 
 import httpx
@@ -94,3 +95,86 @@ def test_compact_request_forwards_metadata_and_user_to_the_downstream_proxy(drop
         "user": "end-user-1",
         "temperature": 0.2,
     }
+
+
+_GUARDRAIL_BLOCK: Final = {
+    "error": {
+        "message": "Content blocked: secret_project_codename pattern detected",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "400",
+        "provider_specific_fields": {"guardrail_name": "block-secret-project", "guardrail_mode": "pre_call"},
+    }
+}
+
+
+def _proxy_rejection(route: str, response: httpx.Response, call: Callable[[], object]) -> litellm.BadRequestError:
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://my-proxy.example.com/{route}").mock(return_value=response)
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    return caught.value
+
+
+def _consume(stream: Iterable[object]) -> None:
+    for _ in stream:
+        pass
+
+
+_PROXY_PARAMS: Final = {"api_base": "https://my-proxy.example.com/", "api_key": "sk-proxy-key"}
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.parametrize("stream", [False, True])
+def test_proxy_400_reaches_responses_caller_with_the_same_body_as_chat_completions(stream: bool) -> None:
+    chat_error: Final = _proxy_rejection(
+        "chat/completions",
+        httpx.Response(400, json=_GUARDRAIL_BLOCK),
+        lambda: litellm.completion(
+            model="litellm_proxy/gpt-5.5", messages=[{"role": "user", "content": "project bluebird"}], **_PROXY_PARAMS
+        ),
+    )
+    responses_error: Final = _proxy_rejection(
+        "responses",
+        httpx.Response(400, json=_GUARDRAIL_BLOCK),
+        lambda: (
+            _consume(litellm.responses(model="litellm_proxy/gpt-5.5", input="project bluebird", stream=True, **_PROXY_PARAMS))
+            if stream
+            else litellm.responses(model="litellm_proxy/gpt-5.5", input="project bluebird", **_PROXY_PARAMS)
+        ),
+    )
+    assert responses_error.body == chat_error.body == _GUARDRAIL_BLOCK["error"]
+    assert (responses_error.code, responses_error.type) == (chat_error.code, chat_error.type)
+    assert str(responses_error) == str(chat_error)
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+def test_proxy_error_without_a_json_object_body_still_raises_with_its_text() -> None:
+    error: Final = _proxy_rejection(
+        "responses",
+        httpx.Response(400, text="upstream proxy rejected the request"),
+        lambda: litellm.responses(model="litellm_proxy/gpt-5.5", input="hi", **_PROXY_PARAMS),
+    )
+    assert error.body is None
+    assert "upstream proxy rejected the request" in str(error)
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+def test_proxy_error_object_without_an_error_member_is_the_body_as_sent() -> None:
+    sent: Final = {"message": "upstream proxy rejected the request", "type": "invalid_request_error"}
+    error: Final = _proxy_rejection(
+        "responses",
+        httpx.Response(400, json=sent),
+        lambda: litellm.responses(model="litellm_proxy/gpt-5.5", input="hi", **_PROXY_PARAMS),
+    )
+    assert error.body == sent
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+def test_proxy_error_whose_error_member_is_text_still_raises_with_that_text() -> None:
+    error: Final = _proxy_rejection(
+        "responses",
+        httpx.Response(400, json={"error": "upstream proxy rejected the request"}),
+        lambda: litellm.responses(model="litellm_proxy/gpt-5.5", input="hi", **_PROXY_PARAMS),
+    )
+    assert "upstream proxy rejected the request" in str(error)

@@ -54,7 +54,7 @@ def _assert_otel_destination_configured(client: LoggingClient) -> None:
     details = _ReadinessDetails.model_validate_json(readiness_details_body(client))
     assert OTEL_V2_LOGGER_NAME in details.success_callbacks, (
         f"the proxy must report the {OTEL_V2_LOGGER_NAME} callback active "
-        f"(LITELLM_OTEL_V2 + arize_phoenix preset in the compose config); got: {details.success_callbacks}"
+        f"(LITELLM_OTEL_V2=true + the otel callback in the stack config); got: {details.success_callbacks}"
     )
 
 
@@ -79,7 +79,7 @@ def _chain_reaches(span_id: str, root_id: str, trace: JaegerTrace) -> bool:
     return False
 
 
-def _assert_complete_trace(traces: CallTraces, *, route: str, genai_span: str) -> None:
+def assert_complete_trace(traces: CallTraces, *, route: str, genai_span: str) -> None:
     """The enforced behavior: the destination holds exactly one call-id-tagged
     trace for the call, rooted at the SERVER span, with auth/db children and
     the gen-AI span all connected into that one tree - no dangling parent
@@ -112,10 +112,9 @@ def _assert_complete_trace(traces: CallTraces, *, route: str, genai_span: str) -
     roots = [span for span in trace.spans if not span.references]
     assert len(roots) == 1, f"expected exactly one root span, got {[s.operation_name for s in roots]}; spans: {names}"
     root = roots[0]
-    assert root.operation_name == f"POST {route}", (
-        f"the root must be the SERVER span 'POST {route}', got {root.operation_name!r}"
-    )
     assert root.kind == "server", f"the root span must have kind=server, got {root.kind!r}"
+    request_route: Final = root.tag("http.route") or root.tag("url.path") or root.tag("http.target")
+    assert request_route == route, f"the root must identify route {route!r}, got {request_route!r}"
 
     assert f"auth {route}" in names, f"auth phase span 'auth {route}' missing; spans: {names}"
     assert any(name.startswith(DB_SPAN_PREFIX) for name in names), (
@@ -133,12 +132,12 @@ def _assert_complete_trace(traces: CallTraces, *, route: str, genai_span: str) -
 def _poll(otel_reader: OtelReader, *, call_id: str, route: str, genai_span: str) -> CallTraces:
     return otel_reader.poll_traces_for_call(
         call_id=call_id,
-        settled_names={f"POST {route}", f"auth {route}", genai_span},
+        settled_names={f"auth {route}", genai_span},
         settled_prefixes={DB_SPAN_PREFIX},
     )
 
 
-def _assert_real_ttft(hits: tuple[JaegerTrace, ...], *, genai_span: str) -> None:
+def assert_real_ttft(hits: tuple[JaegerTrace, ...], *, genai_span: str) -> None:
     """The enforced behavior: the gen-AI span for the attempt that served the
     stream records a TTFT that is a real measurement - present, numeric,
     positive, and strictly less than that span's own total duration. A TTFT of
@@ -282,7 +281,7 @@ class TestOtelTraceCompleteness:
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
 
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=f"chat {MODEL}")
-        _assert_complete_trace(traces, route=route, genai_span=f"chat {MODEL}")
+        assert_complete_trace(traces, route=route, genai_span=f"chat {MODEL}")
 
     @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["chat_completions"])
     @meta(
@@ -315,7 +314,7 @@ class TestOtelTraceCompleteness:
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
 
         hits: Final = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=f"chat {MODEL}")
-        _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
+        assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
 
     @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["messages"])
     @meta(
@@ -333,7 +332,7 @@ class TestOtelTraceCompleteness:
         """This test verifies that one successful non-streaming /v1/messages request
         produces exactly one complete OTEL trace.
 
-        The trace must have a single root span named "POST /v1/messages". The
+        The trace must have a single root SERVER span identifying /v1/messages. The
         authentication, database, and model-call spans must all belong to
         the same trace and have valid parent relationships leading back to that root.
 
@@ -353,7 +352,7 @@ class TestOtelTraceCompleteness:
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
 
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=f"chat {MODEL}")
-        _assert_complete_trace(traces, route=route, genai_span=f"chat {MODEL}")
+        assert_complete_trace(traces, route=route, genai_span=f"chat {MODEL}")
 
     @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["responses"])
     @meta(
@@ -392,7 +391,7 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {CHEAP_OPENAI_MODEL}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_complete_trace(traces, route=route, genai_span=genai_span)
+        assert_complete_trace(traces, route=route, genai_span=genai_span)
 
     @pytest.mark.covers("logging.otel.stream.exports_metric", exercised_on=["chat_completions"])
     @meta(
@@ -443,7 +442,7 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {MODEL}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_complete_trace(traces, route=route, genai_span=genai_span)
+        assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         served = one_served_genai_span(traces.hits[0], genai_span)
         assert served.tag("litellm.request.streaming") is True, (
@@ -500,7 +499,7 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {MODEL}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_complete_trace(traces, route=route, genai_span=genai_span)
+        assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         served = one_served_genai_span(traces.hits[0], genai_span)
         assert served.tag("litellm.request.streaming") is True, (
@@ -557,7 +556,7 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {CHEAP_OPENAI_MODEL}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_complete_trace(traces, route=route, genai_span=genai_span)
+        assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         one_served_genai_span(traces.hits[0], genai_span)
 
@@ -614,7 +613,7 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {MODEL}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_real_ttft(traces.hits, genai_span=genai_span)
+        assert_real_ttft(traces.hits, genai_span=genai_span)
 
     @pytest.mark.covers("logging.otel.stream.records_ttft", exercised_on=["messages"])
     @meta(
@@ -661,7 +660,7 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {MODEL}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_real_ttft(traces.hits, genai_span=genai_span)
+        assert_real_ttft(traces.hits, genai_span=genai_span)
 
     @pytest.mark.covers("logging.otel.stream.records_ttft", exercised_on=["responses"])
     @meta(
@@ -708,7 +707,7 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {CHEAP_OPENAI_MODEL}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_real_ttft(traces.hits, genai_span=genai_span)
+        assert_real_ttft(traces.hits, genai_span=genai_span)
 
     @pytest.mark.covers("logging.otel.failure.exports_metric", exercised_on=["chat_completions"])
     @meta(
@@ -763,7 +762,7 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {model_name}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_complete_trace(traces, route=route, genai_span=genai_span)
+        assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         root = next(span for span in traces.hits[0].spans if not span.references)
         assert str(root.tag("http.status_code")) == "401", (
@@ -825,7 +824,7 @@ class TestOtelTraceCompleteness:
 
         genai_span = f"chat {model_name}"
         traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
-        _assert_complete_trace(traces, route=route, genai_span=genai_span)
+        assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         root = next(span for span in traces.hits[0].spans if not span.references)
         assert str(root.tag("http.status_code")) == "401", (

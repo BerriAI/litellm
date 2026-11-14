@@ -6,16 +6,19 @@ from typing import (
     TypeAlias,
 )
 
-from pydantic import ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import ConfigDict, Field, PrivateAttr, TypeAdapter, model_validator
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the before-validator input without copying it
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import Member
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.types.agents import AgentCaller, AgentResponse
+from litellm.types.integrations.custom_logger_v2 import BudgetPlan
 from litellm.types.proxy.agent_identity import ManagedAgentContext
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.carried_budget_state import (
+    CommittedBudgetSpend,
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
@@ -28,6 +31,9 @@ if TYPE_CHECKING:
     Span: TypeAlias = _Span | Any
 else:
     Span: TypeAlias = Any
+
+
+_BILLING_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def is_jwt(token: str | None) -> bool:
@@ -86,6 +92,9 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_tpd_limit: int | None = None
     end_user_max_budget: float | None = None
     end_user_model_max_budget: _UntypedDict | None = None
+    end_user_model_tpm_limit: Mapping[str, int] | None = None
+    end_user_model_rpm_limit: Mapping[str, int] | None = None
+    customer_hierarchy: CustomerHierarchyAuth | None = None
 
     # Organization Params
     organization_alias: str | None = None
@@ -132,6 +141,60 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     """
 
     api_key: str | None = None
+    _access_group_rule_grants: frozenset[str] = PrivateAttr(default=frozenset())
+    _dashboard_session_origin: "UserAPIKeyAuth | None" = PrivateAttr(default=None)
+    _dashboard_session_billing_team_id: str | None = PrivateAttr(default=None)
+    _dashboard_session_model: str | None = PrivateAttr(default=None)
+
+    @property
+    def dashboard_session_origin(self) -> "UserAPIKeyAuth | None":
+        return self._dashboard_session_origin
+
+    @property
+    def dashboard_session_billing_team_id(self) -> str | None:
+        return self._dashboard_session_billing_team_id
+
+    @property
+    def dashboard_session_model(self) -> str | None:
+        return self._dashboard_session_model
+
+    def bind_dashboard_session(self, origin: "UserAPIKeyAuth", *, model: str | None = None) -> None:
+        self._dashboard_session_origin = origin
+        self._dashboard_session_billing_team_id = self.team_id
+        self._dashboard_session_model = model
+
+    def dashboard_model_access_auth(self) -> "UserAPIKeyAuth":
+        if self._dashboard_session_origin is None:
+            return self
+        origin: Final = self._dashboard_session_origin
+        fields: Final = frozenset(
+            name
+            for name in UserAPIKeyAuth.model_fields
+            if name.startswith(("team_", "organization_")) or name == "org_id"
+        )
+        values: Final = _BILLING_FIELDS_ADAPTER.validate_python(origin.model_dump(include=set(fields)))
+        return self.model_copy(update=values)
+
+    _customer_model_scopes: tuple[tuple[str, ...], ...] = PrivateAttr(default=())
+
+    @property
+    def customer_model_scopes(self) -> tuple[tuple[str, ...], ...]:
+        return self._customer_model_scopes
+
+    def with_customer_model_scopes(self, scopes: tuple[tuple[str, ...], ...]) -> "UserAPIKeyAuth":
+        scoped: Final = self.model_copy()
+        scoped._customer_model_scopes = scopes
+        return scoped
+
+    @property
+    def access_group_rule_grants(self) -> frozenset[str]:
+        return self._access_group_rule_grants
+
+    def apply_access_group_rule_grants(self, grants: tuple[str, ...]) -> None:
+        if grants:
+            self._access_group_rule_grants = frozenset(grants)
+            self.access_group_ids = list(dict.fromkeys((*(self.access_group_ids or ()), *grants)))
+
     user_role: LitellmUserRoles | None = None
     allowed_model_region: AllowedModelRegion | None = None
     parent_otel_span: Span | None = None
@@ -169,6 +232,10 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # above; a forged value could at most narrow, but the stripping keeps the field's provenance
     # single-owner so its meaning stays trustworthy.
     mcp_session_resource_server_ids: tuple[str, ...] | None = Field(default=None, exclude=True)
+    # Set only by MCP admission when a legacy delegate_auth_to_upstream caller's Authorization is the
+    # upstream token rather than a LiteLLM credential, so egress forwards it. Stripped from validated
+    # input like the markers above: a forged value would forward a LiteLLM credential upstream.
+    mcp_forwards_caller_authorization: bool = Field(default=False, exclude=True)
     mcp_toolset_id: str | None = Field(default=None, exclude=True)
     authenticated_by_custom_auth: bool = Field(default=False, exclude=True)
     via_virtual_key: bool = Field(
@@ -199,9 +266,11 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         ),
     )
     budget_reservation: dict[str, object] | None = Field(default=None, exclude=True)
+    budget_plan: BudgetPlan | None = Field(default=None, exclude=True)
     team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
     user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
     org_budget_snapshot: OrgBudgetSnapshot | None = Field(default=None, exclude=True)
+    committed_budget_spend: CommittedBudgetSpend | None = Field(default=None, exclude=True, repr=False)
     matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
     user: object | None = None  # Expanded user object when expand=user is used
@@ -230,6 +299,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("mcp_explicit_grants_only", None)
         values.pop("mcp_source_team_rpm_limits", None)
         values.pop("mcp_session_resource_server_ids", None)
+        values.pop("mcp_forwards_caller_authorization", None)
         values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
         values.pop("authenticated_by_custom_auth", None)
@@ -322,6 +392,21 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             and bool(self.metadata)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped base field
             and self.metadata.get("service_account_id") is not None  # pyright: ignore[reportUnknownMemberType]  # untyped base field
         )
+
+
+COMMITTED_BUDGET_SPEND_PARAM: Final = "committed_budget_spend"
+
+
+def committed_budget_spend_of_row(
+    metadata: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> CommittedBudgetSpend | None:
+    auth: Final = metadata.get("user_api_key_auth")
+    if isinstance(auth, UserAPIKeyAuth) and auth.committed_budget_spend is not None:
+        return auth.committed_budget_spend
+    if "user_api_key_auth" in metadata:
+        return CommittedBudgetSpend()
+    carried: Final = litellm_params.get(COMMITTED_BUDGET_SPEND_PARAM)
+    return carried if isinstance(carried, CommittedBudgetSpend) else None
 
 
 def user_api_key_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:

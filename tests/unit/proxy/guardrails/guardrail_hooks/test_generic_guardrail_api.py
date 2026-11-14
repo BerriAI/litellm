@@ -16,12 +16,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from mcp.types import CallToolResult, TextContent
 
 import litellm
 from litellm import ModelResponse
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, MaskedHTTPStatusError
+from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
+    MCPGuardrailTranslationHandler,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -29,6 +33,9 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     _HEADER_PRESENT_PLACEHOLDER,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import Choices, GenericGuardrailAPIInputs, Message
 
 
@@ -942,6 +949,89 @@ class TestStructuredMessagesInResponse:
             )
 
         assert guardrailed_inputs["structured_messages"] == [assistant_row, redacted_row]
+
+    @pytest.mark.asyncio
+    async def test_an_echo_that_drops_bucket_owner_still_sends_bucket_owner_to_bedrock(
+        self, raw_rows_guardrail, mock_request_data_input
+    ):
+        image_row = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe it."},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "s3://media-bucket/dir/cat.png", "bucket_owner": "111122223333"},
+                },
+            ],
+        }
+        redacted_row = {"role": "user", "content": "my ssn is [SSN]"}
+
+        def echo_without_bucket_owner_and_redact_one_row(url, json, headers, **_kwargs):
+            sent_image_row = json["structured_messages"][0]
+            answer = MagicMock()
+            answer.json.return_value = {
+                "action": "GUARDRAIL_INTERVENED",
+                "structured_messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            sent_image_row["content"][0],
+                            {"type": "image_url", "image_url": {"url": sent_image_row["content"][1]["image_url"]["url"]}},
+                        ],
+                    },
+                    redacted_row,
+                ],
+            }
+            answer.raise_for_status = MagicMock()
+            return answer
+
+        with patch.object(
+            raw_rows_guardrail.async_handler, "post", side_effect=echo_without_bucket_owner_and_redact_one_row
+        ):
+            guardrailed_inputs = await raw_rows_guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["Describe it.", "my ssn is 123-45-6789"],
+                    "structured_messages": [image_row, {"role": "user", "content": "my ssn is 123-45-6789"}],
+                },
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+        bedrock_messages = _bedrock_converse_messages_pt(
+            messages=guardrailed_inputs["structured_messages"], model="us.amazon.nova-2-lite-v1:0", llm_provider="bedrock"
+        )
+
+        assert [block for block in bedrock_messages[0]["content"] if "image" in block] == [
+            {
+                "image": {
+                    "format": "png",
+                    "source": {"s3Location": {"uri": "s3://media-bucket/dir/cat.png", "bucketOwner": "111122223333"}},
+                }
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_an_image_with_a_bucket_owner_that_is_not_a_string_keeps_its_turn_for_the_guardrail(
+        self, generic_guardrail
+    ):
+        row = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is written here?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA", "bucket_owner": 111122223333}},
+            ],
+        }
+
+        assert await _structured_messages_sent(generic_guardrail, [row]) == [
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is written here?"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}},
+                    ],
+                }
+            ]
+        ]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -2621,3 +2711,68 @@ class TestNumRetries:
 
         assert sent.qsize() == num_retries + 1
         assert result == {"texts": ["hi"]}
+
+
+def _mcp_guardrail(mode: str) -> GenericGuardrailAPI:
+    return GenericGuardrailAPI(api_base="http://x", guardrail_name="g", event_hook=mode, default_on=True)
+
+
+def _mock_api_response(payload: dict[str, object]) -> MagicMock:
+    response: Final = MagicMock()
+    response.json.return_value = payload
+    response.raise_for_status = MagicMock()
+    return response
+
+
+@pytest.mark.parametrize("mode", ["pre_mcp_call", "during_mcp_call", "post_mcp_call"])
+def test_mcp_call_modes_pass_event_hook_validation(mode: str) -> None:
+    guardrail: Final = _mcp_guardrail(mode)
+
+    assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks(mode)) is True
+
+
+@pytest.mark.asyncio
+async def test_pre_mcp_call_blocked_raises() -> None:
+    guardrail: Final = _mcp_guardrail("pre_mcp_call")
+    response: Final = _mock_api_response({"action": "BLOCKED", "blocked_reason": "credential detected in tool input"})
+
+    with patch.object(guardrail.async_handler, "post", return_value=response):
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await MCPGuardrailTranslationHandler().process_input_messages(
+                data={"mcp_tool_name": "t", "mcp_arguments": {"a": "secret"}},
+                guardrail_to_apply=guardrail,
+            )
+
+    assert exc_info.value.message == "credential detected in tool input"
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_redacts_result() -> None:
+    guardrail: Final = _mcp_guardrail("post_mcp_call")
+    response: Final = _mock_api_response({"action": "GUARDRAIL_INTERVENED", "texts": ["x [R] y"]})
+    result: Final = CallToolResult(content=[TextContent(type="text", text="x secret y")], isError=False)
+
+    with patch.object(guardrail.async_handler, "post", return_value=response):
+        returned: Final = await MCPGuardrailTranslationHandler().process_output_response(
+            response=result,
+            guardrail_to_apply=guardrail,
+            request_data={"mcp_tool_name": "t"},
+        )
+
+    assert returned.content[0].text == "x [R] y"
+
+
+@pytest.mark.asyncio
+async def test_during_mcp_call_blocked_raises() -> None:
+    guardrail: Final = _mcp_guardrail("during_mcp_call")
+    response: Final = _mock_api_response({"action": "BLOCKED", "blocked_reason": "credential detected in tool input"})
+
+    with patch.object(guardrail.async_handler, "post", return_value=response):
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await UnifiedLLMGuardrails().async_moderation_hook(
+                data={"mcp_tool_name": "t", "mcp_arguments": {"a": "secret"}, "guardrail_to_apply": guardrail},
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="call_mcp_tool",
+            )
+
+    assert exc_info.value.message == "credential detected in tool input"
