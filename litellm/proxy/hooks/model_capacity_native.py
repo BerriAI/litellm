@@ -1,19 +1,17 @@
 import asyncio
 import logging
 import os
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from itertools import count
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal
 from weakref import WeakKeyDictionary
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
-from redis.exceptions import RedisError
-from typing_extensions import TypeIs  # noqa: TID251  # tells the legacy and native dynamic limiters apart
 
 import litellm
 from litellm import Router
@@ -42,10 +40,6 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError, map_v3_rate_limit_type
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-    _PROXY_DynamicRateLimitHandlerV3,  # pyright: ignore[reportPrivateUsage]  # the class behind the public alias, usable in a type
-    _SettlementLoggingObject,  # pyright: ignore[reportPrivateUsage]  # the handler's own settlement validation error text
-)
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RATE_LIMIT_UNVERIFIABLE_MESSAGE,
     PROXY_MaxParallelRequestsHandler_v3,
@@ -71,8 +65,10 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitCounter, RateLimitScope
 from litellm.types.integrations.custom_logger_v2 import KeyIdentity
 from litellm.types.integrations.custom_logger_v2 import Outcome as AttemptOutcome
+from litellm.types.utils import PriorityReservationSettings
 
 if TYPE_CHECKING:
+    from litellm.integrations.prometheus import PrometheusLogger
     from litellm.rust_bridge._native import NativeModelCapacity, NativeModelCapacityState
 
 UNLICENSED_PRIORITY_MESSAGE: Final = (
@@ -166,6 +162,30 @@ def _dumped(record: BaseModel | None) -> object:
 def key_inputs(auth: UserAPIKeyAuth) -> Mapping[str, object]:
     args: Final = HookArgs(auth=auth)
     return {"identity": _dumped(key_identity(args)), "gaps": key_gaps(auth)}
+
+
+class _SettlementMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    user_api_key_auth_metadata: Mapping[str, object] | None = None
+    user_api_key_team_id: str | None = None
+    user_api_key_team_alias: str | None = None
+
+
+class _SettlementLoggingObject(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    metadata: _SettlementMetadata | None = None
+
+
+def _prometheus_loggers() -> "Sequence[PrometheusLogger]":
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    return tuple(
+        logger
+        for logger in litellm.logging_callback_manager.get_custom_loggers_for_type(PrometheusLogger)
+        if isinstance(logger, PrometheusLogger)
+    )
 
 
 def _settlement_error(kwargs: Mapping[str, object]) -> str | None:
@@ -298,6 +318,16 @@ def _wire_response(live: LiveRequest, response: RateLimitResponse) -> Mapping[st
     }
 
 
+def _registry_unavailable(error: Exception) -> bool:
+    if isinstance(error, RedisCircuitBreakerOpenError | ValidationError):
+        return True
+    try:
+        from redis.exceptions import RedisError
+    except ImportError:
+        return False
+    return isinstance(error, RedisError)
+
+
 def _raised(error: Exception) -> Mapping[str, object]:
     live: Final = _LIVE.get()
     token: Final = next(_TOKENS)
@@ -307,7 +337,7 @@ def _raised(error: Exception) -> Mapping[str, object]:
         "http"
         if isinstance(error, HTTPException)
         else "registry_unavailable"
-        if isinstance(error, RedisError | RedisCircuitBreakerOpenError | ValidationError)
+        if _registry_unavailable(error)
         else "other"
     )
     return {"raised": {"token": token, "kind": kind, "message": str(error)}}
@@ -348,11 +378,7 @@ class CapacityDelegate:
 
     @_seam
     async def settings(self, _args: Mapping[str, object]) -> object:
-        from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-            _get_priority_settings,  # pyright: ignore[reportPrivateUsage]  # one settings source
-        )
-
-        settings: Final = _get_priority_settings()
+        settings: Final = litellm.priority_reservation_settings or PriorityReservationSettings()
         reservation: Final = litellm.priority_reservation
         return {
             "priority_reservation": None
@@ -540,18 +566,11 @@ class CapacityDelegate:
 
     @_seam
     async def metrics_enabled(self, _args: Mapping[str, object]) -> object:
-        from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-            _prometheus_loggers,  # pyright: ignore[reportPrivateUsage]  # one metrics source
-        )
-
         return bool(_prometheus_loggers())
 
     @_seam
     async def throttled(self, args: Mapping[str, object]) -> object:
         from litellm._logging import verbose_proxy_logger
-        from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-            _prometheus_loggers,  # pyright: ignore[reportPrivateUsage]  # one metrics source
-        )
 
         for logger in _prometheus_loggers():
             try:
@@ -584,9 +603,6 @@ class CapacityDelegate:
     @_seam
     async def set_share(self, args: Mapping[str, object]) -> object:
         from litellm._logging import verbose_proxy_logger
-        from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-            _prometheus_loggers,  # pyright: ignore[reportPrivateUsage]  # one metrics source
-        )
 
         try:
             for logger in _prometheus_loggers():
@@ -837,18 +853,10 @@ def native_dynamic_rate_limiter(internal_usage_cache: DualCache, llm_router: obj
     return _REGISTERED.logger
 
 
-DynamicRateLimiter: TypeAlias = _PROXY_DynamicRateLimitHandlerV3 | NativeDynamicRateLimiter
-
-
-def is_dynamic_rate_limiter(callback: object) -> TypeIs[DynamicRateLimiter]:  # guard-ok: one isinstance on both classes
-    return isinstance(callback, _PROXY_DynamicRateLimitHandlerV3 | NativeDynamicRateLimiter)
-
-
 __all__ = [
     "CapacityDelegate",
     "NativeDynamicRateLimiter",
     "build_native_dynamic_rate_limiter",
-    "is_dynamic_rate_limiter",
     "native_dynamic_rate_limiter",
     "registered_native_dynamic_rate_limiter",
 ]

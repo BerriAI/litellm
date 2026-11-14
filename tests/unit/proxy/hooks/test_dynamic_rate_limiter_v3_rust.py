@@ -3656,9 +3656,9 @@ async def test_a_worker_without_redis_reads_the_models_saturation_from_its_own_m
 async def test_the_limiter_loads_and_admits_requests_without_redis_installed(
     monkeypatch: pytest.MonkeyPatch, import_without_redis_installed: Callable[[str], ModuleType]
 ):
-    module: Final = import_without_redis_installed("litellm.proxy.hooks.dynamic_rate_limiter_v3")
-    handler: Final[PROXY_DynamicRateLimitHandlerV3] = module.PROXY_DynamicRateLimitHandlerV3(
-        internal_usage_cache=DualCache()
+    module: Final = import_without_redis_installed("litellm.proxy.hooks.model_capacity_native")
+    handler: Final = PROXY_DynamicRateLimitHandlerV3(
+        internal_usage_cache=DualCache(), build=module.build_native_dynamic_rate_limiter
     )
     handler.update_variables(llm_router=_borrowing_handler(monkeypatch, borrows=False).llm_router)
 

@@ -2,7 +2,7 @@ import asyncio
 import contextvars
 import logging
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from types import MappingProxyType
@@ -42,7 +42,6 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
     mark_saturation_fallbacks_exhausted,
 )
 from litellm.proxy.hooks import parallel_request_limiter_v3
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
 from litellm.proxy.hooks.model_capacity_native import (
     UNLICENSED_PRIORITY_MESSAGE,
     NativeDynamicRateLimiter,
@@ -82,8 +81,10 @@ class Clock:
 
 
 @pytest.fixture(autouse=True)
-def golden_case(request: pytest.FixtureRequest) -> None:
+def golden_case(request: pytest.FixtureRequest) -> Iterator[None]:
     golden.begin(request.node.nodeid)
+    yield
+    golden.finish()
 
 
 @pytest.fixture(autouse=True)
@@ -167,55 +168,6 @@ def _auth(data: Mapping[str, object]) -> UserAPIKeyAuth:
     auth: Final = metadata["user_api_key_auth"]
     assert isinstance(auth, UserAPIKeyAuth)
     return auth
-
-
-class PythonSide:
-    def __init__(self, router: Router, clock: Clock) -> None:
-        self.handler: Final = PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=DualCache(), time_provider=clock.now)
-        self.handler.update_variables(llm_router=router)
-        self.limiter = self.handler.v3_limiter
-
-    async def pre_call(self, data: dict[str, object], call_type: str) -> Outcome:
-        live_auth: Final = _auth(data)
-        try:
-            returned = await self.handler.async_pre_call_hook(live_auth, DualCache(), data, call_type)  # pyright: ignore[reportArgumentType]
-        except Exception as error:
-            return Outcome(raised=_raised(error))
-        return _outcome(returned if isinstance(returned, dict) else data, live_auth)
-
-    async def post_call(self, data: dict[str, object], response: ModelResponse) -> object:
-        await self.handler.async_post_call_success_hook(data=data, user_api_key_dict=_auth(data), response=response)
-        return dict(response._hidden_params.get("additional_headers") or {})
-
-    async def response_headers(self, data: dict[str, object]) -> object:
-        return await self.handler.async_post_call_response_headers_hook(data, _auth(data), None)
-
-    async def post_call_failure(
-        self,
-        data: dict[str, object],  # mutable-ok: the legacy failure hook takes the proxy's request dict
-    ) -> None:
-        await self.handler.async_post_call_failure_hook(
-            request_data=data, original_exception=RuntimeError("a later hook refused"), user_api_key_dict=_auth(data)
-        )
-
-    async def ended(self, kwargs: dict[str, object], response: object, failed: bool) -> None:
-        if failed:
-            await self.handler.async_log_failure_event(kwargs, response, None, None)
-        else:
-            await self.handler.async_log_success_event(kwargs, response, None, None)
-
-    async def fallback(self, auth: UserAPIKeyAuth, model: str, data: dict[str, object], commit: bool) -> object:
-        try:
-            return await self.handler.async_fallback_target_allowed(auth, model, data, commit=commit)
-        except Exception as error:
-            return _raised(error)
-
-    async def frame(self, auth: UserAPIKeyAuth, model: str | None) -> object:
-        try:
-            await self.handler.enforce_token_limits_for_frame(user_api_key_dict=auth, requested_model=model)
-        except Exception as error:
-            return _raised(error)
-        return None
 
 
 def _call(data: Mapping[str, object], call_type: str) -> CallFacts:
@@ -581,24 +533,17 @@ async def _differential(
     tap: Final = _UnlicensedTap()
     verbose_proxy_logger.addHandler(tap)
     monkeypatch.setattr(verbose_proxy_logger, "level", logging.INFO)
-    transcripts: Final[list[list[object]]] = []
+    side: Final = NativeSide(router, clock)
+    if prepare is not None:
+        prepare(side)
+    gauges: Final = _MetricsTap()
+    monkeypatch.setattr(litellm, "callbacks", [side.logger, gauges] if metrics else [side.logger])
     try:
-        for build in (PythonSide, NativeSide):
-            clock.current = datetime(2026, 11, 13, 12, 0, 0)
-            side = build(router, clock)
-            if prepare is not None:
-                prepare(side)
-            limiter = side.handler if isinstance(side, PythonSide) else side.logger
-            gauges = _MetricsTap()
-            monkeypatch.setattr(litellm, "callbacks", [limiter, gauges] if metrics else [limiter])
-            transcripts.append([*await _transcript(side, clock, steps, scopes, tap), tuple(gauges.calls)])
+        transcript: Final = [*await _transcript(side, clock, steps, scopes, tap), tuple(gauges.calls)]
     finally:
         verbose_proxy_logger.removeHandler(tap)
-    python, native = transcripts
-    golden.observe(python, native)
-    for index, (expected, actual) in enumerate(zip(python, native, strict=True)):
-        assert actual == expected, f"step {index} differs"
-    return python
+    golden.check(transcript)
+    return transcript
 
 
 async def _transcript(
@@ -628,8 +573,8 @@ async def test_the_group_is_held_to_its_deployments_requests(monkeypatch: pytest
     router: Final = _router(("capped", None, 3))
     key: Final = _key("a")
     steps: Final = [Step(Request(key, "capped", f"c{i}")) for i in range(5)]
-    python: Final = await _differential(monkeypatch, isolated, router, steps, [("model_saturation_check", "capped")])
-    refusals: Final = [step[0].raised for step in python[:5] if step[0].raised is not None]
+    native: Final = await _differential(monkeypatch, isolated, router, steps, [("model_saturation_check", "capped")])
+    refusals: Final = [step[0].raised for step in native[:5] if step[0].raised is not None]
     assert len(refusals) == 2
 
 
@@ -642,8 +587,8 @@ async def test_capacity_refusals_keep_their_own_error_beside_the_parallel_limite
     monkeypatch.setitem(ABORT_ERRORS, "proxy_rate_limit", limiters_refusal)
     router: Final = _router(("capped", None, 1))
     steps: Final = [Step(Request(_key("a"), "capped", f"k{i}")) for i in range(2)]
-    python: Final = await _differential(monkeypatch, isolated, router, steps, [("model_saturation_check", "capped")])
-    assert python[1][0].raised[0] == "ProxyRateLimitError", python[1]
+    native: Final = await _differential(monkeypatch, isolated, router, steps, [("model_saturation_check", "capped")])
+    assert native[1][0].raised[0] == "ProxyRateLimitError", native[1]
     assert ABORT_ERRORS["proxy_rate_limit"] is limiters_refusal
 
 
@@ -661,7 +606,7 @@ async def test_busy_groups_hold_priorities_to_their_share_and_tokens_settle(
         *(Step(Request(low, "shared", f"l{i}"), tokens=(10, 10)) for i in range(3)),
         *(Step(Request(plain, "shared", f"p{i}"), tokens=(10, 10)) for i in range(2)),
     ]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
@@ -673,7 +618,7 @@ async def test_busy_groups_hold_priorities_to_their_share_and_tokens_settle(
             ("priority_model", "shared:default_pool"),
         ],
     )
-    assert _refusal_prefixes(python) == ["Priority-based rate limit exceeded"], python
+    assert _refusal_prefixes(native) == ["Priority-based rate limit exceeded"], native
 
 
 async def test_over_allocated_and_absolute_reservations_normalize_the_same_way(
@@ -734,7 +679,7 @@ async def test_class_split_holds_each_active_team_to_its_slice(monkeypatch: pyte
             for index, team in enumerate(teams)
         ),
     ]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
@@ -748,8 +693,8 @@ async def test_class_split_holds_each_active_team_to_its_slice(monkeypatch: pyte
         ],
         metrics=True,
     )
-    assert {call[0] for call in python[-1]} == {"throttled", "share"}, python[-1]
-    assert "Priority class share reached" in _refusal_prefixes(python), python
+    assert {call[0] for call in native[-1]} == {"throttled", "share"}, native[-1]
+    assert "Priority class share reached" in _refusal_prefixes(native), native
 
 
 def _borrowing(monkeypatch: pytest.MonkeyPatch, threshold: float) -> None:
@@ -780,7 +725,7 @@ async def test_borrowing_teams_hold_tokens_settle_and_refund(monkeypatch: pytest
         Step(Request(capped, "borrow", "b6"), tokens=(10, 10)),
         Step(Request(team, "borrow", "w0"), tokens=(10, 10), advance=61),
     ]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
@@ -793,11 +738,11 @@ async def test_borrowing_teams_hold_tokens_settle_and_refund(monkeypatch: pytest
         ],
         metrics=True,
     )
-    assert {call[0] for call in python[-1]} == {"throttled", "share"}, python[-1]
-    assert set(_refusal_prefixes(python)) == {
+    assert {call[0] for call in native[-1]} == {"throttled", "share"}, native[-1]
+    assert set(_refusal_prefixes(native)) == {
         "Team model_tpm_limit borrow cap reached",
         "Team model_tpm_limit reached",
-    }, python
+    }, native
 
 
 async def test_a_retried_attempt_and_a_streamed_reply_settle_like_python(
@@ -810,14 +755,14 @@ async def test_a_retried_attempt_and_a_streamed_reply_settle_like_python(
         Step(Request(team, "retry", "t0"), tokens=(40, 20), retried=True),
         Step(Request(team, "retry", "t1"), tokens=(5, 5), streamed=(70, 50)),
     ]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
         steps,
         [("model_saturation_check", "retry"), ("model_per_team_saturated", "team-t:retry")],
     )
-    assert python[-2][3][3] == 60 + 120, python[-2]
+    assert native[-2][3][3] == 60 + 120, native[-2]
 
 
 async def test_an_unavailable_team_registry_and_a_failing_post_call_log_like_python(
@@ -838,11 +783,11 @@ async def test_an_unavailable_team_registry_and_a_failing_post_call_log_like_pyt
         raise RuntimeError("post-call down")
 
     def prepare(side: Side) -> None:
-        registry = side.handler.active_teams if isinstance(side, PythonSide) else side.logger.delegate.active_teams
+        registry = side.logger.delegate.active_teams
         monkeypatch.setattr(registry, "touch", registry_down)
         monkeypatch.setattr(side.limiter, "async_post_call_success_hook", post_call_fails)
 
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
@@ -850,10 +795,10 @@ async def test_an_unavailable_team_registry_and_a_failing_post_call_log_like_pyt
         [("model_saturation_check", "down")],
         prepare,
     )
-    assert [line[1].split(":")[0] for line in python[0][-1][1]] == [
+    assert [line[1].split(":")[0] for line in native[0][-1][1]] == [
         "Active team registry unavailable for down, holding team team-a to the class pool",
         "Error in dynamic rate limiter v3 post-call hook",
-    ], python[0]
+    ], native[0]
 
 
 async def test_responses_calls_cap_their_output_the_same_way(monkeypatch: pytest.MonkeyPatch, isolated: Clock):
@@ -889,7 +834,7 @@ async def test_fallback_targets_are_held_to_the_teams_share_and_settle_there(
             fallbacks=(("backup", False), ("backup", True)),
         ),
     ]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
@@ -901,7 +846,7 @@ async def test_fallback_targets_are_held_to_the_teams_share_and_settle_there(
             ("model_per_team_saturated", "team-f:backup"),
         ],
     )
-    assert python[4][1:3] == [False, False], python[4]
+    assert native[4][1:3] == [False, False], native[4]
 
 
 async def test_requests_outside_the_limiter_pass_untouched(monkeypatch: pytest.MonkeyPatch, isolated: Clock):
@@ -922,10 +867,6 @@ async def test_bad_priority_configuration_fails_open_the_same_way(monkeypatch: p
     await _differential(monkeypatch, isolated, router, steps, [("model_saturation_check", "open")])
 
 
-def _sides() -> Sequence[Callable[[Router, Clock], Side]]:
-    return (PythonSide, NativeSide)
-
-
 async def test_non_string_priorities_render_and_match_like_python(monkeypatch: pytest.MonkeyPatch, isolated: Clock):
     monkeypatch.setattr(litellm, "priority_reservation", {7: 0.5, 1: 0.2, "x": 0.3})
     monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.0)
@@ -936,7 +877,7 @@ async def test_non_string_priorities_render_and_match_like_python(monkeypatch: p
         for round_ in range(2)
         for index, priority in enumerate(priorities)
     ]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
@@ -946,7 +887,7 @@ async def test_non_string_priorities_render_and_match_like_python(monkeypatch: p
             *(("priority_model", f"nsp:{name}") for name in ("7", "7.0", "True", "1", "x", "default_pool")),
         ],
     )
-    assert _refusal_prefixes(python), python
+    assert _refusal_prefixes(native), native
 
 
 async def test_team_shares_sum_float_weights_like_python(monkeypatch: pytest.MonkeyPatch, isolated: Clock):
@@ -990,14 +931,14 @@ async def test_requests_without_a_call_id_keep_their_stash(monkeypatch: pytest.M
         Step(Request(team, "luna", None)),
         Step(Request(team, "luna", None), failed=True, partial=(2, 3)),
     ]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
         steps,
         [("model_saturation_check", "luna"), ("model_per_team_saturated", "flex:luna")],
     )
-    assert python[-2][3][3] == 30 + 5, python[-2]
+    assert native[-2][3][3] == 30 + 5, native[-2]
 
 
 @pytest.mark.parametrize(
@@ -1017,11 +958,11 @@ async def test_priorities_the_contract_cannot_hold_fail_like_python(
     router: Final = _router(("nsp", 1000, 6))
     key: Final = _key("held", team_id="team-h", **priorities)
     steps: Final = [Step(Request(key, "nsp", f"h{index}"), tokens=(5, 5)) for index in range(2)]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch, isolated, router, steps, [("model_saturation_check", "nsp"), ("priority_model", "nsp:7")]
     )
-    logged: Final = " ".join(line[1] for line in python[0][-1][1])
-    assert (f"unhashable type: '{unhashable}'" in logged) is (unhashable is not None), python[0]
+    logged: Final = " ".join(line[1] for line in native[0][-1][1])
+    assert (f"unhashable type: '{unhashable}'" in logged) is (unhashable is not None), native[0]
 
 
 @pytest.mark.parametrize("team_id", [["team-l"], 5, True])
@@ -1037,14 +978,14 @@ async def test_team_ids_python_formats_share_the_class_like_python(
     key: Final = _key("odd", team_metadata={"priority": "interactive"})
     key.team_id = team_id  # pyright: ignore[reportAttributeAccessIssue]  # a team id another writer left in any shape
     steps: Final = [Step(Request(key, "ids", f"i{index}"), tokens=(60, 40)) for index in range(4)]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
         steps,
         [("model_saturation_check", "ids"), ("priority_class_share_saturated", f"3:ids:{team_id}")],
     )
-    assert [status["descriptor_value"] for status in python[0][0].statuses] == ["ids", f"3:ids:{team_id}"], python[0]
+    assert [status["descriptor_value"] for status in native[0][0].statuses] == ["ids", f"3:ids:{team_id}"], native[0]
 
 
 async def test_a_reply_whose_usage_differs_from_the_logged_counts_settles_the_reply_like_python(
@@ -1054,14 +995,14 @@ async def test_a_reply_whose_usage_differs_from_the_logged_counts_settles_the_re
     router: Final = _router(("reply", 1000, None))
     team: Final = _key("team", team_id="team-r", team_metadata={"model_tpm_limit": {"reply": 400}})
     steps: Final = [Step(Request(team, "reply", "r0"), tokens=(5, 5), reply=(70, 50))]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
         steps,
         [("model_saturation_check", "reply"), ("model_per_team_saturated", "team-r:reply")],
     )
-    assert python[-2][3][3] == 120, python[-2]
+    assert native[-2][3][3] == 120, native[-2]
 
 
 @pytest.mark.parametrize(
@@ -1087,16 +1028,16 @@ async def test_logged_metadata_python_cannot_validate_settles_nothing_and_logs_l
         Step(Request(team, "valid", "v0"), tokens=(30, 10)),
         Step(Request(team, "valid", "v1"), tokens=(30, 10), logged_metadata=logged_metadata),
     ]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
         steps,
         [("model_saturation_check", "valid"), ("priority_model", "valid:gold"), ("priority_model", "valid:7")],
     )
-    logged: Final = [line[1].split(":")[0] for line in python[1][-1][1]]
-    assert logged == ([] if settles else ["Error in dynamic rate limiter success event"]), python[1]
-    assert python[-2][1][3] == (80 if settles else 40), python[-2]
+    logged: Final = [line[1].split(":")[0] for line in native[1][-1][1]]
+    assert logged == ([] if settles else ["Error in dynamic rate limiter success event"]), native[1]
+    assert native[-2][1][3] == (80 if settles else 40), native[-2]
 
 
 async def test_unlicensed_priorities_log_the_premium_line_the_same_number_of_times(
@@ -1110,8 +1051,8 @@ async def test_unlicensed_priorities_log_the_premium_line_the_same_number_of_tim
         for i in range(2)
         for name in ("high", "low", "none")
     ]
-    python: Final = await _differential(monkeypatch, isolated, router, steps, [("priority_model", "lic:high")])
-    assert sum(step[-2][1] for step in python[:-2]) > 0, python
+    native: Final = await _differential(monkeypatch, isolated, router, steps, [("priority_model", "lic:high")])
+    assert sum(step[-2][1] for step in native[:-2]) > 0, native
 
 
 def _socket_connection(name: str, key: UserAPIKeyAuth, turns: Sequence[Turn]) -> Step:
@@ -1133,14 +1074,14 @@ async def test_socket_frames_hold_turns_to_the_team_share_and_turns_settle_on_th
         Turn(None),
         Turn("sock", call_type="aresponses", connection="someone-else"),
     )
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
         [_socket_connection("a", team, turns), _socket_connection("b", team, (Turn("sock"),))],
         [("model_saturation_check", "sock"), ("model_per_team_saturated", "team-s:sock")],
     )
-    assert any(isinstance(entry, tuple) and entry[0] == "ProxyRateLimitError" for entry in python[0]), python[0]
+    assert any(isinstance(entry, tuple) and entry[0] == "ProxyRateLimitError" for entry in native[0]), native[0]
 
 
 async def test_socket_frames_hold_turns_to_the_class_share(monkeypatch: pytest.MonkeyPatch, isolated: Clock):
@@ -1153,7 +1094,7 @@ async def test_socket_frames_hold_turns_to_the_class_share(monkeypatch: pytest.M
     first: Final = _key("a", team_id="team-a", team_metadata={"priority": "interactive"})
     second: Final = _key("b", team_id="team-b", team_metadata={"priority": "interactive"})
     unhashable: Final = _key("l", team_id="team-l", metadata={"priority": [1]})
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
@@ -1168,11 +1109,11 @@ async def test_socket_frames_hold_turns_to_the_class_share(monkeypatch: pytest.M
             ("priority_class_share_saturated", "2:sock:team-b"),
         ],
     )
-    assert python[2][1] == ("TypeError", "unhashable type: 'list'"), python[2]
+    assert native[2][1] == ("TypeError", "unhashable type: 'list'"), native[2]
     assert any(
         isinstance(entry, tuple) and str(entry[2]).startswith("{'error': 'Priority class share reached")
-        for entry in python[1]
-    ), python[1]
+        for entry in native[1]
+    ), native[1]
 
 
 async def test_an_unverifiable_frame_check_is_a_service_unavailable(monkeypatch: pytest.MonkeyPatch, isolated: Clock):
@@ -1186,10 +1127,10 @@ async def test_an_unverifiable_frame_check_is_a_service_unavailable(monkeypatch:
     def prepare(side: Side) -> None:
         monkeypatch.setattr(side.limiter, "should_rate_limit", unverifiable)
 
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch, isolated, router, [_socket_connection("u", team, (Turn("sock"),))], [], prepare
     )
-    assert python[0][1][0] == "ServiceUnavailableError", python[0]
+    assert native[0][1][0] == "ServiceUnavailableError", native[0]
 
 
 async def _settled() -> None:
@@ -1240,29 +1181,23 @@ async def test_attempts_settle_through_the_real_logging_path(monkeypatch: pytest
     )
     plan: Final = [("l0", False), ("l1", True), ("l2", False), ("l3", True)]
     scopes: Final = [("model_saturation_check", "logged"), ("model_per_team_saturated", "team-l:logged")]
-    transcripts: Final[list[list[object]]] = []
-    for build in (PythonSide, NativeSide):
-        isolated.current = datetime(2026, 11, 13, 12, 0, 0)
-        side = build(router, isolated)
-        for name in (
-            "callbacks",
-            "success_callback",
-            "failure_callback",
-            "_async_success_callback",
-            "_async_failure_callback",
-        ):
-            monkeypatch.setattr(litellm, name, [])
-        litellm.callbacks.append(side.handler if isinstance(side, PythonSide) else side.logger)
-        transcript: list[object] = []
-        for call_id, failed in plan:
-            transcript.append(await _logged_lifecycle(side, router, Request(team, "logged", call_id), failed))
-            transcript.append(await _counters(side, scopes))
-        transcripts.append(transcript)
-    python, native = transcripts
-    golden.observe(python, native)
-    assert native == python, (native, python)
-    assert [step[1][3] for step in python[1::2]] == [30, 30, 60, 60], python
-    assert [step[1] for step in python[0::2]] == [None, "InternalServerError", None, "InternalServerError"], python
+    side: Final = NativeSide(router, isolated)
+    for name in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, name, [])
+    litellm.callbacks.append(side.logger)
+    native: Final[list[object]] = []  # mutable-ok: the native's transcript, in order
+    for call_id, failed in plan:
+        native.append(await _logged_lifecycle(side, router, Request(team, "logged", call_id), failed))
+        native.append(await _counters(side, scopes))
+    golden.check(native)
+    assert [step[1][3] for step in native[1::2]] == [30, 30, 60, 60], native
+    assert [step[1] for step in native[0::2]] == [None, "InternalServerError", None, "InternalServerError"], native
 
 
 class _PayloadCapture(CustomLogger):
@@ -1347,31 +1282,24 @@ async def test_the_real_proxy_hooks_share_one_request_stash_like_python(
         Request(_key("plain"), "luna", "p1"),
         Request(_key("team", team_id="flex"), "luna", "f0"),
     ]
-    runs: Final[list[list[ProxyRun]]] = []
-    for build in (PythonSide, NativeSide):
-        isolated.current = datetime(2026, 11, 13, 12, 0, 0)
-        router = _router(("luna", None, 4))
-        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-        side = build(router, isolated)
-        limiter = side.handler if isinstance(side, PythonSide) else side.logger
-        parallel = PROXY_MaxParallelRequestsHandler_v3(InternalUsageCache(dual_cache=DualCache()))
-        capture = _PayloadCapture()
-        registered = {
-            "alone": [limiter],
-            "before_parallel_limiter": [limiter, parallel],
-            "after_parallel_limiter": [parallel, limiter],
-        }[order]
-        for name in ("success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
-            monkeypatch.setattr(litellm, name, [])
-        monkeypatch.setattr(litellm, "callbacks", [*registered, capture])
-        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
-        runs.append(
-            [await _through_the_proxy(proxy_logging, router, capture, request, metadata_auth) for request in requests]
-        )
-    python, native = runs
-    golden.observe(python, native)
-    for index, (expected, actual) in enumerate(zip(python, native, strict=True)):
-        assert actual == expected, f"request {index} differs\nPY={expected!r}\nRS={actual!r}"
+    router: Final = _router(("luna", None, 4))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    limiter: Final = NativeSide(router, isolated).logger
+    parallel: Final = PROXY_MaxParallelRequestsHandler_v3(InternalUsageCache(dual_cache=DualCache()))
+    capture: Final = _PayloadCapture()
+    registered: Final = {
+        "alone": [limiter],
+        "before_parallel_limiter": [limiter, parallel],
+        "after_parallel_limiter": [parallel, limiter],
+    }[order]
+    for name in ("success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(litellm, "callbacks", [*registered, capture])
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    native: Final = [
+        await _through_the_proxy(proxy_logging, router, capture, request, metadata_auth) for request in requests
+    ]
+    golden.check(native)
     assert [run.stashes_created for run in native] == [1, 1, 1], native
     assert [run.model for run in native] == ["luna", "luna", "luna"], native
     assert all(
@@ -1441,28 +1369,21 @@ async def test_requests_without_a_request_scope_keep_their_stash_through_the_rea
         ("model_per_team_saturated", "flex:luna"),
         ("model_per_team_saturated", "solo-team:solo"),
     ]
-    runs: Final[list[list[object]]] = []
-    for build in (PythonSide, NativeSide):
-        isolated.current = datetime(2026, 11, 13, 12, 0, 0)
-        router = _router(("luna", 1000, 4), ("solo", 1000, 4))
-        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-        side = build(router, isolated)
-        for name in ("success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
-            monkeypatch.setattr(litellm, name, [])
-        monkeypatch.setattr(litellm, "callbacks", [side.handler if isinstance(side, PythonSide) else side.logger])
-        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
-        run: list[object] = []
-        for request, failed in plan:
-            run.append(await _unscoped_through_the_proxy(proxy_logging, router, request, failed))
-            run.append(await _counters(side, scopes))
-        runs.append(run)
-    python, native = runs
-    golden.observe(python, native)
-    for index, (expected, actual) in enumerate(zip(python, native, strict=True)):
-        assert actual == expected, f"entry {index} differs\nPY={expected!r}\nRS={actual!r}"
-    assert python[4] == ["luna", {}], python[4]
-    assert python[6][1] == "InternalServerError", python[6]
-    assert [entry[5][3] for entry in python[9::2]] == [None, None, 30, 30], python
+    router: Final = _router(("luna", 1000, 4), ("solo", 1000, 4))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    side: Final = NativeSide(router, isolated)
+    for name in ("success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(litellm, "callbacks", [side.logger])
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    native: Final[list[object]] = []  # mutable-ok: the native's transcript, in order
+    for request, failed in plan:
+        native.append(await _unscoped_through_the_proxy(proxy_logging, router, request, failed))
+        native.append(await _counters(side, scopes))
+    golden.check(native)
+    assert native[4] == ["luna", {}], native[4]
+    assert native[6][1] == "InternalServerError", native[6]
+    assert [entry[5][3] for entry in native[9::2]] == [None, None, 30, 30], native
 
 
 async def test_sync_sdk_calls_settle_nothing_like_python(monkeypatch: pytest.MonkeyPatch, isolated: Clock) -> None:
@@ -1471,34 +1392,29 @@ async def test_sync_sdk_calls_settle_nothing_like_python(monkeypatch: pytest.Mon
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
     team: Final = _key("team", team_id="team-y", team_metadata={"model_tpm_limit": {"sync": 400}})
     scopes: Final = [("model_saturation_check", "sync"), ("model_per_team_saturated", "team-y:sync")]
-    transcripts: Final[list[list[object]]] = []
-    for build in (PythonSide, NativeSide):
-        isolated.current = datetime(2026, 11, 13, 12, 0, 0)
-        side = build(router, isolated)
-        for name in ("success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
-            monkeypatch.setattr(litellm, name, [])
-        monkeypatch.setattr(litellm, "callbacks", [side.handler if isinstance(side, PythonSide) else side.logger])
-        request = Request(team, "sync", "y0")
+    side: Final = NativeSide(router, isolated)
+    for name in ("success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(litellm, "callbacks", [side.logger])
+    request: Final = Request(team, "sync", "y0")
 
-        async def lifecycle(side: Side = side, request: Request = request) -> object:
-            outcome = await side.pre_call(request.data(), request.call_type)
-            await asyncio.to_thread(
-                router.completion,
-                model=request.model,
-                messages=list(request.messages),
-                litellm_call_id=request.call_id,
-                metadata={"user_api_key_auth": team, "user_api_key_team_id": team.team_id},
-                mock_response="a sync sdk call",
-            )
-            await _settled()
-            return outcome
+    async def lifecycle() -> object:
+        outcome = await side.pre_call(request.data(), request.call_type)
+        await asyncio.to_thread(
+            router.completion,
+            model=request.model,
+            messages=list(request.messages),
+            litellm_call_id=request.call_id,
+            metadata={"user_api_key_auth": team, "user_api_key_team_id": team.team_id},
+            mock_response="a sync sdk call",
+        )
+        await _settled()
+        return outcome
 
-        outcome = await asyncio.create_task(lifecycle(), context=contextvars.Context())
-        transcripts.append([outcome, await _counters(side, scopes)])
-    python, native = transcripts
-    golden.observe(python, native)
-    assert native == python, (native, python)
-    assert python[1][3][3] is not None, python
+    outcome: Final = await asyncio.create_task(lifecycle(), context=contextvars.Context())
+    native: Final = [outcome, await _counters(side, scopes)]
+    golden.check(native)
+    assert native[1][3][3] is not None, native
 
 
 class _AuthSeen(CustomLogger):
@@ -1552,12 +1468,12 @@ async def test_a_saturated_model_hands_an_opted_in_request_to_the_fallback_walk_
         Step(Request(_key("plain"), "sat", "p1")),
         _opted_in("busy", "s2", fallback_on_saturation, walk),
     ]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch, isolated, router, steps, [("model_saturation_check", "sat")], metrics=True
     )
     handed_off: Final = fallback_on_saturation is True and walk[0] == "armed"
-    assert [outcome.raised is None for outcome in python[0][: len(walk)]] == [True] * len(walk), python[0]
-    refused: Final = python[2][0].raised
+    assert [outcome.raised is None for outcome in native[0][: len(walk)]] == [True] * len(walk), native[0]
+    refused: Final = native[2][0].raised
     assert (None if refused is None else (refused[2], refused[3], refused[-1])) == (
         (
             {
@@ -1569,9 +1485,9 @@ async def test_a_saturated_model_hands_an_opted_in_request_to_the_fallback_walk_
         )
         if handed_off
         else None
-    ), python[2]
+    ), native[2]
     warned: Final = isinstance(fallback_on_saturation, str | int) and not isinstance(fallback_on_saturation, bool)
-    assert [line for line in python[2][-1][1] if "router_settings" in line[1]] == (
+    assert [line for line in native[2][-1][1] if "router_settings" in line[1]] == (
         [
             (
                 "WARNING",
@@ -1582,9 +1498,9 @@ async def test_a_saturated_model_hands_an_opted_in_request_to_the_fallback_walk_
         * (1 if handed_off or len(walk) == 1 else 2)
         if warned
         else []
-    ), python[2]
-    assert not [line for line in python[0][-1][1] if "router_settings" in line[1]], python[0]
-    assert python[-1] == (), python[-1]
+    ), native[2]
+    assert not [line for line in native[0][-1][1] if "router_settings" in line[1]], native[0]
+    assert native[-1] == (), native[-1]
 
 
 async def test_a_handed_off_request_takes_no_hold_and_its_replay_is_admitted_like_python(
@@ -1600,17 +1516,17 @@ async def test_a_handed_off_request_takes_no_hold_and_its_replay_is_admitted_lik
         Step(Request(team, "sat", "w0", extra=opted_in), walk=("armed",)),
         Step(Request(team, "sat", "w1", extra=opted_in), walk=("armed", "exhausted"), tokens=(20, 10)),
     ]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
         steps,
         [("model_saturation_check", "sat"), ("model_per_team_saturated", "team-w:sat")],
     )
-    assert python[2][0].raised is not None and python[2][0].raised[-1] == "model_saturation_fallback", python[2]
-    assert python[3][0].raised is not None and python[3][1].raised is None, python[3]
-    assert python[-2][0][3] == 3, python[-2]
-    assert python[-2][3][3] == 30, python[-2]
+    assert native[2][0].raised is not None and native[2][0].raised[-1] == "model_saturation_fallback", native[2]
+    assert native[3][0].raised is not None and native[3][1].raised is None, native[3]
+    assert native[-2][0][3] == 3, native[-2]
+    assert native[-2][3][3] == 30, native[-2]
 
 
 def _capped_team(name: str, team_id: str, limits: Mapping[str, int]) -> UserAPIKeyAuth:
@@ -1634,7 +1550,7 @@ async def test_a_refused_admission_gives_back_its_team_holds_once_like_python(
         Step(Request(capped, "held", "c0", messages=long_prompt), refused=True),
         Step(Request(capped, "held", "c1", messages=long_prompt), tokens=(30, 10)),
     ]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
@@ -1645,7 +1561,7 @@ async def test_a_refused_admission_gives_back_its_team_holds_once_like_python(
             ("model_per_team_max_borrow_multiple", "team-c:held"),
         ],
     )
-    assert [entry[3] for entry in python[-2][1::2]] == [0, 40, 40], python[-2]
+    assert [entry[3] for entry in native[-2][1::2]] == [0, 40, 40], native[-2]
 
 
 async def test_a_failed_attempt_settles_outside_the_rate_limits_service_target_like_python(
@@ -1660,30 +1576,23 @@ async def test_a_failed_attempt_settles_outside_the_rate_limits_service_target_l
         Step(Request(team, "traced", "t1"), tokens=(30, 0), failed=True, partial=(5, 5)),
         Step(Request(team, "traced", "t2"), refused=True),
     ]
-    seen: Final[list[list[str | None]]] = []  # mutable-ok: one trace per side, in order
-    for build in _sides():
-        isolated.current = Clock().current  # rebind-ok: each side starts on the same clock
-        side = build(router, isolated)
-        targets: list[str | None] = []  # mutable-ok: the trace this side records
-        increment = side.limiter.async_increment_reservation_aware_tokens
+    side: Final = NativeSide(router, isolated)
+    targets: Final[list[str | None]] = []  # mutable-ok: the service target of each increment, in order
+    increment: Final = side.limiter.async_increment_reservation_aware_tokens
 
-        async def traced(
-            *args: object,
-            increment: Callable[..., Awaitable[None]] = increment,
-            targets: list[str | None] = targets,  # mutable-ok: the trace this side records
-            **kwargs: object,  # kwargs-ok: the wrapped limiter method's own keywords pass through
-        ) -> None:
-            targets.append(current_service_target())
-            await increment(*args, **kwargs)
+    async def traced(
+        *args: object,
+        **kwargs: object,  # kwargs-ok: the wrapped limiter method's own keywords pass through
+    ) -> None:
+        targets.append(current_service_target())
+        await increment(*args, **kwargs)
 
-        monkeypatch.setattr(side.limiter, "async_increment_reservation_aware_tokens", traced)
-        monkeypatch.setattr(litellm, "callbacks", [side.handler if isinstance(side, PythonSide) else side.logger])
-        for step in steps:
-            await _run_step(side, step)
-        seen.append(targets)
-    golden.observe(seen[0], seen[1])
-    assert seen[1] == seen[0]
-    assert seen[0] == [RATE_LIMITS_TARGET, None, RATE_LIMITS_TARGET], seen
+    monkeypatch.setattr(side.limiter, "async_increment_reservation_aware_tokens", traced)
+    monkeypatch.setattr(litellm, "callbacks", [side.logger])
+    for step in steps:
+        await _run_step(side, step)
+    golden.check(targets)
+    assert targets == [RATE_LIMITS_TARGET, None, RATE_LIMITS_TARGET], targets
 
 
 async def test_a_capped_team_holds_its_cap_on_fallbacks_and_frames_like_python(
@@ -1705,7 +1614,7 @@ async def test_a_capped_team_holds_its_cap_on_fallbacks_and_frames_like_python(
         Step(Request(capped, "primary", "k3", messages=({"role": "user", "content": "word " * 60},))),
         _socket_connection("k", capped, [Turn("sock", (30, 30)) for _ in range(3)]),
     ]
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
@@ -1718,8 +1627,8 @@ async def test_a_capped_team_holds_its_cap_on_fallbacks_and_frames_like_python(
         ],
         metrics=True,
     )
-    assert "Team model_tpm_limit borrow cap reached" in _refusal_prefixes(python), python
-    assert {call[0] for call in python[-1]} >= {"share"}, python[-1]
+    assert "Team model_tpm_limit borrow cap reached" in _refusal_prefixes(native), native
+    assert {call[0] for call in native[-1]} >= {"share"}, native[-1]
 
 
 async def test_a_failing_redis_saturation_read_falls_back_to_this_workers_copy_like_python(
@@ -1739,7 +1648,7 @@ async def test_a_failing_redis_saturation_read_falls_back_to_this_workers_copy_l
         monkeypatch.setattr(side.limiter.rate_limits, "get_from_redis", redis_down)
 
     high: Final = _key("high", metadata={"priority": "high"})
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
@@ -1748,11 +1657,11 @@ async def test_a_failing_redis_saturation_read_falls_back_to_this_workers_copy_l
         prepare,
     )
     assert {
-        line for step in python[:4] for line in step[-1][1]
+        line for step in native[:4] for line in step[-1][1]
     } == {  # comprehension-ok: every log line of the first four steps
         ("WARNING", "Saturation read failed in Redis, using this worker's copy: redis down")
-    }, python
-    assert set(_refusal_prefixes(python)) == {"Priority-based rate limit exceeded"}, python
+    }, native
+    assert set(_refusal_prefixes(native)) == {"Priority-based rate limit exceeded"}, native
 
 
 @pytest.mark.parametrize("model_group", [5, True, "", ["listed"], ("tupled",)])
@@ -1782,11 +1691,10 @@ async def test_saturation_is_read_from_redis_on_every_check_like_python(
     monkeypatch.setattr(litellm, "priority_reservation", {"high": 0.5})
     monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
     router: Final = _router(("shared", None, 4))
-    reads: Final[dict[str, list[tuple[str, str, object]]]] = {}  # mutable-ok: the reads each side records, in order
+    seen: Final[list[tuple[str, str, object]]] = []  # mutable-ok: the reads the native records, in order
 
     def prepare(side: Side) -> None:
         store: Final = side.limiter.rate_limits
-        seen: Final = reads.setdefault(type(side).__name__, [])
         from_redis: Final = store.get_from_redis
         from_memory: Final = store.get
 
@@ -1804,7 +1712,7 @@ async def test_saturation_is_read_from_redis_on_every_check_like_python(
         monkeypatch.setattr(store, "get", memory_first)
 
     high: Final = _key("high", metadata={"priority": "high"})
-    python: Final = await _differential(
+    native: Final = await _differential(
         monkeypatch,
         isolated,
         router,
@@ -1812,12 +1720,9 @@ async def test_saturation_is_read_from_redis_on_every_check_like_python(
         [("model_saturation_check", "shared"), ("priority_model", "shared:high")],
         prepare,
     )
-    golden.observe(reads["PythonSide"], reads["NativeSide"])
-    assert reads["NativeSide"] == reads["PythonSide"], reads
-    assert [read for read in reads["PythonSide"] if read[0] == "redis"] == [
-        ("redis", "model_saturation_check", 60)
-    ] * 3, reads
-    assert _refusal_prefixes(python) == ["Priority-based rate limit exceeded"], python
+    golden.check(seen)
+    assert [read for read in seen if read[0] == "redis"] == [("redis", "model_saturation_check", 60)] * 3, seen
+    assert _refusal_prefixes(native) == ["Priority-based rate limit exceeded"], native
 
 
 @dataclass(frozen=True)
@@ -1856,8 +1761,8 @@ class _Walk:
 
 
 async def _saturation_walk(
-    build: Callable[[Router, Clock], Side], monkeypatch: pytest.MonkeyPatch, isolated: Clock, shape: _Walk | None = None
-) -> list[object]:  # mutable-ok: the side's transcript, in order
+    monkeypatch: pytest.MonkeyPatch, isolated: Clock, shape: _Walk | None = None
+) -> list[object]:  # mutable-ok: the native's transcript, in order
     from starlette.requests import Request as StarletteRequest
 
     from litellm.proxy import proxy_server
@@ -1865,13 +1770,12 @@ async def _saturation_walk(
     from litellm.proxy.common_utils.proxy_rate_limit_error import rate_limit_fallback_from_request_data
 
     walk: Final = shape or _Walk()
-    isolated.current = Clock().current  # rebind-ok: each side starts on the same clock
     router: Final = _router(*walk.groups)
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    side: Final = build(router, isolated)
-    monkeypatch.setattr(litellm, "callbacks", [side.handler if isinstance(side, PythonSide) else side.logger])
+    side: Final = NativeSide(router, isolated)
+    monkeypatch.setattr(litellm, "callbacks", [side.logger])
     proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())  # pyright: ignore[reportArgumentType]  # the proxy builds it from a DualCache too
-    run: Final[list[object]] = []  # mutable-ok: the side's transcript, in order
+    run: Final[list[object]] = []  # mutable-ok: the native's transcript, in order
     for index in range(2):
         plain = Request(_key("plain"), "busy", f"p{index}").data()
         run.append((await proxy_logging.pre_call_hook(_auth(plain), plain, "acompletion"))["model"])
@@ -1925,11 +1829,9 @@ async def test_the_proxy_fallback_walk_takes_the_natives_saturation_handoff_like
     monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
     for name in ("success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
         monkeypatch.setattr(litellm, name, [])
-    python: Final = await _saturation_walk(PythonSide, monkeypatch, isolated)
-    native: Final = await _saturation_walk(NativeSide, monkeypatch, isolated)
-    golden.observe(python, native)
-    assert native == python, (native, python)
-    handoff: Final = python[2]
+    native: Final = await _saturation_walk(monkeypatch, isolated)
+    golden.check(native)
+    handoff: Final = native[2]
     assert isinstance(handoff, tuple)
     assert (*handoff[:4], handoff[-1]) == (
         "ProxyRateLimitError",
@@ -1940,8 +1842,8 @@ async def test_the_proxy_fallback_walk_takes_the_natives_saturation_handoff_like
         },
         {"retry-after": "60", "x-litellm-priority": "gold"},
         "model_saturation_fallback",
-    ), python
-    assert python[3:5] == ["spare", ("spare", ("busy", "model_saturation_fallback", 1))], python
+    ), native
+    assert native[3:5] == ["spare", ("spare", ("busy", "model_saturation_fallback", 1))], native
 
 
 class _SavedRouterSettings:
@@ -1986,34 +1888,28 @@ async def test_the_router_fallback_check_holds_a_fallback_through_the_native_lik
 
     _borrowing(monkeypatch, 0.0)
     capped: Final = _capped_team("capped", "team-f", {"spare": 40})
-    runs: Final[list[list[object]]] = []  # mutable-ok: one transcript per side
-    for build in (PythonSide, NativeSide):
-        isolated.current = Clock().current  # rebind-ok: each side starts on the same clock
-        router = _router(("busy", 1000, None), ("spare", 1000, None))
-        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-        side = build(router, isolated)
-        monkeypatch.setattr(litellm, "callbacks", [side.handler if isinstance(side, PythonSide) else side.logger])
-        proxy_limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
-        check = RouterFallbackRateLimitCheck(limiter=lambda proxy_limiter=proxy_limiter: proxy_limiter)
-        run: list[object] = []  # mutable-ok: this side's transcript, in order
-        for index in range(4):
-            request = Request(capped, "busy", f"f{index}", messages=({"role": "user", "content": "word " * 20},))
-            run.append(await check(model="spare", request_kwargs=request.data(), ctx=RoutingContext(router)))
-        run.append(
-            await _counters(
-                side,
-                [
-                    ("model_saturation_check", "spare"),
-                    ("model_per_team_saturated", "team-f:spare"),
-                    ("model_per_team_max_borrow_multiple", "team-f:spare"),
-                ],
-            )
+    router: Final = _router(("busy", 1000, None), ("spare", 1000, None))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    side: Final = NativeSide(router, isolated)
+    monkeypatch.setattr(litellm, "callbacks", [side.logger])
+    proxy_limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    check: Final = RouterFallbackRateLimitCheck(limiter=lambda: proxy_limiter)
+    native: Final[list[object]] = []  # mutable-ok: the native's transcript, in order
+    for index in range(4):
+        request = Request(capped, "busy", f"f{index}", messages=({"role": "user", "content": "word " * 20},))
+        native.append(await check(model="spare", request_kwargs=request.data(), ctx=RoutingContext(router)))
+    native.append(
+        await _counters(
+            side,
+            [
+                ("model_saturation_check", "spare"),
+                ("model_per_team_saturated", "team-f:spare"),
+                ("model_per_team_max_borrow_multiple", "team-f:spare"),
+            ],
         )
-        runs.append(run)
-    python, native = runs
-    golden.observe(python, native)
-    assert native == python, (native, python)
-    assert False in python[:4] and True in python[:4], python
+    )
+    golden.check(native)
+    assert False in native[:4] and True in native[:4], native
 
 
 _TEAM_SCOPES: Final = (
@@ -2046,12 +1942,10 @@ async def test_a_model_the_walk_leaves_gives_back_its_capped_team_hold_like_pyth
         scopes=_TEAM_SCOPES,
         opted_in=False,
     )
-    python: Final = await _saturation_walk(PythonSide, monkeypatch, isolated, walk)
-    native: Final = await _saturation_walk(NativeSide, monkeypatch, isolated, walk)
-    golden.observe(python, native)
-    assert native == python, (native, python)
-    assert python[2:5] == ["busy", "spare", ("spare", ("busy", "unknown", 1))], python
-    assert _team_tokens(python) == (0.0, 0.0, None, 150), python
+    native: Final = await _saturation_walk(monkeypatch, isolated, walk)
+    golden.check(native)
+    assert native[2:5] == ["busy", "spare", ("spare", ("busy", "unknown", 1))], native
+    assert _team_tokens(native) == (0.0, 0.0, None, 150), native
 
 
 async def test_a_fallback_refused_after_admission_gives_back_its_hold_and_the_replay_holds_once_like_python(
@@ -2069,15 +1963,13 @@ async def test_a_fallback_refused_after_admission_gives_back_its_hold_and_the_re
         refuse=MappingProxyType({"spare": HTTPException(status_code=400, detail="a later hook refused the fallback")}),
         scopes=_TEAM_SCOPES,
     )
-    python: Final = await _saturation_walk(PythonSide, monkeypatch, isolated, walk)
-    native: Final = await _saturation_walk(NativeSide, monkeypatch, isolated, walk)
-    golden.observe(python, native)
-    assert native == python, (native, python)
-    handoff: Final = python[2]
+    native: Final = await _saturation_walk(monkeypatch, isolated, walk)
+    golden.check(native)
+    handoff: Final = native[2]
     assert isinstance(handoff, tuple)
-    assert handoff[-1] == "model_saturation_fallback", python
-    assert python[3:6] == ["spare", "busy", ("busy", None)], python
-    assert _team_tokens(python) == (150, 150, None, 0.0), python
+    assert handoff[-1] == "model_saturation_fallback", native
+    assert native[3:6] == ["spare", "busy", ("busy", None)], native
+    assert _team_tokens(native) == (150, 150, None, 0.0), native
 
 
 async def test_a_released_hold_is_not_refunded_again_by_the_failure_line_like_python(
@@ -2092,28 +1984,21 @@ async def test_a_released_hold_is_not_refunded_again_by_the_failure_line_like_py
         monkeypatch.setattr(litellm, name, [])
     team: Final = _capped_team("capped", "team-w", {"busy": 400})
     scopes: Final = _TEAM_SCOPES[:2]
-    runs: Final[list[list[object]]] = []  # mutable-ok: one transcript per side
-    for build in (PythonSide, NativeSide):
-        isolated.current = Clock().current  # rebind-ok: each side starts on the same clock
-        router = _router(("busy", 1000, 4))
-        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-        side = build(router, isolated)
-        monkeypatch.setattr(litellm, "callbacks", [side.handler if isinstance(side, PythonSide) else side.logger])
-        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())  # pyright: ignore[reportArgumentType]  # the proxy builds it from a DualCache too
-        runs.append(
-            await asyncio.create_task(
-                _release_twice(side, proxy_logging, team, scopes, _release_pre_call_hold), context=contextvars.Context()
-            )
-        )
-    python, native = runs
-    golden.observe(python, native)
-    assert native == python, (native, python)
-    assert [[entry[3] for entry in counters if entry[2] == "tokens"] for counters in python] == [  # pyright: ignore[reportIndexIssue, reportUnknownVariableType, reportAttributeAccessIssue]  # counter rows
+    router: Final = _router(("busy", 1000, 4))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    side: Final = NativeSide(router, isolated)
+    monkeypatch.setattr(litellm, "callbacks", [side.logger])
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())  # pyright: ignore[reportArgumentType]  # the proxy builds it from a DualCache too
+    native: Final = await asyncio.create_task(
+        _release_twice(side, proxy_logging, team, scopes, _release_pre_call_hold), context=contextvars.Context()
+    )
+    golden.check(native)
+    assert [[entry[3] for entry in counters if entry[2] == "tokens"] for counters in native] == [  # pyright: ignore[reportIndexIssue, reportUnknownVariableType, reportAttributeAccessIssue]  # counter rows
         [150, 150],
         [0, 0],
         [0, 0],
         [0, 0],
-    ], python
+    ], native
 
 
 async def _release_twice(
@@ -2140,41 +2025,28 @@ async def _release_twice(
     return seen
 
 
-@pytest.mark.parametrize(
-    ("registered", "released"),
-    [
-        (("python", "python-again"), ["python"]),
-        (("native", "native-again"), ["native"]),
-        (("python", "native"), ["python", "native"]),
-        (("native", "python"), ["python", "native"]),
-    ],
-)
-async def test_the_hold_release_reaches_each_dynamic_limiter_once(
-    monkeypatch: pytest.MonkeyPatch, isolated: Clock, registered: Sequence[str], released: Sequence[str]
+async def test_the_hold_release_reaches_the_dynamic_limiter_once(
+    monkeypatch: pytest.MonkeyPatch, isolated: Clock
 ) -> None:
     from litellm.proxy.common_request_processing import (
         _release_pre_call_hold,  # pyright: ignore[reportPrivateUsage]  # the release under test
     )
 
     router: Final = _router(("busy", 1000, 4))
-    limiters: Final = {"python": PythonSide(router, isolated).handler, "native": NativeSide(router, isolated).logger}
+    limiter: Final = NativeSide(router, isolated).logger
     calls: Final[list[str]] = []  # mutable-ok: the limiters the release reached, in order
-    for name, limiter in limiters.items():
 
-        async def released_by(
-            *_args: object,
-            name: str = name,
-            **_kwargs: object,  # kwargs-ok: the hook's own keywords
-        ) -> None:
-            calls.append(name)
+    async def released_by(
+        *_args: object,
+        **_kwargs: object,  # kwargs-ok: the hook's own keywords
+    ) -> None:
+        calls.append("native")
 
-        monkeypatch.setattr(limiter, "async_post_call_failure_hook", released_by)
+    monkeypatch.setattr(limiter, "async_post_call_failure_hook", released_by)
     for name in ("success_callback", "failure_callback", "_async_success_callback"):
         monkeypatch.setattr(litellm, name, [])
-    monkeypatch.setattr(litellm, "callbacks", [limiters[name.removesuffix("-again")] for name in registered])
-    monkeypatch.setattr(
-        litellm, "_async_failure_callback", [limiters[name.removesuffix("-again")] for name in registered]
-    )
+    monkeypatch.setattr(litellm, "callbacks", [limiter, limiter])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [limiter, limiter])
     data: Final = Request(_key("plain"), "busy", "x0").data()
     await _release_pre_call_hold(
         ProxyLogging(user_api_key_cache=DualCache()),  # pyright: ignore[reportArgumentType]  # the proxy builds it from a DualCache too
@@ -2182,4 +2054,4 @@ async def test_the_hold_release_reaches_each_dynamic_limiter_once(
         ProxyRateLimitError(detail="a later hook's limit", headers={}),
         _auth(data),
     )
-    assert calls == list(released), calls
+    assert calls == ["native"], calls

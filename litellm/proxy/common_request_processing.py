@@ -166,8 +166,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
-from litellm.proxy.hooks.model_capacity_native import is_dynamic_rate_limiter
+from litellm.proxy.hooks.model_capacity_native import NativeDynamicRateLimiter
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
     get_or_create_request_stash,
@@ -2475,16 +2474,11 @@ async def _release_pre_call_hold(
     ``post_call_failure_hook``. The dynamic rate limiter admits through its own inner limiter, so its team-share
     reservation is released alongside the registered limiter's slot and tokens."""
     limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
-    dynamic_limiters: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
-        PROXY_DynamicRateLimitHandlerV3
-    )
     natives: Final = dict.fromkeys(
-        callback
-        for callback in litellm.callbacks
-        if is_dynamic_rate_limiter(callback) and not isinstance(callback, PROXY_DynamicRateLimitHandlerV3)
+        callback for callback in litellm.callbacks if isinstance(callback, NativeDynamicRateLimiter)
     )
-    for holder in (limiter, *dynamic_limiters, *natives):
-        if not (isinstance(holder, PROXY_MaxParallelRequestsHandler_v3) or is_dynamic_rate_limiter(holder)):
+    for holder in (limiter, *natives):
+        if not isinstance(holder, PROXY_MaxParallelRequestsHandler_v3 | NativeDynamicRateLimiter):
             continue
         await holder.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # the limiter hooks take the proxy's bare request dict
             request_data=dict(request_data), original_exception=refusal, user_api_key_dict=user_api_key_dict

@@ -195,10 +195,13 @@ def _call(data: Mapping[str, object], call_type: str) -> CallFacts:
 
 
 class NativeDynamicRateLimitHandler:
-    def __init__(self, internal_usage_cache: DualCache, time_provider: Callable[[], datetime] | None = None) -> None:
-        self.logger: Final[NativeDynamicRateLimiter] = build_native_dynamic_rate_limiter(
-            internal_usage_cache, time_provider=time_provider
-        )
+    def __init__(
+        self,
+        internal_usage_cache: DualCache,
+        time_provider: Callable[[], datetime] | None = None,
+        build: Callable[..., NativeDynamicRateLimiter] = build_native_dynamic_rate_limiter,
+    ) -> None:
+        self.logger: Final[NativeDynamicRateLimiter] = build(internal_usage_cache, time_provider=time_provider)
         self.callbacks: Final[list[object]] = [self.logger]
 
     @property

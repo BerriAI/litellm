@@ -155,16 +155,12 @@ Test scenarios covered:
 5. Default priority value handling
 
 
-### `_PROXY_DynamicRateLimitHandlerV3`
+### Implementation
 
-Main handler class inheriting from `CustomLogger`.
+The limiter is a Rust CustomLoggerV2 callback in `litellm/rust/crates/callbacks-model-capacity`. `litellm/proxy/hooks/model_capacity_native.py` builds it and registers it under the callback name `dynamic_rate_limiter_v3`, in the same place in `litellm.callbacks` and with the same settings as before, so proxy configs do not change.
 
-**Key Methods:**
-- `async_pre_call_hook()` - Main entry point, routes to generous/strict mode
-- `_check_model_saturation()` - Queries Redis for current usage
-- `_handle_generous_mode()` - Enforces model-wide capacity only
-- `_handle_strict_mode()` - Enforces normalized priority limits
-- `_normalize_priority_weights()` - Handles over-allocation
-- `_create_priority_based_descriptors()` - Creates rate limit descriptors
+The Rust side owns the saturation check, priority normalization, class and team shares, admission and token settlement. It runs on the pre-call, post-call success, post-call failure, response headers and attempt ended hooks. The Python side (`CapacityDelegate`) only serves the host data the Rust side asks for: the priority settings, model group limits, the v3 limiter's counters, token estimates, the active team registry and Prometheus metrics.
 
+Admission on one worker runs one request at a time while the counters live in memory, so concurrent requests on that worker see each other's holds. With Redis, the v3 limiter's atomic check and increment keeps admission consistent across workers.
 
+`PROXY_DynamicRateLimitHandlerV3` in `litellm/proxy/hooks/dynamic_rate_limiter_v3.py` names the Rust-backed class (`NativeDynamicRateLimiter`), so `isinstance` checks against it keep working. Build an instance with `native_dynamic_rate_limiter(internal_usage_cache, llm_router)`, which returns the one registered instance.

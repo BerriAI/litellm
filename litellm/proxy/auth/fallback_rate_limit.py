@@ -18,7 +18,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.fallback_budget import (
     _user_api_key_auth_from_request,  # pyright: ignore[reportPrivateUsage]  # shared auth lookup for fallback checks
 )
-from litellm.proxy.hooks.model_capacity_native import is_dynamic_rate_limiter
+from litellm.proxy.hooks.model_capacity_native import NativeDynamicRateLimiter
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # the proxy's limiter type
 )
@@ -44,7 +44,9 @@ class RouterFallbackRateLimitCheck:
         if valid_token is None:
             return True
         try:
-            dynamic_limiter: Final = next((cb for cb in litellm.callbacks if is_dynamic_rate_limiter(cb)), None)
+            dynamic_limiter: Final = next(
+                (cb for cb in litellm.callbacks if isinstance(cb, NativeDynamicRateLimiter)), None
+            )
             if dynamic_limiter is not None and not await dynamic_limiter.async_fallback_target_allowed(
                 valid_token, model, request_kwargs, commit=False
             ):
