@@ -23,7 +23,8 @@ Used by JWT Auth to get the user role from the token, and by
 additional_drop_params to remove nested fields from optional parameters.
 """
 
-from collections.abc import Mapping
+import copy
+from collections.abc import Iterable, Mapping
 from typing import Any, Final, TypeVar
 
 T = TypeVar("T")
@@ -212,8 +213,6 @@ def delete_nested_value(
         >>> delete_nested_value(data, "tools[*].input_examples")
         {"tools": [{"name": "t1"}]}
     """
-    import copy
-
     result: Final = copy.deepcopy(data if isinstance(data, dict) else dict(data))
 
     try:
@@ -230,6 +229,13 @@ def delete_nested_value(
         # Invalid path or parsing error - silently skip
         pass
 
+    return result
+
+
+def delete_nested_values(data: Mapping[str, object], paths: Iterable[str]) -> Mapping[str, object]:
+    result: Final = copy.deepcopy(dict(data))
+    for path in dict.fromkeys(paths):
+        _delete_nested_value_custom(result, _parse_path_segments(path), 0)
     return result
 
 

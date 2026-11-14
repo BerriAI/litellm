@@ -31902,7 +31902,7 @@ export interface components {
             allow_unmanaged_response_ids?: boolean | null;
             /**
              * Allowed Client Side S3 Buckets
-             * @description S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches. Any other bucket is rejected unless client-side credentials are allowed
+             * @description S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches, and the buckets of the s3:// image and file URLs a non-admin key sends. Any other bucket is rejected unless client-side credentials are allowed
              */
             allowed_client_side_s3_buckets?: string[] | null;
             /**
@@ -50870,14 +50870,20 @@ export interface components {
             }[] | null;
             /** Model */
             model: string;
+            parallel_tool_calls?: components["schemas"]["JsonValue"];
             /** Prompt */
             prompt?: string | null;
+            reasoning_effort?: components["schemas"]["JsonValue"];
+            response_format?: components["schemas"]["JsonValue"];
             /** System */
             system?: unknown | null;
+            thinking?: components["schemas"]["JsonValue"];
+            tool_choice?: components["schemas"]["JsonValue"];
             /** Tools */
             tools?: {
                 [key: string]: unknown;
             }[] | null;
+            web_search_options?: components["schemas"]["JsonValue"];
         };
         /** TokenCountResponse */
         TokenCountResponse: {

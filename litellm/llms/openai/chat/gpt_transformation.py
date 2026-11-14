@@ -660,7 +660,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         raw_api_base: Final = litellm_params.get("api_base")
         sanitize: Final = (
             flatten_combinators_and_drop_non_python_regex_patterns
-            if self._targets_openai_hosted_endpoint(provider, raw_api_base if isinstance(raw_api_base, str) else None)
+            if self._targets_openai_hosted_endpoint(
+                provider if isinstance(provider, str) else None,
+                raw_api_base if isinstance(raw_api_base, str) else None,
+            )
             else drop_non_python_regex_patterns
         )
         sanitized: Final = [

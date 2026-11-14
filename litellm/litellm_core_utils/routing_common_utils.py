@@ -401,9 +401,10 @@ def filter_team_based_models(
     litellm_metadata: Final = request_kwargs.get("litellm_metadata") or {}
     request_team_id: Final = get_request_team_id(request_kwargs)
     if request_team_id is None and is_proxy_admin_request(request_kwargs) and isinstance(healthy_deployments, list):
-        requested_model: Final = (
+        requested_model_value: Final = (
             request_kwargs.get("model") or metadata.get("model_group") or litellm_metadata.get("model_group")
         )
+        requested_model: Final = requested_model_value if isinstance(requested_model_value, str) else None
         candidate_deployments: Final = tuple(
             (deployment.get("model_name"), deployment.get("model_info") or {}) for deployment in healthy_deployments
         )

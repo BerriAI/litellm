@@ -79,6 +79,7 @@ class Abort:
     headers: Mapping[str, str] | None = None
     body: JsonValue = None
     patch: Patch | None = None
+    exception: Exception | None = None
 
     def __post_init__(self) -> None:
         _require_outcome_patch(self.patch)
