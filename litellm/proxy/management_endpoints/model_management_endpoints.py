@@ -61,7 +61,7 @@ from litellm.proxy._types import (
     TeamModelDeleteRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
+from litellm.proxy.auth.litellm_license import MISSING_AUTO_ROUTER_LICENSE
 from litellm.proxy.auth.model_checks import (
     GLOBAL_ALIASES_ONLY,
     OtherDeploymentsBill,
@@ -663,7 +663,7 @@ def _raise_on_tuning_quota_violation(
 ) -> None:
     violation: Final = tuning_quota_violation(candidate=candidate, others=others, baselines=baselines, limit=limit)
     if violation is not None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"{violation} {AUTO_ROUTER_LICENSE_REMEDY}")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"{violation} {MISSING_AUTO_ROUTER_LICENSE}")
 
 
 async def _claimed_capability_violation(
@@ -820,7 +820,7 @@ async def _auto_router_capability_slot(
                 )
             ) is not None:
                 raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN, detail=f"{violation} {AUTO_ROUTER_LICENSE_REMEDY}"
+                    status_code=status.HTTP_403_FORBIDDEN, detail=f"{violation} {MISSING_AUTO_ROUTER_LICENSE}"
                 )
         if checks_license and judges_tuning and baselines is not None:
             model_rows: Final = await ModelRepository(_TransactionClient(tx_ctx)).find_all_except(model_id or "")

@@ -53,6 +53,7 @@ litellm-inference-ocr.workspace = true
 litellm-core-utils.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
+litellm-license.workspace = true
 litellm-secrets = { workspace = true, features = ["aws", "azure", "google", "hashicorp", "cyberark"] }
 litellm-secrets-types.workspace = true
 litellm-llms-types.workspace = true

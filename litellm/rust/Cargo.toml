@@ -84,6 +84,7 @@ litellm-redis-types = { path = "crates/redis-types" }
 litellm-cost = { path = "crates/cost" }
 litellm-model-catalog = { path = "crates/model-catalog" }
 litellm-model-catalog-refresh = { path = "crates/model-catalog-refresh" }
+litellm-license = { path = "crates/license" }
 
 arc-swap = "1.9.2"
 async-trait = "0.1.91"

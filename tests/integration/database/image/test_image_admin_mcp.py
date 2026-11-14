@@ -22,9 +22,11 @@ from typing import Final
 import httpx2
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi import HTTPException
 from litellm_admin_mcp.server import create_http_app
 from litellm.proxy import proxy_server
+from litellm.proxy.auth.litellm_license import LicenseCheck, LicenseVerifier
 
 module_name: Final = {
     "unified": "litellm.proxy.proxy_server",
@@ -41,7 +43,10 @@ if sys.argv[1] == "base":
         padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
         hashes.SHA256(),
     )
-    proxy_server._license_check.public_key = private_key.public_key()
+    public_key_pem: Final = private_key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+    proxy_server._license_check = LicenseCheck(
+        LicenseVerifier(timeout_seconds=5, public_key_pem=public_key_pem.decode())
+    )
     proxy_server._license_check.license_str = base64.b64encode(message + b"." + signature).decode()
 
 async def verify_admin_tools(client: httpx2.AsyncClient) -> None:

@@ -84,6 +84,7 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMUserGroup,
     SCIMUserName,
 )
+from tests._support.license import enterprise_entitlements
 
 _SYNC_GROUP_ROSTER: Final = "litellm.proxy.management_endpoints.scim.scim_v2._sync_group_roster"
 
@@ -4545,7 +4546,7 @@ async def test_group_push_creates_its_new_members_only_when_they_all_fit_the_lic
     from litellm.proxy.auth.litellm_license import LicenseCheck
 
     license_check: Final = LicenseCheck()
-    license_check.airgapped_license_data = {"max_users": 3}
+    license_check.entitlements = enterprise_entitlements(max_users=3)
     mocker.patch("litellm.proxy.proxy_server._license_check", license_check)
 
     async def count(where: Mapping[str, object] | None = None) -> int:

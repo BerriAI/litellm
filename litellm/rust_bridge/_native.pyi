@@ -1,6 +1,6 @@
 from asyncio import Future
 from collections.abc import Callable, Mapping, Sequence
-from typing import Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
+from typing import ClassVar, Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
 
 import httpx
 from pydantic import JsonValue
@@ -23,6 +23,36 @@ def trace_encode_error(message: str) -> bytes: ...
 def bundled_model_cost_map() -> bytes: ...
 def native_redis_breaker_states() -> list[str]: ...
 def unsupported_tls_settings(ssl_security_level: str | None = None, ssl_ecdh_curve: str | None = None) -> list[str]: ...
+_LicenseFeature = Literal["auto_router"]
+
+class _LicenseClaims(TypedDict, total=False):
+    expiration_date: str
+    user_id: str
+    allowed_features: list[str]
+    max_users: int
+    max_teams: int
+
+@final
+class LicenseVerifier:
+    def __new__(
+        cls, *, timeout_seconds: float, public_key_pem: str | None = None, license_server: str | None = None
+    ) -> LicenseVerifier: ...
+    def entitlements(self, license: str | None) -> Entitlements: ...
+
+@final
+class Entitlements:
+    COMMUNITY: ClassVar[Entitlements]
+    @staticmethod
+    def missing_feature_error(feature: _LicenseFeature) -> str: ...
+    def is_enterprise(self) -> bool: ...
+    def grants(self, feature: _LicenseFeature) -> bool: ...
+    @property
+    def license(self) -> _LicenseClaims | None: ...
+    @property
+    def max_users(self) -> int | None: ...
+    def is_over_user_limit(self, users: int) -> bool: ...
+    def is_over_team_limit(self, teams: int) -> bool: ...
+
 @final
 class NativeCostMapSource:
     def __new__(cls, url: str, *, use_http_settings: bool) -> NativeCostMapSource: ...
@@ -749,11 +779,13 @@ def reserve_process_for_forking() -> None: ...
 __all__ = [
     "AtomicApplied",
     "AtomicOverLimit",
+    "Entitlements",
     "ForkedAfterNativeRuntimeStarted",
     "GaugeOverLimit",
     "GaugesAcquired",
     "GuardedReply",
     "HuggingFaceEncoding",
+    "LicenseVerifier",
     "LocalSizes",
     "NativeAdmission",
     "NativeAuthCache",

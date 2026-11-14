@@ -7,6 +7,7 @@ mod diagnostics;
 mod errors;
 mod execution;
 mod http;
+mod license;
 mod logger;
 mod marshal;
 mod model_cost;
@@ -36,6 +37,8 @@ mod _native {
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
     use crate::http::unsupported_tls_settings;
+    #[pymodule_export]
+    use crate::license::{Entitlements, LicenseVerifier};
     #[pymodule_export]
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
@@ -151,6 +154,8 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
+                "Entitlements",
+                "LicenseVerifier",
                 "NativeRedisClient",
                 "NativeRedisBreaker",
                 "NativeAdmission",
