@@ -58,12 +58,14 @@ from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import (
+    REQUEST_HEADERS,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
     bedrock_native_output_is_opt_in,
     bedrock_supports_tool_search,
+    bedrock_user_profile_fields,
     deployment_model_info,
     requests_output_config_format,
 )
@@ -2134,13 +2136,18 @@ class AmazonConverseConfig(BaseConfig):
             for config_name, config_class in self.get_config_blocks().items()
         )
 
+        user_profile_fields: Final[Mapping[str, str]] = (
+            bedrock_user_profile_fields(REQUEST_HEADERS.validate_python(headers or {}))
+            if BedrockModelInfo.get_base_model(model).startswith("anthropic")
+            else types.MappingProxyType({})
+        )
         data: Final[CommonRequestObject] = {
             "inferenceConfig": self._transform_inference_params(inference_params=inference_params),
         }
-        if additional_request_params:
-            data["additionalModelRequestFields"] = additional_request_params
-            if "thinking" in additional_request_params:
-                data["additionalModelResponseFieldPaths"] = ("/usage/output_tokens_details",)
+        if additional_request_params or user_profile_fields:
+            data["additionalModelRequestFields"] = {**additional_request_params, **user_profile_fields}
+        if "thinking" in additional_request_params:
+            data["additionalModelResponseFieldPaths"] = ("/usage/output_tokens_details",)
         if system_content_blocks:
             data["system"] = system_content_blocks
 

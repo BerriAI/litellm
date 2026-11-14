@@ -10,6 +10,7 @@ Bearer/SigV4 auth chain, and the wire request through the public entrypoint.
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -295,6 +296,57 @@ class TestWireRequest:
         assert body["messages"] == [{"role": "user", "content": "ping"}]
         assert "anthropic_version" not in body
         assert "stream" not in body
+
+    @pytest.mark.asyncio
+    @respx.mock
+    @pytest.mark.parametrize(
+        "model", ["bedrock_mantle/anthropic.claude-sonnet-5", "bedrock/mantle/anthropic.claude-sonnet-5"]
+    )
+    async def test_a_proxy_user_profile_id_reaches_mantle_in_the_body(self, model: str) -> None:
+        from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+        proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+        add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id="uprof_01")
+        route: Final = _mantle_messages_route("us-east-1").mock(return_value=_anthropic_response())
+
+        await litellm.anthropic_messages(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=8,
+            api_key="test-bearer",
+            aws_region_name="us-east-1",
+            **proxy_request_data,
+        )
+
+        assert _sent_body(route)["user_profile_id"] == "uprof_01"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    @pytest.mark.parametrize(
+        "extra_headers,expected_fields",
+        [
+            ({"Anthropic-User-Profile-Id": "uprof_sdk"}, {"user_profile_id": "uprof_sdk"}),
+            ({"anthropic-user-profile-id": ""}, {}),
+            ({}, {}),
+        ],
+        ids=["sdk-header-in-any-case", "empty-sdk-header", "no-profile"],
+    )
+    async def test_an_sdk_user_profile_header_becomes_the_mantle_body_field(
+        self, extra_headers: dict[str, str], expected_fields: dict[str, str]
+    ) -> None:
+        route: Final = _mantle_messages_route("us-east-1").mock(return_value=_anthropic_response())
+
+        await litellm.anthropic_messages(
+            model="bedrock_mantle/anthropic.claude-sonnet-5",
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=8,
+            api_key="test-bearer",
+            aws_region_name="us-east-1",
+            extra_headers=extra_headers,
+        )
+
+        body: Final = _sent_body(route)
+        assert {key: body[key] for key in ("user_profile_id",) if key in body} == expected_fields
 
     @pytest.mark.asyncio
     @respx.mock

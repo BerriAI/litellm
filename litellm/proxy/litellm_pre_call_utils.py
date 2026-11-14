@@ -5,7 +5,7 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Iterator, Mapping, MutableMapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import (
@@ -45,7 +45,7 @@ from litellm.constants import (
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
-from litellm.litellm_core_utils.core_helpers import is_codex_user_agent
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, is_codex_user_agent
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
@@ -229,7 +229,7 @@ def sanitize_for_log(value: object) -> str:
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
-from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
+from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS, ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     CAPTURE_MESSAGE_CONTENT_VAR,
@@ -402,6 +402,7 @@ UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS: Final = frozenset(
 )
 _CLIENT_MOCK_CONTROL_FIELDS: Final = frozenset({"mock_response", "mock_tool_calls"})
 _ALLOW_CLIENT_MOCK_RESPONSE_METADATA_KEY: Final = "allow_client_mock_response"
+_ANTHROPIC_USER_PROFILE_ID_METADATA_KEY: Final = "anthropic_user_profile_id"
 _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_message_redaction_opt_out"
 
 # Per-request pricing parameters mutate cost-tracking output and (via
@@ -551,14 +552,26 @@ def _is_false_like(value: object) -> bool:
     return False
 
 
+def _key_then_team_metadata_values(user_api_key_dict: UserAPIKeyAuth, metadata_key: str) -> Iterator[object]:
+    return (
+        (as_str_mapping(source) or {}).get(metadata_key)  # pyright: ignore[reportUnknownArgumentType]  # bare dict field
+        for source in (user_api_key_dict.metadata, user_api_key_dict.team_metadata)  # pyright: ignore[reportUnknownVariableType]  # bare dict field
+    )
+
+
 def _key_or_team_metadata_flag_is_true(
     user_api_key_dict: UserAPIKeyAuth,
     metadata_key: str,
 ) -> bool:
-    for admin_metadata in (user_api_key_dict.metadata, user_api_key_dict.team_metadata):
-        if isinstance(admin_metadata, dict) and admin_metadata.get(metadata_key) is True:
-            return True
-    return False
+    return any(value is True for value in _key_then_team_metadata_values(user_api_key_dict, metadata_key))
+
+
+def _anthropic_user_profile_id(user_api_key_dict: UserAPIKeyAuth, headers: Mapping[str, str]) -> str | None:
+    admin_mapped: Final = _key_then_team_metadata_values(user_api_key_dict, _ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
+    return next(
+        (value for value in admin_mapped if isinstance(value, str) and value),
+        headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER),
+    )
 
 
 def _key_or_team_allows_client_mock_response(
@@ -2357,7 +2370,7 @@ async def add_litellm_data_to_request(
 
     ## Forward any LLM API Provider specific headers in extra_headers
     data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
-        data=data, headers=_headers
+        data=data, headers=_headers, user_profile_id=_anthropic_user_profile_id(user_api_key_dict, _headers)
     )
 
     ## Cache Controls
@@ -4046,12 +4059,22 @@ _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
         LlmProviders.VERTEX_AI.value,
     )
 )
+_ANTHROPIC_USER_PROFILE_ID_PROVIDERS: Final = ",".join(
+    (
+        LlmProviders.ANTHROPIC.value,
+        LlmProviders.AZURE_AI.value,
+        LlmProviders.BEDROCK.value,
+        LlmProviders.BEDROCK_MANTLE.value,
+        LlmProviders.VERTEX_AI.value,
+    )
+)
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
 
 
 def add_provider_specific_headers_to_request(
     data: dict,
     headers: Mapping[str, str],
+    user_profile_id: str | None = None,
 ) -> bool:
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
 
@@ -4071,6 +4094,10 @@ def add_provider_specific_headers_to_request(
         ProviderSpecificHeader(custom_llm_provider=providers, extra_headers=extra_headers)
         for providers, extra_headers in (
             (_ANTHROPIC_API_HEADER_PROVIDERS, anthropic_api_headers),
+            (
+                _ANTHROPIC_USER_PROFILE_ID_PROVIDERS,
+                {ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id else {},
+            ),
             (_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS, anthropic_oauth_credential_headers),
             (LlmProviders.TYPESAFE.value, typesafe_danger_zone_headers),
         )
