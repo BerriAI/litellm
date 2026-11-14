@@ -1306,6 +1306,73 @@ def test_lite_logout_revokes_the_cli_refresh_token_sent_the_way_the_cli_sends_it
         assert completion.status_code == 200, completion.text
 
 
+def _preselected_teams(page: str) -> list[str]:
+    return re.findall(r'<option value="([^"]*)" selected>', page)
+
+
+def test_lite_login_team_hint_preselects_that_team_on_the_consent_page(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        first_team: Final = scenario.team()
+        hinted_alias: Final = f"hinted-{uuid.uuid4().hex}"
+        hinted_team: Final = scenario.team(team_alias=hinted_alias)
+        outsider_alias: Final = f"outsider-{uuid.uuid4().hex}"
+        scenario.team(team_alias=outsider_alias)
+        member: Final = scenario.member(first_team)
+        gateway.post("/team/member_add", {"team_id": hinted_team, "member": {"role": "user", "user_id": member}})
+        client_id: Final = _registered_dcr_client(gateway)
+        pkce: Final = _Pkce(secrets.token_urlsafe(64))
+        cookies: Final = _ui_session_cookie(scenario, member)
+
+        def consent(hint: Mapping[str, str]) -> httpx.Response:
+            page: Final = gateway.client.get(
+                "/authorize",
+                params={
+                    "response_type": "code",
+                    "client_id": client_id,
+                    "redirect_uri": CLIENT_REDIRECT,
+                    "state": "lite-login-team-hint",
+                    "code_challenge": pkce.challenge,
+                    "code_challenge_method": "S256",
+                    "resource": _base(gateway),
+                    **hint,
+                },
+                cookies=cookies,
+            )
+            assert page.status_code == 200, page.text
+            assert set(re.findall(r'<option value="([^"]*)"', page.text)) == {first_team, hinted_team}, page.text
+            return page
+
+        unhinted: Final = consent({})
+        assert _preselected_teams(unhinted.text) == [], unhinted.text
+        for unmatched in ("no-such-team", outsider_alias):
+            page = consent({"team": unmatched})
+            assert _preselected_teams(page.text) == [], page.text
+            assert unmatched not in page.text, page.text
+        by_id: Final = consent({"team": hinted_team})
+        assert _preselected_teams(by_id.text) == [hinted_team], by_id.text
+        by_alias: Final = consent({"team": hinted_alias})
+        assert _preselected_teams(by_alias.text) == [hinted_team], by_alias.text
+        approved: Final = gateway.client.post(
+            "/authorize/complete",
+            data={**_consent_form_fields(by_alias.text), "team_id": hinted_team, "decision": "approve"},
+            cookies={**cookies, **dict(by_alias.cookies)},
+        )
+        assert approved.status_code == 303, approved.text
+        issued: Final = gateway.client.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": parse_qs(urlsplit(approved.headers["location"]).query)["code"][0],
+                "redirect_uri": CLIENT_REDIRECT,
+                "client_id": client_id,
+                "code_verifier": pkce.verifier,
+                "resource": _base(gateway),
+            },
+        )
+        assert issued.status_code == 200, issued.text
+        assert _response_object(issued)["team_id"] == hinted_team, issued.text
+
+
 def _toolset_rpc(
     gateway: Gateway,
     bearer: str,

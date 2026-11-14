@@ -325,6 +325,12 @@ def test_authorize_url_carries_every_oauth_parameter_and_the_proxy_resource():
     }
 
 
+@pytest.mark.parametrize(("team", "sent"), [("Team A", ["Team A"]), (None, None), ("", None)])
+def test_authorize_url_names_the_team_only_when_one_was_requested(team, sent):
+    url = authorize_url(CONTRACT, "llm_dcrc_abc", "http://127.0.0.1:5/callback", "state-1", "challenge-1", team)
+    assert parse_qs(urlparse(url).query, keep_blank_values=True).get("team") == sent
+
+
 def test_redeem_code_posts_the_verifier_and_binds_the_credential_to_the_contract():
     http = _FakeHttp({("POST", f"{BASE}/token"): _FakeResponse(200, TOKEN_JSON)})
     credential = redeem_code(
@@ -533,6 +539,25 @@ def test_run_pkce_login_reports_a_denied_sign_in_without_touching_the_token_endp
     )
     assert result == PkceFailure("sign-in was not approved (access_denied): nope")
     assert [call[1] for call in http.calls] == [DISCOVERY_URL, f"{BASE}/register"]
+
+
+def test_run_pkce_login_sends_the_requested_team_to_the_authorize_page():
+    seen = {}
+    http = _FakeHttp(
+        {
+            ("GET", DISCOVERY_URL): _FakeResponse(200, CONTRACT_DOC),
+            ("POST", f"{BASE}/register"): _FakeResponse(201, {"client_id": "llm_dcrc_abc"}),
+        }
+    )
+    run_pkce_login(
+        BASE,
+        http,
+        open_browser=_blocking_browser(seen, "error=access_denied"),
+        echo=lambda _: None,
+        timeout_seconds=10,
+        team="Team A",
+    )
+    assert seen["authorize"]["team"] == ["Team A"]
 
 
 def test_run_pkce_login_stops_before_the_browser_when_registration_fails():

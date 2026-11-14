@@ -12,6 +12,7 @@ def render_native_client_consent_page(
     teams: Sequence[tuple[str, str]],
     flow_handle: str,
     complete_url: str,
+    selected_team_id: str | None = None,
 ) -> str:
     """The consent page a native client's sign-in lands on: who is signed in, which
     loopback client asked, which team the credential is attributed to, and an explicit
@@ -62,7 +63,7 @@ button {{ flex: 1; padding: 10px; border-radius: 6px; font-size: 15px; cursor: p
 <p>Approving issues it a personal credential that expires within {CLI_JWT_EXPIRATION_HOURS} hours. <code>lite logout</code> stops it from being renewed. Only approve if you started this sign-in yourself.</p>
 <form method="post" action="{escape(complete_url)}">
 <input type="hidden" name="flow" value="{escape(flow_handle)}">
-{team_select_field(teams)}
+{team_select_field(teams, selected_team_id=selected_team_id)}
 <div class="actions">
 <button type="submit" name="decision" value="deny" class="deny">Deny</button>
 <button type="submit" name="decision" value="approve" class="approve">Approve</button>
@@ -74,7 +75,9 @@ button {{ flex: 1; padding: 10px; border-radius: 6px; font-size: 15px; cursor: p
 """
 
 
-def team_select_field(teams: Sequence[tuple[str, str]], *, require_choice: bool = False) -> str:
+def team_select_field(
+    teams: Sequence[tuple[str, str]], *, require_choice: bool = False, selected_team_id: str | None = None
+) -> str:
     if not teams:
         return ""
     if len(teams) == 1:
@@ -85,7 +88,9 @@ def team_select_field(teams: Sequence[tuple[str, str]], *, require_choice: bool 
         )
     placeholder: Final = '<option value="" disabled selected>Choose a team</option>' if require_choice else ""
     options: Final = "".join(
-        f'<option value="{escape(team_id)}">{escape(team_label)}</option>' for team_id, team_label in teams
+        f'<option value="{escape(team_id)}"{" selected" if team_id == selected_team_id else ""}>'
+        f"{escape(team_label)}</option>"
+        for team_id, team_label in teams
     )
     required: Final = " required" if require_choice else ""
     return (

@@ -767,6 +767,17 @@ def aggregate_authorize(
     return response
 
 
+def _hinted_team_id(teams: tuple[ConsentTeam, ...], team_hint: str | None) -> str | None:
+    """The team a native client asked to preselect: an exact team_id wins, else an alias only one team has."""
+    if not team_hint:
+        return None
+    by_id: Final = tuple(team.team_id for team in teams if team.team_id == team_hint)
+    by_alias: Final = tuple(team.team_id for team in teams if team.team_alias == team_hint)
+    if by_id:
+        return by_id[0]
+    return by_alias[0] if len(by_alias) == 1 else None
+
+
 async def native_client_authorize(
     request: Request,
     client_id: str,
@@ -777,6 +788,7 @@ async def native_client_authorize(
     response_type: str | None,
     session_user_id: str | None,
     lookup_consent_teams: LookupConsentTeams,
+    team_hint: str | None = None,
 ) -> Response:
     """The authorize verb for a native client that named the proxy API itself as its
     RFC 8707 ``resource``: the same client, redirect, PKCE, and sign-in checks as the
@@ -814,6 +826,7 @@ async def native_client_authorize(
         teams=tuple((team.team_id, team.team_alias or team.team_id) for team in teams),
         flow_handle=handle,
         complete_url=f"{base_url}/authorize/complete",
+        selected_team_id=_hinted_team_id(teams, team_hint),
     )
     response: Final = HTMLResponse(page, headers=_CONSENT_PAGE_HEADERS)
     _set_flow_cookie(response, request, handle, flow)

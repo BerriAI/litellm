@@ -3,7 +3,10 @@ from __future__ import annotations
 import base64
 import json
 import re
+import os
 import secrets
+import subprocess
+import sys
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -30,7 +33,7 @@ from tests.integration._support.client import (
     string_value,
 )
 from tests.integration._support.database import read_rows
-from tests.integration._support.process import OwnedProxy, group_members, owned_proxy_process
+from tests.integration._support.process import OwnedProxy, group_members, owned_proxy_process, stop_child
 from tests.integration._support.provider import SharedProvider
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
@@ -705,3 +708,53 @@ def test_cli_session_token_is_denied_once_its_team_budget_is_exhausted(
         assert f"Team={team}" in message, refused.text
         assert "Current cost:" in message and f"Max budget: {budget}" in message, refused.text
         assert provider.received() == ()
+
+
+def test_lite_login_with_a_team_env_var_skips_the_terminal_team_pick(
+    one_worker: OneWorkerProxy, tmp_path: Path
+) -> None:
+    proxy: Final = one_worker.owned.gateway
+    subject: Final = f"cli-sso-team-hint-{uuid.uuid4().hex[:12]}"
+    with proxy.scenario() as scenario:
+        first_team: Final = scenario.team()
+        hinted_alias: Final = f"hinted-{uuid.uuid4().hex}"
+        hinted_team: Final = scenario.team(team_alias=hinted_alias)
+        scenario.user(user_id=subject, user_email=f"{subject}@example.com", user_role="internal_user")
+        for team in (first_team, hinted_team):
+            added = proxy.request(
+                "POST", "/team/member_add", {"team_id": team, "member": {"user_id": subject, "role": "user"}}
+            )
+            assert added.status_code == 200, added.text
+        output: Final = tmp_path / "lite-login.out"
+        with output.open("w") as sink:
+            lite_login: Final = subprocess.Popen(
+                [sys.executable, "-P", "-c", "from litellm.proxy.client.cli import cli; cli()", "login"],
+                env={
+                    **os.environ,
+                    "HOME": str(tmp_path),
+                    "BROWSER": "true",
+                    "PYTHONUNBUFFERED": "1",
+                    "LITELLM_PROXY_URL": _proxy_url(proxy),
+                    "LITELLM_PROXY_TEAM": hinted_alias,
+                },
+                stdin=subprocess.DEVNULL,
+                stdout=sink,
+                stderr=subprocess.STDOUT,
+            )
+        try:
+            started: Final = eventually(
+                lambda: re.search(r"Verification code: (\S+).*\nSession ID: (\S+)", output.read_text()),
+                lambda match: match is not None or lite_login.poll() is not None,
+                seconds=60,
+            )
+            assert started is not None, output.read_text()
+            with _browser() as browser:
+                _sign_in(
+                    proxy, one_worker.idp, browser, CliSession(started.group(2), "", started.group(1)), subject=subject
+                )
+            eventually(lite_login.poll, lambda code: code is not None, seconds=60)
+        finally:
+            stop_child(lite_login)
+        printed: Final = output.read_text()
+        assert f"Successfully generated JWT for team: {hinted_team}" in printed, printed
+        assert "Select a team by entering the index number" not in printed, printed

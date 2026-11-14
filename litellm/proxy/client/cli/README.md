@@ -518,6 +518,20 @@ The token minted by `lite login` is a short-lived, per-session agent credential,
 
 The credential is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); run `lite login` again to refresh it, which also re-reads your latest team and user settings. It does not appear in the Keys UI and cannot be rotated or revoked mid-session. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it without asking the proxy for its first 24 hours, or `LITELLM_CLI_JWT_EXPIRATION_HOURS` if you set it on the client. After that, `print-token` and `lite whoami` ask the proxy whether it still accepts the token, and `print-token` fails once the proxy rejects it. There is no silent renewal, so a long-running session needs a fresh `lite login` each time the proxy's token lifetime runs out. If the proxy's tokens last less than 24 hours, set the same `LITELLM_CLI_JWT_EXPIRATION_HOURS` on the client so `print-token` stops printing the token once it runs out. `lite up` still starts a new login once the token is older than that same client window. It copies the token into Claude Code's settings as a static key that it never renews, so a fresh login gives Claude Code the proxy's full token lifetime instead of whatever an old token has left. `lite claude`, `lite codex`, `lite opencode`, and `lite pi` work with it on a default deployment; `EXPERIMENTAL_UI_LOGIN` is not required. `lite login --pkce` is the exception to the re-login: it signs in through your system browser with OAuth authorization code and PKCE and stores a refresh token next to the key, so every `lite` command and `lite auth print-token` renew the key on their own shortly before it expires (with `--config-claude`, Claude Code runs `lite auth print-token` itself, so its key renews too), `lite whoami` shows when the current key expires, and `lite logout` revokes the refresh token on the proxy (it needs a proxy that serves `/.well-known/litellm-cli-auth`; see [Browser sign-in with PKCE](https://docs.litellm.ai/docs/proxy/cli_sso#browser-sign-in-with-pkce)). When a renewal is refused, for example after a `lite logout` run from another copy of the credential, the command prints why on stderr and, once the key has run out, tells you to run `lite login --pkce` again. Only the holder can end a `--pkce` session early, with `lite logout`; an admin has no button for it, but every renewal re-reads the user on the proxy, so deactivating the user or removing them from the team makes the next renewal fail and the key runs out within `LITELLM_CLI_JWT_EXPIRATION_HOURS`. On a proxy with more than one worker or replica, configure Redis (`litellm_settings.cache` with Redis `cache_params`, or `general_settings.coordination_redis`) so a refresh token stays single-use and `lite logout` holds on every worker; without Redis each worker keeps its own record. If you need a long-lived, rotatable key that shows up in the Keys UI, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY` instead.
 
+#### Choosing the team at login
+
+When you belong to more than one team, `lite login` asks which team the credential is for, in the terminal for the default flow and on the browser consent page for `--pkce`. Name the team up front to skip the question:
+
+```bash
+lite login --team my-team-id-or-alias
+# or once in your shell profile
+export LITELLM_PROXY_TEAM=my-team-id-or-alias
+export LITELLM_PROXY_LOGIN_PKCE=true
+lite login
+```
+
+The value is compared exactly, including case, first against your team ids and then against your team aliases. An alias only counts when exactly one of your teams has it. With a match, the default flow signs in to that team without prompting, and the `--pkce` consent page opens with that team already chosen, so you still review it and click Approve. Without a match, including a team you are not a member of, you pick the team the same way as without the option. `--team` overrides `LITELLM_PROXY_TEAM`. For PKCE, `--pkce` / `--no-pkce` overrides `LITELLM_PROXY_LOGIN_PKCE`, which overrides `lite config set pkce`.
+
 ### Route Every Claude Code Session Through the Proxy
 
 `lite claude` wraps a single invocation, but `lite up` goes further: it patches `~/.claude/settings.json`, Claude Code's own config file, so that every Claude Code session started afterward -- from any terminal, launched normally with just `claude`, no wrapper needed -- routes through your LiteLLM proxy. It sets `env.ANTHROPIC_BASE_URL` to the proxy URL, `env.ENABLE_TOOL_SEARCH` to `true` and `env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` to `1` when those keys are missing, writes the key it resolved (your fresh `lite login`, or an explicit `--api-key`) into `env.ANTHROPIC_AUTH_TOKEN` as a static token, drops any stray `ANTHROPIC_API_KEY` or `apiKeyHelper` so nothing fights that token, and leaves every other setting in the file untouched. It backs up the original file before patching it. Nothing here writes an `apiKeyHelper`: Claude Code would spawn `lite` (and its keychain check) on every credential refresh, so the key is copied in instead and `lite up` restores the file when it stops.
@@ -709,6 +723,8 @@ The CLI respects the following environment variables:
 
 - `LITELLM_PROXY_URL`: Base URL of the proxy server
 - `LITELLM_PROXY_API_KEY`: API key for authentication
+- `LITELLM_PROXY_TEAM`: Team id or alias `lite login` signs in to, same as `lite login --team`
+- `LITELLM_PROXY_LOGIN_PKCE`: Set to `true` or `false` to make `lite login` use, or not use, the PKCE browser sign-in, same as `--pkce` / `--no-pkce`
 
 `LITELLM_PROXY_URL` takes precedence over a `base_url` stored via `lite config set`, and the `--base-url` option overrides both. See the Configuration section for the full precedence order.
 

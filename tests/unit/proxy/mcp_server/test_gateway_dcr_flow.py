@@ -1907,6 +1907,51 @@ async def test_native_authorize_renders_consent_page_and_sets_flow_cookie():
     assert handle not in body.replace(f'value="{handle}"', "")
 
 
+HINT_TEAMS = (
+    ConsentTeam(team_id="team-c", team_alias="team-a"),
+    ConsentTeam(team_id="team-a", team_alias="Team A"),
+    ConsentTeam(team_id="team-b", team_alias="Shared"),
+    ConsentTeam(team_id="team-d", team_alias="Shared"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_hint", "preselected"),
+    [
+        ("team-b", ["team-b"]),
+        ("Team A", ["team-a"]),
+        ("team-a", ["team-a"]),
+        ("Shared", []),
+        ("team a", []),
+        ("team-not-mine", []),
+        ("", []),
+        (None, []),
+    ],
+)
+async def test_native_authorize_preselects_the_hinted_team_only_when_it_names_one_of_the_users_teams(
+    team_hint, preselected
+):
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    hinted = await _native_authorize(client_id, lookup=_ConsentTeams(HINT_TEAMS), team_hint=team_hint)
+    assert hinted.status_code == 200
+    body = hinted.body.decode()
+    assert re.findall(r'<option value="([^"]*)" selected>', body) == preselected
+    assert re.findall(r'<option value="([^"]*)"', body) == ["team-c", "team-a", "team-b", "team-d"]
+    if not preselected:
+        unhinted = await _native_authorize(client_id, lookup=_ConsentTeams(HINT_TEAMS))
+        handles = [re.search(r'name="flow" value="([^"]+)"', page).group(1) for page in (body, unhinted.body.decode())]
+        assert body.replace(handles[0], "") == unhinted.body.decode().replace(handles[1], "")
+
+
+@pytest.mark.asyncio
+async def test_native_authorize_never_writes_the_team_hint_into_the_consent_page():
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    response = await _native_authorize(client_id, team_hint='"><script>alert(1)</script>')
+    assert response.status_code == 200
+    assert "script>alert" not in response.body.decode()
+
+
 @pytest.mark.asyncio
 async def test_native_authorize_without_session_redirects_to_login_before_any_lookup():
     client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]

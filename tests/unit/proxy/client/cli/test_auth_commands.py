@@ -927,6 +927,53 @@ class TestCLIKeyRegenerationFlow:
 
             mock_show_commands.assert_called_once()
 
+    @pytest.mark.parametrize(
+        ("args", "env", "polled_team", "prompted"),
+        [
+            (["--team", "team-beta"], {}, "team-beta", False),
+            (["--team", "Alpha Team"], {}, "team-alpha", False),
+            (["--team", "team-alpha"], {}, "team-alpha", False),
+            ([], {"LITELLM_PROXY_TEAM": "Alpha Team"}, "team-alpha", False),
+            (["--team", "team-beta"], {"LITELLM_PROXY_TEAM": "Alpha Team"}, "team-beta", False),
+            (["--team", "Shared"], {}, "team-gamma", True),
+            (["--team", "alpha team"], {}, "team-gamma", True),
+            (["--team", "team-not-mine"], {}, "team-gamma", True),
+            ([], {}, "team-gamma", True),
+        ],
+    )
+    def test_login_skips_the_team_prompt_only_when_the_requested_team_names_one_of_the_users_teams(
+        self, args, env, polled_team, prompted
+    ):
+        team_pick = Mock(status_code=200)
+        team_pick.json.return_value = {
+            "status": "ready",
+            "requires_team_selection": True,
+            "user_id": "test-user-456",
+            "team_details": [
+                {"team_id": "team-delta", "team_alias": "team-alpha"},
+                {"team_id": "team-alpha", "team_alias": "Alpha Team"},
+                {"team_id": "team-beta", "team_alias": "Shared"},
+                {"team_id": "team-gamma", "team_alias": "Shared"},
+            ],
+        }
+        issued = Mock(status_code=200)
+        issued.json.return_value = {"status": "ready", "key": "sk-jwt", "user_id": "test-user-456"}
+        with (
+            patch("webbrowser.open"),
+            patch("requests.post", return_value=_mock_cli_sso_start_response(login_id="cli-session-uuid-456")),
+            patch("requests.get", side_effect=[team_pick, issued]) as mock_get,
+            patch("litellm.proxy.client.cli.commands.auth.save_cli_token"),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+            patch("click.prompt", return_value="4") as prompt,
+        ):
+            result = self.runner.invoke(login, args, obj={"base_url": "https://test.example.com"}, env=env)
+
+        assert "Login successful!" in result.output, result.output
+        assert mock_get.call_args_list[1].args[0].endswith(f"?team_id={polled_team}"), result.output
+        assert prompt.call_count == (1 if prompted else 0)
+        requested = "--team" in args or bool(env)
+        assert ("was not found among your teams" in result.output) is (prompted and requested), result.output
+
     def test_login_without_teams_flow(self):
         """Test complete login flow when user has no teams - JWT generated without team"""
         mock_context = Mock()
@@ -1920,6 +1967,56 @@ class TestPkceLoginCommand:
 
         assert ("Login successful!" in result.output) is uses_pkce
         assert ("Authentication failed: classic sso flow" in result.output) is (not uses_pkce)
+
+    @pytest.mark.parametrize(
+        ("saved", "args", "env", "uses_pkce"),
+        [
+            (None, [], "true", True),
+            ("false", [], "true", True),
+            ("true", [], "false", False),
+            (None, ["--no-pkce"], "true", False),
+            (None, ["--pkce"], "false", True),
+        ],
+    )
+    def test_login_pkce_env_var_sits_between_the_flag_and_the_saved_setting(self, saved, args, env, uses_pkce):
+        from litellm.proxy.client.cli.commands.config import save_config
+
+        if saved is not None:
+            save_config({"pkce": saved})
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch(
+                "litellm.proxy.client.cli.commands.auth._start_cli_sso_flow",
+                side_effect=RuntimeError("classic sso flow"),
+            ),
+            patch("litellm.proxy.client.cli.commands.auth.save_token", return_value=SecretStored()),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            result = self.runner.invoke(
+                login, args, obj={"base_url": PKCE_BASE_URL}, env={"LITELLM_PROXY_LOGIN_PKCE": env}
+            )
+
+        assert ("Login successful!" in result.output) is uses_pkce
+        assert ("Authentication failed: classic sso flow" in result.output) is (not uses_pkce)
+
+    @pytest.mark.parametrize(
+        ("args", "env", "team"),
+        [
+            (["--pkce", "--team", "Team A"], {}, "Team A"),
+            (["--pkce"], {"LITELLM_PROXY_TEAM": "team-b"}, "team-b"),
+            (["--pkce"], {}, None),
+        ],
+    )
+    def test_pkce_login_hands_the_requested_team_to_the_browser_flow(self, args, env, team):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()) as run,
+            patch("litellm.proxy.client.cli.commands.auth.save_token", return_value=SecretStored()),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            result = self.runner.invoke(login, args, obj={"base_url": PKCE_BASE_URL}, env=env)
+
+        assert "Login successful!" in result.output, result.output
+        assert run.call_args.kwargs["team"] == team
 
     def test_pkce_login_saves_the_refreshable_record_and_skips_the_sso_poll(self):
         with (
