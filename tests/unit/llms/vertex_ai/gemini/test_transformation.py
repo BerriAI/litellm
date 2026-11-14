@@ -485,3 +485,67 @@ def test_image_only_user_content_logs_the_blank_text_fixup_at_debug(caplog: pyte
     fixups: Final = tuple(r for r in caplog.records if "No text in user content" in r.getMessage())
     assert tuple(r.levelno for r in fixups) == (logging.DEBUG,)
     assert contents[0]["parts"][-1] == {"text": " "}
+
+
+_LOOKUP_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "lookup",
+        "parameters": {
+            "oneOf": [
+                {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+                {"type": "object", "properties": {"b": {"type": "string"}}, "required": ["b"]},
+            ]
+        },
+    },
+}
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    },
+}
+
+
+def _declarations(tool_choice: str, extra_body: dict[str, object] | None) -> list[dict[str, object]]:
+    optional_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": [_LOOKUP_TOOL, _WEATHER_TOOL], "tool_choice": tool_choice},
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+    body: Final = transformation.transform_request_body(
+        messages=[{"role": "user", "content": "Find the record named Atlas"}],
+        model="gemini-2.5-flash",
+        optional_params={**optional_params, **({} if extra_body is None else {"extra_body": extra_body})},
+        custom_llm_provider="gemini",
+        litellm_params={},
+        cached_content=None,
+    )
+    return body["tools"][0]["function_declarations"]
+
+
+@pytest.mark.parametrize(
+    ("extra_body", "forced"),
+    [
+        ({"toolConfig": {"functionCallingConfig": {"mode": "ANY"}}}, True),
+        ({"tool_config": {"function_calling_config": {"mode": "VALIDATED"}}}, True),
+        ({"toolConfig": {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": ["lookup"]}}}, True),
+        ({"toolConfig": {"functionCallingConfig": {"mode": "ANY", "allowed_function_names": ["weather"]}}}, False),
+        ({"toolConfig": {"functionCallingConfig": {"mode": "AUTO"}}}, False),
+        ({"toolConfig": {"retrievalConfig": {"languageCode": "en"}}}, False),
+        (None, False),
+    ],
+    ids=["any", "validated-snake-case", "any-named-union-tool", "any-named-other-tool", "auto", "no-mode", "none"],
+)
+def test_a_tool_call_forced_through_extra_body_keeps_a_bare_root_union_tool_as_tool_choice_does(
+    extra_body: dict[str, object] | None, forced: bool
+) -> None:
+    lookup, weather = _declarations("auto", extra_body)
+    forced_lookup, forced_weather = _declarations("required", None)
+    free_lookup, _ = _declarations("auto", None)
+
+    assert "parameters" in forced_lookup and "parametersJsonSchema" in free_lookup
+    assert lookup == (forced_lookup if forced else free_lookup)
+    assert weather == forced_weather

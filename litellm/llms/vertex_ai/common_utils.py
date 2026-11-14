@@ -40,7 +40,12 @@ from litellm.types.llms.vertex_ai import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
-from litellm.utils import supports_response_schema, supports_system_messages
+from litellm.utils import (
+    remove_additional_properties,
+    remove_strict_from_schema,
+    supports_response_schema,
+    supports_system_messages,
+)
 
 if TYPE_CHECKING:
     from litellm.llms.anthropic.count_tokens.transformation import AnthropicCountFields
@@ -976,6 +981,51 @@ def has_bare_root_union(json_schema: Mapping[str, JsonValue]) -> bool:
     defs: Final = json_schema.get("$defs")
     chain: Final = _root_ref_chain(json_schema, defs if isinstance(defs, dict) else {})
     return any(map(_is_union, chain)) and not any("properties" in schema for schema in chain)
+
+
+def _forces(function_calling_config: JsonValue, name: JsonValue) -> bool:
+    match function_calling_config:
+        case {"mode": "ANY" | "VALIDATED", "allowed_function_names": [*names]} | {
+            "mode": "ANY" | "VALIDATED",
+            "allowedFunctionNames": [*names],
+        }:
+            return name in names
+        case {"mode": "ANY" | "VALIDATED"}:
+            return True
+        case _:
+            return False
+
+
+def _vertex_parameters(json_schema: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    stripped: Final = remove_strict_from_schema(remove_additional_properties(deepcopy(dict(json_schema))))
+    return _JSON_SCHEMA.validate_python(build_vertex_schema(stripped))
+
+
+def _declaration_for(declaration: JsonValue, function_calling_config: JsonValue) -> JsonValue:
+    if not isinstance(declaration, dict):
+        return declaration
+    json_schema: Final = declaration.get("parametersJsonSchema")
+    if not isinstance(json_schema, dict) or not has_bare_root_union(json_schema):
+        return declaration
+    if not _forces(function_calling_config, declaration.get("name")):
+        return declaration
+    kept: Final = {key: value for key, value in declaration.items() if key != "parametersJsonSchema"}
+    return {**kept, "parameters": dict(_vertex_parameters(json_schema))}
+
+
+def _tool_for(tool: JsonValue, function_calling_config: JsonValue) -> JsonValue:
+    declarations: Final = tool.get("function_declarations") if isinstance(tool, dict) else None
+    if not isinstance(tool, dict) or not isinstance(declarations, list):
+        return tool
+    return {**tool, "function_declarations": [_declaration_for(item, function_calling_config) for item in declarations]}
+
+
+def with_forced_bare_root_unions_on_parameters(tools: JsonValue, tool_config: JsonValue) -> JsonValue:
+    match tool_config:
+        case {"functionCallingConfig": function_calling_config} | {"function_calling_config": function_calling_config}:
+            return [_tool_for(tool, function_calling_config) for tool in tools] if isinstance(tools, list) else tools
+        case _:
+            return tools
 
 
 def parameters_json_schema_for(parameters: Mapping[str, object]) -> Mapping[str, JsonValue] | None:
