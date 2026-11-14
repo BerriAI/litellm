@@ -664,6 +664,8 @@ def test_renaming_a_subpath_endpoint_moves_both_routes_keeps_stored_fields_and_n
             "guardrails": None,
             "is_from_config": False,
             "methods": ["POST"],
+            "display_name": None,
+            "show_in_model_hub": False,
         }
         assert created == expected, created
         assert _readback(candidate, endpoint_id) == [expected]
