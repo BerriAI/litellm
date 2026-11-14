@@ -82,6 +82,8 @@ NOVA_INVOKE_STREAM_EVENT_TYPES: Final = (
     "metadata",
 )
 NOVA_INVOKE_STREAM_EVENT_PAYLOAD: Final = TypeAdapter(dict[str, object])
+# what llama's invoke-with-response-stream reports in stop_reason once it is done
+_LLAMA_STOP_REASONS: Final = frozenset({"stop", "stop_sequence", "end_turn"})
 
 
 class AmazonCohereChatConfig:
@@ -795,6 +797,7 @@ class AWSEventStreamDecoder:
         text = ""
         is_finished = False
         finish_reason = ""
+        usage = None
         if "outputText" in chunk_data:
             text = chunk_data["outputText"]
         # ai21 mapping
@@ -827,6 +830,19 @@ class AWSEventStreamDecoder:
         # meta mapping
         elif "generation" in chunk_data:
             text = chunk_data["generation"]  # bedrock.meta
+            # llama reports running totals on every event, not deltas - take them as they are
+            prompt_tokens: Final = chunk_data.get("prompt_token_count")
+            completion_tokens: Final = chunk_data.get("generation_token_count")
+            if prompt_tokens is not None and completion_tokens is not None:
+                usage = Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                )
+            stop_reason = chunk_data.get("stop_reason")
+            if stop_reason is not None:
+                is_finished = True
+                finish_reason = "stop" if stop_reason in _LLAMA_STOP_REASONS else "length"
         # cohere mapping
         elif "text" in chunk_data:
             text = chunk_data["text"]  # bedrock.cohere
@@ -841,7 +857,7 @@ class AWSEventStreamDecoder:
             text=text,
             is_finished=is_finished,
             finish_reason=finish_reason,
-            usage=None,
+            usage=usage,
             index=0,
             tool_use=None,
         )

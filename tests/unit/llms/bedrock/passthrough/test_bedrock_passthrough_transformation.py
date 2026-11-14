@@ -907,6 +907,46 @@ def test_stream_collector_logs_nothing_for_an_unrecognized_endpoint():
     assert collector.build_logged_response(_converse_stream_logging_obj()) is None
 
 
+LLAMA_MODEL = "meta.llama3-1-8b-instruct-v1:0"
+LLAMA_STREAM_ENDPOINT = f"/model/{LLAMA_MODEL}/invoke-with-response-stream"
+LLAMA_CHUNKS = [
+    {"generation": "Hello", "prompt_token_count": 25, "generation_token_count": 1, "stop_reason": None},
+    {"generation": " world", "prompt_token_count": 25, "generation_token_count": 2, "stop_reason": "stop"},
+]
+
+
+def _llama_stream() -> bytes:
+    return b"".join(_invoke_chunk(chunk) for chunk in LLAMA_CHUNKS) + _event_frame("end", {})
+
+
+@pytest.mark.parametrize("chunk_size", [1, 16384])
+def test_llama_stream_collector_keeps_provider_usage(chunk_size: int):
+    collector = BedrockPassthroughConfig().create_stream_collector(
+        model=LLAMA_MODEL, custom_llm_provider="bedrock", endpoint=LLAMA_STREAM_ENDPOINT
+    )
+    _feed(collector, _llama_stream(), chunk_size=chunk_size)
+    logging_obj = _stream_logging_obj(LLAMA_STREAM_ENDPOINT)
+    logging_obj.model = f"bedrock/{LLAMA_MODEL}"
+    logging_obj.model_call_details["input"] = {"prompt": "hello there", "max_gen_len": 10}
+
+    response = collector.build_logged_response(logging_obj)
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "Hello world"
+    assert response.choices[0].finish_reason == "stop"
+    # llama sends running totals on every event, so these must not be summed up to 50 / 3
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (25, 2)
+    assert response.usage.total_tokens == 27
+
+
+def test_llama_stop_reason_maps_to_a_finish_reason():
+    decoder = BedrockPassthroughConfig()._get_event_stream_decoder(model=LLAMA_MODEL, endpoint=LLAMA_STREAM_ENDPOINT)
+
+    truncated = decoder.chunk_parser({**LLAMA_CHUNKS[1], "stop_reason": "length"})
+    assert truncated["is_finished"] is True
+    assert truncated["finish_reason"] == "length"
+
+
 TIERED_MODEL: Final = "amazon.nova-pro-v1:0"
 TIERED_INVOKE_ENDPOINT: Final = f"/model/{TIERED_MODEL}/invoke"
 TIERED_INVOKE_STREAM_ENDPOINT: Final = f"/model/{TIERED_MODEL}/invoke-with-response-stream"
