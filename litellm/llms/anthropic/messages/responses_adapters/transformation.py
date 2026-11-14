@@ -27,7 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
 )
-from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_parts
+from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.native.utils import (
     refusal_stop_details,
     responses_output_refusal_text,
@@ -63,6 +63,22 @@ from litellm.types.llms.openai import (
 REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
 RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _responses_tool_result_part(block: object) -> str | None:
+    match block:
+        case {"type": "tool_reference", "tool_name": str(tool_name)}:
+            return f"[Loaded tool: {tool_name}]"
+        case {"type": "tool_reference"}:
+            return "[Loaded tool: ]"
+        case _:
+            return tool_result_text_part(block)
+
+
+def _responses_tool_result_text_parts(tool_result: Mapping[str, object]) -> tuple[str, ...]:
+    content: Final = tool_result.get("content")
+    parts: Final = map(_responses_tool_result_part, content if isinstance(content, list) else ())
+    return tuple(part for part in parts if part is not None)
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -392,7 +408,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             elif isinstance(inner, str):
                                 output_text = inner
                             elif isinstance(inner, list):
-                                output_text = "\n".join(tool_result_text_parts(tool_result_block))
+                                output_text = "\n".join(_responses_tool_result_text_parts(tool_result_block))
                                 if covered_image_parts or later_image_parts:
                                     output_text = (
                                         f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
