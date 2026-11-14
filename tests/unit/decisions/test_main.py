@@ -1970,8 +1970,24 @@ def _openai_decisions_route(respx_mock: respx.MockRouter, monkeypatch: pytest.Mo
 @pytest.mark.parametrize(("api", "request_kwargs"), _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
 @pytest.mark.parametrize(
     "extra_headers",
-    (*_MALFORMED_EXTRA_HEADERS, {"X-Foo": 1}, {"X-Foo": "caf\u00e9"}, {"X-Foo": "a\r\nX-Injected: 1"}),
-    ids=(*_MALFORMED_EXTRA_HEADERS_IDS, "non_string_value", "non_ascii_value", "crlf_value"),
+    (
+        *_MALFORMED_EXTRA_HEADERS,
+        {"X-Foo": 1},
+        {"X-Foo": "caf\u00e9"},
+        {"X-Foo": "a\r\nX-Injected: 1"},
+        {"X Foo": "bar"},
+        {"": "bar"},
+        {"X:Foo": "bar"},
+    ),
+    ids=(
+        *_MALFORMED_EXTRA_HEADERS_IDS,
+        "non_string_value",
+        "non_ascii_value",
+        "crlf_value",
+        "space_in_name",
+        "empty_name",
+        "colon_in_name",
+    ),
 )
 async def test_malformed_extra_headers_is_rejected_before_http(
     extra_headers: object,
@@ -2073,8 +2089,9 @@ async def test_malformed_extra_headers_is_dropped_under_drop_params(
         ({"X-Kept": "yes", 1: "x-bad"}, "1"),
         ({"X-Kept": "yes", "X-Bad": "a\r\nX-Injected: 1"}, "x-bad"),
         ({"X-Kept": "yes", "X-Bad": "caf\u00e9"}, "x-bad"),
+        ({"X-Kept": "yes", "X Bad": "v"}, "x bad"),
     ),
-    ids=("non_string_value", "non_string_name", "crlf_value", "non_ascii_value"),
+    ids=("non_string_value", "non_string_name", "crlf_value", "non_ascii_value", "space_in_name"),
 )
 async def test_drop_params_keeps_the_well_formed_extra_headers(
     extra_headers: Mapping[object, object],
@@ -2101,7 +2118,12 @@ async def test_drop_params_keeps_the_well_formed_extra_headers(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("api", "request_kwargs"), _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
-async def test_ascii_bytes_extra_headers_value_is_sent_unchanged(
+@pytest.mark.parametrize(
+    ("value", "sent_value"), ((b"plain", "plain"), (" plain\t", "plain")), ids=("ascii_bytes", "surrounding_whitespace")
+)
+async def test_extra_headers_value_is_sent_as_its_http_field_value(
+    value: object,
+    sent_value: str,
     api: str,
     request_kwargs: Mapping[str, object],
     respx_mock: respx.MockRouter,
@@ -2111,10 +2133,10 @@ async def test_ascii_bytes_extra_headers_value_is_sent_unchanged(
     route: Final = _openai_decisions_route(respx_mock, monkeypatch)
 
     await getattr(litellm, f"a{api}")(
-        model="openai/gpt-6-luna", api_key="caller-key", extra_headers={"X-Foo": b"plain"}, **request_kwargs
+        model="openai/gpt-6-luna", api_key="caller-key", extra_headers={"X-Foo": value}, **request_kwargs
     )
 
-    assert route.calls.last.request.headers["x-foo"] == "plain"
+    assert route.calls.last.request.headers["x-foo"] == sent_value
 
 
 @pytest.mark.asyncio

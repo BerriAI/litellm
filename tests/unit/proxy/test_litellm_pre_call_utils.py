@@ -43,6 +43,7 @@ from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMe
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
+    _add_otel_traceparent_to_data,
     _apply_credential_overrides_from_model_config,
     _extract_credential_from_entry,
     _get_enforced_params,
@@ -7350,6 +7351,32 @@ def _make_request_mock(path: str, headers: dict) -> MagicMock:
     request_mock.client = MagicMock()
     request_mock.client.host = "127.0.0.1"
     return request_mock
+
+
+_TRACEPARENT: Final = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+
+
+@pytest.mark.parametrize(
+    ("extra_headers", "forwarded"),
+    (
+        ("X-Foo: bar", "X-Foo: bar"),
+        (["X-Foo: bar"], ["X-Foo: bar"]),
+        (None, {"traceparent": _TRACEPARENT}),
+        ({"X-Kept": "yes"}, {"X-Kept": "yes", "traceparent": _TRACEPARENT}),
+        ({"traceparent": "caller-set"}, {"traceparent": "caller-set"}),
+    ),
+    ids=("string", "list", "null", "object", "caller_traceparent"),
+)
+def test_traceparent_forwarding_leaves_non_object_extra_headers_for_the_endpoint_to_check(
+    extra_headers: object, forwarded: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "forward_traceparent_to_llm_provider", True)
+    data: Final = {"model": "decider", "extra_headers": extra_headers}
+
+    with patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()):
+        _add_otel_traceparent_to_data(data, request=_make_request_mock("/v1/decisions", {"traceparent": _TRACEPARENT}))
+
+    assert data["extra_headers"] == forwarded
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
 import httpx
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
 from typing_extensions import assert_never
 
@@ -82,12 +82,21 @@ _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
 _IMAGES_ADAPTER: Final[TypeAdapter[tuple[DecisionsImage, ...] | None]] = TypeAdapter(
     tuple[DecisionsImage, ...] | None, config=ConfigDict(title="images")
 )
-_SendableHeaderText: TypeAlias = Annotated[str, Field(pattern=r"^[\t\x20-\x7e]*$")]
+
+
+def _without_surrounding_whitespace(value: str) -> str:
+    return value.strip(" \t")
+
+
+_HeaderName: TypeAlias = Annotated[str, Field(pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")]
+_HeaderValue: TypeAlias = Annotated[
+    str, Field(pattern=r"^[\t\x20-\x7e]*$"), AfterValidator(_without_surrounding_whitespace)
+]
 _EXTRA_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str] | None]] = TypeAdapter(
-    Mapping[_SendableHeaderText, _SendableHeaderText] | None,
+    Mapping[_HeaderName, _HeaderValue] | None,
     config=ConfigDict(title="extra_headers", hide_input_in_errors=True),
 )
-_HEADER_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[_SendableHeaderText, _SendableHeaderText])
+_HEADER_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[_HeaderName, _HeaderValue])
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None]
 ] = TypeAdapter(ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None)

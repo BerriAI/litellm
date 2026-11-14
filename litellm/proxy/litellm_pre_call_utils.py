@@ -4553,8 +4553,8 @@ def _add_otel_traceparent_to_data(data: dict, request: Request):
                 # we want to forward this to the LLM Provider
                 # Relevant issue: https://github.com/BerriAI/litellm/issues/4419
                 # pass this in extra_headers
-                if "extra_headers" not in data:
+                if "extra_headers" not in data or not data["extra_headers"]:
                     data["extra_headers"] = {}
-                _exra_headers: Final = data["extra_headers"]
-                if "traceparent" not in _exra_headers:
-                    _exra_headers["traceparent"] = request.headers["traceparent"]
+                extra_headers: Final[object] = data["extra_headers"]
+                if isinstance(extra_headers, dict) and "traceparent" not in extra_headers:
+                    extra_headers["traceparent"] = request.headers["traceparent"]
