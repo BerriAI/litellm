@@ -2436,6 +2436,7 @@ class ProxyLogging:
         # Replace string entries in litellm.callbacks with initialized instances
         for idx, initialized_callback in string_callbacks_to_replace.items():
             litellm.callbacks[idx] = initialized_callback
+        litellm.logging_callback_manager.place_v2_companions(litellm.callbacks)
 
         # Fan ``litellm.callbacks`` (the "all events" registry) out into the
         # success/failure event lists eagerly, at startup. ``completion()`` does
