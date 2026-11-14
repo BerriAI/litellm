@@ -17,10 +17,12 @@ MASTER_KEY_SETTING: Final = "master_key"
 MASTER_KEY_ENV_VAR: Final = "LITELLM_MASTER_KEY"
 SALT_KEY_ENV_VAR: Final = "LITELLM_SALT_KEY"
 MIGRATE_FROM_MASTER_KEY_ENV_VAR: Final = "LITELLM_MIGRATE_FROM_MASTER_KEY"
+MIGRATE_FROM_SALT_KEY_ENV_VAR: Final = "LITELLM_MIGRATE_FROM_SALT_KEY"
 PUBLICLY_KNOWN_MASTER_KEY_SHA256_DIGESTS: Final = frozenset(
     {"88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"}
 )
 ROTATION_DOCS_URL: Final = "https://docs.litellm.ai/docs/proxy/master_key_rotations#proxy-refuses-to-start"
+SALT_KEY_ROTATION_DOCS_URL: Final = "https://docs.litellm.ai/docs/proxy/master_key_rotations#rotating-the-salt-key"
 _NEW_MASTER_KEY: Final = "sk-$(openssl rand -hex 32)"
 GENERATE_MASTER_KEY_COMMAND: Final = f'echo "{MASTER_KEY_ENV_VAR}={_NEW_MASTER_KEY}" | tee -a .env'
 PRINT_NEW_MASTER_KEY_COMMAND: Final = f'echo "{_NEW_MASTER_KEY}"'

@@ -698,7 +698,7 @@ from litellm.proxy.db.gateway_request_tracking import (
 )
 from litellm.proxy.db.master_key_migration import (
     count_values_encrypted_with_or_none,
-    migrate_if_requested,
+    migrate_stored_values_if_requested,
 )
 from litellm.proxy.db.proxy_worker_heartbeat import (
     PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
@@ -1768,7 +1768,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
 
     database: Final = existing_database or await _own_database(resources, prisma_client)
 
-    await migrate_if_requested(
+    await migrate_stored_values_if_requested(
         environ=os.environ,
         master_key=master_key,
         connected_database=lambda: None if prisma_client is None else prisma_client.writer_db,

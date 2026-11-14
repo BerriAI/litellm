@@ -82,7 +82,7 @@ def missing_keys_form(missing_key_names: str):
                 <pre>
     <span class="comment"># Generate one with: echo "LITELLM_MASTER_KEY=sk-$(openssl rand -hex 32)"</span>
     <span class="env-var">LITELLM_MASTER_KEY=""</span> <span class="comment"># Your master key for the proxy server. Can use this to send /chat/completion requests etc</span>
-    <span class="env-var">LITELLM_SALT_KEY="sk-XXXXXXXX"</span> <span class="comment"># Can NOT CHANGE THIS ONCE SET - It is used to encrypt/decrypt credentials stored in DB. If value of 'LITELLM_SALT_KEY' changes your models cannot be retrieved from DB</span>
+    <span class="env-var">LITELLM_SALT_KEY="sk-XXXXXXXX"</span> <span class="comment"># Encrypts/decrypts credentials stored in DB. To change it, also set LITELLM_MIGRATE_FROM_SALT_KEY to the old value, or your models cannot be retrieved from DB</span>
     <span class="env-var">DATABASE_URL="postgres://..."</span> <span class="comment"># Need a postgres database? (Check out Supabase, Neon, etc)</span>
     <span class="comment">## OPTIONAL ##</span>
     <span class="env-var">PORT=4000</span> <span class="comment"># DO THIS FOR RENDER/RAILWAY</span>

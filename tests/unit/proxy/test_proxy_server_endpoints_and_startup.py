@@ -1764,6 +1764,7 @@ def _boot_with_general_settings(monkeypatch, tmp_path, general_settings):
         "LITELLM_MASTER_KEY",
         "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY",
         "LITELLM_MIGRATE_FROM_MASTER_KEY",
+        "LITELLM_MIGRATE_FROM_SALT_KEY",
         "LITELLM_SALT_KEY",
         "WORKER_CONFIG",
         "DATABASE_URL",
@@ -1942,6 +1943,31 @@ async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatc
             pass
 
     notices = [record.getMessage() for record in caplog.records if "LITELLM_MIGRATE_FROM_MASTER_KEY" in record.message]
+    assert len(notices) == 1
+    assert "Could not migrate stored values" in notices[0]
+    assert prisma.disconnect_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_stops_when_the_requested_salt_key_migration_fails(monkeypatch, tmp_path, caplog):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    prisma: Final = _PrismaClientWhoseDatabaseRejectsQueries()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-the-new-salt-key")
+    monkeypatch.setenv("LITELLM_MIGRATE_FROM_SALT_KEY", "sk-the-leaked-salt-key")
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+        pytest.raises(RuntimeError, match="permission denied"),
+    ):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    notices = [record.getMessage() for record in caplog.records if "LITELLM_MIGRATE_FROM_SALT_KEY" in record.message]
     assert len(notices) == 1
     assert "Could not migrate stored values" in notices[0]
     assert prisma.disconnect_calls == 1

@@ -8,7 +8,11 @@ from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.proxy.auth.master_key_boot_check import MIGRATE_FROM_MASTER_KEY_ENV_VAR, SALT_KEY_ENV_VAR
+from litellm.proxy.auth.master_key_boot_check import (
+    MIGRATE_FROM_MASTER_KEY_ENV_VAR,
+    MIGRATE_FROM_SALT_KEY_ENV_VAR,
+    SALT_KEY_ENV_VAR,
+)
 from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
 from litellm.proxy.db.create_views import SupportsRawQueries
@@ -164,6 +168,7 @@ def _as_sql_parameter(value: JsonValue, secret_column: _SecretColumn) -> str:
 
 class NothingToMigrate(Enum):
     SALT_KEY_ENCRYPTS_STORED_VALUES = "salt_key_encrypts_stored_values"
+    SALT_KEY_NOT_SET = "salt_key_not_set"
     NO_DATABASE = "no_database"
     NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY = "nothing_encrypted_with_previous_key"
 
@@ -182,6 +187,39 @@ class MigrationFailed:
 MigrationOutcome = NothingToMigrate | Migrated | MigrationFailed
 
 
+@dataclass(frozen=True, slots=True)
+class KeyRotation:
+    previous_key_variable: str
+    key_name: str
+
+
+MASTER_KEY_ROTATION: Final = KeyRotation(previous_key_variable=MIGRATE_FROM_MASTER_KEY_ENV_VAR, key_name="master key")
+SALT_KEY_ROTATION: Final = KeyRotation(previous_key_variable=MIGRATE_FROM_SALT_KEY_ENV_VAR, key_name="salt key")
+
+
+async def migrate_stored_values_if_requested(
+    *,
+    environ: Mapping[str, str],
+    master_key: str | None,
+    connected_database: Callable[[], SupportsRawQueries | None],
+    log: Callable[[str], None],
+    raise_unless_tolerated: Callable[[Exception], None],
+) -> None:
+    await migrate_if_requested(
+        environ=environ,
+        master_key=master_key,
+        connected_database=connected_database,
+        log=log,
+        raise_unless_tolerated=raise_unless_tolerated,
+    )
+    await migrate_salt_key_if_requested(
+        environ=environ,
+        connected_database=connected_database,
+        log=log,
+        raise_unless_tolerated=raise_unless_tolerated,
+    )
+
+
 async def migrate_if_requested(
     *,
     environ: Mapping[str, str],
@@ -193,13 +231,42 @@ async def migrate_if_requested(
     previous_master_key: Final = environ.get(MIGRATE_FROM_MASTER_KEY_ENV_VAR)
     if previous_master_key is None or master_key is None:
         return None
-    outcome: Final = await migrate_from_previous_master_key(
-        previous_master_key=previous_master_key,
-        master_key=master_key,
-        salt_key_is_set=SALT_KEY_ENV_VAR in environ,
-        database=connected_database(),
-        log=log,
+    return _raised_unless_tolerated(
+        await migrate_from_previous_master_key(
+            previous_master_key=previous_master_key,
+            master_key=master_key,
+            salt_key_is_set=SALT_KEY_ENV_VAR in environ,
+            database=connected_database(),
+            log=log,
+        ),
+        raise_unless_tolerated,
     )
+
+
+async def migrate_salt_key_if_requested(
+    *,
+    environ: Mapping[str, str],
+    connected_database: Callable[[], SupportsRawQueries | None],
+    log: Callable[[str], None],
+    raise_unless_tolerated: Callable[[Exception], None],
+) -> MigrationOutcome | None:
+    previous_salt_key: Final = environ.get(MIGRATE_FROM_SALT_KEY_ENV_VAR)
+    if previous_salt_key is None:
+        return None
+    return _raised_unless_tolerated(
+        await migrate_from_previous_salt_key(
+            previous_salt_key=previous_salt_key,
+            salt_key=environ.get(SALT_KEY_ENV_VAR),
+            database=connected_database(),
+            log=log,
+        ),
+        raise_unless_tolerated,
+    )
+
+
+def _raised_unless_tolerated(
+    outcome: MigrationOutcome, raise_unless_tolerated: Callable[[Exception], None]
+) -> MigrationOutcome:
     if isinstance(outcome, MigrationFailed):
         raise_unless_tolerated(outcome.error)
     return outcome
@@ -213,97 +280,116 @@ async def migrate_from_previous_master_key(
     database: SupportsRawQueries | None,
     log: Callable[[str], None],
 ) -> MigrationOutcome:
-    outcome: Final = await _migrate_or_failure(
-        previous_master_key=previous_master_key,
-        master_key=master_key,
-        salt_key_is_set=salt_key_is_set,
-        database=database,
-        log=log,
+    outcome: Final = (
+        NothingToMigrate.SALT_KEY_ENCRYPTS_STORED_VALUES
+        if salt_key_is_set
+        else await _migrate_or_failure(
+            MASTER_KEY_ROTATION, previous_key=previous_master_key, key=master_key, database=database, log=log
+        )
     )
-    log(describe_outcome(outcome))
+    log(describe_outcome(outcome, MASTER_KEY_ROTATION))
+    return outcome
+
+
+async def migrate_from_previous_salt_key(
+    *,
+    previous_salt_key: str,
+    salt_key: str | None,
+    database: SupportsRawQueries | None,
+    log: Callable[[str], None],
+) -> MigrationOutcome:
+    outcome: Final = (
+        NothingToMigrate.SALT_KEY_NOT_SET
+        if salt_key is None
+        else await _migrate_or_failure(
+            SALT_KEY_ROTATION, previous_key=previous_salt_key, key=salt_key, database=database, log=log
+        )
+    )
+    log(describe_outcome(outcome, SALT_KEY_ROTATION))
     return outcome
 
 
 async def _migrate_or_failure(
+    rotation: KeyRotation,
     *,
-    previous_master_key: str,
-    master_key: str,
-    salt_key_is_set: bool,
+    previous_key: str,
+    key: str,
     database: SupportsRawQueries | None,
     log: Callable[[str], None],
 ) -> MigrationOutcome:
     try:
-        return await _migrate(
-            previous_master_key=previous_master_key,
-            master_key=master_key,
-            salt_key_is_set=salt_key_is_set,
-            database=database,
-            log=log,
-        )
+        return await _migrate(rotation, previous_key=previous_key, key=key, database=database, log=log)
     except Exception as error:  # noqa: BLE001  # a value, so the boot applies its own database outage rule to it
         return MigrationFailed(error=error)
 
 
 async def _migrate(
+    rotation: KeyRotation,
     *,
-    previous_master_key: str,
-    master_key: str,
-    salt_key_is_set: bool,
+    previous_key: str,
+    key: str,
     database: SupportsRawQueries | None,
     log: Callable[[str], None],
 ) -> MigrationOutcome:
-    if salt_key_is_set:
-        return NothingToMigrate.SALT_KEY_ENCRYPTS_STORED_VALUES
     if database is None:
         return NothingToMigrate.NO_DATABASE
-    if previous_master_key == master_key:
+    if previous_key == key:
         return NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY
-    found: Final = await count_values_encrypted_with(database, previous_master_key)
+    found: Final = await count_values_encrypted_with(database, previous_key)
     if found == 0:
         return NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY
-    log(f"Re-encrypting {found} stored value(s) from the {MIGRATE_FROM_MASTER_KEY_ENV_VAR} key to the new master key.")
+    log(
+        f"Re-encrypting {found} stored value(s) from the {rotation.previous_key_variable} key to the new "
+        f"{rotation.key_name}."
+    )
     migrated: Final = Migrated(
-        migrated=await reencrypt_stored_values(database, from_key=previous_master_key, to_key=master_key),
-        remaining=await count_values_encrypted_with(database, previous_master_key),
+        migrated=await reencrypt_stored_values(database, from_key=previous_key, to_key=key),
+        remaining=await count_values_encrypted_with(database, previous_key),
     )
     another_worker_migrated_everything: Final = migrated == Migrated(migrated=0, remaining=0)
     return NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY if another_worker_migrated_everything else migrated
 
 
-def describe_outcome(outcome: MigrationOutcome) -> str:
+def describe_outcome(outcome: MigrationOutcome, rotation: KeyRotation) -> str:
+    variable: Final = rotation.previous_key_variable
     match outcome:
         case NothingToMigrate.SALT_KEY_ENCRYPTS_STORED_VALUES:
             return (
-                f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR} is set, but {SALT_KEY_ENV_VAR} is what encrypts your stored "
-                f"values, so there is nothing to migrate. You may now delete {MIGRATE_FROM_MASTER_KEY_ENV_VAR}."
+                f"{variable} is set, but {SALT_KEY_ENV_VAR} is what encrypts your stored "
+                f"values, so there is nothing to migrate. You may now delete {variable}."
+            )
+        case NothingToMigrate.SALT_KEY_NOT_SET:
+            return (
+                f"{variable} is set, but {SALT_KEY_ENV_VAR} is not, so nothing was migrated. Set {SALT_KEY_ENV_VAR} "
+                f"to the new salt key, keep {variable} set to the previous one, and restart the proxy."
             )
         case NothingToMigrate.NO_DATABASE:
             return (
-                f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR} is set, but no database is connected, so nothing was migrated. If "
-                f"this proxy has no database, you may now delete {MIGRATE_FROM_MASTER_KEY_ENV_VAR}."
+                f"{variable} is set, but no database is connected, so nothing was migrated. If "
+                f"this proxy has no database, you may now delete {variable}."
             )
         case NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY:
             return (
-                f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR} is still set, but nothing in the database is left to migrate "
-                f"from that key. You may now delete {MIGRATE_FROM_MASTER_KEY_ENV_VAR}."
+                f"{variable} is still set, but nothing in the database is left to migrate "
+                f"from that key. You may now delete {variable}."
             )
         case Migrated(migrated=migrated, remaining=0):
             return (
-                f"Done re-encrypting {migrated} stored value(s) with the new master key. You may now delete the "
-                f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR} environment variable."
+                f"Done re-encrypting {migrated} stored value(s) with the new {rotation.key_name}. You may now delete "
+                f"the {variable} environment variable."
             )
         case Migrated(migrated=migrated, remaining=remaining):
             return (
                 f"Re-encrypted {migrated} stored value(s), but {remaining} are still encrypted with the previous key "
-                f"because they changed during the migration. Keep {MIGRATE_FROM_MASTER_KEY_ENV_VAR} set and restart "
+                f"because they changed during the migration. Keep {variable} set and restart "
                 "the proxy to migrate them."
             )
         case MigrationFailed(error=error):
             cause: Final = f"{type(error).__name__}: {error}"[:300]
             return (
-                f"Could not migrate stored values from the {MIGRATE_FROM_MASTER_KEY_ENV_VAR} key ({cause}). Values "
+                f"Could not migrate stored values from the {variable} key ({cause}). Values "
                 "still encrypted with the previous key cannot be read until the migration succeeds. Keep "
-                f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR} set and restart the proxy once the database is reachable."
+                f"{variable} set and restart the proxy once the database is reachable."
             )
         case _:
             assert_never(outcome)

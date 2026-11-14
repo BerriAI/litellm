@@ -8,7 +8,11 @@ from typing import Final, Literal, TypeVar, cast, overload
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
+from litellm.proxy.auth.master_key_boot_check import (
+    MIGRATE_FROM_SALT_KEY_ENV_VAR,
+    SALT_KEY_ENV_VAR,
+    SALT_KEY_ROTATION_DOCS_URL,
+)
 
 # Versioned ciphertext marker for AES-256-GCM values.
 # Format: "v2:gcm:" + base64url(nonce(12) || ciphertext || tag(16)).
@@ -281,7 +285,12 @@ def decrypt_value_helper(
         # if it's not str - do not decrypt it, return the value
         return value
     except Exception as e:
-        error_message = f"Error decrypting value for key: {key}, Did your master_key/salt key change recently? \nError: {e}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
+        error_message: Final = (
+            f"Error decrypting value for key: {key}, Did your master_key/salt key change recently? \nError: {e}\n"
+            "Set permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key\n"
+            f"To rotate it, set {MIGRATE_FROM_SALT_KEY_ENV_VAR} to the previous salt key and restart - "
+            f"{SALT_KEY_ROTATION_DOCS_URL}"
+        )
         if exception_type == "debug":
             verbose_proxy_logger.debug(error_message)
             return value if return_original_value else None

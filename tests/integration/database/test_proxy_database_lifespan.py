@@ -107,6 +107,7 @@ def test_failed_startup_then_retry_releases_database_resources(tmp_path: Path, m
             "DATABASE_URL_READ_REPLICA",
             "LITELLM_SALT_KEY",
             "LITELLM_MIGRATE_FROM_MASTER_KEY",
+            "LITELLM_MIGRATE_FROM_SALT_KEY",
             "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY",
             "INTEGRATION_UPSTREAM_URL",
         )

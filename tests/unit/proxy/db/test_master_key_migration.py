@@ -8,17 +8,30 @@ from pydantic import JsonValue
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy import proxy_server
-from litellm.proxy.auth.master_key_boot_check import MIGRATE_FROM_MASTER_KEY_ENV_VAR, SALT_KEY_ENV_VAR
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
+from litellm.proxy.auth.master_key_boot_check import (
+    MIGRATE_FROM_MASTER_KEY_ENV_VAR,
+    MIGRATE_FROM_SALT_KEY_ENV_VAR,
+    SALT_KEY_ENV_VAR,
+)
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_if_encrypted_with,
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.db.master_key_migration import (
     _SECRET_COLUMNS,
+    MASTER_KEY_ROTATION,
+    SALT_KEY_ROTATION,
+    KeyRotation,
     Migrated,
     MigrationFailed,
     NothingToMigrate,
     count_values_encrypted_with,
     describe_outcome,
     migrate_from_previous_master_key,
+    migrate_from_previous_salt_key,
     migrate_if_requested,
+    migrate_salt_key_if_requested,
     reencrypt_stored_values,
     replace_ciphertexts,
 )
@@ -348,7 +361,7 @@ async def test_variable_left_set_after_the_migration_is_a_no_op_with_one_notice(
     outcome, logged = await _run(database)
 
     assert outcome is NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY
-    assert logged == [describe_outcome(NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY)]
+    assert logged == [describe_outcome(NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY, MASTER_KEY_ROTATION)]
     assert database.writes == writes_after_the_migration
     assert json.dumps(database.tables) == stored_after_the_migration
 
@@ -393,7 +406,7 @@ async def test_database_is_left_alone_when_the_master_key_cannot_have_encrypted_
     )
 
     assert outcome is expected
-    assert logged == [describe_outcome(expected)]
+    assert logged == [describe_outcome(expected, MASTER_KEY_ROTATION)]
 
 
 class _AnotherWorkerMigratesRightAfterTheFirstCount(_FakeDatabase):
@@ -417,7 +430,7 @@ async def test_worker_that_loses_the_race_reports_nothing_left_instead_of_zero_v
 
     assert outcome is NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY
     assert database.writes == []
-    assert logged[-1] == describe_outcome(NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY)
+    assert logged[-1] == describe_outcome(NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY, MASTER_KEY_ROTATION)
 
 
 @pytest.mark.asyncio
@@ -436,19 +449,34 @@ async def test_values_that_could_not_be_written_keep_the_variable_in_place():
     assert "You may now delete" not in logged[-1]
 
 
-@pytest.mark.parametrize(
-    "outcome", [*NothingToMigrate, Migrated(migrated=5, remaining=0)], ids=lambda outcome: str(outcome)
+_FINISHED_OUTCOMES = (
+    NothingToMigrate.NO_DATABASE,
+    NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY,
+    Migrated(migrated=5, remaining=0),
 )
-def test_every_finished_outcome_tells_the_user_the_variable_can_be_deleted(outcome: NothingToMigrate | Migrated):
-    message = describe_outcome(outcome)
+
+
+@pytest.mark.parametrize(
+    "outcome, rotation",
+    [
+        *((outcome, MASTER_KEY_ROTATION) for outcome in _FINISHED_OUTCOMES),
+        (NothingToMigrate.SALT_KEY_ENCRYPTS_STORED_VALUES, MASTER_KEY_ROTATION),
+        *((outcome, SALT_KEY_ROTATION) for outcome in _FINISHED_OUTCOMES),
+    ],
+    ids=str,
+)
+def test_every_finished_outcome_tells_the_user_the_variable_can_be_deleted(
+    outcome: NothingToMigrate | Migrated, rotation: KeyRotation
+):
+    message = describe_outcome(outcome, rotation)
 
     assert "ou may now delete" in message
-    assert MIGRATE_FROM_MASTER_KEY_ENV_VAR in message
+    assert rotation.previous_key_variable in message
 
 
 def test_salt_key_outcome_names_the_salt_key_as_the_reason():
-    assert SALT_KEY_ENV_VAR in describe_outcome(NothingToMigrate.SALT_KEY_ENCRYPTS_STORED_VALUES)
-    assert SALT_KEY_ENV_VAR not in describe_outcome(NothingToMigrate.NO_DATABASE)
+    assert SALT_KEY_ENV_VAR in describe_outcome(NothingToMigrate.SALT_KEY_ENCRYPTS_STORED_VALUES, MASTER_KEY_ROTATION)
+    assert SALT_KEY_ENV_VAR not in describe_outcome(NothingToMigrate.NO_DATABASE, MASTER_KEY_ROTATION)
 
 
 @pytest.mark.asyncio
@@ -609,3 +637,120 @@ async def test_guardrail_params_move_to_the_new_key_and_legacy_plaintext_rows_ar
     assert decrypt_if_encrypted_with(migrated_key.removeprefix("litellm_enc::"), NEW_KEY) == "guardrail-vendor-key"
     assert tables["LiteLLM_GuardrailsTable"][1]["litellm_params"] == legacy_params
     assert database.writes == [("LiteLLM_GuardrailsTable", "litellm_params", "guardrail-1")]
+
+
+@pytest.mark.asyncio
+async def test_boot_moves_stored_values_from_the_previous_salt_key_to_the_one_the_proxy_now_reads_with(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    tables = _seeded_tables()
+    logged: list[str] = []
+
+    outcome = await migrate_salt_key_if_requested(
+        environ={MIGRATE_FROM_SALT_KEY_ENV_VAR: PREVIOUS_KEY, SALT_KEY_ENV_VAR: NEW_KEY},
+        connected_database=lambda: _FakeDatabase(tables),
+        log=logged.append,
+        raise_unless_tolerated=_raise,
+    )
+
+    assert outcome == Migrated(migrated=_VALUES_UNDER_THE_PREVIOUS_KEY, remaining=0)
+    monkeypatch.setenv(SALT_KEY_ENV_VAR, NEW_KEY)
+    model_params = tables["LiteLLM_ProxyModelTable"][0]["litellm_params"]
+    assert isinstance(model_params, dict)
+    assert decrypt_value_helper(model_params["api_key"], key="api_key") == "provider-key"
+    assert decrypt_if_encrypted_with(model_params["api_key"], PREVIOUS_KEY) is None
+    assert (
+        decrypt_if_encrypted_with(tables["LiteLLM_MCPUserCredentials"][0]["credential_b64"], NEW_KEY) == "byok-secret"
+    )
+    other_deployment = tables["LiteLLM_ProxyModelTable"][1]["litellm_params"]
+    assert isinstance(other_deployment, dict)
+    assert decrypt_if_encrypted_with(other_deployment["api_key"], UNRELATED_KEY) == "other-deployment"
+    assert logged[0].startswith(f"Re-encrypting {_VALUES_UNDER_THE_PREVIOUS_KEY} stored value(s) from the ")
+    assert MIGRATE_FROM_SALT_KEY_ENV_VAR in logged[0]
+    assert logged[1] == describe_outcome(outcome, SALT_KEY_ROTATION)
+    assert "with the new salt key" in logged[1]
+    assert f"You may now delete the {MIGRATE_FROM_SALT_KEY_ENV_VAR} environment variable" in logged[1]
+
+
+@pytest.mark.asyncio
+async def test_salt_key_migration_waits_for_the_new_salt_key_instead_of_moving_values_to_the_master_key():
+    logged: list[str] = []
+
+    outcome = await migrate_salt_key_if_requested(
+        environ={MIGRATE_FROM_SALT_KEY_ENV_VAR: PREVIOUS_KEY},
+        connected_database=_DatabaseThatMustNotBeTouched,
+        log=logged.append,
+        raise_unless_tolerated=_raise,
+    )
+
+    assert outcome is NothingToMigrate.SALT_KEY_NOT_SET
+    assert logged == [describe_outcome(NothingToMigrate.SALT_KEY_NOT_SET, SALT_KEY_ROTATION)]
+    assert f"Set {SALT_KEY_ENV_VAR} to the new salt key" in logged[0]
+    assert "ou may now delete" not in logged[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("previous_salt_key", "has_database", "expected"),
+    [
+        (NEW_KEY, True, NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY),
+        (PREVIOUS_KEY, False, NothingToMigrate.NO_DATABASE),
+    ],
+)
+async def test_salt_key_migration_leaves_the_database_alone_when_nothing_can_be_under_the_previous_salt_key(
+    previous_salt_key: str, has_database: bool, expected: NothingToMigrate
+):
+    logged: list[str] = []
+
+    outcome = await migrate_from_previous_salt_key(
+        previous_salt_key=previous_salt_key,
+        salt_key=NEW_KEY,
+        database=_DatabaseThatMustNotBeTouched() if has_database else None,
+        log=logged.append,
+    )
+
+    assert outcome is expected
+    assert logged == [describe_outcome(expected, SALT_KEY_ROTATION)]
+    assert MIGRATE_FROM_SALT_KEY_ENV_VAR in logged[0]
+
+
+@pytest.mark.asyncio
+async def test_salt_key_migration_is_not_attempted_unless_requested():
+    database_handles_taken: list[str] = []
+
+    def connected_database() -> _DatabaseThatMustNotBeTouched:
+        database_handles_taken.append("taken")
+        return _DatabaseThatMustNotBeTouched()
+
+    outcome = await migrate_salt_key_if_requested(
+        environ={SALT_KEY_ENV_VAR: NEW_KEY, MIGRATE_FROM_MASTER_KEY_ENV_VAR: PREVIOUS_KEY},
+        connected_database=connected_database,
+        log=lambda line: pytest.fail(line),
+        raise_unless_tolerated=_raise,
+    )
+
+    assert outcome is None
+    assert database_handles_taken == []
+
+
+@pytest.mark.asyncio
+async def test_boot_stops_on_a_failed_salt_key_migration_unless_the_outage_is_tolerated():
+    logged: list[str] = []
+
+    with pytest.raises(ConnectionError, match="Can't reach database server"):
+        await migrate_salt_key_if_requested(
+            environ={MIGRATE_FROM_SALT_KEY_ENV_VAR: PREVIOUS_KEY, SALT_KEY_ENV_VAR: NEW_KEY},
+            connected_database=lambda: _DatabaseIsDown(_seeded_tables()),
+            log=logged.append,
+            raise_unless_tolerated=_raise,
+        )
+    tolerated = await migrate_salt_key_if_requested(
+        environ={MIGRATE_FROM_SALT_KEY_ENV_VAR: PREVIOUS_KEY, SALT_KEY_ENV_VAR: NEW_KEY},
+        connected_database=lambda: _DatabaseIsDown(_seeded_tables()),
+        log=logged.append,
+        raise_unless_tolerated=_tolerate,
+    )
+
+    assert isinstance(tolerated, MigrationFailed)
+    assert len(logged) == 2
+    assert all(f"Keep {MIGRATE_FROM_SALT_KEY_ENV_VAR} set" in line for line in logged)
