@@ -383,8 +383,9 @@ def test_a_refused_turn_s_failure_row_leaves_the_socket_s_parallel_slot_held_unt
                 await _until(lambda: _deployment_spend(deployment), lambda spent: spent > TURN_SPEND / 2)
                 _assert_refused(await _say(holding, deployment.name))
                 await asyncio.to_thread(_failure_rows, limited, key)
-                with pytest.raises(websockets.exceptions.InvalidStatus):
+                with pytest.raises(websockets.exceptions.InvalidStatus) as refused:
                     await opened_once()
+                assert refused.value.response.status_code == 403, refused.value
 
         def reopened_once_the_slot_frees() -> tuple[tuple[dict[str, JsonValue], ...], int | None]:
             try:
