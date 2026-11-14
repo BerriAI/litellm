@@ -13,6 +13,7 @@ from typing import (
 
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.types.integrations.custom_logger import CHAT_COMPLETION_AGENTIC_SURFACE
 from litellm.types.litellm_params import PROMPT_MANAGEMENT_APPLIED
 from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -313,7 +314,12 @@ class ResponsesToCompletionBridgeHandler:
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
         if kwargs.get("cache") is not None:
             request_data["cache"] = kwargs["cache"]
-        result: Final = await aresponses(**request_data, **PROMPT_MANAGEMENT_APPLIED, aresponses=True)
+        result: Final = await aresponses(
+            **request_data,
+            **PROMPT_MANAGEMENT_APPLIED,
+            aresponses=True,
+            _agentic_loop_api_surface=CHAT_COMPLETION_AGENTIC_SURFACE,
+        )
 
         from litellm.types.utils import ModelResponse
 

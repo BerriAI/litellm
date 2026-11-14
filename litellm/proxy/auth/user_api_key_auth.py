@@ -1086,7 +1086,7 @@ async def _try_team_member_model_budget_fallback(
         try:
             if (
                 litellm.block_requests_for_models_without_pricing
-                and RouteChecks.is_llm_api_route(route=route)
+                and RouteChecks.runs_inference_checks(route=route)
                 and _unpriced_models_in_request(model=served_model, llm_router=llm_router)
             ):
                 continue
@@ -3479,7 +3479,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                 )
 
                 # Check 5. Token Spend is under budget
-                if RouteChecks.is_llm_api_route(route=route):
+                if RouteChecks.runs_inference_checks(route=route):
                     await virtual_key_max_budget_check(
                         valid_token=valid_token,
                         proxy_logging_obj=proxy_logging_obj,

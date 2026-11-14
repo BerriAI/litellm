@@ -148,7 +148,7 @@ Example output format:
 ============================================================
 Starting health check queries
 
----- gpt-4o ----
+---- gpt-6.1-sol ----
 ✅ Success. Response:
 This is a test
 
@@ -175,8 +175,8 @@ When `LITELLM_JSON_OUTPUT=true`, outputs JSON:
 
 ```json
 {
-  "gpt-4o": {
-    "model": "gpt-4o",
+  "gpt-6.1-sol": {
+    "model": "gpt-6.1-sol",
     "healthy": true,
     "error": null,
     "response_time_ms": 245.67,
