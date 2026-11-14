@@ -484,6 +484,14 @@ class LocalSizes:
     @property
     def key_objects(self) -> int: ...
 
+def auth_route_matches_wildcard(route: str, pattern: str) -> bool: ...
+def auth_managed_route(route: str) -> Literal["discovery", "realtime", "live", "model", "tool", "other"]: ...
+def auth_managed_agent_route_allowed(route: str, method: str | None = None) -> bool: ...
+def auth_route_matches_prefix(route: str, allowed_route: str) -> bool: ...
+def auth_route_matches_denied(route: str, denied_route: str) -> bool: ...
+def auth_first_denied_route(forwarded_routes: Sequence[str], denied_routes: Sequence[str]) -> str | None: ...
+def auth_jwt_team_routes_grant(route: str, team_allowed_routes: Sequence[str]) -> bool: ...
+def auth_allowed_routes_grant(route: str, *, key: Sequence[str] | None, team: Sequence[str] | None) -> bool: ...
 @final
 class NativeAuthCache:
     def __new__(
@@ -803,6 +811,14 @@ __all__ = [
     "aocr",
     "aresponses",
     "atranscription",
+    "auth_allowed_routes_grant",
+    "auth_first_denied_route",
+    "auth_jwt_team_routes_grant",
+    "auth_managed_agent_route_allowed",
+    "auth_managed_route",
+    "auth_route_matches_denied",
+    "auth_route_matches_prefix",
+    "auth_route_matches_wildcard",
     "bundled_model_cost_map",
     "completion",
     "embedding",

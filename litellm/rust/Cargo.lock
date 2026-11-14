@@ -3917,6 +3917,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-gateway-auth-core"
+version = "0.1.0"
+dependencies = [
+ "http 1.4.2",
+ "rstest",
+ "strum",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "litellm-gateway-forward"
 version = "0.1.0"
 dependencies = [
@@ -4437,6 +4447,7 @@ dependencies = [
  "criterion",
  "fancy-regex 0.19.2",
  "futures-util",
+ "http 1.4.2",
  "indexmap 2.14.0",
  "litellm-auth",
  "litellm-auth-aws",
@@ -4446,6 +4457,7 @@ dependencies = [
  "litellm-circuit-breaker",
  "litellm-core-utils",
  "litellm-error",
+ "litellm-gateway-auth-core",
  "litellm-host",
  "litellm-host-python",
  "litellm-http",

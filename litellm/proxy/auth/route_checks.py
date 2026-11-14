@@ -1,6 +1,6 @@
 import itertools
 import re
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import Final, cast
 
 from fastapi import HTTPException, Request, status
@@ -17,6 +17,14 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
+)
+from litellm.rust_bridge._native import (
+    auth_allowed_routes_grant,
+    auth_first_denied_route,
+    auth_jwt_team_routes_grant,
+    auth_route_matches_denied,
+    auth_route_matches_prefix,
+    auth_route_matches_wildcard,
 )
 
 from .auth_checks_organization import (  # noqa: F401  # legacy module exports
@@ -109,6 +117,12 @@ _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
 )
 _TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "count-tokens"})
 _TOKEN_COUNTING_ACTION: Final = "countTokens"
+
+
+def _allowed_passthrough_routes(metadata: Mapping[str, object] | None) -> Sequence[str] | None:
+    return cast(  # cast-ok: management endpoints validate this metadata key as a list of route strings on write
+        "Sequence[str] | None", (metadata or {}).get("allowed_passthrough_routes")
+    )
 
 
 class RouteChecks:
@@ -659,58 +673,13 @@ class RouteChecks:
 
     @staticmethod
     def route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
-        """
-        Check if route matches the wildcard pattern
-
-        eg.
-
-        pattern: "/scim/v2/*"
-        route: "/scim/v2/Users"
-        - returns: True
-
-        pattern: "/scim/v2/*"
-        route: "/chat/completions"
-        - returns: False
-
-
-        pattern: "/scim/v2/*"
-        route: "/scim/v2/Users/123"
-        - returns: True
-
-        """
-        if pattern.endswith("*"):
-            # Get the prefix (everything before the wildcard)
-            prefix: Final = pattern[:-1]
-            return route.startswith(prefix)
-        else:
-            # If there's no wildcard, the pattern and route should match exactly
-            return route == pattern
+        """A trailing `*` matches by prefix, anything else exactly."""
+        return auth_route_matches_wildcard(route, pattern)
 
     @staticmethod
     def _route_matches_allowed_route(route: str, allowed_route: str) -> bool:
-        """
-        Check if route matches the allowed_route pattern.
-        Supports both exact match and prefix match.
-
-        Examples:
-        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-6" -> True (exact match)
-        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-6/v1/chat/completions" -> True (prefix match)
-        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-600" -> False (not a valid prefix)
-
-        Args:
-            route: The actual route being accessed
-            allowed_route: The allowed route pattern
-
-        Returns:
-            bool: True if route matches (exact or prefix), False otherwise
-        """
-        # Exact match
-        if route == allowed_route:
-            return True
-        # Prefix match - ensure we add "/" to prevent false matches like /fake-openai-proxy-600
-        if route.startswith(allowed_route + "/"):
-            return True
-        return False
+        """The route itself or anything under it, never a sibling that only shares the prefix."""
+        return auth_route_matches_prefix(route, allowed_route)
 
     @staticmethod
     def check_route_access(route: str, allowed_routes: Collection[str]) -> bool:
@@ -813,12 +782,15 @@ class RouteChecks:
     @staticmethod
     def _route_matches_denied_route(route: str, denied_route: str) -> bool:
         """A `/` entry denies every route, since every route sits under the root."""
-        normalized_denied_route: Final = denied_route.rstrip("/") or "/"
-        return (
-            normalized_denied_route == "/"
-            or RouteChecks._route_matches_allowed_route(route=route, allowed_route=normalized_denied_route)
-            or RouteChecks.route_matches_wildcard_pattern(route=route, pattern=denied_route)
+        return auth_route_matches_denied(route, denied_route)
+
+    @staticmethod
+    def forwarded_pass_through_routes(route: str) -> tuple[str, ...]:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415  # pass-through endpoints import this module
+            InitPassThroughEndpointHelpers,
         )
+
+        return InitPassThroughEndpointHelpers.forwarded_routes(route)
 
     @staticmethod
     def matching_denied_passthrough_route(
@@ -828,7 +800,7 @@ class RouteChecks:
         First ``denied_passthrough_routes`` entry across ``metadata_sources`` that matches ``route``.
         Unlike the allowlist (key list, else team list), every source's deny list applies.
         """
-        denied_routes: Final = tuple(
+        denied_routes: Final = list(
             itertools.chain.from_iterable(
                 cast(  # cast-ok: management endpoints validate this metadata key as a list of route strings on write
                     "list[str]", (metadata or {}).get("denied_passthrough_routes") or []
@@ -838,22 +810,7 @@ class RouteChecks:
         )
         if not denied_routes:
             return None
-        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-            InitPassThroughEndpointHelpers,
-        )
-
-        forwarded_routes: Final = InitPassThroughEndpointHelpers.forwarded_routes(route)
-        return next(
-            (
-                denied_route
-                for denied_route in denied_routes
-                if any(
-                    RouteChecks._route_matches_denied_route(route=candidate, denied_route=denied_route)
-                    for candidate in forwarded_routes
-                )
-            ),
-            None,
-        )
+        return auth_first_denied_route(list(RouteChecks.forwarded_pass_through_routes(route)), denied_routes)
 
     @staticmethod
     def passthrough_route_denied_exception(route: str, denied_route: str) -> HTTPException:
@@ -881,11 +838,7 @@ class RouteChecks:
         a named route group like ``openai_routes`` is only ever compared as a path, and an entry that names
         no path segment (``*``, ``/*``) is skipped.
         """
-        return any(
-            RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route)
-            for allowed_route in team_allowed_routes
-            if allowed_route.rstrip("*").strip("/")
-        )
+        return auth_jwt_team_routes_grant(route, list(team_allowed_routes))
 
     @staticmethod
     def _jwt_team_allowed_routes(valid_token: UserAPIKeyAuth) -> Collection[str]:
@@ -917,32 +870,12 @@ class RouteChecks:
 
     @staticmethod
     def check_passthrough_route_access(route: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
-        """
-        Check if route is a passthrough route.
-        Supports both exact match and prefix match.
-        """
-        metadata: Final = user_api_key_dict.metadata
-        team_metadata: Final = user_api_key_dict.team_metadata or {}
-        if metadata is None and team_metadata is None:
-            return False
-        if "allowed_passthrough_routes" not in metadata and "allowed_passthrough_routes" not in team_metadata:
-            return False
-        if (
-            metadata.get("allowed_passthrough_routes") is None
-            and team_metadata.get("allowed_passthrough_routes") is None
-        ):
-            return False
-
-        allowed_passthrough_routes: Final = (
-            metadata.get("allowed_passthrough_routes") or team_metadata.get("allowed_passthrough_routes") or []
+        """The key's ``allowed_passthrough_routes`` when it lists any, otherwise the team's, matched by prefix."""
+        return auth_allowed_routes_grant(
+            route,
+            key=_allowed_passthrough_routes(user_api_key_dict.metadata),
+            team=_allowed_passthrough_routes(user_api_key_dict.team_metadata),
         )
-
-        # Check if route matches any allowed passthrough route (exact or prefix match)
-        for allowed_route in allowed_passthrough_routes:
-            if RouteChecks._route_matches_allowed_route(route=route, allowed_route=allowed_route):
-                return True
-
-        return False
 
     @staticmethod
     def is_assistants_api_request(request: Request) -> bool:
