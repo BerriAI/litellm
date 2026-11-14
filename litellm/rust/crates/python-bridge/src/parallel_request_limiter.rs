@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex, PoisonError};
+use std::{
+    sync::{Arc, Mutex, PoisonError},
+    task::Poll,
+};
 
 use futures_util::future::BoxFuture;
 use litellm_callbacks::{
@@ -11,9 +14,13 @@ use litellm_callbacks_parallel_request_limiter::{
     Unverifiable, WindowIdentity, input_and_output_tokens, process_monotonic, tokens_for_request,
 };
 use litellm_callbacks_python::RustCallback;
-use litellm_host_python::{Pythonized, from_py, json_from_py, json_loads, run_async_value, to_py};
+use litellm_host_python::{
+    Pythonized, from_py, json_from_py, json_loads, poll_async_value, ready_future, run_async_value,
+    to_py,
+};
 use litellm_redis_store::{Number, rate_limits::Scope};
 use pyo3::{
+    IntoPyObjectExt,
     exceptions::PyValueError,
     prelude::*,
     types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString},
@@ -46,6 +53,38 @@ where
         py,
         crate::logger::capture(py).instrument(Box::pin(call.scope(operation))),
     )
+}
+
+fn limiter_admission<'py, T, F>(
+    py: Python<'py>,
+    in_memory: bool,
+    operation: F,
+) -> PyResult<Bound<'py, PyAny>>
+where
+    T: for<'a> IntoPyObject<'a> + Send + 'static,
+    F: Future<Output = PyResult<T>> + Send + 'static,
+{
+    if !in_memory {
+        return limiter_async(py, operation);
+    }
+    let target = py
+        .import("litellm.redis.stores.rate_limits.types")?
+        .getattr("RATE_LIMITS_TARGET")?;
+    let call = targeted_call(py, &target, "eval")?;
+    let mut future =
+        Box::pin(crate::logger::capture(py).instrument(Box::pin(call.scope(operation))));
+    match poll_async_value(py, future.as_mut()) {
+        Ok(Poll::Ready(value)) => ready_future(py, &value.into_bound_py_any(py)?),
+        Ok(Poll::Pending) => run_async_value(py, future),
+        Err(error) => {
+            let failed = py
+                .import("asyncio")?
+                .call_method0("get_running_loop")?
+                .call_method0("create_future")?;
+            failed.call_method1("set_exception", (error.into_value(py),))?;
+            Ok(failed)
+        }
+    }
 }
 
 fn named<T: serde::de::DeserializeOwned>(name: &str) -> PyResult<T> {
@@ -513,7 +552,8 @@ impl NativeParallelRequestLimiter {
         let policy: PolicyFacts = decoded(py, policy)?;
         let request = request.map(|request| request.0.clone());
         let limiter = Arc::clone(&self.limiter);
-        limiter_async(py, async move {
+        let in_memory = !limiter.engine().has_redis();
+        limiter_admission(py, in_memory, async move {
             let ctx = Ctx {
                 policy: policy.into(),
                 request: request.as_ref(),
@@ -546,7 +586,8 @@ impl NativeParallelRequestLimiter {
         let policy: PolicyFacts = decoded(py, policy)?;
         let request = request.map(|request| request.0.clone());
         let limiter = Arc::clone(&self.limiter);
-        limiter_async(py, async move {
+        let in_memory = !limiter.engine().has_redis();
+        limiter_admission(py, in_memory, async move {
             let ctx = Ctx {
                 policy: policy.into(),
                 request: request.as_ref(),
@@ -573,7 +614,8 @@ impl NativeParallelRequestLimiter {
                 .collect(),
         };
         let limiter = Arc::clone(&self.limiter);
-        limiter_async(py, async move {
+        let in_memory = !limiter.engine().has_redis();
+        limiter_admission(py, in_memory, async move {
             limiter.engine().release_slots(&acquisition).await;
             Ok(())
         })

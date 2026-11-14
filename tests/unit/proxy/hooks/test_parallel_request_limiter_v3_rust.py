@@ -4706,6 +4706,62 @@ async def test_atomic_check_with_zero_increment_still_enforces_token_limit():
 
 
 @pytest.mark.asyncio
+async def test_in_memory_checks_and_increments_finish_before_another_concurrent_caller_runs():
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    descriptor = RateLimitDescriptor(
+        key="api_key",
+        value="in-memory-arrival-order",
+        rate_limit={"requests_per_unit": 3, "window_size": 60},
+    )
+    outcomes: list[tuple[int, str, str | None]] = []
+
+    async def caller(index: int) -> None:
+        checked = await handler.should_rate_limit(descriptors=[descriptor], read_only=True)
+        if checked["overall_code"] != "OK":
+            outcomes.append((index, checked["overall_code"], None))
+            return
+        admitted = await handler.atomic_check_and_increment_by_n(
+            descriptors=[descriptor], increments=[{"requests": 1, "tokens": 0}]
+        )
+        outcomes.append((index, checked["overall_code"], admitted["overall_code"]))
+
+    await asyncio.gather(*(caller(index) for index in range(5)))
+
+    assert outcomes == [
+        (0, "OK", "OK"),
+        (1, "OK", "OK"),
+        (2, "OK", "OK"),
+        (3, "OVER_LIMIT", None),
+        (4, "OVER_LIMIT", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_in_memory_admission_does_not_let_a_concurrent_task_run_before_it_returns():
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    descriptor = RateLimitDescriptor(
+        key="api_key",
+        value="in-memory-no-yield",
+        rate_limit={"requests_per_unit": 10, "max_parallel_requests": 10, "window_size": 60},
+    )
+    events: list[str] = []
+
+    async def admit() -> None:
+        events.append("admit started")
+        await handler.should_rate_limit(descriptors=[descriptor], parallel_slot_id="slot-1")
+        events.append("admitted")
+        await handler.atomic_check_and_increment_by_n(descriptors=[descriptor], increments=[{"requests": 1}])
+        events.append("incremented")
+
+    async def bystander() -> None:
+        events.append("bystander ran")
+
+    await asyncio.gather(admit(), bystander())
+
+    assert events == ["admit started", "admitted", "incremented", "bystander ran"]
+
+
+@pytest.mark.asyncio
 async def test_reserve_tpm_tokens_never_evaluates_the_requests_dimension():
     """The reservation path deliberately leaves RPM to the separate
     should_rate_limit pass. Now that zero-increment counters are checked
