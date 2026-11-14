@@ -10,12 +10,15 @@ server-generated filename so the client-controlled name never reaches storage.
 
 from __future__ import annotations
 
+import io
+import struct
 import uuid
+import zipfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Protocol, TypeAlias, runtime_checkable
+from typing import Final, Protocol, TypeAlias, cast, runtime_checkable
 
 from typing_extensions import assert_never
 
@@ -59,6 +62,8 @@ _UTF8_BOM: Final = b"\xef\xbb\xbf"
 class DetectedFormat(str, Enum):
     PDF = "pdf"
     TEXT = "text"
+    DOCX = "docx"
+    PPTX = "pptx"
 
 
 class DisallowedKind(str, Enum):
@@ -143,6 +148,8 @@ _SAFE_EXTENSION: Final[Mapping[DetectedFormat, str]] = MappingProxyType(
     {
         DetectedFormat.PDF: "pdf",
         DetectedFormat.TEXT: "txt",
+        DetectedFormat.DOCX: "docx",
+        DetectedFormat.PPTX: "pptx",
     }
 )
 
@@ -150,7 +157,30 @@ _SAFE_CONTENT_TYPE: Final[Mapping[DetectedFormat, str]] = MappingProxyType(
     {
         DetectedFormat.PDF: "application/pdf",
         DetectedFormat.TEXT: "text/plain",
+        DetectedFormat.DOCX: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        DetectedFormat.PPTX: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     }
+)
+
+_OFFICE_CONTENT_TYPES: Final = "[Content_Types].xml"
+_OFFICE_DOCUMENT_PARTS: Final[Mapping[DetectedFormat, str]] = MappingProxyType(
+    {
+        DetectedFormat.DOCX: "word/document.xml",
+        DetectedFormat.PPTX: "ppt/presentation.xml",
+    }
+)
+_MAX_OFFICE_ZIP_ENTRIES: Final = 1024
+_DANGEROUS_OFFICE_SUFFIXES: Final[tuple[str, ...]] = (
+    ".exe",
+    ".dll",
+    ".bat",
+    ".cmd",
+    ".ps1",
+    ".js",
+    ".vbs",
+    ".scr",
+    ".com",
+    ".msi",
 )
 
 
@@ -188,11 +218,51 @@ def _looks_like_shebang(content: bytes) -> bool:
     return body.startswith(b"#!")
 
 
+def _has_bounded_zip_entries(content: bytes) -> bool:
+    eocd_offset: Final = content.rfind(b"PK\x05\x06", max(0, len(content) - 22 - 65535))
+    if eocd_offset == -1 or eocd_offset + 22 > len(content):
+        return False
+    total_entries: Final = cast(tuple[int], struct.unpack_from("<H", content, eocd_offset + 10))[0]
+    return total_entries <= _MAX_OFFICE_ZIP_ENTRIES
+
+
+def _is_dangerous_office_entry(name: str) -> bool:
+    normalized_name: Final = name.replace("\\", "/").lower()
+    segments: Final = normalized_name.split("/")
+    return (
+        segments[-1] == "vbaproject.bin"
+        or normalized_name.endswith(_DANGEROUS_OFFICE_SUFFIXES)
+        or normalized_name.startswith("/")
+        or ".." in segments
+    )
+
+
+def _detect_office_document(content: bytes) -> DetectedFormat | None:
+    if not content.startswith(b"PK\x03\x04") or not _has_bounded_zip_entries(content):
+        return None
+    try:
+        names: Final = zipfile.ZipFile(io.BytesIO(content)).namelist()
+    except zipfile.BadZipFile:
+        return None
+    if len(names) > _MAX_OFFICE_ZIP_ENTRIES or _OFFICE_CONTENT_TYPES not in names:
+        return None
+    for detected_format, document_part in _OFFICE_DOCUMENT_PARTS.items():
+        if document_part not in names:
+            continue
+        if any(_is_dangerous_office_entry(name) for name in names):
+            return None
+        return detected_format
+    return None
+
+
 def inspect_content(content: bytes) -> ContentInspection:
     if _looks_like_shebang(content):
         return DisallowedContent(DisallowedKind.EXECUTABLE)
     if content.startswith(b"%PDF-"):
         return AllowedContent(DetectedFormat.PDF)
+    office_document = _detect_office_document(content)
+    if office_document is not None:
+        return AllowedContent(office_document)
     if _is_archive(content):
         return DisallowedContent(DisallowedKind.ARCHIVE)
     if _is_executable_binary(content):
@@ -221,7 +291,7 @@ def _reject_disallowed(kind: DisallowedKind) -> RejectedUpload:
         case DisallowedKind.UNKNOWN_BINARY:
             return RejectedUpload(
                 RejectionReason.UNSUPPORTED_FORMAT,
-                "Only PDF and UTF-8 text documents are accepted.",
+                "Only PDF, UTF-8 text, DOCX and PPTX documents are accepted.",
             )
     assert_never(kind)
 
