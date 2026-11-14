@@ -41,6 +41,7 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
+from litellm.litellm_core_utils.tool_fields import chat_member_name
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
@@ -4503,6 +4504,30 @@ class TestOpenAIResponsesHandlerNamespaceTools:
             "mcp__confluence__confluence_search",
             "apply_patch",
         ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("top_level", [False, True], ids=["sibling_member", "top_level_function"])
+    async def test_scanning_tools_whose_chat_names_collide_leaves_them_for_the_route_to_judge(self, top_level: bool):
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        long_member: Final = {"type": "function", "name": "_get_document_tool_schemas", "parameters": {"type": "object"}}
+        shortened: Final = chat_member_name(namespace, long_member["name"])
+        colliding: Final = {
+            "type": "function",
+            "name": shortened if top_level else shortened.removeprefix(f"{namespace}__"),
+            "parameters": {"type": "object"},
+        }
+        members: Final = [long_member] if top_level else [long_member, colliding]
+        data: Final = {
+            **_codex_request("hi"),
+            "tools": [*([colliding] if top_level else []), {"type": "namespace", "name": namespace, "tools": members}],
+        }
+        expected_tools: Final = copy.deepcopy(data["tools"])
+        guardrail: Final = MockRecordingGuardrail(guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert result["tools"] == expected_tools
+        assert [tool["function"]["name"] for tool in guardrail.seen_inputs[0]["tools"]] == [shortened, shortened]
 
     @pytest.mark.asyncio
     async def test_a_function_only_guardrail_keeps_the_tool_search_tool_it_never_scans(self):
