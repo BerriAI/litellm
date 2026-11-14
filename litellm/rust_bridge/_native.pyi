@@ -570,6 +570,11 @@ class NativeDatabase:
     def close(self) -> Future[None]: ...
 
 @final
+class NativeTokenRedactor:
+    def __new__(cls, minimum_custom_key_length: int, word_ranges: Sequence[tuple[int, int]]) -> NativeTokenRedactor: ...
+    def redact(self, text: str, replacement: str) -> str | None: ...
+
+@final
 class NativeDiagnosticProcessor:
     def __new__(cls, minimum_custom_key_length: int) -> NativeDiagnosticProcessor: ...
     def redact_text(self, text: str) -> str: ...
@@ -785,6 +790,7 @@ __all__ = [
     "NativeSensitiveRoutePins",
     "NativeSpendCounters",
     "NativeTableSwapped",
+    "NativeTokenRedactor",
     "NativeUsageRead",
     "PostCallSettlement",
     "ProcessReservedForForking",

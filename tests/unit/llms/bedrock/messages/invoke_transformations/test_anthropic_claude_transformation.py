@@ -42,6 +42,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_trans
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 
 REASONING_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
@@ -4818,3 +4819,98 @@ async def test_bedrock_chat_fallback_to_anthropic_sends_the_tool_bedrock_cleaned
 
     (body,) = upstream.anthropic_bodies
     assert body["tools"] == [{"name": "get_weather", "input_schema": schema, **sent_extras}]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_messages_abort_on_detached_drain_cap_closes_httpx_response_and_stops_upstream_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.llms.anthropic.messages.native.streaming_iterator as streaming_iterator_module
+
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 0)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 2)
+
+    class _TrackedByteStream(httpx.AsyncByteStream):
+        def __init__(self) -> None:
+            self.closed: Final = asyncio.Event()
+            self.frames_sent = 0
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            self.frames_sent += 1
+            yield _bedrock_event_frame(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_abort_test",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [],
+                        "model": "us.anthropic.claude-sonnet-4-6",
+                        "usage": {"input_tokens": 4, "output_tokens": 1},
+                    },
+                }
+            )
+            for idx in range(50):
+                await asyncio.sleep(0.005)
+                if self.closed.is_set():
+                    break
+                self.frames_sent += 1
+                yield _bedrock_event_frame(
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "text_delta", "text": f"token_{idx} "},
+                    }
+                )
+
+        async def aclose(self) -> None:
+            self.closed.set()
+
+    tracked_stream: Final = _TrackedByteStream()
+    response: Final = httpx.Response(200, stream=tracked_stream)
+    iterator: Final = AmazonAnthropicClaudeMessagesConfig().get_async_streaming_response_iterator(
+        model="us.anthropic.claude-sonnet-4-6",
+        httpx_response=response,
+        request_body={"model": "us.anthropic.claude-sonnet-4-6"},
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/us.anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Count to 50"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime(2026, 1, 1),
+            litellm_call_id="test_bedrock_abort_closes_httpx_response",
+            function_id="test_bedrock_abort_closes_httpx_response",
+        ),
+    )
+
+    first_frame: Final = await asyncio.wait_for(anext(iterator), timeout=5)
+    assert first_frame.startswith(b"event: message_start\n"), first_frame
+    assert not tracked_stream.closed.is_set()
+
+    await iterator.aclose()
+    await asyncio.wait_for(tracked_stream.closed.wait(), timeout=5)
+
+    assert tracked_stream.closed.is_set(), (
+        "Expected httpx.Response stream to be closed when detached-drain cap aborts upstream"
+    )
+    assert tracked_stream.frames_sent < 10, (
+        f"Expected upstream to stop generating after abort, but {tracked_stream.frames_sent} frames were read"
+    )
+
+
+@pytest.mark.asyncio
+async def test_promote_message_stop_usage_closes_its_source_on_aclose() -> None:
+    source_closed: Final = asyncio.Event()
+
+    async def _source() -> AsyncIterator[dict[str, object]]:
+        try:
+            yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 1}}}
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}
+        finally:
+            source_closed.set()
+
+    source: Final = _source()
+    promoted: Final = AmazonAnthropicClaudeMessagesConfig._promote_message_stop_usage(source)
+    await anext(promoted)
+    await aclose_if_supported(promoted)
+    assert source_closed.is_set()

@@ -32140,6 +32140,11 @@ export interface components {
              * @description for `/models` endpoint, infers available model based on environment keys (e.g. OPENAI_API_KEY)
              */
             infer_model_from_keys?: boolean | null;
+            /**
+             * Key Expiry Alert Days
+             * @description Email a key's owner once when the key has this many days or fewer left before it expires. Applies to every key with an expiry date and an owner email, including existing keys. A key's metadata.key_expiry_alert_days overrides it. Off unless set.
+             */
+            key_expiry_alert_days?: number | null;
             /** @description key manager to load keys from / decrypt keys with */
             key_management_system?: components["schemas"]["KeyManagementSystem"] | null;
             /**
@@ -34432,7 +34437,7 @@ export interface components {
          * EmailEvent
          * @enum {string}
          */
-        EmailEvent: "Model Deprecations" | "Performance Alerts" | "Virtual Key Created" | "New User Invitation" | "Virtual Key Rotated" | "Soft Budget Crossed" | "Max Budget Alert";
+        EmailEvent: "Model Deprecations" | "Performance Alerts" | "Virtual Key Created" | "New User Invitation" | "Virtual Key Rotated" | "Virtual Key Expiring" | "Soft Budget Crossed" | "Max Budget Alert";
         /** EmailEventSettings */
         EmailEventSettings: {
             /** Enabled */
@@ -37905,6 +37910,14 @@ export interface components {
             fireworks_forward_user_id?: boolean | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
+            /** Github Copilot App Id */
+            github_copilot_app_id?: string | number | null;
+            /** Github Copilot App Installation Id */
+            github_copilot_app_installation_id?: string | number | null;
+            /** Github Copilot App Private Key */
+            github_copilot_app_private_key?: string | null;
+            /** Github Copilot App Private Key Ref */
+            github_copilot_app_private_key_ref?: string | null;
             /** Google Maps Grounding Cost Per Query */
             google_maps_grounding_cost_per_query?: number | null;
             /** Input Cost Per Audio Per Second */
@@ -54610,6 +54623,14 @@ export interface components {
             fireworks_forward_user_id?: boolean | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
+            /** Github Copilot App Id */
+            github_copilot_app_id?: string | number | null;
+            /** Github Copilot App Installation Id */
+            github_copilot_app_installation_id?: string | number | null;
+            /** Github Copilot App Private Key */
+            github_copilot_app_private_key?: string | null;
+            /** Github Copilot App Private Key Ref */
+            github_copilot_app_private_key_ref?: string | null;
             /** Google Maps Grounding Cost Per Query */
             google_maps_grounding_cost_per_query?: number | null;
             /** Input Cost Per Audio Per Second */

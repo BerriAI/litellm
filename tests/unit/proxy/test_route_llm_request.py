@@ -398,7 +398,7 @@ async def test_route_request_no_model_required_with_router_settings_and_no_route
     }
 
     with patch.object(litellm, "acompletion", return_value="fake_response") as mock_completion:
-        await route_request(data, None, "gpt-3.5-turbo", "acompletion")
+        assert await (await route_request(data, None, "gpt-3.5-turbo", "acompletion")) == "fake_response"
 
         mock_completion.assert_called_once_with(**data)
 
@@ -1478,6 +1478,40 @@ async def test_route_request_keeps_key_fallbacks_out_of_pass_through_provider_bo
 
     provider_bodies: Final = tuple(JSON_OBJECT_ADAPTER.validate_json(call.request.content) for call in upstream.calls)
     assert provider_bodies and all("gpt-4" not in body for body in provider_bodies), provider_bodies
+
+
+@pytest.mark.asyncio
+async def test_route_request_pass_through_never_falls_back_to_the_global_model_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/gpt-not-granted"])
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-pass-through")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-proxy", "api_base": _PROXY_DEPLOYMENT_BASE},
+            }
+        ],
+        router_general_settings=RouterGeneralSettings(pass_through_all_models=True),
+    )
+    data: Final = {"model": "openai/gpt-pass-through", "messages": list(_HELLO_MESSAGES)}
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        requested: Final = respx_mock.post(
+            "https://api.openai.com/v1/chat/completions", json__model="gpt-pass-through"
+        ).mock(return_value=httpx.Response(404, json={"error": {"message": "no such model", "code": "model_not_found"}}))
+        not_granted: Final = respx_mock.post(
+            "https://api.openai.com/v1/chat/completions", json__model="gpt-not-granted"
+        ).mock(return_value=_chat_completion_response("gpt-not-granted"))
+        with pytest.raises(litellm.NotFoundError):
+            await (await route_request(data, router, None, "acompletion"))
+
+    assert requested.called
+    assert not not_granted.called
 
 
 @pytest.mark.parametrize(
