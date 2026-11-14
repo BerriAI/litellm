@@ -132,6 +132,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.router import Router
+    from litellm.rust_bridge._native import NativeModelCapacityState
     from litellm.types.agents import AgentResponse
 
     Span = _Span
@@ -169,7 +170,7 @@ class RateLimitedModel:
 
 
 def dynamic_rate_limiter_covers(model_group: str) -> bool:
-    from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
+    from litellm.proxy.hooks.model_capacity_native import NativeDynamicRateLimiter
     from litellm.proxy.proxy_server import llm_router
 
     if llm_router is None:
@@ -178,7 +179,7 @@ def dynamic_rate_limiter_covers(model_group: str) -> bool:
     if group is None or (group.tpm is None and group.rpm is None):
         return False
     return any(
-        callback == "dynamic_rate_limiter_v3" or isinstance(callback, PROXY_DynamicRateLimitHandlerV3)
+        callback == "dynamic_rate_limiter_v3" or isinstance(callback, NativeDynamicRateLimiter)
         for callback in litellm.callbacks
     )
 
@@ -647,6 +648,12 @@ class RequestRateLimiterStash:
     io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
     socket_agent_windows: tuple[RateLimitDescriptor, ...] = ()
+    native_capacity_state: "NativeModelCapacityState | None" = None
+
+    def native_capacity(self, create: Callable[[], "NativeModelCapacityState"]) -> "NativeModelCapacityState":
+        if self.native_capacity_state is None:
+            self.native_capacity_state = create()
+        return self.native_capacity_state
 
     def clear_reserved_tokens(self) -> None:
         self.reserved_tokens = 0

@@ -229,7 +229,7 @@ class TestProxyHookCategoryWiring:
             "litellm.proxy.hooks.parallel_request_limiter",
             "litellm.proxy.hooks.parallel_request_limiter_v3",
             "litellm.proxy.hooks.dynamic_rate_limiter",
-            "litellm.proxy.hooks.dynamic_rate_limiter_v3",
+            "litellm.proxy.hooks.model_capacity_native",
             "litellm.proxy.hooks.batch_rate_limiter",
             "litellm.proxy.hooks.max_budget_per_session_limiter",
             "litellm.proxy.hooks.max_iterations_limiter",
@@ -760,27 +760,37 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
     @pytest.mark.asyncio
     async def test_dynamic_rate_limiter_v3_each_raise_branch(self, descriptor_key):
         """
-        Drive each of the three raise branches in v3 dynamic_rate_limiter:
+        Drive each of the three raise branches of the dynamic_rate_limiter_v3 callback:
         model_saturation_check, priority_model, and the fail-closed fallback
         for an unrecognized descriptor_key. Mocks
         ``atomic_check_and_increment_by_n`` so the v3 limiter's response
         directly drives the raise-site selection.
         """
-        from unittest.mock import AsyncMock, MagicMock
+        from unittest.mock import AsyncMock, patch
 
+        from litellm import Router
         from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-            PROXY_DynamicRateLimitHandlerV3,
+        from tests.unit.proxy.hooks.native_capacity_handler import (
+            NativeDynamicRateLimitHandler,
         )
 
-        # Bypass __init__ — we want to inject a stub v3_limiter without
-        # paying for the full handler setup.
-        handler = PROXY_DynamicRateLimitHandlerV3.__new__(
-            PROXY_DynamicRateLimitHandlerV3
+        handler = NativeDynamicRateLimitHandler(internal_usage_cache=DualCache())
+        handler.update_variables(
+            llm_router=Router(
+                model_list=[
+                    {
+                        "model_name": "gpt-4",
+                        "litellm_params": {
+                            "model": "gpt-4",
+                            "api_key": "sk-test",
+                            "rpm": 100,
+                            "tpm": 1000,
+                        },
+                    }
+                ]
+            )
         )
-        v3_limiter = MagicMock()
-        v3_limiter.window_size = 60
-        v3_limiter.atomic_check_and_increment_by_n = AsyncMock(
+        over_limit = AsyncMock(
             return_value={
                 "overall_code": "OVER_LIMIT",
                 "statuses": [
@@ -794,34 +804,16 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
                 ],
             }
         )
-        handler.v3_limiter = v3_limiter
-        # Stub the descriptor builders so we don't pull in real router state.
-        handler._create_model_tracking_descriptor = MagicMock(  # type: ignore[method-assign]
-            return_value={
-                "key": descriptor_key,
-                "value": "v",
-                "rate_limit": {
-                    "requests_per_unit": 100,
-                    "tokens_per_unit": None,
-                    "window_size": 60,
-                },
-            }
-        )
-        handler._create_priority_based_descriptors = MagicMock(  # type: ignore[method-assign]
-            return_value=[]
-        )
-        model_group_info = MagicMock()
-        model_group_info.tpm = 1000
-        model_group_info.rpm = 100
-
-        with pytest.raises(ProxyRateLimitError) as exc_info:
-            await handler._check_rate_limits(
-                model="gpt-4",
-                model_group_info=model_group_info,
+        with patch.object(
+            handler.v3_limiter, "atomic_check_and_increment_by_n", over_limit
+        ), pytest.raises(ProxyRateLimitError) as exc_info:
+            await handler.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-test-v3"),
-                priority="default",
-                saturation=0.99,
+                cache=DualCache(),
+                data={"model": "gpt-4"},
+                call_type="completion",
             )
+        over_limit.assert_awaited()
         e = exc_info.value
         assert e.status_code == 429
         assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT

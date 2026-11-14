@@ -318,6 +318,7 @@ from litellm.proxy.policy_engine.pipeline_executor import (
 )
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+from litellm.proxy.request_auth_context import REQUEST_AUTH
 from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.proxy.v2_proxy_fields import (
     DERIVED_POST_CALL_FAILURE_PROXY_FIELDS,
@@ -3539,17 +3540,26 @@ class ProxyLogging:
             independent_snapshot(data) if needs_raw_request_snapshot else None
         )
 
-        return await self._dispatch_pre_call(
-            _PreCallRun(
-                user_api_key_dict=user_api_key_dict,
-                call_type=call_type,
-                guardrails_only=guardrails_only,
-                skip_guardrails=skip_guardrails,
-                endpoint_type=endpoint_type,
-                raw_request_snapshot=raw_request_snapshot,
-                latest=data,
-            )
+        auth_token: Final = (
+            REQUEST_AUTH.set(user_api_key_dict)
+            if any(isinstance(callback, CustomLoggerV2) for callback in litellm.callbacks)
+            else None
         )
+        try:
+            return await self._dispatch_pre_call(
+                _PreCallRun(
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                    guardrails_only=guardrails_only,
+                    skip_guardrails=skip_guardrails,
+                    endpoint_type=endpoint_type,
+                    raw_request_snapshot=raw_request_snapshot,
+                    latest=data,
+                )
+            )
+        finally:
+            if auth_token is not None:
+                REQUEST_AUTH.reset(auth_token)
 
     async def _dispatch_pre_call(self, run: "_PreCallRun") -> dict[str, object] | None:  # mutable-ok: request dict
         try:
@@ -4384,17 +4394,21 @@ class ProxyLogging:
                     run, request_data, user_api_key_dict, redacted_traceback_str, callback, request_data
                 )
             return run.transformed
-        await run_hook_subscribers(
-            hook_subscribers(Hook.post_call_failure, callbacks, admit=Admit.every_entry),
-            with_sources(
-                hook_fields(request_data, run, Field.error),
-                DERIVED_POST_CALL_FAILURE_PROXY_FIELDS,
-                HookArgs(auth=user_api_key_dict, request=request_data),  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
-            ),
-            partial(self._post_call_failure_one, run, request_data, user_api_key_dict, redacted_traceback_str),
-            on_abort=partial(_keep_v2_abort, run),
-            call=partial(post_call_facts, request_data, user_api_key_dict, logging_obj),
-        )
+        auth_token: Final = REQUEST_AUTH.set(user_api_key_dict)
+        try:
+            await run_hook_subscribers(
+                hook_subscribers(Hook.post_call_failure, callbacks, admit=Admit.every_entry),
+                with_sources(
+                    hook_fields(request_data, run, Field.error),
+                    DERIVED_POST_CALL_FAILURE_PROXY_FIELDS,
+                    HookArgs(auth=user_api_key_dict, request=request_data),  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
+                ),
+                partial(self._post_call_failure_one, run, request_data, user_api_key_dict, redacted_traceback_str),
+                on_abort=partial(_keep_v2_abort, run),
+                call=partial(post_call_facts, request_data, user_api_key_dict, logging_obj),
+            )
+        finally:
+            REQUEST_AUTH.reset(auth_token)
         return run.transformed
 
     async def _post_call_failure_one(
@@ -4700,12 +4714,16 @@ class ProxyLogging:
             call=facts,
         )
         run.raise_flow_change()
-        await run_hook_subscribers(
-            hook_subscribers(Hook.post_call_success, other_callbacks),
-            fields,
-            partial(self._post_call_logger, run, data, user_api_key_dict),
-            call=facts,
-        )
+        auth_token: Final = REQUEST_AUTH.set(user_api_key_dict)
+        try:
+            await run_hook_subscribers(
+                hook_subscribers(Hook.post_call_success, other_callbacks),
+                fields,
+                partial(self._post_call_logger, run, data, user_api_key_dict),
+                call=facts,
+            )
+        finally:
+            REQUEST_AUTH.reset(auth_token)
         return run.response
 
     async def _post_call_without_v2(

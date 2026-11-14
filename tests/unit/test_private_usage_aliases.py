@@ -13,11 +13,6 @@ PROXY_CLASS_NAME_ALIAS_CASES: Final = (
         "PROXY_DynamicRateLimitHandler",
     ),
     (
-        "litellm.proxy.hooks.dynamic_rate_limiter_v3",
-        "_PROXY_DynamicRateLimitHandlerV3",
-        "PROXY_DynamicRateLimitHandlerV3",
-    ),
-    (
         "litellm.proxy.common_utils.config_sync_pubsub",
         "_ConfigSyncPubSub",
         "ConfigSyncPubSub",

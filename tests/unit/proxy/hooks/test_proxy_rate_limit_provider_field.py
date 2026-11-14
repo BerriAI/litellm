@@ -49,9 +49,6 @@ from litellm.proxy.hooks.batch_rate_limiter import (
     PROXY_BatchRateLimiter,
 )
 from litellm.proxy.hooks.dynamic_rate_limiter import PROXY_DynamicRateLimitHandler
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-    PROXY_DynamicRateLimitHandlerV3,
-)
 from litellm.proxy.hooks.max_budget_per_session_limiter import (
     PROXY_MaxBudgetPerSessionHandler,
 )
@@ -629,112 +626,6 @@ async def test_dynamic_rate_limiter_v1_unknown_model_falls_back():
 
     assert exc_info.value.llm_provider == PROXY_LLM_PROVIDER_FALLBACK
     assert exc_info.value.model == "no-such-model"
-
-
-# ---------------------------------------------------------------------------
-# dynamic_rate_limiter v3 — exercise just the raise path via the helper, not
-# the full Redis/Lua stack.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_dynamic_rate_limiter_v3_model_capacity_path_populates_provider():
-    """
-    The v3 dynamic limiter has three raise sites: model_saturation_check,
-    priority_model, and the fail-closed unknown-descriptor branch. We patch
-    the atomic increment to short-circuit straight into the model_saturation
-    path — that's the most common production trip — and confirm the
-    raised exception carries provider info.
-    """
-    from litellm.types.router import ModelGroupInfo
-
-    handler = PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=DualCache())
-    handler.v3_limiter.atomic_check_and_increment_by_n = AsyncMock(
-        return_value={
-            "overall_code": "OVER_LIMIT",
-            "statuses": [
-                {
-                    "code": "OVER_LIMIT",
-                    "descriptor_key": "model_saturation_check",
-                    "current_limit": 100,
-                    "limit_remaining": 0,
-                    "rate_limit_type": "requests",
-                }
-            ],
-        }
-    )
-    handler._create_priority_based_descriptors = MagicMock(return_value=[])
-    handler._create_model_tracking_descriptor = MagicMock(
-        return_value={
-            "key": "model_saturation_check",
-            "value": "gpt-4o-mini",
-            "rate_limit": {"requests_per_unit": 100},
-        }
-    )
-
-    user_api_key_dict = UserAPIKeyAuth(api_key="sk-dyn-v3")
-    user_api_key_dict.metadata = {}
-    model_info = ModelGroupInfo(model_group="gpt-4o-mini", providers=["openai"])
-
-    with pytest.raises(HTTPException) as exc_info:
-        await handler._check_rate_limits(
-            model="gpt-4o-mini",
-            model_group_info=model_info,
-            user_api_key_dict=user_api_key_dict,
-            priority="default",
-            saturation=1.0,
-        )
-
-    exc = exc_info.value
-    assert exc.status_code == 429
-    assert isinstance(exc, RateLimitError)
-    assert exc.llm_provider == "openai"
-    assert exc.model == "gpt-4o-mini"
-
-
-@pytest.mark.asyncio
-async def test_dynamic_rate_limiter_v3_unknown_descriptor_path_populates_provider():
-    """Fail-closed unknown-descriptor branch must still attribute provider."""
-    from litellm.types.router import ModelGroupInfo
-
-    handler = PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=DualCache())
-    handler.v3_limiter.atomic_check_and_increment_by_n = AsyncMock(
-        return_value={
-            "overall_code": "OVER_LIMIT",
-            "statuses": [
-                {
-                    "code": "OVER_LIMIT",
-                    "descriptor_key": "something_we_dont_handle",
-                    "current_limit": 1,
-                    "limit_remaining": 0,
-                    "rate_limit_type": "requests",
-                }
-            ],
-        }
-    )
-    handler._create_priority_based_descriptors = MagicMock(return_value=[])
-    handler._create_model_tracking_descriptor = MagicMock(
-        return_value={
-            "key": "model_saturation_check",
-            "value": "gpt-4o-mini",
-            "rate_limit": {"requests_per_unit": 1},
-        }
-    )
-
-    user_api_key_dict = UserAPIKeyAuth(api_key="sk-dyn-v3-unknown")
-    user_api_key_dict.metadata = {}
-    model_info = ModelGroupInfo(model_group="gpt-4o-mini", providers=["openai"])
-
-    with pytest.raises(HTTPException) as exc_info:
-        await handler._check_rate_limits(
-            model="gpt-4o-mini",
-            model_group_info=model_info,
-            user_api_key_dict=user_api_key_dict,
-            priority="default",
-            saturation=1.0,
-        )
-
-    assert exc_info.value.llm_provider == "openai"
 
 
 # ---------------------------------------------------------------------------
