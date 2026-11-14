@@ -1,6 +1,7 @@
 from typing import Any, Final
 
 import litellm
+from litellm.llms.anthropic.common_utils import verifies_claude_thinking_signatures
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
@@ -19,6 +20,9 @@ from .common_utils import (
 class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicMessagesConfig):
     def should_filter_anthropic_beta_headers(self) -> bool:
         return False
+
+    def verifies_thinking_signatures(self, model: str, api_base: str | None) -> bool:
+        return verifies_claude_thinking_signatures("bedrock", model, api_base)
 
     def validate_anthropic_messages_environment(
         self,
