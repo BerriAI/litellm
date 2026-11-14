@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use litellm_callbacks_budgets::{
-    BudgetReservation, Budgets, Check, EngineError, ErrorKind, Shared, decide,
+    BudgetReservation, Budgets, Check, EngineError, ErrorKind, Settle, Shared, decide,
 };
 use litellm_callbacks_python::RustCallback;
 use litellm_host_python::{Pythonized, from_py_argument, json_from_py, run_async_value, to_py};
@@ -51,12 +51,20 @@ impl NativeBudgets {
         py: Python<'py>,
         #[pyo3(from_py_with = from_record)] reservation: BudgetReservation,
         window_resets: Vec<Option<String>>,
+        observed: Vec<Option<f64>>,
         actual: f64,
+        apply_consistent: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let budgets = Arc::clone(&self.0);
         run_async_value(py, async move {
             budgets
-                .settle(&reservation, &window_resets, actual)
+                .settle(&Settle {
+                    reservation: &reservation,
+                    window_resets: &window_resets,
+                    observed: &observed,
+                    actual,
+                    apply_consistent,
+                })
                 .await
                 .map(Pythonized)
                 .map_err(settle_error)

@@ -541,7 +541,12 @@ class NativeBudgets:
     def __new__(cls, spend_counters: NativeSpendCounters) -> NativeBudgets: ...
     def callback(self) -> RustHandle: ...
     def settle(
-        self, reservation: BudgetReservation, window_resets: tuple[str | None, ...], actual: float
+        self,
+        reservation: BudgetReservation,
+        window_resets: tuple[str | None, ...],
+        observed: tuple[float | None, ...],
+        actual: float,
+        apply_consistent: bool,
     ) -> Future[JsonValue]: ...
 
 def budget_check_decision(check: BudgetCheck) -> JsonValue: ...

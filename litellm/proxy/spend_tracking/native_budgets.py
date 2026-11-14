@@ -33,6 +33,7 @@ from litellm.integrations.custom_logger_v2.rust import (
 )
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.types.integrations.custom_logger_v2 import BudgetPlan, BudgetReservation, coerce_record
 from litellm.types.proxy.native_budgets import BudgetCheck, NativeSettlement
@@ -474,27 +475,56 @@ def _held_entries(raw: object) -> tuple[object, ...]:
         raise TypeError(f"'{type(raw).__name__}' object is not iterable") from None
 
 
+def _held_counter_key(entry: object) -> str | None:
+    held: Final = mapping(entry)
+    counter_key: Final = None if held is None else held.get("counter_key")
+    return counter_key if isinstance(counter_key, str) else None
+
+
+async def _observed_spend(counter_key: str | None) -> float | None:
+    if counter_key is None:
+        return None
+    from litellm.proxy.proxy_server import read_spend_counter_cache_value
+
+    try:
+        value, _ = await read_spend_counter_cache_value(counter_key=counter_key)
+    except (TypeError, ValueError):
+        return None
+    return value
+
+
 async def settle_native_reservation(
     reservation: Mapping[str, object],
     actual_cost: float,
-) -> None:
+    apply_consistent: bool = True,
+) -> tuple[PendingSpendIncrement, ...]:
     budgets: Final = native_budgets()
     if budgets is None:
-        return
+        return ()
     entries: Final = _held_entries(reservation.get("entries") or ())
     record: Final = _reservation_record(reservation)
     if record is None:
-        return
-    settled: Final = _SETTLEMENT.validate_python(
-        await budgets.settle(record, tuple(map(_window_reset, entries)), actual_cost)
-    )
+        return ()
+    from litellm.proxy.proxy_server import spend_counter_store
     from litellm.proxy.spend_tracking.budget_reservation import reseed_reserved_counter
 
-    for reseed in settled.reseed:
-        await reseed_reserved_counter(reseed.counter_key, reseed.actual_cost)
+    counter_keys: Final = tuple(map(_held_counter_key, entries))
+    with spend_counter_batch_scope(
+        spend_counter_store, counter_keys=frozenset(key for key in counter_keys if key is not None)
+    ):
+        observed: Final = tuple([await _observed_spend(counter_key) for counter_key in counter_keys])
+        settled: Final = _SETTLEMENT.validate_python(
+            await budgets.settle(record, tuple(map(_window_reset, entries)), observed, actual_cost, apply_consistent)
+        )
+        for reseed in settled.reseed:
+            await reseed_reserved_counter(reseed.counter_key, reseed.actual_cost)
     for entry, target in zip(entries, settled.adjustments):
         if target is not None and isinstance(entry, dict):
             entry["applied_adjustment"] = target
+    return tuple(
+        PendingSpendIncrement(counter_key=pending.counter_key, increment=pending.increment)
+        for pending in settled.pending
+    )
 
 
 def is_native_reservation(reservation: Mapping[str, object] | None) -> bool:

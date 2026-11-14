@@ -166,22 +166,43 @@ async fn current_value(
     }
 }
 
+fn applies_to(value: Option<f64>, adjustment: f64) -> bool {
+    match value {
+        None => false,
+        Some(value) => !(adjustment < 0.0 && value + adjustment < -EPSILON),
+    }
+}
+
 async fn can_apply(
     store: &SpendCounters,
     counter: &SpendCounter,
     adjustment: f64,
 ) -> Result<bool, EngineError> {
-    Ok(match store.read(counter).await?.value() {
-        None => false,
-        Some(value) => !(adjustment < 0.0 && value.as_f64() + adjustment < -EPSILON),
-    })
+    Ok(applies_to(
+        store.read(counter).await?.value().map(Number::as_f64),
+        adjustment,
+    ))
+}
+
+async fn increment_or_invalidate(
+    store: &SpendCounters,
+    applicable: Vec<(SpendCounter, Number)>,
+) -> Result<(), EngineError> {
+    if applicable.is_empty() {
+        return Ok(());
+    }
+    if let Err(error) = store.increment_many(&applicable).await {
+        let counters: Vec<SpendCounter> = applicable.into_iter().map(|(c, _)| c).collect();
+        store.invalidate(&counters).await;
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Inconsistent {
     Drop,
     Refuse,
-    Report,
 }
 
 struct Adjustment {
@@ -223,13 +244,7 @@ async fn apply(
             )
         })
         .collect();
-    if !applicable.is_empty()
-        && let Err(error) = store.increment_many(&applicable).await
-    {
-        let counters: Vec<SpendCounter> = applicable.into_iter().map(|(c, _)| c).collect();
-        store.invalidate(&counters).await;
-        return Err(error.into());
-    }
+    increment_or_invalidate(store, applicable).await?;
     if inconsistent == Inconsistent::Drop {
         for (adjustment, _) in adjustments
             .iter()
@@ -421,9 +436,24 @@ pub struct Reseed {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PendingIncrement {
+    pub counter_key: String,
+    pub increment: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Settlement {
     pub adjustments: Vec<Option<f64>>,
     pub reseed: Vec<Reseed>,
+    pub pending: Vec<PendingIncrement>,
+}
+
+pub struct Settle<'a> {
+    pub reservation: &'a BudgetReservation,
+    pub window_resets: &'a [Option<String>],
+    pub observed: &'a [Option<f64>],
+    pub actual: f64,
+    pub apply_consistent: bool,
 }
 
 fn rejected(rejected: Option<&[String]>, member: &str) -> bool {
@@ -481,28 +511,26 @@ fn held_adjustment(
 
 pub async fn settle(
     store: &SpendCounters,
-    reservation: &BudgetReservation,
-    window_resets: &[Option<String>],
-    actual: f64,
+    request: &Settle<'_>,
     now: &Moment,
 ) -> Result<Settlement, EngineError> {
-    let entries = reservation.entries.as_deref().unwrap_or_default();
+    let entries = request.reservation.entries.as_deref().unwrap_or_default();
     if entries.iter().any(Option::is_none) {
         return Err(
             ReservationError::type_error("a budget reservation entry is not a mapping").into(),
         );
     }
-    let default_reserved_cost = reservation.reserved_cost.unwrap_or(0.0);
+    let default_reserved_cost = request.reservation.reserved_cost.unwrap_or(0.0);
     let mut adjustments = Vec::new();
     let mut settled_costs = Vec::new();
     for (index, entry) in entries.iter().enumerate() {
         let Some(entry) = entry else { continue };
-        let window_reset = window_resets.get(index).and_then(Option::as_deref);
+        let window_reset = request.window_resets.get(index).and_then(Option::as_deref);
         if let Some((adjustment, settled_cost)) = held_adjustment(
             index,
             entry,
             window_reset,
-            actual,
+            request.actual,
             default_reserved_cost,
             now,
         )? {
@@ -510,10 +538,33 @@ pub async fn settle(
             settled_costs.push(settled_cost);
         }
     }
-    let consistent = apply(store, &adjustments, Inconsistent::Report).await?;
+    let consistent: Vec<bool> = adjustments
+        .iter()
+        .map(|adjustment| {
+            applies_to(
+                request.observed.get(adjustment.index).copied().flatten(),
+                adjustment.adjustment,
+            )
+        })
+        .collect();
+    if request.apply_consistent {
+        let applicable = adjustments
+            .iter()
+            .zip(&consistent)
+            .filter(|(_, consistent)| **consistent)
+            .map(|(adjustment, _)| {
+                (
+                    adjustment.counter.clone(),
+                    Number::Float(adjustment.adjustment),
+                )
+            })
+            .collect();
+        increment_or_invalidate(store, applicable).await?;
+    }
     let mut settlement = Settlement {
         adjustments: vec![None; entries.len()],
         reseed: Vec::new(),
+        pending: Vec::new(),
     };
     for ((adjustment, settled_cost), consistent) in
         adjustments.iter().zip(settled_costs).zip(consistent)
@@ -523,6 +574,12 @@ pub async fn settle(
                 counter_key: adjustment.counter_key.clone(),
                 actual_cost: settled_cost,
             });
+        } else if !request.apply_consistent {
+            settlement.pending.push(PendingIncrement {
+                counter_key: adjustment.counter_key.clone(),
+                increment: adjustment.adjustment,
+            });
+            continue;
         }
         settlement.adjustments[adjustment.index] = Some(adjustment.target);
     }
@@ -722,20 +779,128 @@ mod tests {
         }
     }
 
+    async fn observed(store: &SpendCounters, record: &BudgetReservation) -> Vec<Option<f64>> {
+        let mut observed = Vec::new();
+        for entry in record.entries.iter().flatten() {
+            let counter = entry
+                .as_ref()
+                .and_then(|entry| entry.counter_key.as_deref())
+                .and_then(|key| SpendCounter::parse(key).ok());
+            observed.push(match counter {
+                Some(counter) => store
+                    .read(&counter)
+                    .await
+                    .unwrap()
+                    .value()
+                    .map(Number::as_f64),
+                None => None,
+            });
+        }
+        observed
+    }
+
+    async fn settle_as(
+        store: &SpendCounters,
+        record: &BudgetReservation,
+        resets: &[Option<String>],
+        actual: f64,
+        apply_consistent: bool,
+    ) -> Result<Settlement, EngineError> {
+        let observed = observed(store, record).await;
+        settle(
+            store,
+            &Settle {
+                reservation: record,
+                window_resets: resets,
+                observed: &observed,
+                actual,
+                apply_consistent,
+            },
+            &Moment::from_unix_micros(NOW),
+        )
+        .await
+    }
+
     async fn settle_now(
         store: &SpendCounters,
         record: &BudgetReservation,
         resets: &[Option<String>],
         actual: f64,
     ) -> Result<Settlement, EngineError> {
-        settle(
-            store,
-            record,
-            resets,
-            actual,
+        settle_as(store, record, resets, actual, true).await
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_settlement_that_leaves_writes_to_the_caller_hands_back_the_consistent_increments() {
+        let store = store(&[(KEY, 1.0), (TEAM, 0.0)]);
+        let plan = plan(
+            vec![
+                counter(KEY, 10.0, "Key", "hashed"),
+                counter(TEAM, 10.0, "Team", "t1"),
+            ],
+            2.0,
+        );
+        let record = record(
+            &reserve(&store, &plan, &Host::detached())
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+        store
+            .invalidate(&[SpendCounter::parse(TEAM).unwrap()])
+            .await;
+        let settlement = settle_as(&store, &record, &[], 0.5, false).await.unwrap();
+        assert_eq!(value(&store, KEY), Some(3.0));
+        assert_eq!(
+            settlement.pending,
+            vec![PendingIncrement {
+                counter_key: KEY.to_owned(),
+                increment: -1.5
+            }]
+        );
+        assert_eq!(
+            settlement.reseed,
+            vec![Reseed {
+                counter_key: TEAM.to_owned(),
+                actual_cost: 0.5
+            }]
+        );
+        assert_eq!(settlement.adjustments, vec![None, Some(-1.5)]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_counter_the_caller_saw_missing_is_reseeded_whatever_the_store_holds_now() {
+        let store = store(&[(KEY, 1.0)]);
+        let plan = plan(vec![counter(KEY, 10.0, "Key", "hashed")], 2.0);
+        let record = record(
+            &reserve(&store, &plan, &Host::detached())
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+        let settlement = settle(
+            &store,
+            &Settle {
+                reservation: &record,
+                window_resets: &[],
+                observed: &[None],
+                actual: 0.5,
+                apply_consistent: true,
+            },
             &Moment::from_unix_micros(NOW),
         )
         .await
+        .unwrap();
+        assert_eq!(value(&store, KEY), Some(3.0));
+        assert_eq!(
+            settlement.reseed,
+            vec![Reseed {
+                counter_key: KEY.to_owned(),
+                actual_cost: 0.5
+            }]
+        );
     }
 
     const NOW: i128 = 1_763_035_200_000_000;

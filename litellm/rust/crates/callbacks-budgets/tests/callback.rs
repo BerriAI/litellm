@@ -6,7 +6,7 @@ use litellm_callbacks::{
     FieldValues, Hook, HookInput, HookOutput, HostCallError, HostException, HostFault, HostRequest,
     Hosted, PatchOp, Verdict, hosted,
 };
-use litellm_callbacks_budgets::{Budgets, Shared};
+use litellm_callbacks_budgets::{Budgets, Settle, Settlement, Shared};
 use litellm_coroutine::CoroutineState;
 use litellm_redis_store::{
     Number,
@@ -91,6 +91,36 @@ fn stamp(record: &mut BudgetReservation, adjustments: &[Option<f64>]) {
     }
 }
 
+async fn settle(
+    budgets: &Budgets,
+    store: &SpendCounters,
+    record: &BudgetReservation,
+    actual: f64,
+) -> Settlement {
+    let mut observed = Vec::new();
+    for entry in record.entries.iter().flatten().flatten() {
+        let counter = SpendCounter::parse(entry.counter_key.as_deref().unwrap()).unwrap();
+        observed.push(
+            store
+                .read(&counter)
+                .await
+                .unwrap()
+                .value()
+                .map(Number::as_f64),
+        );
+    }
+    budgets
+        .settle(&Settle {
+            reservation: record,
+            window_resets: &[],
+            observed: &observed,
+            actual,
+            apply_consistent: true,
+        })
+        .await
+        .unwrap()
+}
+
 #[rstest]
 #[tokio::test]
 async fn the_callback_holds_at_pre_call_and_writes_the_hold_as_the_reservation() {
@@ -104,12 +134,12 @@ async fn the_callback_holds_at_pre_call_and_writes_the_hold_as_the_reservation()
     assert_eq!(record.input_cost, Some(0.5));
     assert_eq!(record.input_tokens, Some(12));
     assert_eq!(record.finalized, None);
-    let settled = budgets.settle(&record, &[], 0.5).await.unwrap();
+    let settled = settle(&budgets, &store, &record, 0.5).await;
     assert_eq!(settled.adjustments, vec![Some(-1.5)]);
     assert!(settled.reseed.is_empty());
     assert_eq!(value(&store, KEY), Some(1.5));
     stamp(&mut record, &settled.adjustments);
-    let again = budgets.settle(&record, &[], 0.5).await.unwrap();
+    let again = settle(&budgets, &store, &record, 0.5).await;
     assert_eq!(again.adjustments, vec![None]);
     assert_eq!(value(&store, KEY), Some(1.5));
 }
@@ -151,7 +181,7 @@ async fn a_settlement_through_the_reservation_dict_lands_on_the_last_cost(#[case
     let plan = plan(vec![counter(KEY, 10.0, "Key", "hashed")], 2.0);
     let mut record = held(&callback, &plan).await;
     for cost in costs {
-        let settled = budgets.settle(&record, &[], *cost).await.unwrap();
+        let settled = settle(&budgets, &store, &record, *cost).await;
         stamp(&mut record, &settled.adjustments);
     }
     assert_eq!(value(&store, KEY), Some(1.0 + costs[costs.len() - 1]));

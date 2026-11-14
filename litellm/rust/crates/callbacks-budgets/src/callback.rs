@@ -10,7 +10,7 @@ use litellm_redis_store::spend_counters::SpendCounters;
 use serde_json::{Map, json};
 
 use crate::{
-    engine::{self, EngineError, Reservation, Settlement, UNAVAILABLE},
+    engine::{self, EngineError, Reservation, Settle, Settlement, UNAVAILABLE},
     plan::Plan,
     window::Moment,
 };
@@ -105,20 +105,8 @@ impl Budgets {
         }
     }
 
-    pub async fn settle(
-        &self,
-        reservation: &BudgetReservation,
-        window_resets: &[Option<String>],
-        actual: f64,
-    ) -> Result<Settlement, EngineError> {
-        engine::settle(
-            &self.store,
-            reservation,
-            window_resets,
-            actual,
-            &Moment::now(),
-        )
-        .await
+    pub async fn settle(&self, request: &Settle<'_>) -> Result<Settlement, EngineError> {
+        engine::settle(&self.store, request, &Moment::now()).await
     }
 
     async fn admit(&self, input: &HookInput, host: Host) -> HookOutput {

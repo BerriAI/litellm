@@ -7,8 +7,8 @@ mod window;
 pub use callback::{Budgets, NAME, Shared};
 pub use checks::{Check, Decision, PyNumber, Refusal, decide, fixed};
 pub use engine::{
-    CurrentSpend, EngineError, Entry, Exceeded, Reseed, Reservation, Settlement, UNAVAILABLE,
-    reserve, settle,
+    CurrentSpend, EngineError, Entry, Exceeded, PendingIncrement, Reseed, Reservation, Settle,
+    Settlement, UNAVAILABLE, reserve, settle,
 };
 pub use litellm_callbacks::BudgetReservation;
 pub use plan::{Plan, PlannedCounter};

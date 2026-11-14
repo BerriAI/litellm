@@ -380,10 +380,12 @@ async def reconcile_budget_reservation(
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return ()
     _ = float(budget_reservation.get("reserved_cost") or 0.0)
-    await settle_native_reservation(budget_reservation, float(actual_cost or 0.0))
+    pending: Final = await settle_native_reservation(
+        budget_reservation, float(actual_cost or 0.0), apply_consistent=apply_consistent
+    )
     if finalize:
         budget_reservation["finalized"] = True
-    return ()
+    return pending
 
 
 def stamp_budget_reservation_actual_cost(budget_reservation: dict | None, actual_cost: float | None) -> None:

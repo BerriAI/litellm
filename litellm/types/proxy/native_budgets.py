@@ -10,11 +10,19 @@ class NativeReseed(BaseModel):
     actual_cost: float
 
 
+class NativePendingIncrement(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    counter_key: str
+    increment: float
+
+
 class NativeSettlement(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     adjustments: tuple[float | None, ...]
     reseed: tuple[NativeReseed, ...]
+    pending: tuple[NativePendingIncrement, ...]
 
 
 PyNumber: TypeAlias = StrictInt | StrictFloat
@@ -166,6 +174,7 @@ __all__ = [
     "KeySoftCheck",
     "KeyWindowCheck",
     "ModelAccessGroupCheck",
+    "NativePendingIncrement",
     "NativeReseed",
     "NativeSettlement",
     "OrganizationCheck",
