@@ -2818,6 +2818,15 @@ def _complete_custom_openai(
         raise litellm.AuthenticationError(
             message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
         )
+    # A JSON provider with `require_api_key` gets its own key or nothing: without this, the
+    # fallback below sends litellm.openai_key / OPENAI_API_KEY to the provider's host.
+    json_provider: Final = None if api_key else JSONProviderRegistry.get(custom_llm_provider)
+    if json_provider is not None and json_provider.special_handling.get("require_api_key"):
+        raise litellm.AuthenticationError(
+            message=f"Set {json_provider.api_key_env} or pass api_key",
+            llm_provider=custom_llm_provider,
+            model=model,
+        )
     organization = (
         organization
         or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
