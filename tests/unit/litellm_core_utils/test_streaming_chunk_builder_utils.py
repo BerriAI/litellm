@@ -339,6 +339,63 @@ def test_get_combined_thinking_content_keeps_signed_block_without_thinking_text(
     ]
 
 
+def test_get_combined_reasoning_content_flattens_list_reasoning_blocks():
+    chunks: Final = [
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "reasoning_content": [
+                            {"content": "", "signature": "abc123"},
+                            {"thinking": "first ", "content": "ignored"},
+                            {"content": "second "},
+                            {"text": "third"},
+                            {"signature": "only-a-signature"},
+                            "fourth",
+                        ]
+                    }
+                }
+            ]
+        },
+        {"choices": [{"delta": {"reasoning_content": " fifth"}}]},
+    ]
+
+    result: Final = ChunkProcessor(chunks=chunks).get_combined_reasoning_content(chunks)
+
+    assert result == "first second thirdfourth fifth"
+
+
+def test_stream_chunk_builder_survives_list_reasoning_content():
+    chunks: Final = [
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "gpt-6.1-sol",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"reasoning_content": [{"content": "", "signature": "abc123"}]},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "gpt-6.1-sol",
+            "choices": [{"index": 0, "delta": {"content": "done"}, "finish_reason": "stop"}],
+        },
+    ]
+
+    response: Final = stream_chunk_builder(chunks)
+    message: Final = response["choices"][0]["message"]
+
+    assert message["reasoning_content"] == ""
+    assert message["content"] == "done"
+
+
 def test_cache_read_input_tokens_retained():
     chunk1 = ModelResponseStream(
         id="chatcmpl-95aabb85-c39f-443d-ae96-0370c404d70c",

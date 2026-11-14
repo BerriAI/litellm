@@ -778,6 +778,22 @@ class ChunkProcessor:
             arguments=combined_arguments,
         )
 
+    @staticmethod
+    def _reasoning_block_text(block: object) -> str:
+        if isinstance(block, str):
+            return block
+        if isinstance(block, dict):
+            for key in ("thinking", "content", "text"):
+                value = block.get(key)
+                if isinstance(value, str):
+                    return value
+            return ""
+        for key in ("thinking", "content", "text"):
+            value = getattr(block, key, None)
+            if isinstance(value, str):
+                return value
+        return ""
+
     def get_combined_content(
         self, chunks: Sequence["_ContentChunk"], delta_key: str = "content"
     ) -> ChatCompletionAssistantContentValue:
@@ -789,6 +805,11 @@ class ChunkProcessor:
                 content = delta.get(delta_key, "")
                 if content is None:
                     continue  # openai v1.0.0 sets content = None for chunks
+                if isinstance(content, list) and delta_key == "reasoning_content":
+                    for block in content:
+                        if block_text := self._reasoning_block_text(block):
+                            content_list.append(block_text)
+                    continue
                 content_list.append(content)
 
         # Combine the "content" strings into a single string || combine the 'function' strings into a single string
