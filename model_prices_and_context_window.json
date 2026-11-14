@@ -33366,7 +33366,6 @@
             "/v1/messages"
         ],
         "supports_adaptive_thinking": true,
-        "thinking_on_by_default": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -33436,7 +33435,6 @@
             "/v1/messages"
         ],
         "supports_adaptive_thinking": true,
-        "thinking_on_by_default": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -33482,7 +33480,6 @@
             "/v1/messages"
         ],
         "supports_adaptive_thinking": true,
-        "thinking_on_by_default": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -66209,7 +66206,6 @@
         "prompt_cache_min_tokens": 512,
         "source": "https://deepinfra.com/pricing",
         "supports_adaptive_thinking": true,
-        "thinking_on_by_default": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -66525,7 +66521,6 @@
         "prompt_cache_min_tokens": 1024,
         "source": "https://deepinfra.com/pricing",
         "supports_adaptive_thinking": true,
-        "thinking_on_by_default": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -69615,7 +69610,6 @@
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_adaptive_thinking": true,
-        "thinking_on_by_default": true,
         "prompt_cache_min_tokens": 512,
         "supports_web_search": true,
         "supports_function_calling": true,
@@ -69639,7 +69633,6 @@
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_adaptive_thinking": true,
-        "thinking_on_by_default": true,
         "supports_web_search": true,
         "supports_function_calling": true,
         "input_cost_per_token": 2e-06,
@@ -71599,7 +71592,6 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_adaptive_thinking": true,
-        "thinking_on_by_default": true,
         "prompt_cache_min_tokens": 512,
         "supports_sampling_params": false
     },
@@ -71621,7 +71613,6 @@
         "supports_vision": true,
         "prompt_cache_min_tokens": 1024,
         "supports_adaptive_thinking": true,
-        "thinking_on_by_default": true,
         "supports_sampling_params": false
     },
     "aihubmix/coding-glm-5.3": {
@@ -76359,7 +76350,6 @@
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_adaptive_thinking": true,
-        "thinking_on_by_default": true,
         "supports_web_search": true,
         "supports_function_calling": true,
         "input_cost_per_token": 1e-07,
