@@ -109,7 +109,7 @@ Follow these coding conventions for new/updated code (a three-line fix in a lega
 - API-fragmentation-aware: when logic must branch on which API surface produced or consumes data (e.g. chat completions vs Anthropic Messages vs Responses API shapes), proactively look for an existing shared helper (e.g. `litellm_core_utils/prompt_templates/factory.py`) before writing per-surface parsing in the new module. If none exists, add one there instead of duplicating the same format-detection logic in every new guardrail/integration
 - Current default for new model names: logic that picks behavior from a model-name table (tokenizer, message framing, supported params) gives a provider's model the table does not list yet that provider's current behavior, never its oldest, since providers ship names faster than any table is updated
 
-Follow conventional commits for commit names and PR titles
+Follow conventional commits for commit names and PR titles. Reserve `!` and `BREAKING CHANGE` for an evidenced incompatibility with a supported public contract. Name the previously valid request, config or integration, its before/after behavior and the required caller or operator migration. Observable differences alone, including provider price refreshes, additive changes that preserve existing contracts, internal refactors and fixes restoring intended behavior, do not qualify. Investigate uncertain compatibility risks without asserting a confirmed break. Keep billing, security and rollout risk assessments separate (2026-11-03, a price correction was mislabeled breaking)
 
 ## Think Before Coding
 
