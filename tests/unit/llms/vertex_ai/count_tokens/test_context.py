@@ -534,3 +534,35 @@ async def test_anthropic_view_names_the_block_gemini_cannot_count_when_an_edit_t
     assert blocks_error is not None
     assert blocks_error.status_code == 400
     assert "search_result" in blocks_error.error_message
+
+
+def _shared_def_tool(name: str, def_block: str, definitions: JsonValue) -> dict[str, JsonValue]:
+    return {
+        "name": name,
+        "input_schema": {
+            "type": "object",
+            "properties": {f"field{index}": {"$ref": f"#/{def_block}/Shared"} for index in range(3)},
+            def_block: definitions,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("tool", "message"),
+    [
+        (
+            _shared_def_tool("shared_tree", "$defs", {"Shared": {"type": "string", "description": "x" * 5_000_000}}),
+            "tool 'shared_tree'",
+        ),
+        (_shared_def_tool("weather", "definitions", [{"Shared": {"type": "string"}}]), "must be JSON objects"),
+    ],
+    ids=("over-the-inlining-budget", "non-object-definitions"),
+)
+def test_tool_schemas_gemini_refuses_return_a_400_error_value_naming_why(
+    tool: dict[str, JsonValue], message: str
+) -> None:
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", system=None, tools=[tool])
+
+    assert isinstance(context, VertexGeminiCountContextError)
+    assert context.status_code == 400
+    assert message in context.error_message

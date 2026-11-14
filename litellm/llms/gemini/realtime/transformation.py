@@ -5,6 +5,7 @@ This file contains the transformation logic for the Gemini realtime API.
 import json
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 from typing import Final, cast
 
 from pydantic import TypeAdapter
@@ -15,8 +16,10 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.common_utils import DefsInliningBudgetExceededError
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeSessionUpdateRejection
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
     VertexGeminiConfig,
@@ -200,6 +203,7 @@ def _base64_decoded_byte_count(data: str) -> int:
 
 
 _JSON_ARRAY: Final = TypeAdapter(tuple[object, ...])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
 def _chat_completion_tool(tool: object) -> dict[str, object]:
@@ -207,6 +211,15 @@ def _chat_completion_tool(tool: object) -> dict[str, object]:
     if fields.get("type") != "function" or "function" in fields:
         return {**fields}
     return {"type": "function", "function": {key: value for key, value in fields.items() if key != "type"}}
+
+
+def _gemini_live_tool_params_json(tools_json: str) -> str:
+    request_params: Final[dict[str, object]] = {}  # mutable-ok: map_function writes toolConfig into the params it gets
+    tools: Final = VertexGeminiConfig().map_function(
+        value=[_chat_completion_tool(tool) for tool in _JSON_ARRAY.validate_json(tools_json)],
+        optional_params=request_params,
+    )
+    return json.dumps({**request_params, "tools": tools})
 
 
 def _system_instruction_text(system_instruction: HttpxContentType | None) -> str | None:
@@ -221,6 +234,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def __init__(self, drop_params: bool = False) -> None:
         super().__init__()
         self.drop_params = drop_params
+        self._tool_params_json: Final = lru_cache(maxsize=2)(_gemini_live_tool_params_json)
         self._tool_call_id_to_name: OrderedDict[str, str] = OrderedDict()
         # Gemini Live sometimes emits usageMetadata in a standalone frame between
         # turns; buffer it here so the next response.done carries the token counts.
@@ -428,16 +442,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     GeminiRealtimeConfig._requested_response_modalities(cast(object, value))
                 )
             elif key == "tools":
-                from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-                    VertexGeminiConfig,
-                )
-
-                vertex_gemini_config = VertexGeminiConfig()
-                # Tools should be at the top level of setup, not inside generationConfig
-                optional_params["tools"] = vertex_gemini_config.map_function(
-                    value=[_chat_completion_tool(tool) for tool in _JSON_ARRAY.validate_python(value)],
-                    optional_params=optional_params,
-                )
+                optional_params.update(_JSON_OBJECT.validate_json(self._tool_params_json(json.dumps(value))))
             elif key == "input_audio_transcription" and value is not None:
                 optional_params["inputAudioTranscription"] = {}
             elif key == "turn_detection":
@@ -588,6 +593,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 param="session",
             )
         return self._modality_rejection(model, session) or self._voice_rejection(model, session)
+
+    def session_fields_rejection(self, session: Mapping[str, object]) -> RealtimeSessionUpdateRejection | None:
+        tools: Final = session.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return None
+        try:
+            self._tool_params_json(json.dumps(tools))
+        except (DefsInliningBudgetExceededError, VertexAIError) as e:
+            return RealtimeSessionUpdateRejection(code="invalid_value", message=str(e), param="session.tools")
+        return None
 
     @staticmethod
     def _modality_rejection(model: str, session: Mapping[str, object]) -> RealtimeSessionUpdateRejection | None:

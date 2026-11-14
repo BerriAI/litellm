@@ -21,10 +21,14 @@ from litellm.cost_calculator import batch_cost_calculator
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token, parse_prompt_tokens_details
+from litellm.litellm_core_utils.prompt_templates.common_utils import DEFS_MAX_INLINED_BYTES
 from litellm.llms.anthropic.messages.native import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
-from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
+from litellm.llms.vertex_ai.common_utils import (
+    GEMINI_MAX_ENUM_CHARACTERS,
+    VertexAIError,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
@@ -11370,3 +11374,269 @@ def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) 
         }
         for index, start, end in expected_sources
     ]
+
+
+def _schema_referencing_a_shared_def(def_bytes: int, references: int) -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": {f"field{index}": {"$ref": "#/$defs/Shared"} for index in range(references)},
+        "$defs": {"Shared": {"type": "string", "description": "x" * def_bytes}},
+    }
+
+
+def _function_tool(name: str, parameters: dict[str, object]) -> dict[str, object]:
+    return {"type": "function", "function": {"name": name, "parameters": parameters}}
+
+
+def _gemini_reply() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+        },
+    )
+
+
+_OVER_BUDGET_TOOL: Final = _function_tool(
+    "shared_tree", _schema_referencing_a_shared_def(DEFS_MAX_INLINED_BYTES // 2, references=3)
+)
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_gemini_tool_whose_defs_inline_past_the_budget_is_rejected_as_a_context_window_error_naming_it(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*").mock(
+        return_value=_gemini_reply()
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError, match="tool 'shared_tree'") as raised:
+        completion(
+            model="gemini/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Say hi"}],
+            tools=[_OVER_BUDGET_TOOL],
+            api_key="test-api-key",
+            client=HTTPHandler(),
+        )
+
+    assert (raised.value.status_code, raised.value.llm_provider) == (400, "gemini")
+    assert not route.called
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_gemini_tool_over_the_inlining_budget_runs_the_context_window_fallback(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*").mock(
+        return_value=_gemini_reply()
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gemini-tools", "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "k"}},
+            {"model_name": "bigger-window", "litellm_params": {"model": "openai/gpt-4o", "mock_response": "fell back"}},
+        ],
+        context_window_fallbacks=[{"gemini-tools": ["bigger-window"]}],
+    )
+
+    response: Final = router.completion(
+        model="gemini-tools", messages=[{"role": "user", "content": "Say hi"}], tools=[_OVER_BUDGET_TOOL]
+    )
+
+    assert response.choices[0].message.content == "fell back"
+    assert not route.called
+
+
+@pytest.mark.parametrize(
+    ("config", "llm_provider"), [(VertexGeminiConfig(), "vertex_ai"), (GoogleAIStudioGeminiConfig(), "gemini")]
+)
+def test_gemini_tools_in_one_request_share_the_inlining_budget(config: VertexGeminiConfig, llm_provider: str) -> None:
+    def_bytes: Final = DEFS_MAX_INLINED_BYTES * 3 // 5
+    first: Final = _function_tool("first", _schema_referencing_a_shared_def(def_bytes, references=1))
+    second: Final = _function_tool("second", _schema_referencing_a_shared_def(def_bytes, references=1))
+
+    alone: Final = config.map_openai_params(
+        non_default_params={"tools": [first]}, optional_params={}, model="gemini-2.5-flash", drop_params=False
+    )
+
+    assert alone["tools"][0]["function_declarations"][0]["parameters"]["properties"]["field0"]["description"] == (
+        "x" * def_bytes
+    )
+    with pytest.raises(litellm.ContextWindowExceededError, match="tool 'second' and the tools before it") as raised:
+        config.map_openai_params(
+            non_default_params={"tools": [first, second]},
+            optional_params={},
+            model="gemini-2.5-flash",
+            drop_params=False,
+        )
+    assert raised.value.llm_provider == llm_provider
+
+
+def test_vertex_response_schema_whose_defs_inline_past_the_budget_is_rejected_as_a_context_window_error() -> None:
+    schema: Final = _schema_referencing_a_shared_def(DEFS_MAX_INLINED_BYTES // 2, references=3)
+
+    with pytest.raises(litellm.ContextWindowExceededError, match="the response schema") as raised:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={
+                "response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}
+            },
+            optional_params={},
+            model="gemini-1.5-flash",
+            drop_params=False,
+        )
+    assert (raised.value.status_code, raised.value.llm_provider) == (400, "vertex_ai")
+
+
+def test_root_definitions_are_inlined_once_against_the_budget() -> None:
+    def_bytes: Final = DEFS_MAX_INLINED_BYTES * 3 // 5
+    tool: Final = _function_tool(
+        "legacy",
+        {
+            "type": "object",
+            "properties": {"wrapper": {"$ref": "#/definitions/Wrapper"}},
+            "definitions": {
+                "Wrapper": {"type": "object", "properties": {"shared": {"$ref": "#/definitions/Shared"}}},
+                "Shared": {"type": "string", "description": "x" * def_bytes},
+            },
+        },
+    )
+
+    mapped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": [tool]}, optional_params={}, model="gemini-2.5-flash", drop_params=False
+    )
+
+    parameters: Final = mapped["tools"][0]["function_declarations"][0]["parameters"]
+    assert parameters["properties"]["wrapper"]["properties"]["shared"]["description"] == "x" * def_bytes
+
+
+def test_gemini_inlining_budget_counts_only_the_fields_gemini_receives() -> None:
+    def mapped(shared_extras: dict[str, object]) -> object:
+        tool: Final = _function_tool(
+            "noisy",
+            {
+                "type": "object",
+                "properties": {f"field{index}": {"$ref": "#/$defs/Shared"} for index in range(3)},
+                "$defs": {
+                    "Shared": {"type": "string", "description": "a shared field", **shared_extras},
+                    "Big": {"type": "string", "description": "w" * (DEFS_MAX_INLINED_BYTES // 2)},
+                },
+            },
+        )
+        return VertexGeminiConfig().map_openai_params(
+            non_default_params={"tools": [tool]}, optional_params={}, model="gemini-2.5-flash", drop_params=False
+        )["tools"]
+
+    dropped_by_gemini: Final = {
+        "examples": ["x" * (DEFS_MAX_INLINED_BYTES // 2)],
+        "$comment": "y" * (DEFS_MAX_INLINED_BYTES // 2),
+        "x-ui": {"widget": "z" * (DEFS_MAX_INLINED_BYTES // 2)},
+        "oneOf": [{"$ref": "#/$defs/Big"}],
+        "allOf": [{"$ref": "#/$defs/Big"}],
+    }
+
+    assert mapped(dropped_by_gemini) == mapped({})
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_gemini_tool_with_boolean_schemas_and_definitions_held_as_data_reaches_gemini(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*").mock(
+        return_value=_gemini_reply()
+    )
+    word_default: Final = {"word": "go", "definitions": ["to leave"]}
+    tool: Final = _function_tool(
+        "define",
+        {
+            "type": "object",
+            "properties": {"definitions": True, "word": {"$ref": "#/$defs/Word"}, "city": {"$ref": "#/$defs/City"}},
+            "$defs": {
+                "City": True,
+                "Word": {
+                    "type": "object",
+                    "properties": {"word": {"type": "string"}},
+                    "examples": [{"word": "run", "definitions": ["to move fast"]}],
+                    "default": word_default,
+                },
+            },
+        },
+    )
+
+    completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Define run"}],
+        tools=[tool],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)["tools"][0]["function_declarations"][0]["parameters"]
+    assert sent["properties"]["definitions"] == sent["properties"]["city"] == {"type": "object"}
+    assert sent["properties"]["word"]["default"] == word_default
+
+
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"type": "object", "properties": {"city": {"$ref": "#/$defs/City"}}, "$defs": [{"City": {"type": "string"}}]},
+        {
+            "type": "object",
+            "properties": {"city": {"$ref": "#/definitions/City"}},
+            "definitions": [{"City": {"type": "string"}}],
+        },
+        {
+            "type": "object",
+            "properties": {
+                "place": {
+                    "type": "object",
+                    "properties": {"city": {"$ref": "#/$defs/City"}},
+                    "$defs": [{"City": {"type": "string"}}],
+                }
+            },
+        },
+        {"type": "object", "properties": {"city": {"$ref": "#/$defs/City"}}, "$defs": {"City": False}},
+    ],
+    ids=("root-defs-list", "root-definitions-list", "nested-defs-list", "false-def"),
+)
+def test_gemini_tool_whose_def_block_is_not_an_object_is_rejected_with_a_400(
+    respx_mock: respx.MockRouter, parameters: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*").mock(
+        return_value=_gemini_reply()
+    )
+    tool: Final = _function_tool("weather", parameters)
+
+    with pytest.raises(litellm.BadRequestError, match="must be JSON objects") as raised:
+        completion(
+            model="gemini/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Weather in Paris?"}],
+            tools=[tool],
+            api_key="test-api-key",
+            client=HTTPHandler(),
+        )
+
+    assert raised.value.status_code == 400
+    assert not route.called
+
+
+def test_recursive_tool_schema_reaches_gemini_the_same_under_defs_and_definitions() -> None:
+    def mapped(block: str) -> object:
+        tool: Final = _function_tool(
+            "linked_list",
+            {
+                "type": "object",
+                "properties": {"head": {"$ref": f"#/{block}/MaybeNode"}},
+                block: {
+                    "MaybeNode": {"anyOf": [{"$ref": f"#/{block}/Node"}, {"type": "null"}]},
+                    "Node": {
+                        "type": "object",
+                        "properties": {"text": {"type": "string"}, "next": {"$ref": f"#/{block}/MaybeNode"}},
+                        "required": ["text"],
+                    },
+                },
+            },
+        )
+        return GoogleAIStudioGeminiConfig().map_openai_params(
+            non_default_params={"tools": [tool]}, optional_params={}, model="gemini-2.5-flash", drop_params=False
+        )["tools"]
+
+    assert mapped("definitions") == mapped("$defs")

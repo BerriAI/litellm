@@ -14,6 +14,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
 )
 from litellm.llms.vertex_ai.common_utils import (
     build_vertex_schema,
+    schema_budget_errors_as_context_window_errors,
     supports_response_json_schema,
     with_integer_enums_that_fit,
 )
@@ -356,7 +357,8 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             GenerateContentRequestDict,
         )
 
-        self._normalize_response_schema(generate_content_config_dict, model)
+        with schema_budget_errors_as_context_window_errors(model, self.custom_llm_provider):
+            self._normalize_response_schema(generate_content_config_dict, model)
 
         typed_generate_content_request: Final = GenerateContentRequestDict(
             model=model,

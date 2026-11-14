@@ -2511,3 +2511,72 @@ def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
 
     assert input_details.get("web_search_requests") is None
     assert input_details.get("google_maps_grounding_requests") is None
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    ("definitions", "message"),
+    [
+        ({"Shared": {"type": "string", "description": "x" * 5_000_000}}, "tool 'shared_tree'"),
+        ([{"Shared": {"type": "string"}}], "must be JSON objects"),
+        ({"Shared": False}, "points at a bool"),
+    ],
+    ids=("over-the-inlining-budget", "non-object-defs", "non-object-def"),
+)
+def test_gemini_live_rejects_a_session_update_whose_tool_schema_gemini_cannot_take(
+    drop_params: bool, definitions: object, message: str
+) -> None:
+    tool: Final = {
+        "type": "function",
+        "name": "shared_tree",
+        "parameters": {
+            "type": "object",
+            "properties": {f"field{index}": {"$ref": "#/$defs/Shared"} for index in range(3)},
+            "$defs": definitions,
+        },
+    }
+
+    rejection: Final = GeminiRealtimeConfig(drop_params=drop_params).session_fields_rejection({"tools": [tool]})
+
+    assert rejection is not None
+    assert (rejection.code, rejection.param) == ("invalid_value", "session.tools")
+    assert message in rejection.message
+
+
+def test_gemini_live_accepts_a_session_update_whose_tool_schema_fits() -> None:
+    tool: Final = {
+        "type": "function",
+        "name": "weather",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"$ref": "#/$defs/City"}},
+            "$defs": {"City": {"type": "string"}},
+        },
+    }
+
+    assert GeminiRealtimeConfig().session_fields_rejection({"tools": [tool]}) is None
+
+
+def test_gemini_live_setup_tools_stay_independent_when_one_session_update_is_mapped_twice() -> None:
+    config: Final = GeminiRealtimeConfig()
+    session: Final = {
+        "tools": [
+            {
+                "type": "function",
+                "name": "weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"$ref": "#/$defs/City"}},
+                    "$defs": {"City": {"type": "string"}},
+                },
+            }
+        ]
+    }
+
+    first: Final = config.map_openai_params(optional_params={}, non_default_params=session, model="gemini-live-2.5-flash")
+    first["tools"][0]["function_declarations"][0]["parameters"]["properties"]["city"]["type"] = "integer"
+    second: Final = config.map_openai_params(
+        optional_params={}, non_default_params=session, model="gemini-live-2.5-flash"
+    )
+
+    assert second["tools"][0]["function_declarations"][0]["parameters"]["properties"]["city"] == {"type": "string"}

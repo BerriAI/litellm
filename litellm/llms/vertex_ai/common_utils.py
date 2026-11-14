@@ -1,10 +1,12 @@
 import math
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from functools import lru_cache
+from functools import cache, lru_cache
 from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast, get_type_hints
@@ -16,7 +18,12 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    DEFS_MAX_INLINED_BYTES,
+    DefsInliningBudgetExceededError,
+    MalformedDefsError,
+    unpack_defs,
+)
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.gemini.common_utils import (
@@ -688,7 +695,7 @@ def get_gemini_url(
 _get_gemini_url = get_gemini_url
 
 
-def check_text_in_content(parts: list[PartType]) -> bool:
+def check_text_in_content(parts: Sequence[PartType]) -> bool:
     """
     check that user_content has 'text' parameter.
         - Known Vertex Error: Unable to submit request because it must have a text parameter.
@@ -860,6 +867,70 @@ def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
                 _fix_enum_types(item, depth=depth + 1, send_integer_enums=send_integer_enums)
 
 
+@contextmanager
+def schema_budget_errors_as_context_window_errors(model: str, llm_provider: str) -> Generator[None, None, None]:
+    try:
+        yield
+    except DefsInliningBudgetExceededError as e:
+        raise litellm.ContextWindowExceededError(message=str(e), model=model, llm_provider=llm_provider) from e
+
+
+_FIELDS_INLINING_READS: Final = frozenset({"$ref", "$defs", "definitions"})
+_FIELDS_ONLY_PRESENCE_MATTERS: Final = frozenset({"oneOf", "allOf"})
+
+
+def _schema_field_gemini_receives(key: str, value: JsonValue, valid_fields: frozenset[str], depth: int) -> JsonValue:
+    match key, value:
+        case ("properties" | "$defs" | "definitions", dict()):
+            return {
+                name: _schema_gemini_receives(subschema, valid_fields, depth + 1) for name, subschema in value.items()
+            }
+        case ("items", _):
+            return _schema_gemini_receives(value, valid_fields, depth + 1)
+        case ("anyOf", list()):
+            return [_schema_gemini_receives(item, valid_fields, depth + 1) for item in value]
+        case ("oneOf" | "allOf", _):
+            return []
+        case _:
+            return value
+
+
+def _schema_object_gemini_receives(
+    schema: Mapping[str, JsonValue], valid_fields: frozenset[str], depth: int = 0
+) -> dict[str, JsonValue]:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+    return {
+        key: _schema_field_gemini_receives(key, value, valid_fields, depth)
+        for key, value in schema.items()
+        if key in valid_fields or key in _FIELDS_INLINING_READS or key in _FIELDS_ONLY_PRESENCE_MATTERS
+    }
+
+
+def _schema_gemini_receives(schema: JsonValue, valid_fields: frozenset[str], depth: int) -> JsonValue:
+    match schema:
+        case True:
+            return {}
+        case dict():
+            return _schema_object_gemini_receives(schema, valid_fields, depth)
+        case _:
+            return schema
+
+
+@dataclass(frozen=True, slots=True)
+class _DefinitionsFilteredOnUse:
+    definitions: Mapping[str, JsonValue]
+    gemini_receives: Callable[[str], JsonValue]
+
+    def __contains__(self, name: object) -> bool:
+        return name in self.definitions
+
+    def __getitem__(self, name: str) -> JsonValue:
+        return self.gemini_receives(name)
+
+
 def build_vertex_schema(
     parameters: dict, add_property_ordering: bool = False, send_integer_enums: bool = False
 ) -> dict[str, object]:
@@ -876,15 +947,63 @@ def build_vertex_schema(
     Returns:
         parameters: dict - the input parameters, modified in place
     """
-    # Get valid fields from Schema TypedDict
-    valid_schema_fields: Final = set(get_type_hints(Schema).keys())
+    schema, _ = build_vertex_schema_within_budget(
+        parameters,
+        max_inlined_bytes=DEFS_MAX_INLINED_BYTES,
+        schema_name="the response schema",
+        add_property_ordering=add_property_ordering,
+        send_integer_enums=send_integer_enums,
+    )
+    return schema
 
-    defs: Final = parameters.pop("$defs", {})
+
+def build_vertex_schema_within_budget(
+    parameters: dict[str, object],
+    max_inlined_bytes: int,
+    schema_name: str,
+    add_property_ordering: bool = False,
+    send_integer_enums: bool = False,
+) -> tuple[dict[str, object], int]:
+    valid_schema_fields: Final = frozenset(get_type_hints(Schema).keys())
+
+    dollar_defs: Final = parameters.pop("$defs", {})
+    definitions: Final = parameters.pop("definitions", {})
+    if not isinstance(dollar_defs, dict) or not isinstance(definitions, dict):
+        raise VertexAIError(
+            status_code=400,
+            message=f"The $defs and definitions of {schema_name} must be JSON objects that map names to schemas.",
+        )
+    all_defs: Final = cast(Mapping[str, JsonValue], {**dollar_defs, **definitions})  # cast-ok: tool schemas are JSON
+    parameters_json: Final = cast(Mapping[str, JsonValue], parameters)  # cast-ok: tool schemas are JSON request data
+    parameters_gemini_receives: Final = _schema_object_gemini_receives(parameters_json, valid_schema_fields)
+    parameters.clear()
+    parameters.update(parameters_gemini_receives)
+
+    @cache
+    def definition_gemini_receives(name: str) -> JsonValue:
+        return _schema_gemini_receives(all_defs[name], valid_schema_fields, 1)
+
     # Expand $ref references in parameters using the definitions
     # Note: We don't pre-flatten defs as that causes exponential memory growth
     # with circular references (see issue #19098). unpack_defs handles nested
     # refs recursively and correctly detects/skips circular references.
-    unpack_defs(parameters, defs)
+    try:
+        inlined_bytes: Final = unpack_defs(
+            parameters,
+            _DefinitionsFilteredOnUse(all_defs, definition_gemini_receives),
+            max_inlined_bytes=max_inlined_bytes,
+        )
+    except DefsInliningBudgetExceededError as e:
+        raise DefsInliningBudgetExceededError(
+            f"Inlining the $ref definitions of {schema_name} copies more than {DEFS_MAX_INLINED_BYTES:,} bytes of "
+            "definitions, more than a model context window holds. Reference shared $defs less often or flatten the "
+            "schema."
+        ) from e
+    except MalformedDefsError as e:
+        raise VertexAIError(
+            status_code=400,
+            message=f"The $defs and definitions of {schema_name} must be JSON objects that map names to schemas: {e.reason}.",
+        ) from e
 
     _convert_schema_types(parameters)
 
@@ -906,12 +1025,12 @@ def build_vertex_schema(
     # Postprocessing
     # Filter out fields that don't exist in Schema
 
-    parameters = filter_schema_fields(parameters, valid_schema_fields)
+    filtered: Final = filter_schema_fields(parameters, valid_schema_fields)
 
     if add_property_ordering:
-        set_schema_property_ordering(parameters)
+        set_schema_property_ordering(filtered)
 
-    return parameters
+    return filtered, inlined_bytes
 
 
 _build_vertex_schema = build_vertex_schema
@@ -1028,7 +1147,9 @@ def set_schema_property_ordering(schema: dict[str, object], depth: int = 0) -> d
     return schema
 
 
-def filter_schema_fields(schema_dict: dict[str, object], valid_fields: set[str], processed=None) -> dict[str, object]:
+def filter_schema_fields(
+    schema_dict: dict[str, object], valid_fields: frozenset[str], processed=None
+) -> dict[str, object]:
     """
     Recursively filter a schema dictionary to keep only valid fields.
     """

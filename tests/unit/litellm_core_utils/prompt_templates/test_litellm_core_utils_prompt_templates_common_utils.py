@@ -2,6 +2,7 @@ import contextlib
 import copy
 import importlib
 import json
+import tracemalloc
 import warnings
 from collections.abc import Mapping
 from typing import Final, cast
@@ -9,8 +10,10 @@ from unittest import mock
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates import common_utils
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    DEFS_MAX_INLINED_BYTES,
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     TOOL_RESULT_MEDIA_BOUNDARY,
@@ -25,6 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     merge_consecutive_system_messages,
     strip_litellm_response_only_fields,
     system_messages_first,
+    unpack_defs,
 )
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     flatten_combinators_and_drop_non_python_regex_patterns,
@@ -1157,7 +1161,9 @@ def test_old_path_patch_with_create_leaves_the_moved_helper_in_place() -> None:
 
 def test_overriding_a_moved_helper_through_the_old_path_warns_and_deleting_it_restores_the_released_one() -> None:
     moved_name: Final = "_attempt_json_repair"
-    with pytest.warns(DeprecationWarning, match=r"common_utils\._attempt_json_repair moved to .*\.tool_call_json_repair"):
+    with pytest.warns(
+        DeprecationWarning, match=r"common_utils\._attempt_json_repair moved to .*\.tool_call_json_repair"
+    ):
         setattr(common_utils, moved_name, mock.Mock(return_value={"overridden": True}))
     assert parse_tool_call_arguments('{"a": 1') == {"overridden": True}
     delattr(common_utils, moved_name)
@@ -1195,3 +1201,94 @@ def test_get_content_from_model_response_includes_server_tool_calls_before_clien
     assert get_content_from_model_response(response) == (
         "Looking it up." + server_call.model_dump_json() + client_call.model_dump_json()
     )
+
+
+def _unpack_defs_peak_bytes(definition_count: int) -> int:
+    schema: Final = {
+        "type": "object",
+        "properties": {f"p{index}": {"$ref": f"#/$defs/D{index}"} for index in range(definition_count)},
+    }
+    defs: Final = {f"D{index}": {"type": "string"} for index in range(definition_count)}
+    tracemalloc.start()
+    try:
+        unpack_defs(schema, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_unpack_defs_memory_grows_linearly_with_the_number_of_definitions_and_refs() -> None:
+    assert _unpack_defs_peak_bytes(2048) < 8 * _unpack_defs_peak_bytes(512)
+
+
+def test_unpack_defs_resolves_refs_under_a_property_named_ref() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {"$ref": {"$ref": "#/$defs/Name"}},
+        "$defs": {"Name": {"type": "string"}},
+    }
+    unpack_defs(schema, {})
+    assert schema["properties"] == {"$ref": {"type": "string"}}
+
+
+def test_unpack_defs_reads_defs_and_refs_only_where_a_schema_sits() -> None:
+    word: Final = {
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "examples": [{"text": "run", "definitions": ["to move fast"]}],
+        "default": {"$ref": "#/$defs/Word"},
+    }
+    tag: Final = {"const": {"definitions": "x"}, "enum": [{"definitions": "y"}], "example": {"definitions": "z"}}
+    schema: Final = {
+        "type": "object",
+        "properties": {"definitions": True, "word": {"$ref": "#/$defs/Word"}, "tag": tag},
+        "patternProperties": {"definitions": True},
+        "dependentSchemas": {"definitions": True},
+        "$defs": {"Word": word, "definitions": True},
+        "definitions": {"definitions": True},
+    }
+
+    unpack_defs(schema, {})
+
+    assert schema["properties"] == {"definitions": True, "word": word, "tag": tag}
+
+
+def test_unpack_defs_inlines_a_ref_to_a_true_definition_as_the_empty_schema() -> None:
+    schema: Final = {"type": "object", "properties": {"city": {"$ref": "#/$defs/City"}}, "$defs": {"City": True}}
+
+    unpack_defs(schema, {})
+
+    assert schema["properties"] == {"city": {}}
+
+
+@pytest.mark.parametrize(
+    ("model", "defs_key", "credentials"),
+    [
+        (
+            "bedrock/converse/us.anthropic.claude-haiku-5-5-v1:0",
+            "$defs",
+            {"aws_access_key_id": "test", "aws_secret_access_key": "test", "aws_region_name": "us-east-1"},
+        ),
+        ("anthropic/claude-haiku-5-5", "definitions", {"api_key": "test"}),
+    ],
+)
+def test_ref_to_a_definition_that_is_not_a_schema_is_a_bad_request(
+    model: str, defs_key: str, credentials: Mapping[str, str]
+) -> None:
+    tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"$ref": f"#/{defs_key}/City"}},
+                defs_key: {"City": False},
+            },
+        },
+    }
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model=model, messages=[{"role": "user", "content": "hi"}], tools=[tool], num_retries=0, **credentials
+        )
+    assert exc_info.value.status_code == 400
+    assert "points at a bool" in exc_info.value.message

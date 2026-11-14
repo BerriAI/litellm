@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import threading
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal
@@ -21,6 +22,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (
+    ClientLoopExit,
     RealTimeStreaming,
     _merge_session_fields,
     client_sent_openai_beta_realtime_header,
@@ -1640,6 +1642,7 @@ async def test_client_ack_caches_setup_to_prevent_duplicate_session_update_setup
 
     provider_config = MagicMock()
     provider_config.setup_session_update_rejection = MagicMock(return_value=None)
+    provider_config.session_fields_rejection = MagicMock(return_value=None)
 
     def _transform(message: str, model: str, session_configuration_request=None):
         if session_configuration_request is None:
@@ -1665,6 +1668,39 @@ async def test_client_ack_caches_setup_to_prevent_duplicate_session_update_setup
     assert streaming.session_configuration_request is not None
     sent_payload = json.loads(backend_ws.send.await_args_list[0].args[0])
     assert "setup" in sent_payload
+
+
+@pytest.mark.asyncio
+async def test_session_update_tool_check_runs_off_the_event_loop_thread() -> None:
+    loop_thread: Final = threading.get_ident()
+    check_threads: Final[list[int]] = []
+
+    def _record_check_thread(session: Mapping[str, object]) -> None:
+        check_threads.append(threading.get_ident())
+
+    websocket = MagicMock()
+    websocket.receive_text = AsyncMock(
+        side_effect=[json.dumps({"type": "session.update", "session": {"tools": []}}), Exception("client done")]
+    )
+    websocket.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    provider_config = MagicMock()
+    provider_config.setup_session_update_rejection = MagicMock(return_value=None)
+    provider_config.session_fields_rejection = MagicMock(side_effect=_record_check_thread)
+    provider_config.transform_realtime_request = MagicMock(return_value=[])
+    streaming = RealTimeStreaming(
+        websocket=websocket,
+        backend_ws=backend_ws,
+        logging_obj=_mock_logging(),
+        provider_config=provider_config,
+        model="gemini-3.8-live",
+    )
+
+    await streaming.client_ack_messages()
+
+    assert len(check_threads) == 1
+    assert check_threads[0] != loop_thread
 
 
 @pytest.mark.asyncio
@@ -2896,6 +2932,7 @@ async def test_subsequent_session_update_cannot_reenable_vad_when_guardrails_act
 
     provider_config = MagicMock()
     provider_config.setup_session_update_rejection = MagicMock(return_value=None)
+    provider_config.session_fields_rejection = MagicMock(return_value=None)
     transformed_messages = []
 
     def mock_transform(msg, model, session_config):
@@ -2949,6 +2986,7 @@ async def test_follow_up_setup_updates_cached_session_configuration_request():
 
     provider_config = MagicMock()
     provider_config.setup_session_update_rejection = MagicMock(return_value=None)
+    provider_config.session_fields_rejection = MagicMock(return_value=None)
     follow_up_setup = json.dumps(
         {
             "setup": {
@@ -3149,6 +3187,47 @@ async def test_default_mode_drops_a_late_session_update_quietly_under_drop_param
     await streaming.client_ack_messages()
 
     assert _events_sent_to_client(streaming) == []
+    assert backend_ws.send.await_count == 2
+
+
+_OVER_BUDGET_TOOLS_UPDATE = json.dumps(
+    {
+        "type": "session.update",
+        "event_id": "evt_tools",
+        "session": {
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "shared_tree",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {f"field{index}": {"$ref": "#/$defs/Shared"} for index in range(3)},
+                        "$defs": {"Shared": {"type": "string", "description": "x" * 5_000_000}},
+                    },
+                }
+            ]
+        },
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [False, True])
+async def test_default_mode_answers_an_over_budget_tool_update_after_the_first_content_and_keeps_the_session(
+    monkeypatch, drop_params
+):
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch, [_TEXT_ITEM_CREATE, _OVER_BUDGET_TOOLS_UPDATE], drop_params=drop_params
+    )
+
+    loop_exit: Final = await streaming.client_ack_messages()
+
+    assert loop_exit is ClientLoopExit.CLIENT_DISCONNECTED
+    errors: Final = [event["error"] for event in _events_sent_to_client(streaming) if event["type"] == "error"]
+    assert [(error["code"], error["param"], error["event_id"]) for error in errors] == [
+        ("invalid_value", "session.tools", "evt_tools")
+    ]
+    assert "tool 'shared_tree'" in errors[0]["message"]
     assert backend_ws.send.await_count == 2
 
 

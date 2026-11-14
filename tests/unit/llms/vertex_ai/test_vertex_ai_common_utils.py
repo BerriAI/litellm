@@ -4,6 +4,7 @@ import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from enum import Enum
+from functools import reduce
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -708,6 +709,51 @@ def test_build_vertex_schema():
 
     assert build_vertex_schema(parameters) == expected_output
 
+
+def test_build_vertex_schema_answers_far_too_deep_nesting_with_the_depth_error() -> None:
+    deep: Final = reduce(
+        lambda inner, _: {"type": "object", "properties": {"nested": inner}},
+        range(DEFAULT_MAX_RECURSE_DEPTH * 20),
+        {"type": "object"},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting.",
+    ):
+        build_vertex_schema(deep)
+
+
+
+def _nested_past_the_depth_limit() -> dict[str, object]:
+    return reduce(
+        lambda inner, _: {"type": "object", "properties": {"nested": inner}},
+        range(DEFAULT_MAX_RECURSE_DEPTH + 1),
+        {"type": "object"},
+    )
+
+
+def test_build_vertex_schema_ignores_an_unused_definition_nested_past_the_depth_limit() -> None:
+    schema: Final = build_vertex_schema(
+        {
+            "type": "object",
+            "properties": {"city": {"$ref": "#/$defs/City"}},
+            "$defs": {"City": {"type": "string"}, "Unused": _nested_past_the_depth_limit()},
+        }
+    )
+
+    assert schema["properties"] == {"city": {"type": "string"}}
+
+
+def test_build_vertex_schema_answers_a_used_definition_nested_past_the_depth_limit_with_the_depth_error() -> None:
+    with pytest.raises(ValueError, match=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded"):
+        build_vertex_schema(
+            {
+                "type": "object",
+                "properties": {"deep": {"$ref": "#/definitions/Deep"}},
+                "definitions": {"Deep": _nested_past_the_depth_limit()},
+            }
+        )
 
 def test_process_items_with_excessive_nesting():
     """Test process_items with excessive nesting > max levels +1 deep."""

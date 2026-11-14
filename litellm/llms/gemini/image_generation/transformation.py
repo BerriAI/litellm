@@ -18,6 +18,7 @@ from litellm.llms.gemini.common_utils import (
 from litellm.llms.gemini.image_usage_transformation import (
     transform_gemini_image_usage,
 )
+from litellm.llms.vertex_ai.common_utils import schema_budget_errors_as_context_window_errors
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.gemini import GeminiImageGenerationRequest
 from litellm.types.llms.openai import (
@@ -69,9 +70,10 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             supported_params=self.get_supported_openai_params(model),
             optional_params=optional_params,
         )
-        if is_gemini_image_model(model):
-            mapped_params = map_gemini_image_tools_params(non_default_params, mapped_params)
-        return mapped_params
+        if not is_gemini_image_model(model):
+            return mapped_params
+        with schema_budget_errors_as_context_window_errors(model, "gemini"):
+            return map_gemini_image_tools_params(non_default_params, mapped_params)
 
     def get_complete_url(
         self,

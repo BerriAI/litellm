@@ -60,6 +60,10 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     candidate_count: int | None = None
     stop_sequences: list | None = None
 
+    @property
+    def _llm_provider(self) -> str:
+        return "gemini"
+
     def __init__(
         self,
         temperature: float | None = None,
