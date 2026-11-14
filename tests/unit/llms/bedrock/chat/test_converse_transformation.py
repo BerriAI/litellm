@@ -4383,6 +4383,70 @@ async def test_guarded_part_outside_user_turns_stays_guarded_when_a_tool_result_
     assert {"text": _GUARDED_PART_TEXT} not in sent_blocks
 
 
+_BLOCKED_QUESTION: Final = "Tell me about hexblade in one sentence."
+_REPLY_RULE: Final = "Reply with only the word OK."
+
+
+def _conversation_ending_in(shape: str) -> list[AllMessageValues]:
+    question: Final = {"role": "user", "content": _BLOCKED_QUESTION}
+    reply_rule: Final = {"role": "system", "content": [{"type": "text", "text": _REPLY_RULE}]}
+    match shape:
+        case "system_after_assistant":
+            return [question, {"role": "assistant", "content": "Sure."}, reply_rule]
+        case "system_after_tool_result":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
+                reply_rule,
+            ]
+        case "system_after_guarded_assistant":
+            guarded_answer: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
+            return [question, {"role": "assistant", "content": guarded_answer}, reply_rule]
+        case "user_turn":
+            return [question, {"role": "assistant", "content": "Sure."}, {"role": "user", "content": _REPLY_RULE}]
+        case "system_after_user_turn":
+            return [
+                question,
+                {"role": "assistant", "content": "Sure."},
+                {"role": "user", "content": "Be brief."},
+                reply_rule,
+            ]
+    raise AssertionError(shape)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("shape", "guarded_texts"),
+    [
+        ("system_after_assistant", ()),
+        ("system_after_tool_result", ()),
+        ("system_after_guarded_assistant", ()),
+        ("user_turn", (_REPLY_RULE,)),
+        ("system_after_user_turn", ("Be brief.", CONVERTED_SYSTEM_NOTE, _REPLY_RULE)),
+    ],
+)
+async def test_trailing_guard_wrap_never_shrinks_the_input_check_to_a_converted_system_turn(
+    use_async: bool, shape: str, guarded_texts: tuple[str, ...]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_conversation_ending_in(shape),
+        optional_params={**_GUARDRAIL_CONFIG, "tools": [_LOOKUP_TOOL]},
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    message_blocks: Final = chain.from_iterable(message["content"] for message in request["messages"])
+    sent_guarded_texts: Final = tuple(
+        block["guardContent"]["text"]["text"] for block in message_blocks if "guardContent" in block
+    )
+    assert sent_guarded_texts == guarded_texts
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("placement", ["system_after_unanswered_tool_call", "assistant_after_unanswered_tool_call"])

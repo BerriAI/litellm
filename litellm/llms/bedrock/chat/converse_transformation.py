@@ -1745,8 +1745,7 @@ class AmazonConverseConfig(BaseConfig):
 
         A guarded system or assistant part past the system prompt would shrink the check to that part, so it goes as
         text, with the trailing turns left unguarded, when the messages would carry no guardContent without it: no user
-        turn is guarded, no tool result is rewritten into a guarded user turn, and no turn that ends the request, a
-        converted system turn included, has text to guard.
+        turn is guarded, no tool result is rewritten into a guarded user turn, and the trailing wrap has no text to guard.
         """
         remaining: Final = messages[_leading_system_count(messages) :]
         if "guardrailConfig" not in optional_params or not any(map(_is_guarded_turn_outside_user_turns, remaining)):
@@ -1759,10 +1758,25 @@ class AmazonConverseConfig(BaseConfig):
             and any(map(_is_tool_or_function_turn, messages))
         ):
             return False
+        return not any(map(_gets_guarded_when_trailing, self._turns_the_trailing_wrap_guards(messages)))
+
+    def _wraps_the_trailing_turns(
+        self, messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]
+    ) -> bool:
+        return "guardrailConfig" in optional_params and bool(self._turns_the_trailing_wrap_guards(messages))
+
+    def _turns_the_trailing_wrap_guards(self, messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+        """The turns that end the request as user turns, or none when no user turn is among them.
+
+        A converted system turn is not user input, so guarding it alone would shrink the input check to the system
+        text and let a blocked word in an earlier user turn through.
+        """
+        remaining: Final = messages[_leading_system_count(messages) :]
         reordered: Final = chain.from_iterable(
             self._reordered_around_tool_results(remaining, index) for index in range(len(remaining))
         )
-        return not any(map(_gets_guarded_when_trailing, takewhile(_becomes_a_user_turn, reversed(tuple(reordered)))))
+        trailing: Final = tuple(takewhile(_becomes_a_user_turn, reversed(tuple(reordered))))
+        return trailing if any(map(_is_user_turn, trailing)) else ()
 
     def _reordered_around_tool_results(
         self, messages: Sequence[AllMessageValues], index: int
@@ -2413,6 +2427,9 @@ class AmazonConverseConfig(BaseConfig):
             messages, typed_optional_params, litellm_params, capability_model
         )
         keeps_full_input_check: Final = self._keeps_the_full_input_check(sendable_messages, typed_optional_params)
+        wraps_trailing_turns: Final = not keeps_full_input_check and self._wraps_the_trailing_turns(
+            sendable_messages, typed_optional_params
+        )
         messages, system_content_blocks = self._transform_system_message(
             list(
                 _guarded_text_as_text_past_the_system_prompt(sendable_messages)
@@ -2427,7 +2444,7 @@ class AmazonConverseConfig(BaseConfig):
         guard_input: Final = self._handle_orphaned_tool_blocks(messages, optional_params)
         messages = (
             guard_input
-            if keeps_full_input_check
+            if not wraps_trailing_turns
             else self._convert_consecutive_user_messages_to_guarded_text(guard_input, optional_params)
         )
         ## TRANSFORMATION ##
@@ -2533,6 +2550,9 @@ class AmazonConverseConfig(BaseConfig):
             messages, typed_optional_params, litellm_params, capability_model
         )
         keeps_full_input_check: Final = self._keeps_the_full_input_check(sendable_messages, typed_optional_params)
+        wraps_trailing_turns: Final = not keeps_full_input_check and self._wraps_the_trailing_turns(
+            sendable_messages, typed_optional_params
+        )
         messages, system_content_blocks = self._transform_system_message(
             list(
                 _guarded_text_as_text_past_the_system_prompt(sendable_messages)
@@ -2547,7 +2567,7 @@ class AmazonConverseConfig(BaseConfig):
         guard_input: Final = self._handle_orphaned_tool_blocks(messages, optional_params)
         messages = (
             guard_input
-            if keeps_full_input_check
+            if not wraps_trailing_turns
             else self._convert_consecutive_user_messages_to_guarded_text(guard_input, optional_params)
         )
 
