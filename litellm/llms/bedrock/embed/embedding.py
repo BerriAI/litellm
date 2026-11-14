@@ -85,6 +85,20 @@ _FIELDS: Final = TypeAdapter(dict[str, object])
 _NOVA_PARAMS_KEYS: Final = ("segmentedEmbeddingParams", "singleEmbeddingParams")
 _NOVA_INPUT_KEYS: Final = frozenset({"text", "image", "video", "audio"})
 _NOVA_CONTENT_KEYS: Final = frozenset({"value", "source"})
+_NESTED_CONTENT_KEYS: Final = frozenset(
+    {
+        *_NOVA_INPUT_KEYS,
+        *_NOVA_CONTENT_KEYS,
+        "inputText",
+        "inputImage",
+        "mediaSource",
+        "mediaSources",
+        "base64String",
+        "s3Location",
+        "uri",
+        "bytes",
+    }
+)
 _DEFAULTED_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "cohere": ("input_type",),
@@ -145,14 +159,27 @@ def _nova_model_input_with_options(
     }
 
 
+def _combined_field(extra_value: object, body_value: object) -> object:
+    """A generated object with the caller's settings for the same object added. The generated fields win, and the
+    caller cannot add a field that carries content to embed."""
+    extra: Final = _fields(extra_value)
+    body: Final = _fields(body_value)
+    if not extra or not body:
+        return body_value
+    return {
+        **{k: v for k, v in extra.items() if k not in _NESTED_CONTENT_KEYS},
+        **{k: _combined_field(extra.get(k), v) for k, v in body.items()},
+    }
+
+
 def _with_extra_body(
     provider: str, extra_body: Mapping[str, object], body: Mapping[str, object]
 ) -> dict[str, object]:  # mutable-ok: serialized as the request body
-    """The provider body over the ``extra_body`` fields. On Nova the caller's embedding params are also kept next to
-    the generated ones, which win on a shared field."""
-    merged: Final = {**extra_body, **body}
+    """The provider body over the ``extra_body`` fields. An object on both sides is combined field by field, and the
+    generated fields win. On Nova the caller's embedding params are combined with the generated ones the same way."""
     if provider != "nova":
-        return merged
+        return {**extra_body, **{k: _combined_field(extra_body.get(k), v) for k, v in body.items()}}
+    merged: Final = {**extra_body, **body}
     caller: Final = _nova_model_input(extra_body)
     if "modelInput" in body:
         return {

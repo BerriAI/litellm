@@ -2386,6 +2386,76 @@ def test_bedrock_cohere_image_embedding_keeps_its_input_type_over_extra_body(res
     assert sent_body(extra_body={"input_type": "search_query"}) == default_body
 
 
+def test_bedrock_titan_multimodal_extra_body_settings_join_the_generated_embedding_config(
+    respx_mock: respx.MockRouter,
+) -> None:
+    model_id: Final = "amazon.titan-embed-image-v1"
+    route: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/invoke").mock(
+        return_value=httpx.Response(200, json=titan_embedding_response)
+    )
+
+    litellm.embedding(
+        model=f"bedrock/{model_id}",
+        input=["hello"],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        dimensions=384,
+        extra_body={"embeddingConfig": {"outputEmbeddingLength": 256, "extraOption": {"enabled": True}}},
+    )
+
+    assert json.loads(route.calls.last.request.read()) == {
+        "inputText": "hello",
+        "embeddingConfig": {"outputEmbeddingLength": 384, "extraOption": {"enabled": True}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("params", "extra_body", "expected_body"),
+    [
+        (
+            {},
+            {"text": {"inputText": "text the guardrails never saw", "extraOption": 1}},
+            {"inputType": "text", "text": {"inputText": "a duck on water", "extraOption": 1}},
+        ),
+        (
+            {"input_type": "image"},
+            {
+                "image": {
+                    "inputText": "text the guardrails never saw",
+                    "extraOption": 1,
+                    "mediaSource": {"s3Location": {"uri": "s3://bucket/unscanned.png"}, "extraOption": 2},
+                }
+            },
+            {
+                "inputType": "image",
+                "image": {"extraOption": 1, "mediaSource": {"base64String": "ZHVjaw==", "extraOption": 2}},
+            },
+        ),
+    ],
+)
+def test_marengo_3_extra_body_settings_join_the_generated_input_without_adding_content(
+    params: dict[str, object],
+    extra_body: dict[str, object],
+    expected_body: dict[str, object],
+    respx_mock: respx.MockRouter,
+) -> None:
+    model_id: Final = "us.twelvelabs.marengo-embed-3-0-v1:0"
+    route: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/invoke").mock(
+        return_value=httpx.Response(200, json=marengo_3_embedding_response)
+    )
+
+    litellm.embedding(
+        model=f"bedrock/{model_id}",
+        input=[MARENGO_3_DUCK if params else "a duck on water"],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        extra_body=extra_body,
+        **params,
+    )
+
+    assert json.loads(route.calls.last.request.read()) == expected_body
+
+
 def test_bedrock_embedding_signs_the_body_it_sends(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
