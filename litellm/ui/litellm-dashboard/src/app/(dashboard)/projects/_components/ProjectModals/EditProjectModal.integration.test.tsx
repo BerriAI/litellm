@@ -172,6 +172,25 @@ describe("EditProjectModal submit payload", () => {
     expect(variables().params.metadata).toStrictEqual({ owner: "platform" });
   });
 
+  it("keeps the stored per-model batch enqueued limits when saving after opening Advanced Settings", async () => {
+    const user = setup();
+    renderModal({
+      ...project,
+      metadata: { ...project.metadata, model_batch_enqueued_token_limit: { "gpt-4": 1000 } },
+    } as unknown as ProjectResponse);
+    await screen.findByDisplayValue("My Project");
+
+    await user.click(screen.getByText("Advanced Settings"));
+    await screen.findByText("Model-Specific Limits");
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.metadata).toStrictEqual({
+      owner: "platform",
+      model_batch_enqueued_token_limit: { "gpt-4": 1000 },
+    });
+  });
+
   it("blocks the save when the project name is cleared", async () => {
     const user = setup();
     renderModal();

@@ -10,10 +10,12 @@ import base64
 import logging
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
@@ -82,7 +84,7 @@ def _project_user(model_limits: object, project_id: str | None = "project-1") ->
 
 
 def test_project_model_scopes_charge_each_limited_row_model_only_its_own_tokens():
-    scopes = resolve_project_model_batch_enqueued_token_scopes(
+    scopes: Final = resolve_project_model_batch_enqueued_token_scopes(
         _project_user({"gpt-5.5": 100, "claude-opus-5-5": 50}),
         row_tokens_by_model={"gpt-5.5": 80, "unlimited-model": 999},
         routing_model="unlimited-model",
@@ -93,7 +95,7 @@ def test_project_model_scopes_charge_each_limited_row_model_only_its_own_tokens(
 
 
 def test_project_model_scopes_charge_the_routing_model_the_whole_batch_whatever_rows_name():
-    scopes = resolve_project_model_batch_enqueued_token_scopes(
+    scopes: Final = resolve_project_model_batch_enqueued_token_scopes(
         _project_user({"capped-deployment": 100}),
         row_tokens_by_model={"unlisted-model": 400},
         routing_model="capped-deployment",
@@ -107,7 +109,7 @@ def test_project_model_scopes_charge_the_routing_model_the_whole_batch_whatever_
 
 def test_project_model_scopes_charge_rows_of_the_routing_group_once():
     groups: Final = MappingProxyType({"mini-alias": "gpt-mini", "gpt-mini": "gpt-mini"})
-    scopes = resolve_project_model_batch_enqueued_token_scopes(
+    scopes: Final = resolve_project_model_batch_enqueued_token_scopes(
         _project_user({"gpt-mini": 100}),
         row_tokens_by_model={"mini-alias": 30},
         routing_model="gpt-mini",
@@ -118,8 +120,10 @@ def test_project_model_scopes_charge_rows_of_the_routing_group_once():
 
 
 def test_project_model_scopes_share_one_counter_per_model_group_under_the_tightest_limit():
-    groups: Final = MappingProxyType({"gpt-latest": "gpt-5.5", "gpt-5.5": "gpt-5.5", "mini": "gpt-mini"})
-    scopes = resolve_project_model_batch_enqueued_token_scopes(
+    groups: Final = MappingProxyType(
+        {"gpt-latest": "gpt-5.5", "gpt-5.5": "gpt-5.5", "mini": "gpt-mini", "gpt-mini": "gpt-mini"}
+    )
+    scopes: Final = resolve_project_model_batch_enqueued_token_scopes(
         _project_user({"gpt-latest": 100, "gpt-5.5": 70, "gpt-mini": 40}),
         row_tokens_by_model={"gpt-latest": 30, "gpt-5.5": 20, "mini": 5},
         routing_model=None,
@@ -130,6 +134,19 @@ def test_project_model_scopes_share_one_counter_per_model_group_under_the_tighte
         BatchEnqueuedTokenScope(key="project_model", value="project-1:gpt-5.5", limit=70, tokens=50),
         BatchEnqueuedTokenScope(key="project_model", value="project-1:gpt-mini", limit=40, tokens=5),
     )
+
+
+@pytest.mark.parametrize("named_model", ["gpt-latest", "gpt-5.5"], ids=["only an alias", "only the group"])
+def test_project_model_scope_takes_its_groups_tightest_limit_whichever_name_the_batch_uses(named_model: str) -> None:
+    groups: Final = MappingProxyType({"gpt-latest": "gpt-5.5", "gpt-pinned": "gpt-5.5", "gpt-5.5": "gpt-5.5"})
+    scopes: Final = resolve_project_model_batch_enqueued_token_scopes(
+        _project_user({"gpt-latest": 100, "gpt-5.5": 70, "gpt-pinned": 60}),
+        row_tokens_by_model={named_model: 30},
+        routing_model=named_model,
+        batch_tokens=30,
+        model_group_of=groups.__getitem__,
+    )
+    assert scopes == (BatchEnqueuedTokenScope(key="project_model", value="project-1:gpt-5.5", limit=60, tokens=30),)
 
 
 @pytest.mark.parametrize(
@@ -322,22 +339,22 @@ async def test_redis_reserve_issues_single_key_calls_and_rolls_back_on_over_limi
 
 @pytest.mark.asyncio
 async def test_project_model_scope_is_charged_its_own_tokens_and_refunded_after_a_round_trip():
-    fake = _SingleKeyRedisFake()
-    store = BatchEnqueuedTokenStore(
+    fake: Final = _SingleKeyRedisFake()
+    store: Final = BatchEnqueuedTokenStore(
         internal_usage_cache=InternalUsageCache(DualCache(redis_cache=fake, default_in_memory_ttl=60))
     )
-    key_scope = _scope(limit=1000, key="api_key")
-    model_scope = BatchEnqueuedTokenScope(
+    key_scope: Final = _scope(limit=1000, key="api_key")
+    model_scope: Final = BatchEnqueuedTokenScope(
         key="project_model", value=f"project-{uuid.uuid4().hex}:gpt-5.5", limit=40, tokens=30
     )
     key_counter: Final = f"batch_enqueued_tokens:api_key:{key_scope.value}"
     model_counter: Final = f"batch_enqueued_tokens:project_model:{model_scope.value}"
 
-    reservation = await store.reserve(tokens=100, scopes=(key_scope, model_scope))
+    reservation: Final = await store.reserve(tokens=100, scopes=(key_scope, model_scope))
     assert isinstance(reservation, BatchEnqueuedTokenReservation)
     assert fake.counters == {key_counter: 100, model_counter: 30}
 
-    over = await store.reserve(
+    over: Final = await store.reserve(
         tokens=100,
         scopes=(key_scope, BatchEnqueuedTokenScope(key="project_model", value=model_scope.value, limit=40, tokens=20)),
     )
@@ -346,26 +363,58 @@ async def test_project_model_scope_is_charged_its_own_tokens_and_refunded_after_
     assert fake.counters == {key_counter: 100, model_counter: 30}
 
     await store.save_reservation("batch_project_model", reservation)
-    popped = await store.pop_reservation("batch_project_model")
+    popped: Final = await store.pop_reservation("batch_project_model")
     assert popped == reservation
     await store.refund(popped)
     assert not fake.counters
 
 
+@dataclass(frozen=True, slots=True)
+class _ScopeBeforeProjectScopes:
+    key: Literal["api_key", "team"]
+    value: str
+    limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ReservationBeforeProjectScopes:
+    tokens: int
+    scopes: tuple[_ScopeBeforeProjectScopes, ...]
+
+
+@pytest.mark.asyncio
+async def test_a_pod_that_predates_project_scopes_still_reads_the_key_and_team_scopes_of_a_saved_record():
+    fake: Final = _SingleKeyRedisFake()
+    store: Final = BatchEnqueuedTokenStore(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=fake, default_in_memory_ttl=60))
+    )
+    key_scope: Final = _scope(limit=1000, key="api_key")
+    model_scope: Final = BatchEnqueuedTokenScope(key="project_model", value="project-1:gpt-5.5", limit=40, tokens=30)
+    reservation: Final = await store.reserve(tokens=100, scopes=(key_scope, model_scope))
+    assert isinstance(reservation, BatchEnqueuedTokenReservation)
+
+    await store.save_reservation("batch_mixed_versions", reservation)
+
+    (record,) = fake.records.values()
+    assert TypeAdapter(_ReservationBeforeProjectScopes).validate_json(record) == _ReservationBeforeProjectScopes(
+        tokens=100, scopes=(_ScopeBeforeProjectScopes(key="api_key", value=key_scope.value, limit=1000),)
+    )
+
+
 @pytest.mark.asyncio
 async def test_in_memory_project_model_scope_is_charged_and_refunded_its_own_tokens():
-    store = _in_memory_store()
-    key_scope = _scope(limit=1000, key="api_key")
-    model_scope = BatchEnqueuedTokenScope(
+    store: Final = _in_memory_store()
+    key_scope: Final = _scope(limit=1000, key="api_key")
+    model_scope: Final = BatchEnqueuedTokenScope(
         key="project_model", value=f"project-{uuid.uuid4().hex}:gpt-5.5", limit=40, tokens=30
     )
-    reservation = await store.reserve(tokens=100, scopes=(key_scope, model_scope))
+    reservation: Final = await store.reserve(tokens=100, scopes=(key_scope, model_scope))
     assert isinstance(reservation, BatchEnqueuedTokenReservation)
-    blocked = BatchEnqueuedTokenScope(key="project_model", value=model_scope.value, limit=40, tokens=20)
+    blocked: Final = BatchEnqueuedTokenScope(key="project_model", value=model_scope.value, limit=40, tokens=20)
     assert await store.reserve(tokens=1, scopes=(blocked,)) == BatchEnqueuedTokenOverLimit(scope=blocked, enqueued=30)
 
     await store.refund(reservation)
-    full = BatchEnqueuedTokenScope(key="project_model", value=model_scope.value, limit=40, tokens=40)
+    full: Final = BatchEnqueuedTokenScope(key="project_model", value=model_scope.value, limit=40, tokens=40)
     assert isinstance(await store.reserve(tokens=1, scopes=(full,)), BatchEnqueuedTokenReservation)
     assert isinstance(await store.reserve(tokens=900, scopes=(key_scope,)), BatchEnqueuedTokenReservation)
     assert isinstance(await store.reserve(tokens=101, scopes=(key_scope,)), BatchEnqueuedTokenOverLimit)

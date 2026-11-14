@@ -113,13 +113,40 @@ class BatchEnqueuedTokenOverLimit:
 
 BatchEnqueuedTokenOutcome: TypeAlias = BatchEnqueuedTokenReservation | BatchEnqueuedTokenOverLimit
 
+
+@dataclass(frozen=True, slots=True)
+class _StoredReservation:
+    """A reservation record as stored, with project scopes apart so pods that predate them still refund the rest."""
+
+    tokens: int
+    scopes: tuple[BatchEnqueuedTokenScope, ...]
+    backend: ReservationBackend = "redis"
+    owner: str = ""
+    project_scopes: tuple[BatchEnqueuedTokenScope, ...] = ()
+
+    @classmethod
+    def of(cls, reservation: BatchEnqueuedTokenReservation) -> "_StoredReservation":
+        return cls(
+            tokens=reservation.tokens,
+            scopes=tuple(scope for scope in reservation.scopes if scope.key != "project_model"),
+            backend=reservation.backend,
+            owner=reservation.owner,
+            project_scopes=tuple(scope for scope in reservation.scopes if scope.key == "project_model"),
+        )
+
+    def restored(self) -> BatchEnqueuedTokenReservation:
+        return BatchEnqueuedTokenReservation(
+            tokens=self.tokens, scopes=(*self.scopes, *self.project_scopes), backend=self.backend, owner=self.owner
+        )
+
+
 _LIMIT_ADAPTER: Final = TypeAdapter(Annotated[int, Field(gt=0)])
 _MODEL_LIMITS_ADAPTER: Final[TypeAdapter[Mapping[str, int]]] = TypeAdapter(Mapping[str, Annotated[int, Field(gt=0)]])
 _NO_MODEL_LIMITS: Final[Mapping[str, int]] = MappingProxyType({})
 _RESERVE_RESULT_ADAPTER: Final = TypeAdapter(tuple[int, int])
 _POPPED_VALUE_ADAPTER: Final = TypeAdapter(str | bytes | None)
 _STORED_COUNTER_ADAPTER: Final = TypeAdapter(int | None)
-_RESERVATION_ADAPTER: Final = TypeAdapter(BatchEnqueuedTokenReservation)
+_RESERVATION_ADAPTER: Final = TypeAdapter(_StoredReservation)
 _LOCAL_RECORD_ADAPTER: Final = TypeAdapter(object)
 
 
@@ -176,8 +203,24 @@ def _read_project_model_limits(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str
         return _NO_MODEL_LIMITS
 
 
+def model_batch_enqueued_token_limits_are_valid(metadata: Mapping[str, object] | None) -> bool:
+    raw: Final = (metadata or _NO_MODEL_LIMITS).get(MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY)
+    if raw is None:
+        return True
+    try:
+        _MODEL_LIMITS_ADAPTER.validate_python(raw)
+    except ValidationError:
+        return False
+    return True
+
+
 def project_has_model_batch_enqueued_token_limits(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return bool(_read_project_model_limits(user_api_key_dict))
+
+
+def _tightest_limit_by_group(limits: Mapping[str, int], model_group_of: Callable[[str], str]) -> Mapping[str, int]:
+    resolved: Final = tuple((model_group_of(name), limit) for name, limit in limits.items())
+    return MappingProxyType({group: min(limit for g, limit in resolved if g == group) for group, _ in resolved})
 
 
 def _limited_model_charges(
@@ -185,11 +228,9 @@ def _limited_model_charges(
     tokens_by_model: Mapping[str, int],
     model_group_of: Callable[[str], str],
 ) -> Iterator[tuple[str, int, int]]:
-    for model, tokens in tokens_by_model.items():
-        group = model_group_of(model)
-        limit = limits.get(model, limits.get(group))
-        if limit is not None:
-            yield group, limit, tokens
+    group_limits: Final = _tightest_limit_by_group(limits, model_group_of)
+    groups_and_tokens: Final = ((model_group_of(model), tokens) for model, tokens in tokens_by_model.items())
+    return ((group, group_limits[group], tokens) for group, tokens in groups_and_tokens if group in group_limits)
 
 
 def project_limits_batch_model(
@@ -470,7 +511,7 @@ class BatchEnqueuedTokenStore:
         reservation: BatchEnqueuedTokenReservation,
         litellm_parent_otel_span: "Span | None" = None,
     ) -> None:
-        serialized: Final = _RESERVATION_ADAPTER.dump_json(reservation).decode("utf-8")
+        serialized: Final = _RESERVATION_ADAPTER.dump_json(_StoredReservation.of(reservation)).decode("utf-8")
         elapsed: Final = self._monotonic() - reservation.reserved_at_monotonic
         ttl: Final = max(1, BATCH_ENQUEUED_TOKEN_TTL_SECONDS - math.ceil(elapsed))
         if self._save_script is not None:
@@ -516,8 +557,8 @@ class BatchEnqueuedTokenStore:
             return None
         try:
             if isinstance(raw, (str, bytes)):
-                return _RESERVATION_ADAPTER.validate_json(raw)
-            return _RESERVATION_ADAPTER.validate_python(raw)
+                return _RESERVATION_ADAPTER.validate_json(raw).restored()
+            return _RESERVATION_ADAPTER.validate_python(raw).restored()
         except ValidationError:
             verbose_proxy_logger.warning("Discarding malformed enqueued-token reservation record for %s", batch_id)
             return None

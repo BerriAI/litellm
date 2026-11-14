@@ -21,6 +21,7 @@ from litellm.constants import (
     EMPTY_MAPPING,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
+    MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
 from litellm.litellm_core_utils.clientside_credential_handler import (
@@ -1929,8 +1930,9 @@ def enforce_batch_limits_are_admin_only(
     Every key in ``ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS`` caps what the holder
     may do with batches, so a holder-writable copy would let a caller lift their
     own quota, and the S3 bucket list grants access to buckets with the proxy's
-    own credentials. Gated on the resulting value rather than on presence, so a form
-    resending the stored value stays a no-op.
+    own credentials. A project only enforces ``model_batch_enqueued_token_limit``,
+    so that is the one key gated there. Gated on the resulting value rather than
+    on presence, so a form resending the stored value stays a no-op.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
@@ -1938,8 +1940,11 @@ def enforce_batch_limits_are_admin_only(
     requested: Final[Mapping[str, object]] = (
         (data.metadata or EMPTY_MAPPING) if "metadata" in data.model_fields_set else stored
     )
+    admin_only_keys: Final[tuple[str, ...]] = (
+        (MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,) if entity == "project" else _ADMIN_ONLY_METADATA_KEYS
+    )
     changed: Final = next(
-        (key for key in _ADMIN_ONLY_METADATA_KEYS if requested.get(key) != stored.get(key)),
+        (key for key in admin_only_keys if requested.get(key) != stored.get(key)),
         None,
     )
     if changed is None:

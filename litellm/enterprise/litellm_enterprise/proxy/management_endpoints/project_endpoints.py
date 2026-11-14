@@ -23,11 +23,13 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.constants import MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
-from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+from litellm.proxy.auth.auth_utils import BatchLimitRequest, enforce_batch_limits_are_admin_only
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
+from litellm.proxy.hooks.batch_enqueued_tokens import model_batch_enqueued_token_limits_are_valid
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamAccess, is_team_admin, is_team_member
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management.users.service import org_admin_org_ids
@@ -116,6 +118,26 @@ def _user_table(prisma_client: PrismaClient) -> TableActions["prisma_models.Lite
 def _jsonified(prisma_client: PrismaClient, payload: dict[str, object]) -> dict[str, object]:
     jsonified: dict[str, object] = prisma_client.jsonify_object(payload)
     return jsonified
+
+
+def _check_project_batch_limits(
+    data: BatchLimitRequest,
+    existing_metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    enforce_batch_limits_are_admin_only(
+        data=data,
+        existing_metadata=existing_metadata,
+        user_api_key_dict=user_api_key_dict,
+        entity="project",
+    )
+    if not model_batch_enqueued_token_limits_are_valid(data.metadata):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"{MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY} must map each model name to a positive integer"
+            },
+        )
 
 
 async def _check_user_permission_for_project(
@@ -606,11 +628,10 @@ async def new_project(
                     "error": f"Only admins or team admins can create projects. Your role is {user_api_key_dict.user_role}"
                 },
             )
-        enforce_batch_limits_are_admin_only(
+        _check_project_batch_limits(
             data=data,
             existing_metadata=None,
             user_api_key_dict=user_api_key_dict,
-            entity="project",
         )
         await validate_guardrail_names(
             None,
@@ -850,11 +871,10 @@ async def update_project(
                     status_code=403,
                     detail={"error": "Cannot reassign project to a team you are not an admin of"},
                 )
-        enforce_batch_limits_are_admin_only(
+        _check_project_batch_limits(
             data=data,
             existing_metadata=existing_project.metadata if isinstance(existing_project.metadata, dict) else None,
             user_api_key_dict=user_api_key_dict,
-            entity="project",
         )
         await validate_guardrail_names(
             None,

@@ -154,6 +154,13 @@ class BatchFileUsage(LiteLLMBaseModel):
     per_model_usage: dict[str, dict[str, int]] = Field(default_factory=dict)
 
 
+def _deployment_model_name_via_proxy_router(model: str) -> str | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    deployment: Final = None if llm_router is None else llm_router.registry().deployment(model)
+    return None if deployment is None else deployment.model_name
+
+
 class _PROXY_BatchRateLimiter(CustomLogger):
     """
     Rate limiter for batch API requests.
@@ -168,6 +175,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         internal_usage_cache: InternalUsageCache,
         parallel_request_limiter: ParallelRequestLimiter,
         time_provider: Callable[[], datetime] | None = None,
+        deployment_model_name: Callable[[str], str | None] = _deployment_model_name_via_proxy_router,
     ):
         """
         Initialize the batch rate limiter.
@@ -179,10 +187,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             internal_usage_cache: Cache for storing rate limit data (auto-injected)
             parallel_request_limiter: Existing rate limiter to integrate with (needs custom injection)
             time_provider: Clock used for rate limit reset times (defaults to ``datetime.now``)
+            deployment_model_name: Model name of the deployment a batch names by id, else None
         """
         self.internal_usage_cache = internal_usage_cache
         self.parallel_request_limiter = parallel_request_limiter
         self._time_provider: Final = time_provider or datetime.now
+        self._deployment_model_name: Final = deployment_model_name
         self._warned_unsupported_model_skip = False
 
     def _get_file_bound_batch_model(self, data: dict) -> str | None:
@@ -661,8 +671,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             raise
 
     def _model_group_of(self, model: str) -> str:
-        rate_limited: Final = self.parallel_request_limiter.rate_limited_model(model)
-        return rate_limited.group if rate_limited is not None else model
+        named_model: Final = self._deployment_model_name(model) or model
+        rate_limited: Final = self.parallel_request_limiter.rate_limited_model(named_model)
+        return rate_limited.group if rate_limited is not None else named_model
 
     def _raise_enqueued_limit_error(
         self,
@@ -1349,13 +1360,16 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             data["_batch_request_count"] = batch_usage.request_count
 
             routing_model: Final = self._get_batch_routing_model(data)  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
+            row_tokens_by_model: Final[Mapping[str, int]] = MappingProxyType(
+                {model: usage.get("total_tokens", 0) for model, usage in batch_usage.per_model_usage.items()}
+                if self._get_file_bound_batch_model(data) is None  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
+                else {}
+            )
             enqueued_scopes: Final = (
                 *key_and_team_scopes,
                 *resolve_project_model_batch_enqueued_token_scopes(
                     user_api_key_dict,
-                    row_tokens_by_model=MappingProxyType(
-                        {model: usage.get("total_tokens", 0) for model, usage in batch_usage.per_model_usage.items()}
-                    ),
+                    row_tokens_by_model=row_tokens_by_model,
                     routing_model=routing_model,
                     batch_tokens=batch_usage.total_tokens,
                     model_group_of=self._model_group_of,
@@ -1368,31 +1382,32 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     batch_usage=batch_usage,
                     scopes=enqueued_scopes,
                 )
-                reservation_covers_batch: Final = bool(key_and_team_scopes) or project_limits_batch_model(
-                    user_api_key_dict, routing_model, self._model_group_of
-                )
-                remaining_descriptors: Final = [
-                    descriptor
-                    for descriptor in (
-                        batch_rate_limit_descriptors
-                        if batch_rate_limit_descriptors is not None
-                        else self._create_batch_rate_limit_descriptors(  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
-                            user_api_key_dict=user_api_key_dict, data=data
+                if not key_and_team_scopes:
+                    project_covers_batch: Final = project_limits_batch_model(
+                        user_api_key_dict, routing_model, self._model_group_of
+                    )
+                    remaining_descriptors: Final = [
+                        descriptor
+                        for descriptor in (
+                            batch_rate_limit_descriptors
+                            if batch_rate_limit_descriptors is not None
+                            else self._create_batch_rate_limit_descriptors(  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
+                                user_api_key_dict=user_api_key_dict, data=data
+                            )
                         )
-                    )
-                    if not reservation_covers_batch or descriptor["key"].endswith(BATCH_TPD_DESCRIPTOR_SUFFIX)
-                ]
-                if remaining_descriptors or not reservation_covers_batch:
-                    await self._refund_enqueued_reservation_if_rejected(
-                        user_api_key_dict,
-                        self._check_and_increment_batch_counters(  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
-                            user_api_key_dict=user_api_key_dict,
-                            data=data,
-                            batch_usage=batch_usage,
-                            descriptors=remaining_descriptors,
-                            include_project_io_limits=not reservation_covers_batch,
-                        ),
-                    )
+                        if not project_covers_batch or descriptor["key"].endswith(BATCH_TPD_DESCRIPTOR_SUFFIX)
+                    ]
+                    if remaining_descriptors or not project_covers_batch:
+                        await self._refund_enqueued_reservation_if_rejected(
+                            user_api_key_dict,
+                            self._check_and_increment_batch_counters(  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
+                                user_api_key_dict=user_api_key_dict,
+                                data=data,
+                                batch_usage=batch_usage,
+                                descriptors=remaining_descriptors,
+                                include_project_io_limits=not project_covers_batch,
+                            ),
+                        )
                 verbose_proxy_logger.debug("Batch enqueued-token reservation succeeded")
                 return data
 
