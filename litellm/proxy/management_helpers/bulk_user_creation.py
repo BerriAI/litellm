@@ -29,8 +29,12 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import invalidate_team_member_spend_state
-from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+from litellm.proxy.auth.auth_utils import (
+    enforce_batch_limits_are_admin_only,
+    enforce_vector_store_index_grants_are_admin_only,
+)
 from litellm.proxy.auth.litellm_license import LicenseCheck
+from litellm.proxy.common_utils.callback_config_validation import credential_reference_rejection
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
@@ -219,9 +223,17 @@ def _row_error(item: BulkNewUserItem, user_api_key_dict: UserAPIKeyAuth) -> str 
         check_permissions_caller_permission(data=item, user_api_key_dict=user_api_key_dict)
         if item.auto_create_key:
             enforce_batch_limits_are_admin_only(item, None, user_api_key_dict, "key")
+            enforce_vector_store_index_grants_are_admin_only(item, None, None, user_api_key_dict, "key")
     except Exception as exc:  # noqa: BLE001  # any validation failure is reported on this row only
         return _error_message(exc)
-    return None
+    rejection: Final = (
+        credential_reference_rejection(
+            item.metadata, None, is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        )
+        if item.auto_create_key
+        else None
+    )
+    return None if rejection is None else rejection.message
 
 
 def _normalized_email(email: str | None) -> str | None:

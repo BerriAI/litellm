@@ -33,6 +33,7 @@ from litellm.types.litellm_params import (
     wire_names,
 )
 from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionUserMessage
+from litellm.types.proxy.guardrails.guardrail_hooks.headroom import HeadroomRequestContext
 from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 from litellm.types.router import (
     ConfigurableClientsideParamsCustomAuth,
@@ -92,6 +93,10 @@ CONNECTION_NAMES: Final = (
     "litellm_credential_name",
     "github_copilot_auth_type",
     "github_copilot_host",
+    "github_copilot_app_id",
+    "github_copilot_app_installation_id",
+    "github_copilot_app_private_key_ref",
+    "github_copilot_app_private_key",
     "configurable_clientside_auth_params",
     "use_xai_oauth",
     "chatgpt_auth_file",
@@ -167,6 +172,7 @@ OPTION_NAMES: Final = (
     "tag_regex",
     "max_file_size_mb",
     "silent_model",
+    "switchyard_router_config",
     "auto_router_config_path",
     "auto_router_config",
     "auto_router_default_model",
@@ -221,6 +227,7 @@ OPTION_NAMES: Final = (
     "assistant_continue_message",
     "disable_add_transform_inline_image_block",
     "merge_reasoning_content_in_choices",
+    "thought_signature_in_tool_call_id",
     "enable_json_schema_validation",
     "complete_response",
     "stream_chunk_size",
@@ -231,9 +238,11 @@ OPTION_NAMES: Final = (
 )
 
 AGENTIC_LOOP_STATE_NAMES: Final = (
+    "_headroom_request_context",
     "_agentic_loop_depth",
     "_agentic_loop_fingerprints",
     "_agentic_loop_api_surface",
+    "_agentic_loop_tool_choice",
     "_code_interpreter_interception_active",
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
@@ -267,6 +276,7 @@ INTERNAL_STATE_NAMES: Final = (
     "github_copilot_user_session",
     "litellm_trusted_callback_vars",
     "_litellm_addressed_response_id",
+    "_litellm_addressed_comparison_response_id",
     "_litellm_strip_stream_usage",
     "_litellm_stream_usage_injected",
     "client_side_timeout",
@@ -529,6 +539,7 @@ TYPE_HINT_NAMESPACE: Final[Mapping[str, object]] = {
     "Logging": Logging,
     "SecretFields": SecretFields,
     "CompactionState": CompactionState,
+    "HeadroomRequestContext": HeadroomRequestContext,
     "RouterWeights": RouterWeights,
     "AttemptedFallbackTargets": AttemptedFallbackTargets,
 }
@@ -673,6 +684,10 @@ def test_routing_options_accept_every_strategy_the_router_accepts(strategy: str)
 NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "credentials": (
+            "github_copilot_app_id",
+            "github_copilot_app_installation_id",
+            "github_copilot_app_private_key_ref",
+            "github_copilot_app_private_key",
             "anthropic_disable_workload_identity_federation",
             "anthropic_federation_rule_id",
             "anthropic_federation_workspace_id",

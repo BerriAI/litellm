@@ -129,7 +129,7 @@ jobs:
           set +e
           uv run --no-sync --with mutmut==3.5.0 mutmut export-cicd-stats > /dev/null 2>&1
           uv run --no-sync --with mutmut==3.5.0 mutmut results > mutmut-results.txt 2>&1
-          uv run --no-sync python scripts/mutation_report.py
+          uv run --no-sync python litellm/scripts/mutation_report.py
           # The full report can be very long for big test files; the run-page
           # summary cuts off at 1 MB. Append the head of the report (summary
           # + survivor list) and link out to the artifact for the full body.

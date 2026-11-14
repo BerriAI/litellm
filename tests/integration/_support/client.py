@@ -280,12 +280,14 @@ class Scenario:
             self.gateway.rows('SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == []
         )
 
-    def model(self, *, model_info: Mapping[str, JsonValue] | None = None, **parameters: JsonValue) -> str:
-        name: Final = f"integration-{uuid.uuid4().hex}"
+    def model(
+        self, *, name: str | None = None, model_info: Mapping[str, JsonValue] | None = None, **parameters: JsonValue
+    ) -> str:
+        model_name: Final = name if name is not None else f"integration-{uuid.uuid4().hex}"
         created: Final = self.gateway.post(
             "/model/new",
             {
-                "model_name": name,
+                "model_name": model_name,
                 "litellm_params": {
                     "model": "openai/gpt-4o-mini",
                     "api_key": "integration-provider-key",
@@ -298,8 +300,8 @@ class Scenario:
         identity: Final = string_value(object_value(created["model_info"])["id"])
         self.cleanups.callback(self.delete_model, identity)
         if self.gateway.workers > 1:
-            self._await_every_worker(name, identity)
-        return name
+            self._await_every_worker(model_name, identity)
+        return model_name
 
     def _await_every_worker(self, name: str, identity: str) -> None:
         from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS

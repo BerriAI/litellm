@@ -170,3 +170,11 @@ class TestRecraftImageEditTransformation:
             )
 
         assert "Error transforming image edit response" in str(exc_info.value)
+
+    def test_transform_image_edit_response_rejects_a_body_that_is_not_a_json_object(self):
+        with pytest.raises(TypeError, match="'int' object is not subscriptable"):
+            self.config.transform_image_edit_response(
+                model=self.model,
+                raw_response=httpx.Response(200, json=5),
+                logging_obj=self.logging_obj,
+            )

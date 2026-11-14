@@ -550,6 +550,32 @@ def test_runtime_404_and_mantle_404_surface_provider_error(counting_proxy: Owned
         assert _mantle_bodies(mantle) == (_mantle_body(system=system, tools=_TOOLS),)
 
 
+def test_utils_token_counter_prompt_answers_the_count_model_404_like_the_messages_form(
+    counting_proxy: OwnedProxy, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(_rejecting(404)), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _metadata_deployment(scenario, runtime.url)
+        from_prompt: Final = gateway.request(
+            "POST",
+            "/utils/token_counter",
+            {"model": model, "prompt": "Count this message"},
+            params={"call_endpoint": "true"},
+        )
+        from_messages: Final = gateway.request(
+            "POST", "/utils/token_counter", _bare(model), params={"call_endpoint": "true"}
+        )
+        assert from_prompt.status_code == from_messages.status_code == 404, from_prompt.text
+        assert _REJECTION in from_prompt.text, from_prompt.text
+        assert _JSON_OBJECT.validate_json(from_prompt.content) == _JSON_OBJECT.validate_json(from_messages.content)
+        assert runtime.drain() == ()
+        assert _mantle_bodies(mantle) == (_MANTLE_BARE, _MANTLE_BARE)
+
+
 def test_runtime_404_on_nova_does_not_call_mantle(counting_proxy: OwnedProxy, mantle_port: int) -> None:
     gateway: Final = counting_proxy.gateway
     with (
@@ -1061,7 +1087,7 @@ def test_messages_count_tokens_repeated_request_lifts_the_leading_system_each_ti
         assert _mantle_bodies(mantle) == (_MANTLE_LIFTED,) * 2
 
 
-def test_messages_count_tokens_surfaces_the_counting_error_for_a_leading_system_without_content(
+def test_messages_count_tokens_answers_400_for_a_leading_system_without_content(
     counting_proxy: OwnedProxy, mantle_port: int
 ) -> None:
     gateway: Final = counting_proxy.gateway
@@ -1073,7 +1099,11 @@ def test_messages_count_tokens_surfaces_the_counting_error_for_a_leading_system_
         model: Final = _fallback_deployment(scenario, runtime.url)
         body: Final[dict[str, JsonValue]] = {"model": model, "messages": [{"role": "system"}, USER]}
         response: Final = _count(gateway, body)
-        assert 500 <= response.status_code < 600, response.text
+        assert response.status_code == 400, response.text
+        assert _JSON_OBJECT.validate_json(response.content) == {
+            "type": "error",
+            "error": {"type": "invalid_request_error", "message": "Message 0 must have a 'content' field"},
+        }, response.text
         assert "input_tokens" not in response.text, response.text
         assert mantle.drain() == ()
         follow_up: Final = _count(gateway, count_request(model, STRING_CASE))

@@ -4,7 +4,7 @@ from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
 
-BEDROCK_REAL_MODEL = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+BEDROCK_REAL_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 BEDROCK_LABEL = "claude-haiku-4-5"
 
 

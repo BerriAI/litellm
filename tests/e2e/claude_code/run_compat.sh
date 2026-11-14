@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the Claude Code compat matrix end-to-end against a live LiteLLM
 # proxy, with per-provider rate limits applied via the cross-process
-# token bucket in `tests/e2e/claude_code/rate_limiter.py`.
+# token bucket in `tests/e2e/cli_harness/rate_limiter.py`.
 #
 # Designed for binary-searching the ideal X / Y / Z req/s per provider:
 #   1. Pick an initial rate (e.g. 5/s for everyone).

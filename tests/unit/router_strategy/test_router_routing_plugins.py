@@ -259,56 +259,6 @@ async def test_router_without_plugins_is_unaffected():
     assert response.choices[0].message.content == "hi"
 
 
-@pytest.mark.asyncio
-async def test_run_routing_plugins_narrows_candidates_and_records_signals():
-    """Unit-level check of _run_routing_plugins in isolation, independent of acompletion."""
-    router = Router(
-        model_list=_smart_router_model_list(),
-        plugins=[LanguageDetector(), DomainClassifier(), TenantPolicy(), BudgetPolicy()],
-    )
-    request_kwargs = {"metadata": {"tenant": "acme-corp"}}
-
-    context = await router._run_routing_plugins(
-        model="smart-router",
-        request_kwargs=request_kwargs,
-        messages=[{"role": "user", "content": "hi"}],
-    )
-
-    assert context.candidate_models == ["openai/gpt-4o-mini", "anthropic/claude-haiku-4-5"]
-    assert context.signals["domain-classifier"]["domain"] == "coding"
-    assert request_kwargs["metadata"]["_routing_plugin_candidate_models"] == context.candidate_models
-
-
-def test_filter_by_routing_plugin_candidates_narrows_and_raises_when_empty():
-    """Unit-level check of _filter_by_routing_plugin_candidates in isolation."""
-    router = Router(model_list=_smart_router_model_list(), plugins=[TenantPolicy()])
-    healthy_deployments = router.model_list
-
-    narrowed = router._filter_by_routing_plugin_candidates(
-        healthy_deployments=healthy_deployments,
-        request_kwargs={"metadata": {"_routing_plugin_candidate_models": ["openai/gpt-4o-mini"]}},
-    )
-    assert [d["litellm_params"]["model"] for d in narrowed] == ["openai/gpt-4o-mini"]
-
-    with pytest.raises(ValueError, match="No deployments left after routing-plugin filtering"):
-        router._filter_by_routing_plugin_candidates(
-            healthy_deployments=healthy_deployments,
-            request_kwargs={"metadata": {"_routing_plugin_candidate_models": ["nonexistent/model"]}},
-        )
-
-
-def test_json_default_stable_id_is_stable_across_instances():
-    """generate_model_id's json.dumps `default=` fallback must not embed an object's
-    memory address (e.g. plain str() on an object with no custom __repr__ falls back
-    to object.__repr__'s `<module.Class object at 0x...>`) -- that would make the
-    deployment id churn on every process restart for any deployment whose
-    litellm_params contain a live plugin instance."""
-    router = Router(model_list=_smart_router_model_list())
-
-    assert router._json_default_stable_id(LanguageDetector()) == router._json_default_stable_id(LanguageDetector())
-    assert router._json_default_stable_id(LanguageDetector()) != router._json_default_stable_id(TenantPolicy())
-
-
 def testgenerate_model_id_is_stable_when_litellm_params_contain_a_plugin_instance():
     """End-to-end: a deployment id built from litellm_params containing a routing
     plugin instance (e.g. complexity_router_config.plugins) must be identical across

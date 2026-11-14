@@ -3,7 +3,7 @@
 from collections.abc import Iterable
 from typing import Final
 
-from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec
+from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec, is_unconfigured_placeholder
 
 
 def ensure_mappers(mapper_names: Iterable[str], *names: str) -> list[str]:
@@ -35,14 +35,3 @@ def credential_gated_exporters(
         *(spec for spec in exporters if not is_unconfigured_placeholder(spec)),
         ExporterSpec(owner=owner, requires_headers=True),
     )
-
-
-def is_unconfigured_placeholder(spec: "ExporterSpec") -> bool:
-    """Whether ``spec`` is the one ``_normalize`` folds in when nothing was configured.
-
-    No field set is what says the operator asked for nothing: an exporter they did
-    configure survives, even ``OTEL_EXPORTER=console`` whose value matches the default,
-    and so does the gated spec this module appends, which would otherwise eat itself
-    when one preset layers onto another.
-    """
-    return not spec.model_fields_set

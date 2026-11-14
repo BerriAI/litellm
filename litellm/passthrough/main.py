@@ -57,11 +57,17 @@ def _as_generator(iterable: Iterator[bytes]) -> Generator[bytes, bytes, None]:
 class _SpendCollection:
     """Feeds relayed chunks to the provider's stream collector without letting spend tracking break the relay."""
 
-    def __init__(self, provider_config: BasePassthroughConfig, litellm_logging_obj: LiteLLMLoggingObj) -> None:
+    def __init__(
+        self,
+        provider_config: BasePassthroughConfig,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        response_headers: httpx.Headers,
+    ) -> None:
         self.collector: Final[PassthroughStreamCollector] = provider_config.create_stream_collector(
             model=litellm_logging_obj.model,
             custom_llm_provider=litellm_logging_obj.model_call_details.get("custom_llm_provider", ""),
             endpoint=litellm_logging_obj.model_call_details.get("endpoint", ""),
+            response_headers=response_headers,
         )
         self.chunk_count = 0
         self._failed = False
@@ -97,7 +103,8 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
         self._response: httpx.Response
         self._iterator: AsyncGenerator[bytes, bytes]
         self._litellm_logging_obj = litellm_logging_obj
-        self._spend = _SpendCollection(provider_config, litellm_logging_obj)
+        self._provider_config: Final = provider_config
+        self._spend: _SpendCollection
         self._flush_scheduled = False
         self._background_tasks: set[asyncio.Task[bool]] = set()  # mutable-ok: instance set for background task tracking
         self._flush: asyncio.Task[bool] | None = None
@@ -129,6 +136,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
                 self._response = await self._response_coro
                 self.headers = self._response.headers
                 self.status_code = self._response.status_code
+                self._spend = _SpendCollection(self._provider_config, self._litellm_logging_obj, self._response.headers)
                 self._initialized = True
                 try:
                     raise_for_provider_status(self._response)
@@ -148,7 +156,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
         return _init().__await__()
 
     def _start_flush(self) -> None:
-        if self._flush_scheduled or not self._spend.should_flush:
+        if self._flush_scheduled or not self._initialized or not self._spend.should_flush:
             return
         self._flush_scheduled = True
 
@@ -237,7 +245,7 @@ class PassthroughStreamingResponse(Generator[bytes, bytes, None]):
         self.status_code = response.status_code
         self._litellm_logging_obj = litellm_logging_obj
         self._iterator: Generator[bytes, bytes, None] = _as_generator(response.iter_bytes())
-        self._spend = _SpendCollection(provider_config, litellm_logging_obj)
+        self._spend = _SpendCollection(provider_config, litellm_logging_obj, response.headers)
         self._flush_scheduled = False
 
     def _start_flush(self) -> None:

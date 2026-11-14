@@ -17,10 +17,11 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.router_api import AttemptedFallbackTargets
     from litellm.router_strategy.complexity_router.context_compaction import CompactionState
-    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
     from litellm.types.caching import DynamicCacheControl
     from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionUserMessage
+    from litellm.types.proxy.guardrails.guardrail_hooks.headroom import HeadroomRequestContext
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
     from litellm.types.router import ConfigurableClientsideParamsCustomAuth, DeploymentTypedDict, RetryPolicy
     from litellm.types.router_weights import RouterWeights
@@ -54,6 +55,7 @@ RoutingStrategyName: TypeAlias = Literal[
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
+ADDRESSED_COMPARISON_RESPONSE_ID_FIELD: Final = "_litellm_addressed_comparison_response_id"
 STREAM_USAGE_INJECTED_FIELD: Final = "_litellm_stream_usage_injected"
 
 WIRE_NAME: Final = "wire_name"
@@ -94,6 +96,10 @@ class ProviderConnection:
     chatgpt_auth_file: str | None = None
     github_copilot_auth_type: str | None = None
     github_copilot_host: str | None = None
+    github_copilot_app_id: str | int | None = None
+    github_copilot_app_installation_id: str | int | None = None
+    github_copilot_app_private_key_ref: str | None = None
+    github_copilot_app_private_key: str | None = None
     github_copilot_user_session: object | None = None
     token_exchange_endpoint: str | None = None
     token_exchange_profile: str | None = None
@@ -205,6 +211,7 @@ class DeploymentOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SpecializedRouterOptions:
+    switchyard_router_config: Mapping[str, object] | None = None
     auto_router_config_path: str | None = None
     auto_router_config: str | None = None
     auto_router_default_model: str | None = None
@@ -287,6 +294,7 @@ class PromptOptions:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResponseOptions:
     merge_reasoning_content_in_choices: bool | None = None
+    thought_signature_in_tool_call_id: bool | None = None
     enable_json_schema_validation: bool | None = None
     complete_response: bool | None = None
     keepalive_seconds: float | None = None
@@ -352,11 +360,13 @@ class CallState:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AgenticLoopState:
+    headroom_context: "HeadroomRequestContext | None" = field(default=None, metadata=wire("_headroom_request_context"))
     depth: int | None = field(default=None, metadata=wire("_agentic_loop_depth"))
     fingerprints: Sequence[str] | None = field(default=None, metadata=wire("_agentic_loop_fingerprints"))
     api_surface: Literal["chat_completions", "responses"] | None = field(
         default=None, metadata=wire("_agentic_loop_api_surface")
     )
+    tool_choice: Mapping[str, object] | None = field(default=None, metadata=wire("_agentic_loop_tool_choice"))
     code_interpreter_active: bool | None = field(default=None, metadata=wire("_code_interpreter_interception_active"))
     code_interpreter_sandbox_key: str | None = field(
         default=None, metadata=wire("_code_interpreter_interception_sandbox_key")
@@ -404,6 +414,9 @@ class ProxyRequestState:
     secret_fields: "SecretFields | None" = None
     trusted_callback_vars: Mapping[str, str] | None = field(default=None, metadata=wire(TRUSTED_CALLBACK_VARS_FIELD))
     addressed_response_id: str | None = field(default=None, metadata=wire(ADDRESSED_RESPONSE_ID_FIELD))
+    addressed_comparison_response_id: str | None = field(
+        default=None, metadata=wire(ADDRESSED_COMPARISON_RESPONSE_ID_FIELD)
+    )
     strip_stream_usage: bool | None = field(default=None, metadata=wire("_litellm_strip_stream_usage"))
     stream_usage_injected: bool | None = field(default=None, metadata=wire(STREAM_USAGE_INJECTED_FIELD))
     client_side_timeout: bool | None = None

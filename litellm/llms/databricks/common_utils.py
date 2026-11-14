@@ -56,6 +56,7 @@ DATABRICKS_WORKSPACE_ROUTE_PREFIXES: Final = (
     DATABRICKS_AI_GATEWAY_MESSAGES_PATH,
 )
 DATABRICKS_NATIVE_MESSAGES_MODEL_PREFIXES: Final = ("databricks-claude-", "system.ai.claude-")
+DATABRICKS_HOSTED_MODEL_PREFIXES: Final = ("databricks-", "system.ai.")
 DATABRICKS_ENDPOINT_PATHS: Final = MappingProxyType(
     {
         "chat_completions": "/chat/completions",

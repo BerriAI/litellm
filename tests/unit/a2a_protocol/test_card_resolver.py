@@ -14,6 +14,7 @@ import pytest
 from litellm.a2a_protocol.card_resolver import (
     LiteLLMA2ACardResolver,
     fix_agent_card_url,
+    get_agent_card_url,
     is_localhost_or_internal_url,
     normalize_agent_card_interfaces,
     resolve_a2a_protocol_version,
@@ -115,6 +116,37 @@ def test_fix_agent_card_url_updates_interface_when_top_level_is_localhost():
 
     assert result.url == "https://my-public-agent.example.com/"
     assert result.supported_interfaces[0].url == "https://my-public-agent.example.com/"
+
+
+@pytest.mark.parametrize(
+    ("card", "expected"),
+    [
+        (SimpleNamespace(url="https://agent.example.com/"), "https://agent.example.com/"),
+        (
+            SimpleNamespace(url="", supported_interfaces=[SimpleNamespace(url="https://interface.example.com/")]),
+            "https://interface.example.com/",
+        ),
+        (
+            SimpleNamespace(supported_interfaces=[SimpleNamespace(url="https://interface.example.com/")]),
+            "https://interface.example.com/",
+        ),
+        (SimpleNamespace(url=""), None),
+        (SimpleNamespace(url=None, supported_interfaces=[]), None),
+        (SimpleNamespace(), None),
+    ],
+    ids=[
+        "top_level_url",
+        "empty_url_falls_to_interface",
+        "interfaces_only",
+        "empty_url_without_interfaces",
+        "no_interfaces",
+        "bare",
+    ],
+)
+def test_get_agent_card_url_prefers_the_top_level_url_then_the_first_interface(
+    card: SimpleNamespace, expected: str | None
+):
+    assert get_agent_card_url(card) == expected
 
 
 def test_normalize_agent_card_interfaces_downgrades_miscased_interfaces_to_the_0_3_dialect():

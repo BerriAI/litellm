@@ -67,6 +67,7 @@ class _StoredResponse:
     id: str
     unified_object_id: str
     status: str
+    created_at: datetime = datetime(2026, 1, 2)
     model_object_id: str = ""
     file_purpose: str = "response"
     file_object: Mapping[str, object] = dataclasses.field(default_factory=lambda: {"model": "gpt-5"})
@@ -203,7 +204,7 @@ class TestCheckResponsesCost:
         """Create a mock LLM Router"""
         router = MagicMock()
         router.aget_responses = AsyncMock()
-        router.get_deployment = MagicMock(side_effect=lambda model_id: _deployment(model_id))
+        router.registry.return_value.deployment = MagicMock(side_effect=lambda model_id: _deployment(model_id))
         return router
 
     @pytest.fixture
@@ -556,8 +557,8 @@ class TestCheckResponsesCost:
         mock_job.id = "job-404"
         mock_job.file_object = {"model": "gpt-4o", "id": encoded_response_id}
 
-        mock_llm_router.get_deployment.side_effect = None
-        mock_llm_router.get_deployment.return_value = _deployment("deployment-404")
+        mock_llm_router.registry.return_value.deployment.side_effect = None
+        mock_llm_router.registry.return_value.deployment.return_value = _deployment("deployment-404")
         mock_llm_router.aget_responses = AsyncMock(
             side_effect=litellm.NotFoundError(
                 message="Response with id 'resp_upstream_404' not found.", model="gpt-5", llm_provider="openai"
@@ -571,7 +572,7 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         mock_sdk_aget.assert_not_called()
-        mock_llm_router.get_deployment.assert_called_once_with(model_id="deployment-404")
+        mock_llm_router.registry.return_value.deployment.assert_called_once_with("deployment-404")
         assert mock_llm_router.aget_responses.call_args.kwargs["response_id"] == encoded_response_id
         assert table.updates == (({"id": {"in": ["job-404"]}}, {"status": "stale_expired"}),)
 
@@ -619,8 +620,8 @@ class TestCheckResponsesCost:
         mock_job.id = "job-404-mapped"
         mock_job.file_object = {"model": "gpt-5.5", "id": encoded_response_id}
 
-        mock_llm_router.get_deployment.side_effect = None
-        mock_llm_router.get_deployment.return_value = _deployment("deployment-404-mapped")
+        mock_llm_router.registry.return_value.deployment.side_effect = None
+        mock_llm_router.registry.return_value.deployment.return_value = _deployment("deployment-404-mapped")
         mock_llm_router.aget_responses = AsyncMock(side_effect=mapped.value)
 
         table = _RecordingManagedObjectTable(rows=(mock_job,))
@@ -652,8 +653,8 @@ class TestCheckResponsesCost:
         mock_job.id = "job-404-fallback"
         mock_job.file_object = {"model": "gpt-4o", "id": encoded_response_id}
 
-        mock_llm_router.get_deployment.side_effect = None
-        mock_llm_router.get_deployment.return_value = None
+        mock_llm_router.registry.return_value.deployment.side_effect = None
+        mock_llm_router.registry.return_value.deployment.return_value = None
 
         table = _RecordingManagedObjectTable(rows=(mock_job,))
         mock_prisma_client.db.litellm_managedobjecttable = table
@@ -691,8 +692,8 @@ class TestCheckResponsesCost:
         mock_job.id = "job-404-other"
         mock_job.file_object = {"model": "azure-gpt-5", "id": encoded_response_id}
 
-        mock_llm_router.get_deployment.side_effect = None
-        mock_llm_router.get_deployment.return_value = _deployment("deployment-renamed")
+        mock_llm_router.registry.return_value.deployment.side_effect = None
+        mock_llm_router.registry.return_value.deployment.return_value = _deployment("deployment-renamed")
         mock_llm_router.aget_responses = AsyncMock(
             side_effect=litellm.NotFoundError(
                 message="Resource not found", model="gpt-5", llm_provider="azure"
@@ -735,7 +736,7 @@ class TestCheckResponsesCost:
         healthy_job.id = "job-healthy"
         healthy_job.file_object = {"model": "gpt-5.5", "id": healthy_response_id}
 
-        mock_llm_router.get_deployment.side_effect = [
+        mock_llm_router.registry.return_value.deployment.side_effect = [
             Exception("Model invalid format - <class 'str'>"),
             _deployment("deployment-healthy"),
         ]
@@ -783,8 +784,8 @@ class TestCheckResponsesCost:
         mock_job.id = "job-500"
         mock_job.file_object = {"model": "gpt-4o", "id": encoded_response_id}
 
-        mock_llm_router.get_deployment.side_effect = None
-        mock_llm_router.get_deployment.return_value = _deployment("deployment-500")
+        mock_llm_router.registry.return_value.deployment.side_effect = None
+        mock_llm_router.registry.return_value.deployment.return_value = _deployment("deployment-500")
         mock_llm_router.aget_responses = AsyncMock(
             side_effect=litellm.InternalServerError(
                 message="boom", model="gpt-5", llm_provider="openai"
@@ -1088,7 +1089,7 @@ class TestCheckResponsesCost:
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
             return_value=0
         )
-        mock_llm_router.get_deployment = MagicMock(return_value=None)
+        mock_llm_router.registry.return_value.deployment = MagicMock(return_value=None)
         mock_llm_router.aget_responses = AsyncMock(
             side_effect=AssertionError("router has no deployment for this model_id")
         )
@@ -1106,7 +1107,7 @@ class TestCheckResponsesCost:
             mock_sdk_aget.return_value = mock_response
             await check_responses_cost_instance.check_responses_cost()
 
-        mock_llm_router.get_deployment.assert_called_once_with(model_id="deployment-deleted")
+        mock_llm_router.registry.return_value.deployment.assert_called_once_with("deployment-deleted")
         mock_llm_router.aget_responses.assert_not_called()
         mock_sdk_aget.assert_called_once()
         assert mock_sdk_aget.call_args[1]["response_id"] == encoded_response_id
@@ -1207,11 +1208,8 @@ class TestCheckResponsesCost:
             return_value=1
         )
 
-        mock_response = MagicMock()
-        mock_response.status = "completed"
-
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.return_value = mock_response
+            mock_aget.return_value = _terminal_response()
             await check_responses_cost_instance.check_responses_cost()
 
         assert [_is_billed(call[1]["litellm_metadata"]) for call in mock_aget.call_args_list] == [False]
@@ -1252,7 +1250,7 @@ class TestCheckResponsesCost:
         )
 
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.return_value = MagicMock(status="completed")
+            mock_aget.return_value = _terminal_response()
             await check_responses_cost_instance.check_responses_cost()
 
         (billed,) = billed_logger.billed
@@ -2084,7 +2082,14 @@ def _key_row(metadata: Mapping[str, object]) -> object:
 def _team_row(metadata: Mapping[str, object]) -> object:
     from types import SimpleNamespace
 
-    return SimpleNamespace(team_alias=None, organization_id=None, spend=0.0, max_budget=None, metadata=dict(metadata))
+    return SimpleNamespace(
+        team_alias=None,
+        organization_id=None,
+        spend=0.0,
+        max_budget=None,
+        metadata=dict(metadata),
+        created_at=datetime(2026, 1, 1),
+    )
 
 
 def _langfuse_callback_settings(callback_vars: Mapping[str, object]) -> Mapping[str, object]:

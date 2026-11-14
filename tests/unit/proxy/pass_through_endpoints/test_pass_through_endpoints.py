@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextvars
 import gzip
 import json
 import logging
@@ -7,20 +8,20 @@ import os
 import sys
 import uuid
 import zlib
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Final, Optional, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import UUID
 
 import httpx
 import pytest
 import respx
-from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, UploadFile, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
@@ -30,20 +31,39 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.caching.dual_cache import DualCache
+from litellm.constants import ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH, ANTHROPIC_MAX_USER_ID_LENGTH, DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
+from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+    VertexPassthroughLoggingHandler,
+)
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    STORED_PROMPT_PROBE_MODEL,
+    WALKOUT_TURN_DRAIN_SECONDS,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
     SafeRouteAdder,
+    WebsocketFrameModelAllowed,
+    WebsocketFrameModelGate,
+    WebsocketFrameModelRefused,
+    WebsocketFrameModelVerdict,
+    _build_passthrough_failure_request_payload,
+    _parse_request_data_by_content_type,
     _registered_pass_through_routes,
     _truncate_upstream_error_body,
     _update_metadata_with_tags_in_header,
@@ -57,17 +77,24 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     set_env_variables_in_header,
     websocket_passthrough_request,
 )
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_websocket_passthrough_logging_handler import (
+    openai_websocket_frame_kind,
+)
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CallTypes
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     EndpointType,
     PassthroughStandardLoggingPayload,
+    WebSocketSessionUsage,
 )
 from tests._master_key import MASTER_KEY
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -82,6 +109,8 @@ PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES: Final = MappingProxyType(
         "/tinyfish/{endpoint:path}": frozenset({"GET", "POST"}),
         "/laya/v1/systemone": frozenset({"POST"}),
         "/bespoke/v1/systemone": frozenset({"POST"}),
+        "/eu_jev/v1/systemone": frozenset({"POST"}),
+        "/opensearch/{endpoint:path}": frozenset({"GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"}),
     }
 )
 
@@ -139,9 +168,7 @@ def test_is_multipart():
         ),
     ],
 )
-def test_get_endpoint_type_classifies_anthropic_messages_routes(
-    url: str, expected_endpoint_type: EndpointType
-) -> None:
+def test_get_endpoint_type_classifies_anthropic_messages_routes(url: str, expected_endpoint_type: EndpointType) -> None:
     assert HttpPassThroughEndpointHelpers.get_endpoint_type(url) == expected_endpoint_type
 
 
@@ -422,6 +449,39 @@ async def test_non_streaming_http_request_handler_multipart_with_non_empty_parse
     assert call_args["files"] == [("file", ("test.txt", file_content, "text/plain"))]
 
 
+@pytest.mark.parametrize("existing_api_base", [None, "http://existing.example/search"])
+def test_build_passthrough_failure_request_payload_carries_masked_api_base(existing_api_base: str | None) -> None:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="passthrough",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.pass_through.value,
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    logging_obj.pre_call(
+        input={},
+        api_key="",
+        additional_args={
+            "complete_input_dict": {},
+            "api_base": "http://upstream.example/search?api-version=1",
+            "headers": {},
+        },
+    )
+    params: Final = {"metadata": {}, **({"api_base": existing_api_base} if existing_api_base else {})}
+    payload: Final = _build_passthrough_failure_request_payload(
+        parsed_body={},
+        kwargs={"litellm_params": params},
+        logging_obj=logging_obj,
+        custom_llm_provider=None,
+    )
+    assert payload["litellm_params"]["api_base"] == (
+        existing_api_base or logging_obj.model_call_details["litellm_params"]["api_base"]
+    )
+    assert params == {"metadata": {}, **({"api_base": existing_api_base} if existing_api_base else {})}
+
+
 @pytest.mark.asyncio
 async def test_pass_through_request_failure_handler():
     """
@@ -429,53 +489,19 @@ async def test_pass_through_request_failure_handler():
 
     Critical Test: When a users pass through endpoint request fails, we must log the failure code, exception in litellm spend logs.
     """
-    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
-        with patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client:
-            with patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
-            ) as mock_processing:
-                # Setup mock for post_call_failure_hook and pre_call_hook
-                mock_proxy_logging.post_call_failure_hook = AsyncMock()
-                mock_proxy_logging.pre_call_hook = AsyncMock()
+    request_failure = httpx.HTTPError("Request failed")
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
 
-                # Setup mock for httpx client
-                mock_client = MagicMock()
-                mock_client.client = MagicMock()
-                mock_client.client.request = AsyncMock(side_effect=httpx.HTTPError("Request failed"))
-                mock_get_client.return_value = mock_client
+    failure: Final = await _run_passthrough_failure(
+        "http://test.com", None, request_failure, user_api_key_dict=user_api_key_dict
+    )
 
-                # Mock headers for custom headers
-                mock_processing.get_custom_headers.return_value = {}
-
-                # Create mock request
-                mock_request = MagicMock(spec=Request)
-                mock_request.method = "POST"
-                mock_request.body = AsyncMock(return_value=b'{"test": "data"}')
-                mock_request.headers = Headers({})
-
-                # Create a simple empty QueryParams
-                mock_request.query_params = QueryParams({})
-
-                # Create mock user API key dict
-                mock_user_api_key_dict = MagicMock()
-
-                # Call the function with a target that will trigger an HTTPError
-                with pytest.raises(ProxyException):
-                    await pass_through_request(
-                        request=mock_request,
-                        target="http://test.com",
-                        custom_headers={},
-                        user_api_key_dict=mock_user_api_key_dict,
-                    )
-
-                # Assert post_call_failure_hook was called
-                mock_proxy_logging.post_call_failure_hook.assert_called_once()
-
-                # Verify the arguments to post_call_failure_hook
-                call_args = mock_proxy_logging.post_call_failure_hook.call_args[1]
-                assert call_args["user_api_key_dict"] == mock_user_api_key_dict
-                assert isinstance(call_args["original_exception"], TypeError)  # Now expecting TypeError
-                assert "traceback_str" in call_args
+    assert failure.user_api_key_dict is user_api_key_dict
+    assert failure.original_exception is request_failure
+    assert "Request failed" in (failure.traceback_str or "")
+    assert failure.request_data["contents"] == "not a list"
+    assert failure.request_data["model"] == ""
+    assert failure.request_data["litellm_params"]["api_base"] == "http://test.com"
 
 
 @pytest.mark.asyncio
@@ -2978,6 +3004,56 @@ async def test_update_pass_through_endpoint_preserves_auth_false():
 
 
 @pytest.mark.asyncio
+async def test_update_pass_through_endpoint_keeps_serving_the_old_route_until_the_new_one_is_registered():
+    from litellm.proxy._types import ConfigFieldInfo, PassThroughGenericEndpoint, UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        update_pass_through_endpoints,
+    )
+
+    def registered_target() -> object:
+        registered: Final = InitPassThroughEndpointHelpers.get_registered_pass_through_route(route="/operator") or {}
+        return registered.get("passthrough_params", {}).get("target")
+
+    targets_during_db_write: Final[list[object]] = []
+
+    async def record_registered_target(**_: object) -> None:
+        targets_during_db_write.append(registered_target())
+
+    with (
+        patch("litellm.proxy.proxy_server.get_config_general_settings") as mock_get_config,
+        patch("litellm.proxy.proxy_server.update_config_general_settings", side_effect=record_registered_target),
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes", {}),
+    ):
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=FastAPI(),
+            path="/operator",
+            target="http://old.example/api",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id="operator-route",
+            methods=["POST"],
+        )
+        mock_get_config.return_value = ConfigFieldInfo(
+            field_name="pass_through_endpoints",
+            field_value=[
+                {"id": "operator-route", "path": "/operator", "target": "http://old.example/api", "methods": ["POST"]}
+            ],
+        )
+        await update_pass_through_endpoints(
+            endpoint_id="operator-route",
+            data=PassThroughGenericEndpoint(path="/operator", target="http://new.example/api", methods=["POST"]),
+            request=MagicMock(spec=Request),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+        assert (targets_during_db_write, registered_target()) == (["http://old.example/api"], "http://new.example/api")
+
+
+@pytest.mark.asyncio
 async def test_update_pass_through_endpoint_not_found():
     """
     Test updating a non-existent pass-through endpoint raises HTTPException
@@ -3605,9 +3681,7 @@ async def test_pass_through_request_preserves_target_query_without_client_query(
 
 
 @pytest.mark.asyncio
-async def test_config_pass_through_without_configured_headers_preserves_no_authorization(
-    tmp_path, monkeypatch
-):
+async def test_config_pass_through_without_configured_headers_preserves_no_authorization(tmp_path, monkeypatch):
     proxy = await _boot_db_backed_proxy(
         tmp_path,
         monkeypatch,
@@ -3674,9 +3748,7 @@ async def test_pass_through_rpm_limit_is_sequential_and_scoped_per_key(tmp_path,
     proxy = await _boot_db_backed_proxy(
         tmp_path,
         monkeypatch,
-        config_pass_through_endpoints=[
-            {"path": "/rpm-rerank", "target": "http://upstream.test/rerank", "auth": True}
-        ],
+        config_pass_through_endpoints=[{"path": "/rpm-rerank", "target": "http://upstream.test/rerank", "auth": True}],
         db_pass_through_endpoints=[],
         master_key=MASTER_KEY,
     )
@@ -4851,8 +4923,10 @@ from fastapi import HTTPException as _FastAPIHTTPException
 from litellm.exceptions import (
     BlockedPiiEntityError,
     GuardrailRaisedException,
+    ModifyResponseException,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
 _PT_MODULE = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
 
 
@@ -6037,7 +6111,7 @@ async def test_pass_through_request_claims_the_budget_reservation_only_when_its_
         patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
         ) as mock_processing,
-        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as mock_worker,
+        patch("litellm.litellm_core_utils.logging_worker.GLOBAL_LOGGING_WORKER") as mock_worker,
     ):
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_failure_hook = AsyncMock()
@@ -6091,7 +6165,7 @@ async def test_pass_through_request_leaves_the_budget_reservation_for_the_reques
         patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
         ) as mock_processing,
-        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as mock_worker,
+        patch("litellm.litellm_core_utils.logging_worker.GLOBAL_LOGGING_WORKER") as mock_worker,
     ):
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_failure_hook = AsyncMock()
@@ -6599,6 +6673,272 @@ async def test_pass_through_body_stays_byte_identical_outside_the_opt_in(
     assert "x-litellm-call-id" in response.headers
 
 
+def _echo_upstream_body(upstream_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200, content=upstream_request.content, headers={"content-type": "application/json"}, request=upstream_request
+    )
+
+
+async def _relayed_body(response: Response) -> bytes:
+    if isinstance(response, StreamingResponse):
+        return b"".join([chunk async for chunk in response.body_iterator])
+    return bytes(response.body)
+
+
+async def _relay_through_pass_through(
+    client_body: Mapping[str, object],
+    target: str,
+    guardrails_config: dict[str, object] | None,
+    custom_body: dict[str, object] | None = None,
+) -> Mapping[str, object]:
+    async def receive() -> Mapping[str, object]:
+        return {"type": "http.request", "body": json.dumps(dict(client_body)).encode()}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/my-claude-route",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(_echo_upstream_body), timeout=None)
+    try:
+        with ExitStack() as stack:
+            _enter_relay_logging_mocks(stack, {})
+            stack.enter_context(
+                patch("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+            )
+            response: Final = await pass_through_request(
+                request=request,
+                target=target,
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                custom_body=custom_body,
+                guardrails_config=guardrails_config,
+            )
+            relayed: Final = await _relayed_body(response)
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert response.status_code == 200
+    return MappingProxyType(json.loads(relayed))
+
+
+_MESSAGES_BODY: Final = MappingProxyType(
+    {"model": "claude-sonnet-4-5", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}
+)
+_ANTHROPIC_MESSAGES: Final = "https://api.anthropic.com/v1/messages"
+
+
+@pytest.fixture
+def no_configured_anthropic_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+@pytest.mark.parametrize(
+    "client_metadata, target, forwarded_metadata",
+    [
+        ({"user_id": "user-1"}, _ANTHROPIC_MESSAGES, {"user_id": "user-1"}),
+        ({"user_id": "user-1"}, f"{_ANTHROPIC_MESSAGES}/", {"user_id": "user-1"}),
+        ({"user_id": "user-1"}, f"{_ANTHROPIC_MESSAGES}?beta=true", {"user_id": "user-1"}),
+        (
+            {"user_id": "user-1", "tags": ["a"], "trace_id": "t", "generation_name": "g", "foo": "bar"},
+            _ANTHROPIC_MESSAGES,
+            {"user_id": "user-1"},
+        ),
+        ({"user_id": "1234567890"}, _ANTHROPIC_MESSAGES, {"user_id": "1234567890"}),
+        ({"tags": ["a"], "foo": "bar"}, _ANTHROPIC_MESSAGES, None),
+        ({"user_id": "a@example.com"}, _ANTHROPIC_MESSAGES, None),
+        ({"user_id": "x" * (ANTHROPIC_MAX_USER_ID_LENGTH + 1)}, _ANTHROPIC_MESSAGES, None),
+        ({"user_id": 42}, _ANTHROPIC_MESSAGES, None),
+        ({"user_id": "line one\nline two"}, _ANTHROPIC_MESSAGES, None),
+        ({"user_id": "a\x1f@example.com"}, _ANTHROPIC_MESSAGES, None),
+        ({"user_id": "user-1"}, f"{_ANTHROPIC_MESSAGES}/count_tokens", None),
+        ({"user_id": "user-1"}, f"{_ANTHROPIC_MESSAGES}/batches", None),
+        ({"user_id": "user-1"}, "https://api.anthropic.com/v1/models", None),
+        ({"user_id": "user-1"}, "https://other-vendor.test/anthropic/v1/messages", None),
+        ({"user_id": "user-1"}, "https://other-vendor.test/v1/responses", None),
+        ({"user_id": "user-1"}, "https://other-vendor.test/v1/chat/completions", None),
+    ],
+    ids=[
+        "messages",
+        "messages-trailing-slash",
+        "messages-with-query",
+        "user-id-beside-litellm-and-unknown-keys",
+        "digits-user-id",
+        "no-user-id",
+        "email-user-id",
+        "over-long-user-id",
+        "integer-user-id",
+        "newline-user-id",
+        "control-character-before-at-sign",
+        "count-tokens",
+        "batches",
+        "other-anthropic-path",
+        "other-vendor-messages",
+        "other-vendor-responses",
+        "other-vendor-chat-completions",
+    ],
+)
+async def test_pass_through_forwards_only_an_acceptable_user_id_to_anthropic_messages(
+    stream: bool, client_metadata: object, target: str, forwarded_metadata: Mapping[str, object] | None
+) -> None:
+    client_body: Final = MappingProxyType(
+        {**_MESSAGES_BODY, "metadata": client_metadata, **({"stream": True} if stream else {})}
+    )
+    body_without_metadata: Final = {k: v for k, v in client_body.items() if k != "metadata"}
+
+    relayed: Final = await _relay_through_pass_through(client_body, target, guardrails_config=None)
+
+    assert relayed == (
+        body_without_metadata if forwarded_metadata is None else {**body_without_metadata, "metadata": forwarded_metadata}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
+@pytest.mark.parametrize("base_env", ["ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"])
+@pytest.mark.parametrize(
+    "target, forwarded",
+    [
+        ("http://gateway.test:8080/anthropic/v1/messages", True),
+        ("http://gateway.test:9090/v1/messages", False),
+        ("http://other-gateway.test:8080/v1/messages", False),
+    ],
+    ids=["configured-upstream", "other-port", "other-host"],
+)
+async def test_pass_through_treats_the_configured_anthropic_base_as_anthropic(
+    monkeypatch: pytest.MonkeyPatch, base_env: str, target: str, forwarded: bool
+) -> None:
+    monkeypatch.setenv(base_env, "http://gateway.test:8080/anthropic")
+    client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": {"user_id": "user-1"}})
+
+    relayed: Final = await _relay_through_pass_through(client_body, target, guardrails_config=None)
+
+    assert relayed == (client_body if forwarded else _MESSAGES_BODY)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
+@pytest.mark.parametrize(
+    "user_id_length, target, forwarded",
+    [
+        (ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH, "http://gateway.test/v1/messages", True),
+        (ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH + 1, "http://gateway.test/v1/messages", False),
+        (ANTHROPIC_MAX_USER_ID_LENGTH, _ANTHROPIC_MESSAGES, True),
+    ],
+    ids=["at-the-configured-base-limit", "over-the-configured-base-limit", "direct-anthropic-keeps-its-limit"],
+)
+async def test_pass_through_caps_the_user_id_for_a_configured_anthropic_compatible_base(
+    monkeypatch: pytest.MonkeyPatch, user_id_length: int, target: str, forwarded: bool
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_BASE", "http://gateway.test")
+    client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": {"user_id": "u" * user_id_length}})
+
+    relayed: Final = await _relay_through_pass_through(client_body, target, guardrails_config=None)
+
+    assert relayed == (client_body if forwarded else _MESSAGES_BODY)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
+@pytest.mark.parametrize(
+    "default_on, event_hook, guardrails_config, client_fields, stream_scope, forwarded",
+    [
+        (False, GuardrailEventHooks.pre_call, None, {}, None, True),
+        (False, GuardrailEventHooks.pre_call, {"unregistered-guard": {}}, {}, None, True),
+        (True, GuardrailEventHooks.post_call, None, {}, None, True),
+        (True, GuardrailEventHooks.pre_call, None, {}, None, False),
+        (False, GuardrailEventHooks.pre_call, {"pii-guard": {}}, {}, None, False),
+        (False, GuardrailEventHooks.pre_call, None, {"litellm_metadata": {"guardrails": ["pii-guard"]}}, None, False),
+        (False, GuardrailEventHooks.pre_call, {"pii-guard": {}}, {"litellm_metadata": {"guardrails": []}}, None, False),
+        (True, GuardrailEventHooks.pre_call, None, {"stream": True}, "streaming", False),
+        (True, GuardrailEventHooks.pre_call, None, {}, "streaming", True),
+        (True, GuardrailEventHooks.pre_call, None, {"stream": True}, "non_streaming", True),
+        (True, GuardrailEventHooks.pre_call, None, {}, "non_streaming", False),
+    ],
+    ids=[
+        "guardrail-not-requested",
+        "guardrail-not-registered",
+        "default-on-post-call-guardrail",
+        "default-on-pre-call-guardrail",
+        "guardrail-on-the-route",
+        "guardrail-in-litellm-metadata",
+        "route-guardrail-beside-an-empty-client-list",
+        "streaming-guardrail-on-a-stream",
+        "streaming-guardrail-off-a-stream",
+        "non-streaming-guardrail-on-a-stream",
+        "non-streaming-guardrail-off-a-stream",
+    ],
+)
+async def test_pass_through_keeps_the_user_id_from_routes_a_guardrail_scans(
+    default_on: bool,
+    event_hook: GuardrailEventHooks,
+    guardrails_config: dict[str, object] | None,
+    client_fields: Mapping[str, object],
+    stream_scope: str | None,
+    forwarded: bool,
+) -> None:
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="pii-guard", default_on=default_on, event_hook=event_hook, stream_scope=stream_scope
+    )
+    client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": {"user_id": "user-1"}, **client_fields})
+    body_without_client_fields: Final = {k: v for k, v in client_body.items() if k not in ("metadata", "litellm_metadata")}
+
+    with patch.object(litellm, "callbacks", [guardrail]):
+        relayed: Final = await _relay_through_pass_through(
+            client_body, _ANTHROPIC_MESSAGES, guardrails_config=guardrails_config
+        )
+
+    assert relayed == (
+        {**body_without_client_fields, "metadata": {"user_id": "user-1"}} if forwarded else body_without_client_fields
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
+async def test_pass_through_warns_without_the_value_when_it_drops_a_refused_user_id(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": {"user_id": "person@example.com"}})
+
+    with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+        await _relay_through_pass_through(client_body, _ANTHROPIC_MESSAGES, guardrails_config=None)
+
+    assert "Not forwarding metadata.user_id" in caplog.text
+    assert "person@example.com" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
+async def test_pass_through_drops_metadata_that_is_not_an_object() -> None:
+    client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": "user-1"})
+
+    relayed: Final = await _relay_through_pass_through(client_body, _ANTHROPIC_MESSAGES, guardrails_config=None)
+
+    assert relayed == _MESSAGES_BODY
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
+async def test_pass_through_custom_body_replaces_the_client_user_id() -> None:
+    client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": {"user_id": "user-1"}})
+
+    relayed: Final = await _relay_through_pass_through(
+        client_body, _ANTHROPIC_MESSAGES, guardrails_config=None, custom_body=dict(_MESSAGES_BODY)
+    )
+
+    assert relayed == _MESSAGES_BODY
+
+
 _PARTIAL_RELAY_WARNING_MARKER = "ended before upstream body was fully relayed"
 
 
@@ -7094,6 +7434,7 @@ async def test_websocket_passthrough_forwards_non_ascii_first_frame():
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_success_hook = AsyncMock()
         mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_proxy_logging.arelease_responses_websocket_slot = AsyncMock()
         mock_worker.ensure_initialized_and_enqueue = MagicMock(
             side_effect=lambda async_coroutine: async_coroutine.close()
         )
@@ -7146,6 +7487,7 @@ async def test_websocket_passthrough_propagates_active_trace_context(
     mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
     mock_proxy_logging.post_call_success_hook = AsyncMock()
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging.arelease_responses_websocket_slot = AsyncMock()
     mock_worker = MagicMock()
     mock_worker.ensure_initialized_and_enqueue = MagicMock(side_effect=lambda async_coroutine: async_coroutine.close())
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
@@ -7212,6 +7554,7 @@ async def test_websocket_passthrough_never_forwards_caller_credentials_upstream(
     mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
     mock_proxy_logging.post_call_success_hook = AsyncMock()
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging.arelease_responses_websocket_slot = AsyncMock()
     mock_worker = MagicMock()
     mock_worker.ensure_initialized_and_enqueue = MagicMock(side_effect=lambda async_coroutine: async_coroutine.close())
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
@@ -7305,10 +7648,11 @@ def _patched_websocket_passthrough_environment(upstream_ws):
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_success_hook = AsyncMock()
         mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_proxy_logging.arelease_responses_websocket_slot = AsyncMock()
         mock_worker.ensure_initialized_and_enqueue = MagicMock(
             side_effect=lambda async_coroutine: async_coroutine.close()
         )
-        yield
+        yield mock_proxy_logging
 
 
 async def _pending_receive():
@@ -7368,7 +7712,7 @@ async def test_websocket_passthrough_keeps_normal_upstream_close_normal():
     websocket.close.assert_awaited_once_with()
 
 
-async def _run_setup_rewrite_passthrough(setup_model: str, llm_router) -> str:
+async def _run_setup_rewrite_passthrough(setup_model: str, llm_router, keeps_caller_resource_path: bool = False) -> str:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         _build_vertex_live_setup_model_rewriter,
     )
@@ -7396,7 +7740,9 @@ async def _run_setup_rewrite_passthrough(setup_model: str, llm_router) -> str:
             setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
                 vertex_project="proj-db",
                 vertex_location="global",
+                configured_location="global",
                 llm_router=llm_router,
+                keeps_caller_resource_path=keeps_caller_resource_path,
             ),
         )
 
@@ -7434,6 +7780,67 @@ async def test_websocket_passthrough_rewrites_gateway_alias_setup_model():
     assert sent_setup["model"] == "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
 
 
+async def _run_binary_client_frame_passthrough(frame: bytes):
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _build_vertex_live_setup_model_rewriter,
+    )
+
+    upstream_ws = RecordingUpstreamWebSocket()
+    websocket = _client_websocket(
+        AsyncMock(
+            side_effect=[
+                {"type": "websocket.receive", "bytes": frame},
+                {"type": "websocket.disconnect"},
+            ]
+        )
+    )
+
+    with _patched_websocket_passthrough_environment(upstream_ws):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+            setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
+                vertex_project="proj-a",
+                vertex_location="europe-west4",
+                configured_location="europe-west4",
+                llm_router=None,
+                keeps_caller_resource_path=False,
+            ),
+        )
+
+    return websocket, upstream_ws
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_moves_a_binary_setup_frame_onto_the_pinned_project():
+    setup_frame = json.dumps(
+        {"setup": {"model": "projects/proj-b/locations/europe-west4/publishers/google/models/gemini-2.0-flash"}}
+    ).encode("utf-8")
+
+    _, upstream_ws = await _run_binary_client_frame_passthrough(setup_frame)
+
+    upstream_ws.send.assert_awaited_once()
+    sent_frame = upstream_ws.send.await_args.args[0]
+    assert isinstance(sent_frame, bytes), "a binary client message must stay binary upstream"
+    assert json.loads(sent_frame)["setup"]["model"] == (
+        "projects/proj-a/locations/europe-west4/publishers/google/models/gemini-2.0-flash"
+    )
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_closes_on_a_binary_frame_that_is_not_utf8():
+    websocket, upstream_ws = await _run_binary_client_frame_passthrough(b"\xff\xfe\x00projects/proj-b")
+
+    upstream_ws.send.assert_not_awaited()
+    websocket.close.assert_awaited_once()
+    assert websocket.close.await_args.kwargs["code"] == 1008
+
+
 @pytest.mark.parametrize(
     "setup_model",
     ["gemini-live-2.5-flash", "models/gemini-live-2.5-flash", "publishers/google/models/gemini-live-2.5-flash"],
@@ -7455,7 +7862,11 @@ def test_vertex_live_setup_model_resolves_before_extraction(setup_model):
     )
 
     rewriter = _build_vertex_live_setup_model_rewriter(
-        vertex_project="proj-db", vertex_location="global", llm_router=None
+        vertex_project="proj-db",
+        vertex_location="global",
+        configured_location="global",
+        llm_router=None,
+        keeps_caller_resource_path=False,
     )
     setup_data = {"model": setup_model}
 
@@ -7505,7 +7916,11 @@ async def test_websocket_passthrough_logs_a_bare_alias_setup_model():
                 endpoint="/vertex_ai/live",
                 accept_websocket=False,
                 setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
-                    vertex_project="proj-db", vertex_location="global", llm_router=None
+                    vertex_project="proj-db",
+                    vertex_location="global",
+                    configured_location="global",
+                    llm_router=None,
+                    keeps_caller_resource_path=False,
                 ),
             )
 
@@ -7559,7 +7974,7 @@ async def test_websocket_passthrough_does_not_relay_unsendable_upstream_close(rc
 @pytest.mark.asyncio
 async def test_websocket_passthrough_rewrites_alias_of_unrecognised_upstream_model():
     llm_router = MagicMock()
-    llm_router.get_model_list.return_value = [
+    llm_router.registry.return_value.deployments.return_value = [
         {"model_name": "gemini-live", "litellm_params": {"model": "self-hosted-live-endpoint"}}
     ]
 
@@ -7570,14 +7985,24 @@ async def test_websocket_passthrough_rewrites_alias_of_unrecognised_upstream_mod
 
 
 @pytest.mark.asyncio
-async def test_websocket_passthrough_leaves_full_resource_setup_model_untouched():
-    full_resource = "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash-live-preview-04-09"
+@pytest.mark.parametrize(
+    "keeps_caller_resource_path, expected_prefix",
+    [(True, "projects/other/locations/us-central1/"), (False, "projects/proj-db/locations/global/")],
+    ids=["caller_path_kept", "moved_onto_session_target"],
+)
+async def test_websocket_passthrough_full_resource_setup_model(
+    keeps_caller_resource_path: bool, expected_prefix: str
+) -> None:
+    model_suffix = "publishers/google/models/gemini-2.0-flash-live-preview-04-09"
 
-    sent_frame = await _run_setup_rewrite_passthrough(full_resource, llm_router=None)
+    sent_frame = await _run_setup_rewrite_passthrough(
+        f"projects/other/locations/us-central1/{model_suffix}",
+        llm_router=None,
+        keeps_caller_resource_path=keeps_caller_resource_path,
+    )
 
-    assert json.loads(sent_frame)["setup"]["model"] == full_resource
     assert sent_frame == json.dumps(
-        {"setup": {"model": full_resource, "generationConfig": {"responseModalities": ["TEXT"]}}}
+        {"setup": {"model": f"{expected_prefix}{model_suffix}", "generationConfig": {"responseModalities": ["TEXT"]}}}
     )
 
 
@@ -7611,6 +8036,1487 @@ async def test_websocket_passthrough_does_not_close_twice_when_success_logging_f
         )
 
     websocket.close.assert_awaited_once_with(code=1008, reason=upstream_reason)
+
+
+SUCCESS_HANDLER: Final = (
+    "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+    "pass_through_endpoint_logging.pass_through_async_success_handler"
+)
+
+
+KEY_MODEL_REFUSAL: Final = "key not allowed to access model. This key can only access models=['gpt-5.4-mini']."
+KEY_MODEL_CLOSE_REASON: Final = "key not allowed to access model."
+
+
+class RecordingFrameModelGate:
+    def __init__(
+        self,
+        refusals: Mapping[str, str] = MappingProxyType({}),
+        groups: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
+        error_type: str = "key_model_access_denied",
+    ):
+        self.refusals = refusals
+        self.groups = groups
+        self.error_type = error_type
+        self.checked: list[str] = []
+
+    async def __call__(self, websocket: object, model: str, /) -> WebsocketFrameModelVerdict:
+        self.checked.append(model)
+        refusal: Final = self.refusals.get(model)
+        if refusal is not None:
+            return WebsocketFrameModelRefused(message=refusal, error_type=self.error_type)
+        return WebsocketFrameModelAllowed(access_groups=self.groups.get(model, ()))
+
+
+def _received_frame(frame: str | bytes) -> Mapping[str, str | bytes]:
+    if isinstance(frame, bytes):
+        return {"type": "websocket.receive", "bytes": frame}
+    return {"type": "websocket.receive", "text": frame}
+
+
+async def _relay_client_frames(
+    frames: Sequence[str | bytes],
+    gate: WebsocketFrameModelGate | None,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+) -> SimpleNamespace:
+    upstream_ws: Final = RecordingUpstreamWebSocket()
+    websocket: Final = _client_websocket(
+        AsyncMock(side_effect=[_received_frame(frame) for frame in frames] + [{"type": "websocket.disconnect"}])
+    )
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1",
+            custom_headers={"Authorization": "Bearer sk-provider"},
+            user_api_key_dict=user_api_key_dict or UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/openai/v1/realtime",
+            accept_websocket=False,
+            client_frame_model_gate=gate,
+        )
+
+    return SimpleNamespace(upstream=upstream_ws, client=websocket, success_handler=success_handler)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "frame, expected_model",
+    [
+        ({"type": "response.create", "model": "gpt-5.4-mini"}, "gpt-5.4-mini"),
+        ({"type": "response.create", "response": {"model": "gpt-5.4"}}, "gpt-5.4"),
+        ({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}}, "gpt-realtime-2.1"),
+        (
+            {"type": "session.update", "session": {"input_audio_transcription": {"model": "gpt-4o-transcribe"}}},
+            "gpt-4o-transcribe",
+        ),
+        (
+            {
+                "type": "session.update",
+                "session": {"audio": {"input": {"transcription": {"model": "gpt-transcribe"}}}},
+            },
+            "gpt-transcribe",
+        ),
+    ],
+)
+async def test_websocket_passthrough_checks_the_model_a_client_frame_asks_for(frame, expected_model):
+    gate: Final = RecordingFrameModelGate()
+
+    relayed: Final = await _relay_client_frames([json.dumps(frame)], gate)
+
+    assert gate.checked == [expected_model]
+    assert [call.args[0] for call in relayed.upstream.send.await_args_list] == [json.dumps(frame)]
+    assert relayed.client.close.await_args_list == [call()]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_refuses_a_frame_naming_a_model_the_key_cannot_call():
+    gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": KEY_MODEL_REFUSAL}))
+    frame: Final = json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}})
+
+    relayed: Final = await _relay_client_frames([frame], gate)
+
+    assert relayed.upstream.send.await_args_list == []
+    assert json.loads(relayed.client.send_text.await_args.args[0]) == {
+        "type": "error",
+        "error": {"type": "key_model_access_denied", "message": KEY_MODEL_REFUSAL},
+    }
+    assert relayed.client.close.await_args_list == [call(code=1008, reason=KEY_MODEL_CLOSE_REASON)]
+    relayed.upstream.close.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_closes_with_the_whole_first_sentence_of_the_refusal():
+    """
+    The close frame only has room for 123 bytes, so a refusal cut at that limit
+    reads as a truncated number. The first sentence names the reason whole, and
+    the error event before the close still carries every word with its type.
+    """
+    refusal: Final = "Budget has been exceeded! Key=" + "f" * 64 + " Spend=1.23456789, Budget=1.0"
+    gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-5.4": refusal}), error_type="budget_exceeded")
+
+    relayed: Final = await _relay_client_frames([json.dumps({"type": "response.create", "model": "gpt-5.4"})], gate)
+
+    assert relayed.client.close.await_args_list == [call(code=1008, reason="Budget has been exceeded!")]
+    assert json.loads(relayed.client.send_text.await_args.args[0])["error"] == {
+        "type": "budget_exceeded",
+        "message": refusal,
+    }
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_refuses_the_whole_frame_when_any_named_model_is_denied():
+    gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-4o-transcribe": KEY_MODEL_REFUSAL}))
+    frame: Final = json.dumps(
+        {
+            "type": "session.update",
+            "session": {"model": "gpt-realtime-2.1", "input_audio_transcription": {"model": "gpt-4o-transcribe"}},
+        }
+    )
+
+    relayed: Final = await _relay_client_frames([frame], gate)
+
+    assert gate.checked == ["gpt-realtime-2.1", "gpt-4o-transcribe"]
+    assert relayed.upstream.send.await_args_list == []
+    assert relayed.client.close.await_args_list == [call(code=1008, reason=KEY_MODEL_CLOSE_REASON)]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_stops_relaying_after_a_refused_frame():
+    gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": KEY_MODEL_REFUSAL}))
+    frames: Final = [
+        json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}}),
+        json.dumps({"type": "response.create"}),
+    ]
+
+    relayed: Final = await _relay_client_frames(frames, gate)
+
+    assert relayed.upstream.send.await_args_list == []
+    assert gate.checked == ["gpt-realtime-2.1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "frame",
+    [
+        '{"type": "input_audio_buffer.append", "audio": "AAAA"}',
+        '{"type": "response.create", "response": {"modalities": ["audio"]}}',
+        '{"type": "session.update", "session": {"model": 42}}',
+        'not json at all, but it does say "model"',
+        '{"type": "session.update", "session": "model"}',
+    ],
+)
+async def test_websocket_passthrough_forwards_frames_that_name_no_model(frame):
+    gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": "denied"}))
+
+    relayed: Final = await _relay_client_frames([frame], gate)
+
+    assert gate.checked == []
+    assert [call_.args[0] for call_ in relayed.upstream.send.await_args_list] == [frame]
+    assert relayed.client.close.await_args_list == [call()]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_never_bills_the_model_a_client_frame_named():
+    """
+    A frame is what the caller asked for, not what the provider ran. A caller
+    who names a cheap model in a frame the provider ignores must not move the
+    session onto that model's price, so only the provider's own frames decide
+    what a session is billed as.
+    """
+    gate: Final = RecordingFrameModelGate()
+    frames: Final = [
+        json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}}),
+        json.dumps({"type": "response.create", "response": {"model": "gpt-realtime-2.1-mini"}}),
+    ]
+
+    relayed: Final = await _relay_client_frames(frames, gate)
+
+    assert gate.checked == ["gpt-realtime-2.1", "gpt-realtime-2.1-mini"]
+    assert "model" not in relayed.success_handler.call_args.kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "frame, expected_model",
+    [
+        ('{"type": "response.create", "\\u006dodel": "gpt-5.4"}', "gpt-5.4"),
+        ('{"type": "session.update", "session": {"\\u006d\\u006fdel": "gpt-realtime-2.1"}}', "gpt-realtime-2.1"),
+    ],
+)
+async def test_websocket_passthrough_checks_a_model_named_with_escaped_json(frame, expected_model):
+    """
+    JSON lets a caller spell the same key several ways, so a frame carrying
+    "\\u006dodel" asks for a model just as plainly as one carrying "model" and
+    has to face the same check.
+    """
+    gate: Final = RecordingFrameModelGate(MappingProxyType({expected_model: KEY_MODEL_REFUSAL}))
+
+    relayed: Final = await _relay_client_frames([frame], gate)
+
+    assert gate.checked == [expected_model]
+    assert relayed.upstream.send.await_args_list == []
+    assert relayed.client.close.await_args_list == [call(code=1008, reason=KEY_MODEL_CLOSE_REASON)]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_checks_the_model_a_binary_frame_asks_for():
+    gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": KEY_MODEL_REFUSAL}))
+    frame: Final = json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}}).encode()
+
+    relayed: Final = await _relay_client_frames([frame], gate)
+
+    assert gate.checked == ["gpt-realtime-2.1"]
+    assert relayed.upstream.send.await_args_list == []
+    assert relayed.client.close.await_args_list == [call(code=1008, reason=KEY_MODEL_CLOSE_REASON)]
+
+
+STORED_PROMPT_FRAMES: Final = (
+    {"type": "response.create", "prompt": {"id": "pmpt_fake", "version": "2"}},
+    {"type": "response.create", "response": {"prompt": {"id": "pmpt_fake"}}},
+    {"type": "session.update", "session": {"prompt": {"id": "pmpt_fake"}}},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("frame", STORED_PROMPT_FRAMES)
+async def test_websocket_passthrough_refuses_a_stored_prompt_for_a_key_limited_to_some_models(frame):
+    """
+    A stored prompt carries its own model on the provider side, so a key held to
+    a model list could reach any model through one. The gateway cannot see that
+    model, so a key that is not allowed every model cannot run a stored prompt.
+    """
+    gate: Final = RecordingFrameModelGate(MappingProxyType({STORED_PROMPT_PROBE_MODEL: KEY_MODEL_REFUSAL}))
+
+    relayed: Final = await _relay_client_frames([json.dumps(frame)], gate)
+
+    error_message: Final = json.loads(relayed.client.send_text.await_args.args[0])["error"]["message"]
+    close_reason: Final = relayed.client.close.await_args.kwargs["reason"]
+    assert gate.checked == [STORED_PROMPT_PROBE_MODEL]
+    assert relayed.upstream.send.await_args_list == []
+    assert relayed.client.close.await_args.kwargs["code"] == 1008
+    assert "stored prompt" in close_reason
+    assert close_reason.endswith(".") and error_message.startswith(close_reason)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("frame", STORED_PROMPT_FRAMES)
+async def test_websocket_passthrough_forwards_a_stored_prompt_for_a_key_allowed_every_model(frame):
+    gate: Final = RecordingFrameModelGate()
+
+    relayed: Final = await _relay_client_frames([json.dumps(frame)], gate)
+
+    assert [call_.args[0] for call_ in relayed.upstream.send.await_args_list] == [json.dumps(frame)]
+    assert relayed.client.close.await_args_list == [call()]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_keeps_the_budget_reason_when_a_stored_prompt_is_refused_for_spend():
+    refusal: Final = "Budget has been exceeded! Key=hashed Spend=2.0, Budget=1.0"
+    gate: Final = RecordingFrameModelGate(
+        MappingProxyType({STORED_PROMPT_PROBE_MODEL: refusal}), error_type="budget_exceeded"
+    )
+
+    relayed: Final = await _relay_client_frames([json.dumps(STORED_PROMPT_FRAMES[0])], gate)
+
+    assert json.loads(relayed.client.send_text.await_args.args[0])["error"] == {
+        "type": "budget_exceeded",
+        "message": refusal,
+    }
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_checks_the_model_a_hosted_tool_names():
+    """A hosted tool such as image generation runs its own model, so that model gets the same check as the turn's"""
+    gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-image-2": KEY_MODEL_REFUSAL}))
+    frame: Final = {
+        "type": "response.create",
+        "model": "gpt-5.4-mini",
+        "tools": [{"type": "web_search"}, {"type": "image_generation", "model": "gpt-image-2"}],
+    }
+
+    relayed: Final = await _relay_client_frames([json.dumps(frame)], gate)
+
+    assert gate.checked == ["gpt-5.4-mini", "gpt-image-2"]
+    assert relayed.upstream.send.await_args_list == []
+    assert relayed.client.close.await_args.kwargs["code"] == 1008
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "frame",
+    [
+        {"type": "response.create", "model": "gpt-5.4-mini", "tools": [{"type": "image_generation"}]},
+        {"type": "response.create", "response": {"tools": [{"type": "image_generation", "model": None}]}},
+    ],
+)
+async def test_websocket_passthrough_refuses_an_image_tool_without_a_model_for_a_key_limited_to_some_models(frame):
+    gate: Final = RecordingFrameModelGate(MappingProxyType({STORED_PROMPT_PROBE_MODEL: KEY_MODEL_REFUSAL}))
+
+    relayed: Final = await _relay_client_frames([json.dumps(frame)], gate)
+
+    assert gate.checked[-1] == STORED_PROMPT_PROBE_MODEL
+    assert relayed.upstream.send.await_args_list == []
+    assert "image_generation tool has to name its model" in relayed.client.close.await_args.kwargs["reason"]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_checks_a_frame_only_the_standard_json_parser_reads():
+    """A lone surrogate escape is valid JSON syntax the fast parser refuses, so the frame is still checked"""
+    gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-5.4": KEY_MODEL_REFUSAL}))
+    frame: Final = '{"type": "response.create", "model": "gpt-5.4", "metadata": {"note": "\\ud800"}}'
+
+    relayed: Final = await _relay_client_frames([frame], gate)
+
+    assert gate.checked == ["gpt-5.4"]
+    assert relayed.upstream.send.await_args_list == []
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_forwards_binary_audio_untouched():
+    gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": "denied"}))
+    audio: Final = bytes(range(256)) * 4
+
+    relayed: Final = await _relay_client_frames([audio], gate)
+
+    assert gate.checked == []
+    assert [call_.args[0] for call_ in relayed.upstream.send.await_args_list] == [audio]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_without_a_frame_gate_forwards_every_frame():
+    frame: Final = json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}})
+
+    relayed: Final = await _relay_client_frames([frame], None)
+
+    assert [call_.args[0] for call_ in relayed.upstream.send.await_args_list] == [frame]
+    assert "model" not in relayed.success_handler.call_args.kwargs
+
+
+REALTIME_SESSION_CREATED: Final = json.dumps(
+    {"type": "session.created", "session": {"id": "sess_fake", "model": "gpt-realtime-2.1"}}
+)
+REALTIME_RESPONSE_DONE: Final = json.dumps(
+    {
+        "type": "response.done",
+        "response": {"status": "completed", "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}},
+    }
+)
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_still_bills_a_session_the_client_walked_out_of():
+    """
+    A realtime client closes the moment it has the answer it asked for, so the
+    next frame the provider sends lands on a socket that is already gone. That
+    is how a session ends, not a gateway failure, and the turns the caller
+    already used still have to reach spend, including the last frame the client
+    never collected.
+    """
+    upstream_ws: Final = FakeUpstreamWebSocket(
+        REALTIME_SESSION_CREATED,
+        REALTIME_RESPONSE_DONE,
+        json.dumps({"type": "response.output_text.delta", "delta": "too late"}),
+    )
+    websocket: Final = _client_websocket(_pending_receive)
+    websocket.send_text = AsyncMock(side_effect=[None, None, WebSocketDisconnect(code=1006)])
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1",
+            custom_headers={"Authorization": "Bearer sk-provider"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/openai_passthrough/v1/realtime",
+            accept_websocket=False,
+        )
+
+    relayed_frames: Final = success_handler.call_args.kwargs["response_body"]
+    assert [frame["type"] for frame in relayed_frames] == [
+        "session.created",
+        "response.done",
+        "response.output_text.delta",
+    ]
+
+
+class ScriptedUpstreamWebSocket:
+    """Answers each client frame with its scripted reply"""
+
+    def __init__(self, *opening: str, replies: Sequence[Sequence[str]] = ()):
+        self._frames: asyncio.Queue[str | None] = asyncio.Queue()
+        for frame in opening:
+            self._frames.put_nowait(frame)
+        self._replies = iter(replies)
+        self._closed = False
+        self.send = AsyncMock(side_effect=self._reply)
+        self.close = AsyncMock(side_effect=self._flush_and_close)
+
+    async def _reply(self, frame: str | bytes) -> None:
+        for reply in next(self._replies, ()):
+            self._frames.put_nowait(reply)
+
+    async def _flush_and_close(self, *args: object, **kwargs: object) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._frames.put_nowait(None)
+        while not self._frames.empty():
+            await asyncio.sleep(0)
+
+    async def recv(self, decode: bool | None = None) -> str:
+        from websockets.exceptions import ConnectionClosedOK
+        from websockets.frames import Close
+
+        frame: Final = await self._frames.get()
+        if frame is None:
+            raise ConnectionClosedOK(rcvd=Close(1000, ""), sent=Close(1000, ""), rcvd_then_sent=True)
+        return frame
+
+
+def _turn_taking_client(
+    frames: Sequence[str], answered_by: str, answers_due: Sequence[int] | None = None
+) -> MagicMock:
+    """A client that sends each frame, and then leaves, once the answers due by then reached it (by default the
+    answer to every earlier frame), and that Starlette refuses to send to once it is closed"""
+    from starlette.websockets import WebSocketState
+
+    delivered: Final[list[str]] = []
+    script: Final = iter(frames)
+    receives: Final = iter(range(len(frames) + 1) if answers_due is None else answers_due)
+
+    async def receive():
+        answers_due: Final = next(receives)
+        while sum(answered_by in text for text in delivered) < answers_due:
+            await asyncio.sleep(0)
+        frame: Final = next(script, None)
+        return {"type": "websocket.disconnect"} if frame is None else _received_frame(frame)
+
+    websocket: Final = _client_websocket(receive)
+
+    async def send_text(text: str) -> None:
+        if websocket.application_state == WebSocketState.DISCONNECTED:
+            raise RuntimeError('Cannot call "send" once a close message has been sent.')
+        delivered.append(text)
+
+    websocket.send_text = AsyncMock(side_effect=send_text)
+    return websocket
+
+
+async def _relay_turns(
+    client: MagicMock,
+    upstream_ws: ScriptedUpstreamWebSocket,
+    gate: WebsocketFrameModelGate,
+    endpoint: str = "/openai_passthrough/v1/responses",
+    target: str = "wss://api.openai.com/v1/responses",
+    opening_access_groups: Sequence[str] = (),
+    walkout_turn_drain_seconds: float = 0.05,
+) -> SimpleNamespace:
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws) as proxy_logging,
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock) as success_handler,
+    ):
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=client,
+                target=target,
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="hashed-key", matched_model_access_groups=list(opening_access_groups)
+                ),
+                forward_headers=False,
+                endpoint=endpoint,
+                accept_websocket=False,
+                client_frame_model_gate=gate,
+                upstream_frame_kind=openai_websocket_frame_kind,
+                walkout_turn_drain_seconds=walkout_turn_drain_seconds,
+            ),
+            timeout=10,
+        )
+    return SimpleNamespace(success_handler=success_handler, proxy_logging=proxy_logging)
+
+
+def _responses_turn(model: str) -> list[str]:
+    return [_responses_turn_started(model), _responses_turn_ended(model)]
+
+
+def _responses_turn_started(model: str) -> str:
+    return json.dumps({"type": "response.created", "response": {"model": model}})
+
+
+def _responses_turn_ended(model: str) -> str:
+    return (
+
+        json.dumps(
+            {
+                "type": "response.completed",
+                "response": {"model": model, "usage": {"input_tokens": 9, "output_tokens": 3, "total_tokens": 12}},
+            }
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_logs_each_turn_on_its_own_row_charged_to_the_groups_that_allowed_it():
+    """
+    One socket can run a model from one access group and then a model from
+    another. Each turn has to reach spend as it finishes, under its own call,
+    and be charged to the group that let its model through, so a group budget
+    sees its share during the session and never pays for the other group's turn.
+    """
+    gate: Final = RecordingFrameModelGate(
+        groups=MappingProxyType({"gpt-5.4-mini": ("tier-a",), "gpt-5.4": ("tier-b",)}),
+    )
+    client: Final = _turn_taking_client(
+        [
+            json.dumps({"type": "response.create", "model": "gpt-5.4-mini"}),
+            json.dumps({"type": "response.create", "model": "gpt-5.4"}),
+        ],
+        answered_by='"response.completed"',
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(replies=[_responses_turn("gpt-5.4-mini"), _responses_turn("gpt-5.4")])
+
+    relayed: Final = await _relay_turns(client, upstream_ws, gate)
+
+    rows: Final = [logged.kwargs for logged in relayed.success_handler.call_args_list]
+    assert [[frame["response"]["model"] for frame in row["response_body"]] for row in rows] == [
+        ["gpt-5.4-mini", "gpt-5.4-mini"],
+        ["gpt-5.4", "gpt-5.4"],
+    ]
+    assert [row["litellm_params"]["metadata"][MODEL_ACCESS_GROUP_METADATA_KEY] for row in rows] == [
+        ["tier-a"],
+        ["tier-b"],
+    ]
+    assert [row["litellm_params"]["metadata"]["user_api_key"] for row in rows] == ["hashed-key", "hashed-key"]
+    assert rows[0]["litellm_call_id"] != rows[1]["litellm_call_id"]
+    assert rows[1]["start_time"] == rows[0]["end_time"]
+    relayed.proxy_logging.post_call_failure_hook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_holds_the_keys_parallel_slot_until_the_session_ends():
+    """
+    A key allowed one parallel request holds that slot for as long as its
+    socket stays open. A turn that finishes and reaches spend mid-session must
+    not free it, or a second session gets in while the first is still running.
+    """
+    limiter_cache: Final = DualCache()
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(limiter_cache))
+    key: Final = UserAPIKeyAuth(api_key=hash_token("sk-one-socket"), max_parallel_requests=1)
+    logged_rows: Final[list[asyncio.Task[None]]] = []
+
+    async def admit(user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=limiter_cache, data=data, call_type=call_type
+        )
+
+    async def release(data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object) -> None:
+        await limiter.async_post_call_success_hook(data=data, user_api_key_dict=user_api_key_dict, response=response)
+
+    async def log_row(**row: object) -> None:
+        await limiter.async_log_success_event(
+            kwargs=row, response_obj=None, start_time=row["start_time"], end_time=row["end_time"]
+        )
+
+    async def opens_another_session() -> bool:
+        await asyncio.gather(*logged_rows)
+        try:
+            await asyncio.create_task(
+                admit(key, {"litellm_call_id": str(uuid.uuid4())}, "pass_through_endpoint"),
+                context=contextvars.Context(),
+            )
+        except ProxyRateLimitError:
+            return False
+        return True
+
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4-mini"})], answered_by='"response.completed"'
+    )
+    take_frame: Final = client.receive
+    while_open: Final[list[bool]] = []
+
+    async def receive() -> Mapping[str, str | bytes]:
+        message: Final = await take_frame()
+        if message["type"] == "websocket.disconnect":
+            while_open.append(await opens_another_session())
+        return message
+
+    client.receive = receive
+
+    with (
+        _patched_websocket_passthrough_environment(
+            ScriptedUpstreamWebSocket(replies=[_responses_turn("gpt-5.4-mini")])
+        ) as proxy_logging,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as worker,
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock, side_effect=log_row),
+    ):
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=admit)
+        proxy_logging.post_call_success_hook = AsyncMock(side_effect=release)
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: logged_rows.append(asyncio.create_task(async_coroutine))
+        )
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=client,
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+                walkout_turn_drain_seconds=0.05,
+            ),
+            timeout=10,
+        )
+        after_close: Final = await opens_another_session()
+
+    assert len(logged_rows) == 1
+    assert (while_open, after_close) == ([False], True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "models, upstream_refuses, while_open",
+    [
+        ((), False, [False]),
+        (("gpt-5.4-mini",), False, [False]),
+        (("gpt-5.4-mini", "gpt-5.4"), False, [False]),
+        ((), True, []),
+    ],
+    ids=["no-turn", "one-turn", "two-turns", "upstream-refused"],
+)
+async def test_websocket_passthrough_frees_one_legacy_parallel_slot_only_when_the_session_ends(
+    models: tuple[str, ...], upstream_refuses: bool, while_open: list[bool]
+):
+    limiter: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=lambda: datetime(2026, 1, 31, 23, 59, 30)
+    )
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    key: Final = UserAPIKeyAuth(api_key=hash_token("sk-legacy-socket"), max_parallel_requests=2)
+    logged_rows: Final[list[asyncio.Task[None]]] = []
+    seen_while_open: Final[list[bool]] = []
+
+    async def admit(user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=call_type
+        )
+
+    async def log_row(**row: object) -> None:
+        await limiter.async_log_success_event(
+            kwargs=row, response_obj=None, start_time=row["start_time"], end_time=row["end_time"]
+        )
+
+    async def opens_another_session() -> bool:
+        await asyncio.gather(*logged_rows)
+        try:
+            await admit(key, {}, "pass_through_endpoint")
+        except ProxyRateLimitError:
+            return False
+        return True
+
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create", "model": model}) for model in models],
+        answered_by='"response.completed"',
+    )
+    take_frame: Final = client.receive
+
+    async def receive() -> Mapping[str, str | bytes]:
+        message: Final = await take_frame()
+        if message["type"] == "websocket.disconnect":
+            seen_while_open.append(await opens_another_session())
+        return message
+
+    client.receive = receive
+    await admit(key, {}, "pass_through_endpoint")
+
+    with ExitStack() as stack:
+        proxy_logging: Final = stack.enter_context(
+            _patched_websocket_passthrough_environment(
+                ScriptedUpstreamWebSocket(replies=[_responses_turn(model) for model in models])
+            )
+        )
+        worker: Final = stack.enter_context(
+            patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER")
+        )
+        stack.enter_context(patch(SUCCESS_HANDLER, new_callable=AsyncMock, side_effect=log_row))
+        if upstream_refuses:
+            stack.enter_context(
+                patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+                    side_effect=OSError("upstream refused the socket"),
+                )
+            )
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=admit)
+        proxy_logging.arelease_responses_websocket_slot = proxy_logging_obj.arelease_responses_websocket_slot
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: logged_rows.append(asyncio.create_task(async_coroutine))
+        )
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=client,
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+                walkout_turn_drain_seconds=0.05,
+            ),
+            timeout=10,
+        )
+    after_close: Final = (await opens_another_session(), await opens_another_session())
+
+    assert len(logged_rows) == len(models)
+    assert (seen_while_open, after_close) == (while_open, (True, False))
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_charges_pipelined_turns_to_the_frame_that_asked_for_each():
+    """
+    A client can send its next response.create before the provider finished the
+    last one, and the provider then runs them one after the other. Each turn
+    still has to reach spend under the groups that let its own frame through,
+    and under the model that frame asked for, even when the provider answers
+    under a dated snapshot name a per-model budget was never set on.
+    """
+    gate: Final = RecordingFrameModelGate(
+        groups=MappingProxyType({"gpt-5.4-mini": ("tier-a",), "gpt-5.4": ("tier-b",)}),
+    )
+    client: Final = _turn_taking_client(
+        [
+            json.dumps({"type": "response.create", "model": "gpt-5.4-mini"}),
+            json.dumps({"type": "response.create", "model": "gpt-5.4"}),
+        ],
+        answered_by='"response.completed"',
+        answers_due=(0, 0, 2),
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        replies=[_responses_turn("gpt-5.4-mini-2099-01-01"), _responses_turn("gpt-5.4-2099-01-01")]
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, gate)
+
+    rows: Final = [logged.kwargs for logged in relayed.success_handler.call_args_list]
+    assert [[frame["response"]["model"] for frame in row["response_body"]] for row in rows] == [
+        ["gpt-5.4-mini-2099-01-01", "gpt-5.4-mini-2099-01-01"],
+        ["gpt-5.4-2099-01-01", "gpt-5.4-2099-01-01"],
+    ]
+    assert [row["litellm_params"]["metadata"][MODEL_ACCESS_GROUP_METADATA_KEY] for row in rows] == [
+        ["tier-a"],
+        ["tier-b"],
+    ]
+    assert [row["litellm_params"]["metadata"]["model_group"] for row in rows] == ["gpt-5.4-mini", "gpt-5.4"]
+
+
+def _responses_error(code: str) -> str:
+    return json.dumps({"type": "error", "status": 400, "error": {"type": "invalid_request_error", "code": code}})
+
+
+def _on_lane(frame: str, stream_id: str) -> str:
+    return json.dumps({**json.loads(frame), "stream_id": stream_id})
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_charges_turns_after_a_refused_frame_to_the_frames_that_asked_for_them():
+    """
+    The provider answers a response.create it cannot run, one naming no model
+    or a stale previous_response_id, with an error event and keeps the socket
+    open. Those frames never run, so each later turn still has to reach spend
+    under the groups and model its own frame asked for.
+    """
+    gate: Final = RecordingFrameModelGate(
+        groups=MappingProxyType({"gpt-5.4-mini": ("tier-a",), "gpt-5.4": ("tier-b",)}),
+    )
+    client: Final = _turn_taking_client(
+        [
+            json.dumps({"type": "response.create", "input": "hi"}),
+            json.dumps({"type": "response.create", "model": "gpt-5.4", "previous_response_id": "resp_gone"}),
+            json.dumps({"type": "response.create", "model": "gpt-5.4-mini"}),
+            json.dumps({"type": "response.create", "model": "gpt-5.4"}),
+        ],
+        answered_by='"response.completed"',
+        answers_due=(0, 0, 0, 0, 2),
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        replies=[
+            [_responses_error("missing_required_parameter")],
+            [_responses_error("previous_response_not_found")],
+            _responses_turn("gpt-5.4-mini-2099-01-01"),
+            _responses_turn("gpt-5.4-2099-01-01"),
+        ]
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, gate)
+
+    rows: Final = [logged.kwargs for logged in relayed.success_handler.call_args_list]
+    assert [row["litellm_params"]["metadata"]["model_group"] for row in rows] == ["gpt-5.4-mini", "gpt-5.4"]
+    assert [row["litellm_params"]["metadata"][MODEL_ACCESS_GROUP_METADATA_KEY] for row in rows] == [
+        ["tier-a"],
+        ["tier-b"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_charges_turns_on_parallel_lanes_to_the_frame_that_asked_for_each():
+    """
+    A client can put each response.create on its own stream_id lane, and the
+    provider runs lanes side by side, so a later frame's turn can end first.
+    Each turn still has to reach spend on its own row, under the groups and
+    model its own frame asked for.
+    """
+    gate: Final = RecordingFrameModelGate(
+        groups=MappingProxyType({"gpt-5.4-mini": ("tier-a",), "gpt-5.4": ("tier-b",)}),
+    )
+    client: Final = _turn_taking_client(
+        [
+            json.dumps({"type": "response.create", "stream_id": "slow", "model": "gpt-5.4"}),
+            json.dumps({"type": "response.create", "stream_id": "fast", "model": "gpt-5.4-mini"}),
+        ],
+        answered_by='"response.completed"',
+        answers_due=(0, 0, 2),
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        replies=[
+            [_on_lane(_responses_turn_started("gpt-5.4"), "slow")],
+            [
+                *(_on_lane(frame, "fast") for frame in _responses_turn("gpt-5.4-mini")),
+                _on_lane(_responses_turn_ended("gpt-5.4"), "slow"),
+            ],
+        ]
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, gate)
+
+    rows: Final = [logged.kwargs for logged in relayed.success_handler.call_args_list]
+    assert [[(frame["stream_id"], frame["response"]["model"]) for frame in row["response_body"]] for row in rows] == [
+        [("fast", "gpt-5.4-mini"), ("fast", "gpt-5.4-mini")],
+        [("slow", "gpt-5.4"), ("slow", "gpt-5.4")],
+    ]
+    assert [row["litellm_params"]["metadata"]["model_group"] for row in rows] == ["gpt-5.4-mini", "gpt-5.4"]
+    assert [row["litellm_params"]["metadata"][MODEL_ACCESS_GROUP_METADATA_KEY] for row in rows] == [
+        ["tier-a"],
+        ["tier-b"],
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream_id", ["", 7])
+async def test_websocket_passthrough_refuses_a_frame_on_a_lane_the_provider_error_cannot_name(stream_id):
+    """
+    The provider refuses a frame with an invalid stream_id through an error that
+    names no lane (OpenAI WebSocket mode guide, "Errors to handle", read
+    2026-11-02, which also says an empty stream_id is invalid). Relayed, that
+    error would refuse a turn waiting on the default lane instead, and that turn
+    would reach spend without the groups its own frame asked for.
+    """
+    gate: Final = RecordingFrameModelGate()
+    allowed: Final = json.dumps({"type": "response.create", "model": "gpt-5.4-mini"})
+
+    relayed: Final = await _relay_client_frames(
+        [allowed, json.dumps({"type": "response.create", "stream_id": stream_id, "model": "gpt-5.4-mini"})], gate
+    )
+
+    assert [sent.args[0] for sent in relayed.upstream.send.await_args_list] == [allowed]
+    assert json.loads(relayed.client.send_text.await_args.args[0])["type"] == "error"
+    assert relayed.client.close.await_args.kwargs["code"] == 1008
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_charges_realtime_turns_to_the_session_the_key_opened():
+    """
+    A realtime session runs the model it was opened on, so its turns stay
+    charged to the groups and the model the key opened it with, whatever model
+    a later session.update or response.create names.
+    """
+    gate: Final = RecordingFrameModelGate(groups=MappingProxyType({"gpt-realtime-2.1-mini": ("tier-b",)}))
+    client: Final = _turn_taking_client(
+        [
+            json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1-mini"}}),
+            json.dumps({"type": "response.create", "response": {"model": "gpt-realtime-2.1-mini"}}),
+        ],
+        answered_by='"type"',
+        answers_due=(1, 2, 4),
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        REALTIME_SESSION_CREATED,
+        replies=[
+            [json.dumps({"type": "session.updated"})],
+            [json.dumps({"type": "response.created", "response": {"status": "in_progress"}}), REALTIME_RESPONSE_DONE],
+        ],
+    )
+
+    relayed: Final = await _relay_turns(
+        client,
+        upstream_ws,
+        gate,
+        "/openai/v1/realtime",
+        target="wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1",
+        opening_access_groups=("tier-a",),
+    )
+
+    assert gate.checked == ["gpt-realtime-2.1-mini", "gpt-realtime-2.1-mini"]
+    rows: Final = [logged.kwargs for logged in relayed.success_handler.call_args_list]
+    assert [row["litellm_params"]["metadata"][MODEL_ACCESS_GROUP_METADATA_KEY] for row in rows] == [["tier-a"]]
+    assert [row["litellm_params"]["metadata"]["model_group"] for row in rows] == ["gpt-realtime-2.1"]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_logs_no_spend_row_for_a_session_refused_before_any_answer():
+    """A session refused at its first frame ran nothing, so its only record is the refusal, not an extra $0 row"""
+    gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-5.4": KEY_MODEL_REFUSAL}))
+    client: Final = _turn_taking_client([json.dumps({"type": "response.create", "model": "gpt-5.4"})], answered_by='"error"')
+
+    relayed: Final = await _relay_turns(client, ScriptedUpstreamWebSocket(), gate)
+
+    assert relayed.success_handler.call_args_list == []
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_logs_the_unfinished_turn_a_client_walked_out_of():
+    """
+    A client can leave while a later turn is still running. That turn never
+    ends, but it was started and may be billed, so it still gets its own row.
+    """
+    client: Final = _turn_taking_client(
+        [
+            json.dumps({"type": "response.create", "model": "gpt-5.4-mini"}),
+            json.dumps({"type": "response.create", "model": "gpt-5.4"}),
+        ],
+        answered_by='"response.created"',
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        replies=[_responses_turn("gpt-5.4-mini"), [_responses_turn_started("gpt-5.4")]]
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate())
+
+    assert [
+        [json.loads(frame)["type"] if isinstance(frame, str) else frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
+    ] == [["response.created", "response.completed"], ["response.created"]]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_charges_each_lane_a_client_walked_out_of_to_the_frame_that_started_it():
+    """
+    A client can leave while turns on several stream_id lanes are still
+    running. Each unfinished turn still gets its own row, under the groups and
+    model its own frame asked for.
+    """
+    gate: Final = RecordingFrameModelGate(
+        groups=MappingProxyType({"gpt-5.4-mini": ("tier-a",), "gpt-5.4": ("tier-b",)}),
+    )
+    client: Final = _turn_taking_client(
+        [
+            json.dumps({"type": "response.create", "stream_id": "slow", "model": "gpt-5.4"}),
+            json.dumps({"type": "response.create", "stream_id": "fast", "model": "gpt-5.4-mini"}),
+        ],
+        answered_by='"response.created"',
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        replies=[
+            [_on_lane(_responses_turn_started("gpt-5.4"), "slow")],
+            [_on_lane(_responses_turn_started("gpt-5.4-mini"), "fast")],
+        ]
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, gate)
+
+    rows: Final = [logged.kwargs for logged in relayed.success_handler.call_args_list]
+    assert [[frame["stream_id"] for frame in row["response_body"]] for row in rows] == [["slow"], ["fast"]]
+    assert [row["litellm_params"]["metadata"]["model_group"] for row in rows] == ["gpt-5.4", "gpt-5.4-mini"]
+    assert [row["litellm_params"]["metadata"][MODEL_ACCESS_GROUP_METADATA_KEY] for row in rows] == [
+        ["tier-b"],
+        ["tier-a"],
+    ]
+
+
+class UpstreamFinishingTheTurnAfterTheClientLeft:
+    """Starts a turn for each client frame, unless it only answers once the client left, sends the rest of the session
+    once the client left, and stops once closed"""
+
+    def __init__(
+        self,
+        client_left: asyncio.Event,
+        started: str | None,
+        rest_of_the_turn: Sequence[str],
+        opening: Sequence[str] = (),
+    ):
+        self._frames: asyncio.Queue[str | None] = asyncio.Queue()
+        for frame in opening:
+            self._frames.put_nowait(frame)
+        self._client_left = client_left
+        self._started = started
+        self._rest_of_the_turn = rest_of_the_turn
+        self._closed = False
+        self._finishing: list[asyncio.Task[None]] = []
+        self.send = AsyncMock(side_effect=self._start_turn)
+        self.close = AsyncMock(side_effect=self._close)
+
+    def _close(self, *args: object, **kwargs: object) -> None:
+        self._closed = True
+        self._frames.put_nowait(None)
+
+    async def _start_turn(self, frame: str | bytes) -> None:
+        if self._started is not None:
+            self._frames.put_nowait(self._started)
+        if not self._finishing:
+            self._finishing.append(asyncio.create_task(self._finish_once_the_client_left()))
+
+    async def _finish_once_the_client_left(self) -> None:
+        await self._client_left.wait()
+        for frame in self._rest_of_the_turn:
+            await asyncio.sleep(0)
+            if self._closed:
+                return
+            self._frames.put_nowait(frame)
+
+    async def recv(self, decode: bool | None = None) -> str:
+        from websockets.exceptions import ConnectionClosedOK
+        from websockets.frames import Close
+
+        frame: Final = await self._frames.get()
+        if frame is None:
+            raise ConnectionClosedOK(rcvd=Close(1000, ""), sent=Close(1000, ""), rcvd_then_sent=True)
+        return frame
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hang_up_read_before_the_next_send", [True, False], ids=["read_first", "found_by_a_send"])
+async def test_websocket_passthrough_bills_the_turn_a_client_walked_out_of_once_the_provider_ends_it(
+    hang_up_read_before_the_next_send: bool,
+):
+    """
+    Leaving mid-answer must not make a turn free. The provider keeps running and
+    bills it, so the gateway keeps reading until the turn ends and logs its usage,
+    whether it reads the hang-up first or finds it by failing to relay a frame.
+    """
+    client_left: Final = asyncio.Event()
+    client: Final = _walking_out_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4"})],
+        '"response.created"',
+        None,
+        client_left,
+        hang_up_read_before_the_next_send,
+    )
+    upstream_ws: Final = UpstreamFinishingTheTurnAfterTheClientLeft(
+        client_left,
+        _responses_turn_started("gpt-5.4"),
+        (json.dumps({"type": "response.output_text.delta", "delta": "Hi"}), _responses_turn_ended("gpt-5.4")),
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), walkout_turn_drain_seconds=5)
+
+    assert [
+        [json.loads(frame)["type"] if isinstance(frame, str) else frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
+    ] == [["response.created", "response.output_text.delta", "response.completed"]]
+    upstream_ws.close.assert_awaited()
+
+
+def _walking_out_client(
+    frames: Sequence[str],
+    answered_by: str,
+    answers_due: Sequence[int] | None,
+    client_left: asyncio.Event,
+    hang_up_read_before_the_next_send: bool = True,
+) -> MagicMock:
+    """A turn-taking client that sets client_left as it hangs up, which the gateway either reads at once or only finds
+    when its next send to the client fails"""
+    from starlette.websockets import WebSocketDisconnect, WebSocketState
+
+    send_failed: Final = asyncio.Event()
+    client: Final = _turn_taking_client(frames, answered_by, answers_due)
+    receive: Final = client.receive
+    send_text: Final = client.send_text
+
+    async def receive_until_leaving() -> Mapping[str, object]:
+        message: Final = await receive()
+        if message["type"] == "websocket.disconnect":
+            client_left.set()
+            if not hang_up_read_before_the_next_send:
+                await send_failed.wait()
+            client.client_state = WebSocketState.DISCONNECTED
+        return message
+
+    async def send_text_until_leaving(text: str) -> None:
+        if client_left.is_set():
+            send_failed.set()
+            raise WebSocketDisconnect(code=1006)
+        await send_text(text)
+
+    client.receive = receive_until_leaving
+    client.send_text = AsyncMock(side_effect=send_text_until_leaving)
+    return client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("turns", [1, 2], ids=["one_turn", "two_turns_asked_at_once"])
+async def test_websocket_passthrough_bills_the_turn_a_client_walked_out_of_before_the_provider_started_it(turns: int):
+    """
+    A client can ask for turns and leave before the provider says they started.
+    The provider still runs and bills each one, so the gateway keeps reading
+    until the last one ends and logs each one's usage.
+    """
+    client_left: Final = asyncio.Event()
+    client: Final = _walking_out_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4"})] * turns,
+        '"response.created"',
+        (0,) * (turns + 1),
+        client_left,
+    )
+    upstream_ws: Final = UpstreamFinishingTheTurnAfterTheClientLeft(
+        client_left, None, (_responses_turn_started("gpt-5.4"), _responses_turn_ended("gpt-5.4")) * turns
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), walkout_turn_drain_seconds=5)
+
+    assert _logged_frame_types(relayed) == [["response.created", "response.completed"]] * turns
+    upstream_ws.close.assert_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hang_up_read_before_the_next_send", [True, False], ids=["read_first", "found_by_a_send"])
+async def test_websocket_passthrough_bills_a_realtime_turn_a_client_walked_out_of_while_the_provider_stored_its_input(
+    hang_up_read_before_the_next_send: bool,
+):
+    """
+    A realtime client can add an item, ask for a turn, and leave at once. The
+    provider confirms the item before it starts the turn, and that confirmation
+    must not end the session while the turn it was asked for is still owed.
+    """
+    client_left: Final = asyncio.Event()
+    client: Final = _walking_out_client(
+        [
+            json.dumps({"type": "conversation.item.create", "item": {"type": "message", "role": "user"}}),
+            json.dumps({"type": "response.create"}),
+        ],
+        '"session.created"',
+        (1, 1, 1),
+        client_left,
+        hang_up_read_before_the_next_send,
+    )
+    upstream_ws: Final = UpstreamFinishingTheTurnAfterTheClientLeft(
+        client_left,
+        None,
+        (
+            json.dumps({"type": "conversation.item.created", "item": {"type": "message", "role": "user"}}),
+            json.dumps({"type": "response.created", "response": {"status": "in_progress"}}),
+            REALTIME_RESPONSE_DONE,
+        ),
+        opening=(REALTIME_SESSION_CREATED,),
+    )
+
+    relayed: Final = await _relay_turns(
+        client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime", walkout_turn_drain_seconds=5
+    )
+
+    assert _logged_frame_types(relayed) == [
+        ["session.created", "conversation.item.created", "response.created", "response.done"]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_bills_a_realtime_turn_a_client_walked_out_of_after_the_provider_started_one_itself():
+    """
+    A realtime provider can start a turn on its own when voice detection hears
+    the user stop. That turn answers no client frame, so a turn the client asks
+    for next and leaves before it starts is still owed and still billed.
+    """
+    realtime_response_created: Final = json.dumps({"type": "response.created", "response": {"status": "in_progress"}})
+    client_left: Final = asyncio.Event()
+    client: Final = _walking_out_client(
+        [json.dumps({"type": "response.create"})], '"response.done"', (1, 1), client_left
+    )
+    upstream_ws: Final = UpstreamFinishingTheTurnAfterTheClientLeft(
+        client_left,
+        None,
+        (realtime_response_created, REALTIME_RESPONSE_DONE),
+        opening=(REALTIME_SESSION_CREATED, realtime_response_created, REALTIME_RESPONSE_DONE),
+    )
+
+    relayed: Final = await _relay_turns(
+        client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime", walkout_turn_drain_seconds=5
+    )
+
+    assert _logged_frame_types(relayed) == [
+        ["session.created", "response.created", "response.done"],
+        ["session.created", "response.created", "response.done"],
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        _responses_turn("gpt-5.4"),
+        [_responses_turn_ended("gpt-5.4")],
+        [_responses_error("previous_response_not_found")],
+    ],
+    ids=["finished", "finished_with_no_start_frame", "refused"],
+)
+async def test_websocket_passthrough_lets_go_of_the_provider_at_once_when_a_client_leaves_owing_no_turn(
+    answer: Sequence[str],
+):
+    """
+    Once every turn a client asked for has ended or been refused, nothing more
+    can be billed, so a client leaving closes the provider socket right away
+    instead of holding it for the walkout drain.
+    """
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4"})],
+        answered_by=json.dumps(json.loads(answer[-1])["type"]),
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(replies=[answer])
+
+    relayed: Final = await _relay_turns(
+        client, upstream_ws, RecordingFrameModelGate(), walkout_turn_drain_seconds=WALKOUT_TURN_DRAIN_SECONDS
+    )
+
+    upstream_ws.close.assert_awaited()
+    assert len(relayed.success_handler.call_args_list) == 1
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_logs_no_extra_row_for_what_the_provider_sends_after_the_last_turn():
+    """
+    A realtime provider follows each finished turn with frames that start no
+    turn, such as rate_limits.updated. The session ends with nothing running,
+    so its turn is its only row and the request count stays one per turn.
+    """
+    client: Final = _turn_taking_client([json.dumps({"type": "response.create"})], answered_by='"rate_limits.updated"')
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        REALTIME_SESSION_CREATED,
+        replies=[[REALTIME_RESPONSE_DONE, json.dumps({"type": "rate_limits.updated", "rate_limits": []})]],
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
+
+    assert [
+        [frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
+    ] == [["session.created", "response.done"]]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_carries_the_session_the_provider_opened_into_every_later_turn():
+    """
+    A realtime provider names the session's model once, when it opens the
+    session, and never again. Each later turn logs on its own, so it has to
+    carry that opening frame or it would be priced as a model nobody named.
+    """
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create"}), json.dumps({"type": "response.create"})],
+        answered_by='"response.done"',
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        REALTIME_SESSION_CREATED, replies=[[REALTIME_RESPONSE_DONE], [REALTIME_RESPONSE_DONE]]
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
+
+    assert [
+        [frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
+    ] == [["session.created", "response.done"], ["session.created", "response.done"]]
+
+
+REALTIME_TRANSCRIPTION_COMPLETED: Final = json.dumps(
+    {
+        "type": "conversation.item.input_audio_transcription.completed",
+        "item_id": "item_fake",
+        "transcript": "hello",
+        "usage": {"type": "duration", "seconds": 2},
+    }
+)
+TRANSCRIPTION_COMPLETED: Final = "conversation.item.input_audio_transcription.completed"
+
+
+def _transcription_session_update(frame_type: str, model: str) -> str:
+    return json.dumps({"type": frame_type, "session": {"audio": {"input": {"transcription": {"model": model}}}}})
+
+
+def _logged_frame_types(relayed: SimpleNamespace) -> list[list[str]]:
+    return [
+        [frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
+    ]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_bills_a_clip_transcribed_after_the_last_answer():
+    client: Final = _turn_taking_client(
+        [_transcription_session_update("session.update", "gpt-transcribe"), json.dumps({"type": "response.create"})],
+        answered_by='"type"',
+        answers_due=(1, 2, 4),
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        REALTIME_SESSION_CREATED,
+        replies=[
+            [_transcription_session_update("session.updated", "gpt-transcribe")],
+            [REALTIME_RESPONSE_DONE, REALTIME_TRANSCRIPTION_COMPLETED],
+        ],
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
+
+    assert _logged_frame_types(relayed) == [
+        ["session.created", "session.updated", "response.done"],
+        ["session.created", "session.updated", TRANSCRIPTION_COMPLETED],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_bills_a_clip_transcribed_during_an_answer_in_that_answer_row():
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create"})], answered_by='"type"', answers_due=(1, 4)
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        REALTIME_SESSION_CREATED,
+        replies=[
+            [
+                json.dumps({"type": "response.created", "response": {"status": "in_progress"}}),
+                REALTIME_TRANSCRIPTION_COMPLETED,
+                REALTIME_RESPONSE_DONE,
+            ]
+        ],
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
+
+    assert _logged_frame_types(relayed) == [
+        ["session.created", "response.created", TRANSCRIPTION_COMPLETED, "response.done"]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_carries_only_the_latest_session_update_into_later_rows():
+    client: Final = _turn_taking_client(
+        [
+            _transcription_session_update("session.update", "gpt-transcribe-a"),
+            json.dumps({"type": "response.create"}),
+            _transcription_session_update("session.update", "gpt-transcribe-b"),
+            json.dumps({"type": "response.create"}),
+        ],
+        answered_by='"type"',
+        answers_due=(1, 2, 3, 4, 5),
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        REALTIME_SESSION_CREATED,
+        replies=[
+            [_transcription_session_update("session.updated", "gpt-transcribe-a")],
+            [REALTIME_RESPONSE_DONE],
+            [_transcription_session_update("session.updated", "gpt-transcribe-b")],
+            [REALTIME_RESPONSE_DONE],
+        ],
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
+
+    last_row: Final = relayed.success_handler.call_args_list[-1].kwargs["response_body"]
+    assert [frame for frame in last_row if frame["type"] == "session.updated"] == [
+        json.loads(_transcription_session_update("session.updated", "gpt-transcribe-b"))
+    ]
+    assert len(relayed.success_handler.call_args_list) == 2
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_keeps_the_session_update_a_clip_ran_under_until_its_answer_is_billed():
+    client: Final = _turn_taking_client(
+        [
+            _transcription_session_update("session.update", "gpt-transcribe-a"),
+            json.dumps({"type": "response.create"}),
+            _transcription_session_update("session.update", "gpt-transcribe-b"),
+        ],
+        answered_by='"type"',
+        answers_due=(1, 2, 4, 6),
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        REALTIME_SESSION_CREATED,
+        replies=[
+            [_transcription_session_update("session.updated", "gpt-transcribe-a")],
+            [
+                json.dumps({"type": "response.created", "response": {"status": "in_progress"}}),
+                REALTIME_TRANSCRIPTION_COMPLETED,
+            ],
+            [_transcription_session_update("session.updated", "gpt-transcribe-b"), REALTIME_RESPONSE_DONE],
+        ],
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
+
+    assert _logged_frame_types(relayed) == [
+        [
+            "session.created",
+            "session.updated",
+            "response.created",
+            TRANSCRIPTION_COMPLETED,
+            "session.updated",
+            "response.done",
+        ]
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "later_frame",
+    [
+        json.dumps({"type": "response.create", "model": "gpt-5.4"}),
+        '{"type": "response.create", "model": "gpt-5.4-mini", "metadata": ' + "[" * 100_000 + "]" * 100_000 + "}",
+        (
+            '{"type": "response.create", "model": "gpt-5.4-mini", "seed": '
+            + "9" * (sys.get_int_max_str_digits() + 1)
+            + "}"
+        ),
+    ],
+    ids=["names_a_denied_model", "nests_too_deep_to_parse", "holds_a_number_too_long_to_parse"],
+)
+async def test_websocket_passthrough_still_bills_the_answer_in_flight_when_a_later_frame_is_refused(later_frame: str):
+    """
+    A refused frame closes the client while the provider may still be sending the
+    answer to an earlier, allowed frame. That answer cannot go to a closed client,
+    but the provider bills it once it ends, so the gateway keeps reading until it
+    ends and its usage reaches spend.
+    """
+    gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-5.4": KEY_MODEL_REFUSAL}))
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4-mini"}), later_frame],
+        answered_by='"response.created"',
+    )
+    refused: Final = asyncio.Event()
+    close_client: Final = client.close.side_effect
+
+    def close_client_and_note_the_refusal(*args: object, **kwargs: object) -> None:
+        close_client(*args, **kwargs)
+        refused.set()
+
+    client.close = AsyncMock(side_effect=close_client_and_note_the_refusal)
+    upstream_ws: Final = UpstreamFinishingTheTurnAfterTheClientLeft(
+        refused, _responses_turn_started("gpt-5.4-mini"), (_responses_turn_ended("gpt-5.4-mini"),)
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, gate, walkout_turn_drain_seconds=5)
+
+    assert [json.loads(text.args[0])["type"] for text in client.send_text.await_args_list] == [
+        "response.created",
+        "error",
+    ]
+    assert [
+        [frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
+    ] == [["response.created", "response.completed"]]
+    relayed.proxy_logging.post_call_failure_hook.assert_not_awaited()
 
 
 DEEPGRAM_LISTEN_TARGET = "wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000"
@@ -7715,6 +9621,102 @@ async def test_websocket_passthrough_sends_deepgram_audio_bytes_and_control_text
     upstream_ws.close.assert_awaited_once()
 
 
+@dataclass(frozen=True, slots=True)
+class _LengthMeter:
+    rate: float
+
+    def measure(self, client_text: str) -> int:
+        return len(client_text)
+
+    def price(self, total: int) -> WebSocketSessionUsage:
+        return WebSocketSessionUsage(model="voice-1", custom_llm_provider="tts-provider", response_cost=total * self.rate)
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_logs_the_meters_price_for_the_client_text_it_delivered():
+    """Text frames reach the upstream unchanged and are measured, binary frames are not, and the session is logged at
+    the model, provider and cost the meter prices for the total."""
+    frames = ("hello", b"\x00\x01binary", "world!")
+    upstream_ws = RecordingUpstreamWebSocket()
+    websocket = _client_websocket(
+        AsyncMock(
+            side_effect=[
+                *(
+                    {"type": "websocket.receive", "bytes": frame}
+                    if isinstance(frame, bytes)
+                    else {"type": "websocket.receive", "text": frame}
+                    for frame in frames
+                ),
+                {"type": "websocket.disconnect"},
+            ]
+        )
+    )
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(  # test-quality-ok: pass_through_endpoint_logging is a module global read inside websocket_passthrough_request; there is no injection seam
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+            "pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),
+        ) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://upstream.example/v1/stream",
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/provider/v1/stream",
+            accept_websocket=False,
+            meter=_LengthMeter(rate=0.5),
+        )
+
+    assert [call.args[0] for call in upstream_ws.send.await_args_list] == list(frames)
+    logging_obj = success_handler.call_args.kwargs["logging_obj"]
+    assert logging_obj.model == "voice-1"
+    assert logging_obj.model_call_details["model"] == "voice-1"
+    assert logging_obj.model_call_details["custom_llm_provider"] == "tts-provider"
+    assert logging_obj.model_call_details["response_cost"] == (len("hello") + len("world!")) * 0.5
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_meters_only_client_text_the_upstream_accepted():
+    upstream_ws = RecordingUpstreamWebSocket()
+    upstream_ws.send = AsyncMock(side_effect=[None, ConnectionError("upstream went away")])
+    websocket = _client_websocket(
+        AsyncMock(
+            side_effect=[
+                {"type": "websocket.receive", "text": "hello"},
+                {"type": "websocket.receive", "text": "never delivered"},
+                {"type": "websocket.disconnect"},
+            ]
+        )
+    )
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(  # test-quality-ok: pass_through_endpoint_logging is a module global read inside websocket_passthrough_request; there is no injection seam
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+            "pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),
+        ) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://upstream.example/v1/stream",
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/provider/v1/stream",
+            accept_websocket=False,
+            meter=_LengthMeter(rate=0.5),
+        )
+
+    logging_obj = success_handler.call_args.kwargs["logging_obj"]
+    assert [call.args[0] for call in upstream_ws.send.await_args_list] == ["hello", "never delivered"]
+    assert logging_obj.model_call_details["response_cost"] == len("hello") * 0.5
+
+
 @pytest.mark.asyncio
 async def test_websocket_passthrough_vertex_live_setup_ack_names_the_model_but_is_not_billed_as_usage():
     """Vertex Live keeps its special first frame: the setup acknowledgement is forwarded verbatim, read for the
@@ -7806,6 +9808,31 @@ async def _track_cost_for_passthrough_kwargs(kwargs: dict) -> AsyncMock:
         )
 
     return increment_spend_counters
+
+
+@pytest.mark.asyncio
+async def test_passthrough_charge_moves_the_committed_spend_of_the_entities_auth_named_budgeted():
+    """A forged body value stays out, and loggers that dump the row never get the auth object or the spend it read."""
+    counter_keys: Final = EntitySpendCounterKeys.of(
+        token="hashed-token", team_id="t1", user_id="u1", org_id=None, end_user_id=None
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key="hashed-token",
+        user_id="u1",
+        committed_budget_spend=CommittedBudgetSpend(counter_keys=counter_keys, key=0.123456),
+        metadata={"logging": [{"callback_name": "langfuse"}], "kept": "yes"},
+    )
+
+    kwargs: Final = _passthrough_kwargs_for_reservation(
+        user_api_key_dict,
+        parsed_body={"litellm_metadata": {"user_api_key_auth": {"committed_budget_spend": None}}},
+    )
+    increment_spend_counters: Final = await _track_cost_for_passthrough_kwargs(kwargs)
+
+    assert increment_spend_counters.await_args.kwargs["committed_spend_scope"] == counter_keys
+    assert "user_api_key_auth" not in kwargs["litellm_params"]["metadata"]
+    assert "committed_budget_spend" not in repr(kwargs["litellm_params"]["metadata"])
+    assert "0.123456" not in json.dumps(kwargs, default=str)
 
 
 @pytest.mark.asyncio
@@ -8131,8 +10158,10 @@ async def test_user_defined_passthrough_is_neither_tracked_nor_enforced(metadata
         }
     )
     body: Final = {
-        "model": "upstream-only-model", metadata_slot: {
-            "model_group": "managed-model", "customer_label": "retained",
+        "model": "upstream-only-model",
+        metadata_slot: {
+            "model_group": "managed-model",
+            "customer_label": "retained",
             "user_api_key_team_model_max_budget": budget,
         },
     }
@@ -8140,48 +10169,84 @@ async def test_user_defined_passthrough_is_neither_tracked_nor_enforced(metadata
     assert await limiter.is_team_within_model_budget("shared-team", budget, None, "managed-model")
     start: Final = datetime.now()
     logging_obj: Final = LiteLLMLoggingObj(
-        model="upstream-only-model", messages=[], stream=False, call_type="pass_through_endpoint",
-        start_time=start, litellm_call_id="custom-budget", function_id="custom-budget", kwargs={},
+        model="upstream-only-model",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=start,
+        litellm_call_id="custom-budget",
+        function_id="custom-budget",
+        kwargs={},
         dynamic_async_success_callbacks=[limiter],
     )
     payload: Final = {
-        "url": "https://upstream.test/echo", "request_body": body, "request_method": "POST", "cost_per_request": 0.25,
+        "url": "https://upstream.test/echo",
+        "request_body": body,
+        "request_method": "POST",
+        "cost_per_request": 0.25,
     }
     kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
-        request=request, user_api_key_dict=auth, passthrough_logging_payload=payload, logging_obj=logging_obj,
-        _parsed_body=body, litellm_call_id="custom-budget",
+        request=request,
+        user_api_key_dict=auth,
+        passthrough_logging_payload=payload,
+        logging_obj=logging_obj,
+        _parsed_body=body,
+        litellm_call_id="custom-budget",
     )
     logging_obj.update_environment_variables(
-        model="upstream-only-model", user="unknown", optional_params={},
-        litellm_params=kwargs["litellm_params"], call_type="pass_through_endpoint",
+        model="upstream-only-model",
+        user="unknown",
+        optional_params={},
+        litellm_params=kwargs["litellm_params"],
+        call_type="pass_through_endpoint",
     )
     response: Final = httpx.Response(
-        200, request=httpx.Request("POST", "https://upstream.test/echo"), json={"ok": True},
+        200,
+        request=httpx.Request("POST", "https://upstream.test/echo"),
+        json={"ok": True},
     )
     await PassThroughEndpointLogging().pass_through_async_success_handler(
-        httpx_response=response, response_body={"ok": True}, request_body=body, logging_obj=logging_obj,
-        url_route="https://upstream.test/echo", result=response.text, start_time=start, end_time=datetime.now(),
-        cache_hit=False, **kwargs,
+        httpx_response=response,
+        response_body={"ok": True},
+        request_body=body,
+        logging_obj=logging_obj,
+        url_route="https://upstream.test/echo",
+        result=response.text,
+        start_time=start,
+        end_time=datetime.now(),
+        cache_hit=False,
+        **kwargs,
     )
     assert logging_obj.model_call_details["response_cost"] == 0.25
     assert await limiter.is_team_within_model_budget("shared-team", budget, None, "managed-model")
     metadata: Final = kwargs["litellm_params"]["metadata"]
     assert (metadata["model_group"], metadata["customer_label"]) == ("managed-model", "retained")
-    assert metadata.keys().isdisjoint({
-        "user_api_key_model_max_budget", "user_api_key_team_model_max_budget",
-        "user_api_key_user_model_max_budget", "user_api_key_end_user_model_max_budget",
-    })
+    assert metadata.keys().isdisjoint(
+        {
+            "user_api_key_model_max_budget",
+            "user_api_key_team_model_max_budget",
+            "user_api_key_user_model_max_budget",
+            "user_api_key_end_user_model_max_budget",
+        }
+    )
 
 
 @pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
 def test_builtin_passthrough_pins_model_group_to_the_resolved_model(metadata_slot: str) -> None:
-    request: Final = Request({
-        "type": "http", "method": "POST", "path": "/gemini/v1beta/models/gemini-2.5-flash:generateContent",
-        "headers": [], "query_string": b"",
-    })
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/gemini/v1beta/models/gemini-2.5-flash:generateContent",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
     kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
-        request=request, user_api_key_dict=UserAPIKeyAuth(token="hash", user_id="u-1"),
-        passthrough_logging_payload=MagicMock(), logging_obj=MagicMock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(token="hash", user_id="u-1"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
         _parsed_body={"contents": [], metadata_slot: {"model_group": "unbounded-client-choice"}},
     )
     assert kwargs["litellm_params"]["metadata"]["model_group"] == "gemini-2.5-flash"
@@ -8541,13 +10606,645 @@ def test_passthrough_client_cannot_forge_session_id_omission(client_metadata_key
 
 
 @pytest.mark.parametrize("client_metadata_key", ["litellm_metadata", "metadata"])
+@pytest.mark.parametrize(
+    "counted_marker",
+    ["_litellm_router_usage_counted_tokens", "_litellm_usage_based_routing_counted_tokens"],
+)
+def test_passthrough_client_cannot_mark_its_tokens_as_already_counted(
+    client_metadata_key: str, counted_marker: str
+) -> None:
+    from litellm.router_utils.router_callbacks.track_deployment_metrics import get_counted_usage_tokens
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = httpx.URL("http://0.0.0.0:4000/openai/v1/responses")
+    mock_request.headers = Headers({})
+    mock_request.scope = {}
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={client_metadata_key: {counted_marker: 1_000_000, "client_key": "kept"}},
+        litellm_call_id="counted-marker-call-id",
+    )
+
+    assert get_counted_usage_tokens(kwargs["litellm_params"], counted_marker) is None
+    assert kwargs["litellm_params"]["metadata"]["client_key"] == "kept"
+
+
+async def _billed_metadata(gate: WebsocketFrameModelGate) -> Mapping[str, object]:
+    served: Final = await _relay_client_frames(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4-mini"})],
+        gate,
+        UserAPIKeyAuth(api_key="hashed-key"),
+    )
+    return served.success_handler.call_args.kwargs["litellm_params"]["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_websocket_session_is_charged_to_the_group_its_frames_were_authorized_through():
+    """A websocket names its model in a frame, long after the relay built its logging metadata, so the
+    groups the gate matched have to be picked up at the end or the group pays for nothing it allowed."""
+    metadata: Final = await _billed_metadata(RecordingFrameModelGate(groups=MappingProxyType({"gpt-5.4-mini": ("tier-a",)})))
+
+    assert metadata[MODEL_ACCESS_GROUP_METADATA_KEY] == ["tier-a"]
+    assert metadata["user_api_key"] == "hashed-key"
+
+
+@pytest.mark.asyncio
+async def test_websocket_session_that_matched_no_group_is_charged_to_none():
+    metadata: Final = await _billed_metadata(RecordingFrameModelGate())
+
+    assert not metadata[MODEL_ACCESS_GROUP_METADATA_KEY]
+
+
+_GEMINI_FLASH_TARGET: Final = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+_VERTEX_FLASH_TARGET: Final = (
+    "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
+    "/publishers/google/models/gemini-3.8-flash:generateContent"
+)
+_VERTEX_CLAUDE_RAW_PREDICT_TARGET: Final = (
+    "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
+    "/publishers/anthropic/models/claude-opus-5:rawPredict"
+)
+_VERTEX_SEARCH_TARGET: Final = (
+    "https://discoveryengine.googleapis.com/v1/projects/p/locations/global"
+    "/dataStores/default/servingConfigs/default:search"
+)
+_RELAYED_GEMINI_COUNT_TOKENS_TARGET: Final = "http://127.0.0.1:30732/v1beta/models/gemini-3.8-flash:countTokens"
+_TRANSLATE_TARGET: Final = "https://translate.googleapis.com/v3/projects/p/locations/global:translateText"
+_NON_GOOGLE_VERTEX_SHAPED_TARGET: Final = "https://llm.example.com/v1/projects/a/locations/b/models/my-model:predict"
+_VERTEX_LIVE_TARGET: Final = (
+    "wss://us-central1-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+)
+_VEO_OPERATION_SUFFIX: Final = "/models/veo-3.0-generate-001/operations/op-8f2c1"
+_RELAYED_VERTEX_COUNT_TOKENS_TARGET: Final = (
+    "http://127.0.0.1:30732/v1/projects/p/locations/us-east5/publishers/google/models/gemini-3.8-flash:countTokens"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _RecordedFailure:
+    request_data: dict[str, object]
+    original_exception: Exception
+    user_api_key_dict: UserAPIKeyAuth
+    traceback_str: str | None
+
+
+class _FailureHookRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: tuple[_RecordedFailure, ...] = ()
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> None:
+        self.failures = (
+            *self.failures,
+            _RecordedFailure(request_data, original_exception, user_api_key_dict, traceback_str),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _PassthroughRun:
+    failure: _RecordedFailure
+    response: Response | None
+
+
+async def _drained_pass_through_response(
+    request: Request,
+    target: str,
+    custom_llm_provider: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    stream: bool,
+) -> Response | None:
+    try:
+        received: Final = await pass_through_request(
+            request=request,
+            target=target,
+            custom_headers={},
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=custom_llm_provider,
+            stream=stream,
+        )
+        if isinstance(received, StreamingResponse):
+            async for _ in received.body_iterator:
+                pass
+    except (ProxyException, httpx.HTTPError):
+        return None
+    return received if isinstance(received, Response) else None
+
+
+async def _run_passthrough_failure(
+    target: str,
+    custom_llm_provider: str | None,
+    upstream: httpx.Response | Exception,
+    stream: bool = False,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+    dispatched_endpoint: Callable[..., object] | None = None,
+    guardrail: CustomGuardrail | None = None,
+    body: bytes = b'{"contents": "not a list"}',
+) -> _RecordedFailure:
+    run: Final = await _run_passthrough(
+        target, custom_llm_provider, upstream, stream, user_api_key_dict, dispatched_endpoint, guardrail, body
+    )
+    return run.failure
+
+
+async def _run_passthrough(
+    target: str,
+    custom_llm_provider: str | None,
+    upstream: httpx.Response | Exception,
+    stream: bool = False,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+    dispatched_endpoint: Callable[..., object] | None = None,
+    guardrail: CustomGuardrail | None = None,
+    body: bytes = b'{"contents": "not a list"}',
+) -> _PassthroughRun:
+    recorder: Final = _FailureHookRecorder()
+    with (
+        pytest.MonkeyPatch.context() as litellm_patch,
+        patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside pass_through_request; there is no injection seam
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+        ),
+        respx.mock(assert_all_called=False) as upstream_mock,
+    ):
+        litellm_patch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm_patch.setattr(litellm, "callbacks", [recorder] if guardrail is None else [guardrail, recorder])
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        upstream_route: Final = upstream_mock.route(method="POST")
+        if isinstance(upstream, Exception):
+            upstream_route.mock(side_effect=upstream)
+        else:
+            upstream_route.mock(return_value=upstream)
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        proxy_url: Final = httpx.URL(target.replace("https://", "http://test-proxy.com/"))
+        mock_request.url = proxy_url
+        mock_request.scope = {
+            "type": "http",
+            "method": "POST",
+            "path": proxy_url.path,
+            **({"endpoint": dispatched_endpoint} if dispatched_endpoint is not None else {}),
+        }
+        mock_request.body = AsyncMock(return_value=body)
+        mock_request.headers = Headers({"content-type": "application/json"})
+        mock_request.query_params = QueryParams({})
+        response: Final = await _drained_pass_through_response(
+            mock_request,
+            target,
+            custom_llm_provider,
+            user_api_key_dict or UserAPIKeyAuth(api_key="sk-test"),
+            stream,
+        )
+        await asyncio.sleep(0)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    assert len(recorder.failures) == 1
+    return _PassthroughRun(recorder.failures[0], response)
+
+
+def _upstream_400(target: str) -> httpx.Response:
+    return httpx.Response(
+        status_code=400,
+        headers={"content-type": "application/json"},
+        content=json.dumps({"error": {"code": 400, "status": "INVALID_ARGUMENT"}}).encode(),
+        request=httpx.Request("POST", target),
+    )
+
+
+def _upstream_400_as_event_stream(target: str) -> httpx.Response:
+    return httpx.Response(
+        status_code=400,
+        headers={"content-type": "text/event-stream"},
+        content=b'data: {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}\n\n',
+        request=httpx.Request("POST", target),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target, custom_llm_provider, stream, expected_provider",
+    [
+        (_GEMINI_FLASH_TARGET, "gemini", False, "gemini"),
+        (_GEMINI_FLASH_TARGET, "gemini", True, "gemini"),
+        (_VERTEX_FLASH_TARGET, None, False, "vertex_ai"),
+        (_VERTEX_FLASH_TARGET, None, True, "vertex_ai"),
+        (_GEMINI_FLASH_TARGET.replace(":generateContent", ":countTokens"), "gemini", False, "gemini"),
+        (_VERTEX_FLASH_TARGET.replace(":generateContent", ":countTokens"), None, False, "vertex_ai"),
+        (_RELAYED_GEMINI_COUNT_TOKENS_TARGET, "gemini", False, "gemini"),
+    ],
+)
+async def test_passthrough_upstream_error_logs_model_from_url(
+    target: str, custom_llm_provider: str | None, stream: bool, expected_provider: str
+):
+    failure: Final = await _run_passthrough_failure(target, custom_llm_provider, _upstream_400(target), stream=stream)
+    assert failure.request_data["model"] == "gemini-3.8-flash"
+    assert failure.request_data["custom_llm_provider"] == expected_provider
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target",
+    [
+        _RELAYED_VERTEX_COUNT_TOKENS_TARGET,
+        _TRANSLATE_TARGET,
+        _NON_GOOGLE_VERTEX_SHAPED_TARGET,
+    ],
+)
+async def test_passthrough_upstream_error_to_a_host_outside_gemini_and_vertex_gets_no_url_attribution(target: str):
+    failure: Final = await _run_passthrough_failure(target, None, _upstream_400(target))
+    assert failure.request_data["model"] == ""
+    assert failure.request_data.get("custom_llm_provider") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", [_GEMINI_FLASH_TARGET, _VERTEX_FLASH_TARGET])
+async def test_passthrough_upstream_error_on_a_user_defined_route_to_google_gets_no_url_attribution(target: str):
+    failure: Final = await _run_passthrough_failure(
+        target, None, _upstream_400(target), dispatched_endpoint=_marked_pass_through_endpoint()
+    )
+    assert failure.request_data["model"] == ""
+    assert failure.request_data.get("custom_llm_provider") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target, custom_llm_provider, expected_provider",
+    [
+        (_GEMINI_FLASH_TARGET, "gemini", "gemini"),
+        (_VERTEX_FLASH_TARGET, None, "vertex_ai"),
+    ],
+)
+async def test_passthrough_detected_stream_upstream_error_logs_model_from_url(
+    target: str, custom_llm_provider: str | None, expected_provider: str
+):
+    failure: Final = await _run_passthrough_failure(
+        target, custom_llm_provider, _upstream_400_as_event_stream(target), stream=False
+    )
+    assert failure.request_data["model"] == "gemini-3.8-flash"
+    assert failure.request_data["custom_llm_provider"] == expected_provider
+
+
+@pytest.mark.asyncio
+async def test_passthrough_internal_failure_logs_model_from_url():
+    failure: Final = await _run_passthrough_failure(
+        _GEMINI_FLASH_TARGET, "gemini", httpx.ReadTimeout("upstream timed out")
+    )
+    assert failure.request_data["model"] == "gemini-3.8-flash"
+    assert failure.request_data["custom_llm_provider"] == "gemini"
+
+
+def _upstream_dropping_stream(target: str) -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        headers={"content-type": "text/event-stream"},
+        stream=_UpstreamDroppingMidStream(),
+        request=httpx.Request("POST", target),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize(
+    "target, custom_llm_provider, expected_provider",
+    [
+        (_GEMINI_FLASH_TARGET.replace(":generateContent", ":streamGenerateContent?alt=sse"), "gemini", "gemini"),
+        (_VERTEX_FLASH_TARGET.replace(":generateContent", ":streamGenerateContent?alt=sse"), None, "vertex_ai"),
+    ],
+)
+async def test_passthrough_mid_stream_drop_logs_model_from_url(
+    target: str, custom_llm_provider: str | None, expected_provider: str, stream: bool
+):
+    failure: Final = await _run_passthrough_failure(
+        target, custom_llm_provider, _upstream_dropping_stream(target), stream=stream
+    )
+    assert isinstance(failure.original_exception, httpx.ReadError)
+    assert failure.request_data["model"] == "gemini-3.8-flash"
+    assert failure.request_data["custom_llm_provider"] == expected_provider
+
+
+class _ModifyResponseOnPreCallGuardrail(CustomGuardrail):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: str,
+    ) -> None:
+        self.raise_passthrough_exception(violation_message="blocked by policy", request_data=data, detection_info=None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target, custom_llm_provider, body, expected_model, expected_provider",
+    [
+        (_GEMINI_FLASH_TARGET, "gemini", b'{"contents": "not a list"}', "gemini-3.8-flash", "gemini"),
+        (_VERTEX_FLASH_TARGET, None, b'{"contents": "not a list"}', "gemini-3.8-flash", "vertex_ai"),
+        (_VERTEX_FLASH_TARGET, None, b'{"custom_llm_provider": "gemini"}', "gemini-3.8-flash", "vertex_ai"),
+    ],
+)
+async def test_passthrough_guardrail_block_logs_model_from_url(
+    target: str, custom_llm_provider: str | None, body: bytes, expected_model: str, expected_provider: str
+):
+    guardrail: Final = _ModifyResponseOnPreCallGuardrail(
+        guardrail_name="block-policy", event_hook=GuardrailEventHooks.pre_call, default_on=True
+    )
+    failure: Final = await _run_passthrough_failure(
+        target, custom_llm_provider, _upstream_400(target), guardrail=guardrail, body=body
+    )
+    assert isinstance(failure.original_exception, ModifyResponseException)
+    assert failure.request_data["model"] == expected_model
+    assert failure.request_data["custom_llm_provider"] == expected_provider
+    assert PrometheusLogger._extract_api_provider_from_request_data(failure.request_data) == expected_provider
+    assert get_spend_logs_id(CallTypes.pass_through.value, {}, failure.request_data) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [b'{"contents": "not a list"}', b'{"litellm_call_id": "client-chosen-id"}'])
+async def test_passthrough_guardrail_block_response_names_the_call_id_of_its_spend_row(body: bytes):
+    guardrail: Final = _ModifyResponseOnPreCallGuardrail(
+        guardrail_name="block-policy", event_hook=GuardrailEventHooks.pre_call, default_on=True
+    )
+    run: Final = await _run_passthrough(
+        _GEMINI_FLASH_TARGET, "gemini", _upstream_400(_GEMINI_FLASH_TARGET), guardrail=guardrail, body=body
+    )
+    assert isinstance(run.failure.original_exception, ModifyResponseException)
+    assert run.response is not None
+    assert run.response.headers["x-litellm-call-id"] == get_spend_logs_id(
+        CallTypes.pass_through.value, {}, run.failure.request_data
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [b'{"contents": "not a list"}', b'{"custom_llm_provider": "vertex_ai"}'])
+async def test_passthrough_guardrail_block_on_a_user_defined_route_gets_no_url_attribution(body: bytes):
+    guardrail: Final = _ModifyResponseOnPreCallGuardrail(
+        guardrail_name="block-policy", event_hook=GuardrailEventHooks.pre_call, default_on=True
+    )
+    failure: Final = await _run_passthrough_failure(
+        _GEMINI_FLASH_TARGET,
+        None,
+        _upstream_400(_GEMINI_FLASH_TARGET),
+        dispatched_endpoint=_marked_pass_through_endpoint(),
+        guardrail=guardrail,
+        body=body,
+    )
+    assert isinstance(failure.original_exception, ModifyResponseException)
+    assert failure.request_data["model"] == ""
+    assert "custom_llm_provider" not in failure.request_data
+
+
+def _websocket_connect_failure(kind: str) -> Exception:
+    from websockets.datastructures import Headers as WebSocketHeaders
+    from websockets.exceptions import InvalidStatus
+    from websockets.http11 import Response as WebSocketHandshakeResponse
+
+    if kind == "rejected_handshake":
+        return InvalidStatus(WebSocketHandshakeResponse(403, "Forbidden", WebSocketHeaders()))
+    return OSError("connection refused")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_kind", ["rejected_handshake", "unreachable_host"])
+@pytest.mark.parametrize(
+    "target, builtin_provider_route, expected_provider",
+    [
+        (_VERTEX_LIVE_TARGET, True, "vertex_ai"),
+        (_VERTEX_LIVE_TARGET, False, None),
+        ("wss://api.openai.com/v1/realtime?model=gpt-realtime", True, None),
+    ],
+)
+async def test_websocket_passthrough_connect_failure_logs_the_provider_of_the_upstream_url(
+    failure_kind: str, target: str, builtin_provider_route: bool, expected_provider: str | None
+):
+    failure: Final = await _run_websocket_connect_failure(failure_kind, target, builtin_provider_route)
+    assert failure.request_data.get("custom_llm_provider") == expected_provider
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_kind", ["rejected_handshake", "unreachable_host"])
+@pytest.mark.parametrize("model, expected_model", [("gemini-3.8-live", "gemini-3.8-live"), (None, "")])
+async def test_websocket_passthrough_connect_failure_logs_the_model_the_caller_named(
+    failure_kind: str, model: str | None, expected_model: str
+):
+    failure: Final = await _run_websocket_connect_failure(failure_kind, _VERTEX_LIVE_TARGET, True, model=model)
+    assert failure.request_data["model"] == expected_model
+
+
+async def _run_websocket_connect_failure(
+    failure_kind: str, target: str, builtin_provider_route: bool, model: str | None = None
+) -> _RecordedFailure:
+    recorder: Final = _FailureHookRecorder()
+    with (
+        pytest.MonkeyPatch.context() as litellm_patch,
+        patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside websocket_passthrough_request; there is no injection seam
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+            side_effect=_websocket_connect_failure(failure_kind),
+        ),
+    ):
+        litellm_patch.setattr(litellm, "callbacks", [recorder])
+        await websocket_passthrough_request(
+            websocket=_client_websocket(_pending_receive),
+            target=target,
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+            builtin_provider_route=builtin_provider_route,
+            model=model,
+        )
+    assert len(recorder.failures) == 1
+    return recorder.failures[0]
+
+
+@pytest.mark.parametrize(
+    "parsed_body, url, custom_llm_provider, expected_model, expected_provider",
+    [
+        ({"model": "from-body"}, _GEMINI_FLASH_TARGET, "gemini", "from-body", "gemini"),
+        ({"contents": []}, _GEMINI_FLASH_TARGET, "gemini", "gemini-3.8-flash", "gemini"),
+        ({"contents": []}, _VERTEX_FLASH_TARGET, None, "gemini-3.8-flash", "vertex_ai"),
+        ({"contents": []}, _VERTEX_FLASH_TARGET, "anthropic", "", "anthropic"),
+        ({}, "https://generativelanguage.googleapis.com/v1beta/openai/models/gemini-3.8-flash", "openai", "", "openai"),
+        ({"custom_llm_provider": "from-body"}, _VERTEX_FLASH_TARGET, None, "gemini-3.8-flash", "vertex_ai"),
+        ({"custom_llm_provider": "gemini"}, _VERTEX_FLASH_TARGET, "anthropic", "", "anthropic"),
+        ({"contents": []}, _GEMINI_FLASH_TARGET, None, "gemini-3.8-flash", "gemini"),
+        (
+            {},
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash?key=provider-secret",
+            "gemini",
+            "gemini-3.8-flash",
+            "gemini",
+        ),
+        (
+            {},
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
+            "/publishers/google/models/gemini-3.8-flash?key=provider-secret",
+            None,
+            "gemini-3.8-flash",
+            "vertex_ai",
+        ),
+        ({}, _VERTEX_CLAUDE_RAW_PREDICT_TARGET, None, "vertex_ai/claude-opus-5", "vertex_ai"),
+        (
+            {},
+            _VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":streamRawPredict?alt=sse"),
+            None,
+            "claude-opus-5",
+            "vertex_ai",
+        ),
+        ({}, "https://generativelanguage.googleapis.com/v1beta/models?pageToken=/models/x", "gemini", "", "gemini"),
+        (
+            {"contents": []},
+            "https://evilaiplatform.googleapis.com/v1/projects/p/locations/l"
+            "/publishers/google/models/gemini-3.8-flash:generateContent",
+            None,
+            "",
+            None,
+        ),
+        ({}, _VERTEX_SEARCH_TARGET, None, "vertex_ai/search_api", "vertex_ai"),
+        ({}, f"{_VERTEX_FLASH_TARGET}?tag=rawPredict", None, "gemini-3.8-flash", "vertex_ai"),
+        (
+            {},
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/batchPredictionJobs"
+            "?filter=:search",
+            None,
+            "",
+            "vertex_ai",
+        ),
+        (
+            {},
+            f"https://generativelanguage.googleapis.com/v1beta{_VEO_OPERATION_SUFFIX}",
+            "gemini",
+            "veo-3.0-generate-001",
+            "gemini",
+        ),
+        (
+            {},
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1"
+            f"/publishers/google{_VEO_OPERATION_SUFFIX}",
+            None,
+            "veo-3.0-generate-001",
+            "vertex_ai",
+        ),
+        (
+            {"contents": []},
+            "https://aiplatform.us.rep.googleapis.com/v1/projects/p/locations/us"
+            "/publishers/google/models/gemini-3.8-flash:generateContent",
+            None,
+            "gemini-3.8-flash",
+            "vertex_ai",
+        ),
+        (
+            {},
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/batchPredictionJobs",
+            None,
+            "",
+            "vertex_ai",
+        ),
+        (
+            {"contents": []},
+            _GEMINI_FLASH_TARGET.replace(":generateContent", ":countTokens"),
+            "gemini",
+            "gemini-3.8-flash",
+            "gemini",
+        ),
+        (
+            {"contents": []},
+            _VERTEX_FLASH_TARGET.replace(":generateContent", ":countTokens"),
+            None,
+            "gemini-3.8-flash",
+            "vertex_ai",
+        ),
+        (
+            {"contents": []},
+            "https://aiplatform.googleapis.com/v1/projects/p/locations/global"
+            "/publishers/google/models/gemini-3.8-flash:countTokens",
+            None,
+            "gemini-3.8-flash",
+            "vertex_ai",
+        ),
+        (
+            {},
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/cachedContents",
+            None,
+            "",
+            "vertex_ai",
+        ),
+        ({"contents": []}, _RELAYED_GEMINI_COUNT_TOKENS_TARGET, "gemini", "gemini-3.8-flash", "gemini"),
+        ({"contents": []}, _RELAYED_VERTEX_COUNT_TOKENS_TARGET, None, "", None),
+        ({"contents": []}, _TRANSLATE_TARGET, None, "", None),
+        ({"contents": []}, _NON_GOOGLE_VERTEX_SHAPED_TARGET, None, "", None),
+        ({"contents": []}, "https://api.example.com/v1/models/gpt-x:countTokens", None, "", None),
+        ({"contents": []}, "https://api.example.com/v1/models/gpt-x:predict", None, "", None),
+        ({"contents": []}, "https://api.example.com/v1/models/gpt-x:thing", None, "", None),
+        (None, None, None, "", None),
+    ],
+)
+def test_build_passthrough_failure_request_payload_model_and_provider_precedence(
+    parsed_body: dict | None,
+    url: str | None,
+    custom_llm_provider: str | None,
+    expected_model: str,
+    expected_provider: str | None,
+):
+    request_payload: Final = _build_passthrough_failure_request_payload(
+        parsed_body=parsed_body,
+        kwargs=None,
+        logging_obj=None,
+        custom_llm_provider=custom_llm_provider,
+        url=httpx.URL(url) if url else None,
+        builtin_provider_route=True,
+    )
+    assert request_payload["model"] == expected_model
+    assert request_payload.get("custom_llm_provider") == expected_provider
+
+
+@pytest.mark.parametrize(
+    "url_route, expected_model",
+    [
+        (_VERTEX_FLASH_TARGET, "gemini-3.8-flash"),
+        (_VERTEX_FLASH_TARGET.replace(":generateContent", ":streamGenerateContent?alt=sse"), "gemini-3.8-flash"),
+        (_VERTEX_FLASH_TARGET.replace(":generateContent", ":predict"), "gemini-3.8-flash"),
+        (_VERTEX_FLASH_TARGET.replace(":generateContent", ":embedContent"), "gemini-3.8-flash"),
+        (_VERTEX_CLAUDE_RAW_PREDICT_TARGET, "vertex_ai/claude-opus-5"),
+        (_VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":streamRawPredict"), "vertex_ai/claude-opus-5"),
+        (
+            _VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":streamRawPredict?alt=sse"),
+            "claude-opus-5",
+        ),
+        (_VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":rawPredict?alt=sse"), "claude-opus-5"),
+        (f"{_VERTEX_FLASH_TARGET}?tag=rawPredict", "gemini-3.8-flash"),
+        (_VERTEX_SEARCH_TARGET, "vertex_ai/search_api"),
+        ("https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/batchPredictionJobs", None),
+        (
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/batchPredictionJobs"
+            "?filter=:search",
+            None,
+        ),
+    ],
+)
+def test_vertex_failure_model_name_matches_success_handler_naming(url_route: str, expected_model: str | None):
+    assert VertexPassthroughLoggingHandler.model_from_url_route(url_route) == expected_model
+
+
+@pytest.mark.parametrize("client_metadata_key", ["litellm_metadata", "metadata"])
 def test_passthrough_logs_the_resolved_deployment_model_info_over_the_request_body(client_metadata_key: str):
     """A provider route that resolved a router deployment stashes its model_info on request.state. That
     deployment, not a model_info the client put in its own body, is what spend logs and metrics attribute
     the call to (LIT-1761: passthrough successes carried model_id="")."""
     mock_request = MagicMock(spec=Request)
     mock_request.method = "POST"
-    mock_request.url = httpx.URL("http://0.0.0.0:4000/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent")
+    mock_request.url = httpx.URL(
+        "http://0.0.0.0:4000/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent"
+    )
     mock_request.headers = Headers({})
     mock_request.scope = {}
     mock_request.state = SimpleNamespace(
@@ -8609,6 +11306,9 @@ def _split_pass_through_body(
 GEMINI_BODY: Final = '{"contents": [{"parts": [{"text": "hi"}]}], "generationConfig": {"temperature": 0}}'
 
 
+PROXY_SET_PARAMS: Final = ("metadata", "proxy_server_request", COMMITTED_BUDGET_SPEND_PARAM)
+
+
 def _metadata_of(split: _PassThroughSplit) -> Mapping[str, object]:
     return MappingProxyType(_LITELLM_PARAMS.validate_python(split.litellm_params["metadata"]))
 
@@ -8620,7 +11320,7 @@ def test_passthrough_moves_every_litellm_owned_key_from_the_forwarded_body_into_
     )
 
     assert frozenset(split.litellm_params) == frozenset(
-        ("ttl", "num_retries", "litellm_trace_id", "metadata", "proxy_server_request")
+        ("ttl", "num_retries", "litellm_trace_id", *PROXY_SET_PARAMS)
     )
     assert tuple(split.litellm_params[k] for k in ("ttl", "num_retries", "litellm_trace_id")) == (30, 2, "trace-a")
     assert split.forwarded_body == json.loads(GEMINI_BODY)
@@ -8633,6 +11333,7 @@ PROXY_STAMPED_NAMES: Final = frozenset(
         "secret_fields",
         "litellm_trusted_callback_vars",
         "_litellm_addressed_response_id",
+        "_litellm_addressed_comparison_response_id",
         "_litellm_strip_stream_usage",
         "_litellm_stream_usage_injected",
         "client_side_timeout",
@@ -8653,7 +11354,7 @@ PROXY_STAMPED_NAMES: Final = frozenset(
 def test_passthrough_keeps_each_registered_litellm_owned_name_out_of_the_forwarded_body(name: str) -> None:
     split: Final = _split_pass_through_body(json.dumps({name: "owned", **json.loads(GEMINI_BODY)}))
 
-    assert frozenset(split.litellm_params) == frozenset((name, "metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset((name, *PROXY_SET_PARAMS))
     assert split.litellm_params[name] == "owned"
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
@@ -8697,7 +11398,7 @@ def test_passthrough_keeps_a_client_model_info_object_for_keys_that_allow_client
 def test_passthrough_drops_a_client_supplied_proxy_stamped_name(name: str) -> None:
     split: Final = _split_pass_through_body(json.dumps({name: {"forged": "by-client"}, **json.loads(GEMINI_BODY)}))
 
-    assert frozenset(split.litellm_params) == frozenset(("metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset(PROXY_SET_PARAMS)
     assert split.litellm_params["proxy_server_request"] != {"forged": "by-client"}, split.litellm_params
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
@@ -8708,7 +11409,7 @@ def test_passthrough_merges_both_metadata_carriers_from_the_body_into_one_metada
         ' "litellm_metadata": {"lm": "b"}, "generationConfig": {"temperature": 0}}'
     )
 
-    assert frozenset(split.litellm_params) == frozenset(("ttl", "metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset(("ttl", *PROXY_SET_PARAMS))
     assert _metadata_of(split) == {**_metadata_of(_split_pass_through_body(GEMINI_BODY)), "client_tag": "a", "lm": "b"}
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
@@ -8747,7 +11448,7 @@ def test_passthrough_sees_a_name_appended_to_the_public_list_after_import() -> N
     finally:
         litellm.all_litellm_params.remove("registered_later")
 
-    assert frozenset(split.litellm_params) == frozenset(("registered_later", "metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset(("registered_later", *PROXY_SET_PARAMS))
     assert split.forwarded_body == {"contents": [{"parts": [{"text": "hi"}]}]}
 
 
@@ -8756,7 +11457,7 @@ def test_passthrough_sees_the_public_list_rebound_after_import(monkeypatch: pyte
 
     split: Final = _split_pass_through_body(LATE_REGISTERED_BODY)
 
-    assert frozenset(split.litellm_params) == frozenset(("registered_later", "metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset(("registered_later", *PROXY_SET_PARAMS))
     assert split.forwarded_body == {"contents": [{"parts": [{"text": "hi"}]}]}
 
 
@@ -8927,6 +11628,44 @@ async def test_chat_completion_pass_through_endpoint_failure_carries_the_callers
     record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
     assert record.litellm_call_id == call_id
     assert call_id in record.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_without_a_model_answers_model_not_found_with_a_router(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A body without a model is not a router name: the request falls through to the
+    model-not-found answer instead of failing on the registry lookup."""
+    proxy_logging: Final = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+    proxy_logging.post_call_failure_hook = AsyncMock()
+
+    async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
+        return kwargs["data"]
+
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "known-model", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-x"}}]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", fake_add_litellm_data_to_request)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    request: Final = MagicMock(spec=Request)
+    request.body = AsyncMock(return_value=json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode())
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    logged_exception: Final = proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"]
+    assert isinstance(logged_exception, ProxyModelNotFoundError)
+    assert raised.value.code == "400"
 
 
 def test_passthrough_attributes_a_cli_session_to_its_alias_not_the_login_token():
@@ -9579,11 +12318,13 @@ async def _drain_logging_worker():
     await GLOBAL_LOGGING_WORKER.stop()
     yield
 
+
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
 
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 def test_update_pass_through_route_updates_registry():
@@ -9674,9 +12415,7 @@ def mock_request():
             return self._dict.values()
 
     class MockRequest:
-        def __init__(
-            self, headers=None, method="POST", request_body: Optional[dict] = None
-        ):
+        def __init__(self, headers=None, method="POST", request_body: Optional[dict] = None):
             self.headers = headers or {}
             self.query_params = QueryParams()
             self.method = method
@@ -9784,9 +12523,9 @@ def test_pass_through_routes_support_all_methods():
                 path = route.path
                 methods = set(route.methods)
                 allowed = PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES.get(path, expected_methods)
-                assert (
-                    methods == allowed
-                ), f"Route {path} does not support all methods. Supported: {methods}, Expected: {allowed}"
+                assert methods == allowed, (
+                    f"Route {path} does not support all methods. Supported: {methods}, Expected: {allowed}"
+                )
 
     check_router_methods(llm_router)
 
@@ -9816,19 +12555,11 @@ def test_is_bedrock_agent_runtime_route():
 
     # Test agent runtime endpoints (should return True)
     assert _is_bedrock_agent_runtime_route("/knowledgebases/kb-123/retrieve") is True
-    assert (
-        _is_bedrock_agent_runtime_route("/agents/knowledgebases/kb-123/retrieve")
-        is True
-    )
+    assert _is_bedrock_agent_runtime_route("/agents/knowledgebases/kb-123/retrieve") is True
 
     # Test regular bedrock runtime endpoints (should return False)
-    assert (
-        _is_bedrock_agent_runtime_route("/guardrail/test-id/version/1/apply") is False
-    )
-    assert (
-        _is_bedrock_agent_runtime_route("/model/cohere.command-r-v1:0/converse")
-        is False
-    )
+    assert _is_bedrock_agent_runtime_route("/guardrail/test-id/version/1/apply") is False
+    assert _is_bedrock_agent_runtime_route("/model/cohere.command-r-v1:0/converse") is False
     assert _is_bedrock_agent_runtime_route("/some/random/endpoint") is False
 
 
@@ -9895,9 +12626,7 @@ def test_custom_pricing_used_in_cost_calculation():
 
     # Verify custom cost is different from standard cost (unless prices happen to match)
     # This confirms custom pricing is actually being applied
-    assert (
-        custom_cost != standard_cost
-    ), "Custom pricing should produce different cost than standard pricing"
+    assert custom_cost != standard_cost, "Custom pricing should produce different cost than standard pricing"
 
     # Test 3: Custom pricing with cache_read_input_token_cost and input_cost_per_token_batches
     # This specifically tests the parameters that were causing the original issue
@@ -10437,6 +13166,43 @@ def test_init_kwargs_no_authenticated_identity_field_is_client_settable(mock_req
     survived: Final = {key: metadata.get(key) for key in expected if metadata.get(key) != expected[key]}
     assert survived == {}, f"client-supplied values survived for: {sorted(survived)}"
 
+
+def test_init_kwargs_client_metadata_cannot_mark_a_pass_through_call_as_a_silent_experiment(
+    mock_user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    started: Final = datetime(2026, 1, 15, 12, 0, 0)
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=Request({"type": "http", "method": "POST", "path": "/test", "headers": [], "query_string": b""}),
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=PassthroughStandardLoggingPayload(url="https://test.com", request_body={}),
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=started,
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+        _parsed_body={
+            "litellm_metadata": {"is_silent_experiment": True, "client_key": "kept"},
+            "metadata": {"is_silent_experiment": True},
+        },
+    )
+
+    row: Final = get_logging_payload(
+        kwargs={"model": "test-model", "litellm_params": result["litellm_params"]},
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=started,
+        end_time=started,
+    )
+    assert "is_silent_experiment" not in json.loads(row["metadata"])
+    assert result["litellm_params"]["metadata"]["client_key"] == "kept"
+
+
 @pytest.mark.asyncio
 async def test_direct_passthrough_keeps_mapped_baggage_tags_outside_upstream_body():
     from litellm.proxy.common_utils.http_parsing_utils import read_request_body
@@ -10472,3 +13238,354 @@ async def test_direct_passthrough_keeps_mapped_baggage_tags_outside_upstream_bod
     metadata = _update_metadata_with_tags_in_header(request, {})
     assert metadata["tags"] == ["existing", "usecase:a"]
     assert await read_request_body(request) == {"model": "qa-model"}
+
+
+@pytest.mark.parametrize(
+    ("update", "expected"),
+    [
+        ({"path": "/moved-to"}, (True, True, False, False)),
+        ({"path": "/moved-from"}, (True, True, True, True)),
+        ({"path": "/moved-from", "auth": False}, (False, False, False, False)),
+    ],
+)
+@pytest.mark.asyncio
+async def test_update_pass_through_endpoint_keeps_llm_api_route_checks_on_the_updated_path(
+    monkeypatch: pytest.MonkeyPatch,
+    update: dict[str, str | bool],
+    expected: tuple[bool, bool, bool, bool],
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        ConfigFieldUpdate,
+        LiteLLMRoutes,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import update_pass_through_endpoints
+
+    async def serve_stored_endpoints(data: ConfigFieldUpdate, **_: object) -> None:
+        await initialize_pass_through_endpoints(data.field_value)
+
+    stored_endpoint: Final = {
+        "id": "moved-route",
+        "path": "/moved-from",
+        "target": "http://example.com/api",
+        "auth": True,
+        "include_subpath": True,
+    }
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    saved_openai_routes: Final = tuple(LiteLLMRoutes.openai_routes.value)
+    try:
+        _registered_pass_through_routes.clear()
+        monkeypatch.setattr(proxy_server, "app", FastAPI())
+        monkeypatch.setattr(proxy_server, "premium_user", True)
+        monkeypatch.setattr(proxy_server, "config_passthrough_endpoints", None)
+        await initialize_pass_through_endpoints([stored_endpoint])
+        with (
+            patch(
+                "litellm.proxy.proxy_server.get_config_general_settings",
+                return_value=ConfigFieldInfo(field_name="pass_through_endpoints", field_value=[stored_endpoint]),
+            ),
+            patch("litellm.proxy.proxy_server.update_config_general_settings", side_effect=serve_stored_endpoints),
+        ):
+            await update_pass_through_endpoints(
+                endpoint_id="moved-route",
+                data=PassThroughGenericEndpoint.model_validate({"target": "http://example.com/api", **update}),
+                request=MagicMock(spec=Request),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+        updated_path: Final = str(update["path"])
+        assert (
+            RouteChecks.is_llm_api_route(route=updated_path),
+            f"{updated_path}/*" in LiteLLMRoutes.openai_routes.value,
+            RouteChecks.is_llm_api_route(route="/moved-from"),
+            "/moved-from/*" in LiteLLMRoutes.openai_routes.value,
+        ) == expected
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+        LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes
+
+
+@pytest.mark.asyncio
+async def test_update_pass_through_endpoint_keeps_llm_api_route_checks_on_a_path_another_endpoint_shares(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        ConfigFieldUpdate,
+        LiteLLMRoutes,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import update_pass_through_endpoints
+
+    async def serve_stored_endpoints(data: ConfigFieldUpdate, **_: object) -> None:
+        await initialize_pass_through_endpoints(data.field_value)
+
+    stored_endpoints: Final = [
+        {
+            "id": f"shared-{method.lower()}",
+            "path": "/shared",
+            "target": "http://example.com/api",
+            "auth": True,
+            "methods": [method],
+        }
+        for method in ("GET", "POST")
+    ]
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    saved_openai_routes: Final = tuple(LiteLLMRoutes.openai_routes.value)
+    try:
+        _registered_pass_through_routes.clear()
+        monkeypatch.setattr(proxy_server, "app", FastAPI())
+        monkeypatch.setattr(proxy_server, "premium_user", True)
+        monkeypatch.setattr(proxy_server, "config_passthrough_endpoints", None)
+        await initialize_pass_through_endpoints(stored_endpoints)
+        with (
+            patch(
+                "litellm.proxy.proxy_server.get_config_general_settings",
+                return_value=ConfigFieldInfo(field_name="pass_through_endpoints", field_value=stored_endpoints),
+            ),
+            patch("litellm.proxy.proxy_server.update_config_general_settings", side_effect=serve_stored_endpoints),
+        ):
+            await update_pass_through_endpoints(
+                endpoint_id="shared-get",
+                data=PassThroughGenericEndpoint.model_validate(
+                    {"target": "http://example.com/api", "path": "/moved", "auth": True, "methods": ["GET"]}
+                ),
+                request=MagicMock(spec=Request),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+        assert (RouteChecks.is_llm_api_route(route="/shared"), RouteChecks.is_llm_api_route(route="/moved")) == (
+            True,
+            True,
+        )
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+        LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("flat_cost", "upstream_cost", "expected"),
+    [(0.5, None, 0.5), (0.0, None, 0.0), (0.5, "0.75", 0.75), (0.5, "0", 0.0)],
+)
+async def test_passthrough_header_and_callback_share_finalized_cost(
+    monkeypatch: pytest.MonkeyPatch, flat_cost: float, upstream_cost: str | None, expected: float
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    observed: Final = asyncio.get_running_loop().create_future()
+
+    class Observer(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            observed.set_result(kwargs["standard_logging_object"])
+
+    monkeypatch.setattr(litellm, "_async_success_callback", [Observer()])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    upstream_headers: Final = (
+        {} if upstream_cost is None else {"x-litellm-response-cost": upstream_cost, "x-litellm-total-tokens": "12"}
+    )
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True}, headers=upstream_headers, request=request)
+
+    client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(upstream), timeout=None)
+    try:
+        request: Final = Request({
+            "type": "http", "method": "GET", "path": "/passthrough-relay/results",
+            "headers": [], "query_string": b"", "scheme": "http", "server": ("test", 80),
+        })
+        result: Final = await pass_through_request(
+            request=request, target="http://cost-upstream.invalid/results", custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed"), cost_per_request=flat_cost,
+        )
+        payload: Final = await asyncio.wait_for(observed, timeout=10)
+        await GLOBAL_LOGGING_WORKER.flush()
+        assert result.status_code == 200
+        assert float(result.headers["x-litellm-response-cost"]) == pytest.approx(expected)
+        assert payload["response_cost"] == pytest.approx(expected)
+        assert payload["cost_finalized"] is True
+        if upstream_cost is not None:
+            assert payload["total_tokens"] == 12
+    finally:
+        cleanup()
+        await client.aclose()
+
+
+def _stub_adapter_proxy(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    proxy_logging: Final = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+    proxy_logging.post_call_failure_hook = AsyncMock()
+
+    async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
+        return kwargs["data"]
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", fake_add_litellm_data_to_request)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    return proxy_logging
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_reads_a_body_only_json_can_parse(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    proxy_logging: Final = _stub_adapter_proxy(monkeypatch)
+    request: Final = MagicMock(spec=Request)
+    request.body = AsyncMock(
+        return_value=b'{"model": "unknown-model", "stream": false, "user": null, "messages": [{"role": "user", "content": "hi"}]}'
+    )
+
+    with pytest.raises(ProxyException):
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    forwarded: Final = proxy_logging.pre_call_hook.call_args.kwargs["data"]
+    assert (forwarded["model"], forwarded["stream"], forwarded["user"], forwarded["adapter_id"]) == (
+        "unknown-model",
+        False,
+        None,
+        "anthropic",
+    )
+    assert forwarded["messages"] == [{"role": "user", "content": "hi"}]
+
+
+_ADAPTER_BODY_WITH_S3_IMAGE: Final = json.dumps(
+    {
+        "model": "unknown-model",
+        "messages": [
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "s3://private-bucket/cat.png"}}]}
+        ],
+    }
+).encode()
+_ADAPTER_PYTHON_LITERAL_BODY_WITH_S3_IMAGE_IN_TUPLES: Final = repr(
+    {
+        "model": "unknown-model",
+        "messages": (
+            {"role": "user", "content": ({"type": "image_url", "image_url": {"url": "s3://private-bucket/cat.png"}},)},
+        ),
+    }
+).encode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [_ADAPTER_BODY_WITH_S3_IMAGE, _ADAPTER_PYTHON_LITERAL_BODY_WITH_S3_IMAGE_IN_TUPLES],
+    ids=["json", "python_literal_with_tuples"],
+)
+async def test_chat_completion_pass_through_endpoint_refuses_an_s3_image_in_an_unlisted_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+    body: bytes,
+):
+    proxy_logging: Final = _stub_adapter_proxy(monkeypatch)
+    request: Final = MagicMock(spec=Request)
+    request.body = AsyncMock(return_value=body)
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert raised.value.code == "403"
+    proxy_logging.pre_call_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_routes_an_s3_image_in_a_listed_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings", {"allowed_client_side_s3_buckets": ["private-bucket"]}
+    )
+    request: Final = _request_with_body("application/json", _ADAPTER_BODY_WITH_S3_IMAGE)
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert raised.value.code == "400"
+    assert raised.value.message == str(ProxyModelNotFoundError(route="completion", model_name="unknown-model"))
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_rejects_a_body_that_is_not_an_object(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    proxy_logging: Final = _stub_adapter_proxy(monkeypatch)
+    request: Final = MagicMock(spec=Request)
+    request.body = AsyncMock(return_value=b'["not", "an", "object"]')
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert raised.value.message
+    proxy_logging.pre_call_hook.assert_not_awaited()
+
+
+def _request_with_body(content_type: str, body: bytes) -> Request:
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/pass-through",
+            "query_string": b"",
+            "headers": [(b"content-type", content_type.encode())],
+        },
+        receive,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (b'{"model": "m", "stream": true}', (None, {"model": "m", "stream": True}, None, True)),
+        (
+            b'{"query_params": {"a": "1"}, "custom_body": {"b": 2}, "stream": false}',
+            ({"a": "1"}, {"b": 2}, None, False),
+        ),
+        (b"{}", (None, None, None, None)),
+        (b"[1, 2]", (None, None, None, None)),
+        (b'--x\r\nContent-Disposition: form-data; name="f"\r\n\r\nv\r\n--x--\r\n', (None, None, None, None)),
+    ],
+    ids=["json_body_is_the_custom_body", "explicit_envelope", "empty_object", "json_array", "real_multipart"],
+)
+async def test_parse_request_data_by_content_type_reads_json_sent_as_multipart(
+    body: bytes, expected: tuple[object, object, None, object]
+):
+    request: Final = _request_with_body("multipart/form-data; boundary=x", body)
+
+    assert await _parse_request_data_by_content_type(request) == expected

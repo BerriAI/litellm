@@ -1,12 +1,15 @@
 import base64
 import os
 from types import MappingProxyType
-from unittest.mock import MagicMock, patch
+from typing import Final
+from unittest.mock import patch
 
+import httpx
 import pytest
 
 import litellm.files.main as files_main
 from litellm.llms.bedrock.files.handler import BedrockFilesHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import SpecialEnums
 
 
@@ -123,87 +126,66 @@ class TestBedrockFilesHandler:
                 configured_bucket_name="safe-bucket",
             )
 
-    def test_should_not_trust_request_s3_bucket_name_for_expected_bucket(self):
-        with patch.dict(os.environ, {"AWS_S3_BUCKET_NAME": "safe-bucket"}):
-            assert (
-                self.handler._get_configured_s3_bucket_name(
-                    {"s3_bucket_name": "attacker-bucket"}
-                )
-                == "safe-bucket"
-            )
+    def test_call_s3_bucket_name_wins_over_env_bucket(self):
+        with patch.dict(os.environ, {"AWS_S3_BUCKET_NAME": "env-bucket"}):
+            assert self.handler._get_configured_s3_bucket_name({"s3_bucket_name": "call-bucket"}) == "call-bucket"
 
-    def test_should_trust_proxy_config_s3_bucket_name_for_expected_bucket(self):
-        trusted_credentials = MappingProxyType({"s3_bucket_name": "safe-bucket"})
+    def test_env_bucket_is_used_when_the_call_names_none(self):
+        with patch.dict(os.environ, {"AWS_S3_BUCKET_NAME": "env-bucket"}):
+            assert self.handler._get_configured_s3_bucket_name({}) == "env-bucket"
 
-        with patch.dict(os.environ, {}, clear=True):
-            assert (
-                self.handler._get_configured_s3_bucket_name(
-                    {
-                        "s3_bucket_name": "attacker-bucket",
-                        "_litellm_internal_model_credentials": trusted_credentials,
-                    }
-                )
-                == "safe-bucket"
-            )
-
-    def test_should_not_trust_user_supplied_internal_credentials_dict(self):
+    def test_missing_bucket_in_call_and_env_is_rejected(self):
         with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(ValueError, match="S3 bucket_name is required"):
-                self.handler._get_configured_s3_bucket_name(
-                    {
-                        "_litellm_internal_model_credentials": {
-                            "s3_bucket_name": "attacker-bucket"
-                        }
-                    }
-                )
-
-    def test_should_require_server_s3_bucket_name(self):
-        with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ValueError, match="S3 bucket_name is required"):
-                self.handler._get_configured_s3_bucket_name(
-                    {"s3_bucket_name": "attacker-bucket"}
-                )
+                self.handler._get_configured_s3_bucket_name({})
 
 
-def test_should_forward_trusted_model_credentials_to_bedrock_provider_config():
-    trusted_credentials = MappingProxyType({"s3_bucket_name": "safe-bucket"})
-    mock_response = MagicMock()
+def _echo_request_url_client() -> HTTPHandler:
+    return HTTPHandler(
+        client=httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, content=str(request.url).encode()))
+        )
+    )
 
-    with patch.object(
-        files_main.base_llm_http_handler,
-        "retrieve_file_content",
-        return_value=mock_response,
-    ) as mock_retrieve_file_content:
-        response = files_main.file_content(
-            file_id="s3://safe-bucket/litellm-bedrock-files/file.jsonl",
+
+_SDK_AWS_CREDENTIALS: Final = MappingProxyType(
+    {
+        "aws_access_key_id": "AKIASDKCALLER",
+        "aws_secret_access_key": "sdk-caller-secret",
+        "aws_region_name": "us-west-2",
+    }
+)
+
+
+def test_sdk_file_content_reads_from_the_bucket_passed_to_the_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+    response: Final = files_main.file_content(
+        file_id="s3://sdk-bucket/litellm-bedrock-files/batch.jsonl",
+        custom_llm_provider="bedrock",
+        s3_bucket_name="sdk-bucket",
+        client=_echo_request_url_client(),
+        **_SDK_AWS_CREDENTIALS,
+    )
+
+    assert httpx.URL(response.content.decode()).path == "/sdk-bucket/litellm-bedrock-files/batch.jsonl"
+
+
+def test_sdk_file_content_rejects_a_file_outside_the_bucket_passed_to_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+    with pytest.raises(Exception, match="configured storage bucket"):
+        files_main.file_content(
+            file_id="s3://other-bucket/litellm-bedrock-files/batch.jsonl",
             custom_llm_provider="bedrock",
-            _litellm_internal_model_credentials=trusted_credentials,
+            s3_bucket_name="sdk-bucket",
+            client=_echo_request_url_client(),
+            **_SDK_AWS_CREDENTIALS,
         )
-
-    assert response is mock_response
-    litellm_params = mock_retrieve_file_content.call_args.kwargs["litellm_params"]
-    assert litellm_params["_litellm_internal_model_credentials"] is trusted_credentials
-    assert "s3_bucket_name" not in litellm_params
-
-
-def test_should_forward_trusted_model_credentials_to_retrieve_provider_config():
-    trusted_credentials = MappingProxyType({"allow_legacy_cloud_file_ids": True})
-    mock_response = MagicMock()
-
-    with patch.object(
-        files_main.base_llm_http_handler,
-        "retrieve_file",
-        return_value=mock_response,
-    ) as mock_retrieve_file:
-        response = files_main.file_retrieve(
-            file_id="gs://safe-bucket/private/file.jsonl",
-            custom_llm_provider="vertex_ai",
-            _litellm_internal_model_credentials=trusted_credentials,
-        )
-
-    assert response is mock_response
-    litellm_params = mock_retrieve_file.call_args.kwargs["litellm_params"]
-    assert litellm_params["_litellm_internal_model_credentials"] is trusted_credentials
 
 
 @pytest.mark.asyncio
@@ -249,7 +231,7 @@ async def test_afile_content_assumes_role_with_external_id(monkeypatch):
         return FakeS3Client()
 
     optional_params = {
-        "_litellm_internal_model_credentials": MappingProxyType({"s3_bucket_name": "safe-bucket"}),
+        "s3_bucket_name": "safe-bucket",
         "aws_region_name": "us-east-1",
         "aws_access_key_id": "AKIAFILESDOWNLOADCALLER",
         "aws_secret_access_key": "pod-caller-secret",
@@ -285,7 +267,7 @@ async def test_afile_content_builds_the_s3_client_with_the_s3_pair_when_it_diffe
             return {"Body": FakeS3Body()}
 
     optional_params = {
-        "_litellm_internal_model_credentials": MappingProxyType({"s3_bucket_name": "safe-bucket"}),
+        "s3_bucket_name": "safe-bucket",
         "aws_region_name": "us-east-1",
         "aws_access_key_id": "AKIABEDROCKONLY",
         "aws_secret_access_key": "bedrock-only-secret",

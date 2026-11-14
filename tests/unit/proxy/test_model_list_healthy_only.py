@@ -7,7 +7,7 @@ per-request `healthy_only` query parameter and the proxy-wide
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import DEFAULT, AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -25,7 +25,8 @@ def patched_model_list(monkeypatch):
 
     router = MagicMock()
     router.get_fully_blocked_model_names = MagicMock(return_value=set())
-    router.async_get_fully_unhealthy_model_names = AsyncMock(
+    router.health.return_value.fully_blocked_model_names = MagicMock(return_value=set())
+    router.health.return_value.fully_unhealthy_model_names = AsyncMock(
         return_value={"claude-sonnet"}
     )
 
@@ -70,7 +71,13 @@ def patched_model_info_v1(monkeypatch):
     router.get_model_list_from_model_alias.return_value = []
     router.get_model_names.return_value = ["gpt-4", "claude-sonnet"]
     router.get_model_access_groups.return_value = {}
-    router.async_get_fully_unhealthy_model_names = AsyncMock(return_value={"claude-sonnet"})
+    registry = router.registry.return_value
+    registry.all.return_value = router.model_list
+    registry.deployments.side_effect = lambda *_, source="group", **__: [] if source == "alias" else DEFAULT
+    registry.names.return_value = ["gpt-4", "claude-sonnet"]
+    registry.access_groups.return_value = {}
+    router.health.return_value.fully_blocked_model_names = MagicMock(return_value=set())
+    router.health.return_value.fully_unhealthy_model_names = AsyncMock(return_value={"claude-sonnet"})
 
     monkeypatch.setattr(proxy_server, "user_model", None)
     monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
@@ -107,7 +114,7 @@ async def test_model_list_default_keeps_unhealthy_models(patched_model_list):
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
     )
     assert [m["id"] for m in response["data"]] == ["gpt-4", "claude-sonnet"]
-    patched_model_list.async_get_fully_unhealthy_model_names.assert_not_awaited()
+    patched_model_list.health.return_value.fully_unhealthy_model_names.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -184,7 +191,7 @@ async def test_model_list_general_setting_false_keeps_unhealthy_models(patched_m
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
     )
     assert [m["id"] for m in response["data"]] == ["gpt-4", "claude-sonnet"]
-    patched_model_list.async_get_fully_unhealthy_model_names.assert_not_awaited()
+    patched_model_list.health.return_value.fully_unhealthy_model_names.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -196,7 +203,7 @@ async def test_model_list_non_boolean_general_setting_does_not_filter(patched_mo
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
     )
     assert [m["id"] for m in response["data"]] == ["gpt-4", "claude-sonnet"]
-    patched_model_list.async_get_fully_unhealthy_model_names.assert_not_awaited()
+    patched_model_list.health.return_value.fully_unhealthy_model_names.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -204,7 +211,7 @@ async def test_model_list_blocked_models_hidden_without_health_filter(
     patched_model_list,
 ):
     """Blocked-model hiding is independent of the health filter."""
-    patched_model_list.get_fully_blocked_model_names = MagicMock(return_value={"gpt-4"})
+    patched_model_list.health.return_value.fully_blocked_model_names = MagicMock(return_value={"gpt-4"})
 
     response = await proxy_server.model_list(
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
@@ -228,7 +235,7 @@ async def test_model_list_no_router_does_not_filter(patched_model_list, monkeypa
 async def test_model_list_general_setting_no_health_state_keeps_all_models(patched_model_list, monkeypatch):
     """Setting on but no background health checks running: hide nothing."""
     monkeypatch.setattr(proxy_server, "general_settings", HEALTHY_ONLY_SETTING)
-    patched_model_list.async_get_fully_unhealthy_model_names = AsyncMock(return_value=set())
+    patched_model_list.health.return_value.fully_unhealthy_model_names = AsyncMock(return_value=set())
 
     response = await proxy_server.model_list(
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
@@ -264,7 +271,7 @@ async def test_retrieve_model_default_serves_unhealthy_model(patched_model_list,
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
     )
     assert response["id"] == "claude-sonnet"
-    patched_model_list.async_get_fully_unhealthy_model_names.assert_not_awaited()
+    patched_model_list.health.return_value.fully_unhealthy_model_names.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -299,7 +306,7 @@ async def test_model_info_v1_default_keeps_unhealthy_deployments(
         litellm_model_id=None,
     )
     assert [m["model_name"] for m in json.loads(response.body)["data"]] == ["gpt-4", "claude-sonnet"]
-    patched_model_info_v1.async_get_fully_unhealthy_model_names.assert_not_awaited()
+    patched_model_info_v1.health.return_value.fully_unhealthy_model_names.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -313,7 +320,7 @@ async def test_model_info_v1_litellm_model_id_lookup_ignores_health_filter(patch
         "litellm_params": {"model": "anthropic/claude-sonnet"},
         "model_info": {"id": "unhealthy-id"},
     }
-    patched_model_info_v1.get_deployment.return_value = deployment
+    patched_model_info_v1.registry.return_value.deployment.return_value = deployment
 
     response = await proxy_server.model_info_v1(
         user_api_key_dict=_admin_key(),

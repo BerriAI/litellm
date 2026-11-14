@@ -932,6 +932,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "CLF_AI_GATEWAY",
+    "provider_display_name": "CLF AI Gateway",
+    "litellm_provider": "clf_ai_gateway",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.clfaigateway.dev/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "clf_ai_gateway/glm-5.3"
+  },
+  {
     "provider": "CLOUDFLARE",
     "provider_display_name": "Cloudflare",
     "litellm_provider": "cloudflare",
@@ -1526,6 +1554,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "EMPIRIOLABS",
+    "provider_display_name": "EmpirioLabs AI",
+    "litellm_provider": "empiriolabs",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.empiriolabs.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "empiriolabs/aplomb-1"
+  },
+  {
     "provider": "EMPOWER",
     "provider_display_name": "Empower",
     "litellm_provider": "empower",
@@ -1552,6 +1608,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "EU_JEV",
+    "provider_display_name": "eu/jev",
+    "litellm_provider": "eu_jev",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://eu-jev.com",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "eu_jev/eu-jeff-latest"
   },
   {
     "provider": "FalAI",
@@ -1797,6 +1881,46 @@
         "field_type": "text",
         "options": null,
         "default_value": null
+      },
+      {
+        "key": "github_copilot_app_id",
+        "label": "App client ID",
+        "placeholder": "Iv23...",
+        "tooltip": "The public client ID shown in GitHub Settings > Developer settings > GitHub Apps > your App. It usually starts with Iv. A numeric App ID also works as text. This is not the client secret.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "github_copilot_app_installation_id",
+        "label": "Installation ID",
+        "placeholder": "12345678",
+        "tooltip": "The numeric ID in the URL when you open organization Settings > GitHub Apps > Installed GitHub Apps > Configure. It identifies this App installation, not the organization or App itself. The App needs Copilot Requests read permission.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "github_copilot_app_private_key",
+        "label": "Private key (PEM)",
+        "placeholder": null,
+        "tooltip": "Upload the PEM downloaded from your GitHub App Credentials > Key pairs. LiteLLM encrypts it in its credential database. The saved key is never returned to this form. Upload a replacement here to rotate it. Use HTTPS for your dashboard.",
+        "required": false,
+        "field_type": "upload",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "github_copilot_app_private_key_ref",
+        "label": "Private key secret reference",
+        "placeholder": "oidc/file//run/secrets/copilot-app.pem",
+        "tooltip": "Generate a PEM in your GitHub App Credentials > Key pairs. Store it securely on the server, then enter a reference such as oidc/file//run/secrets/copilot-app.pem or a secret name in your configured LiteLLM secret manager. os.environ/VARIABLE_NAME is also supported. Never paste PEM contents or a path on your laptop.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
@@ -2024,6 +2148,34 @@
     "default_model_placeholder": "jina_ai/"
   },
   {
+    "provider": "KYMA",
+    "provider_display_name": "Kyma API",
+    "litellm_provider": "kyma",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://kymaapi.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "kyma/qwen3.7-flash"
+  },
+  {
     "provider": "Laya",
     "provider_display_name": "Laya",
     "litellm_provider": "laya",
@@ -2155,7 +2307,7 @@
   },
   {
     "provider": "LITELLM_PROXY",
-    "provider_display_name": "Litellm Proxy",
+    "provider_display_name": "LiteLLM Gateway",
     "litellm_provider": "litellm_proxy",
     "credential_fields": [
       {
@@ -2292,6 +2444,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "META",
+    "provider_display_name": "Meta Model API",
+    "litellm_provider": "meta",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "meta/muse-spark-1.1"
   },
   {
     "provider": "MILVUS",
@@ -2528,6 +2708,34 @@
       }
     ],
     "default_model_placeholder": "nace/drex-latest"
+  },
+  {
+    "provider": "PARALLEL_AI",
+    "provider_display_name": "Parallel AI",
+    "litellm_provider": "parallel_ai",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.parallel.ai",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "parallel_ai/decision"
   },
   {
     "provider": "NEBIUS",
@@ -3232,6 +3440,34 @@
     "default_model_placeholder": "prism/deepseek-v4.1-flash"
   },
   {
+    "provider": "HOSTINGER_ROUTER",
+    "provider_display_name": "Hostinger Router",
+    "litellm_provider": "hostinger_router",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://router.hostinger.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "hostinger_router/claude-sonnet-5"
+  },
+  {
     "provider": "RECRAFT",
     "provider_display_name": "Recraft",
     "litellm_provider": "recraft",
@@ -3398,6 +3634,34 @@
       }
     ],
     "default_model_placeholder": "reka/reka-flash"
+  },
+  {
+    "provider": "WALLY",
+    "provider_display_name": "Wally",
+    "litellm_provider": "wally",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://inference.runanywhere.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "wally/glm-5.3-flash"
   },
   {
     "provider": "Sail",
@@ -3584,14 +3848,14 @@
         "key": "api_key",
         "label": "Soniox API Key",
         "placeholder": null,
-        "tooltip": "Currently only the async Speech-to-Text REST API (api.soniox.com) is supported. Realtime STT (stt-rt.soniox.com) and TTS (tts-rt.soniox.com) are not yet available.",
+        "tooltip": "Supports async Speech-to-Text (api.soniox.com) on /v1/audio/transcriptions and realtime Speech-to-Text (stt-rt.soniox.com) on /v1/realtime. TTS (tts-rt.soniox.com) is not yet available.",
         "required": true,
         "field_type": "password",
         "options": null,
         "default_value": null
       }
     ],
-    "default_model_placeholder": "soniox/stt-async-v5"
+    "default_model_placeholder": "soniox/stt-async-v6"
   },
   {
     "provider": "StrandsDecider",
@@ -4174,6 +4438,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "ZAI",
+    "provider_display_name": "Z.AI (Zhipu AI)",
+    "litellm_provider": "zai",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.z.ai/api/paas/v4",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "zai/glm-4.5"
+  },
+  {
     "provider": "ZeroGPU",
     "provider_display_name": "ZeroGPU",
     "litellm_provider": "zerogpu",
@@ -4228,5 +4520,33 @@
       }
     ],
     "default_model_placeholder": "cursor/claude-4-sonnet"
+  },
+  {
+    "provider": "BIGMODEL",
+    "provider_display_name": "BigModel (Zhipu AI)",
+    "litellm_provider": "bigmodel",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "BigModel (Zhipu AI) API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://open.bigmodel.cn",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://open.bigmodel.cn"
+      }
+    ],
+    "default_model_placeholder": "bigmodel/glm-5.3"
   }
 ]

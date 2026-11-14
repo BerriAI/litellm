@@ -16,9 +16,7 @@ from typing import TYPE_CHECKING, Any, Final
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
-from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
     DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS,
@@ -26,11 +24,13 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
-from litellm.exceptions import MidStreamFallbackError
+from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
-from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCacheValue
+from litellm.router_deprecated import renamed_router_param
+from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
+from litellm.types.llms.anthropic import MESSAGE_THREAD_NOT_FOUND_ERROR_CODE
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -48,12 +48,10 @@ from .router_callbacks.track_deployment_metrics import (
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.router import Router as _Router
+    from litellm.router_api import RoutingContext
 
-    LitellmRouter = _Router
     Span = _Span
 else:
-    LitellmRouter = Any
     Span = Any
 
 _ADVISOR_ORCHESTRATION_FAILURE_ATTR: Final = "_litellm_advisor_orchestration_failure"
@@ -85,8 +83,10 @@ def mark_deployment_selection_failure(exception: BaseException) -> None:
 
 
 def is_failure_outside_selected_deployment(exception: BaseException | None) -> bool:
-    return is_advisor_orchestration_failure(exception) or bool(
-        getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False)
+    return (
+        is_advisor_orchestration_failure(exception)
+        or isinstance(exception, MissingMessageRoleError)
+        or bool(getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False))
     )
 
 
@@ -109,6 +109,32 @@ def is_video_lookup_not_found(exception: object, failure_kwargs: Mapping[str, ob
     return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in VIDEO_ID_CALL_TYPES
 
 
+def is_message_thread_not_found(exception: object) -> bool:
+    """Whether a message-thread continue failed with Anthropic's 404 ``thread_not_found``: the caller's
+    ``previous_message_id`` is stale and the SDK replays the conversation, the deployment is healthy."""
+    return getattr(exception, "status_code", None) == 404 and MESSAGE_THREAD_NOT_FOUND_ERROR_CODE in str(exception)
+
+
+# The calls on an existing response id. ``compact_responses`` is left out: it sends a model and input,
+# so its 404 can mean a missing model rather than a missing response.
+RESPONSE_ID_CALL_TYPES: Final = frozenset(
+    {
+        "aget_responses",
+        "get_responses",
+        "adelete_responses",
+        "delete_responses",
+        "acancel_responses",
+        "cancel_responses",
+        "alist_input_items",
+    }
+)
+
+
+def is_response_lookup_not_found(exception: object, failure_kwargs: Mapping[str, object]) -> bool:
+    """Whether a call on an existing response id failed with a provider 404: the response is not on that account."""
+    return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in RESPONSE_ID_CALL_TYPES
+
+
 _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
     # ContentPolicyViolationError subclasses BadRequestError, so it must be checked first.
     (litellm.ContentPolicyViolationError, "ContentPolicyViolationErrorAllowedFails"),
@@ -123,21 +149,22 @@ _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
 )
 
 
-def _first_present(*sources: Mapping[str, Any] | None, key: str) -> int | float | None:
+def _first_present(*sources: Mapping[str, object] | None, key: str) -> int | float | None:
     """Return *key* from the first source mapping where it's set, so callers can
     support a setting living in more than one deployment config location. Sources
-    are checked in order from most to least specific to that setting."""
+    are checked in order from most to least specific to that setting. Only a number
+    counts: a bool or a string is skipped, so the router default applies."""
     for source in sources:
         if source is None:
             continue
         value = source.get(key)
-        if value is not None:
+        if isinstance(value, int | float) and not isinstance(value, bool):
             return value
     return None
 
 
 def _get_deployment_cooldown_policy(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     deployment: str,
 ) -> tuple[Mapping[str, int] | None, int | None]:
     """Return (allowed_fails_policy, allowed_fails) from deployment model_info, or (None, None).
@@ -149,7 +176,7 @@ def _get_deployment_cooldown_policy(
     field placed there would leak into the outgoing LLM request instead of staying
     router-internal.
     """
-    dep: Final = litellm_router_instance.get_model_info(id=deployment)
+    dep: Final = ctx.registry().deployment_dict(deployment)
     if dep is None:
         return None, None
     mi: Final[Mapping[str, Any]] = dep.get("model_info") or MappingProxyType({})
@@ -175,7 +202,7 @@ def _resolve_allowed_fails_from_policy(
 
 
 def _should_cooldown_based_on_deployment_policy(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     deployment: str,
     original_exception: Exception,
     dep_policy: Mapping[str, int] | None,
@@ -199,10 +226,7 @@ def _should_cooldown_based_on_deployment_policy(
     if (
         allowed_fails_from_policy is None
         and is_single_deployment_model_group
-        and (
-            dep_allowed_fails is not None
-            or litellm_router_instance.get_allowed_fails_from_policy(original_exception) is None
-        )
+        and (dep_allowed_fails is not None or ctx.settings().allowed_fails_for(original_exception) is None)
     ):
         return False
 
@@ -215,7 +239,7 @@ def _should_cooldown_based_on_deployment_policy(
         else ("generic" if dep_allowed_fails is not None else None)
     )
 
-    dep: Final = litellm_router_instance.get_model_info(id=deployment)
+    dep: Final = ctx.registry().deployment_dict(deployment)
     cooldown_time_override: Final = (
         _first_present(dep.get("model_info"), dep.get("litellm_params"), key="cooldown_time")
         if dep is not None
@@ -223,7 +247,7 @@ def _should_cooldown_based_on_deployment_policy(
     )
 
     return should_cooldown_based_on_allowed_fails_policy(
-        litellm_router_instance=litellm_router_instance,
+        ctx=ctx,
         deployment=deployment,
         original_exception=original_exception,
         allowed_fails_override=allowed_fails_override,
@@ -233,7 +257,7 @@ def _should_cooldown_based_on_deployment_policy(
 
 
 def _has_explicit_allowed_fails_policy_for_exception(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     deployment: str | None,
     original_exception: Exception,
 ) -> bool:
@@ -254,12 +278,12 @@ def _has_explicit_allowed_fails_policy_for_exception(
     """
     if deployment is None:
         return False
-    dep_policy, _ = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
+    dep_policy, _ = _get_deployment_cooldown_policy(ctx, deployment)
     return _resolve_allowed_fails_from_policy(dep_policy, original_exception) is not None
 
 
 def _is_cooldown_required(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     model_id: str,
     exception_status: str | int,
     exception_str: str | None = None,
@@ -309,18 +333,16 @@ def _is_cooldown_required(
 
 def _is_per_user_provider_request(request_kwargs: Mapping[str, object]) -> bool:
     from litellm.llms.github_copilot.per_user_auth import (
-        github_copilot_user_session_from,
         is_github_copilot_per_user_request,
     )
 
-    return (
-        is_github_copilot_per_user_request(request_kwargs)
-        or github_copilot_user_session_from(request_kwargs.get("litellm_params")) is not None
+    return is_github_copilot_per_user_request(request_kwargs) or is_github_copilot_per_user_request(
+        request_kwargs.get("litellm_params")
     )
 
 
 def _should_run_cooldown_logic(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     deployment: str | None,
     exception_status: str | int,
     original_exception: Exception,
@@ -335,10 +357,10 @@ def _should_run_cooldown_logic(
     - router.disable_cooldowns is True
     - deployment is None
     - _is_cooldown_required() returns False
-    - deployment is in litellm_router_instance.provider_default_deployment_ids
+    - deployment is in ctx.settings().provider_default_deployment_ids
     - exception_status is not one that should be immediately retried (e.g. 401)
     """
-    if deployment is None or litellm_router_instance.get_model_group(id=deployment) is None:
+    if deployment is None or ctx.registry().resolve(deployment, kind="group_of_id") is None:
         verbose_router_logger.debug(
             "Should Not Run Cooldown Logic: deployment id is none or model group can't be found."
         )
@@ -369,7 +391,7 @@ def _should_run_cooldown_logic(
         return False
 
     if deployment is not None:
-        failed_deployment: Final = litellm_router_instance.get_deployment(model_id=deployment)
+        failed_deployment: Final = ctx.registry().deployment(deployment)
         if failed_deployment is not None:
             from litellm.llms.github_copilot.per_user_auth import (
                 github_copilot_per_user_credential_name,
@@ -389,7 +411,7 @@ def _should_run_cooldown_logic(
         verbose_router_logger.debug("Should Not Run Cooldown Logic: time_to_cooldown is effectively 0")
         return False
 
-    if litellm_router_instance.disable_cooldowns:
+    if ctx.settings().disable_cooldowns:
         verbose_router_logger.debug("Should Not Run Cooldown Logic: disable_cooldowns is True")
         return False
 
@@ -398,19 +420,19 @@ def _should_run_cooldown_logic(
         return False
 
     if not _is_cooldown_required(
-        litellm_router_instance=litellm_router_instance,
+        ctx=ctx,
         model_id=deployment,
         exception_status=exception_status,
         exception_str=str(original_exception),
     ) and not _has_explicit_allowed_fails_policy_for_exception(
-        litellm_router_instance=litellm_router_instance,
+        ctx=ctx,
         deployment=deployment,
         original_exception=original_exception,
     ):
         verbose_router_logger.debug("Should Not Run Cooldown Logic: _is_cooldown_required returned False")
         return False
 
-    if deployment in litellm_router_instance.provider_default_deployment_ids:
+    if deployment in ctx.settings().provider_default_deployment_ids:
         verbose_router_logger.debug("Should Not Run Cooldown Logic: deployment is in provider_default_deployment_ids")
         return False
 
@@ -448,10 +470,10 @@ def _fallback_entries(configured: object) -> tuple[object, ...]:
         return ()
 
 
-def _has_fallback_group(litellm_router_instance: LitellmRouter, requested_model_group: str | None) -> bool:
+def _has_fallback_group(ctx: "RoutingContext", requested_model_group: str | None) -> bool:
     from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 
-    configured: Final[object] = getattr(litellm_router_instance, "fallbacks", None)
+    configured: Final[object] = ctx.settings().fallbacks
     if requested_model_group is None or not configured:
         return False
     chains: Final = tuple(
@@ -462,7 +484,7 @@ def _has_fallback_group(litellm_router_instance: LitellmRouter, requested_model_
 
 
 def _should_cooldown_deployment(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     deployment: str,
     exception_status: str | int,
     original_exception: Exception,
@@ -486,31 +508,29 @@ def _should_cooldown_deployment(
 
     - v1 logic (Legacy): if allowed fails or allowed fail policy set, coolsdown if num fails in this minute > allowed fails
     """
-    model_group: Final = litellm_router_instance.get_model_group(id=deployment)
+    model_group: Final = ctx.registry().resolve(deployment, kind="group_of_id")
     is_single_deployment_model_group = False
     if model_group is not None and len(model_group) == 1:
         is_single_deployment_model_group = not (
-            litellm_router_instance.routing_group_has_alternatives(requested_model_group)
-            or litellm_router_instance.team_model_has_alternatives(deployment)
+            ctx.registry().resolve(requested_model_group, kind="routing_group_alternatives")
+            or ctx.registry().resolve(deployment, kind="team_model_alternatives")
         )
-    is_lone_deployment: Final = is_single_deployment_model_group and not _has_fallback_group(
-        litellm_router_instance, requested_model_group
-    )
+    is_lone_deployment: Final = is_single_deployment_model_group and not _has_fallback_group(ctx, requested_model_group)
 
     exception_status_int: Final = cast_exception_status_to_int(exception_status)
-    dep_policy, dep_allowed_fails = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
+    dep_policy, dep_allowed_fails = _get_deployment_cooldown_policy(ctx, deployment)
     if (
         is_single_deployment_model_group
         and exception_status_int == 402
         and _resolve_allowed_fails_from_policy(dep_policy, original_exception) is None
-        and litellm_router_instance.get_allowed_fails_from_policy(original_exception) is None
+        and ctx.settings().allowed_fails_for(original_exception) is None
     ):
         return False
 
     ## CHECK DEPLOYMENT-LEVEL POLICY FIRST (overrides router-level)
     if dep_policy is not None or dep_allowed_fails is not None:
         return _should_cooldown_based_on_deployment_policy(
-            litellm_router_instance,
+            ctx,
             deployment,
             original_exception,
             dep_policy,
@@ -519,16 +539,11 @@ def _should_cooldown_deployment(
         )
 
     ## BASE CASE - single deployment
-    if (
-        litellm_router_instance.allowed_fails_policy is None
-        and _is_allowed_fails_set_on_router(litellm_router_instance=litellm_router_instance) is False
-    ):
+    if ctx.settings().allowed_fails_policy is None and _is_allowed_fails_set_on_router(ctx=ctx) is False:
         num_successes_this_minute: Final = get_deployment_successes_for_current_minute(
-            litellm_router_instance=litellm_router_instance, deployment_id=deployment
+            ctx=ctx, deployment_id=deployment
         )
-        num_fails_this_minute: Final = get_deployment_failures_for_current_minute(
-            litellm_router_instance=litellm_router_instance, deployment_id=deployment
-        )
+        num_fails_this_minute: Final = get_deployment_failures_for_current_minute(ctx=ctx, deployment_id=deployment)
 
         total_requests_this_minute: Final = num_successes_this_minute + num_fails_this_minute
         percent_fails = 0.0
@@ -560,10 +575,10 @@ def _should_cooldown_deployment(
 
         return False
     else:
-        if is_lone_deployment and litellm_router_instance.get_allowed_fails_from_policy(original_exception) is None:
+        if is_lone_deployment and ctx.settings().allowed_fails_for(original_exception) is None:
             return False
         return should_cooldown_based_on_allowed_fails_policy(
-            litellm_router_instance=litellm_router_instance,
+            ctx=ctx,
             deployment=deployment,
             original_exception=original_exception,
         )
@@ -571,8 +586,9 @@ def _should_cooldown_deployment(
     return False
 
 
+@renamed_router_param("litellm_router_instance")
 def set_cooldown_deployments(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     original_exception: Exception,
     exception_status: str | int,
     deployment: str | None = None,
@@ -595,7 +611,7 @@ def set_cooldown_deployments(
 
     if (
         _should_run_cooldown_logic(
-            litellm_router_instance=litellm_router_instance,
+            ctx=ctx,
             deployment=deployment,
             exception_status=exception_status,
             original_exception=original_exception,
@@ -612,13 +628,13 @@ def set_cooldown_deployments(
     verbose_router_logger.debug("Attempting to add %s to cooldown list", deployment)
 
     if _should_cooldown_deployment(
-        litellm_router_instance=litellm_router_instance,
+        ctx=ctx,
         deployment=deployment,
         exception_status=exception_status,
         original_exception=original_exception,
         requested_model_group=requested_model_group,
     ):
-        litellm_router_instance.cooldown_cache.add_deployment_to_cooldown(
+        ctx.health().cooldowns.add_deployment_to_cooldown(
             model_id=deployment,
             original_exception=original_exception,
             exception_status=exception_status_int,
@@ -628,7 +644,7 @@ def set_cooldown_deployments(
         # Trigger cooldown callback handler
         asyncio.create_task(
             router_cooldown_event_callback(
-                litellm_router_instance=litellm_router_instance,
+                ctx=ctx,
                 deployment_id=deployment,
                 exception_status=exception_status,
                 cooldown_time=time_to_cooldown,
@@ -641,15 +657,16 @@ def set_cooldown_deployments(
 _set_cooldown_deployments = set_cooldown_deployments
 
 
+@renamed_router_param("litellm_router_instance")
 async def async_get_cooldown_deployments(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     parent_otel_span: Span | None,
 ) -> list[str]:
     """
     Async implementation of 'get_cooldown_deployments'
     """
-    model_ids: Final = litellm_router_instance.get_model_ids()
-    cooldown_models: Final = await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
+    model_ids: Final = ctx.registry().names(kind="ids")
+    cooldown_models: Final = await ctx.health().cooldowns.async_get_active_cooldowns(
         model_ids=model_ids,
         parent_otel_span=parent_otel_span,
     )
@@ -670,15 +687,16 @@ async def async_get_cooldown_deployments(
 _async_get_cooldown_deployments = async_get_cooldown_deployments
 
 
+@renamed_router_param("litellm_router_instance")
 async def async_get_cooldown_deployments_with_debug_info(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     parent_otel_span: Span | None,
 ) -> list[tuple[str, CooldownCacheValue]]:
     """
     Async implementation of 'get_cooldown_deployments'
     """
-    model_ids: Final = litellm_router_instance.get_model_ids()
-    cooldown_models: Final = await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
+    model_ids: Final = ctx.registry().names(kind="ids")
+    cooldown_models: Final = await ctx.health().cooldowns.async_get_active_cooldowns(
         model_ids=model_ids, parent_otel_span=parent_otel_span
     )
 
@@ -689,7 +707,8 @@ async def async_get_cooldown_deployments_with_debug_info(
 _async_get_cooldown_deployments_with_debug_info = async_get_cooldown_deployments_with_debug_info
 
 
-def get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_otel_span: Span | None) -> list[str]:
+@renamed_router_param("litellm_router_instance")
+def get_cooldown_deployments(ctx: "RoutingContext", parent_otel_span: Span | None) -> list[str]:
     """
     Get the list of models being cooled down for this minute
     """
@@ -698,9 +717,9 @@ def get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_otel
     # ----------------------
     # Return cooldown models
     # ----------------------
-    model_ids: Final = litellm_router_instance.get_model_ids()
+    model_ids: Final = ctx.registry().names(kind="ids")
 
-    cooldown_models: Final = litellm_router_instance.cooldown_cache.get_active_cooldowns(
+    cooldown_models: Final = ctx.health().cooldowns.get_active_cooldowns(
         model_ids=model_ids, parent_otel_span=parent_otel_span
     )
 
@@ -719,28 +738,30 @@ def get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_otel
 _get_cooldown_deployments = get_cooldown_deployments
 
 
-def _deployment_api_base(litellm_router_instance: LitellmRouter, model_id: str) -> str | None:
-    deployment: Final = litellm_router_instance.get_deployment(model_id=model_id)
+def _deployment_api_base(ctx: "RoutingContext", model_id: str) -> str | None:
+    deployment: Final = ctx.registry().deployment(model_id)
     api_base: Final = deployment.litellm_params.api_base if deployment else None
     return None if api_base is None else mask_api_base_credentials(api_base)
 
 
+@renamed_router_param("litellm_router_instance")
 def get_cooldown_deployment_info(
-    litellm_router_instance: LitellmRouter, route_model_ids: Collection[str], cooldown_list: Sequence[str]
+    ctx: "RoutingContext", route_model_ids: Collection[str], cooldown_list: Sequence[str]
 ) -> tuple[CooldownDeploymentInfo, ...]:
     """
     The deployments the router resolved for this request (`route_model_ids`) that are in `cooldown_list`, each
     with its masked api_base
     """
     return tuple(
-        CooldownDeploymentInfo(model_id=model_id, api_base=_deployment_api_base(litellm_router_instance, model_id))
+        CooldownDeploymentInfo(model_id=model_id, api_base=_deployment_api_base(ctx, model_id))
         for model_id in cooldown_list
         if model_id in route_model_ids
     )
 
 
+@renamed_router_param("litellm_router_instance")
 def should_cooldown_based_on_allowed_fails_policy(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     deployment: str,
     original_exception: Exception,
     allowed_fails_override: int | None = None,
@@ -753,7 +774,7 @@ def should_cooldown_based_on_allowed_fails_policy(
     When *allowed_fails_override* / *cooldown_time_override* are supplied they
     take precedence over the router-level values (used by deployment-level overrides).
 
-    The counter lives in the router's shared ``DualCache`` (Redis when configured), so
+    The counter lives in the cooldown store (Redis when configured), so
     every worker process increments the same key and the threshold applies fleet-wide.
 
     When *cache_key_suffix* is supplied the fail counter is keyed as
@@ -764,48 +785,26 @@ def should_cooldown_based_on_allowed_fails_policy(
     - True if fails exceed the allowed limit (should cooldown)
     - False if fails are within the allowed limit (should not cooldown)
     """
-    allowed_fails_from_policy: Final = litellm_router_instance.get_allowed_fails_from_policy(
-        exception=original_exception
-    )
+    allowed_fails_from_policy: Final = ctx.settings().allowed_fails_for(original_exception)
     allowed_fails: Final = (
         allowed_fails_override
         if allowed_fails_override is not None
-        else (
-            allowed_fails_from_policy
-            if allowed_fails_from_policy is not None
-            else litellm_router_instance.allowed_fails
-        )
+        else (allowed_fails_from_policy if allowed_fails_from_policy is not None else ctx.settings().allowed_fails)
     )
     cooldown_time: Final = (
         cooldown_time_override
         if cooldown_time_override is not None
-        else (litellm_router_instance.cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS)
+        else (ctx.settings().cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS)
     )
 
-    base_key: Final = f"deployment:{deployment}:allowed_fails"
-    cache_key: Final = f"{base_key}:{cache_key_suffix}" if cache_key_suffix else base_key
-    updated_fails: Final = _increment_allowed_fails(
-        cache=litellm_router_instance.cache, cache_key=cache_key, ttl=cooldown_time
+    updated_fails: Final = ctx.health().cooldowns.cooldown_store.increment_allowed_fails(
+        deployment, cache_key_suffix, cooldown_time
     )
     return updated_fails > allowed_fails
 
 
-def _increment_allowed_fails(cache: DualCache, cache_key: str, ttl: float) -> int:
-    """
-    Return the fleet-wide fail count. ``DualCache.increment_cache`` bumps the in-memory tier
-    before Redis and re-raises a Redis error, so a Redis outage degrades to this worker's own count.
-    """
-    with service_target(ROUTER_COOLDOWNS_TARGET):
-        try:
-            return cache.increment_cache(key=cache_key, value=1, ttl=ttl)
-        except Exception as e:  # noqa: BLE001  # a Redis outage must not stop failing deployments from cooling down
-            verbose_router_logger.warning("allowed_fails counter fell back to this worker's in-memory count: %s", e)
-            local_fails: Final = cache.get_cache(key=cache_key, local_only=True)
-            return local_fails if isinstance(local_fails, int) else 0
-
-
 def _is_allowed_fails_set_on_router(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
 ) -> bool:
     """
     Check if Router.allowed_fails was passed to the Router or is a Non-default Value
@@ -815,16 +814,16 @@ def _is_allowed_fails_set_on_router(
     - True if Router.allowed_fails is a Non-default Value
     - False if Router.allowed_fails is None, or is the Default Value and was not passed
     """
-    if litellm_router_instance.allowed_fails is None:
+    if ctx.settings().allowed_fails is None:
         return False
-    if litellm_router_instance.explicit_allowed_fails is not None:
+    if ctx.explicit_allowed_fails is not None:
         return True
-    if litellm_router_instance.allowed_fails != litellm.allowed_fails:
+    if ctx.settings().allowed_fails != litellm.allowed_fails:
         return True
     return False
 
 
-def cast_exception_status_to_int(exception_status: str | int) -> int:
+def cast_exception_status_to_int(exception_status: object) -> int:
     if isinstance(exception_status, str):
         try:
             exception_status = int(exception_status)
@@ -833,6 +832,13 @@ def cast_exception_status_to_int(exception_status: str | int) -> int:
                 "Unable to cast exception status to int %s. Defaulting to status=500.", exception_status
             )
             exception_status = 500
+    # A bool or a number no HTTP status can be is read as a 500, as the Rust router core reads it.
+    if (
+        isinstance(exception_status, bool)
+        or not isinstance(exception_status, int)
+        or not 0 <= exception_status <= 65535
+    ):
+        return 500
     return exception_status
 
 
@@ -858,6 +864,45 @@ def is_caller_timeout_408(
 
 def is_stream_stall(exception: BaseException) -> bool:
     return isinstance(exception, litellm.Timeout) and isinstance(exception.__cause__, MidStreamFallbackError)
+
+
+def is_caller_entra_credential_failure(
+    deployment: Deployment | None,
+    router_defaults: Mapping[str, object],
+    model_call_details: Mapping[str, object],
+    exception_status: str | int,
+    exception: BaseException,
+) -> bool:
+    if cast_exception_status_to_int(exception_status) != 401 or deployment is None:
+        return False
+
+    from litellm.llms.azure.common_utils import caused_by_entra_rejection
+
+    if not caused_by_entra_rejection(exception):
+        return False
+    from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_LITELLM_PARAM_KEYS, azure_entra_environment_defaults
+
+    call_params: Final = _CREDENTIAL_VALUES_ADAPTER.validate_python(model_call_details.get("litellm_params") or {})
+
+    credential_name: Final = deployment.litellm_params.litellm_credential_name
+    configured_by_precedence: Final[tuple[Mapping[str, object], ...]] = (
+        router_defaults,
+        _CREDENTIAL_VALUES_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True)),
+        _CREDENTIAL_VALUES_ADAPTER.validate_python(
+            CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
+        ),
+    )
+    environment: Final = azure_entra_environment_defaults()
+    return any(
+        call_params.get(key) is not None
+        and (call_params.get(key) or environment.get(key))
+        != (_first_configured(configured_by_precedence, key) or environment.get(key))
+        for key in AZURE_ENTRA_LITELLM_PARAM_KEYS
+    )
+
+
+def _first_configured(sources: tuple[Mapping[str, object], ...], key: str) -> object:
+    return next((value for source in sources if (value := source.get(key)) is not None), None)
 
 
 def is_caller_scoped_auth_failure(deployment: Deployment | None, exception_status: str | int) -> bool:

@@ -10,7 +10,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm import ModelResponse, Router
-from litellm.utils import _invalidate_model_cost_lowercase_map  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
+from litellm.litellm_core_utils.model_cost_table import publish
 
 _OPUS_4_8: Final = "us.anthropic.claude-opus-4-8"
 _JSON_TOOL: Final = "json_tool_call"
@@ -87,7 +87,7 @@ def opus_4_8_opted_in_for_the_process(monkeypatch: pytest.MonkeyPatch) -> Iterat
     )
     yield
     monkeypatch.undo()
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def _model(route: str) -> str:

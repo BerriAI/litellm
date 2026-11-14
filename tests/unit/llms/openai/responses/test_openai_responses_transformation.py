@@ -1,4 +1,6 @@
+import copy
 import json
+import logging
 from collections.abc import Callable, Mapping
 from types import SimpleNamespace
 from typing import Final, cast
@@ -15,16 +17,20 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig
+from litellm.llms.bedrock_mantle.responses.transformation import BedrockMantleResponsesAPIConfig
 from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     ImageGenerationPartialImageEvent,
     IncompleteDetails,
     OutputTextDeltaEvent,
     ResponseAPIUsage,
     ResponseCompletedEvent,
+    ResponseInputParam,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
@@ -537,6 +543,50 @@ class TestOpenAIResponsesAPIConfig:
 
         assert "cache_control" not in result["tools"][0]
         assert result["tools"][0]["name"] == "get_weather"
+
+    def test_transform_does_not_strip_cache_control_from_the_callers_input(self):
+        """Stripping for OpenAI must not reach back into the caller's own objects.
+
+        `filter_value_from_dict` deletes the key in place and recurses, and
+        `_validate_input_param` passes plain dict items through by reference, so
+        the caller's input list used to lose its cache breakpoints. Reusing that
+        list on Anthropic or Bedrock afterwards then silently lost prompt caching.
+        Same defect as the Chat Completions path.
+        """
+        input_with_cache_control = [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "a long cached system prompt",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+        tools_with_cache_control = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "parameters": {"type": "object"},
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        input_before = copy.deepcopy(input_with_cache_control)
+        tools_before = copy.deepcopy(tools_with_cache_control)
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_with_cache_control,
+            response_api_optional_request_params={"tools": tools_with_cache_control},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "cache_control" not in json.dumps(result)
+        assert input_with_cache_control == input_before
+        assert tools_with_cache_control == tools_before
 
     def test_transform_preserves_input_without_cache_control(self):
         """Inputs without cache_control must pass through unmodified."""
@@ -1302,7 +1352,15 @@ class TestOpenAIResponsesAPIConfig:
         )
         return list(bridged.output)
 
-    @pytest.mark.parametrize("config", [OpenAIResponsesAPIConfig(), AzureOpenAIResponsesAPIConfig()])
+    @pytest.mark.parametrize(
+        "config",
+        [
+            OpenAIResponsesAPIConfig(),
+            AzureOpenAIResponsesAPIConfig(),
+            BedrockOpenAIResponsesConfig(),
+            BedrockMantleResponsesAPIConfig(),
+        ],
+    )
     def test_claude_reasoning_minted_by_the_bridge_is_dropped_before_the_history_reaches_openai(self, config):
         saved_claude_turn = json.loads(
             json.dumps([item.model_dump() for item in self._claude_turn_bridged_to_responses_output()])
@@ -2477,6 +2535,105 @@ class TestResponsesSurfaceSharesTheEffortRule:
             drop_params=True,
         )
         assert mapped["reasoning"] == {"summary": "auto"}
+
+    @pytest.mark.parametrize(
+        ("declared_reasoning_efforts", "suggests_declared_levels"),
+        [((), True), (None, False)],
+        ids=["responses route reads model_info levels", "compact route reads none"],
+    )
+    def test_dropping_a_refused_effort_logs_one_warning_naming_only_the_fix_its_route_honors(
+        self,
+        local_model_cost_map: None,
+        caplog: pytest.LogCaptureFixture,
+        declared_reasoning_efforts: tuple[str, ...] | None,
+        suggests_declared_levels: bool,
+    ) -> None:
+        refused: Final = next(
+            level
+            for level in ("none", "minimal", "low")
+            if litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is False
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            mapped: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+                model="gpt-6.1-sol",
+                responses_api_provider_config=OpenAIResponsesAPIConfig(),
+                response_api_optional_params={"reasoning": {"effort": refused}},
+                drop_params=True,
+                declared_reasoning_efforts=declared_reasoning_efforts,
+            )
+
+        assert "reasoning" not in mapped
+        drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+        assert len(drop_warnings) == 1
+        assert repr(refused) in drop_warnings[0] and "gpt-6.1-sol" in drop_warnings[0]
+        assert ("model_info.reasoning_effort_levels" in drop_warnings[0]) is suggests_declared_levels
+        assert "model_info.base_model" not in drop_warnings[0]
+
+    def test_dropping_reasoning_for_a_model_without_supports_reasoning_logs_one_warning(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium"}},
+                model="gpt-4o",
+                drop_params=True,
+            )
+
+        assert "reasoning" not in mapped
+        drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+        assert len(drop_warnings) == 1
+        assert all(fragment in drop_warnings[0] for fragment in ("'medium'", "gpt-4o", "supports_reasoning"))
+
+    def test_turning_reasoning_off_for_a_model_without_supports_reasoning_drops_it_silently(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "none", "summary": "auto"}},
+                model="gpt-4o",
+                drop_params=True,
+            )
+
+        assert "reasoning" not in mapped
+        assert not [record for record in caplog.records if "Dropping" in record.getMessage()]
+
+    def test_turning_reasoning_off_warns_when_only_custom_pricing_describes_the_model(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        litellm.register_model(
+            {
+                "pricing-only-test-model": {
+                    "litellm_provider": "openai",
+                    "mode": "responses",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                }
+            }
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "none"}},
+                model="pricing-only-test-model",
+                drop_params=True,
+            )
+
+        assert "reasoning" not in mapped
+        drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+        assert len(drop_warnings) == 1
+        assert all(fragment in drop_warnings[0] for fragment in ("'none'", "pricing-only-test-model"))
+
+    def test_a_forwarded_effort_logs_no_drop_warning(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium"}},
+                model="gpt-6.1-sol",
+                drop_params=True,
+            )
+
+        assert mapped["reasoning"] == {"effort": "medium"}
+        assert not [record for record in caplog.records if "Dropping" in record.getMessage()]
 
     @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
     def test_gpt5_3_codex_forwards_exactly_the_effort_levels_its_map_row_allows(self, local_model_cost_map, level):
@@ -4244,6 +4401,420 @@ async def test_extra_body_merges_with_request_data(extra_body_mock_response_data
         assert "temperature" in request_body
         assert "custom_field" in request_body
         assert request_body["custom_field"] == "custom_value"
+
+
+_MALFORMED_MARKERS: Final = ("yes", 1, {"mode": "bogus"}, {"mode": "bogus", "ttl": "30m"})
+_MALFORMED_MARKER_IDS: Final = ("string", "int", "bogus-mode", "bogus-mode-with-ttl")
+_UNSUPPORTED_TTL_MARKER: Final = {"mode": "explicit", "ttl": "1h"}
+_VALID_MARKERS: Final = ({"mode": "explicit"}, {"mode": "explicit", "ttl": "30m"})
+_VALID_MARKER_IDS: Final = ("explicit", "explicit-30m")
+_PARTS: Final[Mapping[str, Mapping[str, object]]] = {
+    "input_text": {"type": "input_text", "text": "Say ok"},
+    "input_image": {"type": "input_image", "image_url": "https://example.com/a.png"},
+    "input_file": {"type": "input_file", "file_id": "file-abc"},
+}
+_CONFIGS: Final = (OpenAIResponsesAPIConfig(), AzureOpenAIResponsesAPIConfig())
+_CONFIG_IDS: Final = ("openai", "azure")
+
+
+def _marked_message(part_type: str, marker: object) -> list[dict[str, object]]:
+    return [{"type": "message", "role": "user", "content": [{**_PARTS[part_type], "prompt_cache_breakpoint": marker}]}]
+
+
+def _transformed_input(
+    config: BaseResponsesAPIConfig, input: str | list[dict[str, object]], litellm_params: GenericLiteLLMParams
+) -> object:
+    request: Final = config.transform_responses_api_request(
+        model="gpt-6.1-sol",
+        input=cast("ResponseInputParam", input),  # cast-ok: plain dicts shaped like the SDK's input items
+        response_api_optional_request_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    return request["input"]
+
+
+def _single_part(transformed_input: object) -> Mapping[str, object]:
+    (item,) = cast(list[Mapping[str, object]], transformed_input)
+    (part,) = cast(list[Mapping[str, object]], item["content"])
+    return part
+
+
+@pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
+@pytest.mark.parametrize("part_type", tuple(_PARTS))
+@pytest.mark.parametrize("marker", _MALFORMED_MARKERS, ids=_MALFORMED_MARKER_IDS)
+def test_malformed_prompt_cache_breakpoint_is_dropped_under_deployment_drop_params(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig, part_type: str, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    transformed: Final = _transformed_input(
+        config, _marked_message(part_type, marker), GenericLiteLLMParams(drop_params=True)
+    )
+    assert _single_part(transformed) == _PARTS[part_type]
+
+
+@pytest.mark.parametrize("marker", _MALFORMED_MARKERS, ids=_MALFORMED_MARKER_IDS)
+def test_malformed_prompt_cache_breakpoint_is_dropped_under_global_drop_params(
+    monkeypatch: pytest.MonkeyPatch, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    transformed: Final = _transformed_input(_CONFIGS[0], _marked_message("input_text", marker), GenericLiteLLMParams())
+    assert _single_part(transformed) == _PARTS["input_text"]
+
+
+@pytest.mark.parametrize("drop_params", (False, None), ids=("false", "null"))
+@pytest.mark.parametrize("marker", _MALFORMED_MARKERS, ids=_MALFORMED_MARKER_IDS)
+def test_malformed_prompt_cache_breakpoint_is_forwarded_verbatim_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, marker: object, drop_params: bool | None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=drop_params)) == input
+
+
+@pytest.mark.parametrize("marker", _MALFORMED_MARKERS, ids=_MALFORMED_MARKER_IDS)
+def test_a_non_flag_deployment_drop_params_keeps_the_marker_like_the_param_mapper_does(
+    monkeypatch: pytest.MonkeyPatch, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params="maybe")) == input
+
+
+@pytest.mark.parametrize("drop_params", (True, False), ids=("drop", "keep"))
+@pytest.mark.parametrize("marker", _VALID_MARKERS, ids=_VALID_MARKER_IDS)
+def test_valid_prompt_cache_breakpoint_reaches_the_wire_under_both_settings(
+    monkeypatch: pytest.MonkeyPatch, marker: Mapping[str, str], drop_params: bool
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=drop_params)) == input
+
+
+@pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
+@pytest.mark.parametrize("part_type", tuple(_PARTS))
+def test_an_unsupported_ttl_is_dropped_and_the_explicit_mode_kept_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig, part_type: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message(part_type, _UNSUPPORTED_TTL_MARKER)
+    trimmed: Final = _transformed_input(config, input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(trimmed) == {**_PARTS[part_type], "prompt_cache_breakpoint": {"mode": "explicit"}}
+    assert _transformed_input(config, input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+@pytest.mark.parametrize(
+    "config, marker, wire_marker",
+    [
+        (OpenAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "12h"}, {"mode": "explicit", "ttl": "12h"}),
+        (AzureOpenAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "30m"}, {"mode": "explicit", "ttl": "30m"}),
+        (AzureOpenAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "12h"}, {"mode": "explicit"}),
+        (AzureAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "12h"}, {"mode": "explicit"}),
+    ],
+    ids=("openai-keeps-12h", "azure-keeps-30m", "azure-drops-12h", "azure-ai-drops-12h"),
+)
+def test_drop_params_keeps_only_a_ttl_the_target_responses_api_accepts(
+    monkeypatch: pytest.MonkeyPatch,
+    config: BaseResponsesAPIConfig,
+    marker: Mapping[str, str],
+    wire_marker: Mapping[str, str],
+) -> None:
+    """Azure OpenAI Responses answered 400 for a 12h breakpoint ttl and 200 for 30m on 2026-10-29, and Azure AI
+    Foundry Responses did the same on 2026-10-30."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    trimmed: Final = _transformed_input(config, input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(trimmed) == {**_PARTS["input_text"], "prompt_cache_breakpoint": wire_marker}
+    assert _transformed_input(config, input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+@pytest.mark.parametrize(
+    "config, litellm_params",
+    [
+        (XAIResponsesAPIConfig(), GenericLiteLLMParams(drop_params=True)),
+        (HostedVLLMResponsesAPIConfig(), GenericLiteLLMParams(drop_params=True, api_base="http://localhost:8000/v1")),
+        (OpenAIResponsesAPIConfig(), GenericLiteLLMParams(drop_params=True, api_base="http://localhost:8000/v1")),
+    ],
+    ids=("xai", "hosted-vllm", "openai-compatible-host"),
+)
+def test_a_responses_api_not_known_to_take_breakpoints_gets_a_marker_whole_or_not_at_all(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig, litellm_params: GenericLiteLLMParams
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    unsupported_ttl: Final = _marked_message("input_text", _UNSUPPORTED_TTL_MARKER)
+    assert _single_part(_transformed_input(config, unsupported_ttl, litellm_params)) == _PARTS["input_text"]
+    openai_ttl: Final = _marked_message("input_text", {"mode": "explicit", "ttl": "12h"})
+    assert _transformed_input(config, openai_ttl, litellm_params) == openai_ttl
+
+
+def test_a_custom_host_opted_in_with_prompt_cache_options_keeps_the_mode_of_a_marker_with_an_unsupported_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = OpenAIResponsesAPIConfig().transform_responses_api_request(
+        model="gpt-6.1-sol",
+        input=cast("ResponseInputParam", _marked_message("input_text", _UNSUPPORTED_TTL_MARKER)),
+        response_api_optional_request_params={"prompt_cache_options": {"mode": "explicit"}},
+        litellm_params=GenericLiteLLMParams(drop_params=True, api_base="https://gateway.example/v1"),
+        headers={},
+    )
+    assert _single_part(request["input"]) == {**_PARTS["input_text"], "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+
+def test_prompt_cache_breakpoint_unknown_key_is_trimmed_under_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", {"mode": "explicit", "note": "kept"})
+    dropped: Final = _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(dropped)["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+def test_malformed_prompt_cache_breakpoint_on_a_tool_output_part_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    marked_output: Final = [{"type": "input_text", "text": "42", "prompt_cache_breakpoint": "yes"}]
+    input: Final[list[dict[str, object]]] = [{"type": "function_call_output", "call_id": "call_1", "output": marked_output}]
+    (item,) = cast(
+        list[Mapping[str, object]], _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True))
+    )
+    assert item["output"] == [{"type": "input_text", "text": "42"}]
+
+
+@pytest.mark.parametrize("input", ("hi", [{"type": "message", "role": "user", "content": "hi"}]), ids=("string", "unmarked"))
+def test_input_without_a_marker_is_untouched_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, input: str | list[dict[str, object]]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True)) == input
+
+
+def _transformed_input_for(
+    model: str,
+    input: list[dict[str, object]],
+    litellm_params: GenericLiteLLMParams,
+    config: BaseResponsesAPIConfig = _CONFIGS[0],
+) -> object:
+    request: Final = config.transform_responses_api_request(
+        model=model,
+        input=cast("ResponseInputParam", input),  # cast-ok: plain dicts shaped like the SDK's input items
+        response_api_optional_request_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    return request["input"]
+
+
+@pytest.mark.parametrize(
+    "marker", (*_VALID_MARKERS, *_MALFORMED_MARKERS), ids=(*_VALID_MARKER_IDS, *_MALFORMED_MARKER_IDS)
+)
+def test_every_prompt_cache_breakpoint_is_dropped_under_drop_params_for_a_model_without_breakpoints(
+    monkeypatch: pytest.MonkeyPatch, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    dropped: Final = _transformed_input_for("gpt-5.4-mini", input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(dropped) == _PARTS["input_text"]
+    assert _transformed_input_for("gpt-5.4-mini", input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("o4-mini", "ft:gpt-4o-mini-2024-07-18:my-org::abc123", "ft:o4-mini-2025-04-16:my-org::abc123"),
+    ids=("o-series", "fine-tune-of-older-gpt", "fine-tune-of-o-series"),
+)
+def test_a_valid_marker_is_dropped_under_drop_params_on_a_model_known_to_lack_breakpoints(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", {"mode": "explicit"})
+    dropped: Final = _transformed_input_for(model, input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(dropped) == _PARTS["input_text"]
+
+
+@pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
+def test_a_cost_map_entry_registered_under_the_deployment_name_keeps_a_valid_marker_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    registered: Final = {"id": "litellm-qa-sol-alias", "supports_vision": True, "input_cost_per_token": 1e-6}
+    monkeypatch.setitem(litellm.model_cost, "litellm-qa-sol-alias", registered)
+    valid: Final = _marked_message("input_text", {"mode": "explicit"})
+    assert _transformed_input_for("litellm-qa-sol-alias", valid, GenericLiteLLMParams(drop_params=True), config) == valid
+
+
+@pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
+def test_a_valid_marker_survives_drop_params_on_a_deployment_name_with_unknown_breakpoint_support(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm_params: Final = GenericLiteLLMParams(drop_params=True)
+    valid: Final = _marked_message("input_text", {"mode": "explicit"})
+    malformed: Final = _marked_message("input_text", {"mode": "bogus"})
+    assert _transformed_input_for("litellm-qa-sol-alias", valid, litellm_params, config) == valid
+    dropped: Final = _transformed_input_for("litellm-qa-sol-alias", malformed, litellm_params, config)
+    assert _single_part(dropped) == _PARTS["input_text"]
+
+
+@pytest.mark.parametrize("ttl", ("30m", "12h"))
+@pytest.mark.parametrize(
+    "config",
+    (OpenAIResponsesAPIConfig(), AzureOpenAIResponsesAPIConfig(), AzureAIResponsesAPIConfig()),
+    ids=("openai", "azure", "azure_ai"),
+)
+def test_a_deployment_with_unknown_breakpoint_support_gets_a_marker_whole_or_not_at_all(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig, ttl: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm_params: Final = GenericLiteLLMParams(drop_params=True)
+    supported_ttl: Final = _marked_message("input_text", {"mode": "explicit", "ttl": ttl})
+    unsupported_ttl: Final = _marked_message("input_text", _UNSUPPORTED_TTL_MARKER)
+    assert _transformed_input_for("litellm-qa-sol-alias", supported_ttl, litellm_params, config) == supported_ttl
+    dropped: Final = _transformed_input_for("litellm-qa-sol-alias", unsupported_ttl, litellm_params, config)
+    assert _single_part(dropped) == _PARTS["input_text"]
+
+
+@pytest.mark.parametrize(
+    "config", (AzureOpenAIResponsesAPIConfig(), AzureAIResponsesAPIConfig()), ids=("azure", "azure_ai")
+)
+def test_an_azure_deployment_declaring_a_breakpoint_reader_keeps_the_mode_of_a_marker_with_an_unsupported_ttl(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm_params: Final = GenericLiteLLMParams(drop_params=True, base_model="gpt-6.1-sol")
+    unsupported_ttl: Final = _marked_message("input_text", _UNSUPPORTED_TTL_MARKER)
+    trimmed: Final = _transformed_input_for("litellm-qa-sol-alias", unsupported_ttl, litellm_params, config)
+    assert _single_part(trimmed) == {**_PARTS["input_text"], "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+
+def _declaring_base_model(where: str, base_model: str) -> GenericLiteLLMParams:
+    if where == "litellm_params":
+        return GenericLiteLLMParams(drop_params=True, base_model=base_model)
+    return GenericLiteLLMParams(drop_params=True, model_info={"base_model": base_model})
+
+
+@pytest.mark.parametrize("where", ("litellm_params", "model_info"))
+def test_a_declared_base_model_decides_whether_a_valid_marker_survives_drop_params(
+    monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", {"mode": "explicit"})
+    kept: Final = _transformed_input_for("gpt-5.4-mini-prod", input, _declaring_base_model(where, "gpt-6.1-sol"))
+    assert kept == input
+    dropped: Final = _transformed_input_for("prod-deployment", input, _declaring_base_model(where, "gpt-5.4-mini"))
+    assert _single_part(dropped) == _PARTS["input_text"]
+
+
+def test_a_deployment_that_marks_cache_control_keeps_the_callers_own_marker_whatever_its_base_model_says(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    cached: Final = {"type": "input_text", "text": "a", "cache_control": {"type": "ephemeral"}}
+    marked: Final = {"type": "input_text", "text": "b", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    input: Final = [{"type": "message", "role": "user", "content": [cached, marked]}]
+    transformed: Final = _transformed_input_for("gpt-6.1-sol", input, _declaring_base_model("model_info", "gpt-5.5"))
+    (item,) = cast(list[Mapping[str, object]], transformed)
+    parts: Final = cast(list[Mapping[str, object]], item["content"])
+    assert [part.get("prompt_cache_breakpoint") for part in parts] == [{"mode": "explicit"}, {"mode": "explicit"}]
+
+
+def test_a_model_that_takes_markers_sends_kept_parts_byte_for_byte_and_drops_only_the_rejected_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    kept: Final = [
+        {"type": "input_text", "text": "a", "prompt_cache_breakpoint": None},
+        {"prompt_cache_breakpoint": {"mode": "explicit"}, "type": "input_text", "text": "b"},
+    ]
+    rejected: Final = {"type": "input_text", "text": "c"}
+    bogus_mode: Final = {"prompt_cache_breakpoint": {"mode": "bogus"}}
+    input: Final = [
+        {"type": "message", "role": "user", "content": kept},
+        {"type": "message", "role": "user", "content": [{**bogus_mode, **rejected}]},
+    ]
+    transformed: Final = _transformed_input_for("gpt-6.1-sol", input, GenericLiteLLMParams(drop_params=True))
+    assert json.dumps(transformed) == json.dumps(
+        [{"type": "message", "role": "user", "content": kept}, {"type": "message", "role": "user", "content": [rejected]}]
+    )
+
+
+@pytest.mark.parametrize("content", ("Say ok", [{"type": "input_text", "text": "Say ok"}]), ids=("string", "parts"))
+@pytest.mark.parametrize("marker", (_VALID_MARKERS[0], "yes"), ids=("explicit", "string"))
+def test_a_prompt_cache_breakpoint_on_the_message_item_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, content: object, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    unmarked: Final[dict[str, object]] = {"type": "message", "role": "user", "content": content}
+    input: Final = [{**unmarked, "prompt_cache_breakpoint": marker}]
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True)) == [unmarked]
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+def test_cache_control_still_marks_a_part_whose_own_marker_is_malformed_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    part: Final = {"type": "input_text", "text": "Say ok", "cache_control": {"type": "ephemeral"}}
+    input: Final = [{"type": "message", "role": "user", "content": [{**part, "prompt_cache_breakpoint": "yes"}]}]
+    transformed: Final = _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(transformed) == {
+        "type": "input_text",
+        "text": "Say ok",
+        "prompt_cache_breakpoint": {"mode": "explicit"},
+    }
+
+
+def _hinted_caller_input(marker: object) -> list[dict[str, object]]:
+    hint: Final = {"type": "ephemeral"}
+    marked: Final = {} if marker is None else {"prompt_cache_breakpoint": marker}
+    return [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Say ok", "cache_control": hint, **marked},
+                {"type": "input_text", "text": "Thanks", "cache_control": hint},
+            ],
+            "cache_control": hint,
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "cache_control": hint, **marked}],
+        },
+    ]
+
+
+def _caller_input_after_transform(model: str, marker: object) -> str:
+    input: Final = _hinted_caller_input(marker)
+    _CONFIGS[0].transform_responses_api_request(
+        model=model,
+        input=cast("ResponseInputParam", input),  # cast-ok: plain dicts shaped like the SDK's input items
+        response_api_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+    return json.dumps(input)
+
+
+@pytest.mark.parametrize("model", ("gpt-4.1", "gpt-6.1-sol"))
+@pytest.mark.parametrize("marker", (_VALID_MARKERS[0], "yes"), ids=("explicit", "malformed"))
+def test_a_marker_leaves_the_caller_request_that_fallbacks_and_logs_read_as_an_unmarked_one_would(
+    monkeypatch: pytest.MonkeyPatch, model: str, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    marker_json: Final = f', "prompt_cache_breakpoint": {json.dumps(marker)}'
+    unmarked: Final = _caller_input_after_transform(model, None)
+    assert _caller_input_after_transform(model, marker).replace(marker_json, "") == unmarked
+
+
+@pytest.mark.parametrize("model", ("gpt-4.1", "gpt-6.1-sol"))
+@pytest.mark.parametrize("marker", (None, _VALID_MARKERS[0], "yes"), ids=("unmarked", "explicit", "malformed"))
+def test_the_caller_input_keeps_its_cache_control_hints_for_a_fallback_deployment(
+    monkeypatch: pytest.MonkeyPatch, model: str, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    assert _caller_input_after_transform(model, marker) == json.dumps(_hinted_caller_input(marker))
 
 
 @pytest.mark.asyncio

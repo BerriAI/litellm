@@ -22,6 +22,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import claude_hosted_web_tool_arguments
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     Choices,
@@ -227,6 +228,9 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         if not output:
             return args
         for item in output:
+            hosted_arguments = claude_hosted_web_tool_arguments(item)
+            if hosted_arguments:
+                args.append(hosted_arguments)
             if isinstance(item, dict):
                 item_type = item.get("type")
                 arguments = item.get("arguments")
@@ -321,6 +325,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input_data if input_data is not None else "",
                 responses_api_request=data,
+                replay_tool_search=True,
             )
             return self.get_prompt_text_for_dlp(cast(list["AllMessageValues"], messages))
         except Exception:

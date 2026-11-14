@@ -20,10 +20,9 @@ class TestGetFileContentsFromS3:
     """Test suite for S3 config loading functionality."""
 
     @patch("boto3.client")
-    @patch("litellm.main.bedrock_converse_chat_completion")
     @patch("yaml.safe_load")
     def test_get_file_contents_from_s3_no_temp_file_creation(
-        self, mock_yaml_load, mock_bedrock, mock_boto3_client
+        self, mock_yaml_load, mock_boto3_client, monkeypatch
     ):
         """
         Test that get_file_contents_from_s3 doesn't create temporary files
@@ -33,12 +32,9 @@ class TestGetFileContentsFromS3:
 
         Relevant issue/PR: https://github.com/BerriAI/litellm/pull/12078
         """
-        # Mock credentials
-        mock_credentials = MagicMock()
-        mock_credentials.access_key = "test_access_key"
-        mock_credentials.secret_key = "test_secret_key"
-        mock_credentials.token = "test_token"
-        mock_bedrock.get_credentials.return_value = mock_credentials
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test_access_key")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test_secret_key")
+        monkeypatch.setenv("AWS_SESSION_TOKEN", "test_token")
 
         # Mock S3 client and response
         mock_s3_client = MagicMock()

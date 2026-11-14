@@ -9,6 +9,8 @@ import json
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, Mock, patch
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 import httpx
 import pytest
 import respx
@@ -33,7 +35,7 @@ async def test_route_a2a_model_bypasses_router():
     }
 
     # Mock router that doesn't have the a2a model
-    mock_router = Mock()
+    mock_router = route_entry_points_to_stubs(Mock())
     mock_router.model_names = ["gpt-4", "gpt-3.5-turbo"]
     mock_router.deployment_names = []
     mock_router.has_model_id = Mock(return_value=False)
@@ -91,7 +93,7 @@ async def test_route_non_a2a_model_raises_error_if_not_in_router():
     }
 
     # Mock router without the model
-    mock_router = Mock()
+    mock_router = route_entry_points_to_stubs(Mock())
     mock_router.model_names = ["gpt-4", "gpt-3.5-turbo"]
     mock_router.deployment_names = []
     mock_router.has_model_id = Mock(return_value=False)
@@ -133,7 +135,7 @@ class _DbAgentRow:
 
 
 def _router_without_models():
-    mock_router = Mock()
+    mock_router = route_entry_points_to_stubs(Mock())
     mock_router.model_names = []
     mock_router.deployment_names = []
     mock_router.has_model_id = Mock(return_value=False)

@@ -57,7 +57,10 @@ def two_messages_before_tools(case: TranslationTestCase) -> TranslationTestCase:
 def _messages_then_tools_response(case: TranslationTestCase) -> Mapping[str, JsonValue]:
     expected: Final = case.expected_litellm_response
     if case.litellm_endpoint == "/v1/chat/completions":
-        choice: Final = items(expected["choices"])[0]
+        choices: Final = expected["choices"]
+        assert isinstance(choices, list) and isinstance(choices[0], dict), choices
+        message: Final = choices[0]["message"]
+        assert isinstance(message, dict), message
         return {
             **expected,
             "choices": [
@@ -67,7 +70,12 @@ def _messages_then_tools_response(case: TranslationTestCase) -> Mapping[str, Jso
                     "message": {
                         "role": "assistant",
                         "content": "".join(COMMENTARY),
-                        "tool_calls": object_value(choice["message"])["tool_calls"],
+                        "tool_calls": message["tool_calls"],
+                        **(
+                            {"provider_specific_fields": message["provider_specific_fields"]}
+                            if "provider_specific_fields" in message
+                            else {}
+                        ),
                     },
                 }
             ],

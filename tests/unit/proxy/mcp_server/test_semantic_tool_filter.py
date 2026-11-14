@@ -7,7 +7,7 @@ an ordered set of top K tools based on semantic similarity.
 
 import asyncio
 import sys
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -2238,3 +2238,59 @@ async def test_semantic_filter_hook_narrows_only_references_the_gateway_serves()
     )
 
     assert narrowed == [{**gateway_reference, "allowed_tools": ["srv-tool_1"]}, external_tool]
+
+
+@pytest.mark.asyncio
+async def test_expand_mcp_tools_returns_every_expanded_tool_as_a_dict():
+    from typing import Optional
+
+    from pydantic import BaseModel, ConfigDict
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.proxy.mcp_server.semantic_tool_filter import SemanticMCPToolFilter
+
+    class _FunctionTool(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
+        type: str
+        name: str
+        description: Optional[str] = None
+
+    class _LegacyFunctionTool:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def dict(self, *, exclude_none: bool) -> dict[str, object]:
+            fields = {"type": "function", "name": self.name, "description": None}
+            return {key: value for key, value in fields.items() if value is not None or not exclude_none}
+
+    plain_tool = {"type": "function", "name": "plain_tool", "parameters": {"type": "object"}}
+    unknown_tool = "opaque-tool"
+    pipeline_output = [
+        _FunctionTool(type="function", name="v2_tool"),
+        _LegacyFunctionTool("legacy_tool"),
+        plain_tool,
+        unknown_tool,
+    ]
+    auth = UserAPIKeyAuth(api_key="hashed-key")
+    gateway_reference = {"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}
+
+    process_tools = AsyncMock(return_value=(pipeline_output, {}))
+    hook = SemanticToolFilterHook(
+        SemanticMCPToolFilter(embedding_model="text-embedding-3-small", litellm_router_instance=Mock()),
+        load_openai_tools=process_tools,
+    )
+
+    expanded = await hook._expand_mcp_tools([gateway_reference], auth)
+
+    assert expanded == [
+        {"type": "function", "name": "v2_tool"},
+        {"type": "function", "name": "legacy_tool"},
+        plain_tool,
+        unknown_tool,
+    ]
+    assert process_tools.await_args.kwargs == {
+        "user_api_key_auth": auth,
+        "mcp_tools_with_litellm_proxy": [gateway_reference],
+    }

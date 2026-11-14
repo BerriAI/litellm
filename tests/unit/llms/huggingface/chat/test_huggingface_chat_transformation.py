@@ -10,7 +10,7 @@ import respx
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.huggingface.common_utils import _fetch_inference_provider_mapping
-from litellm.utils import _HUGGINGFACE_TOKENIZER_LOAD_FAILURES, _load_huggingface_tokenizer
+from litellm.utils import _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
 
 HUGGINGFACE_MODEL: Final = "meta-llama/Meta-Llama-3-8B-Instruct"
 HUGGINGFACE_ROUTER_MODEL: Final = "meta-llama/Meta-Llama-3-8B-Instruct-Turbo"
@@ -84,13 +84,11 @@ def isolate_huggingface_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator
     monkeypatch.delenv("HF_API_BASE", raising=False)
     monkeypatch.delenv("HUGGINGFACE_API_BASE", raising=False)
     monkeypatch.delenv("HUGGINGFACE_API_KEY", raising=False)
-    _load_huggingface_tokenizer.cache_clear()
-    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
     _fetch_inference_provider_mapping.cache_clear()
     yield
     _fetch_inference_provider_mapping.cache_clear()
-    _load_huggingface_tokenizer.cache_clear()
-    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
 
 PROVIDER_MAPPING_RESPONSE = {
@@ -427,6 +425,47 @@ def test_completion_with_api_base_uses_endpoint_url(respx_mock: respx.MockRouter
 
     assert str(route.calls[0].request.url) == "https://custom.huggingface.test/v1/chat/completions"
     assert response.choices[0].message.content == "Hugging Face response"
+
+
+@pytest.mark.parametrize("env_var", ["HF_API_BASE", "HUGGINGFACE_API_BASE"])
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_with_env_api_base_uses_endpoint_url(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, env_var: str
+) -> None:
+    monkeypatch.setenv(env_var, "https://custom.huggingface.test/v1/chat/completions")
+    route: Final = respx_mock.post("https://custom.huggingface.test/v1/chat/completions")
+    route.return_value = httpx.Response(200, json=HUGGINGFACE_COMPLETION_RESPONSE)
+    messages: Final = [{"role": "user", "content": "This is a test message"}]
+
+    response: Final = litellm.completion(
+        model="huggingface/tgi",
+        messages=messages,
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert json.loads(route.calls[0].request.content) == {"model": "tgi", "messages": messages}
+    assert response.choices[0].message.content == "Hugging Face response"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_with_env_api_base_converts_string_image_url(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HF_API_BASE", "https://custom.huggingface.test/v1/chat/completions")
+    route: Final = respx_mock.post("https://custom.huggingface.test/v1/chat/completions")
+    route.return_value = httpx.Response(200, json=HUGGINGFACE_COMPLETION_RESPONSE)
+    image_url: Final = "https://example.test/cat.png"
+
+    litellm.completion(
+        model="huggingface/tgi",
+        messages=[{"role": "user", "content": [{"type": "image_url", "image_url": image_url}]}],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    sent_part: Final = json.loads(route.calls[0].request.content)["messages"][0]["content"][0]
+    assert sent_part["image_url"] == {"url": image_url}
 
 
 @pytest.mark.asyncio

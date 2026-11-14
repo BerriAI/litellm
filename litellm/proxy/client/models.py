@@ -5,9 +5,12 @@ from typing import Any, Final
 import requests
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
+
 from .exceptions import NotFoundError, UnauthorizedError
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class ModelsManagementClient:
@@ -195,9 +198,11 @@ class ModelsManagementClient:
 
         # Find the matching model
         for model in models:
-            if (model_id and model.get("model_info", {}).get("id") == model_id) or (
-                model_name and model.get("model_name") == model_name
-            ):
+            if (
+                model_id
+                and decoded_json_object(_DECODED_JSON.validate_python(model.get("model_info", {}))).get("id")
+                == model_id
+            ) or (model_name and model.get("model_name") == model_name):
                 return model
 
         # If we get here, no model was found

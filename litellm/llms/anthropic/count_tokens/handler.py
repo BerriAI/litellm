@@ -39,6 +39,8 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
         tools: list[dict[str, JsonValue]] | None = None,
         system: JsonValue = None,
         optional_params: Mapping[str, JsonValue] | None = None,
+        context_management: JsonValue = None,
+        drop_params: bool = False,
     ) -> dict[str, JsonValue]:
         """
         Handle a CountTokens request using httpx.
@@ -69,6 +71,8 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
                 tools=tools,
                 system=system,
                 optional_params=optional_params,
+                context_management=context_management,
+                drop_params=drop_params,
             )
 
             verbose_logger.debug("Transformed request: %s", request_body)
@@ -79,7 +83,9 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             verbose_logger.debug("Making request to: %s", endpoint_url)
 
             # Get required headers
-            headers: Final = self.get_count_tokens_headers(auth_header)
+            headers: Final = self.get_count_tokens_headers(
+                auth_header, messages, context_management, request_body.get("thinking")
+            )
 
             # Use LiteLLM's async httpx client
             async_client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
@@ -121,6 +127,8 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
+        except litellm.Timeout as e:
+            raise AnthropicError(status_code=e.status_code, message=str(e)) from e
         except Exception as e:
             verbose_logger.error("Error in CountTokens handler: %s", e)
             raise AnthropicError(

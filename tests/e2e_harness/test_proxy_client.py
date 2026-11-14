@@ -12,10 +12,11 @@ injected clock, so nothing here monkeypatches anything.
 from __future__ import annotations
 
 import json
+import time
 from builtins import ExceptionGroup
 from collections.abc import Callable, Generator, Iterable, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import chain, repeat
 from queue import SimpleQueue
@@ -40,7 +41,10 @@ from models import (
     LiteLLMParamsBody,
     McpServerCreateBody,
     McpServerUpdateBody,
+    ModelDeleteBody,
+    ModelInfoBody,
     ModelListEntry,
+    ModelNewBody,
     ModelsListResponse,
     OrgNewBody,
     OrgUpdateBody,
@@ -59,6 +63,8 @@ from proxy_client import (
     ConvergeOutcome,
     CredentialKind,
     EverywhereConverged,
+    ModelNotRegistered,
+    ModelRegistered,
     ModelsPoller,
     NeverConvergedOn,
     NotConverged,
@@ -691,3 +697,85 @@ def test_partial_updates_preserve_explicit_null_at_the_http_boundary(operation: 
         )
         assert json.loads(bodies.get_nowait()) == expected
         assert bodies.empty()
+
+
+@contextmanager
+def model_registry(
+    listed: frozenset[str], refused: frozenset[str]
+) -> Generator[tuple[ProxyClient, SimpleQueue[float], SimpleQueue[str]]]:
+    writes: Final[SimpleQueue[float]] = SimpleQueue()
+    deleted: Final[SimpleQueue[str]] = SimpleQueue()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+        def reply(self, status: int, body: object) -> None:
+            self.send_response(status)
+            self.end_headers()
+            self.wfile.write(json.dumps(body).encode())
+
+        def do_GET(self) -> None:
+            self.reply(200, {"data": [{"id": name} for name in sorted(listed)]})
+
+        def do_POST(self) -> None:
+            raw: Final = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if self.path == "/model/delete":
+                deleted.put(ModelDeleteBody.model_validate_json(raw).id)
+                self.reply(200, {})
+                return
+            writes.put(time.monotonic())
+            name: Final = ModelNewBody.model_validate_json(raw).model_name
+            if name in refused:
+                self.reply(500, {"error": "refused"})
+                return
+            self.reply(200, {"model_id": f"id-{name}"})
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread: Final = Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
+    thread.start()
+    url: Final = f"http://127.0.0.1:{server.server_port}"
+    proxy: Final = build_proxy_client(
+        base_url=url, control_plane_base_url=url, replica_urls=(url,), control_replica_urls=(url,), master_key="bootstrap"
+    )
+    try:
+        yield replace(proxy, model_servable_timeout=0.3, model_servable_interval=0.01), writes, deleted
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+class TestRegisterModels:
+    def test_a_batch_waits_once_after_its_last_write_and_reports_each_model(self) -> None:
+        names: Final = ("first", "refused", "ghost", "last")
+        settled: Final[SimpleQueue[float]] = SimpleQueue()
+        with (
+            model_registry(listed=frozenset({"first", "last"}), refused=frozenset({"refused"})) as (
+                proxy,
+                writes,
+                deleted,
+            ),
+            without_retries(),
+        ):
+            registrations: Final = replace(proxy, settle=settled.put).register_models(
+                tuple(
+                    ModelNewBody(
+                        model_name=name, litellm_params=LiteLLMParamsBody(model="synthetic"), model_info=ModelInfoBody()
+                    )
+                    for name in names
+                )
+            )
+            last_write: Final = max(writes.get_nowait() for _ in names)
+            assert writes.empty()
+            assert settled.get_nowait() >= last_write
+            assert settled.empty(), "a batch must wait out propagation once, not once per model"
+            assert tuple((type(r), r.model_name) for r in registrations) == (
+                (ModelRegistered, "first"),
+                (ModelNotRegistered, "refused"),
+                (ModelNotRegistered, "ghost"),
+                (ModelRegistered, "last"),
+            )
+            assert tuple(r.model_id for r in registrations if isinstance(r, ModelRegistered)) == ("id-first", "id-last")
+            assert deleted.get_nowait() == "id-ghost"
+            assert deleted.empty()

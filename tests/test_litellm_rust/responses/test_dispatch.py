@@ -260,7 +260,6 @@ ENCODED_ID: Final = ResponsesAPIRequestUtils._build_encrypted_item_id("deploymen
         (Feature.MOCK_RESPONSE, {"mock_response": "hi"}, {}),
         (Feature.PROXY_MCP_TOOLS, {"tools": [{"type": "mcp", "server_label": "g", "server_url": "litellm_proxy"}]}, {}),
         (Feature.CALLER_CLIENT, {"client": object()}, {}),
-        pytest.param(Feature.CALLER_CLIENT, {"shared_session": object()}, {}, id="shared-session"),
         pytest.param(Feature.EXTRA_BODY, {"extra_body": {"stream": True}}, {}, id="extra-body-stream"),
         pytest.param(
             Feature.PROVIDER_AFFINITY,

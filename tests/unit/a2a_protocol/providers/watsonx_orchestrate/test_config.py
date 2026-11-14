@@ -148,6 +148,8 @@ async def test_handle_streaming_runs_the_agent_and_ignores_unrelated_keywords(re
         "kind": "artifact-update",
         "taskId": ANY,
         "artifact": {"artifactId": ANY, "parts": [{"kind": "text", "text": "wxo says hi"}]},
+        "append": False,
+        "lastChunk": True,
     }
     assert chunks[3]["result"] == {
         "contextId": ANY,

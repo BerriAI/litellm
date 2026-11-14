@@ -89,7 +89,7 @@ class NomaV2StreamingParams(BaseModel):
         cls, value: object, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
     ) -> object:
         try:
-            validated: Final = handler(value)
+            validated: Final[object] = handler(value)
         except ValidationError:
             verbose_proxy_logger.warning(
                 "Noma v2 guardrail %s: ignoring %s=%.100r, which is not a valid value; the default applies",

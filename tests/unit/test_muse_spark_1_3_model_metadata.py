@@ -6,7 +6,7 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import StandardBuiltInToolCostTracking
-from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
 MUSE_SPARK_STANDARD = "meta/muse-spark-1.3"
 MUSE_SPARK_CONTRIBUTOR = "meta/muse-spark-1.3-contributor"
