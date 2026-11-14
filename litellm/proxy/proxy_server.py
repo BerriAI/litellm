@@ -925,6 +925,7 @@ from litellm.redis.stores.spend_counters import (
     team_member_counter,
     team_window_counter,
     user_counter,
+    user_window_counter,
 )
 from litellm.router import router_arguments
 from litellm.router_config import build_router_config
@@ -3776,7 +3777,7 @@ def _cached_budget_limits(cached: object) -> object:
 
 
 def _has_budget_windows(budget_limits: object) -> bool:
-    return isinstance(budget_limits, list) and budget_limits != []
+    return isinstance(budget_limits, (list, tuple)) and budget_limits not in ([], ())
 
 
 def _budget_windows_absent_marker(absent_key: str) -> object:
@@ -3829,12 +3830,14 @@ async def accounting_window_keys(
     token: str | None,
     team_id: str | None,
     customer_counters: Sequence[BudgetCounter] = (),
+    user_id: str | None = None,
 ) -> tuple[Mapping[str, object], ...]:
     scopes: Final = tuple(
         (entity_type, entity_id, cache_key)
         for entity_type, entity_id, cache_key in (
             (Litellm_EntityType.KEY, token, token),
             (Litellm_EntityType.TEAM, team_id, f"team_id:{team_id}"),
+            (Litellm_EntityType.USER, user_id, user_id),
         )
         if entity_id is not None and cache_key is not None
     )
@@ -3867,7 +3870,7 @@ async def _accounting_scope_windows(
     limits: Final = (
         await _stored_budget_limits(entity_type, entity_id) if cached is None else _cached_budget_limits(cached)
     )
-    if not isinstance(limits, list):
+    if not isinstance(limits, (list, tuple)):
         return ()
     windows: Final = TypeAdapter(tuple[object, ...]).validate_python(limits)
     return tuple(
@@ -3895,6 +3898,8 @@ async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str)
         row: Final[SupportsModelDump | None] = (
             await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": entity_id})
             if entity_type == Litellm_EntityType.KEY
+            else await UserRepository(prisma_client).table.find_unique(where={"user_id": entity_id})
+            if entity_type == Litellm_EntityType.USER
             else await TeamRepository(prisma_client).table.find_unique(where={"team_id": entity_id})
         )
     except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback
@@ -3963,7 +3968,7 @@ async def _increment_spend_counters_batched(
                 counter_key=window_counter,
                 entity_type=(
                     entity_type.value.capitalize()
-                    if entity_type in (Litellm_EntityType.KEY, Litellm_EntityType.TEAM)
+                    if entity_type in (Litellm_EntityType.KEY, Litellm_EntityType.TEAM, Litellm_EntityType.USER)
                     else entity_type.value
                 ),
                 entity_id=entity_id,
@@ -3992,13 +3997,16 @@ async def _increment_spend_counters_batched(
         duration: Final = (
             window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
         )
+        duration_text: Final = TypeAdapter(str).validate_python(duration)
         window_reset_at: Final = (
             window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
         )
         window_counter: Final = (
-            key_window_counter(entity_id, str(duration))
+            key_window_counter(entity_id, duration_text)
             if entity_type is Litellm_EntityType.KEY
-            else team_window_counter(entity_id, str(duration))
+            else user_window_counter(entity_id, duration_text)
+            if entity_type is Litellm_EntityType.USER
+            else team_window_counter(entity_id, duration_text)
         )
         return await _resolved_window_increment(
             entity_type, entity_id, window_counter, duration, get_budget_window_start(window), window_reset_at
@@ -4025,7 +4033,7 @@ async def _increment_spend_counters_batched(
     async def _window_increments(
         entity_type: Litellm_EntityType, entity_id: str, budget_limits: object
     ) -> tuple[PendingSpendIncrement | BaseException, ...]:
-        if not isinstance(budget_limits, list):
+        if not isinstance(budget_limits, (list, tuple)):
             return ()
         window_pending: Final = await asyncio.gather(
             *(_window_increment(entity_type, entity_id, window) for window in budget_limits), return_exceptions=True
@@ -4106,17 +4114,20 @@ async def _increment_spend_counters_batched(
             ),
         )
 
-    async def _user_scope(scope_user_id: str) -> tuple[PendingSpendIncrement | BaseException, ...]:
+    async def _user_scope(scope_user_id: str) -> tuple[_SpendScopeItem, ...]:
         user_counter_key: Final = user_counter(scope_user_id)
-        if user_counter_key in reserved_counter_keys:
-            return ()
-        return (
-            await _prepare_spend_counter_increment(
-                counter_key=user_counter_key,
-                source_cache_key=scope_user_id,
-                increment=cost,
-            ),
+        pending: Final = (
+            ()
+            if user_counter_key in reserved_counter_keys
+            else (
+                await _prepare_spend_counter_increment(
+                    counter_key=user_counter_key,
+                    source_cache_key=scope_user_id,
+                    increment=cost,
+                ),
+            )
         )
+        return pending + await _cached_window_increments(Litellm_EntityType.USER, scope_user_id, scope_user_id)
 
     scope_coros: Final = tuple(
         coro

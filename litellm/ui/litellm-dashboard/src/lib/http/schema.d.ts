@@ -20189,7 +20189,7 @@ export interface paths {
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
          *     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *     - organizations: List[str] - List of organization id's the user is a member of
-         *     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - budget_limits: Optional[list] - Budget windows the user carries at the same time. Each window has a budget_duration and a max_budget, and whichever window runs out first blocks the user. Example - [{"budget_duration": "1h", "max_budget": 1.0}, {"budget_duration": "1mo", "max_budget": 100.0}].
          *     - password: Optional[str] - Not supported; any value is rejected with a 422. Users set their own password through an invitation link (POST /invitation/new).
          *     Returns:
          *     - key: (str) The generated api key for the user
@@ -20326,7 +20326,7 @@ export interface paths {
          *         - key_alias: Optional[str] - [NOT IMPLEMENTED].
          *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
          *         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
-         *         - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *         - budget_limits: Optional[list] - Budget windows the user carries at the same time. Each window has a budget_duration and a max_budget, and whichever window runs out first blocks the user. Example - [{"budget_duration": "1h", "max_budget": 1.0}, {"budget_duration": "1mo", "max_budget": 100.0}].
          */
         post: operations["user_update_user_update_post"];
         delete?: never;
@@ -38651,6 +38651,8 @@ export interface components {
             allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -38743,6 +38745,8 @@ export interface components {
             allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -53605,6 +53609,8 @@ export interface components {
         UserInfoV2Response: {
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
