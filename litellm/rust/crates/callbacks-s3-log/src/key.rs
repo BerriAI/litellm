@@ -328,6 +328,36 @@ mod tests {
     }
 
     #[rstest]
+    #[case(
+        "cn-north-1",
+        "https://audit-bucket.s3.cn-north-1.amazonaws.com.cn/2025-01-01/key.json"
+    )]
+    #[case(
+        "cn-northwest-1",
+        "https://audit-bucket.s3.cn-northwest-1.amazonaws.com.cn/2025-01-01/key.json"
+    )]
+    #[case(
+        "us-east-1",
+        "https://audit-bucket.s3.us-east-1.amazonaws.com/2025-01-01/key.json"
+    )]
+    #[case(
+        "us-gov-west-1",
+        "https://audit-bucket.s3.us-gov-west-1.amazonaws.com/2025-01-01/key.json"
+    )]
+    fn object_urls_follow_the_partition_of_the_region(
+        #[case] region: &str,
+        #[case] expected: &str,
+    ) {
+        let params =
+            serde_json::json!({"s3_bucket_name": "audit-bucket", "s3_region_name": region});
+        let settings = Settings::from_params(
+            params.as_object().unwrap(),
+            &crate::settings::Constants::default(),
+        );
+        assert_eq!(object_url(&settings, "2025-01-01/key.json"), expected);
+    }
+
+    #[rstest]
     fn download_names_replace_slashes_and_quotes() {
         assert_eq!(
             download_name(&stamp(), "a/b\"c"),

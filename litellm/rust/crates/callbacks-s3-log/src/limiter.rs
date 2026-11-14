@@ -187,4 +187,118 @@ mod tests {
         drop(first);
         waiting.await.unwrap();
     }
+
+    fn adaptive(initial: usize, floor: usize, ceiling: usize) -> Arc<Limiter> {
+        Arc::new(Limiter::Adaptive(Arc::new(Adaptive::new(
+            initial, floor, ceiling,
+        ))))
+    }
+
+    fn in_flight(limiter: &Limiter) -> usize {
+        match limiter {
+            Limiter::Fixed(_) => 0,
+            Limiter::Adaptive(adaptive) => adaptive.state().in_flight,
+        }
+    }
+
+    fn record(limiter: &Limiter, throttled: bool, times: usize) {
+        for _ in 0..times {
+            limiter.record(throttled);
+        }
+    }
+
+    #[rstest]
+    #[case(4, 1, 16, &[(false, 4)], 5)]
+    #[case(4, 1, 16, &[(false, 3)], 4)]
+    #[case(16, 1, 16, &[(true, 1)], 8)]
+    #[case(4, 4, 16, &[(true, 1)], 4)]
+    #[case(15, 1, 16, &[(false, 1000)], 16)]
+    #[case(4, 1, 32, &[(false, 3), (true, 1), (false, 1)], 2)]
+    fn the_limit_follows_the_samples(
+        #[case] initial: usize,
+        #[case] floor: usize,
+        #[case] ceiling: usize,
+        #[case] samples: &[(bool, usize)],
+        #[case] expected: usize,
+    ) {
+        let limiter = adaptive(initial, floor, ceiling);
+        for &(throttled, times) in samples {
+            record(&limiter, throttled, times);
+        }
+        assert_eq!(limiter.limit(), Some(expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn growing_the_limit_wakes_a_waiting_acquirer() {
+        let limiter = adaptive(1, 1, 4);
+        let holder = limiter.acquire().await;
+        let waiting = {
+            let limiter = Arc::clone(&limiter);
+            tokio::spawn(async move {
+                let _permit = limiter.acquire().await;
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+        limiter.record(false);
+        waiting.await.unwrap();
+        drop(holder);
+        assert_eq!(in_flight(&limiter), 0);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn releasing_a_slot_wakes_exactly_one_waiter() {
+        let limiter = adaptive(1, 1, 4);
+        let holder = limiter.acquire().await;
+        let acquired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (release, released) = tokio::sync::watch::channel(false);
+        let waiters: Vec<_> = (0..3)
+            .map(|_| {
+                let limiter = Arc::clone(&limiter);
+                let acquired = Arc::clone(&acquired);
+                let mut released = released.clone();
+                tokio::spawn(async move {
+                    let _permit = limiter.acquire().await;
+                    acquired.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let _ = released.wait_for(|released| *released).await;
+                })
+            })
+            .collect();
+        tokio::task::yield_now().await;
+        drop(holder);
+        tokio::task::yield_now().await;
+        assert_eq!(acquired.load(std::sync::atomic::Ordering::SeqCst), 1);
+        for _ in 0..3 {
+            limiter.record(false);
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(acquired.load(std::sync::atomic::Ordering::SeqCst), 3);
+        release.send(true).unwrap();
+        for waiter in waiters {
+            waiter.await.unwrap();
+        }
+        assert_eq!(in_flight(&limiter), 0);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_cancelled_waiter_is_skipped_and_leaves_in_flight_at_zero() {
+        let limiter = adaptive(1, 1, 1);
+        let holder = limiter.acquire().await;
+        let spawn_waiter = |limiter: Arc<Limiter>| {
+            tokio::spawn(async move {
+                let _permit = limiter.acquire().await;
+            })
+        };
+        let doomed = spawn_waiter(Arc::clone(&limiter));
+        let next = spawn_waiter(Arc::clone(&limiter));
+        tokio::task::yield_now().await;
+        doomed.abort();
+        assert!(doomed.await.unwrap_err().is_cancelled());
+        drop(holder);
+        next.await.unwrap();
+        assert_eq!(in_flight(&limiter), 0);
+    }
 }
