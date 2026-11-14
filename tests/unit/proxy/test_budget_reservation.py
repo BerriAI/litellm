@@ -45,6 +45,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     invalidate_budget_reservation_counters,
     release_budget_reservation,
     release_budget_reservation_on_cancel,
+    release_cancelled_budget_reservation,
     reserve_budget_for_request,
 )
 from litellm.proxy.spend_tracking.input_tokens import (
@@ -2656,6 +2657,47 @@ async def test_release_budget_reservation_on_cancel_gives_back_counter(
     # idempotent: a second cancel reconcile must not change the counter again
     await release_budget_reservation_on_cancel(reservation)
     assert counter_cache.get_local("spend:key:key-cancel-give-back") == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("callback_bound", "kept_cost"), [(False, 0.0), (True, 0.5)])
+async def test_a_cancelled_call_keeps_its_input_cost_only_once_the_model_call_claimed_its_hold(
+    spend_counter_state, callback_bound: bool, kept_cost: float
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    token = f"key-cancelled-bound-{callback_bound}"
+    valid_token = UserAPIKeyAuth(token=token, spend=0.0, max_budget=10.0)
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=3.0,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_input_cost",
+            return_value=0.5,
+        ),
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/queue/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    assert reservation is not None
+    assert counter_cache.get_local(f"spend:key:{token}") == pytest.approx(3.0)
+    reservation["callback_bound"] = callback_bound
+
+    await release_cancelled_budget_reservation(reservation)
+
+    assert counter_cache.get_local(f"spend:key:{token}") == pytest.approx(kept_cost)
+    assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio

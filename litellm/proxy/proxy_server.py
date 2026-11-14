@@ -1005,7 +1005,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     BudgetCounter,
     customer_window_counters,
     get_budget_window_start,
-    release_budget_reservation_on_cancel,
+    release_cancelled_budget_reservation,
     release_unbound_budget_reservation,
     stamp_budget_reservation_actual_cost,
 )
@@ -19599,7 +19599,7 @@ async def async_queue_request(
             try:
                 return _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
             except asyncio.CancelledError:
-                await release_budget_reservation_on_cancel(user_api_key_dict.budget_reservation)
+                await release_cancelled_budget_reservation(user_api_key_dict.budget_reservation)
                 raise
 
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses

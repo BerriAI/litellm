@@ -540,6 +540,15 @@ async def release_or_invalidate_budget_reservation(
             budget_reservation["finalized"] = True
 
 
+async def release_cancelled_budget_reservation(
+    budget_reservation: dict[str, object] | None,  # mutable-ok: stamps finalized on the caller's reservation
+) -> None:
+    if budget_reservation is not None and budget_reservation.get("callback_bound") is True:
+        await release_budget_reservation_on_cancel(budget_reservation)
+        return
+    await release_or_invalidate_budget_reservation(budget_reservation)
+
+
 async def release_unbound_budget_reservation(budget_reservation: Mapping[str, object]) -> None:
     """Release a reservation no logging callback took ownership of, once the request ended.
 
