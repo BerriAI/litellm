@@ -143,10 +143,26 @@ def estimate_tokens_for_request(
     return native.estimate_tokens_for_request(data, call_type or "", min_configured_tpm_limit, configured_output_tokens)
 
 
+def estimate_input_and_output_tokens(
+    handler: _PROXY_MaxParallelRequestsHandler_v3,
+    data: object,
+    call_type: str | None = None,
+    min_configured_tpm_limit: int | None = None,
+    configured_output_tokens: int | None = None,
+    include_media: bool = True,
+) -> tuple[int, int] | None:
+    native: Final = handler.native_companion
+    assert native is not None
+    return native.estimate_input_and_output_tokens(
+        data, call_type or "", min_configured_tpm_limit, configured_output_tokens, include_media
+    )
+
+
 PROXY_MaxParallelRequestsHandler_v3 = RustParallelRequestLimiter
 
 __all__ = [
     "PROXY_MaxParallelRequestsHandler_v3",
     "RustParallelRequestLimiter",
+    "estimate_input_and_output_tokens",
     "estimate_tokens_for_request",
 ]
