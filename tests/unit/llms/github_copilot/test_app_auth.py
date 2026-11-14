@@ -584,7 +584,7 @@ async def test_caller_headers_keep_device_login_wire_headers_and_cannot_unpin_ap
 
 
 @pytest.mark.parametrize("async_call", [False, True])
-async def test_deployment_naming_an_unloaded_credential_never_falls_back_to_the_shared_device_login(
+async def test_app_deployment_whose_credential_is_not_loaded_fails_closed_before_any_github_call(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, async_call: bool
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -596,6 +596,7 @@ async def test_deployment_naming_an_unloaded_credential_never_falls_back_to_the_
                 "litellm_params": {
                     "model": "github_copilot/claude-sonnet-5.5",
                     "litellm_credential_name": "copilot-service-a",
+                    "github_copilot_auth_type": "github_app",
                 },
             }
         ],
@@ -608,7 +609,7 @@ async def test_deployment_naming_an_unloaded_credential_never_falls_back_to_the_
             return await router.acompletion(model="copilot", messages=messages)
         return router.completion(model="copilot", messages=messages)
 
-    with pytest.raises(BadRequestError, match="names a credential that is not loaded"):
+    with pytest.raises(BadRequestError, match="GitHub App authentication requires"):
         await call()
     assert respx_mock.calls.call_count == 0
 

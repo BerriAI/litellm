@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 import respx
 
@@ -5,6 +7,7 @@ import litellm
 from litellm.litellm_core_utils.llm_response_utils import get_api_base as get_api_base_module
 from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
 from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE
+from litellm.types.router import GenericLiteLLMParams
 
 
 @pytest.fixture
@@ -112,3 +115,20 @@ def test_base_url_alias_is_reported_as_the_api_base():
         litellm.get_api_base(model="groq/whisper-large-v3", optional_params={"base_url": ""})
         == "https://api.groq.com/openai/v1"
     )
+
+
+def test_github_app_deployment_reports_the_copilot_host_it_calls_over_a_configured_api_base(isolated_token_dirs):
+    model: Final = "github_copilot/gpt-5.5"
+    params: Final = {
+        "api_base": "https://admin-set.internal/v1",
+        "github_copilot_auth_type": "github_app",
+        "github_copilot_app_id": "test-client",
+        "github_copilot_app_installation_id": 123,
+        "github_copilot_app_private_key_ref": "os.environ/TEST_APP_KEY",
+    }
+    called_api_base: Final = litellm.get_llm_provider(
+        model=model, api_base=params["api_base"], litellm_params=GenericLiteLLMParams(**params)
+    )[3]
+
+    assert called_api_base != params["api_base"]
+    assert litellm.get_api_base(model=model, optional_params=params) == called_api_base

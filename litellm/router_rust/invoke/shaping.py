@@ -496,14 +496,8 @@ def update_kwargs_with_deployment(
         metadata["tags"] = existing_tags
 
     from litellm.llms.github_copilot.app_auth import app_config
-    from litellm.llms.github_copilot.per_user_auth import (
-        github_copilot_per_user_credential_name,
-        unloaded_credential_refusal,
-    )
+    from litellm.llms.github_copilot.per_user_auth import github_copilot_per_user_credential_name
 
-    refusal: Final = unloaded_credential_refusal(deployment_params, deployment_provider, str(deployment_model_name))
-    if refusal is not None:
-        raise refusal
     if (
         app_config(deployment_params) is not None
         and "litellm_credential_name" in kwargs

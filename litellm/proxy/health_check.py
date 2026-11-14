@@ -26,7 +26,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_PROMPT,
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
-from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider, resolve_model_and_provider_for_metadata
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.litellm_core_utils.health_check_helpers import native_health_check_mode
 from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, is_model_capability_field
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
@@ -583,28 +583,12 @@ def _finalize_strategy_router_endpoints(
     )
 
 
-def _unloaded_credential_failure(litellm_params: Mapping[str, object]) -> Mapping[str, object] | None:
-    from litellm.llms.github_copilot.per_user_auth import unloaded_credential_refusal
-
-    model: Final = litellm_params.get("model")
-    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
-    provider: Final = declared_provider(
-        model if isinstance(model, str) else None,
-        custom_llm_provider if isinstance(custom_llm_provider, str) else None,
-    )
-    refusal: Final = unloaded_credential_refusal(litellm_params, provider, str(model))
-    return None if refusal is None else {"error": str(refusal), "exception": refusal}
-
-
 async def _run_model_health_check(model: dict):
     litellm_params = model["litellm_params"]
     model_info: Final = model.get("model_info", {})
 
     if _is_strategy_router_deployment(litellm_params):
         return {}
-    unloaded_credential_failure: Final = _unloaded_credential_failure(litellm_params)
-    if unloaded_credential_failure is not None:
-        return unloaded_credential_failure
 
     mode: Final = resolve_health_check_mode(
         model_info,

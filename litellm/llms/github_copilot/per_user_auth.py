@@ -794,28 +794,6 @@ def _strip_caller_authorization(
             }
 
 
-def unloaded_credential_refusal(
-    deployment_params: Mapping[str, object], provider: str | None, model: str
-) -> BadRequestError | None:
-    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-
-    credential_name: Final = deployment_params.get("litellm_credential_name")
-    if (
-        provider != "github_copilot"
-        or not isinstance(credential_name, str)
-        or not credential_name
-        or deployment_params.get(GITHUB_COPILOT_AUTH_TYPE_KEY) is not None
-        or CredentialAccessor.find_credential(credential_name) is not None
-    ):
-        return None
-    return BadRequestError(
-        message="This GitHub Copilot deployment names a credential that is not loaded, so the call is refused "
-        "instead of falling back to the shared device login.",
-        model=model,
-        llm_provider="github_copilot",
-    )
-
-
 def attach_github_copilot_user_session(
     kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
 ) -> None:
