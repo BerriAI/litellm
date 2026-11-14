@@ -2779,7 +2779,8 @@ class _AzureSearchIndexCall:
     provider_config: BaseVectorStoreConfig
     index_name: str
 
-    async def to(self, params: Mapping[str, object]) -> object:
+    async def to(self, store_params: Mapping[str, object]) -> object:
+        params: Final = with_named_credential(store_params)
         base_target_url: Final = _optional_str(params.get("api_base"))
         if base_target_url is None:
             raise Exception(f"API base not found for {self.index_name}")

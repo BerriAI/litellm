@@ -14,6 +14,9 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import request_timeout
+from litellm.litellm_core_utils.asyncify import (
+    run_async_function,  # pyright: ignore[reportUnknownVariableType]  # the sync bridge is untyped
+)
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
@@ -483,6 +486,24 @@ def search(
     Returns:
         VectorStoreSearchResponse containing the search results.
     """
+    if VECTOR_STORE_DEPLOYMENT_PARAM in kwargs and "asearch" not in kwargs:
+        return run_async_function(  # pyright: ignore[reportUnknownVariableType]  # the sync bridge is untyped; it returns asearch's response
+            asearch,
+            vector_store_id=vector_store_id,
+            query=query,
+            filters=filters,
+            max_num_results=max_num_results,
+            ranking_options=ranking_options,
+            rewrite_query=rewrite_query,
+            query_image=query_image,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            router=router,
+            **kwargs,  # pyright: ignore[reportUnknownArgumentType]  # search's own untyped kwargs, forwarded as asearch forwards them
+        )
     embedding_executor: Final = _direct_vector_store_embedding_executor(
         kwargs.pop("_direct_vector_store_embedding_executor", None), router, kwargs
     )

@@ -5,6 +5,7 @@ Azure AI Search service per region. A read tries them in ``order``. A deployment
 with a retryable error is cooled down and the same read moves to the next one.
 """
 
+import math
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -264,7 +265,10 @@ async def _cooldown_ends(keys: Sequence[str]) -> Mapping[str, object]:
     """Each key's cooldown end, read from Redis when the proxy shares one so every worker sees the same state."""
     redis: Final = vector_store_deployment_cooldowns.redis_cache
     if redis is not None:
-        return _CACHED.validate_python(await redis.async_batch_get_cache(key_list=list(keys)))
+        try:
+            return _CACHED.validate_python(await redis.async_batch_get_cache(key_list=list(keys)))
+        except Exception as error:  # noqa: BLE001  # Redis down must not stop healthy searches; this worker's state stands in
+            verbose_logger.warning("vector store deployment cooldowns: Redis read failed, using local state: %s", error)
     values: Final[object] = await vector_store_deployment_cooldowns.in_memory_cache.async_batch_get_cache(
         keys=list(keys)
     )  # pyright: ignore[reportUnknownMemberType]  # the in-memory cache's reads are untyped
@@ -294,7 +298,7 @@ async def _record_failure(failure: Failed[_Value]) -> None:
     failures: Final = await vector_store_deployment_cooldowns.async_increment_cache(  # pyright: ignore[reportUnknownMemberType]  # DualCache's writes are untyped
         _failures_key(deployment), 1, ttl=_FAILURE_WINDOW_SECONDS
     )
-    if failures is not None and failures < deployment.allowed_fails:
+    if deployment.cooldown_time <= 0 or (failures is not None and failures < deployment.allowed_fails):
         return
     verbose_logger.warning(
         "vector store deployment %s of group %s cooled down for %ss: %s",
@@ -304,7 +308,7 @@ async def _record_failure(failure: Failed[_Value]) -> None:
         str(failure.error)[:200],
     )
     await vector_store_deployment_cooldowns.async_set_cache(  # pyright: ignore[reportUnknownMemberType]  # DualCache's writes are untyped
-        _cooldown_key(deployment), time.time() + deployment.cooldown_time, ttl=deployment.cooldown_time
+        _cooldown_key(deployment), time.time() + deployment.cooldown_time, ttl=math.ceil(deployment.cooldown_time)
     )
 
 

@@ -543,3 +543,43 @@ def test_is_azure_search_read_fails_over_reads_and_keeps_writes_on_the_primary(m
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import is_azure_search_read
 
     assert is_azure_search_read(method, endpoint) is is_read
+
+
+@pytest.mark.asyncio
+async def test_an_azure_search_passthrough_expands_a_named_credential(monkeypatch: pytest.MonkeyPatch):
+    from litellm.llms.azure_ai.vector_stores.transformation import AzureAIVectorStoreConfig
+    from litellm.proxy.pass_through_endpoints import llm_passthrough_endpoints
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="search-scus",
+                credential_values={"api_base": "https://scus.search.windows.net", "api_key": "key-scus"},
+                credential_info={},
+            )
+        ],
+    )
+    sent: list[tuple[str, object]] = []
+
+    async def relay(**call: object) -> str:
+        sent.append((str(call["base_target_url"]), call["extra_headers"]))
+        return "relayed"
+
+    monkeypatch.setattr(
+        llm_passthrough_endpoints.BaseOpenAIPassThroughHandler, "base_openai_pass_through_handler", relay
+    )
+    call = llm_passthrough_endpoints._AzureSearchIndexCall(
+        endpoint="indexes/claims-docs/docs/search",
+        request=None,
+        fastapi_response=None,
+        user_api_key_dict=None,
+        provider_config=AzureAIVectorStoreConfig(),
+        index_name="claims-docs",
+    )
+
+    await call.to({"litellm_credential_name": "search-scus"})
+
+    assert sent == [("https://scus.search.windows.net", {"api-key": "key-scus"})]
