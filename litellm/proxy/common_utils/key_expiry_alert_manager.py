@@ -93,6 +93,7 @@ class KeyExpiryAlertManager:
         self.clock = clock
         self.pod_lock_manager = pod_lock_manager
 
+    @with_service_target("key_expiry_alerts")
     async def process_alerts(self) -> None:
         """Entry point for the scheduled job: one pod runs it per clock window of one interval. Pods' timers fire at
         their own boot time plus jitter, so the lock is named after the window the run falls in (the same
