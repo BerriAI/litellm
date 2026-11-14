@@ -867,7 +867,9 @@ INPUT_TOKENS = 1000
 OUTPUT_TOKENS = 500
 
 
-def _router_pricing(model: str = AN_UNDERLYING_MODEL, **pricing: float) -> MagicMock:
+def _router_pricing(
+    model: str = AN_UNDERLYING_MODEL, model_info: dict[str, object] | None = None, **pricing: float
+) -> MagicMock:
     mock_router = MagicMock()
     mock_router.get_model_list.return_value = [
         {
@@ -877,7 +879,7 @@ def _router_pricing(model: str = AN_UNDERLYING_MODEL, **pricing: float) -> Magic
                 "custom_llm_provider": "openai",
                 **pricing,
             },
-            "model_info": {},
+            "model_info": model_info or {},
         }
     ]
     return mock_router
@@ -1003,6 +1005,38 @@ async def _estimate_with_cache_and_reasoning(mock_router: MagicMock | None, mode
         reasoning_tokens=REASONING_TOKENS,
         **overrides,
     )
+
+
+class TestEstimateCostBillingMinimum:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model_info", "billed_input_tokens"),
+        [({}, 600), ({"min_billed_input_tokens": 0}, 100), ({"min_billed_input_tokens": "1000"}, 1000)],
+        ids=["inherits_cost_map_minimum", "waives_the_minimum", "raises_the_minimum"],
+    )
+    async def test_a_custom_priced_deployment_estimates_the_minimum_live_billing_uses(
+        self, monkeypatch, model_info: dict[str, object], billed_input_tokens: int
+    ):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            A_MAPPED_MODEL,
+            {
+                "input_cost_per_token": 5e-6,
+                "output_cost_per_token": 6e-6,
+                "min_billed_input_tokens": 600,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            },
+        )
+
+        response = await _estimate(
+            _router_pricing(
+                model=A_MAPPED_MODEL, model_info=model_info, input_cost_per_token=1e-6, output_cost_per_token=2e-6
+            ),
+            input_tokens=100,
+        )
+
+        assert response.input_cost_per_request == pytest.approx(billed_input_tokens * 1e-6)
 
 
 class TestEstimateCostCacheAndReasoningTokens:

@@ -177,6 +177,7 @@ class CostPerToken(TypedDict, total=False):
     output_cost_per_token: Required[float]
     cache_read_input_token_cost: float
     cache_creation_input_token_cost: float
+    min_billed_input_tokens: ReadOnly[int | None]
 
 
 class ProviderField(TypedDict):

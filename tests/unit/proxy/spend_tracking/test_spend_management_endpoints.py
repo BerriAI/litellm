@@ -7869,6 +7869,56 @@ async def test_spend_calc_model_on_router_messages(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_spend_calc_bills_a_custom_priced_deployment_at_its_own_billing_minimum(monkeypatch):
+    backend_model: Final = "openai/deployment-minimum-fixture"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        backend_model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 1e-6,
+            "min_billed_input_tokens": 600,
+        },
+    )
+    custom_rates: Final = {"input_cost_per_token": 2e-6, "output_cost_per_token": 5e-6}
+    temp_llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": backend_model, "api_key": "fake-key", **custom_rates},
+                "model_info": model_info,
+            }
+            for name, model_info in (
+                ("inherits-minimum", {}),
+                ("waives-minimum", {"min_billed_input_tokens": 0}),
+                ("raises-minimum", {"min_billed_input_tokens": 1000}),
+            )
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", temp_llm_router)
+    messages: Final = [{"role": "user", "content": "What is the capital of France?"}]
+
+    costs: Final = {
+        name: (
+            await spend_management_endpoints.calculate_spend(
+                request=SpendCalculateRequest(model=name, messages=messages)
+            )
+        )["cost"]
+        for name in ("inherits-minimum", "waives-minimum", "raises-minimum")
+    }
+
+    assert costs == pytest.approx(
+        {
+            "inherits-minimum": 600 * 2e-6,
+            "waives-minimum": litellm.token_counter(model=backend_model, messages=messages) * 2e-6,
+            "raises-minimum": 1000 * 2e-6,
+        }
+    )
+
+
+@pytest.mark.asyncio
 async def test_spend_calc_using_response():
     cost_obj: Final = await spend_management_endpoints.calculate_spend(
         request=SpendCalculateRequest(
