@@ -512,15 +512,25 @@ def test_foundry_reasoning_effort_that_is_not_a_level_is_refused_without_drop_pa
 
 
 @pytest.mark.parametrize("requested", NOT_A_FOUNDRY_LEVEL)
+@pytest.mark.parametrize(
+    ("request_drop_params", "global_drop_params"),
+    (pytest.param(True, False, id="request-drop-params"), pytest.param(False, True, id="global-drop-params")),
+)
 def test_foundry_reasoning_effort_that_is_not_a_level_is_dropped_with_a_warning_under_drop_params(
-    foundry_reasoner: str, caplog: pytest.LogCaptureFixture, requested: object
+    foundry_reasoner: str,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    requested: object,
+    request_drop_params: bool,
+    global_drop_params: bool,
 ) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         optional_params: Final = AzureAIStudioConfig().map_openai_params(
             non_default_params={"reasoning_effort": requested, "temperature": 0.2},
             optional_params={},
             model=foundry_reasoner,
-            drop_params=True,
+            drop_params=request_drop_params,
         )
 
     assert optional_params == {"temperature": 0.2}
