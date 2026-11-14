@@ -2082,13 +2082,13 @@ def completion_cost(
                         size=size,
                         optional_params=optional_params,
                         call_type=call_type,
-                        model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
+                        model_info=custom_priced_deployment_info(litellm_logging_obj, custom_pricing, router_model_id),
                         vertex_location=vertex_location,
                         service_tier=_served_image_service_tier(completion_response, cost_per_token_usage_object),
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
-                    _video_model_info: ModelInfo | None = _deployment_model_info(
+                    _video_model_info: ModelInfo | None = custom_priced_deployment_info(
                         litellm_logging_obj, custom_pricing, router_model_id
                     )
 
@@ -2694,7 +2694,7 @@ def _configured_search_cost_per_query(litellm_logging_obj: LitellmLoggingObject 
     return float(cost_per_query) if isinstance(cost_per_query, (int, float)) else None
 
 
-def _deployment_model_info(
+def custom_priced_deployment_info(
     litellm_logging_obj: LitellmLoggingObject | None,
     custom_pricing: bool | None,
     router_model_id: str | None,
@@ -2724,7 +2724,7 @@ def _ocr_model_info(
     custom_pricing: bool | None,
     router_model_id: str | None,
 ) -> OCRPricing | None:
-    deployment_info: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
+    deployment_info: Final = custom_priced_deployment_info(litellm_logging_obj, custom_pricing, router_model_id)
     litellm_params: Final = (
         litellm_logging_obj.litellm_params if custom_pricing and litellm_logging_obj is not None else None
     )
@@ -2789,7 +2789,7 @@ def pricing_entry_for_cost_calc(
     region_name: str | None,
     litellm_logging_obj: LitellmLoggingObject | None,
 ) -> tuple[str, Mapping[str, object]] | None:
-    deployment_entry: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
+    deployment_entry: Final = custom_priced_deployment_info(litellm_logging_obj, custom_pricing, router_model_id)
     deployment_key: Final = router_model_id or model
     if deployment_entry is not None and deployment_key is not None:
         return deployment_key, deployment_entry

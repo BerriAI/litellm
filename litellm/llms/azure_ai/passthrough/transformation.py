@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -99,23 +100,51 @@ def echoed_texts(body: Mapping[str, object]) -> tuple[str, ...]:
         return ()
 
 
-def cohere_embed_relay_response(body: Mapping[str, object]) -> EmbeddingResponse:
+def cohere_embed_relay_response(
+    body: Mapping[str, object], image_billing: CohereImageTokenBilling
+) -> EmbeddingResponse:
     return cohere_embedding_response(
         body,
         None,
         get_default_encoding(),
         echoed_texts(body),
-        CohereImageTokenBilling.FOLDED_INTO_INPUT_TOKENS,
+        image_billing,
         CohereEmbeddingRowShape.TYPED,
     )
 
 
-FOUNDRY_RELAY_SHAPES: Final = (
-    RelayShape("/rerank", CallTypes.arerank, RerankResponse.model_validate),
-    RelayShape("/providers/blackforestlabs/v1/flux-2-pro", CallTypes.aimage_generation, ImageResponse.model_validate),
-    RelayShape("/providers/cohere/v1/embed", CallTypes.aembedding, cohere_embed_relay_response),
-    RelayShape("/providers/cohere/v2/embed", CallTypes.aembedding, cohere_embed_relay_response),
+def foundry_relay_shapes(image_billing: CohereImageTokenBilling) -> tuple[RelayShape, ...]:
+    cohere_embed: Final = partial(cohere_embed_relay_response, image_billing=image_billing)
+    return (
+        RelayShape("/rerank", CallTypes.arerank, RerankResponse.model_validate),
+        RelayShape(
+            "/providers/blackforestlabs/v1/flux-2-pro", CallTypes.aimage_generation, ImageResponse.model_validate
+        ),
+        RelayShape("/providers/cohere/v1/embed", CallTypes.aembedding, cohere_embed),
+        RelayShape("/providers/cohere/v2/embed", CallTypes.aembedding, cohere_embed),
+    )
+
+
+FOUNDRY_RELAY_SHAPES: Final = MappingProxyType(
+    {
+        image_billing: foundry_relay_shapes(image_billing)
+        for image_billing in (
+            CohereImageTokenBilling.FOLDED_INTO_INPUT_TOKENS,
+            CohereImageTokenBilling.BILLED_AS_FOLDED_INPUT_TOKENS,
+        )
+    }
 )
+
+
+def foundry_image_billing(logging_obj: Logging) -> CohereImageTokenBilling:
+    from litellm.cost_calculator import custom_priced_deployment_info
+
+    deployment_info: Final = custom_priced_deployment_info(
+        logging_obj, logging_obj.custom_pricing_for(None), logging_obj.get_router_model_id()
+    )
+    if deployment_info is not None and deployment_info.get("input_cost_per_image_token") is None:
+        return CohereImageTokenBilling.BILLED_AS_FOLDED_INPUT_TOKENS
+    return CohereImageTokenBilling.FOLDED_INTO_INPUT_TOKENS
 
 
 class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
@@ -187,7 +216,9 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         ocr_result: Final = self.logged_ocr_response(model, httpx_response, logging_obj, endpoint)
         if ocr_result is not None:
             return ocr_result
-        foundry_result: Final = logged_relay_shape(FOUNDRY_RELAY_SHAPES, httpx_response, logging_obj, endpoint)
+        foundry_result: Final = logged_relay_shape(
+            FOUNDRY_RELAY_SHAPES[foundry_image_billing(logging_obj)], httpx_response, logging_obj, endpoint
+        )
         if foundry_result is not None:
             return foundry_result
         return StandardPassThroughResponseObject(response=relayed_body(httpx_response))

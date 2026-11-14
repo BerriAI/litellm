@@ -46,6 +46,7 @@ class _SupportsEncode(Protocol):
 class CohereImageTokenBilling(Enum):
     SEPARATE_FROM_INPUT_TOKENS = "separate_from_input_tokens"
     FOLDED_INTO_INPUT_TOKENS = "folded_into_input_tokens"
+    BILLED_AS_FOLDED_INPUT_TOKENS = "billed_as_folded_input_tokens"
 
 
 class CohereEmbeddingRowShape(Enum):
@@ -125,7 +126,7 @@ def _billed_usage(billed_units: _CohereBilledUnits, image_billing: CohereImageTo
                     image_tokens=billed_units.image_tokens or None,
                 ),
             )
-        case CohereImageTokenBilling.FOLDED_INTO_INPUT_TOKENS:
+        case CohereImageTokenBilling.FOLDED_INTO_INPUT_TOKENS | CohereImageTokenBilling.BILLED_AS_FOLDED_INPUT_TOKENS:
             return _prompt_usage(billed_units.input_tokens or 0, None)
 
 

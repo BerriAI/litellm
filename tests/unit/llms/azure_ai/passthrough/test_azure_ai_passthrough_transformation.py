@@ -343,6 +343,7 @@ def _relay_logging_obj(
     stream: bool = False,
     callbacks: list[CustomLogger] | None = None,
     endpoint: str = "",
+    model_info: Mapping[str, object] | None = None,
 ) -> Logging:
     logging_obj = Logging(
         model=model,
@@ -356,7 +357,11 @@ def _relay_logging_obj(
     )
     logging_obj.update_environment_variables(
         model=model,
-        litellm_params={"api_base": api_base, "custom_llm_provider": "azure_ai"},
+        litellm_params={
+            "api_base": api_base,
+            "custom_llm_provider": "azure_ai",
+            **({"metadata": {"model_info": model_info}} if model_info else {}),
+        },
         optional_params={},
         custom_llm_provider="azure_ai",
         endpoint=endpoint,
@@ -371,9 +376,10 @@ def _relay_logging_result(
     body,
     api_base: str = FOUNDRY_BASE,
     status_code: int = 200,
+    model_info: Mapping[str, object] | None = None,
 ):
     relayed_url = f"{FOUNDRY_BASE}/{native_path}?api-version=2024-05-01-preview"
-    logging_obj = _relay_logging_obj(model, api_base)
+    logging_obj = _relay_logging_obj(model, api_base, model_info=model_info)
     response = httpx.Response(
         status_code=status_code,
         headers={"content-type": "application/json"},
@@ -627,6 +633,48 @@ def test_native_cohere_embed_relay_prices_itemized_text_and_image_tokens_at_thei
     assert result.usage.prompt_tokens == text_tokens + image_tokens
     assert logging_obj.response_cost_calculator(result=result) == pytest.approx(
         text_tokens * model_info["input_cost_per_token"] + image_tokens * model_info["input_cost_per_image_token"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("deployment_prices", "billed_tokens"),
+    [
+        ({"input_cost_per_token": 1.2e-07}, {"input_cost_per_token": 1017}),
+        (
+            {"input_cost_per_token": 1.2e-07, "input_cost_per_image_token": 4e-07},
+            {"input_cost_per_token": 6, "input_cost_per_image_token": 258},
+        ),
+    ],
+    ids=["no_image_price_keeps_folded_count", "image_price_itemizes"],
+)
+def test_native_cohere_embed_relay_on_a_custom_priced_deployment_itemizes_only_with_an_image_price(
+    deployment_prices: Mapping[str, float], billed_tokens: Mapping[str, int]
+) -> None:
+    model_info: Final = {"id": "custom-priced-v5-pro", **deployment_prices}
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "Cohere-Embed-V5-Pro",
+                "litellm_params": {"model": "azure_ai/Cohere-Embed-V5-Pro", "api_base": FOUNDRY_BASE, "api_key": "k"},
+                "model_info": model_info,
+            }
+        ]
+    )
+    body: Final = {
+        **COHERE_EMBED_BODY,
+        "meta": {
+            "api_version": {"version": "2"},
+            "billed_units": {"input_tokens": 1017, "image_tokens": 258, "text_tokens": 6},
+        },
+    }
+    result, logging_obj = _relay_logging_result(
+        AzureAIPassthroughConfig(), "Cohere-Embed-V5-Pro", "providers/cohere/v2/embed", body, model_info=model_info
+    )
+
+    assert isinstance(result, EmbeddingResponse)
+    assert result.usage.prompt_tokens == sum(billed_tokens.values())
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(
+        sum(tokens * deployment_prices[price] for price, tokens in billed_tokens.items())
     )
 
 
