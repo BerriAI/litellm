@@ -103,6 +103,16 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
         return graft_default_vertex_path(api_base, default_url) if api_base else default_url
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        merged: Final = super().transform_extra_body(extra_body, request, model, litellm_params)
+        return {key: value for key, value in merged.items() if key != "model"}
+
     def transform_responses_api_request(
         self,
         model: str,
