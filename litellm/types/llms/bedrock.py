@@ -244,7 +244,7 @@ class ConverseTokenUsageBlock(TypedDict, total=False):
 
 
 class ServiceTierBlock(TypedDict):
-    type: Literal["priority", "default", "flex"]
+    type: ReadOnly[Literal["priority", "default", "flex", "reserved"]]
 
 
 class ConverseResponseBlock(TypedDict, total=False):
@@ -505,6 +505,8 @@ class CohereEmbeddingRequest(TypedDict, total=False):
     truncate: Literal["NONE", "START", "END"]
     embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]
     output_dimension: int
+    max_tokens: ReadOnly[int]
+    priority: ReadOnly[int]
 
 
 class CohereEmbeddingRequestWithModel(CohereEmbeddingRequest):

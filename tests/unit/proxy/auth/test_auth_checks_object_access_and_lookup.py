@@ -6966,7 +6966,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     cache = MagicMock()
     cache.async_set_cache = AsyncMock()
     cache.async_delete_cache = AsyncMock()
-    cache.async_delete_cache_pre_call = AsyncMock(return_value=None)  # no request pipeline open
+    cache.declare_delete = MagicMock(return_value=None)
     logging_obj = MagicMock()
     logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
