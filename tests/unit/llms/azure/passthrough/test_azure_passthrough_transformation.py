@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -8,6 +9,7 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.azure.passthrough.transformation import (
     AzurePassthroughConfig,
     azure_router_model_in_endpoint,
@@ -352,6 +354,40 @@ def _complete_url(request_query_params: dict, litellm_params: dict) -> httpx.URL
         litellm_params=litellm_params,
     )
     return url
+
+
+@pytest.mark.asyncio
+async def test_azure_passthrough_router_names_an_unprefixed_deployment_in_the_upstream_path() -> None:
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"choices": []}, request=request)
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-gpt",
+                "litellm_params": {
+                    "model": "my-gpt-deployment",
+                    "custom_llm_provider": "azure",
+                    "api_base": "https://example-resource.openai.azure.com",
+                    "api_key": "azure-key",
+                    "api_version": "2024-10-21",
+                },
+            }
+        ]
+    )
+    response: Final = await router.allm_passthrough_route(
+        model="team-gpt",
+        method="POST",
+        endpoint="/openai/deployments/team-gpt/chat/completions",
+        data={"messages": [{"role": "user", "content": "Hey"}]},
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+    )
+
+    assert response.status_code == 200
+    assert requests[0].url.path == "/openai/deployments/my-gpt-deployment/chat/completions"
 
 
 def test_azure_passthrough_url_forwards_the_callers_api_version():

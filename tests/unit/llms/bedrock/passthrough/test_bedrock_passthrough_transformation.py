@@ -33,7 +33,17 @@ INVOKE_STREAM_ENDPOINT = f"/model/{CONVERSE_MODEL}/invoke-with-response-stream"
 
 
 @pytest.mark.asyncio
-async def test_bedrock_passthrough_router_replaces_alias_in_endpoint() -> None:
+@pytest.mark.parametrize(
+    ("route", "custom_llm_provider"),
+    [
+        ("bedrock/", None),
+        ("bedrock/invoke/", None),
+        ("bedrock/converse/", None),
+        ("invoke/", "bedrock"),
+        ("converse/", "bedrock"),
+    ],
+)
+async def test_bedrock_passthrough_router_replaces_alias_in_endpoint(route: str, custom_llm_provider: str | None) -> None:
     deployment_model: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     requests: Final[list[httpx.Request]] = []
 
@@ -46,7 +56,8 @@ async def test_bedrock_passthrough_router_replaces_alias_in_endpoint() -> None:
             {
                 "model_name": "special-bedrock-model",
                 "litellm_params": {
-                    "model": f"bedrock/{deployment_model}",
+                    "model": f"{route}{deployment_model}",
+                    **({"custom_llm_provider": custom_llm_provider} if custom_llm_provider else {}),
                     "aws_access_key_id": "AKIAROUTERKEY",
                     "aws_secret_access_key": "router-secret",
                     "aws_region_name": "us-west-2",

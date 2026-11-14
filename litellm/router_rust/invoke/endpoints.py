@@ -1003,6 +1003,25 @@ def attempt_call(
             return AttemptCall(plan.host_op, kwargs, kwargs, requested, group)
 
 
+def _passthrough_route_model_id(
+    core: EndpointCore, model_name: str, provider: str | None, kwargs: Mapping[str, object]
+) -> str:
+    from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+    from litellm.types.utils import LlmProviders
+
+    if provider == LlmProviders.BEDROCK.value:
+        return strip_bedrock_routing_prefix(model_name)
+    try:
+        stripped, _, _, _ = core.host.invoke("get_llm_provider")(
+            model=model_name,
+            custom_llm_provider=kwargs.get("custom_llm_provider"),
+            api_base=kwargs.get("api_base"),
+        )
+    except Exception:  # noqa: BLE001  # as the Python router: an unresolvable model is used as is
+        return model_name
+    return str(stripped)
+
+
 def _generic_attempt(
     core: EndpointCore,
     plan: Plan,
@@ -1028,21 +1047,14 @@ def _generic_attempt(
         opens_responses_socket=socket,
     )
     model_name: Final = str(data.get("model"))
+    provider: Final = _generic_provider(data)
     endpoint: Final = kwargs.get("endpoint")
     if endpoint:
-        try:
-            stripped, _, _, _ = core.host.invoke("get_llm_provider")(
-                model=model_name,
-                custom_llm_provider=kwargs.get("custom_llm_provider"),
-                api_base=kwargs.get("api_base"),
-            )
-            replacement = str(stripped)  # rebind-ok: rebound as the Python router rebinds it
-        except Exception:  # noqa: BLE001  # as the Python router: an unresolvable model is used as is
-            replacement = model_name  # rebind-ok: rebound as the Python router rebinds it
         kwargs["endpoint"] = (  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
-            replace_path_segment(str(endpoint), requested, replacement)
+            replace_path_segment(
+                str(endpoint), requested, _passthrough_route_model_id(core, model_name, provider, kwargs)
+            )
         )
-    provider: Final = _generic_provider(data)
     final: Final = {
         **without_retrieve_stream_defaults(data, kwargs),
         "caching": core.shaping.cache_responses,
