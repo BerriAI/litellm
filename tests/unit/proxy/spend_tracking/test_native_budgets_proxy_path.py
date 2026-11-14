@@ -805,6 +805,11 @@ FAMILIES: Final[Mapping[str, Family]] = {
         call_type="pass_through_endpoint",
         upstream_token="ya29.upstream",
     ),
+    "realtime_translation_client_secrets": Family(
+        "/v1/realtime/translations/client_secrets",
+        {"model": "gpt-realtime"},
+        call_type="acreate_realtime_translation_client_secret",
+    ),
 }
 
 
