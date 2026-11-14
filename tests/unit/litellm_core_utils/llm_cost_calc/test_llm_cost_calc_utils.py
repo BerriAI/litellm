@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     apply_off_peak_pricing,
     apply_provider_cache_read_default,
     calculate_cache_writing_cost,
+    calculate_image_response_cost_from_usage,
     generic_cost_per_token,
     get_billed_token_rates,
     get_regional_uplift_multiplier,
@@ -27,6 +28,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.llms.gemini.image_generation.cost_calculator import (
     cost_calculator as gemini_image_generation_cost_calculator,
 )
+from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_image_generation_cost_calculator,
 )
@@ -3511,6 +3513,48 @@ def test_token_type_cost_breakdown_applies_anthropic_geo_multiplier(_local_model
     assert text_output_cost + geo.reasoning_cost == pytest.approx(completion_cost)
 
 
+@pytest.mark.parametrize("has_image", [False, True])
+@pytest.mark.parametrize("thoughts", [0, 40])
+@pytest.mark.parametrize("gemini_usage", [False, True])
+@pytest.mark.parametrize("explicit_breakdown", [False, True])
+def test_image_response_unitemized_output_uses_returned_images(
+    has_image: bool, thoughts: int, gemini_usage: bool, explicit_breakdown: bool
+) -> None:
+    prices: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 3e-6,
+        "output_cost_per_image_token": 7e-5,
+    }
+    response: Final = ImageResponse(
+        data=[ImageObject(b64_json="x")] if has_image else [],
+        usage=transform_gemini_image_usage(
+            {
+                "promptTokenCount": 5,
+                "candidatesTokenCount": 25,
+                "thoughtsTokenCount": thoughts,
+                "totalTokenCount": 30 + thoughts,
+                **({"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 25}]} if explicit_breakdown else {}),
+            }
+        )
+        if gemini_usage
+        else ImageUsage(
+            input_tokens=5,
+            input_tokens_details=ImageUsageInputTokensDetails(text_tokens=5, image_tokens=0),
+            output_tokens=25 + thoughts,
+            total_tokens=30 + thoughts,
+            **(
+                {"output_tokens_details": {"text_tokens": 25, "image_tokens": 0, "reasoning_tokens": thoughts}}
+                if explicit_breakdown
+                else {"output_tokens_details": {"reasoning_tokens": thoughts}}
+            ),
+        ),
+    )
+    expected_output_rate: Final = 7e-5 if has_image and not explicit_breakdown else 3e-6
+    assert calculate_image_response_cost_from_usage(
+        model="gemini-image-test", image_response=response, custom_llm_provider="gemini", model_info=prices
+    ) == pytest.approx(5 * 2e-6 + 25 * expected_output_rate + thoughts * 3e-6)
+
+
 @pytest.mark.parametrize("details_as_dict", [True, False])
 def test_image_response_input_image_tokens_priced_at_image_rate(details_as_dict):
     """
@@ -4369,19 +4413,23 @@ def test_azure_gpt_6_foundry_price_sheet(_local_model_cost_map, model_base):
 
 @pytest.mark.parametrize("model", ["azure/gpt-6-luna", "azure/gpt-6-luna-2026-09-22"])
 @pytest.mark.parametrize(
-    ("prompt_tokens", "input_rate", "cache_read_rate", "output_rate"),
+    ("prompt_tokens", "cost_suffix"),
     [
-        (100_000, 5e-08, 5e-09, 2.5e-07),
-        (300_000, 1e-07, 1e-08, 3.75e-07),
+        (100_000, ""),
+        (300_000, "_above_272k_tokens"),
     ],
 )
-def test_generic_cost_per_token_azure_gpt_6_luna_flex_tiers(
-    _local_model_cost_map, model, prompt_tokens, input_rate, cache_read_rate, output_rate
-):
-    """azure/gpt-6-luna bills Azure's Flex Global rates, half of Standard, with the long context step past 272K."""
-    cached_tokens = 20_000
-    completion_tokens = 1_000
-    usage = Usage(
+def test_generic_cost_per_token_azure_flex_uses_registered_tier_rates(
+    _local_model_cost_map: None, model: str, prompt_tokens: int, cost_suffix: str
+) -> None:
+    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="azure")
+    input_rate, cache_read_rate, output_rate = (
+        rate if (rate := model_info.get(f"{key}{cost_suffix}_flex")) is not None else model_info[f"{key}{cost_suffix}"]
+        for key in ("input_cost_per_token", "cache_read_input_token_cost", "output_cost_per_token")
+    )
+    cached_tokens: Final = 20_000
+    completion_tokens: Final = 1_000
+    usage: Final = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
@@ -4393,7 +4441,7 @@ def test_generic_cost_per_token_azure_gpt_6_luna_flex_tiers(
         custom_llm_provider="azure",
         service_tier="flex",
     )
-    expected_prompt = (prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_read_rate
+    expected_prompt: Final = (prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_read_rate
     assert prompt_cost == pytest.approx(expected_prompt)
     assert completion_cost == pytest.approx(completion_tokens * output_rate)
 
@@ -4579,16 +4627,13 @@ def test_token_type_cost_breakdown_bills_cache_tokens_at_the_provider_speed_mult
 GEMINI_4_ARGON_TOKEN_PRICE_KEYS: Final = (
     "input_cost_per_token",
     "input_cost_per_token_batches",
-    "input_cost_per_token_flex",
     "input_cost_per_token_priority",
     "output_cost_per_token",
     "output_cost_per_token_batches",
-    "output_cost_per_token_flex",
     "output_cost_per_token_priority",
     "output_cost_per_reasoning_token",
     "cache_read_input_token_cost",
     "cache_read_input_token_cost_batches",
-    "cache_read_input_token_cost_flex",
     "cache_read_input_token_cost_priority",
 )
 

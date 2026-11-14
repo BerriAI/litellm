@@ -13,6 +13,7 @@ memory in long-lived deployments.
 """
 
 import asyncio
+import re
 from collections import OrderedDict
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -25,15 +26,20 @@ from litellm.constants import SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup, db_lookup_gate
+from litellm.proxy.management_helpers.customer_hierarchy import customer_row_reset_at
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     read_batched_spend_counter,
     record_spend_counter_value,
 )
 from litellm.redis.stores.spend_counters import END_USER_COUNTER_PREFIX, SPEND_COUNTERS_TARGET, SpendCounterStore
+from litellm.redis.stores.spend_counters.types import parse_customer_window_counter
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     BudgetWindowSpendRepository,
+    CustomerMemberRepository,
+    CustomerOrganizationRepository,
+    CustomerTeamRepository,
     EndUserRepository,
     SpendLogsRepository,
     TeamMembershipRepository,
@@ -45,6 +51,7 @@ from litellm.repositories.verification_token_repository import (
 )
 
 if TYPE_CHECKING:
+    from prisma.models import LiteLLM_BudgetWindowSpend
     from prisma.types import LiteLLM_EndUserTableWhereUniqueInput
 
     from litellm.proxy.utils import PrismaClient
@@ -54,6 +61,9 @@ _WINDOW_SPEND_ENTITY_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "Key": Litellm_EntityType.KEY.value,
         "Team": Litellm_EntityType.TEAM.value,
+        "customer_org": Litellm_EntityType.CUSTOMER_ORG.value,
+        "customer_team": Litellm_EntityType.CUSTOMER_TEAM.value,
+        "customer_member": Litellm_EntityType.CUSTOMER_MEMBER.value,
     }
 )
 
@@ -67,6 +77,34 @@ _WINDOW_SPEND_LOG_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
 
 def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def recorded_window_spend(
+    row: "LiteLLM_BudgetWindowSpend | None", entity_type: str, expected_window_start: datetime | None
+) -> float | None:
+    if expected_window_start is None:
+        return None
+    if row is None or _as_utc(row.window_start) < _as_utc(expected_window_start):
+        return 0.0 if entity_type.startswith("customer_") else None
+    return float(row.spend or 0.0)
+
+
+_CUSTOMER_OVERRIDE_INCLUDE: Final = MappingProxyType({"budget": True, "budget_override": True})
+_CUSTOMER_COUNTER: Final = re.compile(
+    r"spend:(customer_org|customer_team|customer_member):(.+):"
+    r"(lifetime|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?)"
+)
+
+
+def _customer_counter_period_matches(row: object, period: str) -> bool:
+    try:
+        expected: Final = None if period == "lifetime" else datetime.fromisoformat(period)
+    except ValueError:
+        return False
+    actual: Final = customer_row_reset_at(row, datetime.now(timezone.utc))
+    if expected is None or actual is None:
+        return expected is actual
+    return _as_utc(actual) == _as_utc(expected)
 
 
 class SpendCounterReseed:
@@ -133,6 +171,10 @@ class SpendCounterReseed:
         """
         if prisma_client is None:
             return None
+        customer_window: Final = parse_customer_window_counter(counter_key)
+        if customer_window is not None:
+            scope, entity_id, duration, start = customer_window
+            return await SpendCounterReseed.window_from_db(prisma_client, scope, entity_id, duration, start)
         # Per-window key/team counters share prefixes with primary counters
         # but don't correspond to a DB row. Do not reject arbitrary entity IDs
         # or tag names that merely contain ":window:".
@@ -147,11 +189,28 @@ class SpendCounterReseed:
             return None
         if row is None:
             return None
+        customer: Final = _CUSTOMER_COUNTER.fullmatch(counter_key)
+        if customer is not None and not _customer_counter_period_matches(row, customer.group(3)):
+            return None
         return float(getattr(row, "spend", 0.0) or 0.0)
 
     @staticmethod
     async def _counter_row(prisma_client: "PrismaClient", counter_key: str) -> object | None:
         async with db_lookup_gate.current():
+            customer: Final = _CUSTOMER_COUNTER.fullmatch(counter_key)
+            if customer is not None:
+                family, entity_id, _ = customer.groups()
+                if family == "customer_org":
+                    return await CustomerOrganizationRepository(prisma_client).table.find_unique(
+                        where={"customer_org_id": entity_id}, include={"budget": True}
+                    )
+                if family == "customer_team":
+                    return await CustomerTeamRepository(prisma_client).table.find_unique(
+                        where={"customer_team_id": entity_id}, include=_CUSTOMER_OVERRIDE_INCLUDE
+                    )
+                return await CustomerMemberRepository(prisma_client).table.find_unique(
+                    where={"customer_member_id": entity_id}, include=_CUSTOMER_OVERRIDE_INCLUDE
+                )
             if counter_key.startswith("spend:key:"):
                 token: Final = counter_key[len("spend:key:") :]
                 return await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": token})
@@ -266,11 +325,13 @@ class SpendCounterReseed:
     async def _read_cached(spend_counter_store: SpendCounterStore, counter_key: str) -> float | None:
         """Re-check after acquiring the lock. A clean Redis miss, in the request's MGET or a GET, skips memory,
         which only holds this pod's writes."""
-        batched: Final = await SpendCounterReseed._read_active_batch(counter_key)
-        if batched is not None:
-            return batched[0]
-        value, _ = await spend_counter_store.read(counter_key)
+        value, _ = await SpendCounterReseed._cached_reading(spend_counter_store, counter_key)
         return None if value is None else float(value)
+
+    @staticmethod
+    async def _cached_reading(spend_counter_store: SpendCounterStore, counter_key: str) -> tuple[float | None, bool]:
+        batched: Final = await SpendCounterReseed._read_active_batch(counter_key)
+        return batched if batched is not None else await spend_counter_store.read(counter_key)
 
     @staticmethod
     async def window_from_table(
@@ -319,11 +380,7 @@ class SpendCounterReseed:
             )
             return None
 
-        if row is None:
-            return None
-        if _as_utc(row.window_start) < _as_utc(expected_window_start):
-            return None
-        return float(row.spend or 0.0)
+        return recorded_window_spend(row, entity_type, expected_window_start)
 
     @staticmethod
     async def window_from_db(
@@ -407,10 +464,16 @@ class SpendCounterReseed:
         entity_id: str,
         window_duration: str | None,
         window_start: datetime,
+        *,
+        require_authoritative: bool = False,
     ) -> float | None:
+        strict: Final = require_authoritative or entity_type.startswith("customer_")
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
-            cached: Final = await SpendCounterReseed._read_cached(spend_counter_store, counter_key)
+            cached, authoritative = await SpendCounterReseed._cached_reading(spend_counter_store, counter_key)
+            if strict and spend_counter_store.has_redis and not authoritative:
+                # A pod-local value or durable floor omits other workers' holds and unflushed charges.
+                return None
             if cached is not None:
                 return cached
 
@@ -430,6 +493,8 @@ class SpendCounterReseed:
                     "SpendCounterReseed.coalesced_window: failed to warm counter %s",
                     counter_key,
                 )
+                if strict:
+                    return None
                 raise
             if spend_counter_store.has_redis:
                 record_spend_counter_value(counter_key, float(seeded))
