@@ -18805,6 +18805,13 @@ _ADMIN_ONLY_ENDPOINT_URL_FIELDS: Final = frozenset(
         # The Bedrock control plane endpoint, passed to boto3 as endpoint_url
         # (litellm/llms/bedrock/batches/handler.py). Not in API_KEY_UPSTREAM_PARAMS.
         "aws_bedrock_control_plane_endpoint",
+        # The remaining endpoint URL fields of CredentialLiteLLMParams
+        # (litellm/types/router.py): the AWS STS endpoint and the Anthropic
+        # workload identity federation and OAuth token exchange endpoints.
+        "aws_sts_endpoint",
+        "anthropic_issuer_url",
+        "anthropic_keycloak_token_url",
+        "token_exchange_endpoint",
     )
 )
 
