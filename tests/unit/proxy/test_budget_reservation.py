@@ -2701,6 +2701,55 @@ async def test_a_cancelled_call_keeps_its_input_cost_only_once_the_model_call_cl
 
 
 @pytest.mark.asyncio
+async def test_an_unclaimed_hold_is_dropped_when_its_release_fails_after_the_call_is_cancelled_again(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    token: Final = "key-cancelled-twice"
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=3.0,
+    ):
+        reservation: Final = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/queue/chat/completions",
+            llm_router=None,
+            valid_token=UserAPIKeyAuth(token=token, spend=0.0, max_budget=10.0),
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=key_cache),
+        )
+    assert reservation is not None
+    assert counter_cache.get_local(f"spend:key:{token}") == pytest.approx(3.0)
+    release_started: Final = asyncio.Event()
+    store_dropped: Final = asyncio.Event()
+
+    async def release_until_the_store_drops(**_: object) -> tuple[()]:
+        release_started.set()
+        await store_dropped.wait()
+        raise ConnectionError("counter store unreachable")
+
+    async def settled() -> None:
+        while reservation.get("finalized") is not True:
+            await asyncio.sleep(0)
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._set_reserved_entries_actual_cost",
+        side_effect=release_until_the_store_drops,
+    ):
+        release: Final = asyncio.ensure_future(release_cancelled_budget_reservation(reservation))
+        await release_started.wait()
+        release.cancel()
+        await asyncio.wait([release])
+        store_dropped.set()
+        await asyncio.wait_for(settled(), timeout=1)
+
+    assert counter_cache.get_local(f"spend:key:{token}") is None
+
+
+@pytest.mark.asyncio
 async def test_release_budget_reservation_on_cancel_noop_when_finalized(
     spend_counter_state,
 ):
