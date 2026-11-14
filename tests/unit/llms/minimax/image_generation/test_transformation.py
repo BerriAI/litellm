@@ -152,6 +152,58 @@ def test_minimax_image_generation_raises_content_policy_error_only_for_safety_ch
 
     assert isinstance(error.value, litellm.ContentPolicyViolationError) is is_content_policy_error
     assert message in str(error.value)
+    assert error.value.status_code == (400 if is_content_policy_error else status_code)
+
+
+def test_minimax_chat_keeps_safety_check_codes_as_plain_bad_requests():
+    with respx.mock(assert_all_called=True) as router:
+        router.post("https://api.minimax.io/v1/chat/completions").respond(
+            400, json={"type": "error", "error": {"type": "error", "message": "input new_sensitive (1026)"}}
+        )
+        with pytest.raises(litellm.BadRequestError) as error:
+            litellm.completion(
+                model="minimax/MiniMax-M3", messages=[{"role": "user", "content": "hi"}], api_key="sk-fake"
+            )
+
+    assert not isinstance(error.value, litellm.ContentPolicyViolationError)
+
+
+@pytest.mark.parametrize(
+    ("api_base", "url"),
+    [
+        ("https://api.minimax.io", GENERATIONS_URL),
+        ("https://api.minimax.io/v1/", GENERATIONS_URL),
+        ("https://api.minimax.io/anthropic", GENERATIONS_URL),
+        ("https://api.minimax.io/anthropic/v1/messages", GENERATIONS_URL),
+        (GENERATIONS_URL, GENERATIONS_URL),
+        ("https://gateway.example.com/minimax/v1", "https://gateway.example.com/minimax/v1/images/generations"),
+    ],
+)
+def test_minimax_image_generation_url_from_each_api_base_shape(api_base: str, url: str):
+    assert (
+        MinimaxImageGenerationConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="MiniMax-H3-Image", optional_params={}, litellm_params={}
+        )
+        == url
+    )
+
+
+def test_minimax_image_generation_drops_listed_extra_body_fields():
+    with respx.mock(assert_all_called=True) as router:
+        route: Final = router.post(GENERATIONS_URL).respond(200, json=_generation_response("MiniMax-H3-Image"))
+        litellm.image_generation(
+            model="minimax/MiniMax-H3-Image",
+            prompt="a red cube",
+            api_key="sk-fake",
+            extra_body={"area": "4K", "aspect_ratio": "1:1"},
+            additional_drop_params=["area"],
+        )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "MiniMax-H3-Image",
+        "prompt": "a red cube",
+        "aspect_ratio": "1:1",
+    }
 
 def test_minimax_image_generation_refuses_stream_before_calling_minimax():
     with respx.mock(assert_all_called=False) as router:

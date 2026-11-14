@@ -10,6 +10,7 @@ import respx
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
+from litellm.llms.minimax.image_edit.transformation import MinimaxImageEditConfig
 
 EDITS_URL: Final = "https://api.minimax.io/v1/images/edits"
 PNG_BYTES: Final = base64.b64decode(
@@ -36,6 +37,11 @@ def _form_fields(request: httpx.Request) -> dict[str, str]:
 
 def _uploaded_images(request: httpx.Request) -> tuple[bytes, ...]:
     return tuple(value for name, is_file, value in _multipart_parts(request) if is_file and name == "image[]")
+
+
+def _read_from(handle: io.BytesIO, size: int) -> io.BytesIO:
+    handle.read(size)
+    return handle
 
 
 def _edit_response(model: str) -> dict[str, object]:
@@ -85,10 +91,19 @@ def test_minimax_image_edit_uploads_every_image_as_a_multipart_file():
         (lambda path: ("dog.png", PNG_BYTES, "image/png"), (PNG_BYTES,)),
         (lambda path: path, (SECOND_PNG_BYTES,)),
         (lambda path: [("dog.png", io.BytesIO(PNG_BYTES)), path], (PNG_BYTES, SECOND_PNG_BYTES)),
+        (lambda path: _read_from(io.BytesIO(PNG_BYTES), 8), (PNG_BYTES,)),
+        (lambda path: ("dog.png", _read_from(io.BytesIO(PNG_BYTES), -1)), (PNG_BYTES,)),
     ],
-    ids=["filename_tuple", "filename_tuple_with_content_type", "path", "list_of_tuple_and_path"],
+    ids=[
+        "filename_tuple",
+        "filename_tuple_with_content_type",
+        "path",
+        "list_of_tuple_and_path",
+        "partly_read_handle",
+        "tuple_with_fully_read_handle",
+    ],
 )
-def test_minimax_image_edit_uploads_the_file_inside_tuples_and_paths(
+def test_minimax_image_edit_uploads_the_whole_file_from_tuples_paths_and_handles(
     tmp_path: Path, build_image: Callable[[Path], object], expected_uploads: tuple[bytes, ...]
 ):
     image_path: Final = tmp_path / "cat.png"
@@ -149,7 +164,6 @@ def test_minimax_image_edit_bills_its_token_rates(model: str):
                 "extra_body": {
                     "prompt": "make it day",
                     "image": "https://example.com/day.png",
-                    "images": [{"image_url": "https://example.com/day.png"}],
                     "seed": 7,
                 }
             },
@@ -266,3 +280,61 @@ def test_minimax_image_edit_drops_stream_under_drop_params():
 
     assert route.call_count == 1
     assert "stream" not in _form_fields(route.calls.last.request)
+
+
+def test_minimax_image_edit_refuses_json_images_before_calling_minimax():
+    with respx.mock(assert_all_called=False) as router:
+        route: Final = router.post(EDITS_URL).respond(200, json=_edit_response("MiniMax-H3-Image"))
+        with pytest.raises(UnsupportedParamsError) as error:
+            litellm.image_edit(
+                model="minimax/MiniMax-H3-Image",
+                prompt="make it blue",
+                api_key="sk-fake",
+                images=[{"image_url": "https://example.com/cube.png"}],
+            )
+
+    assert error.value.status_code == 400
+    assert "`images`" in error.value.message
+    assert route.call_count == 0
+
+
+def test_minimax_image_edit_drops_json_images_under_drop_params():
+    with respx.mock(assert_all_called=True) as router:
+        route: Final = router.post(EDITS_URL).respond(200, json=_edit_response("MiniMax-H3-Image"))
+        litellm.image_edit(
+            model="minimax/MiniMax-H3-Image",
+            image=PNG_BYTES,
+            prompt="make it blue",
+            api_key="sk-fake",
+            images=[{"image_url": "https://example.com/cube.png"}],
+            drop_params=True,
+        )
+
+    assert _uploaded_images(route.calls.last.request) == (PNG_BYTES,)
+    assert "images" not in _form_fields(route.calls.last.request)
+
+
+def test_minimax_image_edit_raises_content_policy_error_with_status_400_on_a_safety_reject():
+    with respx.mock(assert_all_called=True) as router:
+        router.post(EDITS_URL).respond(
+            422, json={"type": "error", "error": {"type": "error", "message": "input new_sensitive (1026)"}}
+        )
+        with pytest.raises(litellm.ContentPolicyViolationError) as error:
+            litellm.image_edit(model="minimax/MiniMax-H3-Image", image=PNG_BYTES, prompt="x", api_key="sk-fake")
+
+    assert error.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("api_base", "url"),
+    [
+        ("https://api.minimax.io", EDITS_URL),
+        ("https://api.minimax.io/v1/", EDITS_URL),
+        ("https://api.minimax.io/anthropic", EDITS_URL),
+        ("https://api.minimax.io/anthropic/v1/messages", EDITS_URL),
+        (EDITS_URL, EDITS_URL),
+        ("https://gateway.example.com/minimax/v1", "https://gateway.example.com/minimax/v1/images/edits"),
+    ],
+)
+def test_minimax_image_edit_url_from_each_api_base_shape(api_base: str, url: str):
+    assert MinimaxImageEditConfig().get_complete_url(model="MiniMax-H3-Image", api_base=api_base, litellm_params={}) == url

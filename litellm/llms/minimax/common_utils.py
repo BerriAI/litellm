@@ -7,10 +7,17 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.exceptions import ContentPolicyViolationError, UnsupportedParamsError
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import ImageObject, ImageResponse
 
 _STREAM_FLAG: Final = TypeAdapter(bool)
 _SAFETY_CHECK_CODE: Final = re.compile(r"\((?:1026|1027)\)")
+_API_SURFACE_SUFFIX: Final = re.compile(r"/(?:anthropic(?:/v1(?:/messages)?)?|v[12])$")
+
+
+class MinimaxImageError(BaseLLMException):
+    pass
 
 
 class _MinimaxImage(BaseModel):
@@ -38,8 +45,19 @@ def _asks_to_stream(value: object) -> bool:
         return True
 
 
+def _drops_params(drop_params: object) -> bool:
+    return litellm.drop_params is True or drop_params is True
+
+
+def minimax_images_url(api_base: str, endpoint: str) -> str:
+    base_url: Final = api_base.rstrip("/")
+    if base_url.endswith(f"/{endpoint}"):
+        return base_url
+    return join_api_base(_API_SURFACE_SUFFIX.sub("", base_url), f"v1/{endpoint}")
+
+
 def image_params_without_stream(params: Mapping[str, object], drop_params: object) -> Mapping[str, object]:
-    if _asks_to_stream(params.get("stream")) and litellm.drop_params is not True and drop_params is not True:
+    if _asks_to_stream(params.get("stream")) and not _drops_params(drop_params):
         raise UnsupportedParamsError(
             status_code=400,
             message=(
@@ -48,6 +66,18 @@ def image_params_without_stream(params: Mapping[str, object], drop_params: objec
             ),
         )
     return {key: value for key, value in params.items() if key != "stream"}
+
+
+def edit_params_without_json_images(params: Mapping[str, object], drop_params: object) -> Mapping[str, object]:
+    if params.get("images") is not None and not _drops_params(drop_params):
+        raise UnsupportedParamsError(
+            status_code=400,
+            message=(
+                "LiteLLM does not support JSON `images` on MiniMax image edits. Upload each image as an `image` "
+                "file instead. To drop `images` from the call, set `drop_params: true`."
+            ),
+        )
+    return {key: value for key, value in params.items() if key != "images"}
 
 
 def _image_object(image: _MinimaxImage) -> ImageObject:
@@ -71,12 +101,6 @@ def with_minimax_images(image_response: ImageResponse, raw_response: httpx.Respo
 
 
 def minimax_safety_error(model: object, message: str, original_exception: object) -> ContentPolicyViolationError | None:
-    if _SAFETY_CHECK_CODE.search(message) is None:
+    if not isinstance(original_exception, MinimaxImageError) or _SAFETY_CHECK_CODE.search(message) is None:
         return None
-    response: Final = getattr(original_exception, "response", None)
-    return ContentPolicyViolationError(
-        message=message,
-        model=str(model),
-        llm_provider="minimax",
-        response=response if isinstance(response, httpx.Response) else None,
-    )
+    return ContentPolicyViolationError(message=message, model=str(model), llm_provider="minimax")
