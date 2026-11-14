@@ -456,14 +456,17 @@ def test_messages_count_tokens_repeated_request_lifts_each_time(deployment: _Dep
         assert _bodies(peer, deployment.provider) == (_STRING_BODY,) * 2
 
 
-def test_messages_count_tokens_surfaces_the_counting_error_for_a_leading_system_without_content(
+def test_messages_count_tokens_rejects_a_leading_system_without_content_before_calling_the_peer(
     deployment: _Deployment, gateway: Gateway
 ) -> None:
     with _listening(deployment) as peer:
         body: Final[dict[str, JsonValue]] = {"model": deployment.model, "messages": [{"role": "system"}, USER]}
         response: Final = _count(gateway, body)
-        assert 500 <= response.status_code < 600, response.text
-        assert "input_tokens" not in response.text, response.text
+        assert response.status_code == 400, response.text
+        assert JSON_OBJECT.validate_json(response.content)["error"] == {
+            "type": "invalid_request_error",
+            "message": "Message 0 must have a 'content' field",
+        }, response.text
         assert peer.drain() == ()
         follow_up: Final = _count(gateway, count_request(deployment.model, STRING_CASE))
         assert _payload(follow_up) == {"input_tokens": _COUNT, "litellm_count_source": "provider"}, follow_up.text

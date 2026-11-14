@@ -1310,6 +1310,7 @@ _INPUT_ESTIMABLE_CALL_TYPES: Final = frozenset(
 
 
 _RESPONSES_CALL_TYPES: Final = frozenset((CallTypes.responses.value, CallTypes.aresponses.value))
+_RERANK_CALL_TYPES: Final = frozenset((CallTypes.rerank.value, CallTypes.arerank.value))
 
 _FAILED_ATTEMPTS_USAGE: Final = TypeAdapter(tuple[tuple[Usage, float], ...])
 
@@ -1397,12 +1398,32 @@ def _estimated_prompt_usage(
         model=usage_tokenizer_model(
             str(model_call_details.get("model") or ""), get_base_model_from_metadata(model_call_details)
         ),
-        request_input=(
-            messages_since_newest_compaction(dispatched_input)
-            if dispatched_call_type in _RESPONSES_CALL_TYPES
-            else dispatched_input
-        ),
+        request_input=_dispatched_request_input(dispatched_input, request_body, dispatched_call_type),
         system_input=system_input,
+    )
+
+
+def _dispatched_request_input(
+    dispatched_input: object, request_body: Mapping[str, object], dispatched_call_type: str | None
+) -> object:
+    if dispatched_call_type in _RESPONSES_CALL_TYPES:
+        return messages_since_newest_compaction(dispatched_input)
+    if dispatched_call_type in _RERANK_CALL_TYPES:
+        return _rerank_input_text(request_body.get("query"), request_body.get("documents"))
+    return dispatched_input
+
+
+def _rerank_input_text(query: object, documents: object) -> str:
+    sent_documents: Final = (
+        cast("Sequence[object]", documents)  # cast-ok: a rerank body's documents is a JSON array
+        if isinstance(documents, list)
+        else ()
+    )
+    return "\n".join(
+        (
+            query if isinstance(query, str) else "",
+            *(document if isinstance(document, str) else safe_dumps(document) for document in sent_documents),
+        )
     )
 
 
@@ -1577,6 +1598,61 @@ def _priced_input_cost(pricing_model: str, custom_llm_provider: str | None, prom
 
 
 def _estimated_input_cost(
+    model_call_details: Mapping[str, object],
+    prompt_tokens: int,
+    deployment_id: str | None,
+    base_model: str | None,
+) -> float:
+    """A rerank model the provider prices per query bills the one query sent, the way the success path
+    bills one search unit per query; every other estimate is priced per token."""
+    if str(model_call_details.get("call_type")) not in _RERANK_CALL_TYPES:
+        return _estimated_token_input_cost(model_call_details, prompt_tokens, deployment_id, base_model)
+    pricing_details: Final = _routed_deployment_pricing_details(model_call_details, deployment_id)
+    query_rate: Final = _input_cost_per_query(pricing_details, deployment_id, base_model)
+    if query_rate is not None:
+        return query_rate
+    return _estimated_token_input_cost(pricing_details, prompt_tokens, deployment_id, base_model)
+
+
+def _routed_deployment_pricing_details(
+    model_call_details: Mapping[str, object], deployment_id: str | None
+) -> Mapping[str, object]:
+    """The failure handler logs the model group as the model, so price the deployment the router picked,
+    inferring its provider from that deployment's model as ``_record_pricing`` does."""
+    from litellm.proxy.proxy_server import llm_router
+
+    deployment: Final = (
+        llm_router.registry().deployment(deployment_id) if llm_router is not None and deployment_id else None
+    )
+    if deployment is None or deployment.litellm_params.model == model_call_details.get("model"):
+        return model_call_details
+    return {**model_call_details, "model": deployment.litellm_params.model, "custom_llm_provider": None}
+
+
+def _input_cost_per_query(
+    model_call_details: Mapping[str, object], deployment_id: str | None, base_model: str | None
+) -> float | None:
+    """The per-query rate the deployment declares, else, when it declares no pricing at all, the cost
+    map's rate for ``base_model`` or the deployment model; None when the model is priced per token."""
+    model: Final = str(model_call_details.get("model") or "")
+    declared_rate: Final = _cost_per_query(deployment_id) if deployment_id else None
+    if declared_rate is not None:
+        return declared_rate
+    if deployment_pricing_model_info(model_id=deployment_id, deployment_model=model) is not None:
+        return None
+    published_rates: Final = map(_cost_per_query, pricing_models(base_model, model))
+    return next((rate for rate in published_rates if rate is not None), None)
+
+
+def _cost_per_query(model_cost_key: str) -> float | None:
+    try:
+        model_info: Final = litellm.get_model_info(model=model_cost_key)
+    except Exception:  # noqa: BLE001  # get_model_info raises for a key the cost map does not know
+        return None
+    return model_info.get("input_cost_per_query")
+
+
+def _estimated_token_input_cost(
     model_call_details: Mapping[str, object],
     prompt_tokens: int,
     deployment_id: str | None,
@@ -4976,6 +5052,10 @@ class ProxyLogging:
         )
         if result is not None:
             merged_headers.update(result)
+
+    @staticmethod
+    def filters_listed_models() -> bool:
+        return bool(hook_subscribers(Hook.list_models, ProxyLogging.callback_capabilities().hook_callbacks).entries)
 
     async def hidden_by_listing_callbacks(
         self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]

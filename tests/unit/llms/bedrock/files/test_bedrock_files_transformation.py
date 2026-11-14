@@ -4876,6 +4876,32 @@ def _batch_line_with_body(field: str, value: object) -> str:
     return _batch_line({**_VALID_BATCH_RECORD["body"], field: value})
 
 
+_BATCH_S3_IMAGE: Final = "s3://media-bucket/dir/cat.png"
+_BATCH_S3_MEDIA_REFUSAL: Final = (
+    f"Batch input file line 2 has s3:// media URLs ({_BATCH_S3_IMAGE}). "
+    "LiteLLM does not accept s3:// media URLs in Bedrock batch files, so send the media inline as base64 data"
+)
+_CHAT_BATCH_LINE_WITH_AN_S3_IMAGE: Final = _batch_line_with_body(
+    "messages",
+    [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": _BATCH_S3_IMAGE}}]}],
+)
+_S3_IMAGE_PART: Final = {"type": "image_url", "image_url": {"url": _BATCH_S3_IMAGE}}
+_CHAT_BATCH_LINE_WITH_THE_SAME_S3_IMAGE_TWICE: Final = _batch_line_with_body(
+    "messages", [{"role": "user", "content": [_S3_IMAGE_PART, _S3_IMAGE_PART]}]
+)
+_RESPONSES_BATCH_LINE_WITH_AN_S3_IMAGE: Final = json.dumps(
+    {
+        "custom_id": "req-2",
+        "method": "POST",
+        "url": "/v1/responses",
+        "body": {
+            "model": "bedrock/amazon.nova-pro-v1:0",
+            "input": [{"role": "user", "content": [{"type": "input_image", "image_url": _BATCH_S3_IMAGE}]}],
+        },
+    }
+)
+
+
 @pytest.mark.usefixtures(httpx_transport.__name__)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -4918,6 +4944,21 @@ def _batch_line_with_body(field: str, value: object) -> str:
             id="claude-list-role-before-a-system-message",
         ),
         pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_CHAT_BATCH_LINE_WITH_AN_S3_IMAGE}\n".encode(),
+            _BATCH_S3_MEDIA_REFUSAL,
+            id="chat-s3-image",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_RESPONSES_BATCH_LINE_WITH_AN_S3_IMAGE}\n".encode(),
+            _BATCH_S3_MEDIA_REFUSAL,
+            id="responses-s3-image",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_CHAT_BATCH_LINE_WITH_THE_SAME_S3_IMAGE_TWICE}\n".encode(),
+            _BATCH_S3_MEDIA_REFUSAL,
+            id="chat-repeated-s3-image",
+        ),
+        pytest.param(
             f"{_VALID_BATCH_LINE}\n{'[' * 1_000_000}{']' * 1_000_000}\n".encode(),
             "Batch input file line 2 could not be parsed",
             id="deep-nesting",
@@ -4948,6 +4989,35 @@ async def test_create_file_rejects_a_malformed_batch_line_with_a_400_before_uplo
     assert exc_info.value.status_code == 400
     assert exc_info.value.message.startswith(expected_message)
     assert not put_route.called
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+async def test_create_file_uploads_s3_values_that_no_converse_record_sends_as_an_s3_source(
+    respx_mock: respx.MockRouter,
+) -> None:
+    put_route: Final = respx_mock.put(url__regex=r"https://s3\..+").respond(status_code=200)
+    passthrough_messages: Final = [{"role": "user", "content": [_S3_IMAGE_PART]}]
+    passthrough_line: Final = _batch_line(
+        {"model": "bedrock/openai.gpt-oss-120b-1:0", "max_tokens": 10, "messages": passthrough_messages}
+    )
+    metadata_only_line: Final = _batch_line_with_body("metadata", {"url": _BATCH_S3_IMAGE})
+
+    await litellm.acreate_file(
+        file=("batch.jsonl", f"{passthrough_line}\n{metadata_only_line}\n".encode(), "application/jsonl"),
+        purpose="batch",
+        custom_llm_provider="bedrock",
+        s3_bucket_name="litellm-batch-bucket",
+        aws_region_name="us-west-2",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+    )
+
+    passthrough_record, metadata_only_record = (
+        json.loads(line) for line in put_route.calls.last.request.content.decode().split("\n")
+    )
+    assert passthrough_record["modelInput"]["messages"] == passthrough_messages
+    assert metadata_only_record["recordId"] == _VALID_BATCH_RECORD["custom_id"]
 
 
 @pytest.mark.usefixtures(httpx_transport.__name__)

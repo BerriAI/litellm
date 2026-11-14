@@ -121,6 +121,7 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     log_llm_api_exception,
     open_sse_before_first_byte,
+    refuse_s3_media_the_key_may_not_read,
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.callback_utils import strip_callback_config
@@ -332,6 +333,10 @@ async def chat_completion_pass_through_endpoint(
             data = {**_request_body_fields(_DECODED_JSON.validate_python(json.loads(body_str))), **data}
 
         data["adapter_id"] = adapter_id
+
+        await refuse_s3_media_the_key_may_not_read(
+            data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
+        )
 
         verbose_proxy_logger.debug("Request received by LiteLLM:\n%s", data)
         data["model"] = (
@@ -1278,6 +1283,28 @@ def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return headers
 
 
+UpstreamRequest: TypeAlias = tuple[Mapping[str, str], Mapping[str, object] | None]
+UpstreamRequestFilter: TypeAlias = Callable[
+    [Mapping[str, str], Mapping[str, object] | None, Mapping[str, object]], UpstreamRequest
+]
+
+
+def _unfiltered_request(
+    headers: Mapping[str, str], body: Mapping[str, object] | None, litellm_params: Mapping[str, object]
+) -> UpstreamRequest:
+    return headers, body
+
+
+def _filtered_upstream_request(
+    upstream_request_filter: UpstreamRequestFilter,
+    headers: Mapping[str, str],
+    body: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object],
+) -> tuple[dict[str, str], Mapping[str, object] | None]:  # mutable-ok: the relay helpers take a dict of headers
+    filtered_headers, filtered_body = upstream_request_filter(headers, body, litellm_params)
+    return dict(filtered_headers), filtered_body
+
+
 def _caller_query_source(
     keep_target_query: bool, query_params: Mapping[str, object] | None, request: Request
 ) -> Mapping[str, object]:
@@ -1406,6 +1433,7 @@ async def pass_through_request(
     guardrails_config: dict | None = None,
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
+    upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
     keep_target_query: bool = False,
 ):
@@ -1429,6 +1457,8 @@ async def pass_through_request(
         timeout: Optional per-endpoint timeout in seconds. Falls back to
             general_settings.pass_through_request_timeout, then 600s.
         upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
+        upstream_request_filter: Optional last rewrite of the headers and JSON body sent upstream, given the
+            litellm_params the request is logged with
         operation: Optional GenAI operation the route reports, unless the upstream names its own
         keep_target_query: Send the target URL's query exactly as given, adding none of the caller's query params
     """
@@ -1790,14 +1820,19 @@ async def pass_through_request(
                 logging_url = str(url) + "?" + requested_query_params_str
 
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
-        upstream_body: Final = _with_anthropic_user_id(outgoing_body, client_user_id)
+        outbound_headers, upstream_body = _filtered_upstream_request(
+            upstream_request_filter,
+            upstream_headers,
+            _with_anthropic_user_id(outgoing_body, client_user_id),
+            _METADATA_ADAPTER.validate_python(kwargs["litellm_params"]),
+        )
         logging_obj.pre_call(
             input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             api_key="",
             additional_args={
                 "complete_input_dict": upstream_body,
                 "api_base": str(logging_url),
-                "headers": redact_credential_headers(upstream_headers),
+                "headers": redact_credential_headers(outbound_headers),
             },
         )
         stream = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
@@ -1814,7 +1849,7 @@ async def pass_through_request(
                     request=request,
                     async_client=async_client,
                     url=url,
-                    headers=upstream_headers,
+                    headers=outbound_headers,
                     requested_query_params=requested_query_params,
                     stream=True,
                 )
@@ -1826,7 +1861,7 @@ async def pass_through_request(
                         request.method,
                         url,
                         params=requested_query_params,
-                        headers=upstream_headers,
+                        headers=outbound_headers,
                         content=state_raw_body,
                     )
                     if state_raw_body is not None
@@ -1834,7 +1869,7 @@ async def pass_through_request(
                         request.method,
                         url,
                         params=requested_query_params,
-                        headers=upstream_headers,
+                        headers=outbound_headers,
                         json=upstream_body,
                     )
                 )
@@ -1922,7 +1957,7 @@ async def pass_through_request(
             raw_body_request: Final = async_client.build_request(
                 request.method,
                 url,
-                headers=upstream_headers,
+                headers=outbound_headers,
                 params=requested_query_params,
                 content=state_raw_body,
             )
@@ -1932,7 +1967,7 @@ async def pass_through_request(
                 request=request,
                 async_client=async_client,
                 url=url,
-                headers=upstream_headers,
+                headers=outbound_headers,
                 requested_query_params=requested_query_params,
                 _parsed_body=upstream_body,
                 forward_multipart=is_multipart,
@@ -2477,6 +2512,7 @@ def create_pass_through_route(
     config_file_path: str | None = None,
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
+    upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
     keep_target_query: bool = False,
 ):
@@ -2627,6 +2663,7 @@ def create_pass_through_route(
                         guardrails_config=cast(dict | None, param_guardrails),
                         timeout=cast(float | None, param_timeout),
                         upstream_headers_filter=upstream_headers_filter,
+                        upstream_request_filter=upstream_request_filter,
                         operation=operation,
                         keep_target_query=keep_target_query,
                     )

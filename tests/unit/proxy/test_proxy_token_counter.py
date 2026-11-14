@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final, NoReturn
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -63,10 +63,10 @@ from litellm.llms.bedrock.count_tokens.kimi_k3 import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
+from litellm.llms.mistral.count_tokens import handler as mistral_count_tokens_http
 from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
 from litellm.proxy._types import ProxyException, TokenCountRequest, UserAPIKeyAuth
-from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
@@ -84,6 +84,7 @@ from litellm.proxy.proxy_server import (
     _try_provider_token_count,
     count_request_tokens,
 )
+from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
@@ -95,7 +96,6 @@ from litellm.types.utils import (
     TokenCountMessagesFormat,
     TokenCountResponse,
 )
-
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
@@ -1590,7 +1590,7 @@ async def _count_on_a_model_without_a_count_api(
         model_list=[
             {
                 "model_name": "mistral-tool-result",
-                "litellm_params": {"model": "mistral/mistral-small-latest", "api_key": "sk-test"},
+                "litellm_params": {"model": "mistral/mistral-large-4", "api_key": "sk-test"},
             }
         ],
         default_litellm_params=router_defaults,
@@ -1598,7 +1598,11 @@ async def _count_on_a_model_without_a_count_api(
     request: Final = _json_request(body, "python-httpx/0.28.1")
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
+        respx.post("https://api.mistral.ai/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 7})
+        )
         return await anthropic_count_tokens(request, Response(), UserAPIKeyAuth())
 
 
@@ -4169,18 +4173,18 @@ async def test_gemini_messages_count_tokens_rejects_an_invalid_edit_without_drop
     assert sent_bodies == ()
 
 
-_MISTRAL_MODEL: Final = "mistral/mistral-large-latest"
+_GROQ_MODEL: Final = "groq/llama-3.3-70b-versatile"
 
 
-def _mistral_router(
+def _groq_router(
     litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
     router_defaults: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> Router:
     return Router(
         model_list=[
             {
-                "model_name": "mistral-agent",
-                "litellm_params": {"model": _MISTRAL_MODEL, "api_key": "test-key", **litellm_params},
+                "model_name": "groq-agent",
+                "litellm_params": {"model": _GROQ_MODEL, "api_key": "test-key", **litellm_params},
             }
         ],
         default_litellm_params=dict(router_defaults),
@@ -4228,9 +4232,9 @@ async def _messages_the_inference_polyfill_sends(model: str) -> list[dict[str, J
 
 @pytest.mark.asyncio
 async def test_messages_count_tokens_counts_the_body_the_inference_polyfill_sends_on_a_bridged_provider() -> None:
-    router: Final = _mistral_router()
+    router: Final = _groq_router()
     unedited_body: Final[dict[str, JsonValue]] = {
-        "model": "mistral-agent",
+        "model": "groq-agent",
         "messages": _agent_turns_with_tool_results(3),
         "tools": [_READ_FILE_TOOL],
     }
@@ -4238,11 +4242,55 @@ async def test_messages_count_tokens_counts_the_body_the_inference_polyfill_send
     edited: Final = await _input_tokens(router, {**unedited_body, "context_management": _CLEAR_TOOL_USES})
     unedited: Final = await _input_tokens(router, unedited_body)
     polyfilled: Final = await _input_tokens(
-        router, {**unedited_body, "messages": await _messages_the_inference_polyfill_sends(_MISTRAL_MODEL)}
+        router, {**unedited_body, "messages": await _messages_the_inference_polyfill_sends(_GROQ_MODEL)}
     )
 
     assert edited < unedited
     assert edited == polyfilled
+
+
+class _MistralCountTokensPeer:
+    def __init__(self) -> None:
+        self.request_bodies: tuple[bytes, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request_bodies = (*self.request_bodies, request.content)
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 57}, request=request)
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_sends_mistral_the_messages_the_inference_polyfill_edits() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-agent",
+                "litellm_params": {"model": "mistral/mistral-large-4", "api_key": "test-mistral-key"},
+            }
+        ]
+    )
+    unedited_body: Final[dict[str, JsonValue]] = {
+        "model": "mistral-agent",
+        "messages": _agent_turns_with_tool_results(3),
+        "tools": [_READ_FILE_TOOL],
+    }
+    polyfilled_messages: Final = await _messages_the_inference_polyfill_sends("mistral/mistral-large-4")
+    peer: Final = _MistralCountTokensPeer()
+
+    with patch.object(
+        mistral_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    ):
+        for request_body in (
+            {**unedited_body, "context_management": _CLEAR_TOOL_USES},
+            {**unedited_body, "messages": polyfilled_messages},
+            unedited_body,
+        ):
+            assert await _input_tokens(router, request_body) == 57
+
+    edited, polyfilled, unedited = (json.loads(body)["input"] for body in peer.request_bodies)
+    assert edited == polyfilled
+    assert edited != unedited
 
 
 @pytest.mark.asyncio
@@ -4260,9 +4308,9 @@ async def test_messages_count_tokens_on_a_bridged_provider_keeps_the_unedited_co
     router_defaults: dict[str, JsonValue],
     request_options: dict[str, JsonValue],
 ) -> None:
-    router: Final = _mistral_router(deployment_params, router_defaults)
+    router: Final = _groq_router(deployment_params, router_defaults)
     unedited_body: Final[dict[str, JsonValue]] = {
-        "model": "mistral-agent",
+        "model": "groq-agent",
         "messages": _agent_turns_with_tool_results(3),
         "tools": [_READ_FILE_TOOL],
         **request_options,
@@ -4277,9 +4325,9 @@ async def test_messages_count_tokens_on_a_bridged_provider_keeps_the_unedited_co
 async def test_messages_count_tokens_on_a_bridged_provider_rejects_an_invalid_edit_without_drop_params() -> None:
     with patch.object(litellm, "drop_params", False):
         response: Final = await _messages_endpoint_count(
-            _mistral_router(),
+            _groq_router(),
             {
-                "model": "mistral-agent",
+                "model": "groq-agent",
                 "messages": _agent_turns_with_tool_results(3),
                 "tools": [_READ_FILE_TOOL],
                 "context_management": _INVALID_COMPACT_EDIT,
@@ -4292,9 +4340,9 @@ async def test_messages_count_tokens_on_a_bridged_provider_rejects_an_invalid_ed
 
 @pytest.mark.asyncio
 async def test_messages_count_tokens_on_a_bridged_provider_counts_without_an_invalid_edit_under_drop_params() -> None:
-    router: Final = _mistral_router()
+    router: Final = _groq_router()
     unedited_body: Final[dict[str, JsonValue]] = {
-        "model": "mistral-agent",
+        "model": "groq-agent",
         "messages": _agent_turns_with_tool_results(3),
         "tools": [_READ_FILE_TOOL],
         "drop_params": True,
@@ -4319,9 +4367,9 @@ def _turns_compacted_by_the_client() -> list[dict[str, JsonValue]]:
 async def test_messages_count_tokens_on_a_bridged_provider_counts_only_what_follows_a_client_compaction_block() -> None:
     from litellm.llms.anthropic.messages.adapters.handler import prepare_context_managed_request
 
-    router: Final = _mistral_router()
+    router: Final = _groq_router()
     sent: Final = await prepare_context_managed_request(
-        model=_MISTRAL_MODEL,
+        model=_GROQ_MODEL,
         messages=[dict(message) for message in _turns_compacted_by_the_client()],
         tools=[dict(_READ_FILE_TOOL)],
         system=None,
@@ -4333,15 +4381,15 @@ async def test_messages_count_tokens_on_a_bridged_provider_counts_only_what_foll
     assert sent is not None
 
     compacted: Final = await _input_tokens(
-        router, {"model": "mistral-agent", "messages": _turns_compacted_by_the_client(), "tools": [_READ_FILE_TOOL]}
+        router, {"model": "groq-agent", "messages": _turns_compacted_by_the_client(), "tools": [_READ_FILE_TOOL]}
     )
     uncompacted: Final = await _input_tokens(
-        router, {"model": "mistral-agent", "messages": _agent_turns_with_tool_results(3), "tools": [_READ_FILE_TOOL]}
+        router, {"model": "groq-agent", "messages": _agent_turns_with_tool_results(3), "tools": [_READ_FILE_TOOL]}
     )
     sent_body_count: Final = await _input_tokens(
         router,
         {
-            "model": "mistral-agent",
+            "model": "groq-agent",
             "messages": TypeAdapter(list[dict[str, JsonValue]]).validate_python(sent.messages),
             "system": TypeAdapter(JsonValue).validate_python(sent.system),
             "tools": [_READ_FILE_TOOL],
@@ -5819,6 +5867,128 @@ def test_utils_token_counter_line_stays_one_line_when_the_model_carries_a_newlin
     assert line["request_model"] == forged_model
     assert "\n" not in message
     assert message.startswith(f'token count - litellm_call_id="count log" request_model={json.dumps(forged_model)} ')
+
+
+@pytest.mark.asyncio
+async def test_mistral_proxy_token_counter_chat_and_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-proxy-model",
+                "litellm_params": {
+                    "model": "mistral/mistral-large-4",
+                    "api_key": "test-mistral-key",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    def count_peer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 33}, request=request)
+
+    with patch.object(
+        mistral_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_peer)),
+    ):
+        utils_result: Final = await count_request_tokens(
+            request=TokenCountRequest(
+                model="mistral-proxy-model", messages=[{"role": "user", "content": "hello mistral"}]
+            ),
+            call_endpoint=True,
+        )
+        responses_result: Final = await count_request_tokens(
+            request=TokenCountRequest(
+                model="mistral-proxy-model", messages=[{"role": "user", "content": "hello mistral"}]
+            ),
+            call_endpoint=True,
+            responses_request={"model": "mistral-proxy-model", "input": "hello mistral"},
+        )
+
+    assert utils_result.total_tokens == 33
+    assert utils_result.tokenizer_type == "mistral_api"
+    assert responses_result.total_tokens == 33
+    assert responses_result.tokenizer_type == "mistral_api"
+
+
+def _input_texts(item: JsonValue) -> list[str]:
+    assert isinstance(item, dict)
+    content: Final = item.get("content")
+    if isinstance(content, str):
+        return [content]
+    assert isinstance(content, list)
+    return [str(part["text"]) for part in content if isinstance(part, dict) and "text" in part]
+
+
+class _SpendLogsTable:
+    def __init__(self, rows: tuple[Mapping[str, object], ...]) -> None:
+        self.rows: Final = rows
+
+    async def query_raw(self, query: str, request_ids: list[str]) -> list[Mapping[str, object]]:
+        sessions: Final = {row["session_id"] for row in self.rows if row["request_id"] in request_ids}
+        return [row for row in self.rows if row["session_id"] in sessions]
+
+
+@pytest.mark.asyncio
+async def test_responses_count_on_mistral_counts_the_turns_previous_response_id_replays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-counted",
+                "litellm_params": {"model": "mistral/mistral-large-4", "api_key": "test-mistral-key"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    stored_turn: Final = {
+        "request_id": "chatcmpl-stored",
+        "call_type": "aresponses",
+        "session_id": "session-1",
+        "proxy_server_request": {"input": "Who won in 1998?", "model": "mistral-counted"},
+        "response": {
+            "id": "chatcmpl-stored",
+            "object": "chat.completion",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "The Bulls."}, "finish_reason": "stop"}
+            ],
+        },
+        "status": "success",
+    }
+    bodies: Final[list[dict[str, JsonValue]]] = []  # mutable-ok: collects what the mock peer receives
+
+    def count_peer(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 41}, request=request)
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", SimpleNamespace(db=_SpendLogsTable((stored_turn,))))
+    with patch.object(
+        mistral_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_peer)),
+    ):
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest(model="mistral-counted", messages=[{"role": "user", "content": "And in 1999?"}]),
+            call_endpoint=True,
+            responses_request={
+                "model": "mistral-counted",
+                "input": "And in 1999?",
+                "previous_response_id": "chatcmpl-stored",
+            },
+        )
+
+    assert (result.error, result.total_tokens, result.tokenizer_type) == (False, 41, "mistral_api")
+    (body,) = bodies
+    assert "previous_response_id" not in body
+    sent_input: Final = body["input"]
+    assert isinstance(sent_input, list)
+    assert list(itertools.chain.from_iterable(map(_input_texts, sent_input))) == [
+        "Who won in 1998?",
+        "The Bulls.",
+        "And in 1999?",
+    ]
 
 
 _COUNTED_OPTION_FIELDS: Final = ("thinking", "tool_choice", "output_config")

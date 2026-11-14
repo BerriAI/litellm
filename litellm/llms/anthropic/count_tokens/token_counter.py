@@ -18,6 +18,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
     ChatCountTranslationError,
     anthropic_count_fields,
+    malformed_message_error,
     messages_count_options,
 )
 from litellm.llms.base_llm.base_utils import (
@@ -97,6 +98,9 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 )
             case None:
                 pass
+
+        if (malformed := malformed_message_error(messages)) is not None:
+            return malformed.response(request_model, model_to_use, "anthropic_api")
 
         match options := await asyncify(messages_count_options)(
             AnthropicMessagesConfig(),
