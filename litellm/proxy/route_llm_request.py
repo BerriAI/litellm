@@ -924,6 +924,13 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         if data.get("fastest_response", False):
             return llm_router.abatch_completion_fastest_response(**data)
         else:
+            if data.get("stream") in (True, "true", "True"):
+                raise ProxyException(
+                    message="Streaming is not supported for comma-separated models without fastest_response=True. Either request one model per request or set 'fastest_response': true.",
+                    type="invalid_request_error",
+                    param="model",
+                    code=400,
+                )
             models: Final = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
 
