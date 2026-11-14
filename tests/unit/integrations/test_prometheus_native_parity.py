@@ -2,6 +2,7 @@ import asyncio
 import copy
 import json
 import logging
+import os
 import re
 import traceback
 from collections.abc import Awaitable, Callable, Generator, Mapping
@@ -70,6 +71,43 @@ _SETTINGS: Final = (
 import litellm.accounting.metrics  # noqa: E402,F401  # registers its collectors before the snapshot below
 
 _PREEXISTING: Final = frozenset(REGISTRY._collector_to_names)
+GOLDEN: Final = Path(__file__).parent / "prometheus_golden" / "python_outputs.json"
+RECORD_ENV: Final = "PROMETHEUS_GOLDEN_RECORD"
+_RECORDED: Final[dict[str, object]] = {}
+_RECORDING: Final = os.environ.get(RECORD_ENV) == "1"
+
+
+def _recording() -> bool:
+    return _RECORDING
+
+
+def _golden(case: str) -> object:
+    return json.loads(GOLDEN.read_text())[case]
+
+
+def _kept_value(case: str, value: object) -> object:
+    assert _RECORDED.setdefault(case, value) == value
+    return value
+
+
+async def _python_side(case: str, produce: Callable[[], Awaitable[object]]) -> object:
+    if not _recording():
+        return _golden(case)
+    return _kept_value(case, await produce())
+
+
+def _python_side_sync(case: str, produce: Callable[[], object]) -> object:
+    return _kept_value(case, produce()) if _recording() else _golden(case)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def golden_writer() -> Generator[None]:
+    yield
+    if _recording():
+        recorded: Final = json.loads(GOLDEN.read_text()) if GOLDEN.exists() else {}
+        recorded.update(_RECORDED)
+        GOLDEN.parent.mkdir(exist_ok=True)
+        GOLDEN.write_text(json.dumps(recorded, indent=1, sort_keys=True) + "\n")
 
 
 def _logger_collectors() -> list[Collector]:
@@ -654,7 +692,7 @@ async def test_the_native_callback_and_the_fallback_expose_exactly_what_the_pyth
 ) -> None:
     for name, value in CONFIGS[config].items():
         setattr(litellm, name, copy.deepcopy(value))
-    python_text: Final = await _drive("python", monkeypatch)
+    python_text: Final = str(await _python_side(f"main/{config}", lambda: _drive("python", monkeypatch)))
     _clear_registry()
     native_text: Final = await _drive(mode, monkeypatch)
 
@@ -752,7 +790,7 @@ async def test_typed_field_edge_cases_expose_what_the_python_logger_does(
 ) -> None:
     for name, value in EDGE_CONFIGS[config].items():
         setattr(litellm, name, copy.deepcopy(value))
-    python_text: Final = await _drive("python", monkeypatch, _edges)
+    python_text: Final = str(await _python_side(f"edges/{config}", lambda: _drive("python", monkeypatch, _edges)))
     _clear_registry()
     native_text: Final = await _drive("native", monkeypatch, _edges)
 
@@ -786,7 +824,9 @@ async def _shared_call_id_lines(mode: Mode, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 async def test_concurrent_attempts_sharing_a_call_id_keep_their_own_series(monkeypatch: pytest.MonkeyPatch) -> None:
-    python_lines: Final = await _shared_call_id_lines("python", monkeypatch)
+    recorded: Final = await _python_side("shared_call_id", lambda: _shared_call_id_lines("python", monkeypatch))
+    assert isinstance(recorded, list)
+    python_lines: Final = [str(line) for line in recorded]
     native_lines: Final = await _shared_call_id_lines("native", monkeypatch)
 
     assert any(
@@ -803,7 +843,7 @@ async def _openmetrics(mode: Mode, monkeypatch: pytest.MonkeyPatch) -> str:
 
 
 async def test_openmetrics_output_matches_too(monkeypatch: pytest.MonkeyPatch) -> None:
-    python_text: Final = await _openmetrics("python", monkeypatch)
+    python_text: Final = str(await _python_side("openmetrics", lambda: _openmetrics("python", monkeypatch)))
     assert await _openmetrics("native", monkeypatch) == python_text
 
 
@@ -982,9 +1022,15 @@ def saved_in_memory_loggers() -> Generator[None]:
 async def test_every_registration_path_emits_each_request_exactly_once_as_python_does(
     registration: str, scenario: str, monkeypatch: pytest.MonkeyPatch, native_recordings: list[str]
 ) -> None:
-    _ = await _completion_text(False, registration, scenario, monkeypatch)
+    _ = await _completion_text(not _recording(), registration, scenario, monkeypatch)
     _clear_registry()
-    python_text: Final = await _completion_text(False, registration, scenario, monkeypatch)
+    native_recordings.clear()
+    python_text: Final = str(
+        await _python_side(
+            f"registration/{registration}/{scenario}",
+            lambda: _completion_text(False, registration, scenario, monkeypatch),
+        )
+    )
     assert native_recordings == []
     _clear_registry()
     native_text: Final = await _completion_text(True, registration, scenario, monkeypatch)
@@ -1028,7 +1074,9 @@ def _sync_completion_text(native: bool, registration: str, monkeypatch: pytest.M
 def test_a_sync_completion_emits_nothing_on_either_side(
     registration: str, monkeypatch: pytest.MonkeyPatch, native_recordings: list[str]
 ) -> None:
-    python_text: Final = _sync_completion_text(False, registration, monkeypatch)
+    python_text: Final = str(
+        _python_side_sync(f"sync/{registration}", lambda: _sync_completion_text(False, registration, monkeypatch))
+    )
     _clear_registry()
     native_text: Final = _sync_completion_text(True, registration, monkeypatch)
 
@@ -1050,7 +1098,7 @@ def _cooled_down_text(native: bool, monkeypatch: pytest.MonkeyPatch) -> str:
 
 @pytest.mark.usefixtures("saved_in_memory_loggers")
 def test_the_router_cooldown_lookup_reaches_the_native_logger(monkeypatch: pytest.MonkeyPatch) -> None:
-    python_text: Final = _cooled_down_text(False, monkeypatch)
+    python_text: Final = str(_python_side_sync("cooled_down", lambda: _cooled_down_text(False, monkeypatch)))
     _clear_registry()
     native_text: Final = _cooled_down_text(True, monkeypatch)
 
