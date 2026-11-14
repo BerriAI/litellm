@@ -485,7 +485,7 @@ _usage_metadata_adapter: Final = TypeAdapter(UsageMetadata)
 
 def _parse_usage_metadata(raw_usage_metadata: object) -> UsageMetadata | None:
     fields: Final = _as_mapping(raw_usage_metadata)
-    if fields is None:
+    if fields is None or "promptTokenCount" not in fields:
         return None
     details: Final = fields.get("promptTokensDetails", fields.get("promptTokenDetails"))
     try:
@@ -634,11 +634,16 @@ def _locally_counted_usage(input: GeminiEmbeddingInput, model: str) -> Usage:
     return Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
 
 
-def _batch_embed_usage(input: GeminiEmbeddingInput, model: str, raw_usage_metadata: object) -> Usage:
+def _batch_embed_usage(
+    input: GeminiEmbeddingInput,
+    model: str,
+    raw_usage_metadata: object,
+    resolved_files: Mapping[str, Mapping[str, str]],
+) -> Usage:
     usage_metadata: Final = _parse_usage_metadata(raw_usage_metadata)
     if usage_metadata is None:
         return _locally_counted_usage(input, model)
-    return _usage_from_usage_metadata(input, usage_metadata, resolved_files={})
+    return _usage_from_usage_metadata(input, usage_metadata, resolved_files)
 
 
 def process_response(
@@ -646,12 +651,13 @@ def process_response(
     model_response: EmbeddingResponse,
     model: str,
     _predictions: VertexAIBatchEmbeddingsResponseObject,
+    resolved_files: Mapping[str, Mapping[str, str]] | None = None,
 ) -> EmbeddingResponse:
     model_response.data = [
         Embedding(embedding=embedding["values"], index=idx, object="embedding")
         for idx, embedding in enumerate(_predictions["embeddings"])
     ]
     model_response.model = model
-    model_response.usage = _batch_embed_usage(input, model, _predictions.get("usageMetadata"))
+    model_response.usage = _batch_embed_usage(input, model, _predictions.get("usageMetadata"), resolved_files or {})
 
     return model_response

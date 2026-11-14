@@ -29,12 +29,17 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
     transform_openai_input_gemini_embed_content,
 )
 from litellm.types.llms.vertex_ai import VertexAIBatchEmbeddingsResponseObject
-from litellm.types.utils import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse, Usage
 
 IMAGE_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
 GCS_URL = "gs://my-bucket/image.png"
 VIDEO_DATA_URI = "data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAA"
 FILES_URI = "https://generativelanguage.googleapis.com/v1beta/files/clip123"
+
+
+def _prompt_cost(model: str, usage: Usage) -> float:
+    cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="vertex_ai")
+    return cost
 
 
 def _file_block(**file: object) -> dict[str, object]:
@@ -706,3 +711,61 @@ def test_gemini_batch_embedding_usage_comes_from_usage_metadata(
     assert litellm.completion_cost(completion_response=response) == pytest.approx(
         4 * prices["input_cost_per_token"] + 330 * prices[media_price_key]
     )
+
+@pytest.mark.parametrize(
+    "usage_metadata",
+    [
+        {},
+        {"promptTokenDetails": [{"modality": "TEXT", "tokenCount": 3}, {"modality": "IMAGE", "tokenCount": 258}]},
+    ],
+)
+def test_gemini_batch_usage_metadata_without_a_prompt_count_bills_like_none_was_sent(
+    usage_metadata: dict[str, object],
+) -> None:
+    def usage_for(predictions: VertexAIBatchEmbeddingsResponseObject) -> Usage:
+        return process_response(
+            input=["a red apple", IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-2",
+            _predictions=predictions,
+        ).usage
+
+    embeddings: Final = [{"values": [0.1]}, {"values": [0.2]}]
+    with_metadata: Final = usage_for({"embeddings": embeddings, "usageMetadata": usage_metadata})
+    without_metadata: Final = usage_for({"embeddings": embeddings})
+
+    assert with_metadata.prompt_tokens == without_metadata.prompt_tokens > 0
+    assert _prompt_cost("gemini-embedding-2", with_metadata) == _prompt_cost("gemini-embedding-2", without_metadata)
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_batch_embedding_bills_a_files_image_at_the_image_rate_without_modality_details(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, use_async: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.get("https://generativelanguage.googleapis.com/v1beta/files/abc123").mock(
+        return_value=httpx.Response(
+            200,
+            json={"mimeType": "image/png", "uri": "https://generativelanguage.googleapis.com/v1beta/files/abc123"},
+        )
+    )
+    respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
+    ).mock(
+        return_value=httpx.Response(
+            200, json={"embeddings": [{"values": [0.1, 0.2]}], "usageMetadata": {"promptTokenCount": 258}}
+        )
+    )
+
+    response: Final = (
+        await litellm.aembedding(model="gemini/gemini-embedding-2", input=["files/abc123"], api_key="gemini-test-key")
+        if use_async
+        else litellm.embedding(model="gemini/gemini-embedding-2", input=["files/abc123"], api_key="gemini-test-key")
+    )
+
+    assert response.usage.prompt_tokens_details.image_tokens == 258
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        258 * litellm.model_cost["gemini/gemini-embedding-2"]["input_cost_per_image_token"]
+    )
+
