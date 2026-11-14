@@ -5,8 +5,9 @@ matrix never waits for "completed". Each case uploads a tiny JSONL, creates the
 batch through one of the four routing scenarios, asserts it was accepted
 (non-terminal status) and routed to the right provider, then retrieves / cancels /
 lists where the provider supports it. Everything created is deleted on teardown.
-The exception is TestBatchTerminalState, which carries completed-state + cost
-write-back coverage via a cross-run marker baton (design in COVERAGE.md).
+The exception is TestBatchTerminalState in test_batch_terminal_state_e2e.py, which
+carries completed-state + cost write-back coverage via a cross-run marker baton
+(design in COVERAGE.md).
 
 Routing signal: for provider_fallback the raw batch id discriminates the provider;
 for the encoded/unified/model_param scenarios the proxy re-encodes the id, so the
@@ -36,6 +37,17 @@ from batch_client import (
     is_model_access_denied,
     is_result_access_denied,
 )
+from batch_helpers import (
+    BATCH_OP_RETRIES,
+    CREATED_BATCH_STATUSES,
+    BatchOutputLine,
+    assert_batch_object,
+    backoff_seconds,
+    cancel_batch,
+    render_jsonl,
+    retrieve_batch,
+    transient_status,
+)
 from capabilities import (
     AZURE_BATCH_MODEL,
     BATCH_ID_SHAPE,
@@ -57,7 +69,7 @@ from capabilities import (
     openai_batch_params,
     raw_id_matches_provider,
 )
-from e2e_config import MASTER_KEY, PROXY_BASE_URL, unique_marker
+from e2e_config import MASTER_KEY, unique_marker
 from e2e_metadata import Domain, Mode, Route, Subject, meta
 from e2e_metadata import Provider as MetaProvider
 from e2e_http import (
@@ -76,10 +88,8 @@ from pydantic import BaseModel, Field
 
 pytestmark = pytest.mark.e2e
 
-CREATED_BATCH_STATUSES = {"validating", "in_progress", "finalizing"}
 BATCH_CANCEL_DELAY_SECONDS = 2
 BATCH_TERMINAL_BEFORE_CANCEL = {"failed", "cancelled", "expired"}
-BATCH_OP_RETRIES = 5
 
 
 class _GovCloudBedrockContent(BaseModel):
@@ -106,47 +116,6 @@ class _GovCloudBedrockRecord(BaseModel):
 _CANCEL_ASSERTED_PROVIDERS = frozenset({"openai", "azure", "bedrock"})
 
 
-def _transient_status(status_code: int) -> bool:
-    return status_code in {408, 429, 500, 502, 503, 504}
-
-
-def _backoff_seconds(attempt: int) -> float:
-    delays: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 8.0)
-    return delays[min(attempt, len(delays) - 1)]
-
-
-def cancel_batch(
-    client: BatchClient, batch_id: str, *, key: str, provider: str | None
-) -> BatchObject:
-    last = client.cancel_batch(batch_id, key=key, provider=provider)
-    for attempt in range(BATCH_OP_RETRIES - 1):
-        match last:
-            case Success(data=data):
-                return data
-            case UnknownApiError(status_code=code) if _transient_status(code):
-                time.sleep(_backoff_seconds(attempt))
-                last = client.cancel_batch(batch_id, key=key, provider=provider)
-            case _:
-                break
-    return unwrap(last)
-
-
-def retrieve_batch(
-    client: BatchClient, batch_id: str, *, key: str, provider: str | None
-) -> BatchObject:
-    last = client.retrieve_batch(batch_id, key=key, provider=provider)
-    for attempt in range(BATCH_OP_RETRIES - 1):
-        match last:
-            case Success(data=data):
-                return data
-            case UnknownApiError(status_code=code) if _transient_status(code):
-                time.sleep(_backoff_seconds(attempt))
-                last = client.retrieve_batch(batch_id, key=key, provider=provider)
-            case _:
-                break
-    return unwrap(last)
-
-
 def create_batch_resilient(
     client: BatchClient, cap: Capability, file_id: str, key: str
 ) -> StreamingResponse:
@@ -154,25 +123,11 @@ def create_batch_resilient(
     for attempt in range(BATCH_OP_RETRIES - 1):
         if last.ok:
             return last
-        if not _transient_status(last.status_code):
+        if not transient_status(last.status_code):
             return last
-        time.sleep(_backoff_seconds(attempt))
+        time.sleep(backoff_seconds(attempt))
         last = create_for_scenario(client, cap, file_id, key)
     return last
-
-
-def render_jsonl(model: str) -> bytes:
-    line = {
-        "custom_id": "req-1",
-        "method": "POST",
-        "url": "/v1/chat/completions",
-        "body": {
-            "model": model,
-            "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 8,
-        },
-    }
-    return (json.dumps(line) + "\n").encode()
 
 
 def upload_for_scenario(
@@ -233,19 +188,6 @@ def assert_file_object(file: FileObject, *, provider: str) -> None:
     assert (
         file.created_at is not None and file.created_at > 0
     ), "file.created_at missing"
-
-
-def assert_batch_object(batch: BatchObject) -> None:
-    assert batch.object == "batch", f"batch.object={batch.object!r}"
-    if batch.endpoint:
-        assert (
-            batch.endpoint == "/v1/chat/completions"
-        ), f"batch.endpoint={batch.endpoint!r}"
-    assert batch.completion_window == "24h", f"window={batch.completion_window!r}"
-    assert batch.input_file_id, "batch.input_file_id missing"
-    assert (
-        batch.created_at is not None and batch.created_at > 0
-    ), "batch.created_at missing"
 
 
 @pytest.mark.parametrize(
@@ -1671,257 +1613,6 @@ class TestBatchFailurePaths:
         fetched = retrieve_batch(client, batch.id, key=key, provider=None)
         assert fetched.id == batch.id
         assert fetched.status, "retrieved foreign-file batch has no status"
-
-
-class TestBatchSecondHop:
-    """Two-proxy batch routing: a litellm_proxy deployment chained to the gateway
-    itself (LIT-5347, PR #36240).
-
-    The hop deployment's litellm_params point litellm_proxy/<inner model> at this
-    gateway's own base URL with a freshly minted virtual key, so the unified
-    upload and batch create traverse gateway -> gateway -> OpenAI. The regression
-    this pins: target_model_names must be rewritten to the inner deployment on
-    the second hop and the nested managed ids must round-trip retrieve.
-    """
-
-    @pytest.mark.covers(
-        "llm.batches.openai.second_hop.nonstream.works",
-        exercised_on=["batches", "files"],
-    )
-    @meta(
-        Subject(
-            domain=Domain.LLM_TRANSLATION,
-            route=Route.BATCHES,
-            providers=(MetaProvider.LITELLM_PROXY, MetaProvider.OPENAI),
-            models=(OPENAI_BATCH_BACKEND,),
-            mode=Mode.BATCH,
-        )
-    )
-    def test_unified_create_and_retrieve_via_chained_gateway(
-        self, client: BatchClient, resources: ResourceManager, batch_deployments: None
-    ) -> None:
-        key = resources.key()
-        hop_name = batch_model_name("openai-batch-hop")
-        model_id = client.create_model(
-            hop_name,
-            LiteLLMParamsBody(
-                model=f"litellm_proxy/{OPENAI_BATCH_MODEL}",
-                api_base=PROXY_BASE_URL,
-                api_key=key,
-            ),
-        )
-        resources.defer(lambda: client.delete_model(model_id))
-
-        file = unwrap(
-            client.upload_file(
-                content=render_jsonl(OPENAI_BATCH_BACKEND),
-                form=FileUploadForm(purpose="batch", target_model_names=hop_name),
-                key=key,
-            )
-        )
-        resources.defer(lambda: cleanup_file(client, file.id, key=key))
-        assert is_managed_id(file.id), (
-            f"second-hop unified upload must return a managed file id, got {file.id!r}"
-        )
-
-        created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
-        require_successful_call(created)
-        batch = BatchObject.model_validate_json(created.body)
-        resources.defer(lambda: cleanup_batch(client, batch.id, key=key))
-
-        assert is_managed_id(batch.id), (
-            f"second-hop create must return a managed batch id, got {batch.id!r}"
-        )
-        assert batch.status in CREATED_BATCH_STATUSES, (
-            f"second-hop batch has non-transitional status {batch.status!r}"
-        )
-        assert_batch_object(batch)
-
-        fetched = retrieve_batch(client, batch.id, key=key, provider=None)
-        assert fetched.id == batch.id
-        assert fetched.status, "second-hop retrieve returned no status"
-
-
-class BatchOutputBody(BaseModel):
-    choices: list[object] = []
-
-
-class BatchOutputResponse(BaseModel):
-    status_code: int | None = None
-    body: BatchOutputBody | None = None
-
-
-class BatchOutputLine(BaseModel):
-    custom_id: str | None = None
-    response: BatchOutputResponse
-
-
-TERMINAL_MARKER_KEY = "litellm_e2e_suite"
-TERMINAL_MARKER_VALUE = "batches-terminal-baton"
-TERMINAL_POLL_SECONDS = 300.0
-TERMINAL_POLL_INTERVAL_SECONDS = 10.0
-TERMINAL_LIST_LIMIT = 100
-TERMINAL_BAND_MIN_AGE_SECONDS = 25 * 3600
-TERMINAL_BAND_MAX_AGE_SECONDS = 73 * 3600
-
-
-def _marker_batches(client: BatchClient, key: str) -> list[BatchObject]:
-    listed = unwrap(
-        client.list_batches(key=key, model=OPENAI_BATCH_MODEL, limit=TERMINAL_LIST_LIMIT)
-    )
-    return [
-        b
-        for b in listed.data
-        if (b.metadata or {}).get(TERMINAL_MARKER_KEY) == TERMINAL_MARKER_VALUE
-    ]
-
-
-def _await_completed_marker(
-    client: BatchClient, key: str
-) -> tuple[BatchObject | None, list[BatchObject]]:
-    deadline = time.monotonic() + TERMINAL_POLL_SECONDS
-    while True:
-        markers = _marker_batches(client, key)
-        completed = max(
-            (b for b in markers if b.status == "completed"),
-            key=lambda b: b.created_at or 0,
-            default=None,
-        )
-        if completed is not None or time.monotonic() >= deadline:
-            return completed, markers
-        time.sleep(TERMINAL_POLL_INTERVAL_SECONDS)
-
-
-def _assert_aged_markers_terminal(markers: list[BatchObject]) -> None:
-    now = time.time()
-    stuck = [
-        b
-        for b in markers
-        if b.created_at is not None
-        and TERMINAL_BAND_MIN_AGE_SECONDS <= now - b.created_at <= TERMINAL_BAND_MAX_AGE_SECONDS
-        and b.status not in BATCH_TERMINAL_STATUSES
-    ]
-    assert not stuck, (
-        "marker batches past their 24h completion window must be terminal; stuck: "
-        f"{[(b.id, b.status, b.created_at) for b in stuck]}"
-    )
-
-
-class TestBatchTerminalState:
-    """Terminal state + cost write-back via a cross-run marker baton.
-
-    Each run submits a 1-line marker batch (stable metadata key/value plus a
-    per-run field) and never cancels or deletes it: the marker is the baton the
-    next run picks up. Polling is list-only for up to 5 minutes because a
-    retrieve of a non-terminal batch books a $0 spend row whose request_id then
-    blocks the real-cost row (skip_duplicates); the single retrieve happens only
-    once a completed marker exists. The assertion target is the newest completed
-    marker from ANY run, so on the 6h stage cadence the full assertions are
-    deterministic from run 2 onward. On a cold start (no marker has ever
-    completed within the poll budget) the test passes on the submission
-    assertions alone: that is a documented vacuous pass, not a skip, and this
-    run's marker becomes the next run's target. Markers aged past OpenAI's 24h
-    completion window (25h-73h band, within the newest list page) must be
-    terminal. The cost assertion is the LIT-5730 headline: retrieving a
-    completed model-encoded batch must write a positive spend row keyed
-    {batch_id}_batch_cost; before the fix the logging worker fetched the
-    re-encoded output_file_id, 404d, and the row never landed.
-    """
-
-    @pytest.mark.covers(
-        "llm.batches.openai.terminal_state.nonstream.works",
-        "llm.batches.openai.terminal_state.nonstream.cost_logged",
-        exercised_on=["batches", "files"],
-    )
-    @meta(
-        Subject(
-            domain=Domain.LLM_TRANSLATION,
-            route=Route.BATCHES,
-            providers=(MetaProvider.OPENAI,),
-            models=(OPENAI_BATCH_BACKEND,),
-            mode=Mode.BATCH,
-        )
-    )
-    def test_completed_batch_downloads_output_and_books_cost(
-        self, client: BatchClient, resources: ResourceManager, batch_deployments: None
-    ) -> None:
-        key = resources.key()
-        file = unwrap(
-            client.upload_file(
-                content=render_jsonl(OPENAI_BATCH_BACKEND),
-                form=FileUploadForm(purpose="batch"),
-                model=OPENAI_BATCH_MODEL,
-                key=key,
-            )
-        )
-        created = client.create_batch(
-            body=BatchCreateBody(
-                input_file_id=file.id,
-                metadata={
-                    TERMINAL_MARKER_KEY: TERMINAL_MARKER_VALUE,
-                    "run": unique_marker(),
-                },
-            ),
-            key=key,
-        )
-        require_successful_call(created)
-        submitted = BatchObject.model_validate_json(created.body)
-        assert submitted.status in CREATED_BATCH_STATUSES, (
-            f"marker batch has non-transitional status {submitted.status!r}"
-        )
-        assert (submitted.metadata or {}).get(TERMINAL_MARKER_KEY) == TERMINAL_MARKER_VALUE, (
-            f"create dropped the marker metadata: {submitted.metadata!r}"
-        )
-
-        completed, markers = _await_completed_marker(client, key)
-        _assert_aged_markers_terminal(markers)
-        if completed is None:
-            return
-
-        fetched = retrieve_batch(client, completed.id, key=key, provider=None)
-        assert fetched.status == "completed", (
-            f"listed-completed marker retrieved as {fetched.status!r}"
-        )
-        assert fetched.output_file_id, "completed batch has no output_file_id"
-        usage: Final = fetched.usage
-        assert usage is not None and usage.input_tokens and usage.output_tokens, (
-            f"completed batch has no batch token counts: {usage!r}"
-        )
-        assert (usage.prompt_tokens, usage.completion_tokens) == (usage.input_tokens, usage.output_tokens), (
-            f"chat token counts disagree with the batch token counts: {usage!r}"
-        )
-
-        downloaded = client.proxy.transport.download(
-            f"/v1/files/{fetched.output_file_id}/content",
-            headers=client.proxy.transport.bearer(key),
-        )
-        assert downloaded.status_code == 200, (
-            f"output content must be 200, got {downloaded.status_code}: {downloaded.body[:300]}"
-        )
-        first_line = BatchOutputLine.model_validate_json(downloaded.body.strip().splitlines()[0])
-        assert first_line.response.status_code == 200, (
-            f"batch output line reports failure: {downloaded.body[:400]}"
-        )
-        assert first_line.response.body is not None and first_line.response.body.choices, (
-            "batch output line has no choices"
-        )
-
-        rows = client.proxy.poll_logs_for_request_id(
-            f"{fetched.id}_batch_cost",
-            predicate=lambda found: any((row.spend or 0) > 0 for row in found),
-        )
-        priced = [row for row in rows if (row.spend or 0) > 0]
-        assert priced, (
-            f"completed batch {fetched.id} wrote no positive-cost spend row under "
-            f"request_id {fetched.id}_batch_cost; cost write-back is broken (LIT-5730)"
-        )
-        cost_row = priced[0]
-        assert cost_row.call_type == "aretrieve_batch", (
-            f"batch cost row call_type={cost_row.call_type!r}"
-        )
-        assert (cost_row.total_tokens or 0) > 0, (
-            f"batch cost row has no token usage: {cost_row.total_tokens!r}"
-        )
 
 
 NATIVE_VERTEX_BATCH_ROWS: Final = b"".join(
