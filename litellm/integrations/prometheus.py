@@ -54,6 +54,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import is_registered_custom_provider
 from litellm.litellm_core_utils.service_tier_utils import (
+    KNOWN_REQUEST_SERVICE_TIERS,
     get_service_tier_from_standard_logging_payload,
 )
 from litellm.llms.azure.common_utils import caused_by_entra_rejection
@@ -3246,6 +3247,7 @@ class PrometheusLogger(CustomLogger):
             api_provider: Final = self._extract_api_provider_from_request_data(
                 request_data
             ) or self._extract_api_provider_from_exception(original_exception)
+            requested_tier: Final = request_data.get("service_tier")
             enum_values: Final = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -3271,6 +3273,9 @@ class PrometheusLogger(CustomLogger):
                 model_id=model_id,
                 api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
+                service_tier=requested_tier
+                if isinstance(requested_tier, str) and requested_tier in KNOWN_REQUEST_SERVICE_TIERS
+                else None,
             )
             _label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
             PrometheusLogger._inc_labeled_counter(
