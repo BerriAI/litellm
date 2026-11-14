@@ -710,7 +710,7 @@ def _sound_holders(item_modalities: Sequence[frozenset[_Modality]]) -> tuple[int
 
 def _holders(item_modalities: Sequence[frozenset[_Modality]], modality: _Modality) -> tuple[int, ...]:
     holders: Final = tuple(index for index, modalities in enumerate(item_modalities) if modality in modalities)
-    sound_fallback: Final = _sound_holders(item_modalities) if modality in ("text", "audio") else ()
+    sound_fallback: Final = _sound_holders(item_modalities) if modality == "audio" else ()
     return holders or sound_fallback or tuple(range(len(item_modalities)))
 
 
@@ -724,7 +724,9 @@ def _even_weights(item_modalities: Sequence[frozenset[_Modality]], modality: _Mo
 
 def _text_length(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]) -> int:
     return sum(
-        len(part.encode()) for part in _parts(item) if isinstance(part, str) and not _is_multimodal_element(part)
+        len(part.encode(errors="surrogatepass"))
+        for part in _parts(item)
+        if isinstance(part, str) and not _is_multimodal_element(part)
     )
 
 
