@@ -4247,6 +4247,7 @@ class Logging(LiteLLMLoggingBaseClass):
         is_sync_request: Final = run.is_sync_request
         for_async_request: Final = run.for_async_request
         call_details_view: Final = run.call_details_view
+        delivers_final_stream_log: Final = complete_streaming_response is not None or self._is_pass_through_call()
         result = run.result  # rebind-ok: integrations swap in the assembled stream for later callbacks
         kwargs: Mapping[str, object] = run.kwargs  # rebind-ok: integrations leave their kwargs to later callbacks
         litellm_params = run.litellm_params  # rebind-ok: supabase leaves its params to later callbacks
@@ -4273,7 +4274,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                 if self.stream:
-                    if "complete_streaming_response" not in kwargs:
+                    if not delivers_final_stream_log or "complete_streaming_response" not in kwargs:
                         return
                     else:
                         print_verbose("reaches supabase for streaming logging!")
@@ -4322,7 +4323,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                 if self.stream:
-                    if "complete_streaming_response" not in kwargs:
+                    if not delivers_final_stream_log or "complete_streaming_response" not in kwargs:
                         return
                     else:
                         print_verbose("reaches logfire for streaming logging!")
@@ -4348,7 +4349,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                 if self.stream:
-                    if "complete_streaming_response" not in kwargs:
+                    if not delivers_final_stream_log or "complete_streaming_response" not in kwargs:
                         return
                     else:
                         result = call_details_view["complete_streaming_response"]  # rebind-ok: seen by later callbacks
@@ -4376,7 +4377,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                 if self.stream:
-                    if "complete_streaming_response" not in kwargs:
+                    if not delivers_final_stream_log or "complete_streaming_response" not in kwargs:
                         return
                     else:
                         print_verbose("reaches helicone for streaming logging!")
@@ -4455,7 +4456,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     end_time=end_time,
                     print_verbose=print_verbose,
                 )
-            if callback == "athina" and athinaLogger is not None:
+            if callback == "athina" and athinaLogger is not None and (not self.stream or delivers_final_stream_log):
                 deep_copy = {}  # rebind-ok: each integration branch binds its own
                 for k, v in call_details_view.items():
                     deep_copy[k] = v
@@ -4484,7 +4485,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 if s3Logger is None:
                     s3Logger = S3Logger()  # rebind-ok: lazily built module logger
                 if self.stream:
-                    if "complete_streaming_response" in call_details:
+                    if delivers_final_stream_log and "complete_streaming_response" in call_details:
                         print_verbose("S3Logger Logger: Got Stream Event - Completed Stream Response")
                         s3Logger.log_event(
                             kwargs=call_details,
@@ -4714,7 +4715,7 @@ class Logging(LiteLLMLoggingBaseClass):
             is_async=True,
             streaming_chunks=self.streaming_chunks,
         )
-        is_pass_through_call: Final[bool] = self.call_type in (CallTypes.pass_through.value,)
+        is_pass_through_call: Final = self._is_pass_through_call()
 
         if complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
@@ -5214,6 +5215,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     original_model_group=model_group,
                     kwargs=self.model_call_details,
                 )
+
+    def _is_pass_through_call(self) -> bool:
+        return self.call_type in (CallTypes.pass_through.value,)
 
     def claim_v2_failure(self, eligible: bool) -> bool:
         if not eligible or self.v2_failure_delivered:

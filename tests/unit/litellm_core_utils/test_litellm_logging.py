@@ -5256,6 +5256,93 @@ async def test_a_chunk_log_racing_the_stream_end_sends_a_string_callback_integra
     assert integration.events == expected_events
 
 
+class _SyncChunkLogHeldOpen(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.chunk_log_held: Final = threading.Event()
+        self.release_chunk_log: Final = threading.Event()
+
+    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+        if isinstance(result, litellm.ModelResponseStream):
+            self.chunk_log_held.set()
+            _ = self.release_chunk_log.wait(timeout=10)
+        return kwargs, result
+
+
+class _SyncStringCallbackIntegrationRecorder:
+    def __init__(self) -> None:
+        self.logged_responses: Final[list[str]] = []  # mutable-ok: records each delivery as it fires
+
+    def log_event(self, *, response_obj: object, **_: object) -> None:
+        self.logged_responses.append(type(response_obj).__name__)
+
+    def log_success(self, *, response_obj: object, **_: object) -> None:
+        self.logged_responses.append(type(response_obj).__name__)
+
+
+@pytest.mark.parametrize(
+    ("callback", "integration_global"),
+    [
+        ("supabase", "supabaseClient"),
+        ("logfire", "logfireLogger"),
+        ("lunary", "lunaryLogger"),
+        ("helicone", "heliconeLogger"),
+        ("s3", "s3Logger"),
+        ("athina", "athinaLogger"),
+    ],
+)
+def test_a_sync_chunk_log_racing_the_stream_end_sends_a_string_callback_integration_one_success(
+    monkeypatch: pytest.MonkeyPatch, callback: str, integration_global: str
+):
+    integration: Final = _SyncStringCallbackIntegrationRecorder()
+    monkeypatch.setattr(litellm_logging, integration_global, integration)
+    monkeypatch.setattr(litellm, "success_callback", [callback])
+    holder: Final = _SyncChunkLogHeldOpen()
+    start: Final = dt_object(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=start,
+        litellm_call_id="sync-chunk-race",
+        function_id="sync-chunk-race",
+        dynamic_success_callbacks=[holder],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o",
+        user="sync-chunk-race-user",
+        optional_params={},
+        litellm_params={"litellm_call_id": "sync-chunk-race", "metadata": {}},
+        custom_llm_provider="openai",
+    )
+    logging_obj.pre_call(input=[{"role": "user", "content": "hi"}], api_key="sk-test")
+
+    chunk_log: Final = threading.Thread(
+        target=logging_obj.success_handler,
+        kwargs={
+            "result": litellm.ModelResponseStream(model="gpt-4o", choices=[{"index": 0, "delta": {"content": "Hello"}}]),
+            "start_time": start,
+            "end_time": start,
+        },
+    )
+    chunk_log.start()
+    assert holder.chunk_log_held.wait(timeout=10)
+    logging_obj.success_handler(
+        result=ModelResponse(
+            model="gpt-4o",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello there"}, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        ),
+        start_time=start,
+        end_time=start,
+    )
+    holder.release_chunk_log.set()
+    chunk_log.join(timeout=10)
+
+    assert integration.logged_responses == ["ModelResponse"]
+
+
 @pytest.mark.asyncio
 async def test_async_success_handler_sets_standard_logging_object_for_streaming_pass_through():
     """
