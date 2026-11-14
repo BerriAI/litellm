@@ -2162,6 +2162,12 @@ class CustomStreamWrapper:
                         self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
                         # RETURN RESULT
                         self.chunks.append(processed_chunk)
+                        if (
+                            not processed_chunk.choices
+                            and not self.send_stream_usage
+                            and getattr(processed_chunk, "usage", None) is not None
+                        ):
+                            continue
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
             return await self._finalize_completed_stream(cache_hit=cache_hit)

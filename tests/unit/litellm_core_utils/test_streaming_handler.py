@@ -1848,6 +1848,7 @@ async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Loggin
         ("async", ChatCompletionStreamOptionsParam(include_usage=True)),
         ("async", None),
         ("async_over_sync_stream", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("async_over_sync_stream", None),
     ],
 )
 async def test_openrouter_post_finish_usage_trailer_does_not_emit_empty_choice(
