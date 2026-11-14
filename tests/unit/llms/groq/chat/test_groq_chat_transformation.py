@@ -606,3 +606,72 @@ def test_groq_request_drops_null_assistant_fields_without_touching_the_callers_m
 
     assert body["messages"][1] == {"role": "assistant", "content": "Hello"}
     assert messages == messages_before
+
+
+class TestGroqReasoningParams:
+    """Tests for Groq reasoning_effort and reasoning_format handling (Issue #49875)."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "groq/deepseek-r1-distill-llama-70b",
+            "deepseek-r1-distill-llama-70b",
+            "groq/qwen/qwen3.8-27b",
+            "groq/openai/gpt-oss-120b",
+        ],
+    )
+    def test_reasoning_format_in_supported_params_for_reasoning_models(self, model: str):
+        config = GroqChatConfig()
+        supported = config.get_supported_openai_params(model=model)
+        assert "reasoning_format" in supported
+
+    def test_reasoning_format_not_in_supported_params_for_non_reasoning_models(self):
+        config = GroqChatConfig()
+        supported = config.get_supported_openai_params(model="llama-3.3-70b-versatile")
+        assert "reasoning_format" not in supported
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "groq/deepseek-r1-distill-llama-70b",
+            "deepseek-r1-distill-llama-70b",
+        ],
+    )
+    def test_reasoning_effort_not_in_supported_params_for_deepseek_r1(self, model: str):
+        config = GroqChatConfig()
+        supported = config.get_supported_openai_params(model=model)
+        assert "reasoning_effort" not in supported
+
+    def test_deepseek_r1_reasoning_effort_raises_without_drop_params(self):
+        config = GroqChatConfig()
+        with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
+            config.map_openai_params(
+                non_default_params={"reasoning_effort": "low"},
+                optional_params={},
+                model="groq/deepseek-r1-distill-llama-70b",
+                drop_params=False,
+            )
+        assert "reasoning_effort is not supported" in str(exc_info.value)
+
+    def test_deepseek_r1_reasoning_effort_dropped_with_drop_params(self):
+        config = GroqChatConfig()
+        optional_params = {}
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "low"},
+            optional_params=optional_params,
+            model="groq/deepseek-r1-distill-llama-70b",
+            drop_params=True,
+        )
+        assert "reasoning_effort" not in result
+
+    @pytest.mark.parametrize("format_value", ["raw", "parsed", "hidden"])
+    def test_reasoning_format_maps_to_optional_params(self, format_value: str):
+        config = GroqChatConfig()
+        optional_params = {}
+        result = config.map_openai_params(
+            non_default_params={"reasoning_format": format_value},
+            optional_params=optional_params,
+            model="groq/deepseek-r1-distill-llama-70b",
+            drop_params=False,
+        )
+        assert result.get("reasoning_format") == format_value
