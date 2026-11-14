@@ -46,7 +46,13 @@ def _with_file_parts_as_image_url(message: AllMessageValues) -> AllMessageValues
 
 
 def _is_unreadable_file_part(part: OpenAIMessageContentListBlock) -> bool:
-    return part["type"] == "file" and not part["file"].get("file_data")
+    if part["type"] != "file":
+        return False
+    file: Final = part.get("file")
+    return (
+        file is not None  # pyright: ignore[reportUnnecessaryComparison]  # untrusted request JSON
+        and not file.get("file_data")
+    )
 
 
 def _without_unreadable_file_parts(message: AllMessageValues) -> AllMessageValues:
