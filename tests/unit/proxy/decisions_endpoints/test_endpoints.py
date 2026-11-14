@@ -1050,6 +1050,88 @@ def test_images_to_a_text_only_deployment_are_dropped_when_it_drops_params(
     }
 
 
+_CACHE_POLICY: Final = "A defect is damage that makes the item unusable."
+_CACHED_POLICY_MESSAGE: Final[Mapping[str, object]] = {
+    "type": "message",
+    "role": "developer",
+    "content": [{"type": "input_text", "text": _CACHE_POLICY, "prompt_cache_breakpoint": {"mode": "explicit"}}],
+}
+_IMAGE_TEXT_MESSAGE: Final[Mapping[str, object]] = {"type": "message", "role": "user", "content": _IMAGE_TEXT}
+_PREDICATE: Final[Mapping[str, object]] = {
+    "type": "predicate",
+    "name": "is_defect",
+    "instructions": "Is this a defect?",
+}
+
+
+def test_prompt_cache_controls_reach_an_openai_deployment_unchanged(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    _route_decider_to(monkeypatch, {"model": "openai/gpt-6-luna", "api_key": "k"})
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(
+        json={
+            "model": "gpt-6-luna",
+            "answers": _OPENAI_FORMAT_ANSWERS[:1],
+            "usage": {
+                "input_tokens": _INPUT_TOKENS,
+                "output_tokens": _OUTPUT_TOKENS,
+                "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
+            },
+        }
+    )
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "decider",
+            "input": [_CACHED_POLICY_MESSAGE, _IMAGE_TEXT_MESSAGE],
+            "questions": [_PREDICATE],
+            "prompt_cache_key": "defect-review",
+            "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": [_CACHED_POLICY_MESSAGE, _IMAGE_TEXT_MESSAGE],
+        "questions": [_PREDICATE],
+        "prompt_cache_key": "defect-review",
+        "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
+    }
+
+
+@pytest.mark.parametrize("ttl", ("30m", "1h"), ids=("known_ttl", "unknown_ttl"))
+def test_prompt_cache_controls_are_ignored_by_a_deployment_without_prompt_cache(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, ttl: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(monkeypatch, {"model": "perplexity/pplx-decider-v1-27b", "api_key": "test-key"})
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "decider",
+            "input": [_CACHED_POLICY_MESSAGE, _IMAGE_TEXT_MESSAGE],
+            "questions": [_PREDICATE],
+            "prompt_cache_key": "defect-review",
+            "prompt_cache_options": {"mode": "explicit", "ttl": ttl},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": f"{_CACHE_POLICY}\n\n{_IMAGE_TEXT}",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
 @pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
 def test_malformed_images_are_refused_unless_the_deployment_drops_params(
     client: TestClient,

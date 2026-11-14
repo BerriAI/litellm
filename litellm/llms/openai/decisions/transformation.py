@@ -43,6 +43,7 @@ from litellm.types.decisions import (
     OpenAIDecisionInputText,
     OpenAIDecisionInputTokensDetails,
     OpenAIDecisionOutputTokensDetails,
+    OpenAIDecisionPromptCacheOptions,
     OpenAIDecisionQuestion,
     OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
@@ -96,6 +97,12 @@ def _ir_question(question: OpenAIDecisionQuestion) -> DecisionsIRQuestion:
             assert_never(question)
 
 
+def _nonempty_prompt_cache_options(
+    options: OpenAIDecisionPromptCacheOptions | None,
+) -> OpenAIDecisionPromptCacheOptions | None:
+    return options if options is not None and options.model_dump(exclude_none=True) else None
+
+
 def openai_request_to_ir(request: OpenAIDecisionRequestBody) -> DecisionsIRRequest:
     return DecisionsIRRequest(
         input=_ir_input(request.input),
@@ -103,6 +110,8 @@ def openai_request_to_ir(request: OpenAIDecisionRequestBody) -> DecisionsIRReque
         videos=request.videos,
         questions=tuple(_ir_question(question) for question in request.questions),
         safety_identifier=request.safety_identifier,
+        prompt_cache_key=request.prompt_cache_key,
+        prompt_cache_options=_nonempty_prompt_cache_options(request.prompt_cache_options),
     )
 
 
@@ -197,6 +206,10 @@ def _has_one_option(question: DecisionsIRQuestion) -> bool:
             return False
 
 
+def _prompt_cache_options_field(options: OpenAIDecisionPromptCacheOptions | None) -> Mapping[str, object]:
+    return {} if options is None else {"prompt_cache_options": options.model_dump(mode="json", exclude_none=True)}
+
+
 def ir_to_openai_request(model: str, request: DecisionsIRRequest) -> Mapping[str, object] | UnsupportedDecisionsRequest:
     if request.audio or request.videos:
         return UnsupportedDecisionsRequest(reason="audio/video input is not supported by this Decisions provider")
@@ -207,6 +220,8 @@ def ir_to_openai_request(model: str, request: DecisionsIRRequest) -> Mapping[str
         "input": _openai_input(request.input),
         "questions": [_openai_question(question) for question in request.questions],
         **_text_field("safety_identifier", request.safety_identifier),
+        **_text_field("prompt_cache_key", request.prompt_cache_key),
+        **_prompt_cache_options_field(request.prompt_cache_options),
     }
 
 
@@ -336,6 +351,7 @@ def ir_to_openai_response(
 class OpenAIDecisionsConfig(BaseDecisionsConfig):
     path = "/v1/decisions"
     supports_safety_identifier = True
+    supports_prompt_cache = True
     supports_images = True
 
     def get_default_api_base(self) -> str | None:

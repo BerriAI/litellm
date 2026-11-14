@@ -35,6 +35,7 @@ from litellm.llms.base_llm.decisions.transformation import (
     systemone_request_to_ir,
     with_images_where,
     with_inlined_images,
+    without_prompt_cache_breakpoints,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
@@ -59,6 +60,7 @@ from litellm.types.decisions import (
     DecisionsResponse,
     DecisionsVideo,
     OpenAIDecisionInput,
+    OpenAIDecisionPromptCacheOptions,
     OpenAIDecisionQuestion,
     OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
@@ -74,6 +76,7 @@ DecisionsImages: TypeAlias = Sequence[str | DecisionsBase64Image | Mapping[str, 
 DecisionsAssetEntries: TypeAlias = Mapping[str, DecisionsAsset | Mapping[str, object]]
 DecisionsAudioClips: TypeAlias = Sequence[DecisionsAudio | Mapping[str, object]]
 DecisionsVideoClips: TypeAlias = Sequence[DecisionsVideo | Mapping[str, object]]
+DecisionsPromptCacheOptions: TypeAlias = OpenAIDecisionPromptCacheOptions | Mapping[str, object]
 DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequestBody
 
 _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
@@ -181,6 +184,8 @@ class OpenAIDecisionRequestFields:
     questions: OpenAIDecisionQuestions | None
     audio: DecisionsAudioClips | None = None
     videos: DecisionsVideoClips | None = None
+    prompt_cache_key: str | None = None
+    prompt_cache_options: DecisionsPromptCacheOptions | None = None
 
     def validate(self, *, safety_identifier: str | None, drops_params: bool) -> OpenAIDecisionRequestBody:
         return _OPENAI_REQUEST_ADAPTER.validate_python(
@@ -190,6 +195,8 @@ class OpenAIDecisionRequestFields:
                 "safety_identifier": safety_identifier,
                 "audio": self.audio,
                 "videos": self.videos,
+                "prompt_cache_key": self.prompt_cache_key,
+                "prompt_cache_options": self.prompt_cache_options,
             }
         )
 
@@ -375,6 +382,24 @@ def _fields_without_unsupported_media(
     )
 
 
+def _fields_without_unsupported_prompt_cache(
+    fields: RequestFields, provider_config: BaseDecisionsConfig
+) -> RequestFields:
+    match fields:
+        case OpenAIDecisionRequestFields() if not provider_config.supports_prompt_cache:
+            return replace(fields, prompt_cache_key=None, prompt_cache_options=None)
+        case _:
+            return fields
+
+
+def _without_unsupported_breakpoints(
+    ir_request: DecisionsIRRequest, provider_config: BaseDecisionsConfig
+) -> DecisionsIRRequest:
+    if provider_config.supports_prompt_cache:
+        return ir_request
+    return replace(ir_request, input=without_prompt_cache_breakpoints(ir_request.input))
+
+
 @dataclass(frozen=True, slots=True)
 class _UnsupportedParams:
     names: tuple[str, ...]
@@ -556,9 +581,9 @@ def prepare_call(
         headers: Final = decisions_outbound_headers(extra_headers, provider, kwargs)
         support: Final = _resolved_support(provider_config, canonical_model, provider, headers, kwargs, fields)
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
-        request: Final = _fields_without_unsupported_media(fields, support, kwargs).validate(
-            safety_identifier=request_safety_identifier, drops_params=_drops_params(kwargs)
-        )
+        request: Final = _fields_without_unsupported_prompt_cache(
+            _fields_without_unsupported_media(fields, support, kwargs), provider_config
+        ).validate(safety_identifier=request_safety_identifier, drops_params=_drops_params(kwargs))
     except ValidationError as error:
         raise litellm.BadRequestError(
             message=f"Invalid Decisions request: {error}",
@@ -587,7 +612,8 @@ def prepare_call(
         )
 
     caller_ir_request: Final = _without_malformed_images(
-        _ir_request(request, request_safety_identifier), _drops_params(kwargs)
+        _without_unsupported_breakpoints(_ir_request(request, request_safety_identifier), provider_config),
+        _drops_params(kwargs),
     )
     if isinstance(caller_ir_request, _MalformedImages):
         raise litellm.BadRequestError(

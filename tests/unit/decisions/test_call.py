@@ -66,6 +66,27 @@ def test_systemone_logs_every_request_field_the_caller_sent():
     assert set(logged) == {"state", "questions"}
 
 
+def test_prompt_cache_fields_are_logged_even_when_the_provider_ignores_them():
+    logging_obj: Final = _logging_obj("adecisions")
+
+    call: Final = _prepare_decisions_call(
+        **CONNECTION,
+        decision_input="My card was charged twice.",
+        questions=[{"type": "predicate", "instructions": QUESTION_TEXT}],
+        audio=None,
+        videos=None,
+        prompt_cache_key="billing-triage",
+        prompt_cache_options={"mode": "explicit", "ttl": "30m"},
+        kwargs={"litellm_logging_obj": logging_obj},
+    )
+
+    logged: Final = _logged_request(logging_obj)
+    assert logged["prompt_cache_key"] == "billing-triage"
+    assert logged["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
+    assert call.ir_request.prompt_cache_key is None
+    assert call.ir_request.prompt_cache_options is None
+
+
 def test_decisions_logs_every_request_field_the_caller_sent():
     logging_obj: Final = _logging_obj("adecisions")
 
@@ -75,6 +96,8 @@ def test_decisions_logs_every_request_field_the_caller_sent():
         questions=[{"type": "predicate", "instructions": QUESTION_TEXT}],
         audio=None,
         videos=None,
+        prompt_cache_key=None,
+        prompt_cache_options=None,
         kwargs={"litellm_logging_obj": logging_obj},
     )
 
@@ -113,6 +136,8 @@ def test_decisions_request_is_logged_even_when_its_questions_fail_validation():
             questions=[{"type": "not-a-question-type", "instructions": QUESTION_TEXT}],
             audio=None,
             videos=None,
+            prompt_cache_key=None,
+            prompt_cache_options=None,
             kwargs={"litellm_logging_obj": logging_obj},
         )
 
@@ -131,6 +156,8 @@ def test_non_utf8_bytes_in_the_request_are_logged_and_rejected_with_a_400():
             questions=[{"type": "predicate", "instructions": QUESTION_TEXT}],
             audio=None,
             videos=None,
+            prompt_cache_key=None,
+            prompt_cache_options=None,
             kwargs={"litellm_logging_obj": logging_obj},
         )
 

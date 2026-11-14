@@ -4,7 +4,7 @@ from typing import Final
 
 import httpx
 import pytest
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.llms.base_llm.decisions.transformation import (
     DecisionsResponseValidationError,
@@ -386,3 +386,102 @@ def test_openai_probabilities_preserve_missing_entries_and_explicit_zeros(
 
     assert response.answers[1].model_dump(mode="json")["probabilities"] == list(choice_probabilities)
     assert response.answers[2].model_dump(mode="json")["probabilities"] == list(score_probabilities)
+
+
+_POLICY_TEXT: Final = "Refunds need an order number. Escalate anything about fraud."
+_CACHE_REQUEST: Final[Mapping[str, object]] = {
+    "input": [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": _POLICY_TEXT,
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                }
+            ],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.com/receipt.png",
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                }
+            ],
+        },
+        {"type": "message", "role": "system", "content": "Answer for the support team."},
+        {"type": "message", "role": "user", "content": "Please refund order 4411."},
+    ],
+    "questions": [{"type": "predicate", "name": "is_refund_request", "instructions": "Is this a refund request?"}],
+    "prompt_cache_key": "billing-triage",
+    "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
+}
+
+
+def test_prompt_cache_controls_reach_openai_unchanged() -> None:
+    assert ir_to_openai_request("gpt-6-luna", _openai_ir(_CACHE_REQUEST)) == {
+        "model": "gpt-6-luna",
+        **_CACHE_REQUEST,
+    }
+
+
+def test_empty_prompt_cache_options_are_not_sent() -> None:
+    request: Final = {
+        "input": "Please refund order 4411.",
+        "questions": _CACHE_REQUEST["questions"],
+        "prompt_cache_options": {},
+    }
+
+    assert ir_to_openai_request("gpt-6-luna", _openai_ir(request)) == {
+        "model": "gpt-6-luna",
+        "input": "Please refund order 4411.",
+        "questions": _CACHE_REQUEST["questions"],
+    }
+
+
+def test_a_breakpoint_rejects_a_ttl() -> None:
+    with pytest.raises(ValidationError, match=r"prompt_cache_breakpoint\.ttl"):
+        _OPENAI_BODY.validate_python(
+            {
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": _POLICY_TEXT,
+                                "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
+                            }
+                        ],
+                    }
+                ],
+                "questions": _CACHE_REQUEST["questions"],
+            }
+        )
+
+
+def test_prompt_cache_options_reject_a_12h_ttl() -> None:
+    with pytest.raises(ValidationError, match=r"prompt_cache_options\.ttl"):
+        _OPENAI_BODY.validate_python({**_CACHE_REQUEST, "prompt_cache_options": {"mode": "explicit", "ttl": "12h"}})
+
+
+@pytest.mark.parametrize("role", ("developer", "system"))
+def test_an_instruction_message_rejects_an_image(role: str) -> None:
+    with pytest.raises(ValidationError, match=f"{role} messages only accept input text"):
+        _OPENAI_BODY.validate_python(
+            {
+                "input": [
+                    {
+                        "type": "message",
+                        "role": role,
+                        "content": [{"type": "input_image", "image_url": "https://example.com/receipt.png"}],
+                    }
+                ],
+                "questions": _CACHE_REQUEST["questions"],
+            }
+        )

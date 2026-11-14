@@ -277,9 +277,23 @@ class DecisionsResponse(_HiddenParamsResponse):
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
+class OpenAIDecisionPromptCacheBreakpoint(LiteLLMPydanticObjectBase):
+    mode: Literal["explicit"]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIDecisionPromptCacheOptions(LiteLLMPydanticObjectBase):
+    mode: Literal["implicit", "explicit"] | None = None
+    ttl: Literal["30m"] | None = None
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 class OpenAIDecisionInputText(LiteLLMPydanticObjectBase):
     type: Literal["input_text"]
     text: str
+    prompt_cache_breakpoint: OpenAIDecisionPromptCacheBreakpoint | None = None
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -288,6 +302,7 @@ class OpenAIDecisionInputImage(LiteLLMPydanticObjectBase):
     type: Literal["input_image"]
     image_url: str
     detail: str | None = None
+    prompt_cache_breakpoint: OpenAIDecisionPromptCacheBreakpoint | None = None
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -299,11 +314,19 @@ OpenAIDecisionContentPart: TypeAlias = Annotated[
 
 
 class OpenAIDecisionInputMessage(LiteLLMPydanticObjectBase):
-    role: Literal["user"] = "user"
+    role: Literal["user", "developer", "system"] = "user"
     type: Literal["message"] = "message"
     content: str | Sequence[OpenAIDecisionContentPart]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @model_validator(mode="after")
+    def _developer_and_system_are_text(self) -> "OpenAIDecisionInputMessage":
+        if self.role == "user" or isinstance(self.content, str):
+            return self
+        if any(not isinstance(part, OpenAIDecisionInputText) for part in self.content):
+            raise ValueError(f"{self.role} messages only accept input text")
+        return self
 
 
 OpenAIDecisionInput: TypeAlias = str | Sequence[OpenAIDecisionInputMessage]
@@ -388,7 +411,10 @@ class OpenAIDecisionRequestBody(DecisionsMediaBody):
     input: Annotated[
         OpenAIDecisionInput,
         Field(
-            description="The text being judged, or user messages whose content mixes input_text and input_image parts"
+            description=(
+                "The text being judged, or user, developer, and system messages. "
+                "Developer and system messages are input text. User messages can mix input text and images."
+            )
         ),
     ]
     questions: Annotated[
@@ -403,6 +429,11 @@ class OpenAIDecisionRequestBody(DecisionsMediaBody):
         str | None,
         Field(description="A stable id for your end user. Sent to OpenAI and dropped for other providers"),
     ] = None
+    prompt_cache_key: Annotated[
+        str | None,
+        Field(description="Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers"),
+    ] = None
+    prompt_cache_options: OpenAIDecisionPromptCacheOptions | None = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
@@ -575,6 +606,8 @@ class DecisionsIRRequest:
     input: DecisionsIRState | DecisionsIRMessages
     questions: tuple[DecisionsIRQuestion, ...]
     safety_identifier: str | None = None
+    prompt_cache_key: str | None = None
+    prompt_cache_options: OpenAIDecisionPromptCacheOptions | None = None
     assets: Mapping[str, DecisionsAsset] = field(default_factory=lambda: _NO_ASSETS)
     audio: tuple[DecisionsAudio, ...] = ()
     videos: tuple[DecisionsVideo, ...] = ()

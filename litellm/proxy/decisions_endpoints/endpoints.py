@@ -113,7 +113,9 @@ async def _invalid_request(
     )
 
 
-_FIELDS_CHECKED_AFTER_ROUTING: Final = frozenset({"safety_identifier", "images", "assets", "audio", "videos"})
+_FIELDS_CHECKED_AFTER_ROUTING: Final = frozenset(
+    {"safety_identifier", "prompt_cache_key", "prompt_cache_options", "images", "assets", "audio", "videos"}
+)
 
 
 def _fields_checked_before_routing(data: Mapping[str, object], route_type: _RouteType) -> Mapping[str, object]:
