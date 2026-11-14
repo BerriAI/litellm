@@ -31,6 +31,7 @@ from litellm.proxy.control_plane.audit.transport import HttpxPoster
 from litellm.proxy.control_plane.auth.jwt import JwksKeyLookup, SessionTokenCodec, TokenVerifier, build_token_verifier
 from litellm.proxy.control_plane.auth.login import LoginService, LoginThrottle
 from litellm.proxy.control_plane.auth.rbac import (
+    Policy,
     RoleDefinition,
     RolePolicy,
     RolePolicyError,
@@ -43,8 +44,13 @@ from litellm.proxy.control_plane.common.fanout import Fanout
 from litellm.proxy.control_plane.common.tracing import Telemetry, build_log_exporter, build_resource, build_telemetry
 from litellm.proxy.control_plane.dataplanes.client import DataplaneClient, HttpTransport, RetryPolicy
 from litellm.proxy.control_plane.dataplanes.credentials import TokenExchanger, http_token_exchanger
-from litellm.proxy.control_plane.dataplanes.registry import DataplaneRegistry, build_registry
+from litellm.proxy.control_plane.dataplanes.registry import DataplaneRegistry
 from litellm.proxy.control_plane.settings import ControlPlaneSettings
+from litellm.proxy.control_plane.store.crypto import SecretCodec
+from litellm.proxy.control_plane.store.postgres import ConfigStore, PostgresStore
+from litellm.proxy.control_plane.store.runtime import RuntimeConfig
+from litellm.proxy.control_plane.store.state import LivePolicy, LiveRegistry, LiveState
+from litellm.proxy.control_plane.store.stream import ConfigStream, RedisStream
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
@@ -54,7 +60,7 @@ if TYPE_CHECKING:
 @dataclass(frozen=True, slots=True)
 class Container:
     settings: ControlPlaneSettings
-    policy: RolePolicy
+    policy: Policy
     token_verifier: TokenVerifier
     login_service: LoginService
     registry: DataplaneRegistry
@@ -62,6 +68,7 @@ class Container:
     fanout: Fanout
     audit_log: AuditLog
     telemetry: Telemetry
+    runtime_config: RuntimeConfig
 
 
 class InvalidRolePolicy(ValueError):
@@ -207,14 +214,33 @@ def build_container(
     exchanger: TokenExchanger | None = None,
     tracer_provider: TracerProvider | None = None,
     audit_sinks: tuple[AuditSink, ...] | None = None,
+    config_store: ConfigStore | None = None,
+    config_stream: ConfigStream | None = None,
 ) -> Container:
     master_key: Final = settings.master_key.get_secret_value()
-    policy: Final = build_role_policy(settings)
+    initial_policy: Final = build_role_policy(settings)
     http: Final = transport if transport is not None else _shared_http_client(settings)
     exchange: Final = (
         exchanger
         if exchanger is not None
         else http_token_exchanger(_shared_http_handler(settings), settings.dataplane_timeout_seconds)
+    )
+    codec: Final = SecretCodec(settings.salt_key) if settings.salt_key is not None else None
+    state: Final = LiveState(settings, exchange, initial_policy, codec)
+    policy: Final = LivePolicy(state)
+    registry: Final = LiveRegistry(state)
+    runtime: Final = RuntimeConfig(
+        state,
+        config_store
+        if config_store is not None
+        else PostgresStore.build(settings.database_url)
+        if settings.database_url is not None
+        else None,
+        config_stream
+        if config_stream is not None
+        else RedisStream.build(settings.redis_url, settings.config_stream, settings.config_stream_maxlen)
+        if settings.redis_url is not None
+        else None,
     )
     sessions: Final = SessionTokenCodec(
         master_key=master_key,
@@ -225,7 +251,6 @@ def build_container(
     )
     password: Final = settings.ui_password
     telemetry: Final = build_telemetry(settings, tracer_provider)
-    registry: Final = build_registry(settings.dataplanes, exchange)
     return Container(
         settings=settings,
         policy=policy,
@@ -250,7 +275,8 @@ def build_container(
             settings.audit_capacity,
             pipeline=build_audit_pipeline(settings, audit_sinks),
             product=litellm_product(),
-            known_dataplane_ids=frozenset(dataplane.id for dataplane in registry.all()),
+            known_dataplane_ids=lambda: frozenset(dataplane.id for dataplane in registry.all()),
         ),
         telemetry=telemetry,
+        runtime_config=runtime,
     )

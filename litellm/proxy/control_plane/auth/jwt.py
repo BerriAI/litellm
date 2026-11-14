@@ -18,8 +18,8 @@ from litellm.proxy.control_plane.auth.rbac import (
     ADMIN_ROLE,
     ALL_SCOPES,
     DataplaneBinding,
+    Policy,
     Principal,
-    RolePolicy,
     build_principal,
     parse_scopes,
 )
@@ -160,7 +160,7 @@ class SessionTokenCodec:
     token minted under the same master key by another component never authorizes a control plane route."""
 
     def __init__(
-        self, master_key: str, issuer: str, ttl: timedelta, policy: RolePolicy, audience: str = SESSION_AUDIENCE
+        self, master_key: str, issuer: str, ttl: timedelta, policy: Policy, audience: str = SESSION_AUDIENCE
     ) -> None:
         self._master_key = master_key
         self._issuer = issuer
@@ -192,7 +192,7 @@ class SessionTokenCodec:
 
 
 class OidcTokenVerifier:
-    def __init__(self, settings: OidcSettings, keys: JwksKeyLookup, policy: RolePolicy) -> None:
+    def __init__(self, settings: OidcSettings, keys: JwksKeyLookup, policy: Policy) -> None:
         self._settings = settings
         self._keys = keys
         self._policy = policy
@@ -222,7 +222,7 @@ class OidcTokenVerifier:
 
 
 def _principal_from_claims(
-    policy: RolePolicy,
+    policy: Policy,
     claims: Mapping[str, object],
     roles_claim: str,
     scope_claim: str,
@@ -283,7 +283,7 @@ class TokenVerifier:
     """Resolves a bearer credential of any supported kind to a Principal."""
 
     def __init__(
-        self, master_key: str, sessions: SessionTokenCodec, oidc: OidcTokenVerifier | None, policy: RolePolicy
+        self, master_key: str, sessions: SessionTokenCodec, oidc: OidcTokenVerifier | None, policy: Policy
     ) -> None:
         self._master_key = master_key
         self._sessions = sessions
@@ -313,7 +313,7 @@ def _issuer_of(credential: str) -> str | None:
 
 
 def build_token_verifier(
-    settings: ControlPlaneSettings, policy: RolePolicy, keys: JwksKeyLookup | None = None
+    settings: ControlPlaneSettings, policy: Policy, keys: JwksKeyLookup | None = None
 ) -> TokenVerifier:
     master_key: Final = settings.master_key.get_secret_value()
     sessions: Final = SessionTokenCodec(

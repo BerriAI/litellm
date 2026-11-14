@@ -11,6 +11,46 @@ from litellm.proxy.control_plane.settings import (
 )
 from litellm.types.proxy.control_plane.auth import PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH
 
+
+@pytest.mark.parametrize("configured", ["database_url", "redis_url"])
+def test_runtime_store_requires_both_connections(configured: str) -> None:
+    with pytest.raises(ValidationError, match="Set both"):
+        ControlPlaneSettings.model_validate(
+            {"LITELLM_MASTER_KEY": "01234567890123456789012345678901", configured: "unused"}
+        )
+
+
+def test_runtime_store_requires_explicit_or_fallback_salt(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CONTROL_PLANE_SALT_KEY", raising=False)
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    with pytest.raises(ValidationError, match="SALT_KEY"):
+        ControlPlaneSettings.model_validate(
+            {
+                "LITELLM_MASTER_KEY": "01234567890123456789012345678901",
+                "database_url": "postgresql://local/control",
+                "redis_url": "redis://local",
+            }
+        )
+
+
+def test_runtime_store_settings_use_dedicated_environment_and_salt_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "01234567890123456789012345678901")
+    monkeypatch.setenv("DATABASE_URL", "must-not-be-used")
+    monkeypatch.setenv("CONTROL_PLANE_DATABASE_URL", "postgresql://local/control")
+    monkeypatch.setenv("CONTROL_PLANE_REDIS_URL", "redis://local/1")
+    monkeypatch.delenv("CONTROL_PLANE_SALT_KEY", raising=False)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "fallback")
+    settings: Final = ControlPlaneSettings()
+    assert (
+        settings.database_url is not None and settings.database_url.get_secret_value() == "postgresql://local/control"
+    )
+    assert settings.redis_url is not None and settings.redis_url.get_secret_value() == "redis://local/1"
+    assert settings.salt_key is not None and settings.salt_key.get_secret_value() == "fallback"
+    monkeypatch.setenv("CONTROL_PLANE_SALT_KEY", "dedicated")
+    explicit: Final = ControlPlaneSettings()
+    assert explicit.salt_key is not None and explicit.salt_key.get_secret_value() == "dedicated"
+
+
 MASTER_KEY: Final = "01234567890123456789012345678901"
 
 

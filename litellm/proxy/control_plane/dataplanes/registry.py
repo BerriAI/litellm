@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol
 
 from litellm.litellm_core_utils.oauth_token_exchange import OAuthTokenExchangeConfig, OAuthTokenExchangeError
 from litellm.proxy.control_plane.auth.rbac import Principal
@@ -23,6 +23,7 @@ class Dataplane:
     url: str
     credential: DataplaneCredential
     credential_kinds: tuple[CredentialKind, ...]
+    source: Literal["config", "runtime"] = "config"
 
 
 class DataplaneRegistry(Protocol):

@@ -961,7 +961,7 @@ class ProxyInitializationHelpers:
 
 
 def control_plane_requested(control_plane: bool, skip_server_startup: bool, utility_command: bool = False) -> bool:
-    return control_plane and not skip_server_startup and not utility_command
+    return control_plane and not utility_command
 
 
 class _ControlPlaneLicense(Protocol):
@@ -980,10 +980,17 @@ def _control_plane_license_check() -> _ControlPlaneLicense:
     return LicenseCheck()
 
 
+def _migrate_control_plane() -> None:
+    from litellm.proxy.control_plane.store.migrate import migrate_from_environment
+
+    migrate_from_environment()
+
+
 @dataclass(frozen=True, slots=True)
 class CliDependencies:
     decrypt_env: Callable[[], Mapping[str, str]] = _decrypt_env_var
     license_check: Callable[[], _ControlPlaneLicense] = _control_plane_license_check
+    migrate_control_plane: Callable[[], None] = _migrate_control_plane
 
 
 def _decrypt_kms_env_vars(decrypt_env: Callable[[], Mapping[str, str]]) -> None:
@@ -1432,6 +1439,10 @@ def run_server(
         version or validate_config or health or test or check_migrations_against_existing_data
     )
     if control_plane_requested(control_plane, skip_server_startup, utility_command):
+        if skip_server_startup:
+            _decrypt_kms_env_vars(dependencies.decrypt_env)
+            dependencies.migrate_control_plane()
+            return
         if num_workers > 1:
             raise click.UsageError("scale the control plane with replicas.")
         from litellm.proxy.control_plane.main import serve

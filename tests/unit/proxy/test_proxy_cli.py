@@ -24,7 +24,7 @@ import yaml
 from gunicorn.config import Config as GunicornConfig
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
-from pydantic import TypeAdapter
+from pydantic import SecretStr, TypeAdapter
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
@@ -4696,7 +4696,7 @@ def test_utility_commands_do_not_decrypt_kms_environment(
     ("control_plane", "skip_server_startup", "utility_command", "expected"),
     [
         (True, False, False, True),
-        (True, True, False, False),
+        (True, True, False, True),
         (True, False, True, False),
         (False, False, False, False),
         (False, True, True, False),
@@ -4728,3 +4728,56 @@ def test_other_servers_and_reload_are_a_usage_error_with_the_control_plane_flag(
 def test_control_plane_rejects_a_lone_tls_file() -> None:
     result: Final = CliRunner().invoke(run_server, ["--control-plane", "--ssl_keyfile_path", "/c/tls.key"])
     assert result.exit_code == 2 and "both" in result.output
+
+
+def test_control_plane_migration_job_needs_only_its_own_database_and_never_starts_prisma_or_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.control_plane.store.migrate import migrate_from_environment
+
+    monkeypatch.setenv("CONTROL_PLANE_DATABASE_URL", "postgresql://dedicated/control")
+    monkeypatch.setenv("DATABASE_URL", "invalid-proxy-database")
+    monkeypatch.delenv("CONTROL_PLANE_REDIS_URL", raising=False)
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("USE_AWS_KMS", raising=False)
+    migrated: Final[list[str]] = []  # mutable-ok: records the one-shot invocation
+
+    def upgrade(url: SecretStr) -> None:
+        migrated.append(url.get_secret_value())
+
+    result: Final = CliRunner().invoke(
+        run_server,
+        ["--control-plane", "--skip_server_startup"],
+        obj=CliDependencies(migrate_control_plane=lambda: migrate_from_environment(upgrade)),
+    )
+    assert result.exit_code == 0, result.output
+    assert migrated == ["postgresql://dedicated/control"]
+    assert "migrations are current" in result.output
+
+
+def test_control_plane_migration_job_rejects_missing_dedicated_database_instead_of_using_database_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CONTROL_PLANE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("USE_AWS_KMS", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://proxy/should-not-be-used")
+    result: Final = CliRunner().invoke(run_server, ["--control-plane", "--skip_server_startup"])
+    assert result.exit_code != 0
+    assert "CONTROL_PLANE_DATABASE_URL is required" in result.output
+
+
+def test_control_plane_migration_failure_is_nonzero_and_does_not_disclose_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.control_plane.store.migrate import migrate_from_environment
+
+    monkeypatch.setenv("CONTROL_PLANE_DATABASE_URL", "postgresql://private-password@dedicated/control")
+    monkeypatch.delenv("USE_AWS_KMS", raising=False)
+
+    def upgrade(_url: SecretStr) -> None:
+        raise RuntimeError("private-password")
+
+    result: Final = CliRunner().invoke(
+        run_server,
+        ["--control-plane", "--skip_server_startup"],
+        obj=CliDependencies(migrate_control_plane=lambda: migrate_from_environment(upgrade)),
+    )
+    assert result.exit_code != 0
+    assert "Control-plane migration failed" in result.output
+    assert "private-password" not in result.output

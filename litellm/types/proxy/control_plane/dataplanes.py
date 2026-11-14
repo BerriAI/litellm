@@ -15,6 +15,7 @@ class DataplaneResponse(LiteLLMBaseModel):
     name: str
     url: str
     credentials: tuple[CredentialKindName, ...]
+    source: Literal["config", "runtime"] = "config"
 
 
 class DataplaneListResponse(LiteLLMBaseModel):
