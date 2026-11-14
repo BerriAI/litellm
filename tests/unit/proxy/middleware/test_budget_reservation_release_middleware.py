@@ -32,12 +32,12 @@ from litellm.proxy.middleware.budget_reservation_release_middleware import (
 from litellm.proxy.spend_tracking.budget_reservation import (
     reconcile_budget_reservation,
     release_unbound_budget_reservation,
-    reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.utils import Rules, function_setup
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from tests.unit.proxy.spend_tracking.native_budgets_replica import install_native_owner, reserve_budget_for_request
 
 KEY_TOKEN: Final = "hashed-release-middleware-key"
 COUNTER_KEY: Final = f"spend:key:{KEY_TOKEN}"
@@ -45,7 +45,7 @@ CHAT_BODY: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": 
 
 
 @pytest.fixture
-def spend_counter_store(monkeypatch: pytest.MonkeyPatch) -> SpendCounterStore:
+def spend_counter_store(monkeypatch: pytest.MonkeyPatch, native_budgets_on: None) -> SpendCounterStore:
     store: Final = SpendCounterStore(connect(None).spend_counters())
     monkeypatch.setattr(proxy_server, "spend_counter_store", store)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
@@ -65,6 +65,7 @@ def no_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _reserve() -> dict:
+    _ = install_native_owner(proxy_server.spend_counter_store)
     reservation: Final = await reserve_budget_for_request(
         request_body=CHAT_BODY,
         route="/v1/chat/completions",
