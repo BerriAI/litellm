@@ -771,6 +771,64 @@ def test_gemini_batch_embedding_usage_comes_from_usage_metadata(
     )
 
 
+
+@pytest.mark.parametrize(
+    "usage_metadata",
+    [
+        {},
+        {"promptTokenDetails": [{"modality": "TEXT", "tokenCount": 3}, {"modality": "IMAGE", "tokenCount": 258}]},
+    ],
+)
+def test_gemini_batch_usage_metadata_without_a_prompt_count_bills_like_none_was_sent(
+    usage_metadata: dict[str, object],
+) -> None:
+    def usage_for(predictions: VertexAIBatchEmbeddingsResponseObject) -> Usage:
+        return process_response(
+            input=["a red apple", IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-2",
+            _predictions=predictions,
+        ).usage
+
+    embeddings: Final = [{"values": [0.1]}, {"values": [0.2]}]
+    with_metadata: Final = usage_for({"embeddings": embeddings, "usageMetadata": usage_metadata})
+    without_metadata: Final = usage_for({"embeddings": embeddings})
+
+    assert with_metadata.prompt_tokens == without_metadata.prompt_tokens > 0
+    assert _prompt_cost("gemini-embedding-2", with_metadata) == _prompt_cost("gemini-embedding-2", without_metadata)
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_batch_embedding_bills_a_files_image_at_the_image_rate_without_modality_details(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, use_async: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.get("https://generativelanguage.googleapis.com/v1beta/files/abc123").mock(
+        return_value=httpx.Response(
+            200,
+            json={"mimeType": "image/png", "uri": "https://generativelanguage.googleapis.com/v1beta/files/abc123"},
+        )
+    )
+    respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
+    ).mock(
+        return_value=httpx.Response(
+            200, json={"embeddings": [{"values": [0.1, 0.2]}], "usageMetadata": {"promptTokenCount": 258}}
+        )
+    )
+
+    response: Final = (
+        await litellm.aembedding(model="gemini/gemini-embedding-2", input=["files/abc123"], api_key="gemini-test-key")
+        if use_async
+        else litellm.embedding(model="gemini/gemini-embedding-2", input=["files/abc123"], api_key="gemini-test-key")
+    )
+
+    assert response.usage.prompt_tokens_details.image_tokens == 258
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        258 * litellm.model_cost["gemini/gemini-embedding-2"]["input_cost_per_image_token"]
+    )
+
 class TestEmbedContentConfigParams:
     """`document_ocr`, `audio_track_extraction` and `auto_truncate` only exist inside `embedContentConfig`."""
 

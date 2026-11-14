@@ -286,6 +286,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model_response=model_response,
                 _predictions=_json_response,
                 input=input,
+                resolved_files=resolved_files,
             )
 
     async def async_batch_embeddings(
@@ -392,4 +393,5 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model_response=model_response,
                 _predictions=_json_response,
                 input=input,
+                resolved_files=resolved_files,
             )
