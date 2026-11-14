@@ -1,7 +1,7 @@
 import threading
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from types import MethodType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
@@ -19,6 +19,12 @@ else:
 
 _generic_api_logger_cache: Final[dict[str, GenericAPILogger]] = {}
 _callback_lists_lock: Final = threading.RLock()
+
+
+def _v2_companion_in(callback: object, parent_list: Sequence[object]) -> CustomLoggerV2 | None:
+    if not isinstance(callback, CustomLogger) or callback.v2_companion is None:
+        return None
+    return callback.v2_companion if any(existing is callback for existing in parent_list) else None
 
 
 def _instance_attributes(target: object) -> Mapping[str, object]:
@@ -109,14 +115,22 @@ class LoggingCallbackManager:
         Add a success callback to litellm._async_success_callback
         """
         with _callback_lists_lock:
-            self._safe_add_callback_to_list(callback=callback, parent_list=litellm._async_success_callback)
+            callbacks: Final = litellm._async_success_callback
+            self._safe_add_callback_to_list(callback=callback, parent_list=callbacks)
+            companion: Final = _v2_companion_in(callback, callbacks)
+            if companion is not None:
+                self._safe_add_callback_to_list(callback=companion, parent_list=callbacks)
 
     def add_litellm_async_failure_callback(self, callback: CustomLogger | Callable[..., object] | str | CustomLoggerV2):
         """
         Add a failure callback to litellm._async_failure_callback
         """
         with _callback_lists_lock:
-            self._safe_add_callback_to_list(callback=callback, parent_list=litellm._async_failure_callback)
+            callbacks: Final = litellm._async_failure_callback
+            self._safe_add_callback_to_list(callback=callback, parent_list=callbacks)
+            companion: Final = _v2_companion_in(callback, callbacks)
+            if companion is not None:
+                self._safe_add_callback_to_list(callback=companion, parent_list=callbacks)
 
     def remove_callback_from_list_by_object(self, callback_list, obj, require_self=True):
         """
@@ -426,13 +440,18 @@ class LoggingCallbackManager:
         """
         Get all callbacks from litellm.callbacks, litellm.success_callback, litellm.failure_callback, litellm._async_success_callback, litellm._async_failure_callback
         """
-        return (
-            litellm.callbacks
-            + litellm.success_callback
-            + litellm.failure_callback
-            + litellm._async_success_callback
-            + litellm._async_failure_callback
-        )
+        return [
+            *litellm.callbacks,
+            *litellm.success_callback,
+            *litellm.failure_callback,
+            *self.async_event_callbacks("success"),
+            *self.async_event_callbacks("failure"),
+        ]
+
+    def async_event_callbacks(
+        self, event: Literal["success", "failure"]
+    ) -> Sequence[CustomLogger | Callable[..., object] | str]:
+        return litellm._async_success_callback if event == "success" else litellm._async_failure_callback
 
     _get_all_callbacks = get_all_callbacks
 

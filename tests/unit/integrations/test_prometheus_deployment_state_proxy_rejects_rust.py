@@ -1,14 +1,3 @@
-"""
-LIT-7701 attributes a pre_call_hook rejection's failure log to the model
-group's single deployment (``model_id`` and ``custom_llm_provider``) and flags
-it with ``PROXY_REJECTED_BEFORE_ROUTING_KEY``. The deployment health metrics
-must keep treating such rejects as "no deployment picked": a key rate limit or
-guardrail block never reached the deployment, so it must not flip
-``litellm_deployment_state`` to partial outage or count as a deployment failure
-response. A failure raised after the router picked a deployment (a post-call
-guardrail block, a provider error) carries no flag and keeps its deployment labels.
-"""
-
 from typing import Final
 
 import pytest
@@ -20,6 +9,12 @@ from litellm.exceptions import GuardrailRaisedException, MalformedRequestFieldEr
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from tests.unit.integrations.prometheus_native_support import enable_native_prometheus, native_failure, series
+
+
+@pytest.fixture(autouse=True)
+def native_prometheus(monkeypatch):
+    enable_native_prometheus(monkeypatch)
 
 
 @pytest.fixture(autouse=True)
@@ -51,15 +46,23 @@ def _attributed_failure_kwargs(exception: Exception, rejected_before_routing: bo
             "model_id": "dep-1",
             "model_group": "internal-model",
             "api_base": "https://api.openai.com",
-            "metadata": {},
+            "metadata": {
+                "user_api_key_hash": None,
+                "user_api_key_alias": None,
+                "user_api_key_team_id": None,
+                "user_api_key_team_alias": None,
+                "user_api_key_user_id": None,
+                "user_api_key_user_email": None,
+            },
         },
         "exception": exception,
+        "start_time": None,
+        "end_time": None,
     }
 
 
 def _model_id_values(metric) -> set[str]:
-    index = metric._labelnames.index("model_id")
-    return {sample_key[index] for sample_key in metric._metrics}
+    return {labels["model_id"] for labels, _ in series(metric.name)}
 
 
 class _ProviderError(Exception):
@@ -76,12 +79,13 @@ class _ProviderError(Exception):
     ],
     ids=["http_exception", "proxy_exception", "proxy_rate_limit", "guardrail_raised"],
 )
-def test_attributed_proxy_reject_leaves_deployment_healthy(rejection: Exception):
+@pytest.mark.asyncio
+async def test_attributed_proxy_reject_leaves_deployment_healthy(rejection: Exception):
     logger = PrometheusLogger()
 
-    logger.set_llm_deployment_failure_metrics(_attributed_failure_kwargs(rejection, rejected_before_routing=True))
+    await native_failure(logger, _attributed_failure_kwargs(rejection, rejected_before_routing=True), None)
 
-    assert logger.litellm_deployment_state._metrics == {}
+    assert series(logger.litellm_deployment_state.name) == []
     assert _model_id_values(logger.litellm_deployment_failure_responses) == {""}
     assert _model_id_values(logger.litellm_deployment_total_requests) == {""}
 
@@ -94,22 +98,24 @@ def test_attributed_proxy_reject_leaves_deployment_healthy(rejection: Exception)
     ],
     ids=["provider_error", "post_call_guardrail"],
 )
-def test_failure_after_routing_still_marks_deployment_partial_outage(failure: Exception):
+@pytest.mark.asyncio
+async def test_failure_after_routing_still_marks_deployment_partial_outage(failure: Exception):
     logger = PrometheusLogger()
 
-    logger.set_llm_deployment_failure_metrics(_attributed_failure_kwargs(failure, rejected_before_routing=False))
+    await native_failure(logger, _attributed_failure_kwargs(failure, rejected_before_routing=False), None)
 
     assert _model_id_values(logger.litellm_deployment_state) == {"dep-1"}
     assert _model_id_values(logger.litellm_deployment_failure_responses) == {"dep-1"}
 
 
-def test_malformed_field_rejection_after_routing_leaves_deployment_healthy() -> None:
+@pytest.mark.asyncio
+async def test_malformed_field_rejection_after_routing_leaves_deployment_healthy() -> None:
     logger: Final = PrometheusLogger()
     rejection: Final = MalformedRequestFieldError(
         message="tools: Input should be a valid list", model="internal-model", llm_provider="openai"
     )
 
-    logger.set_llm_deployment_failure_metrics(_attributed_failure_kwargs(rejection, rejected_before_routing=False))
+    await native_failure(logger, _attributed_failure_kwargs(rejection, rejected_before_routing=False), None)
 
-    assert logger.litellm_deployment_state._metrics == {}
+    assert series(logger.litellm_deployment_state.name) == []
     assert _model_id_values(logger.litellm_deployment_failure_responses) == {""}

@@ -12,7 +12,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from litellm.integrations.prometheus import PrometheusLogger
 from litellm.types.integrations.prometheus import (
     DEFINED_PROMETHEUS_METRICS,
     PrometheusMetricLabels,
@@ -76,104 +75,8 @@ class TestMediaGenerationMetricsRegistration:
             == PrometheusMetricLabels.litellm_output_tokens_metric
         )
 
-    def test_runtime_label_set_matches_output_tokens_metric(self):
-        """Full parity with litellm_output_tokens_metric, including the org labels
-        appended via _org_label_metrics, so existing token dashboards can be cloned."""
-        expected = PrometheusMetricLabels.get_labels("litellm_output_tokens_metric")
-        for name in MEDIA_GENERATION_METRICS:
-            assert PrometheusMetricLabels.get_labels(name) == expected
 
 
-class TestIncrementMediaGenerationMetrics:
-    def test_video_duration_incremented(self, sample_enum_values):
-        logger = _make_mock_logger()
-        payload = {"metadata": {"usage_object": {"duration_seconds": 8.0}}}
-
-        PrometheusLogger._increment_media_generation_metrics(
-            logger,
-            standard_logging_payload=payload,
-            enum_values=sample_enum_values,
-        )
-
-        logger.litellm_video_duration_seconds_metric.labels().inc.assert_called_once_with(8.0)
-        logger.litellm_images_generated_metric.labels.assert_not_called()
-
-    def test_image_count_incremented(self, sample_enum_values):
-        logger = _make_mock_logger()
-        payload = {
-            "metadata": {
-                "usage_object": {
-                    "prompt_tokens": 18,
-                    "completion_tokens": 391,
-                    "total_tokens": 409,
-                    "output_image_count": 2,
-                }
-            }
-        }
-
-        PrometheusLogger._increment_media_generation_metrics(
-            logger,
-            standard_logging_payload=payload,
-            enum_values=sample_enum_values,
-        )
-
-        logger.litellm_images_generated_metric.labels().inc.assert_called_once_with(2.0)
-        logger.litellm_video_duration_seconds_metric.labels.assert_not_called()
-
-    def test_token_only_usage_is_a_noop(self, sample_enum_values):
-        logger = _make_mock_logger()
-        payload = {
-            "metadata": {
-                "usage_object": {
-                    "prompt_tokens": 10,
-                    "completion_tokens": 20,
-                    "total_tokens": 30,
-                }
-            }
-        }
-
-        PrometheusLogger._increment_media_generation_metrics(
-            logger,
-            standard_logging_payload=payload,
-            enum_values=sample_enum_values,
-        )
-
-        for name in MEDIA_GENERATION_METRICS:
-            getattr(logger, name).labels.assert_not_called()
-
-    @pytest.mark.parametrize("bad_value", [0, 0.0, None, -4.0, "4", True])
-    def test_non_positive_or_non_numeric_values_are_ignored(self, sample_enum_values, bad_value):
-        logger = _make_mock_logger()
-        payload = {
-            "metadata": {
-                "usage_object": {
-                    "duration_seconds": bad_value,
-                    "output_image_count": bad_value,
-                }
-            }
-        }
-
-        PrometheusLogger._increment_media_generation_metrics(
-            logger,
-            standard_logging_payload=payload,
-            enum_values=sample_enum_values,
-        )
-
-        for name in MEDIA_GENERATION_METRICS:
-            getattr(logger, name).labels.assert_not_called()
-
-    def test_missing_usage_object_is_a_noop(self, sample_enum_values):
-        logger = _make_mock_logger()
-
-        for payload in ({"metadata": {}}, {"metadata": None}, {"metadata": {"usage_object": "redacted"}}):
-            PrometheusLogger._increment_media_generation_metrics(
-                logger,
-                standard_logging_payload=payload,
-                enum_values=sample_enum_values,
-            )
-
-        for name in MEDIA_GENERATION_METRICS:
-            getattr(logger, name).labels.assert_not_called()
 
 
 if __name__ == "__main__":

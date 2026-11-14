@@ -1,5 +1,5 @@
 from asyncio import Future
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
 
 import httpx
@@ -770,6 +770,8 @@ __all__ = [
     "NativeModelCostMap",
     "NativeModelCostMapState",
     "NativePending",
+    "NativePrometheusMetric",
+    "NativePrometheusStore",
     "NativeProvenance",
     "NativeRateLimits",
     "NativeRedisBreaker",
@@ -1390,3 +1392,71 @@ class RouterCall(Generic[_S]):
     # candidate ids, pick first; pre_route: see _PreRouteStep; cache: see _CacheStep; secrets, build and model_info:
     # see those steps; first call: None.
     def next(self, outcome: object) -> _S: ...
+
+class _NativePrometheusCallback(Protocol):
+    def manifest(self) -> str: ...
+    def request_state(self) -> object: ...
+    def handle(
+        self, hook: str, fields: Mapping[str, object], call: Mapping[str, object] | None, state: object, /
+    ) -> Awaitable[object]: ...
+
+_PrometheusSeries = tuple[list[str], float, float, list[float], float]
+_PrometheusFamily = tuple[
+    str, str, Literal["counter", "gauge", "histogram"], list[str], list[float], list[_PrometheusSeries]
+]
+
+@final
+class NativePrometheusMetric:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
+    @property
+    def name(self) -> str: ...
+    def labels(self, *args: object, **kwargs: object) -> NativePrometheusMetric: ...
+    def inc(self, amount: object = None) -> None: ...
+    def dec(self, amount: object = None) -> None: ...
+    def set(self, value: object) -> None: ...
+    def observe(self, amount: object) -> None: ...
+    def remove(self, *values: object) -> None: ...
+    def clear(self) -> None: ...
+    def collect(self) -> _PrometheusFamily: ...
+
+@final
+class NativePrometheusStore:
+    def __new__(
+        cls,
+        max_series: int | None = None,
+        ttl_seconds: float | None = None,
+        cleanup_interval_seconds: float | None = None,
+        manual_clock: bool = False,
+    ) -> NativePrometheusStore: ...
+    def set_time(self, monotonic: float, wall: float) -> None: ...
+    def forward(
+        self,
+        sink: Callable[
+            [list[tuple[str, list[str] | None, Literal["inc", "dec", "set", "observe", "remove", "clear"], float]]],
+            object,
+        ],
+    ) -> None: ...
+    def flush(self) -> None: ...
+    def declare_labels(self, metric: str, labels: Sequence[str]) -> None: ...
+    def metric(
+        self,
+        kind: Literal["counter", "gauge", "histogram"],
+        declared: str,
+        documentation: str,
+        labelnames: Sequence[str],
+        excluded: Sequence[str],
+        buckets: Sequence[float],
+        most_recent: bool,
+        wrapped: bool,
+        shares_overflow: bool,
+    ) -> NativePrometheusMetric: ...
+    def track_end_user(
+        self,
+        metric: str,
+        values: Sequence[str | None],
+        max_series: int | None = None,
+        ttl_seconds: float | None = None,
+        cleanup_interval_seconds: float | None = None,
+    ) -> None: ...
+    def op(self, name: str, facts: str) -> None: ...
+    def callback(self, log: Callable[[str, str, list[str]], object]) -> _NativePrometheusCallback: ...

@@ -25,6 +25,12 @@ from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.types.utils import BudgetConfig, GenericBudgetConfigType
+from tests.unit.integrations.prometheus_native_support import enable_native_prometheus
+
+
+@pytest.fixture(autouse=True)
+def native_prometheus(monkeypatch):
+    enable_native_prometheus(monkeypatch)
 
 
 def compare_metrics(func):

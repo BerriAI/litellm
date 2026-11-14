@@ -585,7 +585,11 @@ def rate_limit_state(args: HookArgs) -> RateLimitState | None:
             else _metadata_value(metadata, f"litellm-key-remaining-tokens-{group}"),
             "limiter_headers": None
             if header_map is None
-            else {key: value for key, value in header_map.items() if key.startswith(_LIMITER_HEADER_PREFIX)},
+            else {
+                key: value
+                for key, value in header_map.items()
+                if isinstance(key, str) and key.startswith(_LIMITER_HEADER_PREFIX)
+            },
             "provider_remaining_requests": member(header_map, "x_ratelimit_remaining_requests"),
             "provider_remaining_tokens": member(header_map, "x_ratelimit_remaining_tokens"),
             "hidden_params_present": isinstance(hidden, Mapping),

@@ -1199,17 +1199,42 @@ def test_guardrail_info_keeps_what_prometheus_iterates(
     [("pre_call",), ["pre_call"], ["pre_call", "during_call"], "post_call", 7, None, ["pre_call", 7]],
     ids=repr,
 )
-def test_guardrail_modes_select_the_str_modes_prometheus_counts_as_additive(mode: object) -> None:
-    from litellm.integrations.prometheus import PrometheusLogger
-
+async def test_guardrail_modes_select_the_str_modes_prometheus_counts_as_additive(mode: object) -> None:
     payload: Final = {"guardrail_information": {"guardrail_mode": mode}}
     entries: Final = derivations.guardrail_info(HookArgs(request={"standard_logging_object": payload}))
     assert entries is not None
     modes: Final = frozenset(item for item in entries[0].modes or () if isinstance(item, str))
 
     assert (bool(modes) and modes <= PrometheusLogger._ADDITIVE_GUARDRAIL_MODES) is (
-        PrometheusLogger._guardrail_is_additive({"guardrail_mode": mode})  # pyright: ignore[reportArgumentType]  # the shapes guardrails write
+        await _prometheus_counts_guardrail_as_additive(mode)
     )
+
+
+async def _prometheus_counts_guardrail_as_additive(mode: object) -> bool:
+    from prometheus_client import REGISTRY
+
+    from tests.unit.integrations.prometheus_native_support import native_success, series, standard_payload
+
+    before: Final = frozenset(REGISTRY._collector_to_names)
+    now: Final = datetime.now()
+    kwargs: Final = {
+        "model": "gpt-4o",
+        "litellm_params": {"metadata": {}},
+        "start_time": now,
+        "end_time": now,
+        "standard_logging_object": standard_payload(
+            hidden_params={"additional_headers": None},
+            guardrail_information=[{"guardrail_mode": mode, "duration": 0.25}],
+        ),
+    }
+    try:
+        await native_success(PrometheusLogger(), kwargs, None)
+        observed: Final = [value for _, value in series("litellm_overhead_with_guardrails_latency_metric")]
+    finally:
+        for collector in frozenset(REGISTRY._collector_to_names) - before:
+            REGISTRY.unregister(collector)
+    assert len(observed) <= 1
+    return bool(observed) and abs(observed[0] - 0.25) < 1e-6
 
 
 @pytest.mark.parametrize(
@@ -1383,6 +1408,17 @@ def test_rate_limit_state_leaves_the_key_limits_absent_when_the_helper_raises() 
     state: Final = derivations.rate_limit_state(HookArgs(request={"litellm_params": {"metadata": "g"}}))
 
     assert state == RateLimitState(hidden_params_present=False, additional_headers_present=False)
+
+
+def test_rate_limit_state_reads_provider_headers_beside_a_non_str_header_key() -> None:
+    headers: Final = {1: "x", "x-ratelimit-key-limit-requests": 3, "x_ratelimit_remaining_tokens": "856.5"}
+    payload: Final = {"hidden_params": {"additional_headers": headers}}
+
+    state: Final = derivations.rate_limit_state(HookArgs(request={"standard_logging_object": payload}))
+
+    assert state is not None
+    assert state.provider_remaining_tokens == "856.5"
+    assert state.limiter_headers == {"x-ratelimit-key-limit-requests": 3}
 
 
 def _capacity_reservation_check_raises(reservation: object) -> str | None:

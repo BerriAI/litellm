@@ -9,7 +9,7 @@ the proxy-level failed request counter still records them.
 from collections.abc import Iterator
 from datetime import datetime
 from typing import Final
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 from fastapi import HTTPException
@@ -20,7 +20,6 @@ import litellm
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
-from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 
 
 PROVIDER_CREDENTIAL_FIELDS = [
@@ -388,101 +387,6 @@ class TestSkipMetricsValidation:
         assert prometheus_logger._should_skip_metrics_for_invalid_key() is False
 
 
-class TestAsyncHooks:
-    """Test how async hook methods treat invalid API key requests."""
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "exception",
-        [
-            HTTPException(
-                status_code=401,
-                detail="LiteLLM Virtual Key expected. Received=nota****tall, expected to start with 'sk-'.",
-            ),
-            ProxyException(
-                message="Authentication Error, Invalid proxy server token passed.",
-                type=ProxyErrorTypes.token_not_found_in_db,
-                param="key",
-                code=401,
-            ),
-        ],
-    )
-    async def test_post_call_failure_hook_counts_401_without_key_hash(self, prometheus_logger, exception):
-        unauthenticated = UserAPIKeyAuth(request_route="/v1/chat/completions")
-        unauthenticated.api_key = "notakeyatall"
-
-        with (
-            patch.object(prometheus_logger, "litellm_proxy_failed_requests_metric") as mock_failed,
-            patch.object(prometheus_logger, "litellm_proxy_total_requests_metric") as mock_total,
-        ):
-            await prometheus_logger.async_post_call_failure_hook(
-                request_data={"model": "test-model"},
-                original_exception=exception,
-                user_api_key_dict=unauthenticated,
-            )
-
-        failed_labels = mock_failed.labels.call_args.kwargs
-        assert failed_labels["exception_status"] == "401"
-        assert failed_labels["hashed_api_key"] is None
-        assert failed_labels["route"] == "/v1/chat/completions"
-        mock_failed.labels.return_value.inc.assert_called_once()
-        assert mock_total.labels.call_args.kwargs["status_code"] == "401"
-        mock_total.labels.return_value.inc.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_post_call_failure_hook_keeps_resolved_identity_labels_for_401(self, prometheus_logger):
-        expired_key = UserAPIKeyAuth(
-            api_key="sk-expired",
-            key_alias="expired-alias",
-            team_id="team-1",
-        )
-        exception = ProxyException(
-            message="Authentication Error - Expired Key.",
-            type=ProxyErrorTypes.expired_key,
-            param="key",
-            code=401,
-        )
-
-        with patch.object(prometheus_logger, "litellm_proxy_failed_requests_metric") as mock_failed:
-            await prometheus_logger.async_post_call_failure_hook(
-                request_data={"model": "test-model"},
-                original_exception=exception,
-                user_api_key_dict=expired_key,
-            )
-
-        failed_labels = mock_failed.labels.call_args.kwargs
-        assert failed_labels["exception_status"] == "401"
-        assert failed_labels["hashed_api_key"] is None
-        assert failed_labels["api_key_alias"] == "expired-alias"
-        assert failed_labels["team"] == "team-1"
-
-    @pytest.mark.asyncio
-    async def test_log_failure_event_skips_401_rejected_at_the_proxy_gate(self, prometheus_logger):
-        exception = ExceptionWithCode("401")
-        kwargs = {
-            "model": "test-model",
-            "standard_logging_object": {
-                "metadata": {
-                    "user_api_key_hash": "test-key",
-                    "user_api_key_user_id": "test-user",
-                },
-                "model_group": "test-model",
-            },
-            "exception": exception,
-            "litellm_params": {},
-            LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: True,
-        }
-
-        with (
-            patch.object(prometheus_logger, "litellm_llm_api_failed_requests_metric") as mock_failed,
-            patch.object(prometheus_logger, "set_llm_deployment_failure_metrics") as mock_deployment,
-        ):
-            await prometheus_logger.async_log_failure_event(
-                kwargs=kwargs, response_obj=None, start_time=None, end_time=None
-            )
-
-            mock_failed.labels.assert_not_called()
-            mock_deployment.assert_not_called()
 
 
 def _provider_auth_failure_kwargs() -> dict[str, object]:
@@ -539,50 +443,3 @@ def _registry_samples() -> Iterator[Sample]:
         yield from metric.samples
 
 
-class TestProviderAuthFailures:
-    """A 401 raised by the provider is an upstream failure and is recorded."""
-
-    @pytest.mark.asyncio
-    async def test_log_failure_event_records_a_provider_401(self, prometheus_logger):
-        await prometheus_logger.async_log_failure_event(
-            kwargs=_provider_auth_failure_kwargs(),
-            response_obj=None,
-            start_time=None,
-            end_time=None,
-        )
-
-        assert _metric_values("litellm_llm_api_failed_requests_metric_total", "deployment-1") == [1.0]
-        assert _metric_values("litellm_deployment_failure_responses_total", "deployment-1") == [1.0]
-        assert _metric_values("litellm_deployment_state", "deployment-1") == [1.0]
-
-    @pytest.mark.asyncio
-    async def test_log_failure_event_records_entra_rejecting_the_deployment_credential_before_the_call(
-        self, prometheus_logger
-    ):
-        await prometheus_logger.async_log_failure_event(
-            kwargs=_deployment_entra_rejection_kwargs(),
-            response_obj=None,
-            start_time=None,
-            end_time=None,
-        )
-
-        assert _metric_values("litellm_llm_api_failed_requests_metric_total", "deployment-1") == [1.0]
-        assert _metric_values("litellm_deployment_failure_responses_total", "deployment-1") == [1.0]
-
-    def test_deployment_failure_metrics_record_a_provider_401(self, prometheus_logger):
-        prometheus_logger.set_llm_deployment_failure_metrics(_provider_auth_failure_kwargs())
-
-        failures: Final = [
-            sample for sample in _registry_samples() if sample.name == "litellm_deployment_failure_responses_total"
-        ]
-        assert [
-            (
-                sample.labels["model_id"],
-                sample.labels["exception_status"],
-                sample.labels["api_provider"],
-                sample.value,
-            )
-            for sample in failures
-        ] == [("deployment-1", "401", "openai", 1.0)]
-        assert _metric_values("litellm_deployment_total_requests_total", "deployment-1") == [1.0]
-        assert _metric_values("litellm_deployment_state", "deployment-1") == [1.0]

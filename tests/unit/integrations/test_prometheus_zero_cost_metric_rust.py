@@ -8,6 +8,13 @@ from prometheus_client.samples import Sample
 import litellm
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.types.utils import StandardLoggingZeroCostDiagnostic
+from tests.unit.integrations.prometheus_native_support import enable_native_prometheus, native_success, native_failure
+
+
+@pytest.fixture(autouse=True)
+def native_prometheus(monkeypatch):
+    enable_native_prometheus(monkeypatch)
+
 
 METRIC: Final = "litellm_zero_cost_requests_total"
 MISSING_KEY_DIAGNOSTIC: Final[StandardLoggingZeroCostDiagnostic] = {
@@ -84,7 +91,7 @@ async def _log_success(
         "completion_start_time": now - datetime.timedelta(seconds=1),
         "end_time": now,
     }
-    await logger.async_log_success_event(kwargs, None, now, now)
+    await native_success(logger, kwargs, None, now, now)
 
 
 async def _log_failure(
@@ -100,7 +107,7 @@ async def _log_failure(
         "start_time": now - datetime.timedelta(seconds=3),
         "end_time": now,
     }
-    await logger.async_log_failure_event(kwargs, None, now, now)
+    await native_failure(logger, kwargs, None, now, now)
 
 
 @pytest.mark.asyncio
@@ -161,12 +168,13 @@ async def test_request_without_a_diagnostic_leaves_the_counter_untouched() -> No
 
 
 @pytest.mark.asyncio
-async def test_label_filter_that_drops_reason_still_counts_the_request() -> None:
+async def test_label_filter_that_drops_reason_still_counts_the_request(monkeypatch) -> None:
     _clear_prometheus_registry()
-    previous_config: Final = litellm.prometheus_metrics_config
-    litellm.prometheus_metrics_config = [
-        {"group": "zero_cost", "metrics": [METRIC], "include_labels": ["requested_model"]}
-    ]
+    monkeypatch.setattr(
+        litellm,
+        "prometheus_metrics_config",
+        [{"group": "zero_cost", "metrics": [METRIC], "include_labels": ["requested_model"]}],
+    )
     try:
         await _log_success(PrometheusLogger(), MISSING_KEY_DIAGNOSTIC)
 
@@ -175,5 +183,4 @@ async def test_label_filter_that_drops_reason_still_counts_the_request() -> None
         assert samples[0].labels == {"requested_model": "per-second-priced-chat"}
         assert samples[0].value == 1.0
     finally:
-        litellm.prometheus_metrics_config = previous_config
         _clear_prometheus_registry()

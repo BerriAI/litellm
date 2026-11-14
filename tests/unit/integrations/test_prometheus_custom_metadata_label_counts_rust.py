@@ -6,6 +6,12 @@ from prometheus_client import REGISTRY
 
 import litellm
 from litellm.integrations.prometheus import PrometheusLogger
+from tests.unit.integrations.prometheus_native_support import enable_native_prometheus, native_failure, native_success
+
+
+@pytest.fixture(autouse=True)
+def native_prometheus(monkeypatch):
+    enable_native_prometheus(monkeypatch)
 
 
 def _clear_prometheus_registry() -> None:
@@ -52,13 +58,20 @@ def _standard_logging_payload_with_requester_metadata() -> dict:
     }
 
 
+def _success_payload() -> dict:
+    return {
+        **_standard_logging_payload_with_requester_metadata(),
+        "model": "gpt-4o-mini",
+        "prompt_tokens": 0,
+        "cache_hit": False,
+        "stream": False,
+        "end_user": None,
+        "hidden_params": {"additional_headers": None, "litellm_overhead_time_ms": None},
+    }
+
+
 def _metric_samples(metric_name: str):
-    return [
-        sample
-        for metric in REGISTRY.collect()
-        for sample in metric.samples
-        if sample.name == metric_name
-    ]
+    return [sample for metric in REGISTRY.collect() for sample in metric.samples if sample.name == metric_name]
 
 
 @pytest.mark.asyncio
@@ -77,7 +90,8 @@ async def test_async_log_failure_event_accepts_custom_metadata_labels(
     }
 
     with caplog.at_level(logging.ERROR):
-        await prometheus_logger.async_log_failure_event(
+        await native_failure(
+            prometheus_logger,
             kwargs=kwargs,
             response_obj=None,
             start_time=None,
@@ -93,7 +107,8 @@ async def test_async_log_failure_event_accepts_custom_metadata_labels(
     )
 
 
-def test_virtual_key_rate_limit_metrics_accept_custom_metadata_labels(
+@pytest.mark.asyncio
+async def test_virtual_key_rate_limit_metrics_accept_custom_metadata_labels(
     monkeypatch: pytest.MonkeyPatch,
 ):
     prometheus_logger = _create_prometheus_logger_with_custom_labels(monkeypatch)
@@ -103,19 +118,14 @@ def test_virtual_key_rate_limit_metrics_accept_custom_metadata_labels(
         "litellm-key-remaining-tokens-gpt-4o-mini": 200,
     }
     kwargs = {
+        "model": "gpt-4o-mini",
         "litellm_params": {
             "metadata": metadata,
         },
-        "standard_logging_object": _standard_logging_payload_with_requester_metadata(),
+        "standard_logging_object": _success_payload(),
     }
 
-    prometheus_logger._set_virtual_key_rate_limit_metrics(
-        user_api_key="test-hash",
-        user_api_key_alias="test-alias",
-        kwargs=kwargs,
-        metadata=metadata,
-        model_id="model-123",
-    )
+    await native_success(prometheus_logger, kwargs, None)
 
     samples = _metric_samples("litellm_remaining_api_key_requests_for_model")
     assert any(
@@ -126,7 +136,8 @@ def test_virtual_key_rate_limit_metrics_accept_custom_metadata_labels(
     )
 
 
-def test_virtual_key_rate_limit_metrics_preserve_zero_remaining_values(
+@pytest.mark.asyncio
+async def test_virtual_key_rate_limit_metrics_preserve_zero_remaining_values(
     monkeypatch: pytest.MonkeyPatch,
 ):
     prometheus_logger = _create_prometheus_logger_with_custom_labels(monkeypatch)
@@ -136,19 +147,14 @@ def test_virtual_key_rate_limit_metrics_preserve_zero_remaining_values(
         "litellm-key-remaining-tokens-gpt-4o-mini": 0,
     }
     kwargs = {
+        "model": "gpt-4o-mini",
         "litellm_params": {
             "metadata": metadata,
         },
-        "standard_logging_object": _standard_logging_payload_with_requester_metadata(),
+        "standard_logging_object": _success_payload(),
     }
 
-    prometheus_logger._set_virtual_key_rate_limit_metrics(
-        user_api_key="test-hash",
-        user_api_key_alias="test-alias",
-        kwargs=kwargs,
-        metadata=metadata,
-        model_id="model-123",
-    )
+    await native_success(prometheus_logger, kwargs, None)
 
     request_samples = _metric_samples("litellm_remaining_api_key_requests_for_model")
     token_samples = _metric_samples("litellm_remaining_api_key_tokens_for_model")
