@@ -6760,12 +6760,7 @@ async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
         response: Final = await litellm.aresponses(**kwargs) if is_async else litellm.responses(**kwargs)
         assert response.status == "completed"
         assert route.calls[0].request.headers["authorization"] == "Bearer fake-caller-key"
-        expected_content_types: Final = (
-            ["application/json", "application/vnd.example+json"]
-            if provider == "openai"
-            else ["application/vnd.example+json"]
-        )
-        assert route.calls[0].request.headers.get_list("content-type") == expected_content_types
+        assert route.calls[0].request.headers.get_list("content-type") == ["application/vnd.example+json"]
     finally:
         if isinstance(client, AsyncHTTPHandler):
             await client.close()
@@ -6968,3 +6963,63 @@ def test_sync_responses_run_a_v2_callback_pre_deployment_hook_without_any_legacy
 
     assert seen == (["gpt-5.5"] if with_v2 else [])
     assert response_params["temperature"] == 1.0
+
+
+_ONE_ORGANIZATION_ROUTES: Final = (
+    pytest.param(
+        "https://api.openai.com/v1/responses",
+        {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.5",
+            "output": [],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+        lambda is_async: (litellm.aresponses if is_async else litellm.responses),
+        {"model": "openai/gpt-5.5", "input": "hi"},
+        id="responses",
+    ),
+    pytest.param(
+        "https://api.openai.com/v1/images/edits",
+        {"created": 1, "data": [{"b64_json": "aGk="}]},
+        lambda is_async: (litellm.aimage_edit if is_async else litellm.image_edit),
+        {"model": "openai/gpt-image-1", "image": b"image", "prompt": "hi"},
+        id="image-edit",
+    ),
+    pytest.param(
+        "https://api.openai.com/v1/videos",
+        {"id": "video_1", "object": "video", "status": "queued", "created_at": 1, "model": "sora-2"},
+        lambda is_async: (litellm.avideo_generation if is_async else litellm.video_generation),
+        {"model": "openai/sora-2", "prompt": "hi"},
+        id="video-generation",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize(("url", "wire_body", "route_for", "route_kwargs"), _ONE_ORGANIZATION_ROUTES)
+async def test_openai_route_sends_one_organization_when_a_deployment_header_names_it(
+    monkeypatch: pytest.MonkeyPatch,
+    is_async: bool,
+    url: str,
+    wire_body: Mapping[str, object],
+    route_for: Callable[[bool], Callable[..., object]],
+    route_kwargs: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("OPENAI_ORG_ID", raising=False)
+    with respx.mock:
+        upstream: Final = respx.post(url).mock(return_value=httpx.Response(200, json=wire_body))
+        result: Final = route_for(is_async)(
+            api_key="sk-test",
+            organization="org-deployment",
+            extra_headers={"openai-organization": "org-header"},
+            **route_kwargs,
+        )
+        if inspect.isawaitable(result):
+            await result
+
+    assert upstream.calls.last.request.headers.get_list("OpenAI-Organization") == ["org-header"]

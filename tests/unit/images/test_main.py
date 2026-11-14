@@ -709,3 +709,27 @@ def test_topaz_image_variation_works_without_a_model(respx_mock: respx.MockRoute
     assert route.call_count == 1
     assert response.data is not None
     assert response.data[0].b64_json == base64.b64encode(b"enhanced-image").decode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+async def test_openai_image_variation_sends_the_deployment_organization(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.delenv("OPENAI_ORG_ID", raising=False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/images/variations").mock(
+        return_value=httpx.Response(200, json={"created": 1, "data": [{"url": "https://example.com/variation.png"}]})
+    )
+    variation_kwargs: Final = {
+        "image": b"source-image",
+        "model": "openai/dall-e-2",
+        "api_key": "sk-test",
+        "organization": "org-deployment",
+    }
+
+    if is_async:
+        await litellm.aimage_variation(**variation_kwargs)
+    else:
+        litellm.image_variation(**variation_kwargs)
+
+    assert route.calls.last.request.headers.get_list("OpenAI-Organization") == ["org-deployment"]

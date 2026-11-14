@@ -61,6 +61,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         atranscription: bool = False,
         provider_config: BaseAudioTranscriptionConfig | None = None,
         shared_session: Optional["ClientSession"] = None,
+        organization: str | None = None,
     ) -> (
         TranscriptionResponse
         | Stream[TranscriptionStreamEvent]
@@ -94,6 +95,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 logging_obj=logging_obj,
                 shared_session=shared_session,
                 litellm_params=litellm_params,
+                organization=organization,
             )
 
         openai_client: Final[OpenAI] = self._get_openai_client(
@@ -102,6 +104,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             api_base=api_base,
             timeout=timeout,
             max_retries=max_retries,
+            organization=organization,
             client=client,
             litellm_params=litellm_params,
         )
@@ -161,6 +164,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         max_retries=None,
         shared_session: Optional["ClientSession"] = None,
         litellm_params: Mapping[str, object] | None = None,
+        organization: str | None = None,
     ):
         try:
             openai_aclient: Final[AsyncOpenAI] = self._get_openai_client(
@@ -169,6 +173,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 api_base=api_base,
                 timeout=timeout,
                 max_retries=max_retries,
+                organization=organization,
                 client=client,
                 shared_session=shared_session,
                 litellm_params=litellm_params,

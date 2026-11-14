@@ -93,6 +93,7 @@ from litellm.litellm_core_utils.routing_common_utils import (
     without_model_capability_flags,
 )
 from litellm.litellm_core_utils.routing_groups import apply_routing_group_priority
+from litellm.llms.openai.common_utils import caller_or_deployment_openai_organization
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.redis.stores.connection import connect
@@ -2128,9 +2129,14 @@ class HostRegistry(HostModelInfo):
         deployment: Final = self._core_get_credential_deployment(model_id=model_id, team_id=team_id)
         if deployment is None:
             return None
-        base: Final = CredentialLiteLLMParams.model_validate(
-            deployment.litellm_params.model_dump(exclude_none=True)
-        ).model_dump(exclude_none=True)
+        params: Final = deployment.litellm_params.model_dump(exclude_none=True)
+        organization: Final = caller_or_deployment_openai_organization(
+            as_str_mapping(params.get("extra_headers")), deployment.litellm_params.organization
+        )
+        base: Final = {
+            **CredentialLiteLLMParams.model_validate(params).model_dump(exclude_none=True),
+            **({"organization": organization} if organization else {}),
+        }
         credential_name: Final = deployment.litellm_params.litellm_credential_name
         resolved: Final[UntypedEntry] = dict(base)
         if credential_name is not None:

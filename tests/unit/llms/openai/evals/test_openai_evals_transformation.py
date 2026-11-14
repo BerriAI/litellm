@@ -589,3 +589,13 @@ async def test_delete_eval_sends_delete_to_requested_id_and_parses_confirmation(
     assert str(request.url) == f"{_API_BASE}/v1/evals/{_EVAL_ID}"
     assert request.headers["Authorization"] == f"Bearer {_API_KEY}"
     assert response.model_dump() == {"object": "eval.deleted", "deleted": True, "eval_id": _EVAL_ID}
+
+
+def test_validate_environment_sends_the_deployment_organization(config: OpenAIEvalsConfig):
+    result = config.validate_environment(
+        headers={},
+        litellm_params=GenericLiteLLMParams(api_key="test-key", organization="org-deployment"),
+    )
+
+    assert result["OpenAI-Organization"] == "org-deployment"
+    assert result["Authorization"] == "Bearer test-key"

@@ -15,6 +15,7 @@ from litellm.types.containers.main import (
     DeleteContainerResult,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.types.router import GenericLiteLLMParams
 
 
 class TestOpenAIContainerTransformation:
@@ -385,3 +386,14 @@ class TestOpenAIContainerTransformation:
         ]
 
         assert actual_cost == expected_cost
+
+
+def test_validate_environment_sends_the_deployment_organization():
+    headers = OpenAIContainerConfig().validate_environment(
+        headers={},
+        api_key="test-key",
+        litellm_params=GenericLiteLLMParams(organization="org-deployment"),
+    )
+
+    assert headers["OpenAI-Organization"] == "org-deployment"
+    assert headers["Authorization"] == "Bearer test-key"

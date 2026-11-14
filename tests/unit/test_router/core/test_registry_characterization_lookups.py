@@ -615,6 +615,35 @@ def test_the_credential_deployment_is_found_by_id_group_team_name_then_wildcard(
     assert (None if found is None else found.model_info.id) == expected
 
 
+@pytest.mark.parametrize(
+    ("lookup", "organization"),
+    [("group-one", "org-one"), ("group-two", "org-two"), ("group-none", None), ("group-header", "org-header")],
+)
+def test_credentials_with_provider_carry_the_named_groups_organization_over_a_sibling_on_the_same_model(
+    make_core: MakeCore, lookup: str, organization: str | None
+) -> None:
+    shared_model: Final = "openai/text-embedding-3-large"
+    registry: Final = make_core(
+        model_list=[
+            deployment("group-one", "one", model=shared_model, organization="org-one"),
+            deployment("group-two", "two", model=shared_model, organization="org-two"),
+            deployment("group-none", "none", model=shared_model),
+            deployment(
+                "group-header",
+                "header",
+                model=shared_model,
+                organization="org-stale",
+                extra_headers={"openai-organization": "org-header"},
+            ),
+        ]
+    ).registry()
+
+    found: Final = registry.credentials(lookup, form="with_provider")
+
+    assert found is not None
+    assert found.get("organization") == organization
+
+
 def test_credentials_with_provider_for_a_wildcard_name_carry_the_requested_model(make_core: MakeCore) -> None:
     found = _credential_core(make_core).registry().credentials("openai/gpt-x", form="with_provider", team_id="TA")
 

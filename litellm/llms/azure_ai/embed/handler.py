@@ -226,6 +226,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         max_retries: int | None = None,
         shared_session=None,
         litellm_params: Mapping[str, object] | None = None,
+        organization: str | None = None,
     ) -> EmbeddingResponse:
         """
         - Separate image url from text

@@ -215,6 +215,54 @@ async def test_async_realtime_url_contains_model():
         mock_streaming_instance.bidirectional_forward.assert_awaited_once()
 
 
+class _UpstreamThatRefusesTheHandshake:
+    def __init__(self) -> None:
+        self.headers: Mapping[str, str] | None = None
+
+    def __call__(self, url: str, *, additional_headers: Mapping[str, str], **kwargs: object) -> None:
+        from websockets.datastructures import Headers
+        from websockets.exceptions import InvalidStatus
+        from websockets.http11 import Response
+
+        self.headers = additional_headers
+        raise InvalidStatus(Response(401, "Unauthorized", Headers()))
+
+
+class _ClientWebSocket:
+    def __init__(self) -> None:
+        self.headers: Mapping[str, str] = {}
+        self.scope: Mapping[str, object] = {"headers": []}
+        self.close_code: int | None = None
+
+    async def send_text(self, text: str) -> None:
+        return None
+
+    async def close(self, code: int, reason: str) -> None:
+        self.close_code = code
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_sends_the_deployment_organization():
+    from litellm.llms.openai.realtime.handler import OpenAIRealtime
+
+    upstream: Final = _UpstreamThatRefusesTheHandshake()
+    websocket: Final = _ClientWebSocket()
+    with patch("websockets.connect", upstream):
+        await OpenAIRealtime().async_realtime(
+            model="gpt-realtime",
+            websocket=websocket,
+            logging_obj=MagicMock(),
+            api_base="https://api.openai.com/",
+            api_key="test-key",
+            organization="org-deployment",
+        )
+
+    assert upstream.headers is not None
+    assert upstream.headers["Authorization"] == "Bearer test-key"
+    assert upstream.headers["OpenAI-Organization"] == "org-deployment"
+    assert websocket.close_code is not None
+
+
 @pytest.mark.asyncio
 async def test_async_realtime_forwards_openai_beta_header_when_client_sends_it():
     """Upstream WS gets OpenAI-Beta: realtime=v1 only when the client WebSocket included it."""

@@ -1,6 +1,7 @@
 import pytest
 
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
     VectorStoreCreateOptionalRequestParams,
 )
@@ -86,3 +87,13 @@ class TestOpenAIVectorStoreAPIConfig:
         )
 
         assert url == "https://x.openai.azure.com/openai/vector_stores/vs_1/search?api-version=2024-10-21"
+
+
+def test_validate_environment_sends_the_deployment_organization():
+    headers = OpenAIVectorStoreConfig().validate_environment(
+        headers={},
+        litellm_params=GenericLiteLLMParams(api_key="test-key", organization="org-deployment"),
+    )
+
+    assert headers["OpenAI-Organization"] == "org-deployment"
+    assert headers["Authorization"] == "Bearer test-key"

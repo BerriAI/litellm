@@ -23,6 +23,7 @@ from litellm.types.containers.main import (
 from litellm.types.router import GenericLiteLLMParams
 
 from ...base_llm.containers.transformation import BaseContainerConfig
+from ..common_utils import openai_organization_header
 from ..workload_identity import resolve_openai_bearer_token
 from .utils import join_container_api_base_path
 
@@ -103,7 +104,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
     ) -> dict:
@@ -113,7 +114,9 @@ class OpenAIContainerConfig(BaseContainerConfig):
             api_base=params.api_base,
             litellm_params=params.model_dump(exclude_none=True),
         )
-        headers.update({"Authorization": f"Bearer {bearer_token}"})
+        headers.update(
+            {"Authorization": f"Bearer {bearer_token}", **openai_organization_header(headers, params.organization)}
+        )
         return headers
 
     def get_complete_url(

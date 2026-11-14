@@ -23,7 +23,12 @@ from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_timeout
-from litellm.llms.openai.common_utils import OpenAIError, decoded_json_object, get_openai_credentials
+from litellm.llms.openai.common_utils import (
+    OpenAIError,
+    caller_or_deployment_openai_organization,
+    decoded_json_object,
+    get_openai_credentials,
+)
 from litellm.llms.openai.responses.count_tokens.handler import (
     OpenAICountTokensHandler,
 )
@@ -63,12 +68,14 @@ class _CountCredential:
     api_base: str | None
     credential: str | OpenAIWorkloadIdentityConfig
     timeout: float | httpx.Timeout | None
+    organization: str | None
 
 
 def _count_credential(deployment: Mapping[str, object] | None, model_label: str) -> _CountCredential | OpenAIError:
     litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
     api_base: Final = litellm_params.get("api_base")
     api_key: Final = litellm_params.get("api_key")
+    organization: Final = litellm_params.get("organization")
     credentials: Final = get_openai_credentials(
         api_base=api_base if isinstance(api_base, str) else None,
         api_key=api_key if isinstance(api_key, str) else None,
@@ -85,7 +92,12 @@ def _count_credential(deployment: Mapping[str, object] | None, model_label: str)
             ),
         )
     return _CountCredential(
-        api_base=credentials.api_base, credential=credential, timeout=deployment_timeout(litellm_params)
+        api_base=credentials.api_base,
+        credential=credential,
+        timeout=deployment_timeout(litellm_params),
+        organization=caller_or_deployment_openai_organization(
+            as_str_mapping(litellm_params.get("extra_headers")), organization if isinstance(organization, str) else None
+        ),
     )
 
 
@@ -224,6 +236,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                 instructions=instructions,
                 text=text,
                 timeout=resolved.timeout,
+                organization=resolved.organization,
             ),
             model_to_use,
             request_model,
@@ -244,7 +257,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         return await self._counted(
             resolved,
             lambda api_key, api_base: openai_count_tokens_handler.post_count_request(
-                body, api_key, api_base, resolved.timeout
+                body, api_key, api_base, resolved.timeout, organization=resolved.organization
             ),
             model_to_use,
             request_model,

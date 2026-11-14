@@ -19,6 +19,7 @@ import litellm
 from litellm import client
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     invalid_provider_routing_hints_message,
 )
@@ -38,6 +39,7 @@ from openai.types.audio.transcription_create_params import FileTypes
 # BFL handlers
 from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
 from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
+from litellm.llms.openai.common_utils import caller_or_deployment_openai_organization
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
 from litellm.main import (
     azure_chat_completions,
@@ -736,6 +738,7 @@ def image_variation(
     response_format: Literal["url", "b64_json"] = "url",
     size: str | None = None,
     user: str | None = None,
+    organization: str | None = None,
     **kwargs,
 ) -> ImageResponse:
     # get non-default params
@@ -798,6 +801,9 @@ def image_variation(
             logging_obj=litellm_logging_obj,
             optional_params={},
             litellm_params=litellm_params,
+            organization=caller_or_deployment_openai_organization(
+                as_str_mapping(_OBJECT_DICT_ADAPTER.validate_python(kwargs).get("extra_headers")), organization
+            ),
         )
     elif image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.TOPAZ:
         if api_key is None:

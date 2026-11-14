@@ -160,7 +160,11 @@ from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     DeferredReasoningDropWarnings,
     OpenAIGPT5Config,
 )
-from litellm.llms.openai.common_utils import get_openai_credentials
+from litellm.llms.openai.common_utils import (
+    caller_or_deployment_openai_organization,
+    get_openai_credentials,
+    openai_client_organization,
+)
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -1977,6 +1981,9 @@ def _complete_text_completion_openai(
         litellm_params=litellm_params,
         logger_fn=logger_fn,
         timeout=timeout,
+        organization=openai_client_organization(
+            _REQUEST_KWARGS_ADAPTER.validate_python(headers or {}), ctx.organization
+        ),
     )
 
     if optional_params.get("stream", False) is False and acompletion is False and text_completion is False:
@@ -6988,6 +6995,7 @@ def embedding(
     logger_fn=None,
     *,
     aembedding: Literal[True],
+    organization: str | None = None,
     **kwargs,
 ) -> Coroutine[object, object, EmbeddingResponse]: 
     ...
@@ -7014,6 +7022,7 @@ def embedding(
     logger_fn=None,
     *,
     aembedding: Literal[False] = False,
+    organization: str | None = None,
     **kwargs,
 ) -> EmbeddingResponse: 
     ...
@@ -7039,6 +7048,7 @@ def embedding(
     custom_llm_provider=None,
     litellm_call_id=None,
     logger_fn=None,
+    organization: str | None = None,
     **kwargs,
 ) -> EmbeddingResponse | Coroutine[object, object, EmbeddingResponse]:
     """
@@ -7257,6 +7267,7 @@ def embedding(
                 max_retries=max_retries,
                 shared_session=shared_session,
                 litellm_params=litellm_params_dict,
+                organization=openai_client_organization(headers, organization) if client is None else None,
             )
         elif custom_llm_provider == "databricks":
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
@@ -8474,13 +8485,18 @@ def adapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompl
 ##### Moderation #######################
 
 
-def moderation(input: str, model: str | None = None, api_key: str | None = None, **kwargs) -> OpenAIModerationResponse:
+def moderation(
+    input: str, model: str | None = None, api_key: str | None = None, organization: str | None = None, **kwargs
+) -> OpenAIModerationResponse:
     static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
     api_base: Final = kwargs.get("api_base", None)
 
     openai_client: Final = kwargs.get("client", None) or build_openai_client(
         api_key=static_api_key,
         api_base=api_base,
+        organization=caller_or_deployment_openai_organization(
+            as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")), organization
+        ),
         litellm_params=kwargs,
     )
 
@@ -8533,6 +8549,10 @@ async def amoderation(
             is_async=True,
             api_key=static_api_key,
             api_base=optional_params.api_base or _dynamic_api_base,
+            organization=caller_or_deployment_openai_organization(
+                as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")),
+                optional_params.organization,
+            ),
             litellm_params=optional_params.model_dump(exclude_none=True),
         )
     else:
@@ -8715,6 +8735,7 @@ def transcription(
     languages: Sequence[str] | None = None,
     keywords: Sequence[str] | None = None,
     stream: bool | None = None,
+    organization: str | None = None,
     **kwargs,
 ) -> (
     TranscriptionResponse
@@ -8879,6 +8900,13 @@ def transcription(
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
             shared_session=shared_session,
+            organization=(
+                caller_or_deployment_openai_organization(
+                    as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")), organization
+                )
+                if client is None
+                else None
+            ),
         )
     elif custom_llm_provider == "nvidia_riva":
         # NVIDIA Riva is gRPC-based, not HTTP. It has its own dedicated handler
@@ -9167,13 +9195,6 @@ def speech(
             or get_secret("OPENAI_API_KEY")
         )
 
-        organization = (
-            organization
-            or litellm.organization
-            or get_secret("OPENAI_ORGANIZATION")
-            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-        )
-
         project = (
             project
             or litellm.project
@@ -9190,7 +9211,13 @@ def speech(
             optional_params=optional_params,
             api_key=api_key,
             api_base=api_base,
-            organization=organization,
+            organization=(
+                caller_or_deployment_openai_organization(
+                    as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")), organization
+                )
+                if client is None
+                else None
+            ),
             project=project,
             max_retries=max_retries,
             timeout=http_timeout,

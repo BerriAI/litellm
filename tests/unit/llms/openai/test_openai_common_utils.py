@@ -15,6 +15,7 @@ from litellm.llms.openai.common_utils import (
     BaseOpenAILLM,
     drop_params_from_unprocessable_entity_error,
     is_openai_backed_api_base,
+    openai_organization_header,
 )
 
 # Test parameters for different API functions
@@ -693,6 +694,20 @@ async def test_azure_gateway_and_image_variations_use_the_callers_async_session(
         assert response.data[0].url == "https://example.com/image.png"
         assert not session.is_closed
 
+
+@pytest.mark.parametrize(
+    ("headers", "organization", "expected"),
+    [
+        ({}, "org-deployment", {"OpenAI-Organization": "org-deployment"}),
+        ({}, None, {}),
+        ({}, "", {}),
+        ({"OPENAI-ORGANIZATION": "org-caller"}, "org-deployment", {}),
+    ],
+)
+def test_openai_organization_header_keeps_the_callers_header(
+    headers: dict[str, object], organization: str | None, expected: dict[str, str]
+) -> None:
+    assert openai_organization_header(headers, organization) == expected
 
 
 def test_reasoning_drop_warning_caps_a_large_caller_value(caplog: pytest.LogCaptureFixture) -> None:

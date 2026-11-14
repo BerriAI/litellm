@@ -20,6 +20,7 @@ from litellm.llms.anthropic.messages.native.utils import normalize_native_messag
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
+from litellm.llms.openai.common_utils import openai_organization_header
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicOutputSchema
 from litellm.types.llms.openai import ResponsesAPIRequestParams, replayable_responses_input
@@ -202,10 +203,11 @@ class OpenAICountTokensConfig:
 
         return request
 
-    def get_required_headers(self, api_key: str) -> dict[str, str]:
+    def get_required_headers(self, api_key: str, organization: str | None = None) -> dict[str, str]:
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
+            **openai_organization_header({}, organization),
         }
 
     def validate_request(self, model: str, input: str | Sequence[object]) -> None:

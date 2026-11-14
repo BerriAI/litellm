@@ -8,6 +8,7 @@ from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_a
 from litellm.llms.base_llm.vector_store_files.transformation import (
     BaseVectorStoreFilesConfig,
 )
+from litellm.llms.openai.common_utils import openai_organization_header
 from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -79,6 +80,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
             {
                 "Authorization": f"Bearer {bearer_token}",
                 "Content-Type": "application/json",
+                **openai_organization_header(headers, params.organization),
             }
         )
         if self.ASSISTANTS_HEADER_KEY not in headers:

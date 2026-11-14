@@ -294,9 +294,11 @@ async def test_arealtime_live_session_dispatches_to_openai_live_handler(monkeypa
         websocket=websocket,
         litellm_logging_obj=logging_obj,
         live_session_start=start_frame,
+        organization="org-deployment",
     )
 
     assert captured.values is not None
+    assert captured.values["organization"] == "org-deployment"
     assert captured.values["model"] == "gpt-live-1"
     assert captured.values["websocket"] is websocket
     assert captured.values["logging_obj"] is logging_obj
@@ -492,12 +494,86 @@ async def test_arealtime_without_live_start_preserves_openai_realtime_dispatch(
         model="gpt-realtime",
         websocket=MagicMock(),
         litellm_logging_obj=FakeLogging(),
+        organization="org-deployment",
     )
 
     assert captured.values is not None
+    assert captured.values["organization"] == "org-deployment"
     assert captured.values["model"] == "gpt-realtime"
     assert captured.values["api_key"] == "resolved-key"
     assert captured.values["api_base"] == "https://realtime-gateway.example/v1"
+
+
+
+class _UpstreamThatRefusesTheHandshake:
+    def __init__(self) -> None:
+        self.headers: Mapping[str, str] | None = None
+
+    def __call__(self, url: str, *, additional_headers: Mapping[str, str], **kwargs: object) -> None:
+        from websockets.datastructures import Headers
+        from websockets.exceptions import InvalidStatus
+        from websockets.http11 import Response
+
+        self.headers = additional_headers
+        raise InvalidStatus(Response(401, "Unauthorized", Headers()))
+
+
+class _ClientWebSocket:
+    def __init__(self) -> None:
+        self.headers: Mapping[str, str] = {}
+        self.scope: Mapping[str, object] = {"type": "websocket", "headers": []}
+        self.close_code: int | None = None
+
+    async def receive_text(self) -> str:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    async def send_text(self, data: str) -> None:
+        return None
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        self.close_code = code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "live_session_start",
+    [
+        pytest.param(None, id="realtime"),
+        pytest.param({"type": "session.start", "session": {"model": "gpt-live-1"}}, id="live"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("extra_headers", "expected_organization"),
+    [
+        pytest.param(None, "org-deployment", id="deployment-organization"),
+        pytest.param({"OpenAI-Organization": "org-caller"}, "org-caller", id="caller-header-wins"),
+        pytest.param({"openai-organization": "org-caller"}, "org-caller", id="lowercase-caller-header-wins"),
+    ],
+)
+async def test_openai_websockets_send_one_organization_header(
+    live_session_start: Mapping[str, object] | None,
+    extra_headers: Mapping[str, str] | None,
+    expected_organization: str,
+) -> None:
+    upstream: Final = _UpstreamThatRefusesTheHandshake()
+    websocket: Final = _ClientWebSocket()
+    with patch("websockets.connect", upstream):
+        await realtime_main._arealtime.__wrapped__(
+            model="openai/gpt-live-1" if live_session_start else "openai/gpt-realtime",
+            websocket=websocket,
+            api_key="resolved-key",
+            litellm_logging_obj=FakeLogging(),
+            live_session_start=live_session_start,
+            organization="org-deployment",
+            extra_headers=extra_headers,
+        )
+
+    assert upstream.headers is not None
+    assert [value for name, value in upstream.headers.items() if name.lower() == "openai-organization"] == [
+        expected_organization
+    ]
+    assert websocket.close_code is not None
 
 
 class _ServerEvents(Protocol):
@@ -664,6 +740,39 @@ async def test_bearer_health_check_sends_stored_credential_as_bearer_token(
         )
     assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer sk-from-credential"}
     assert connect.url == expected_url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model_params", "expected_headers"),
+    [
+        pytest.param(
+            "openai",
+            {"organization": "org-deployment"},
+            {"Authorization": "Bearer sk-test", "OpenAI-Organization": "org-deployment"},
+            id="openai-organization",
+        ),
+        pytest.param(
+            "openai",
+            {"organization": "org-deployment", "extra_headers": {"openai-organization": "org-header"}},
+            {"Authorization": "Bearer sk-test", "OpenAI-Organization": "org-header"},
+            id="organization-header-wins",
+        ),
+        pytest.param("xai", {"organization": "org-deployment"}, {"Authorization": "Bearer sk-test"}, id="xai"),
+    ],
+)
+async def test_bearer_health_check_sends_the_deployment_organization_to_openai(
+    custom_llm_provider: str, model_params: Mapping[str, object], expected_headers: Mapping[str, str]
+):
+    connect = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-realtime",
+            custom_llm_provider=custom_llm_provider,
+            api_key="sk-test",
+            model_params={"model": f"{custom_llm_provider}/gpt-realtime", **model_params},
+        )
+    assert connect.kwargs["additional_headers"] == expected_headers
 
 
 @pytest.mark.asyncio
@@ -1237,6 +1346,106 @@ async def test_transcription_client_secret_sends_the_deployment_model_as_the_ses
     assert gateway.session is not None
     assert gateway.session["model"] == "gpt-live-transcribe"
     assert gateway.session["audio"] == {"input": {"transcription": {"model": "gpt-live-transcribe"}}}
+
+
+class _GatewayThatRecordsTheHeaders:
+    def __init__(self) -> None:
+        self.headers: httpx.Headers = httpx.Headers()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.headers = request.headers
+        return httpx.Response(200, json={"value": "ek_test"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    [realtime_main.acreate_realtime_client_secret, realtime_main.acreate_realtime_transcription_session],
+)
+async def test_realtime_http_routes_send_the_deployment_organization(
+    route: Callable[..., Awaitable[object]],
+) -> None:
+    gateway: Final = _GatewayThatRecordsTheHeaders()
+    await route.__wrapped__(
+        model="my-realtime",
+        custom_llm_provider="openai",
+        api_base="https://realtime-gateway.example/v1",
+        api_key="fake-key",
+        organization="org-deployment",
+        litellm_logging_obj=FakeLogging(),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+    assert gateway.headers["OpenAI-Organization"] == "org-deployment"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    [realtime_main.acreate_realtime_client_secret, realtime_main.acreate_realtime_transcription_session],
+)
+async def test_realtime_http_routes_keep_the_caller_organization_header(
+    route: Callable[..., Awaitable[object]],
+) -> None:
+    gateway: Final = _GatewayThatRecordsTheHeaders()
+    await route.__wrapped__(
+        model="my-realtime",
+        custom_llm_provider="openai",
+        api_base="https://realtime-gateway.example/v1",
+        api_key="fake-key",
+        organization="org-deployment",
+        extra_headers={"openai-organization": "org-caller"},
+        litellm_logging_obj=FakeLogging(),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+    assert gateway.headers["OpenAI-Organization"] == "org-caller"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    [realtime_main.acreate_realtime_client_secret, realtime_main.acreate_realtime_transcription_session],
+)
+async def test_realtime_http_routes_keep_the_organization_off_other_providers(
+    route: Callable[..., Awaitable[object]],
+) -> None:
+    gateway: Final = _GatewayThatRecordsTheHeaders()
+    await route.__wrapped__(
+        model="my-realtime",
+        custom_llm_provider="hosted_vllm",
+        api_base="https://realtime-gateway.example/v1",
+        api_key="fake-key",
+        organization="org-deployment",
+        litellm_logging_obj=FakeLogging(),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+    assert "OpenAI-Organization" not in gateway.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "extra_headers", "expected_organization"),
+    [
+        pytest.param("openai", None, "org-deployment", id="deployment-organization"),
+        pytest.param("openai", {"openai-organization": "org-caller"}, "org-caller", id="caller-header-wins"),
+        pytest.param("azure", None, None, id="azure-gets-no-organization"),
+    ],
+)
+async def test_translation_client_secret_sends_the_deployment_organization(
+    custom_llm_provider: str, extra_headers: Mapping[str, str] | None, expected_organization: str | None
+) -> None:
+    gateway: Final = _GatewayThatRecordsTheHeaders()
+    await realtime_main.acreate_realtime_translation_client_secret.__wrapped__(
+        model="gpt-realtime-translate",
+        custom_llm_provider=custom_llm_provider,
+        api_base="https://realtime-gateway.example",
+        api_key="fake-key",
+        api_version="2025-08-28",
+        organization="org-deployment",
+        extra_headers=extra_headers,
+        litellm_logging_obj=_realtime_http_logging("translation_client_secrets"),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+    assert gateway.headers.get("OpenAI-Organization") == expected_organization
 
 
 class _ClientWebSocketWithHeaders:
