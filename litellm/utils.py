@@ -11265,6 +11265,10 @@ class ProviderConfigManager:
             )
 
             return TencentImageGenerationConfig() if is_tokenhub_image_model(model) else None
+        elif LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.image_generation import MinimaxImageGenerationConfig
+
+            return MinimaxImageGenerationConfig()
         return None
 
     @staticmethod
@@ -11454,6 +11458,10 @@ class ProviderConfigManager:
             )
 
             return DashScopeImageEditConfig()
+        elif LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.image_edit import MinimaxImageEditConfig
+
+            return MinimaxImageEditConfig()
         return None
 
     @staticmethod
