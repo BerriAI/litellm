@@ -36,7 +36,7 @@ from collections.abc import Iterable, Mapping, MutableSequence, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Union, cast, runtime_checkable
 
 from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -52,7 +52,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     OpenAiResponsesToChatCompletionStreamIterator,
     tool_call_dict_from_output_item,
 )
-from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.litellm_core_utils.core_helpers import as_object_list, has_attributes
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -111,7 +111,6 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseCompactionItem,
     ResponseCompletedEvent,
-    ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
@@ -298,8 +297,6 @@ _TOOL_OUTPUT_TEXT_PART_TYPES: Final = frozenset({"input_text", "output_text", "t
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
 )
-
-_EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}
 
 
 def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
@@ -522,13 +519,15 @@ def _provenance_unit_bounds(
 def _input_item_provenance(
     raw_input: Sequence[object],
     expected_messages: Sequence[object],
+    request_tools: object = None,
 ) -> tuple[Mapping[int, int], frozenset[int]] | None:
     if not all(isinstance(item, Mapping) for item in raw_input):
         return None
+    request_params: Final = {"tools": request_tools}
     solo_conversions: Final = tuple(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=cast("ResponseInputParam", [item]),  # cast-ok: items checked as Mappings above
-            responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            responses_api_request=request_params,
             replay_tool_search=True,
         )
         for item in raw_input
@@ -536,7 +535,7 @@ def _input_item_provenance(
     full_conversion: Final = tuple(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=cast("ResponseInputParam", list(raw_input)),  # cast-ok: items checked as Mappings above
-            responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            responses_api_request=request_params,
             replay_tool_search=True,
         )
     )
@@ -549,7 +548,7 @@ def _input_item_provenance(
         else tuple(
             LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=cast("ResponseInputParam", list(raw_input[start:end])),  # cast-ok: checked as Mappings above
-                responses_api_request=_EMPTY_RESPONSES_REQUEST,
+                responses_api_request=request_params,
                 replay_tool_search=True,
             )
         )
@@ -695,6 +694,24 @@ def _is_textless_tool_row(message: Mapping[str, object], texts: tuple[str, ...] 
     return _is_string_tool_row(message) and (not message.get("content") or texts == ())
 
 
+@runtime_checkable
+class _SupportsSetItem(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+def _assignable(item: object) -> _SupportsSetItem:
+    if isinstance(item, _SupportsSetItem):
+        return item
+    raise TypeError(f"'{type(item).__name__}' object does not support item assignment")
+
+
+def _summarized_encrypted_content(item: Mapping[str, object]) -> str | None:
+    if compaction_summary(item) is None:
+        return None
+    encrypted_content: Final = item["encrypted_content"]
+    return encrypted_content if isinstance(encrypted_content, str) else None
+
+
 def _rewritten_whole_text(item: object, field: str, guardrail_response: str) -> object | None:
     if isinstance(stream_item_field(item, field), str):
         return guardrail_response
@@ -708,11 +725,12 @@ def _patched_request_fields(
     instructions: object,
     original_messages: Sequence[object],
     structured_messages: Sequence[object],
+    request_tools: object = None,
 ) -> _RequestFields | None:
     if not isinstance(raw_input, list) or len(original_messages) != len(structured_messages):
         return None
     offset: Final = 1 if instructions else 0
-    provenance: Final = _input_item_provenance(raw_input, tuple(original_messages)[offset:])
+    provenance: Final = _input_item_provenance(raw_input, tuple(original_messages)[offset:], request_tools)
     if provenance is None:
         return None
     item_for_message, tainted = provenance
@@ -755,10 +773,13 @@ def _patch_or_convert_request_fields(
     instructions: object,
     original_messages: Sequence[object],
     structured_messages: Sequence[AllMessageValues],
+    request_tools: object = None,
 ) -> _RequestFields | None:
     if not isinstance(structured_messages, list):
         return None
-    patched: Final = _patched_request_fields(raw_input, instructions, original_messages, structured_messages)
+    patched: Final = _patched_request_fields(
+        raw_input, instructions, original_messages, structured_messages, request_tools
+    )
     if patched is not None:
         return patched
     input_items, converted_instructions = (
@@ -1042,7 +1063,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
         )
         return _patch_or_convert_request_fields(
-            data.get("input"), data.get("instructions"), structured_messages, merged
+            data.get("input"), data.get("instructions"), structured_messages, merged, data.get("tools")
         )
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
@@ -1131,7 +1152,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     async def _apply_guardrail_responses_to_input(
         self,
-        messages: Any,  # Can be List[Dict[str, Any]] or ResponseInputParam
+        messages: Sequence[Mapping[str, object]],
         responses: Sequence[str],
         task_mappings: Sequence[tuple[int, int | None]],
     ) -> None:
@@ -1146,26 +1167,27 @@ class OpenAIResponsesHandler(BaseTranslation):
         for guardrail_response, mapping in zip(responses, task_mappings):
             msg_idx = cast(int, mapping[0])
             content_idx_optional = cast(int | None, mapping[1])
+            item = messages[msg_idx]
 
-            if compaction_summary(messages[msg_idx]) is not None:
-                messages[msg_idx]["encrypted_content"] = with_compaction_summary(  # rebind-ok: in-place input rewrite
-                    messages[msg_idx]["encrypted_content"], guardrail_response
-                )
+            encrypted_content = _summarized_encrypted_content(item)
+            if encrypted_content is not None:
+                _assignable(item)["encrypted_content"] = with_compaction_summary(encrypted_content, guardrail_response)
                 continue
 
-            field = _scanned_text_field(messages[msg_idx])
-            content = messages[msg_idx].get(field, None)
+            field = _scanned_text_field(item)
+            content = item.get(field, None)
             if content is None:
                 continue
 
+            content_parts = as_object_list(content)
             if content_idx_optional is None:
-                rewritten = _rewritten_whole_text(messages[msg_idx], field, guardrail_response)
+                rewritten = _rewritten_whole_text(item, field, guardrail_response)
                 if rewritten is not None:
-                    messages[msg_idx][field] = rewritten
+                    _assignable(item)[field] = rewritten
 
-            elif isinstance(content, list):
+            elif content_parts is not None:
                 # Replace specific text item in list content
-                self._write_content_part_text(content[content_idx_optional], guardrail_response)
+                self._write_content_part_text(content_parts[content_idx_optional], guardrail_response)
 
     async def process_output_response(
         self,
@@ -1296,7 +1318,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
-    ) -> list[Any]:
+    ) -> Sequence[object]:
         """
         Process output streaming response by applying guardrails to text content.
 

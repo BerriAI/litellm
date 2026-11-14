@@ -49,6 +49,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     whole_messages_within_cache_control_limit,
     with_cache_control,
 )
+from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     drops_unsupported_params,
@@ -95,6 +96,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex, claude_hosted_web_tool_call
 from litellm.types.llms.base import CachedTokensDetails
+from litellm.types.llms.bedrock import S3MediaFileObjectFile, S3MediaImageUrlObject
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -103,7 +105,6 @@ from litellm.types.llms.openai import (
     ChatCompletionCachedContent,
     ChatCompletionFileObject,
     ChatCompletionImageObject,
-    ChatCompletionImageUrlObject,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
@@ -185,6 +186,7 @@ from .tool_search import (
     answers_tool_search,
     anthropic_tool_search_chat_tool,
     build_tool_search_call,
+    has_client_tool_search,
     has_server_tool_search,
     holds_tool_search_use,
     is_anthropic_tool_search_chat_tool,
@@ -306,8 +308,8 @@ def _valid_content_type(content_type: str) -> ValidChatCompletionMessageContentT
 
 
 _AUDIO_PART_ADAPTER: Final = TypeAdapter(ChatCompletionAudioObject)
-_IMAGE_URL_ADAPTER: Final = TypeAdapter(ChatCompletionImageUrlObject)
-_FILE_PART_ADAPTER: Final = TypeAdapter(_ResponsesFilePart)
+_IMAGE_URL_ADAPTER: Final = TypeAdapter(S3MediaImageUrlObject)
+_FILE_ADAPTER: Final = TypeAdapter(S3MediaFileObjectFile)
 _MessageT = TypeVar("_MessageT")
 _MediaT: Final = TypeVar("_MediaT")
 _InputItemT: Final = TypeVar("_InputItemT")
@@ -315,6 +317,21 @@ _CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
 _RESPONSES_API_TOOL_CHOICE_ADAPTER: Final = TypeAdapter(ToolChoice)
+
+
+def _tool_mapping(entry: object) -> Mapping[str, object] | None:
+    try:
+        return _STR_KEY_DICT_ADAPTER.validate_python(entry)
+    except ValidationError:
+        return None
+
+
+def _tool_mappings(raw_tools: object) -> tuple[Mapping[str, object], ...]:
+    try:
+        entries: Final = _OBJECT_LIST_ADAPTER.validate_python(raw_tools)
+    except ValidationError:
+        return ()
+    return tuple(tool for entry in entries if (tool := _tool_mapping(entry)) is not None)
 
 
 def _validate_responses_media(adapter: TypeAdapter[_MediaT], value: object) -> _MediaT:
@@ -326,6 +343,11 @@ def _validate_responses_media(adapter: TypeAdapter[_MediaT], value: object) -> _
             model="",
             llm_provider="",
         ) from exc
+
+
+def _s3_bucket_owner_field(url: object, bucket_owner: object) -> Mapping[str, object]:
+    is_s3_url: Final = isinstance(url, str) and is_s3_uri(url)
+    return {"bucket_owner": bucket_owner} if is_s3_url and bucket_owner is not None else {}
 
 
 def _responses_image_part(item: Mapping[str, object]) -> _ResponsesImagePart:
@@ -341,13 +363,15 @@ def _responses_image_part(item: Mapping[str, object]) -> _ResponsesImagePart:
     )
     detail: Final = fields.get("detail") or item.get("detail")
     video_metadata: Final = fields.get("video_metadata") or item.get("video_metadata")
+    url: Final = (fields.get("url") if isinstance(source, Mapping) else source) or ""
     image_url: Final = _validate_responses_media(
         _IMAGE_URL_ADAPTER,
         {
-            "url": (fields.get("url") if isinstance(source, Mapping) else source) or "",
+            "url": url,
             "detail": detail if isinstance(detail, str) else "auto",
             **({"format": media_format} if media_format is not None else {}),
             **({"video_metadata": video_metadata} if video_metadata is not None else {}),
+            **_s3_bucket_owner_field(url, fields.get("bucket_owner", item.get("bucket_owner"))),
         },
     )
     return (
@@ -362,18 +386,19 @@ def _responses_file_part(item: Mapping[str, object]) -> _ResponsesFilePart:
     fields: Final = {**nested, **{key: value for key, value in item.items() if key != "file" and value is not None}}
     file_id: Final = fields.get("file_id") or fields.get("file_url")
     media_format: Final = fields.get("format") or fields.get("mime_type") or fields.get("content_type")
-    file: Final = {
-        **{key: fields[key] for key in ("file_data", "filename", "detail", "video_metadata") if fields.get(key)},
-        **({"file_id": file_id} if file_id else {}),
-        **({"format": media_format} if media_format is not None else {}),
-    }
-    return _validate_responses_media(
-        _FILE_PART_ADAPTER,
+    file: Final = _validate_responses_media(
+        _FILE_ADAPTER,
         {
-            "type": "file",
-            "file": file,
-            **({"cache_control": item["cache_control"]} if "cache_control" in item else {}),
+            **{key: fields[key] for key in ("file_data", "filename", "detail", "video_metadata") if fields.get(key)},
+            **({"file_id": file_id} if file_id else {}),
+            **({"format": media_format} if media_format is not None else {}),
+            **_s3_bucket_owner_field(file_id or fields.get("file_data"), fields.get("bucket_owner")),
         },
+    )
+    return (
+        _ResponsesFilePart(type="file", file=file, cache_control=item["cache_control"])
+        if "cache_control" in item
+        else _ResponsesFilePart(type="file", file=file)
     )
 
 
@@ -1182,6 +1207,8 @@ class LiteLLMCompletionResponsesConfig:
     ) -> Sequence[ChatToolParam]:
         if not any("defer_loading" in tool for tool in tools):
             return tools
+        if has_client_tool_search(callers_tools):
+            return [LiteLLMCompletionResponsesConfig._without_deferral(tool) for tool in tools]
         if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
             return tools
         if not has_server_tool_search(callers_tools) and provider_builds_anthropic_request(model, custom_llm_provider):
@@ -1498,6 +1525,9 @@ class LiteLLMCompletionResponsesConfig:
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message,
             replay_reasoning=replay_reasoning,
             native_compaction=native_compaction,
+            self_named_namespace_members=LiteLLMCompletionResponsesConfig.self_named_namespace_members(
+                LiteLLMCompletionResponsesConfig.request_tools(responses_api_request)
+            ),
         )
         try:
             converted: Final = (
@@ -1679,6 +1709,7 @@ class LiteLLMCompletionResponsesConfig:
         input: str | ResponseInputParam,
         replay_reasoning: bool = False,
         native_compaction: bool = False,
+        self_named_namespace_members: frozenset[str] = frozenset(),
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
@@ -1705,6 +1736,7 @@ class LiteLLMCompletionResponsesConfig:
                         input_item=_input,
                         replay_reasoning=replay_reasoning,
                         native_compaction=native_compaction,
+                        self_named_namespace_members=self_named_namespace_members,
                     )
                 )
 
@@ -2417,6 +2449,7 @@ class LiteLLMCompletionResponsesConfig:
         input_item: Mapping[str, object],
         replay_reasoning: bool = False,
         native_compaction: bool = False,
+        self_named_namespace_members: frozenset[str] = frozenset(),
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API input item into a Chat Completion message
@@ -2470,7 +2503,8 @@ class LiteLLMCompletionResponsesConfig:
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
                 function_call=cast(  # cast-ok: callee coerces every field it reads with `or ""` / str()
                     Mapping[str, str], input_item
-                )
+                ),
+                self_named_namespace_members=self_named_namespace_members,
             )
         elif input_item.get("type") == "compaction":
             return list(
@@ -2739,6 +2773,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_responses_api_function_call_to_chat_completion_message(
         function_call: Mapping[str, str],
+        self_named_namespace_members: frozenset[str] = frozenset(),
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API function_call into a Chat Completion message with tool calls
@@ -2768,7 +2803,8 @@ class LiteLLMCompletionResponsesConfig:
             raw_arguments = json.dumps({"content": raw_input}) if raw_input else ""
         raw_name: Final = function_call.get("name") or ""
         namespace: Final = function_call.get("namespace") or ""
-        qualify: Final = bool(namespace) and function_call.get("type") != "custom_tool_call"
+        deferred_top_level: Final = namespace == raw_name and raw_name not in self_named_namespace_members
+        qualify: Final = bool(namespace) and not deferred_top_level and function_call.get("type") != "custom_tool_call"
         tool_call_id: Final = function_call.get("call_id") or function_call.get("id") or ""
         tool_call_function: Final = ChatCompletionToolCallFunctionChunk(
             name=f"{namespace}__{raw_name}" if qualify else raw_name,
@@ -3151,15 +3187,57 @@ class LiteLLMCompletionResponsesConfig:
         return result
 
     @staticmethod
-    def namespace_tool_name_map(tools: ResponseTools) -> NamespaceNameMap:
-        namespace_entries: Final = tuple(
-            (str(tool.get("name") or ""), str(namespace_tool.get("name") or ""))
+    def request_tools(responses_api_request: Mapping[str, object] | None) -> ResponseTools:
+        """The request's tools, keeping the entries that are objects."""
+        raw_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
+        return _tool_mappings(raw_tools) if raw_tools is not None else None
+
+    @staticmethod
+    def _namespace_member_names(tool: Mapping[str, object]) -> tuple[str, ...]:
+        return tuple(
+            str(member.get("name") or "")
+            for member in _tool_mappings(tool.get("tools"))
+            if member.get("type") == "function"
+        )
+
+    @staticmethod
+    def self_named_namespace_members(tools: ResponseTools) -> frozenset[str]:
+        """Names of ``namespace`` tools that hold a function tool of their own name.
+
+        Such a call comes back as namespace == name too, so it keeps the joined ``name__name`` form,
+        and a deferred top-level tool of that name does not get the namespace == name shape.
+        """
+        return frozenset(
+            str(tool.get("name") or "")
             for tool in tools or ()
             if tool.get("type") == "namespace"
-            for namespace_tools in (tool.get("tools"),)
-            if isinstance(namespace_tools, Sequence) and not isinstance(namespace_tools, (str, bytes))
-            for namespace_tool in namespace_tools
-            if isinstance(namespace_tool, Mapping) and namespace_tool.get("type") == "function"
+            and str(tool.get("name") or "") in LiteLLMCompletionResponsesConfig._namespace_member_names(tool)
+        )
+
+    @staticmethod
+    def deferred_top_level_names(tools: ResponseTools) -> frozenset[str]:
+        """Names of deferred top-level function tools that travel as namespace == name.
+
+        Only ``defer_loading is True`` counts here: the request path rejects other values, and
+        callers that only read the input (token counting under drop_params) must not raise.
+        """
+        self_named: Final = LiteLLMCompletionResponsesConfig.self_named_namespace_members(tools)
+        return frozenset(
+            str(tool.get("name") or "")
+            for tool in tools or ()
+            if tool.get("type") == "function"
+            and tool.get("defer_loading") is True
+            and tool.get("name")
+            and str(tool.get("name") or "") not in self_named
+        )
+
+    @staticmethod
+    def namespace_tool_name_map(tools: ResponseTools) -> NamespaceNameMap:
+        namespace_entries: Final = tuple(
+            (str(tool.get("name") or ""), member_name)
+            for tool in tools or ()
+            if tool.get("type") == "namespace"
+            for member_name in LiteLLMCompletionResponsesConfig._namespace_member_names(tool)
         )
         top_level_function_names: Final = frozenset(
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
@@ -3178,7 +3256,11 @@ class LiteLLMCompletionResponsesConfig:
         qualified_entries: Final = tuple(
             (f"{namespace}__{tool_name}", (namespace, tool_name)) for namespace, tool_name in namespace_entries
         )
-        return MappingProxyType(dict(qualified_entries + unambiguous_entries))
+        # The OpenAI Agents SDK reserves namespace == name for a deferred top-level tool (agents/_tool_identity.py)
+        deferred_top_level_entries: Final = tuple(
+            (name, (name, name)) for name in LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools)
+        )
+        return MappingProxyType(dict(qualified_entries + unambiguous_entries + deferred_top_level_entries))
 
     @staticmethod
     def _restore_namespace_tool_name(tool_name: str, names: NamespaceNameMap) -> tuple[str, str | None]:
@@ -3219,7 +3301,7 @@ class LiteLLMCompletionResponsesConfig:
                         value=tool_call,
                     )
 
-        request_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
+        request_tools: Final = LiteLLMCompletionResponsesConfig.request_tools(responses_api_request)
         custom_tool_names: Final = extract_custom_tool_names(request_tools)
         namespace_tool_names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
         tool_search: Final = tool_search_routing(request_tools)
