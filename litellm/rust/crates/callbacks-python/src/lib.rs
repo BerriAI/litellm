@@ -15,6 +15,7 @@ use serde_json::Value;
 
 mod hosted;
 pub mod payload;
+pub mod router;
 
 #[pyclass(frozen, name = "RustCallback")]
 pub struct RustCallback {
@@ -177,6 +178,12 @@ impl RustCallback {
         let mut values = FieldValues::new(subscription.reads);
         for (name, value) in fields {
             let field: Field = named(&name.extract::<String>()?)?;
+            if field == Field::RouterRef {
+                if let Some(router) = router::reference(&value)? {
+                    values.set_router(router);
+                }
+                continue;
+            }
             if field.by_reference() {
                 values.set_payload(payload::stash(value.unbind()));
                 continue;

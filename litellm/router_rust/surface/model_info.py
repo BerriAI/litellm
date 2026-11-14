@@ -58,8 +58,9 @@ from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.redis.stores.router_usage import RouterUsage, UsageCounter
 from litellm.router_python_host import python_host
 from litellm.router_utils.model_group_pricing import deployment_pricing
-from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import build_io_token_rate_limit_headers
+from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import seconds_until_minute_reset
 from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
+from litellm.rust_bridge._native import router_remaining_usage, router_usage_totals
 from litellm.types.router import (
     Deployment,
     DeploymentModelListingInfo,
@@ -78,6 +79,7 @@ if TYPE_CHECKING:
     from litellm.rust_bridge._native import (
         RouterCall,
         RouterCoreHandle,
+        RouterRemainingReads,
         _ModelInfoSteps,  # pyright: ignore[reportPrivateUsage]  # the stub's step shapes
     )
 
@@ -200,16 +202,6 @@ class _GroupBuild:
     pricing: tuple[DeploymentPricing, ...] = ()
 
 
-def _usage_total(values: Sequence[object]) -> int | None:
-    counts: Final = tuple(value for value in values if isinstance(value, int))
-    return sum(counts) if counts else None
-
-
-def _usage_totals(values: Sequence[object], tpm_count: int) -> tuple[int | None, int | None]:
-    """The group's (tpm, rpm): each counter Redis or memory holds, summed; none held is ``None``."""
-    return _usage_total(values[:tpm_count]), _usage_total(values[tpm_count:])
-
-
 def _limits_io(info: ModelGroupInfo | None) -> bool:
     return info is not None and (info.itpm is not None or info.otpm is not None)
 
@@ -218,38 +210,14 @@ def _limits_usage(info: ModelGroupInfo | None) -> bool:
     return info is not None and (info.tpm is not None or info.rpm is not None)
 
 
-def _remaining_usage(
+def _remaining_reads(
     info: ModelGroupInfo | None,
     io_usage: tuple[int | None, int | None] | None,
     usage: tuple[int | None, int | None] | None,
-) -> dict[str, int]:  # mutable-ok: the headers the caller adds to
-    """The remaining-limit headers of a group. ITPM/OTPM groups emit input/output token headers, but they may
-    also set tpm/rpm, so both sets are built: clients and prometheus gauges that read the standard headers
-    still get data."""
-    io_headers: Final = (
-        {}
-        if info is None or io_usage is None
-        else build_io_token_rate_limit_headers(
-            itpm_limit=info.itpm, otpm_limit=info.otpm, current_itpm=io_usage[0], current_otpm=io_usage[1]
-        )
-    )
-    current_tpm, current_rpm = usage or (None, None)
-    tpm_limit: Final = None if info is None else info.tpm
-    rpm_limit: Final = None if info is None else info.rpm
-    tpm_headers: Final = (
-        {}
-        if tpm_limit is None
-        else {"x-ratelimit-remaining-tokens": tpm_limit - (current_tpm or 0), "x-ratelimit-limit-tokens": tpm_limit}
-    )
-    rpm_headers: Final = (
-        {}
-        if rpm_limit is None
-        else {
-            "x-ratelimit-remaining-requests": rpm_limit - (current_rpm or 0),
-            "x-ratelimit-limit-requests": rpm_limit,
-        }
-    )
-    return {**io_headers, **tpm_headers, **rpm_headers}
+) -> "RouterRemainingReads":
+    limits: Final = None if info is None else (info.tpm, info.rpm, info.itpm, info.otpm)
+    reset: Final = seconds_until_minute_reset() if info is not None and io_usage is not None else 0
+    return limits, io_usage, usage, reset
 
 
 class HostModelInfo:
@@ -827,7 +795,7 @@ class HostModelInfo:
         if counters is None:
             return None, None
         tpm, rpm = counters
-        return _usage_totals(await self._core_usage_store.get_many((*tpm, *rpm)), len(tpm))
+        return router_usage_totals(await self._core_usage_store.get_many((*tpm, *rpm)), len(tpm))
 
     def _core_get_model_group_usage_sync(self, model_group: str) -> tuple[int | None, int | None]:
         """``_core_get_model_group_usage`` for a sync call, which has no event loop to await the store on."""
@@ -835,7 +803,7 @@ class HostModelInfo:
         if counters is None:
             return None, None
         tpm, rpm = counters
-        return _usage_totals(self._core_usage_store.get_many_sync((*tpm, *rpm)), len(tpm))
+        return router_usage_totals(self._core_usage_store.get_many_sync((*tpm, *rpm)), len(tpm))
 
     async def get_model_group_io_token_usage(self, model_group: str) -> tuple[int | None, int | None]:
         """
@@ -863,29 +831,18 @@ class HostModelInfo:
             for model_id, litellm_model in deployments
         )
         combined_values: Final = await self._core_usage_store.get_many((*itpm_counters, *otpm_counters))
-
-        itpm_values: Final = combined_values[: len(itpm_counters)]
-        otpm_values: Final = combined_values[len(itpm_counters) :]
-
-        total_itpm: int | None = None  # rebind-ok: ported from the Python core unchanged
-        for value in itpm_values:
-            if isinstance(value, int):
-                total_itpm = (total_itpm or 0) + value
-
-        total_otpm: int | None = None  # rebind-ok: ported from the Python core unchanged
-        for value in otpm_values:
-            if isinstance(value, int):
-                total_otpm = (total_otpm or 0) + value
-
-        return total_itpm, total_otpm
+        return router_usage_totals(combined_values, len(itpm_counters))
 
     async def _core_get_remaining_model_group_usage(
         self, model_group: str
     ) -> dict[str, int]:  # mutable-ok: ported from the Python core unchanged
+        return router_remaining_usage(await self._core_remaining_usage_reads(model_group))
+
+    async def _core_remaining_usage_reads(self, model_group: str) -> "RouterRemainingReads":
         info: Final = self._cached_get_model_group_info(model_group)
         io_usage: Final = await self.get_model_group_io_token_usage(model_group) if _limits_io(info) else None
         usage: Final = await self._core_get_model_group_usage(model_group) if _limits_usage(info) else None
-        return _remaining_usage(info, io_usage, usage)
+        return _remaining_reads(info, io_usage, usage)
 
     def _core_get_remaining_model_group_usage_sync(
         self, model_group: str, read_io_usage: Callable[[str], tuple[int | None, int | None]]
@@ -894,7 +851,7 @@ class HostModelInfo:
         info: Final = self._cached_get_model_group_info(model_group)
         io_usage: Final = read_io_usage(model_group) if _limits_io(info) else None
         usage: Final = self._core_get_model_group_usage_sync(model_group) if _limits_usage(info) else None
-        return _remaining_usage(info, io_usage, usage)
+        return router_remaining_usage(_remaining_reads(info, io_usage, usage))
 
     async def set_response_headers(
         self,

@@ -23,6 +23,24 @@ def trace_encode_error(message: str) -> bytes: ...
 def bundled_model_cost_map() -> bytes: ...
 def native_redis_breaker_states() -> list[str]: ...
 def unsupported_tls_settings(ssl_security_level: str | None = None, ssl_ecdh_curve: str | None = None) -> list[str]: ...
+
+_RouterLimit = int | float | None
+_RouterTotals = tuple[int | None, int | None]
+RouterRemainingReads = tuple[
+    tuple[_RouterLimit, _RouterLimit, _RouterLimit, _RouterLimit] | None,
+    _RouterTotals | None,
+    _RouterTotals | None,
+    int,
+]
+
+@final
+class _RustRouterRef:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
+
+def router_usage_ref(reads: Callable[[str], Awaitable[RouterRemainingReads]]) -> _RustRouterRef: ...
+def router_remaining_usage(reads: RouterRemainingReads) -> dict[str, int]: ...
+def router_usage_totals(values: Sequence[object], tpm_count: int) -> _RouterTotals: ...
+
 @final
 class NativeCostMapSource:
     def __new__(cls, url: str, *, use_http_settings: bool) -> NativeCostMapSource: ...
@@ -817,6 +835,9 @@ __all__ = [
     "process_state_started",
     "reserve_process_for_forking",
     "responses",
+    "router_remaining_usage",
+    "router_usage_ref",
+    "router_usage_totals",
     "trace_encode_error",
     "transcription",
     "unsupported_tls_settings",

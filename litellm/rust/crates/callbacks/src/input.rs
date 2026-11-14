@@ -7,6 +7,7 @@ use crate::{
     field::{Field, FieldSet, TypedField},
     hook::Hook,
     payload::PayloadRef,
+    router::RouterRef,
 };
 
 pub type RequestState = Arc<dyn Any + Send + Sync>;
@@ -71,7 +72,7 @@ pub enum FieldError {
         field: Field,
         source: serde_json::Error,
     },
-    #[error("{0:?} is delivered by reference, so read it with payload()")]
+    #[error("{0:?} is delivered by reference, so read it with its own accessor")]
     ByReference(Field),
 }
 
@@ -80,6 +81,7 @@ pub struct FieldValues {
     declared: FieldSet,
     values: Vec<(Field, Value)>,
     payload: Option<Arc<PayloadRef>>,
+    router: Option<RouterRef>,
 }
 
 impl FieldValues {
@@ -88,6 +90,7 @@ impl FieldValues {
             declared,
             values: Vec::new(),
             payload: None,
+            router: None,
         }
     }
 
@@ -104,6 +107,23 @@ impl FieldValues {
     pub fn payload(&self) -> Result<Option<Arc<PayloadRef>>, FieldError> {
         self.check(Field::StandardLoggingPayloadRef)?;
         Ok(self.payload.clone())
+    }
+
+    #[must_use]
+    pub fn with_router(mut self, router: RouterRef) -> Self {
+        self.router = Some(router);
+        self
+    }
+
+    pub fn set_router(&mut self, router: RouterRef) {
+        self.router = Some(router);
+    }
+
+    pub fn router(&self) -> Result<Option<RouterRef>, FieldError> {
+        if !self.check(Field::RouterRef)? {
+            return Ok(None);
+        }
+        Ok(self.router.clone())
     }
 
     fn check(&self, field: Field) -> Result<bool, FieldError> {
@@ -242,6 +262,37 @@ mod tests {
         assert!(matches!(
             FieldValues::default().payload(),
             Err(FieldError::Undeclared(Field::StandardLoggingPayloadRef))
+        ));
+    }
+
+    struct Unlimited;
+
+    impl crate::RouterUsage for Unlimited {
+        fn remaining(
+            &self,
+            _model_group: &str,
+        ) -> futures_util::future::BoxFuture<'static, Result<crate::RemainingUsage, String>>
+        {
+            Box::pin(async { Ok(crate::RemainingUsage::default()) })
+        }
+    }
+
+    #[rstest]
+    fn the_router_reference_is_read_through_its_own_accessor() {
+        let router = RouterRef::new(Arc::new(Unlimited));
+        let values = FieldValues::new(FieldSet::of(&[Field::RouterRef]));
+        assert!(matches!(
+            values.raw(Field::RouterRef),
+            Err(FieldError::ByReference(Field::RouterRef))
+        ));
+        assert_eq!(values.router().unwrap(), None);
+        assert_eq!(
+            values.with_router(router.clone()).router().unwrap(),
+            Some(router.clone())
+        );
+        assert!(matches!(
+            FieldValues::default().with_router(router).router(),
+            Err(FieldError::Undeclared(Field::RouterRef))
         ));
     }
 

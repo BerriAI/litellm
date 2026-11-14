@@ -1,7 +1,8 @@
 use std::cell::RefCell;
 
 use litellm_callbacks::{
-    CallbackError, GuardrailEntry, LoggedKeyIdentity, MetadataKind, Scalar, UsageRecord,
+    CallbackError, GuardrailEntry, LoggedKeyIdentity, MetadataKind, RemainingUsage, Scalar,
+    UsageRecord,
 };
 use serde_json::{Map, Value};
 
@@ -124,7 +125,7 @@ impl Success<'_> {
         self.facts.settings()
     }
 
-    pub fn run(&self, step: SuccessStep) -> Result<(), CallbackError> {
+    fn request(&self) -> Result<(LabelValues, &Value, Value), CallbackError> {
         let facts = self.facts;
         let identity = metadata(facts)?;
         let labels = &facts.residual.payload_labels;
@@ -190,6 +191,11 @@ impl Success<'_> {
                 .clone()
                 .map_or(Value::Null, Value::from),
         );
+        Ok((values, model_group, response_cost))
+    }
+
+    pub fn run(&self, step: SuccessStep) -> Result<(), CallbackError> {
+        let (values, model_group, response_cost) = self.request()?;
         match step {
             SuccessStep::Head => {
                 let context = values.checked_context(self.settings()).map_err(failed)?;
@@ -221,6 +227,36 @@ impl Success<'_> {
                 self.proxy_total(model_group, &values)
             }
         }
+    }
+
+    pub fn router_remaining(
+        &self,
+        remaining: &RemainingUsage,
+        provided: [bool; 2],
+    ) -> Result<(), CallbackError> {
+        let (values, _, _) = self.request()?;
+        for ((header, metric), provided) in [
+            (
+                "x-ratelimit-remaining-tokens",
+                "litellm_remaining_tokens_metric",
+            ),
+            (
+                "x-ratelimit-remaining-requests",
+                "litellm_remaining_requests_metric",
+            ),
+        ]
+        .into_iter()
+        .zip(provided)
+        {
+            let Some(amount) = remaining.get(header).filter(|_| !provided) else {
+                continue;
+            };
+            let context = values.checked_context(self.settings()).map_err(failed)?;
+            let labels = self.emit.labels(metric, &context);
+            self.emit
+                .record(metric, &labels, Op::Set(amount.as_f64()), false)?;
+        }
+        Ok(())
     }
 
     pub fn zero_cost(&self, values: &LabelValues) -> Result<(), CallbackError> {

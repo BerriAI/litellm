@@ -4467,6 +4467,7 @@ dependencies = [
  "litellm-auth-azure",
  "litellm-cache",
  "litellm-cache-response",
+ "litellm-callbacks",
  "litellm-callbacks-legacy-python",
  "litellm-callbacks-prometheus",
  "litellm-callbacks-python",

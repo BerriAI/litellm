@@ -7,6 +7,7 @@ mod input;
 mod manifest;
 mod payload;
 mod record;
+mod router;
 mod scalar;
 mod verdict;
 
@@ -31,5 +32,6 @@ pub use record::{
     MetadataLabel, ModelInfo, Moment, Outcome, OutputCap, RateLimitState, RateLimitStatus,
     RateLimitStatuses, ReservationEntry, Usage, UsageRecord, ZeroCost,
 };
+pub use router::{RemainingUsage, RouterRef, RouterUsage, UsageAmount};
 pub use scalar::Scalar;
 pub use verdict::{Abort, AbortError, Patch, PatchOp, Verdict};

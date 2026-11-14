@@ -108,6 +108,7 @@ fields! {
     MetadataLabels = 44, SmallRecord, std::vec::Vec<crate::record::MetadataLabel>;
     InputSequenceLength = 45, SmallRecord, crate::record::InputSequenceLength;
     LimiterRequest = 46, SmallRecord, crate::record::LimiterRequest;
+    RouterRef = 50, Compatibility, u64;
 }
 
 impl Field {
@@ -146,9 +147,11 @@ pub const DERIVED_ONLY: FieldSet = FieldSet::of(&[
     Field::MetadataLabels,
     Field::InputSequenceLength,
     Field::LimiterRequest,
+    Field::RouterRef,
 ]);
 
-pub const BY_REFERENCE: FieldSet = FieldSet::of(&[Field::StandardLoggingPayloadRef]);
+pub const BY_REFERENCE: FieldSet =
+    FieldSet::of(&[Field::StandardLoggingPayloadRef, Field::RouterRef]);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(from = "Vec<Field>", into = "Vec<Field>")]
@@ -237,7 +240,8 @@ mod tests {
     #[case::wire(Field::ProviderRequestBody, 24, "provider_request_body")]
     #[case::compatibility(Field::DeprecatedResponseObj, 29, "deprecated_response_obj")]
     #[case::typed(Field::KeyLimits, 30, "key_limits")]
-    #[case::last(Field::LimiterRequest, 46, "limiter_request")]
+    #[case::limiter(Field::LimiterRequest, 46, "limiter_request")]
+    #[case::last(Field::RouterRef, 50, "router_ref")]
     fn a_field_keeps_its_bit_and_its_snake_case_name(
         #[case] field: Field,
         #[case] bit: u8,
@@ -276,6 +280,7 @@ mod tests {
     fn a_by_reference_field_is_derived_only() {
         assert!(BY_REFERENCE.is_subset(DERIVED_ONLY));
         assert!(Field::StandardLoggingPayloadRef.by_reference());
+        assert!(Field::RouterRef.by_reference());
         assert!(!Field::StandardLoggingPayload.by_reference());
     }
 

@@ -1,3 +1,4 @@
+import sys
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -666,6 +667,15 @@ def payload_copy(
     return None if payload is None else dict(payload)
 
 
+def router_ref(_args: HookArgs) -> object:
+    llm_router: Final[object] = getattr(sys.modules.get("litellm.proxy.proxy_server"), "llm_router", None)
+    if llm_router is None:
+        return None
+    from litellm.router_rust.core import remaining_usage_ref
+
+    return remaining_usage_ref(llm_router)
+
+
 RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
     {
         Field.key_identity: KeyIdentity,
@@ -718,6 +728,7 @@ DERIVED_ATTEMPT_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType(
         Field.outcome: derived(outcome),
         Field.standard_logging_payload_ref: derived(payload_copy),
         Field.input_sequence_length: derived(input_sequence_length),
+        Field.router_ref: derived(router_ref),
     }
 )
 DERIVED_AUTH_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType({Field.key_identity: derived(key_identity)})
@@ -779,6 +790,7 @@ __all__ = [
     "payload_of",
     "rate_limit_state",
     "request_tags",
+    "router_ref",
     "usage",
     "usage_record",
     "write_budget_reservation",

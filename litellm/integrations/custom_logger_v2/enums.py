@@ -92,6 +92,7 @@ class Field(str, Enum):
     metadata_labels = ("metadata_labels", 44, FieldTier.small_record)
     input_sequence_length = ("input_sequence_length", 45, FieldTier.small_record)
     limiter_request = ("limiter_request", 46, FieldTier.small_record)
+    router_ref = ("router_ref", 50, FieldTier.compatibility)
 
 
 class Activation(str, Enum):
@@ -128,9 +129,10 @@ DERIVED_ONLY: Final = frozenset(
         Field.metadata_labels,
         Field.input_sequence_length,
         Field.limiter_request,
+        Field.router_ref,
     }
 )
-BY_REFERENCE: Final = frozenset({Field.standard_logging_payload_ref})
+BY_REFERENCE: Final = frozenset({Field.standard_logging_payload_ref, Field.router_ref})
 
 ALL_FIELDS_MASK: Final = sum(1 << field.bit for field in Field)
 

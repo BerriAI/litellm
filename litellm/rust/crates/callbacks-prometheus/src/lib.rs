@@ -11,9 +11,16 @@ mod tracker;
 
 use std::cell::RefCell;
 
-use litellm_callbacks::CallbackError;
+use litellm_callbacks::{CallbackError, RemainingUsage, RouterRef};
 use serde_json::Value;
 
+use crate::{
+    attempt::rejected,
+    emit::Emitter,
+    failure::Failure,
+    pyfmt::{py_str, py_truthy},
+    success::{Success, SuccessStep},
+};
 pub use crate::{
     attempt::{AttemptFacts, Residual},
     callback::{Attempt, Event, LogSink, Prometheus, Stop, StopKind},
@@ -23,11 +30,6 @@ pub use crate::{
     },
     success::{Level, LogLine, exception_text},
     tracker::SeriesLimits,
-};
-use crate::{
-    emit::Emitter,
-    failure::Failure,
-    success::{Success, SuccessStep},
 };
 
 #[derive(
@@ -90,6 +92,89 @@ pub fn record(
         logs: logs.into_inner(),
         outcome,
     }
+}
+
+const ROUTER_READ_FAILED: &str =
+    "Prometheus: get_remaining_model_group_usage failed for model_group=%s: %s";
+const ROUTER_SET_FAILED: &str =
+    "Prometheus Error: _async_set_router_remaining_metrics. Exception occured - %s";
+
+pub struct RouterRead {
+    pub model_group: String,
+    pub provided: [bool; 2],
+}
+
+impl RouterRead {
+    pub fn of(facts: &AttemptFacts) -> Option<Self> {
+        let state = &facts.rate_limits;
+        let rejected_names = state.rejected.as_ref();
+        let provided = [
+            state.provider_remaining_tokens.is_some()
+                || rejected(rejected_names, "provider_remaining_tokens"),
+            state.provider_remaining_requests.is_some()
+                || rejected(rejected_names, "provider_remaining_requests"),
+        ];
+        if provided == [true, true] {
+            return None;
+        }
+        let model_group = facts.residual.payload_labels.get("model_group")?;
+        if !py_truthy(model_group) {
+            return None;
+        }
+        let model_group = match model_group {
+            Value::String(text) => text.clone(),
+            other => py_str(other),
+        };
+        Some(Self {
+            model_group,
+            provided,
+        })
+    }
+}
+
+pub async fn router_remaining(
+    store: &Store,
+    facts: &AttemptFacts,
+    router: Option<RouterRef>,
+) -> Vec<LogLine> {
+    let (Some(read), Some(router)) = (RouterRead::of(facts), router) else {
+        return Vec::new();
+    };
+    let remaining = router.remaining(&read.model_group).await;
+    record_router_remaining(store, facts, &read, remaining)
+}
+
+pub fn record_router_remaining(
+    store: &Store,
+    facts: &AttemptFacts,
+    read: &RouterRead,
+    remaining: Result<RemainingUsage, String>,
+) -> Vec<LogLine> {
+    let logs = RefCell::new(Vec::new());
+    match remaining {
+        Err(error) => logs.borrow_mut().push(LogLine::new(
+            Level::Error,
+            ROUTER_READ_FAILED,
+            vec![read.model_group.clone(), error],
+        )),
+        Ok(remaining) if remaining.is_empty() => {}
+        Ok(remaining) => {
+            let emit = Emitter {
+                store,
+                settings: facts.settings(),
+            };
+            let recorded =
+                success(emit, facts, None, &logs).router_remaining(&remaining, read.provided);
+            if let Err(error) = recorded {
+                logs.borrow_mut().push(LogLine::new(
+                    Level::Error,
+                    ROUTER_SET_FAILED,
+                    vec![exception_text(&error)],
+                ));
+            }
+        }
+    }
+    logs.into_inner()
 }
 
 fn success<'a>(

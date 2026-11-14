@@ -1649,11 +1649,6 @@ class PrometheusLogger(CustomLogger):
             self.v2_companion,
             kwargs,
             "success",
-            after=partial(
-                self._async_set_router_remaining_metrics,
-                standard_logging_payload=standard_logging_payload,
-                enum_values=enum_values,
-            ),
             budget=partial(
                 self._increment_remaining_budget_metrics,
                 user_api_team=user_api_team,
@@ -2469,73 +2464,6 @@ class PrometheusLogger(CustomLogger):
 
         except Exception as e:
             verbose_logger.debug("Prometheus Error: set_llm_deployment_failure_metrics. Exception occured - %s", e)
-
-    async def _async_set_router_remaining_metrics(
-        self,
-        standard_logging_payload: StandardLoggingPayload,
-        enum_values: UserAPIKeyLabelValues,
-    ) -> None:
-        """
-        Populate ``litellm_remaining_tokens_metric`` /
-        ``litellm_remaining_requests_metric`` from the router's internal usage
-        counters when the upstream provider did not return
-        ``x-ratelimit-remaining-*`` response headers.
-
-        OpenAI / Anthropic / Azure return remaining tokens/requests in response
-        headers, but Bedrock and Vertex AI do not. This fallback computes
-        ``configured_limit - current_usage`` via
-        ``Router.health().usage(model_group, kind="remaining")`` so the same gauges are
-        emitted for every provider when tpm/rpm is configured on the
-        deployment.
-        """
-        try:
-            additional_headers: Final = (standard_logging_payload.get("hidden_params", {}) or {}).get(
-                "additional_headers"
-            ) or {}
-
-            already_have_tokens: Final = additional_headers.get("x_ratelimit_remaining_tokens") is not None
-            already_have_requests: Final = additional_headers.get("x_ratelimit_remaining_requests") is not None
-            if already_have_tokens and already_have_requests:
-                return
-
-            model_group: Final = standard_logging_payload.get("model_group")
-            if not model_group:
-                return
-
-            try:
-                from litellm.proxy.proxy_server import llm_router
-            except ImportError:
-                llm_router = None
-
-            if llm_router is None:
-                return
-
-            try:
-                remaining_usage: Final = await llm_router.health().usage(model_group, kind="remaining")
-            except Exception as e:
-                verbose_logger.exception(
-                    "Prometheus: get_remaining_model_group_usage failed for model_group=%s: %s",
-                    model_group,
-                    e,
-                )
-                return
-
-            if not remaining_usage:
-                return
-
-            remaining_tokens: Final = remaining_usage.get("x-ratelimit-remaining-tokens")
-            remaining_requests: Final = remaining_usage.get("x-ratelimit-remaining-requests")
-
-            self._native_store.op(
-                "router_remaining",
-                {
-                    "values": enum_values.model_dump(),
-                    "tokens": None if already_have_tokens else remaining_tokens,
-                    "requests": None if already_have_requests else remaining_requests,
-                },
-            )
-        except Exception as e:
-            verbose_logger.exception("Prometheus Error: _async_set_router_remaining_metrics. Exception occured - %s", e)
 
     def _record_guardrail_metrics(
         self,

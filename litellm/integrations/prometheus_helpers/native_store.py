@@ -66,7 +66,6 @@ NativeOp: TypeAlias = Literal[
     "budget",
     "team_members",
     "counts",
-    "router_remaining",
 ]
 
 NativePrometheusMetric: Final = _native.NativePrometheusMetric
@@ -391,7 +390,7 @@ class NativeTicket:
     call_id: object
     event: NativeEvent
     wire: Mapping[str, object]
-    after: Callable[[], Awaitable[object]]
+    after: Callable[[], Awaitable[object]] | None
     budget: Callable[[], Awaitable[object]] | None
     view: object = None
     claims: Iterator[int] = field(default_factory=count)
@@ -440,7 +439,7 @@ def arm(
     companion: object,
     kwargs: Mapping[str, object],
     event: NativeEvent,
-    after: Callable[[], Awaitable[object]],
+    after: Callable[[], Awaitable[object]] | None = None,
     budget: Callable[[], Awaitable[object]] | None = None,
     input_sequence_length_label: bool = False,
     now: datetime | None = None,
@@ -531,8 +530,6 @@ async def _settle_success(owner: object, ticket: NativeTicket, stopped: Stopped 
     try:
         if step != "success_head" and ticket.budget is not None:
             _ = await ticket.budget()
-        if step in (None, "success_tail"):
-            _ = await ticket.after()
     except Exception as error:  # noqa: BLE001  # the legacy logging line counts and logs it the same way
         _report_success_failure(owner, error)
         return
@@ -544,7 +541,8 @@ async def _settle_failure(ticket: NativeTicket, stopped: Stopped | None) -> None
     try:
         if stopped is not None:
             raise stopped.error
-        _ = await ticket.after()
+        if ticket.after is not None:
+            _ = await ticket.after()
     except Exception as e:  # noqa: BLE001  # the legacy failure handler logs every error this way
         verbose_logger.exception("prometheus Layer Error(): Exception occured - %s", e)
 

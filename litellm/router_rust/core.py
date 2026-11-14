@@ -287,6 +287,7 @@ if TYPE_CHECKING:
         RouterCoreHandle,
         _CallSteps,  # pyright: ignore[reportPrivateUsage]  # the stub's step shapes
         _FailureReportSteps,  # pyright: ignore[reportPrivateUsage]  # see above
+        _RustRouterRef,  # pyright: ignore[reportPrivateUsage]  # the stub's router reference
         _SuccessReportSteps,  # pyright: ignore[reportPrivateUsage]  # see above
     )
     from litellm.types.router import (
@@ -1278,6 +1279,16 @@ _REBOUND_STATE: Final = MappingProxyType(
         "_core_slack_alerting_logger": "_slack_alerting_logger",
     }
 )
+
+
+def remaining_usage_ref(router: object) -> "_RustRouterRef | None":
+    from litellm.rust_bridge._native import router_usage_ref
+
+    attributes: Final[object] = getattr(router, "__dict__", None)
+    core: Final = router if isinstance(router, RustCore) else (as_str_mapping(attributes) or {}).get("_core")
+    if not isinstance(core, RustCore):
+        return None
+    return router_usage_ref(core._hosted._core_remaining_usage_reads)  # pyright: ignore[reportPrivateUsage]  # the reads health().usage(kind="remaining") makes
 
 
 _HEALTH_SERVED: Final = frozenset(
@@ -5691,6 +5702,7 @@ __all__ = [
     "RustSettings",
     "attempt_failure",
     "failure_kind",
+    "remaining_usage_ref",
     "total_tokens",
     "unsupported_arguments",
 ]
