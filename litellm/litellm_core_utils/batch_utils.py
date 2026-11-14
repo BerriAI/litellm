@@ -215,6 +215,7 @@ def replace_model_in_jsonl(
             else InMemoryFile(b"", name="modified_file.jsonl", content_type="application/jsonl")
         )
         last_written_line = 0
+        rewritten_rows = 0  # rebind-ok: counted as rows stream past in the loop below
         buffer = ""
         for line_number, raw_line in enumerate(line_iter, start=1):
             buffer += (
@@ -236,10 +237,18 @@ def replace_model_in_jsonl(
                 and (only_rows_naming is None or json_object["body"].get("model") == only_rows_naming)
             ):
                 json_object["body"]["model"] = new_model_name
+                rewritten_rows += 1
+                row_text = (
+                    json.dumps(json_object)
+                    if only_rows_naming is None
+                    else json.dumps(json_object, ensure_ascii=False, separators=(",", ":"))
+                )
+            else:
+                row_text = json.dumps(json_object) if only_rows_naming is None else stripped
             output.write(
                 (
                     "\n" * (line_number - max(last_written_line, 1) if keep_line_numbers else min(last_written_line, 1))
-                    + json.dumps(json_object)
+                    + row_text
                 ).encode("utf-8")
             )
             last_written_line = line_number
@@ -250,7 +259,7 @@ def replace_model_in_jsonl(
             # that followed it). Returning the partial `output` would silently
             # drop those rows; return the unchanged original so the provider
             # rejects the batch loudly instead of accepting a truncated one.
-            verbose_logger.error("error parsing trailing batch content: %s...", buffer[:100])
+            verbose_logger.error("error parsing trailing batch content after line %d", last_written_line)
             if hasattr(source, "seek"):
                 try:
                     source.seek(0)
@@ -259,13 +268,13 @@ def replace_model_in_jsonl(
             return file_content
 
         # If no valid JSON objects were found, return the original content
-        if not last_written_line:
+        if not last_written_line or (only_rows_naming is not None and not rewritten_rows):
             return file_content
 
         output.seek(0)
         return output
 
-    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+    except (json.JSONDecodeError, UnicodeError, TypeError):
         # return the original file content if there is an error replacing the model name
         return file_content
 

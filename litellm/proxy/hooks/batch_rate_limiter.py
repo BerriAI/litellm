@@ -237,7 +237,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         A key's allowlist and project quotas name the proxy alias, while the uploaded
         rows name the deployment's model. A row that maps here runs on the alias's own
-        deployment, so the alias is what the key has to be granted and charged for.
+        deployment, so the alias is what the key has to be granted. Its project quota is
+        charged to the alias and to the model the row names, since the uploaded file no
+        longer says which of the two the caller wrote.
         """
         from litellm.proxy.openai_files_endpoints.common_utils import (
             batch_row_model_for_deployment,
@@ -1057,9 +1059,11 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                 total_tokens += entry_total_tokens
 
-                if model:
+                for charged_model in (
+                    dict.fromkeys((model, row_model)) if isinstance(model, str) and isinstance(row_model, str) else ()
+                ):
                     model_usage = per_model_usage.setdefault(
-                        model, {"total_tokens": 0, "output_tokens": 0, "request_count": 0}
+                        charged_model, {"total_tokens": 0, "output_tokens": 0, "request_count": 0}
                     )
                     model_usage["total_tokens"] += entry_total_tokens
                     model_usage["output_tokens"] += entry_output_tokens

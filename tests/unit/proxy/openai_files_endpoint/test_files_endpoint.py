@@ -1058,7 +1058,7 @@ def _batch_row(custom_id: str, model: str) -> bytes:
 
 
 @pytest.fixture
-def files_the_provider_received(batch_upload_seams) -> list[ExtractedFileData]:
+def files_the_provider_received(batch_upload_seams: tuple[AsyncMock, AsyncMock, respx.Route]) -> list[ExtractedFileData]:
     _, provider_upload, _ = batch_upload_seams
     received: Final[list[ExtractedFileData]] = []
 
@@ -1082,9 +1082,9 @@ def _models_named_by_rows(received: ExtractedFileData) -> list[str]:
 def test_model_routed_batch_upload_names_the_deployment_model_on_rows_naming_the_alias(
     files_the_provider_received: list[ExtractedFileData], headers: dict[str, str], form: dict[str, str]
 ):
-    content = _batch_row("first", "gpt-5.4-nano-batch") + b"\n" + _batch_row("second", "gpt-5.4-nano-batch")
+    content: Final = _batch_row("first", "gpt-5.4-nano-batch") + b"\n" + _batch_row("second", "gpt-5.4-nano-batch")
 
-    response = _upload_batch_file(headers, form, content)
+    response: Final = _upload_batch_file(headers, form, content)
 
     assert response.status_code == 200, response.text
     assert _models_named_by_rows(files_the_provider_received[0]) == ["gpt-5.4-nano", "gpt-5.4-nano"]
@@ -1093,18 +1093,52 @@ def test_model_routed_batch_upload_names_the_deployment_model_on_rows_naming_the
 def test_model_routed_batch_upload_leaves_a_row_naming_another_model_for_the_limiter_to_check(
     files_the_provider_received: list[ExtractedFileData],
 ):
-    content = _batch_row("alias", "gpt-5.4-nano-batch") + b"\n" + _batch_row("other", "another-model")
+    content: Final = _batch_row("alias", "gpt-5.4-nano-batch") + b"\n" + _batch_row("other", "another-model")
 
-    response = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, content)
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, content)
 
     assert response.status_code == 200, response.text
     assert _models_named_by_rows(files_the_provider_received[0]) == ["gpt-5.4-nano", "another-model"]
 
 
+def test_model_routed_batch_upload_without_an_alias_row_reaches_the_provider_byte_for_byte(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    content: Final = (
+        '{"custom_id":"r","method":"POST","url":"/v1/chat/completions",'
+        '"body":{"model":"gpt-5.4-nano","messages":[{"role":"user","content":"こんにちは"}]}}\r\n'
+    ).encode()
+
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, content)
+
+    assert response.status_code == 200, response.text
+    assert files_the_provider_received[0]["content"] == content
+
+
+def test_model_routed_batch_upload_changes_only_the_model_of_alias_rows_and_keeps_other_rows_as_written(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    alias_row: Final = (
+        '{"custom_id":"alias","method":"POST","url":"/v1/chat/completions",'
+        '"body":{"model":"gpt-5.4-nano-batch","messages":[{"role":"user","content":"日本語"}]}}'
+    ).encode()
+    other_row: Final = (
+        '{"custom_id": "other", "method": "POST", "url": "/v1/chat/completions", '
+        '"body": {"model": "another-model", "messages": [{"role": "user", "content": "日本語"}]}}'
+    ).encode()
+
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, alias_row + b"\n" + other_row)
+
+    assert response.status_code == 200, response.text
+    rewritten_row, kept_row = files_the_provider_received[0]["content"].splitlines()
+    assert kept_row == other_row
+    assert rewritten_row == alias_row.replace(b'"model":"gpt-5.4-nano-batch"', b'"model":"gpt-5.4-nano"')
+
+
 def test_model_routed_batch_upload_strips_the_provider_prefix_from_the_deployment_model(
     files_the_provider_received: list[ExtractedFileData],
 ):
-    response = _upload_batch_file({"x-litellm-model": "azure-batch"}, {}, _batch_row("r", "azure-batch"))
+    response: Final = _upload_batch_file({"x-litellm-model": "azure-batch"}, {}, _batch_row("r", "azure-batch"))
 
     assert response.status_code == 200, response.text
     assert _models_named_by_rows(files_the_provider_received[0]) == ["my-deployment"]
@@ -1134,7 +1168,7 @@ def test_wildcard_routed_batch_upload_names_the_requested_model(
         ),
     )
 
-    response = _upload_batch_file({"x-litellm-model": requested_model}, {}, _batch_row("r", requested_model))
+    response: Final = _upload_batch_file({"x-litellm-model": requested_model}, {}, _batch_row("r", requested_model))
 
     assert response.status_code == 200, response.text
     assert _models_named_by_rows(files_the_provider_received[0]) == ["gpt-x"]
@@ -1143,7 +1177,7 @@ def test_wildcard_routed_batch_upload_names_the_requested_model(
 def test_model_routed_batch_upload_keeps_the_callers_filename_and_content_type(
     files_the_provider_received: list[ExtractedFileData],
 ):
-    response = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, _batch_row("r", "gpt-5.4-nano-batch"))
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, _batch_row("r", "gpt-5.4-nano-batch"))
 
     assert response.status_code == 200, response.text
     assert files_the_provider_received[0]["filename"] == "batch.jsonl"
@@ -1153,9 +1187,9 @@ def test_model_routed_batch_upload_keeps_the_callers_filename_and_content_type(
 def test_model_routed_upload_with_another_purpose_keeps_the_callers_bytes(
     files_the_provider_received: list[ExtractedFileData],
 ):
-    content = b'{"body":   {"model":   "gpt-5.4-nano-batch"}}\n'
+    content: Final = b'{"body":   {"model":   "gpt-5.4-nano-batch"}}\n'
 
-    response = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {"purpose": "assistants"}, content)
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {"purpose": "assistants"}, content)
 
     assert response.status_code == 200, response.text
     assert files_the_provider_received[0]["content"] == content
@@ -1164,9 +1198,9 @@ def test_model_routed_upload_with_another_purpose_keeps_the_callers_bytes(
 def test_model_routed_passthrough_upload_keeps_the_callers_bytes(
     files_the_provider_received: list[ExtractedFileData],
 ):
-    content = b'{"request":   {"contents": []}, "body":   {"model": "native"}}\n'
+    content: Final = b'{"request":   {"contents": []}, "body":   {"model": "native"}}\n'
 
-    response = _upload_batch_file({"x-litellm-model": "vertex-batch-keep"}, {"passthrough": "true"}, content)
+    response: Final = _upload_batch_file({"x-litellm-model": "vertex-batch-keep"}, {"passthrough": "true"}, content)
 
     assert response.status_code == 200, response.text
     assert files_the_provider_received[0]["content"] == content
@@ -1180,9 +1214,9 @@ def test_model_routed_passthrough_upload_keeps_the_callers_bytes(
 def test_model_routed_batch_upload_keeps_line_numbers_only_for_vertex_ai(
     files_the_provider_received: list[ExtractedFileData], model: str, deployment_model: str, second_row_line: int
 ):
-    content = _batch_row("first", model) + b"\n\n" + _batch_row("second", model)
+    content: Final = _batch_row("first", model) + b"\n\n" + _batch_row("second", model)
 
-    response = _upload_batch_file({"x-litellm-model": model}, {}, content)
+    response: Final = _upload_batch_file({"x-litellm-model": model}, {}, content)
 
     assert response.status_code == 200, response.text
     lines = files_the_provider_received[0]["content"].split(b"\n")
@@ -1191,7 +1225,7 @@ def test_model_routed_batch_upload_keeps_line_numbers_only_for_vertex_ai(
     assert _models_named_by_rows(files_the_provider_received[0]) == [deployment_model, deployment_model]
 
 
-def test_model_routed_batch_upload_refuses_a_key_without_the_alias_before_uploading(batch_upload_seams):
+def test_model_routed_batch_upload_refuses_a_key_without_the_alias_before_uploading(batch_upload_seams: tuple[AsyncMock, AsyncMock, respx.Route]):
     import litellm.proxy.proxy_server as ps
 
     _, provider_upload, _ = batch_upload_seams
@@ -1199,7 +1233,7 @@ def test_model_routed_batch_upload_refuses_a_key_without_the_alias_before_upload
         user_id="restricted-user", models=["gemini-2.0-flash"]
     )
 
-    response = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {})
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {})
 
     assert response.status_code == 403, response.text
     assert "gpt-5.4-nano-batch" in response.text
@@ -1214,9 +1248,9 @@ def test_model_routed_batch_upload_refuses_a_key_without_the_alias_before_upload
 def test_batch_upload_the_rewrite_cannot_read_reaches_the_provider_whole(
     files_the_provider_received: list[ExtractedFileData], encoding: str
 ):
-    content = _batch_row("r", "gpt-5.4-nano-batch").decode().encode(encoding)
+    content: Final = _batch_row("r", "gpt-5.4-nano-batch").decode().encode(encoding)
 
-    response = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, content)
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, content)
 
     assert response.status_code == 200, response.text
     assert files_the_provider_received[0]["content"] == content

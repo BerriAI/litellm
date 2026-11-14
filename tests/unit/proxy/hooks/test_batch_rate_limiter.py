@@ -791,8 +791,34 @@ async def test_key_granted_only_the_alias_can_batch_rows_naming_its_deployment_m
         data=dict(data),
     )
 
-    assert set(usage.per_model_usage) == {_BATCH_ALIAS}
     assert usage.per_model_usage[_BATCH_ALIAS]["request_count"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limited_model", [_BATCH_ALIAS, _DEPLOYMENT_MODEL], ids=["alias", "deployment model"])
+async def test_alias_routed_rows_naming_the_deployment_model_are_held_to_both_project_quotas(
+    alias_routed_batch: respx.MockRouter, limited_model: str
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL),))
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key=hash_token("sk-batch"),
+                models=[_BATCH_ALIAS],
+                project_id="project-1",
+                project_metadata={"model_itpm_limit": {limited_model: 1}},
+            ),
+            cache=DualCache(),
+            data=dict(_alias_routing("body")),
+            call_type="acreate_batch",
+        )
+
+    assert refused.value.status_code == 429
+    assert f"project-1:{limited_model}" in str(refused.value.detail)
 
 
 @pytest.mark.asyncio
