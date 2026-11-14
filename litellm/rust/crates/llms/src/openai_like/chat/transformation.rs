@@ -63,8 +63,6 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
 /// Call configuration the caller may pass that never enters the request body.
 const CONFIG_PARAMS: &[&str] = &["custom_endpoint", "extra_headers", "max_retries"];
 
-/// Python sends messages on verbatim, so the reasoning another provider put on
-/// a reply reaches this endpoint as the client sent it back.
 const REASONING_FIELDS: &[&str] = &[THINKING_BLOCKS_FIELD, "reasoning_content"];
 
 pub struct OpenAILikeChatConfig;
@@ -127,7 +125,15 @@ impl BaseConfig for OpenAILikeChatConfig {
         let body = Map::from_iter(
             [
                 ("model".to_string(), json!(model)),
-                ("messages".to_string(), json!(messages)),
+                (
+                    "messages".to_string(),
+                    json!(
+                        messages
+                            .into_iter()
+                            .map(without_null_fields)
+                            .collect::<Vec<_>>()
+                    ),
+                ),
             ]
             .into_iter()
             .chain(params),
@@ -243,6 +249,17 @@ impl BaseConfig for OpenAILikeChatConfig {
 /// `OpenAILikeChatConfig._sanitize_usage_obj`: a provider that reports a null
 /// `*_tokens` entry breaks OpenAI clients, so nulls become 0. Python scrubs
 /// every top-level usage key ending in `_tokens`.
+fn without_null_fields(message: ChatMessage) -> ChatMessage {
+    ChatMessage {
+        extra: message
+            .extra
+            .into_iter()
+            .filter(|(_, value)| !value.is_null())
+            .collect(),
+        ..message
+    }
+}
+
 fn sanitize_usage(body: &mut Value) {
     if let Some(usage) = body.get_mut("usage").and_then(Value::as_object_mut) {
         for (key, value) in usage.iter_mut() {
@@ -661,6 +678,20 @@ mod tests {
         assert_eq!(
             transform("my-model", conversation.clone(), json!({}))["messages"],
             conversation
+        );
+    }
+
+    #[rstest]
+    fn drops_null_reasoning_fields_like_python() {
+        let conversation = json!([
+            {"role": "user", "content": "2+2?"},
+            {"role": "assistant", "content": "4", "reasoning_content": null, "thinking_blocks": null},
+            {"role": "user", "content": "add 1"},
+        ]);
+        assert_eq!(reason(conversation.clone(), json!({})), None);
+        assert_eq!(
+            transform("my-model", conversation, json!({}))["messages"][1],
+            json!({"role": "assistant", "content": "4"})
         );
     }
 
