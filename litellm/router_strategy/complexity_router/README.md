@@ -679,12 +679,23 @@ Omit `reasoning_keywords` to use the built-in list, or supply a nonempty list to
 
 Reasoning markers in the system prompt do **not** trigger the reasoning override. This prevents system prompts like "Think step by step before answering" from forcing all requests to the reasoning tier.
 
-For requests identified by a `claude-cli/` or `claude-code/` user agent, the LLM classifier omits caller system
+`classifier_caller_system_prompt` controls whether the LLM and JEV classifiers see the caller's system text.
+The routed completion receives the original system text in every mode
+
+With the default `auto`, requests identified by a `claude-cli/` or `claude-code/` user agent omit caller system
 text to avoid classifying environment, agent, and skill catalogs. The current ask, configured prior-turn context,
-and trajectory signal remain unchanged. The routed completion still receives the original system text. This
-also excludes genuine task constraints supplied only in Claude Code system messages. Other clients keep the
-existing system-context behavior. The browser routing preview has no client-identity field and retains that
-generic behavior; use the real client when checking Claude Code routing.
+and trajectory signal remain unchanged. This also excludes genuine task constraints supplied only in Claude Code
+system messages. Other clients keep the existing system-context behavior. The browser routing preview has no
+client-identity field and retains that generic behavior, so use the real client when checking Claude Code routing
+
+Set `omit` when the router fronts other coding agents or harnesses whose system prompt is a per-session constant,
+since quoting the same instructions on every request tells the classifier nothing about the request itself. Set
+`include` to quote system text for every client, Claude Code included
+
+```yaml
+classifier_type: llm
+classifier_caller_system_prompt: omit
+```
 
 ### Harness Reminder Blocks
 

@@ -1321,8 +1321,8 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier "
             "model (the configured TypeSafe endpoint for JEV), which may "
             "be a different deployment or provider than the routed completion model; that call carries "
-            "the current user ask and, except for Claude Code requests, the extracted system-role text in full. "
-            "Claude Code system text is omitted to avoid classifying harness instructions; the routed "
+            "the current user ask and the extracted system-role text in full, unless "
+            "classifier_caller_system_prompt omits it; the routed "
             "completion still receives it. Set to 0 to omit prior turns and the conversation-depth summary; "
             "the current ask and selected system text are still sent. Applies to LLM and JEV classification."
         ),
@@ -1335,8 +1335,8 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "context window, per classification call. Turns are taken newest first and quoted whole "
             "while they fit, so a conversation small enough to quote entirely is never cut; once the "
             "budget runs out the older turns are dropped whole and only the turn straddling the "
-            "boundary is truncated, into whatever space is left. The current ask and, except for Claude "
-            "Code requests, the extracted system-role text sit outside this budget and are sent in full, as does "
+            "boundary is truncated, into whatever space is left. The current ask and the extracted "
+            "system-role text, when classifier_caller_system_prompt sends it, sit outside this budget and are sent in full, as does "
             "the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and "
             "suppresses the block; set classifier_context_window_size to 0 to turn context off "
             "deliberately. Applies to LLM and JEV classification."
@@ -1366,6 +1366,18 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "alongside user turns, so raise it if the oldest turns stop being quoted once replies "
             "join the window. Off by default because enabling it shifts tier decisions, and therefore "
             "spend, for an already-deployed router. Applies to LLM and JEV classification."
+        ),
+    )
+    classifier_caller_system_prompt: Literal["auto", "include", "omit"] = Field(
+        default="auto",
+        description=(
+            "Whether the caller's system prompt is quoted to the LLM or JEV classifier as task context. "
+            "'auto' omits it for Claude Code requests, whose system text is harness instructions and "
+            "tool catalogs rather than the task, and includes it for every other client. 'omit' never "
+            "sends it, which suits any coding agent or harness whose system prompt is a per-session "
+            "constant that says nothing about the request being routed. 'include' always sends it, "
+            "Claude Code included. The routed completion receives the original system prompt in every "
+            "mode. Applies to LLM and JEV classification."
         ),
     )
 

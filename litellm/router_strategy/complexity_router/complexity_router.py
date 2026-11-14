@@ -2707,16 +2707,23 @@ class ComplexityRouter(CustomLogger):
     def _classifier_caller_constraints(
         self, system_prompt: str | None, request_kwargs: Mapping[str, object] | None
     ) -> str | None:
-        """Exclude Claude Code's environment and skill catalogs from task forecasts."""
-        return (
-            None
-            if any(
-                is_claude_code_user_agent(user_agent)
-                for metadata in (self._iter_metadata_dicts(request_kwargs) if request_kwargs is not None else ())
-                if isinstance(user_agent := metadata.get("user_agent"), str)
-            )
-            else system_prompt
-        )
+        match self.config.classifier_caller_system_prompt:
+            case "include":
+                return system_prompt
+            case "omit":
+                return None
+            case "auto":
+                return (
+                    None
+                    if any(
+                        is_claude_code_user_agent(user_agent)
+                        for metadata in (
+                            self._iter_metadata_dicts(request_kwargs) if request_kwargs is not None else ()
+                        )
+                        if isinstance(user_agent := metadata.get("user_agent"), str)
+                    )
+                    else system_prompt
+                )
 
     def _classifier_context_payload(
         self,
@@ -2774,7 +2781,7 @@ class ComplexityRouter(CustomLogger):
 
         Args:
             prompt: The current user ask text (already extracted as the real human ask, not tool results)
-            system_prompt: Caller task constraints, omitted from classification for Claude Code requests
+            system_prompt: Caller task constraints, filtered by classifier_caller_system_prompt
             request_kwargs: Request metadata for spend attribution
             messages: Full message history for extracting prior turns and the trajectory signal
         """

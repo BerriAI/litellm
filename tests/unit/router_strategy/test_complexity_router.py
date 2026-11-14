@@ -10352,6 +10352,49 @@ class TestContextAwareClassifier:
             assert "Conversation so far: ~35 tokens across the request" in payload
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "mode,user_agent,forwards_system",
+        [
+            ("auto", "claude-cli/2.1.233", False),
+            ("auto", "codex_cli_rs/0.60.1", True),
+            ("omit", "codex_cli_rs/0.60.1", False),
+            ("omit", None, False),
+            ("include", "claude-cli/2.1.233", True),
+            ("include", None, True),
+        ],
+    )
+    async def test_classifier_caller_system_prompt_mode(
+        self,
+        llm_classifier_config: dict[str, object],
+        mode: str,
+        user_agent: str | None,
+        forwards_system: bool,
+    ) -> None:
+        dependency: Final = MagicMock(acompletion=AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}')))
+        router: Final = ComplexityRouter(
+            "test-complexity-router",
+            RoutingContext(dependency),
+            {**llm_classifier_config, "classifier_caller_system_prompt": mode},
+        )
+        messages: Final = [
+            {"role": "system", "content": "HARNESS_SYSTEM_PROMPT"},
+            {"role": "user", "content": "Now prove it cannot livelock"},
+        ]
+        request_kwargs: Final = {"metadata": {} if user_agent is None else {"user_agent": user_agent}}
+
+        result: Final = await router.async_pre_routing_hook("test-complexity-router", request_kwargs, messages)
+
+        assert result is not None and result.routing_decision["cause"] == "llm_classifier"
+        assert result.messages == messages
+        payload: Final = dependency.acompletion.call_args.kwargs["messages"][1]["content"]
+        assert payload.endswith("Classify this message:\nNow prove it cannot livelock")
+        assert ("HARNESS_SYSTEM_PROMPT" in payload) is forwards_system
+
+    def test_classifier_caller_system_prompt_rejects_unknown_mode(self, llm_classifier_config: dict[str, object]):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(**{**llm_classifier_config, "classifier_caller_system_prompt": "never"})
+
+    @pytest.mark.asyncio
     async def test_claude_code_first_turn_without_context_omits_harness_system_prompt(
         self, llm_classifier_config: dict[str, object]
     ) -> None:
