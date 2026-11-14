@@ -3631,6 +3631,12 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
 
     tools: list[dict] | None = None
     system: Any | None = None
+    thinking: JsonValue = None
+    reasoning_effort: JsonValue = None
+    tool_choice: JsonValue = None
+    parallel_tool_calls: JsonValue = None
+    response_format: JsonValue = None
+    web_search_options: JsonValue = None
 
 
 from litellm.types.integrations.slack_alerting import CallInfo as CallInfo  # noqa: E402, PLC0414  # public re-export
