@@ -3,7 +3,9 @@ import json
 import os
 from collections.abc import Callable, Collection, Mapping
 from functools import cache
-from typing import TYPE_CHECKING, ClassVar, Final, Unpack
+from typing import TYPE_CHECKING, ClassVar, Final
+
+from typing_extensions import Unpack
 
 import litellm
 from litellm._logging import verbose_logger
@@ -70,20 +72,21 @@ class _Host:
     def web_identity_token(self, reference: str) -> str:
         if reference.startswith("os.environ/") or reference in os.environ:
             raise ValueError("Invalid web identity token reference.")
-        token: Final = _read_secret(get_secret, reference)
-        if token is None:
-            raise ValueError("OIDC token could not be retrieved from secret manager.")
-        if not isinstance(token, str):
-            raise ValueError(
-                "Parameter validation failed:\nInvalid type for parameter WebIdentityToken, "
-                f"value: {token}, type: {type(token)}, valid types: {str}"
-            )
-        if len(token) < _WEB_IDENTITY_TOKEN_MIN_LENGTH:
-            raise ValueError(
-                "Parameter validation failed:\nInvalid length for parameter WebIdentityToken, "
-                f"value: {len(token)}, valid min length: {_WEB_IDENTITY_TOKEN_MIN_LENGTH}"
-            )
-        return token
+        match _read_secret(get_secret, reference):
+            case None:
+                raise ValueError("OIDC token could not be retrieved from secret manager.")
+            case str() as token if len(token) < _WEB_IDENTITY_TOKEN_MIN_LENGTH:
+                raise ValueError(
+                    "Parameter validation failed:\nInvalid length for parameter WebIdentityToken, "
+                    f"value: {len(token)}, valid min length: {_WEB_IDENTITY_TOKEN_MIN_LENGTH}"
+                )
+            case str() as token:
+                return token
+            case other:
+                raise ValueError(
+                    "Parameter validation failed:\nInvalid type for parameter WebIdentityToken, "
+                    f"value: {other}, type: {type(other)}, valid types: {str}"
+                )
 
 
 def _read_secret(read: Callable[[str], object], reference: str) -> object:
