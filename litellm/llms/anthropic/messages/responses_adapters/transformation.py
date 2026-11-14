@@ -205,12 +205,24 @@ def _mcp_server_tools(
             return _ResponsesTools(unsupported=(*unsupported, field))
 
 
+def _is_mcp_toolset(tool: Mapping[str, object]) -> bool:
+    return tool.get("type") == _MCP_TOOLSET_TYPE
+
+
+def _requested_mcp_servers(request: AnthropicMessagesRequest) -> Sequence[AnthropicMcpServerTool]:
+    match request:
+        case {"mcp_servers": list() as servers}:
+            return servers
+        case _:
+            return ()
+
+
 def _mcp_server_translation(server: AnthropicMcpServerTool, tools: Sequence[Mapping[str, object]]) -> _ResponsesTools:
     """One Responses ``mcp`` tool per server, its access read from the server's ``mcp_toolset`` entry in ``tools``,
     else from the deprecated ``tool_configuration``."""
     name: Final = server.get("name")
     toolset: Final = next(
-        (tool for tool in tools if tool.get("type") == _MCP_TOOLSET_TYPE and tool.get("mcp_server_name") == name),
+        (tool for tool in tools if _is_mcp_toolset(tool) and tool.get("mcp_server_name") == name),
         None,
     )
     if toolset is None:
@@ -259,6 +271,15 @@ def _requested_output_format(request: Mapping[str, object]) -> Mapping[str, obje
         return output_format
     output_config: Final = _object_map(request.get("output_config"))
     return None if output_config is None else _object_map(output_config.get("format"))
+
+
+def _field_translations(request: Mapping[str, object]) -> tuple[_Translation, ...]:
+    return (
+        _parallel_tool_calls(_object_map(request.get("tool_choice"))),
+        _service_tier(request.get("speed")),
+        _container(request.get("container")),
+        _text_format(_requested_output_format(request)),
+    )
 
 
 def _text_format(output_format: Mapping[str, object] | None) -> _Translation:
@@ -719,12 +740,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     ) -> list[dict[str, object]]:
         """Convert Anthropic tool definitions to Responses API tools. An ``mcp_toolset`` entry configures its MCP
         server's tool, so it never becomes a tool of its own."""
-        return [self._translate_tool_to_responses_api(tool) for tool in tools if tool.get("type") != _MCP_TOOLSET_TYPE]
+        return [self._translate_tool_to_responses_api(tool) for tool in tools if not _is_mcp_toolset(tool)]
 
     def _translate_tools(self, anthropic_request: AnthropicMessagesRequest) -> _Translation:
         tools: Final = cast(list[AllAnthropicToolsValues], anthropic_request.get("tools") or [])
         mcp_servers: Final = tuple(
-            _mcp_server_translation(server, tools) for server in anthropic_request.get("mcp_servers") or ()
+            _mcp_server_translation(server, tools) for server in _requested_mcp_servers(anthropic_request)
         )
         responses_tools: Final = (
             *self.translate_tools_to_responses_api(tools),
@@ -915,14 +936,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 cast(AnthropicMessagesToolChoice, tool_choice)
             )
 
-        request: Final[Mapping[str, object]] = anthropic_request
-        translations: Final = (
-            self._translate_tools(anthropic_request),
-            _parallel_tool_calls(_object_map(tool_choice)),
-            _service_tier(request.get("speed")),
-            _container(request.get("container")),
-            _text_format(_requested_output_format(request)),
-        )
+        translations: Final = (self._translate_tools(anthropic_request), *_field_translations(anthropic_request))
         unsupported: Final = tuple(chain.from_iterable(translation.unsupported for translation in translations))
         if unsupported and not drop_params:
             raise _unsupported_params_error(model, unsupported)
