@@ -136,6 +136,7 @@ def test_serves_the_columns_the_budgets_page_renders(query_raw, as_proxy_admin):
         "rpm_limit",
         "tpd_limit",
         "budget_duration",
+        "budget_limits",
         "budget_reset_at",
         "created_at",
         "updated_at",

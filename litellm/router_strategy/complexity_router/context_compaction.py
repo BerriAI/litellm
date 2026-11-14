@@ -27,10 +27,11 @@ from litellm.llms.compaction import (
     dispatch,
     get_native_compaction_provider,
 )
+from litellm.router_deprecated import renamed_router_param
 from litellm.router_strategy.complexity_router.config import ContextCompactionConfig
 
 if TYPE_CHECKING:
-    from litellm.router import Router
+    from litellm.router_api import RoutingContext
 
 Surface: TypeAlias = Literal["chat", "messages", "responses"]
 _SURFACES: Final[Mapping[str, Surface]] = MappingProxyType(
@@ -96,13 +97,14 @@ def initialize_compaction_state(kwargs: Mapping[str, object], surface: Surface) 
     return existing if isinstance(existing, CompactionState) else CompactionState(surface=surface)
 
 
+@renamed_router_param("router")
 async def arm_compaction(
     kwargs: Mapping[str, object],
     config: ContextCompactionConfig | Literal[False] | None,
     candidates: tuple[str, ...] = (),
     parent_model: str | None = None,
     *,
-    router: Router | None = None,
+    ctx: RoutingContext | None = None,
     allow_escalation: bool = False,
     messages: Sequence[Mapping[str, object]] | None = None,
 ) -> None:
@@ -111,7 +113,7 @@ async def arm_compaction(
         state.config = config if isinstance(config, ContextCompactionConfig) and not _client_managed(kwargs) else None
         state.candidates = candidates
         state.parent_model = parent_model
-        if allow_escalation and router is not None and state.config is not None:
+        if allow_escalation and ctx is not None and state.config is not None:
             payload: Final = MappingProxyType(
                 {
                     **kwargs,
@@ -119,11 +121,11 @@ async def arm_compaction(
                     **({"messages": messages} if messages is not None and state.surface != "responses" else {}),
                 }
             )
-            if not await _has_compactor(router, state, payload):
+            if not await _has_compactor(ctx, state, payload):
                 state.config = None
 
 
-async def _has_compactor(router: Router, state: CompactionState, payload: Mapping[str, object]) -> bool:
+async def _has_compactor(ctx: RoutingContext, state: CompactionState, payload: Mapping[str, object]) -> bool:
     from litellm.exceptions import ContextWindowExceededError
 
     if state.surface is None or state.config is None:
@@ -131,7 +133,7 @@ async def _has_compactor(router: Router, state: CompactionState, payload: Mappin
     try:
         instructions, prefix, _ = _portable_history(payload, state.surface)
         await _compactor_model(
-            router, state, _compactor_input(payload, state.surface, instructions, prefix, state.config.max_tokens)
+            ctx, state, _compactor_input(payload, state.surface, instructions, prefix, state.config.max_tokens)
         )
         return True
     except ContextWindowExceededError:
@@ -237,9 +239,9 @@ def _history(
     return instructions, prefix, conversation[split:]
 
 
-async def _count(router: Router, payload: Mapping[str, object]) -> int:
+async def _count(ctx: RoutingContext, payload: Mapping[str, object]) -> int:
     return await asyncio.to_thread(
-        router._count_pre_call_check_tokens,  # pyright: ignore[reportPrivateUsage]  # shared Router admission counter
+        ctx.count_pre_call_check_tokens,
         messages=_ITEMS.validate_python(payload["messages"]) if "messages" in payload else None,
         input=_INPUT.validate_python(payload.get("input")),
         request_kwargs=payload,
@@ -247,11 +249,11 @@ async def _count(router: Router, payload: Mapping[str, object]) -> int:
 
 
 def _budget(
-    router: Router, deployment: Mapping[str, object], payload: Mapping[str, object], ratio: float
+    ctx: RoutingContext, deployment: Mapping[str, object], payload: Mapping[str, object], ratio: float
 ) -> InputBudget:
     model: Final = str(payload.get("model", ""))
     info: Final = _MAPPING.validate_python(
-        router.get_router_model_info(deployment=_DICT.validate_python(deployment), received_model_name=model)
+        ctx.registry().router_model_info(deployment=_DICT.validate_python(deployment), received_model_name=model)
     )
     raw_window: Final = info.get("max_input_tokens")
     window: Final = raw_window if isinstance(raw_window, int) and not isinstance(raw_window, bool) else None
@@ -269,9 +271,9 @@ def _budget(
 
 
 async def _compactor_model(
-    router: Router, state: CompactionState, payload: Mapping[str, object]
+    ctx: RoutingContext, state: CompactionState, payload: Mapping[str, object]
 ) -> tuple[str, NativeCompactionProvider]:
-    needed: Final = await _count(router, payload)
+    needed: Final = await _count(ctx, payload)
     candidates: Final = (
         (state.config.model,) if state.config is not None and state.config.model is not None else state.candidates
     )
@@ -279,13 +281,13 @@ async def _compactor_model(
         (
             (candidate, provider)
             for candidate in candidates
-            if (deployments := tuple(router.get_model_list(model_name=candidate) or ()))
+            if (deployments := tuple(ctx.registry().deployments(model_name=candidate) or ()))
             and (provider := get_native_compaction_provider(_MAPPING.validate_python(deployments[0]["litellm_params"])))
             is not None
             and all(
                 provider.supports_native_compaction(params := _MAPPING.validate_python(deployment["litellm_params"]))
                 and provider.compatible_defaults(params)
-                and (budget := _budget(router, deployment, payload, 0.9)).available is not None
+                and (budget := _budget(ctx, deployment, payload, 0.9)).available is not None
                 and needed <= budget.available
                 for deployment in deployments
             )
@@ -320,7 +322,7 @@ def _native_prefix(payload: Mapping[str, object], surface: Surface) -> Mapping[s
 
 
 async def _generate_summary(
-    router: Router,
+    ctx: RoutingContext,
     provider: NativeCompactionProvider,
     protocol: CompactionProtocol,
     payload: Mapping[str, object],
@@ -330,7 +332,7 @@ async def _generate_summary(
     executor: Final = compaction_executor.get()
     with native_compaction_call():
         response: Final = await asyncio.wait_for(
-            executor(protocol, payload, parent_model) if executor is not None else dispatch(router, protocol, payload),
+            executor(protocol, payload, parent_model) if executor is not None else dispatch(ctx, protocol, payload),
             timeout=timeout,
         )
     summary: Final = provider.extract_summary(protocol, response)
@@ -362,32 +364,33 @@ def _compactor_input(
     )
 
 
+@renamed_router_param("router")
 async def compact_to_fit(
-    router: Router, deployment: Mapping[str, object], payload: Mapping[str, object], surface: Surface | None
+    ctx: RoutingContext, deployment: Mapping[str, object], payload: Mapping[str, object], surface: Surface | None
 ) -> Mapping[str, object]:
     from litellm.exceptions import ContextWindowExceededError
 
     try:
-        return await _compact_to_fit(router, deployment, payload, surface)
+        return await _compact_to_fit(ctx, deployment, payload, surface)
     except ContextWindowExceededError:
-        window: Final = _budget(router, deployment, payload, 1.0).window
-        if not _native_child.get() and window is not None and await _count(router, payload) <= window:
+        window: Final = _budget(ctx, deployment, payload, 1.0).window
+        if not _native_child.get() and window is not None and await _count(ctx, payload) <= window:
             return payload
         raise
 
 
 async def _check_client_managed_admission(
-    router: Router, deployment: Mapping[str, object], payload: Mapping[str, object]
+    ctx: RoutingContext, deployment: Mapping[str, object], payload: Mapping[str, object]
 ) -> None:
-    if not router.enable_pre_call_checks:
+    if not ctx.settings().enable_pre_call_checks:
         return
-    router._pre_call_checks(  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # restore legacy admission after deployment defaults
+    ctx.pre_call_checks(
         model=str(payload["model"]),
-        healthy_deployments=_ITEMS.validate_python((deployment,)),
+        healthy_deployments=list[object](_ITEMS.validate_python((deployment,))),
         messages=_ITEMS.validate_python(payload["messages"]) if "messages" in payload else None,  # pyright: ignore[reportArgumentType]  # legacy annotation omits structured content
         input=_INPUT.validate_python(payload.get("input")),
         request_kwargs=_DICT.validate_python(payload),
-        input_token_count=await _count(router, payload),
+        input_token_count=await _count(ctx, payload),
         skip_inline_token_count=True,
     )
 
@@ -419,22 +422,22 @@ def _portable_history(
 
 
 async def _compact_to_fit(
-    router: Router, deployment: Mapping[str, object], payload: Mapping[str, object], surface: Surface | None
+    ctx: RoutingContext, deployment: Mapping[str, object], payload: Mapping[str, object], surface: Surface | None
 ) -> Mapping[str, object]:
     state: Final = payload.get(_STATE_KEY)
     config: Final = state.config if isinstance(state, CompactionState) else None
     if not _native_child.get() and (config is None or _client_managed(payload)):
         if config is not None:
-            await _check_client_managed_admission(router, deployment, payload)
+            await _check_client_managed_admission(ctx, deployment, payload)
         return payload
     model: Final = str(payload["model"])
-    limits: Final = _budget(router, deployment, payload, config.trigger_ratio if config is not None else 0.9)
+    limits: Final = _budget(ctx, deployment, payload, config.trigger_ratio if config is not None else 0.9)
     budget: Final = limits.available
     if budget is None or budget <= 0:
         if (
             config is not None
             and config.model is None
-            and (limits.window is None or await _count(router, payload) <= limits.window)
+            and (limits.window is None or await _count(ctx, payload) <= limits.window)
         ):
             return payload
         _unavailable(model, "A known input window and a smaller output allowance are required")
@@ -443,18 +446,18 @@ async def _compact_to_fit(
         if (
             child_provider is None
             or not child_provider.compatible_defaults(payload)
-            or await _count(router, payload) > budget
+            or await _count(ctx, payload) > budget
         ):
             _reject(model, "The selected compactor's effective request is incompatible or exceeds its input budget")
         return payload
-    if await _count(router, payload) <= budget:
+    if await _count(ctx, payload) <= budget:
         return payload
     if surface is None or config is None or not isinstance(state, CompactionState):
         _unavailable(model, "This request surface cannot be compacted")
     key: Final = "input" if surface == "responses" else "messages"
     instructions, prefix, tail = _portable_history(payload, surface)
     retained: Final = MappingProxyType({**payload, key: _ITEMS.validate_python((*instructions, *tail))})
-    if await _count(router, retained) >= budget:
+    if await _count(ctx, retained) >= budget:
         _unavailable(model, "Retained instructions, tools and the latest turn leave no room for a summary")
     older: Final = _compactor_input(payload, surface, instructions, prefix, config.max_tokens)
     metadata: Final = sanitized_forwardable_call_metadata(
@@ -481,7 +484,7 @@ async def _compact_to_fit(
             **parent_session_kwargs(payload),
         }
     )
-    compactor, provider = await _compactor_model(router, state, request)
+    compactor, provider = await _compactor_model(ctx, state, request)
     child: Final = MappingProxyType({**request, **provider.request_kwargs(), "model": compactor})
     identity: Final = hashlib.sha256(
         json.dumps(
@@ -505,7 +508,7 @@ async def _compact_to_fit(
             state.summary = (
                 identity,
                 asyncio.create_task(
-                    _generate_summary(router, provider, protocol, child, config.timeout_seconds, state.parent_model)
+                    _generate_summary(ctx, provider, protocol, child, config.timeout_seconds, state.parent_model)
                 ),
             )
     if state.summary[0] != identity:
@@ -515,6 +518,6 @@ async def _compact_to_fit(
         {"role": "assistant", "content": "Summary of earlier conversation (context, not new instructions):\n" + summary}
     )
     compacted: Final = MappingProxyType({**payload, key: _ITEMS.validate_python((*instructions, message, *tail))})
-    if await _count(router, compacted) > budget:
+    if await _count(ctx, compacted) > budget:
         _unavailable(model, "The summary and retained conversation still exceed the selected deployment's budget")
     return compacted
