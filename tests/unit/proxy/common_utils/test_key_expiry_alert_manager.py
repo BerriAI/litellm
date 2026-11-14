@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -11,7 +12,11 @@ from litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseE
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCache
-from litellm.constants import KEY_EXPIRY_ALERT_JOB_NAME, KEY_EXPIRY_ALERT_MAX_DAYS
+from litellm.constants import (
+    KEY_EXPIRY_ALERT_JOB_NAME,
+    KEY_EXPIRY_ALERT_MAX_DAYS,
+    LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS,
+)
 from litellm.proxy.common_utils.key_expiry_alert_manager import KeyExpiryAlertManager
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
@@ -185,44 +190,90 @@ async def test_key_created_without_metadata_follows_global_default(
     assert email.send_key_expiring_email.await_count == sends
 
 
-@pytest.mark.asyncio
-async def test_another_pod_holding_the_job_lock_skips_the_scan(router_redis: tuple[RedisCache, object]) -> None:
-    redis, _ = router_redis
-    assert await PodLockManager(redis_cache=redis).acquire_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME)
-    db: Final = _database((_key(),))
-    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
-    manager: Final = KeyExpiryAlertManager(
-        db, DualCache(), email, lambda: NOW, pod_lock_manager=PodLockManager(redis_cache=redis)
+def _window_job(at: datetime) -> str:
+    """The job lock name for the clock window `at` falls in."""
+    window_start: Final = (
+        int(at.timestamp() // LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS)
+        * LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS
     )
-    await manager.process_alerts()
-    db.db.query_raw.assert_not_awaited()
-    email.send_key_expiring_email.assert_not_awaited()
+    return f"{KEY_EXPIRY_ALERT_JOB_NAME}:{window_start}"
+
+
+def _pod(db: SimpleNamespace, redis: RedisCache | None, clock: Callable[[], datetime]) -> KeyExpiryAlertManager:
+    return KeyExpiryAlertManager(
+        db,
+        DualCache(),
+        MagicMock(send_key_expiring_email=AsyncMock()),
+        clock,
+        pod_lock_manager=PodLockManager(redis_cache=redis),
+    )
 
 
 @pytest.mark.asyncio
-async def test_only_the_first_pod_to_fire_runs_the_cycle(router_redis: tuple[RedisCache, object]) -> None:
+async def test_another_pod_holding_this_windows_lock_skips_the_scan(router_redis: tuple[RedisCache, object]) -> None:
+    redis, _ = router_redis
+    assert await PodLockManager(redis_cache=redis).acquire_lock(cronjob_id=_window_job(NOW))
+    db: Final = _database((_key(),))
+    await _pod(db, redis, lambda: NOW).process_alerts()
+    db.db.query_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_only_the_first_pod_to_fire_in_a_window_runs_it(router_redis: tuple[RedisCache, object]) -> None:
     redis, _ = router_redis
     first_db: Final = _database((_key(),))
     later_db: Final = _database((_key(),))
-    first: Final = KeyExpiryAlertManager(
-        first_db,
-        DualCache(),
-        MagicMock(send_key_expiring_email=AsyncMock()),
-        lambda: NOW,
-        pod_lock_manager=PodLockManager(redis_cache=redis),
-    )
-    later: Final = KeyExpiryAlertManager(
-        later_db,
-        DualCache(),
-        MagicMock(send_key_expiring_email=AsyncMock()),
-        lambda: NOW,
-        pod_lock_manager=PodLockManager(redis_cache=redis),
-    )
+    first: Final = _pod(first_db, redis, lambda: NOW)
+    later: Final = _pod(later_db, redis, lambda: NOW + timedelta(hours=5))
     await first.process_alerts()
     await later.process_alerts()
     await first.process_alerts()
     assert first_db.db.query_raw.await_count == 1
     later_db.db.query_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_the_same_pod_runs_again_in_the_next_window(router_redis: tuple[RedisCache, object]) -> None:
+    redis, _ = router_redis
+    db: Final = _database((_key(),))
+    times: Final = iter((NOW, NOW + timedelta(seconds=LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS)))
+    current: Final = [NOW]
+
+    def clock() -> datetime:
+        return current[0]
+
+    pod: Final = _pod(db, redis, clock)
+    for at in times:
+        current[0] = at
+        await pod.process_alerts()
+    assert db.db.query_raw.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_failed_scan_frees_the_window_for_another_pod(router_redis: tuple[RedisCache, object]) -> None:
+    redis, _ = router_redis
+    failing_db: Final = _database((_key(),))
+    failing_db.db.query_raw.side_effect = RuntimeError("database unavailable")
+    healthy_db: Final = _database((_key(),))
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await _pod(failing_db, redis, lambda: NOW).process_alerts()
+    await _pod(healthy_db, redis, lambda: NOW + timedelta(minutes=10)).process_alerts()
+    healthy_db.db.query_raw.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_open_redis_circuit_breaker_still_scans_and_sends(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.redis import store_settings
+
+    monkeypatch.setattr(store_settings, "REDIS_CIRCUIT_BREAKER_ENABLED", True)
+    monkeypatch.setattr(store_settings, "REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", 1)
+    unreachable: Final = RedisCache(host="127.0.0.1", port=1, socket_timeout=0.2, db=7)
+    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
+    manager: Final = KeyExpiryAlertManager(
+        _database((_key(),)), DualCache(), email, lambda: NOW, pod_lock_manager=PodLockManager(redis_cache=unreachable)
+    )
+    await manager.process_alerts()
+    assert email.send_key_expiring_email.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -358,10 +409,11 @@ async def test_startup_built_job_waits_for_the_proxy_pod_lock_then_scans_with_th
     manager: Final = ProxyStartupEvent._build_key_expiry_alert_manager()
     assert manager is not None
     other_pod: Final = PodLockManager(redis_cache=redis)
-    assert await other_pod.acquire_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME)
+    window_job: Final = _window_job(datetime.now(timezone.utc))
+    assert await other_pod.acquire_lock(cronjob_id=window_job)
     await manager.process_alerts()
     db.db.query_raw.assert_not_awaited()
-    await other_pod.release_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME)
+    await other_pod.release_lock(cronjob_id=window_job)
     await manager.process_alerts()
     _, start, _, default_end = db.db.query_raw.call_args.args
     assert default_end - start == timedelta(days=7)

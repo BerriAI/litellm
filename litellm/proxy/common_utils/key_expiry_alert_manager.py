@@ -8,6 +8,7 @@ from typing import Final, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._internal_context import with_service_target
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.constants import (
     KEY_EXPIRY_ALERT_JOB_NAME,
     KEY_EXPIRY_ALERT_MAX_DAYS,
@@ -22,11 +23,6 @@ from litellm.repositories.user_repository import UserRepository
 _METADATA: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _ROWS: Final = TypeAdapter(tuple[object, ...])
-# Held for nearly a whole cycle so later-firing pods skip it; it expires before the next cycle's first firer
-# (the weekly spend report lock uses the same interval-minus-an-hour TTL).
-_CYCLE_LOCK_TTL: Final = max(
-    LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS - 3600, LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS // 2
-)
 _EXPIRING_KEYS_SQL: Final = """
 SELECT token, key_alias, key_name, user_id, expires, metadata
 FROM "LiteLLM_VerificationToken"
@@ -98,22 +94,40 @@ class KeyExpiryAlertManager:
         self.pod_lock_manager = pod_lock_manager
 
     async def process_alerts(self) -> None:
-        """Entry point for the scheduled job: one pod runs it per cycle. Each pod's timer fires at its own boot time
-        plus jitter, so the first pod to fire takes the lock for nearly the whole cycle and never releases it; every
-        later pod in that cycle skips. If Redis cannot answer, this pod runs anyway: a skipped cycle can let a key
-        expire unwarned, and the per-key claim still guards each email."""
+        """Entry point for the scheduled job: one pod runs it per clock window of one interval. Pods' timers fire at
+        their own boot time plus jitter, so the lock is named after the window the run falls in (the same
+        int(now // window) * window bucketing as file_usage_caps) and held for the whole window: the first pod to
+        fire in a window runs, every later pod in that window skips, and the next window's lock is a new key. If
+        Redis cannot answer, this pod runs anyway: a skipped window can let a key expire unwarned, and the per-key
+        claim still guards each email."""
         lock: Final = self.pod_lock_manager if self.pod_lock_manager and self.pod_lock_manager.redis_cache else None
         if lock is None or lock.redis_cache is None:
             await self._send_due_alerts()
             return
-        if await lock.acquire_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME, ttl=_CYCLE_LOCK_TTL, allow_reentrant=False):
+        window_start: Final = (
+            int(self.clock().timestamp() // LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS)
+            * LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS
+        )
+        window_job: Final = f"{KEY_EXPIRY_ALERT_JOB_NAME}:{window_start}"
+        if await lock.acquire_lock(
+            cronjob_id=window_job, ttl=LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS, allow_reentrant=False
+        ):
+            try:
+                await self._send_due_alerts()
+            except Exception:
+                await lock.release_lock(cronjob_id=window_job)
+                raise
+            return
+        try:
+            holder: Final = await lock.redis_cache.async_get_cache(  # pyright: ignore[reportUnknownMemberType]  # RedisCache.async_get_cache leaves its key parameter untyped
+                PodLockManager.get_redis_lock_key(window_job)
+            )
+        except RedisCircuitBreakerOpenError:
+            logger.warning("Key expiry alerts: Redis circuit breaker is open, running without the job lock.")
             await self._send_due_alerts()
             return
-        holder: Final = await lock.redis_cache.async_get_cache(  # pyright: ignore[reportUnknownMemberType]  # RedisCache.async_get_cache leaves its key parameter untyped
-            PodLockManager.get_redis_lock_key(KEY_EXPIRY_ALERT_JOB_NAME)
-        )
         if holder is not None:
-            logger.debug("Key expiry alerts: another pod already ran this cycle, skipping.")
+            logger.debug("Key expiry alerts: another pod already ran this window, skipping.")
             return
         logger.warning("Key expiry alerts: could not take the job lock from Redis, running without it.")
         await self._send_due_alerts()
