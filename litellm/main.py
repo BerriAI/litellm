@@ -82,7 +82,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
 )
-from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
     AGENTIC_LOOP_TOOL_CHOICE_KEY,
@@ -1147,6 +1147,16 @@ def _drop_anthropic_only_tool_keys(tools: list[dict[str, object]] | None) -> lis
     if tools is None:
         return None
     return [_without_anthropic_only_tool_keys(tool) if isinstance(tool, dict) else tool for tool in tools]
+
+
+def _replayed_stream_timeout(
+    timeout: float | str | httpx.Timeout | None, request_timeout: object
+) -> float | str | httpx.Timeout | None:
+    if timeout is None or request_timeout is None:
+        return timeout
+    return CompletionTimeout.for_stream(
+        StreamKind.FAKED, CompletionTimeout.as_limit(request_timeout), CompletionTimeout.as_limit(timeout)
+    )
 
 
 def _replayed_stream(
@@ -5708,7 +5718,14 @@ def completion(
 
         ### TIMEOUT LOGIC ###
         timeout = CompletionTimeout.resolve(
-            timeout,
+            _replayed_stream_timeout(
+                timeout,
+                cast("Mapping[str, object]", kwargs).get(  # cast-ok: kwargs is the untyped request dict
+                    "request_timeout"
+                ),
+            )
+            if replays_stream
+            else timeout,
             kwargs,
             custom_llm_provider,
             global_timeout=get_configured_request_timeout(),

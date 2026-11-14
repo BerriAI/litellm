@@ -323,6 +323,61 @@ def test_a_live_responses_stream_keeps_the_stream_timeout_when_fake_stream_is_se
     assert route.calls.last.request.extensions["timeout"]["read"] == 2.0
 
 
+def _router_with_a_bridged_fake_stream() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "bridged",
+                "litellm_params": {
+                    "model": "together_ai/deepseek-ai/DeepSeek-V4.1-Flash",
+                    "api_base": "https://together.test/v1",
+                    "api_key": "fake-key",
+                    "stream_timeout": 2,
+                    "timeout": 600,
+                    "fake_stream": True,
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entrypoint", ["aresponses", "aanthropic_messages"])
+async def test_a_fake_stream_bridged_into_completion_waits_for_the_request_timeout(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, entrypoint: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://together.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_PLAIN_ANSWER)
+    )
+    router: Final = _router_with_a_bridged_fake_stream()
+
+    if entrypoint == "aresponses":
+        await router.aresponses(model="bridged", input="hi", stream=True)
+    else:
+        await router.aanthropic_messages(
+            model="bridged", messages=[{"role": "user", "content": "hi"}], max_tokens=16, stream=True
+        )
+
+    assert route.call_count == 1
+    assert route.calls.last.request.extensions["timeout"]["read"] == 600.0
+
+
+def test_a_sync_fake_stream_bridged_into_completion_waits_for_the_request_timeout(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://together.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_PLAIN_ANSWER)
+    )
+
+    _router_with_a_bridged_fake_stream().responses(model="bridged", input="hi", stream=True)
+
+    assert route.call_count == 1
+    assert route.calls.last.request.extensions["timeout"]["read"] == 600.0
+
+
 @pytest.mark.asyncio
 async def test_bedrock_timeout_preserves_the_provider_timeout_error(
     respx_mock: respx.MockRouter,
