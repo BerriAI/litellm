@@ -5216,6 +5216,40 @@ class TestPriceDataReloadIntegration:
         finally:
             publish(original_model_cost)
 
+    def test_distributed_reload_of_an_unchanged_source_records_the_run_and_serves_the_request_once(self):
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapNotModified
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        proxy_config.model_cost_map_loaded_at = datetime(2024, 1, 1, 1, 0, tzinfo=timezone.utc)
+        frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+            return_value=_reload_schedule_row({}, reload_revision=4)
+        )
+        published = litellm.model_cost
+
+        with (
+            patch(
+                "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map", new_callable=AsyncMock
+            ) as mock_get_map,
+            patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
+        ):
+            mock_get_map.return_value = ModelCostMapNotModified()
+
+            asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+            asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+        assert mock_get_map.call_count == 1
+        assert proxy_config.model_cost_map_applied_revision == 4
+        assert proxy_config.model_cost_map_loaded_at == frozen_now
+        assert mock_prisma.db.litellm_config.update_many.call_args[1] == {
+            "data": {"last_run_at": frozen_now},
+            "where": {"param_name": "model_cost_map_reload_config"},
+        }
+        assert litellm.model_cost is published
+
     def test_distributed_reload_leaves_request_unserved_when_status_write_fails(self):
         """
         A run that never reached the row must not be recorded as served. Adopting the

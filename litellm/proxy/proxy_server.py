@@ -9601,6 +9601,7 @@ class ProxyConfig:
                 return
 
             from litellm.litellm_core_utils.get_model_cost_map import (
+                ModelCostMapNotModified,
                 ModelCostMapReloadUnavailable,
                 refetch_model_cost_map,
             )
@@ -9614,7 +9615,6 @@ class ProxyConfig:
                 )
                 return
 
-            models_count = reload_result.model_count
             self.model_cost_map_loaded_at = current_time
             await record_reload_run(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME, current_time)
             # Adopted last, so neither a failed fetch nor a failed status write is recorded
@@ -9622,7 +9622,12 @@ class ProxyConfig:
             # reporting a run that never landed
             self.model_cost_map_applied_revision = schedule.reload_revision
 
-            verbose_proxy_logger.info("Model cost map reloaded successfully. Models count: %s", models_count)
+            if isinstance(reload_result, ModelCostMapNotModified):
+                verbose_proxy_logger.info("Model cost map is unchanged at its source. Kept the loaded pricing data")
+                return
+            verbose_proxy_logger.info(
+                "Model cost map reloaded successfully. Models count: %s", reload_result.model_count
+            )
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in _check_and_reload_model_cost_map: %s", e)
@@ -22318,6 +22323,7 @@ async def reload_model_cost_map(
 
         # Immediately reload the model cost map in the current pod
         from litellm.litellm_core_utils.get_model_cost_map import (
+            ModelCostMapNotModified,
             ModelCostMapReloadUnavailable,
             get_model_cost_map_provenance,
             refetch_model_cost_map,
@@ -22341,10 +22347,15 @@ async def reload_model_cost_map(
             prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME, current_time
         )
 
-        verbose_proxy_logger.info("Model cost map reloaded successfully in current pod. Models count: %s", models_count)
+        message: Final = (
+            f"Price data is already up to date. {models_count} models loaded."
+            if isinstance(reload_result, ModelCostMapNotModified)
+            else f"Price data reloaded successfully! {models_count} models updated."
+        )
+        verbose_proxy_logger.info("Model cost map reload in current pod: %s", message)
 
         return {
-            "message": f"Price data reloaded successfully! {models_count} models updated.",
+            "message": message,
             "status": "success",
             "models_count": models_count,
             "timestamp": current_time.isoformat(),
