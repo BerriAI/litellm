@@ -52,14 +52,16 @@ HuggingFaceRerankResponseList = list[HuggingFaceRerankResponseItem]
 
 class HuggingFaceRerankConfig(BaseRerankConfig):
     def get_api_base(self, model: str, api_base: str | None) -> str:
-        if api_base is not None:
-            return api_base
-        elif os.getenv("HF_API_BASE") is not None:
-            return os.getenv("HF_API_BASE", "")
-        elif os.getenv("HUGGINGFACE_API_BASE") is not None:
-            return os.getenv("HUGGINGFACE_API_BASE", "")
-        else:
-            return "https://api-inference.huggingface.co"
+        configured_api_base: Final = api_base or os.getenv("HF_API_BASE") or os.getenv("HUGGINGFACE_API_BASE")
+        if configured_api_base:
+            return configured_api_base
+        raise HuggingFaceError(
+            status_code=400,
+            message=(
+                "Hugging Face rerank requires a TEI or Inference Endpoint URL. "
+                "Set api_base, HF_API_BASE, or HUGGINGFACE_API_BASE."
+            ),
+        )
 
     def get_complete_url(
         self,

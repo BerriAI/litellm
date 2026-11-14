@@ -12,7 +12,51 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("api_base", [None, ""])
+async def test_huggingface_rerank_requires_endpoint_before_sending_request(
+    monkeypatch: pytest.MonkeyPatch, sync_mode: bool, api_base: str | None
+) -> None:
+    monkeypatch.delenv("HF_API_BASE", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_API_BASE", raising=False)
+
+    def reject_request(request: httpx.Request) -> httpx.Response:
+        pytest.fail(f"Rerank without an endpoint sent an upstream request to {request.url}")
+
+    transport: Final = httpx.MockTransport(reject_request)
+    if sync_mode:
+        with httpx.Client(transport=transport) as sync_client:
+            with pytest.raises(
+                litellm.BadRequestError, match=r"api_base.*HF_API_BASE.*HUGGINGFACE_API_BASE"
+            ) as sync_error:
+                litellm.rerank(
+                    model="huggingface/BAAI/bge-reranker-base",
+                    query="hello",
+                    documents=["hello", "world"],
+                    api_base=api_base,
+                    client=HTTPHandler(client=sync_client),
+                )
+        assert sync_error.value.status_code == 400
+        return
+
+    async_client: Final = AsyncHTTPHandler(transport=transport)
+    try:
+        with pytest.raises(
+            litellm.BadRequestError, match=r"api_base.*HF_API_BASE.*HUGGINGFACE_API_BASE"
+        ) as async_error:
+            await litellm.arerank(
+                model="huggingface/BAAI/bge-reranker-base",
+                query="hello",
+                documents=["hello", "world"],
+                api_base=api_base,
+                client=async_client,
+            )
+    finally:
+        await async_client.close()
+    assert async_error.value.status_code == 400
 
 
 def assert_response_shape(response, custom_llm_provider):
@@ -56,6 +100,7 @@ def test_basic_rerank_huggingface(mock_sync_post, mock_async_post, sync_mode):
             documents=["hello", "world"],
             top_n=2,
             api_key=api_key,
+            api_base="https://rerank.example.test",
         )
         mock_sync_post.assert_called_once()
     else:
@@ -77,6 +122,7 @@ def test_basic_rerank_huggingface(mock_sync_post, mock_async_post, sync_mode):
                 documents=["hello", "world"],
                 top_n=2,
                 api_key=api_key,
+                api_base="https://rerank.example.test",
             )
         )
         mock_async_post.assert_called_once()
@@ -208,6 +254,7 @@ def test_huggingface_rerank_return_documents(mock_post):
         top_n=2,
         return_documents=True,
         api_key="test_api_key",
+        api_base="https://rerank.example.test",
     )
 
     mock_post.assert_called_once()
@@ -229,7 +276,7 @@ def test_huggingface_rerank_config() -> None:
     config: Final = HuggingFaceRerankConfig()
 
     # Test complete URL generation
-    assert config.get_complete_url(None, "test") == "https://api-inference.huggingface.co/rerank"
+    assert config.get_complete_url("https://rerank.example.test", "test") == "https://rerank.example.test/rerank"
 
     # Test custom API base
     custom_url = config.get_complete_url("https://custom.huggingface.co", "test")
@@ -372,6 +419,7 @@ def test_huggingface_rerank_request_payload(mock_post: MagicMock) -> None:
         query="hello",
         documents=["hello", "world"],
         api_key="test_api_key",
+        api_base="https://rerank.example.test",
         top_n=2,
         return_documents=True,
     )
@@ -380,7 +428,7 @@ def test_huggingface_rerank_request_payload(mock_post: MagicMock) -> None:
 
     # Verify URL
     call_url: Final = mock_post.call_args.kwargs["url"]
-    assert call_url == "https://api-inference.huggingface.co/rerank"
+    assert call_url == "https://rerank.example.test/rerank"
 
     # Verify headers
     headers: Final = mock_post.call_args.kwargs["headers"]
@@ -404,7 +452,20 @@ def test_huggingface_rerank_request_payload(mock_post: MagicMock) -> None:
     assert len(response.results) == 2
 
 
-def test_huggingface_rerank_forwards_truncate_options() -> None:
+@pytest.mark.parametrize(
+    ("api_base", "hf_api_base", "huggingface_api_base"),
+    [
+        ("https://rerank.example.test", "https://hf.example.test", "https://huggingface.example.test"),
+        (None, "https://rerank.example.test", "https://huggingface.example.test"),
+        (None, "", "https://rerank.example.test"),
+        ("https://rerank.example.test/rerank", "", ""),
+    ],
+)
+def test_huggingface_rerank_forwards_truncate_options(
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None, hf_api_base: str, huggingface_api_base: str
+) -> None:
+    monkeypatch.setenv("HF_API_BASE", hf_api_base)
+    monkeypatch.setenv("HUGGINGFACE_API_BASE", huggingface_api_base)
     expected_request: Final = {
         "query": "hello",
         "texts": ["hello", "world"],
@@ -415,7 +476,7 @@ def test_huggingface_rerank_forwards_truncate_options() -> None:
     }
 
     def respond(request: httpx.Request) -> httpx.Response:
-        assert request.url == "https://api-inference.huggingface.co/rerank"
+        assert request.url == "https://rerank.example.test/rerank"
         assert request.headers["Authorization"] == "Bearer test_api_key"
         assert json.loads(request.content) == expected_request
         return httpx.Response(200, json=[{"index": 0, "score": 0.9}])
@@ -426,6 +487,7 @@ def test_huggingface_rerank_forwards_truncate_options() -> None:
             query="hello",
             documents=["hello", "world"],
             api_key="test_api_key",
+            api_base=api_base,
             return_documents=False,
             truncate=True,
             truncation_direction="Left",
