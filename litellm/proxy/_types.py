@@ -3643,6 +3643,11 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     tool_choice: Annotated[JsonValue, WrapValidator(_none_when_invalid)] = None
     additional_drop_params: Annotated[JsonValue, WrapValidator(_none_when_invalid)] = None
     system: Any | None = None
+    thinking: JsonValue = None
+    reasoning_effort: JsonValue = None
+    parallel_tool_calls: JsonValue = None
+    response_format: JsonValue = None
+    web_search_options: JsonValue = None
 
 
 from litellm.types.integrations.slack_alerting import CallInfo as CallInfo  # noqa: E402, PLC0414  # public re-export

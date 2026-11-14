@@ -91,6 +91,7 @@ from .llms.openai import (
     AllMessageValues,
     Batch,
     ChatCompletionAnnotation,
+    ChatCompletionAudioDelta,
     ChatCompletionReasoningItem,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
@@ -1669,7 +1670,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         role: str | None
         function_call: FunctionCall | None
         tool_calls: list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
-        audio: ChatCompletionAudioResponse | None
+        audio: ChatCompletionAudioResponse | ChatCompletionAudioDelta | None
         images: list[ImageURLListItem] | None
         annotations: list[ChatCompletionAnnotation] | None
 
@@ -1684,7 +1685,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         role=None,
         function_call=None,
         tool_calls=None,
-        audio: ChatCompletionAudioResponse | None = None,
+        audio: ChatCompletionAudioResponse | ChatCompletionAudioDelta | None = None,
         images: list[ImageURLListItem] | None = None,
         reasoning_content: str | None = None,
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None,

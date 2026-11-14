@@ -15345,6 +15345,7 @@ async def run_thread(
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
 from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
+from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, without_dropped_paths
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
@@ -15361,8 +15362,10 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.responses.litellm_completion_transformation.count_request import (
+    COUNTED_CHAT_PARAMS,
     ChatCountBridgeError,
     chat_count_request,
+    counted_chat_params,
     with_provider_file_ids,
 )
 
@@ -15475,17 +15478,29 @@ async def _with_resolved_credentials(deployment: Mapping[str, object] | None) ->
 
 
 _DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_COUNT_OPTION_DEFAULTS: Final = TypeAdapter(Mapping[str, JsonValue])
+_REQUEST_DROP_SETTINGS: Final = ("drop_params", "additional_drop_params")
 
 
-def _deployment_with_request_drop_params(
+def _count_options_with_defaults(
+    count_options: Mapping[str, JsonValue], defaults: Mapping[str, object], additional_drop_params: object
+) -> Mapping[str, JsonValue]:
+    default_options: Final = _COUNT_OPTION_DEFAULTS.validate_python(
+        {name: defaults[name] for name in COUNT_TOKEN_OPTION_NAMES if defaults.get(name) is not None}
+    )
+    return MappingProxyType(without_dropped_paths({**default_options, **count_options}, additional_drop_params))
+
+
+def _deployment_with_request_drop_settings(
     deployment: dict[str, object] | None,  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    drop_params: object,
+    sent_params: Mapping[str, object],
 ) -> dict[str, object] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    if drop_params is None:
+    overrides: Final = {name: sent_params[name] for name in _REQUEST_DROP_SETTINGS if sent_params.get(name) is not None}
+    if not overrides:
         return deployment
     resolved_deployment: Final = deployment or {}
     litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
-    return {**resolved_deployment, "litellm_params": {**litellm_params, "drop_params": drop_params}}
+    return {**resolved_deployment, "litellm_params": {**litellm_params, **overrides}}
 
 
 def _counted_request_messages(
@@ -15515,6 +15530,7 @@ async def _try_provider_token_count(
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
     chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    count_options: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Attempt provider-specific token counting. Returns None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -15542,6 +15558,7 @@ async def _try_provider_token_count(
             output_format=output_format,
             context_management=context_management,
             chat_params=chat_params,
+            count_options=count_options,
         )
     except httpx.HTTPStatusError as e:
         return ProviderCountFailure(
@@ -15580,7 +15597,7 @@ async def _provider_token_count(
     request_model: str,
     settings: TokenCountSettings,
     local_estimate_allowed: bool,
-    forwarded_edits: bool = False,
+    forwards_request_fields: bool = False,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Count with the provider, using the token_count_model in its region when one is set.
 
@@ -15604,7 +15621,7 @@ async def _provider_token_count(
     pinned_count_model: Final = None if count_model is None or count_model.region is None else count_model
     region_hint: Final = (
         None
-        if pinned_count_model is None or (forwarded_edits and counted.status_code == 400)
+        if pinned_count_model is None or (forwards_request_fields and counted.status_code == 400)
         else f"This model counts tokens with {pinned_count_model.model} in {pinned_count_model.region}. "
         "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
     )
@@ -16248,6 +16265,7 @@ async def count_request_tokens(
     responses_request: Mapping[str, object] | None = None,
     litellm_call_id: str | None = None,
     client_oauth_token: str | None = None,
+    count_options: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> TokenCountResponse:
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     if request.prompt is None and request.messages is None and request.contents is None:
@@ -16267,6 +16285,7 @@ async def count_request_tokens(
         request_litellm_params=request_litellm_params,
         responses_request=responses_request,
         client_oauth_token=client_oauth_token,
+        count_options=count_options,
     )
     return await logged_token_count(
         _with_anthropic_content_errors(count) if messages_format == "anthropic" else count,
@@ -16313,6 +16332,7 @@ async def _count_request_tokens(
     request_litellm_params: Mapping[str, JsonValue],
     responses_request: Mapping[str, object] | None,
     client_oauth_token: str | None,
+    count_options: Mapping[str, JsonValue],
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -16359,7 +16379,11 @@ async def _count_request_tokens(
             model_to_use = _model
 
     sent_params: Final[Mapping[str, object]] = {**_router_default_litellm_params(llm_router), **request_litellm_params}
-    count_deployment: Final = _deployment_with_request_drop_params(deployment, sent_params.get("drop_params"))
+    count_deployment: Final = _deployment_with_request_drop_settings(deployment, sent_params)
+    count_litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(
+        (count_deployment or {}).get("litellm_params") or {}
+    )
+    deployment_defaults: Final = {**count_litellm_params, **_router_default_litellm_params(llm_router)}
     conversation_empty: Final = not messages and not contents
     if prompt and not conversation_empty and not deployment_drops_params(count_deployment):
         raise ProxyException(
@@ -16427,10 +16451,26 @@ async def _count_request_tokens(
             _deployment_api_base(deployment_view, routed_request),
             routed_request,
             _count_drop_policy(routed_deployment, routed_request),
+            deployment_params=deployment_defaults,
         )
     )
     if isinstance(chat_count, ChatCountBridgeError):
         raise ProxyException(message=chat_count.message, type="invalid_request_error", param=None, code=400)
+    chat_params: Final[Mapping[str, JsonValue]] = (
+        chat_count.params
+        if chat_count is not None
+        else counted_chat_params(
+            request.model_dump(include=set(COUNTED_CHAT_PARAMS), exclude_none=True),
+            deployment_defaults,
+            (),
+            drop_policy(count_litellm_params),
+        )
+        if messages_format == "openai"
+        else MappingProxyType({})
+    )
+    forwarded_count_options: Final = _count_options_with_defaults(
+        count_options, deployment_defaults, count_litellm_params.get("additional_drop_params")
+    )
     ladder: Final = (
         None
         if provider_counter is None
@@ -16461,13 +16501,15 @@ async def _count_request_tokens(
                 messages_format=messages_format,
                 output_format=output_format,
                 context_management=None if edited_request is not None else context_edits,
-                chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
+                chat_params=chat_params,
+                count_options=forwarded_count_options,
             ),
             model_to_use=model_to_use,
             request_model=request.model,
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
-            forwarded_edits=context_edits is not None and edited_request is None,
+            forwards_request_fields=(context_edits is not None and edited_request is None)
+            or bool(forwarded_count_options),
         )
     )
     if isinstance(ladder, TokenCountResponse):
