@@ -114,6 +114,26 @@ def test_gpt_image_edit_falls_back_to_entra_token(monkeypatch: pytest.MonkeyPatc
     assert headers == {"Authorization": "Bearer entra-token"}
 
 
+@pytest.mark.parametrize("process_wide_key", ["AZURE_AI_API_KEY", "litellm.api_key"])
+def test_gpt_image_edit_uses_the_entry_entra_token_over_a_process_wide_key(
+    monkeypatch: pytest.MonkeyPatch, no_ambient_azure_credentials: None, process_wide_key: str
+):
+    if process_wide_key == "AZURE_AI_API_KEY":
+        monkeypatch.setenv("AZURE_AI_API_KEY", "process-wide-key")
+        monkeypatch.setattr(litellm, "api_key", None)
+    else:
+        monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+        monkeypatch.setattr(litellm, "api_key", "process-wide-key")
+
+    headers: Final = AzureFoundryGPTImageEditConfig().validate_environment(
+        {},
+        "gpt-image-2.5-flare",
+        litellm_params={"azure_ad_token": "entra-token"},
+    )
+
+    assert headers == {"Authorization": "Bearer entra-token"}
+
+
 def test_gpt_image_edit_strips_model_from_deployment_multipart():
     data: Final = AzureFoundryGPTImageEditConfig().finalize_image_edit_request_data(
         {"model": "gpt-image-2.5-flare", "prompt": "Add a hat"},

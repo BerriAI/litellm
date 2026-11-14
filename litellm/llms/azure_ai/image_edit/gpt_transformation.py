@@ -35,7 +35,7 @@ class AzureFoundryGPTImageEditConfig(AzureImageEditConfig):
         return {
             **headers,
             **get_azure_ai_auth_headers(
-                api_key=AzureFoundryModelInfo.get_api_key(params.api_key or api_key),
+                api_key=AzureFoundryModelInfo.get_api_key(params.api_key or api_key, litellm_params),
                 litellm_params=litellm_params,
                 api_key_header="api-key",
             ),
