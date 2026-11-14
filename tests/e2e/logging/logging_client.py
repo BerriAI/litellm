@@ -18,10 +18,11 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Callable, Literal
+from datetime import datetime, timedelta, timezone
+from typing import Callable, Final, Literal
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, settle_propagation
 from e2e_metadata import step
@@ -124,21 +125,37 @@ class CreateGuardrailResponse(BaseModel):
     guardrail_name: str | None = None
 
 
+_LANGFUSE_JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
 class LangfuseObservation(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="ignore", populate_by_name=True, frozen=True)
 
     id: str
     trace_id: str | None = Field(default=None, alias="traceId")
     name: str | None = None
     type: str | None = None
-    calculated_total_cost: float | None = Field(default=None, alias="calculatedTotalCost")
+    calculated_total_cost: float | None = Field(
+        default=None, validation_alias=AliasChoices("totalCost", "calculatedTotalCost")
+    )
     level: str | None = None
-    input: object | None = None
-    output: object | None = None
-    metadata: object | None = None
+    input: JsonValue = None
+    output: JsonValue = None
+    metadata: JsonValue = None
     usage: object | None = None
     usage_details: object | None = Field(default=None, alias="usageDetails")
     model: str | None = None
+
+
+    @field_validator("input", "output", "metadata", mode="before")
+    @classmethod
+    def decode_json_fields(cls, value: object) -> JsonValue:
+        if not isinstance(value, str):
+            return _LANGFUSE_JSON.validate_python(value)
+        try:
+            return _LANGFUSE_JSON.validate_json(value)
+        except ValidationError:
+            return value
 
 
 class LangfuseObservationList(BaseModel):
@@ -147,19 +164,18 @@ class LangfuseObservationList(BaseModel):
     data: list[LangfuseObservation] = []
 
 
-class LangfuseOtelMetadata(BaseModel):
-    """Langfuse stores every OTel span attribute under metadata.attributes."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    attributes: dict[str, str] = {}
+_FLATTENED_ATTRIBUTE_PREFIX: Final = "attributes."
 
 
-def otel_attributes(obs: LangfuseObservation) -> dict[str, str]:
-    try:
-        return LangfuseOtelMetadata.model_validate(obs.metadata).attributes
-    except ValidationError:
-        return {}
+def otel_attributes(obs: LangfuseObservation) -> dict[str, JsonValue]:
+    metadata: Final = obs.metadata if isinstance(obs.metadata, dict) else {}
+    nested: Final = metadata.get("attributes")
+    flattened: Final = {
+        key.removeprefix(_FLATTENED_ATTRIBUTE_PREFIX): value
+        for key, value in metadata.items()
+        if key.startswith(_FLATTENED_ATTRIBUTE_PREFIX)
+    }
+    return (nested if isinstance(nested, dict) else {}) | flattened
 
 
 def is_otel_v2_generation(obs: LangfuseObservation, *, key_alias: str) -> bool:
@@ -171,12 +187,15 @@ def is_otel_v2_generation(obs: LangfuseObservation, *, key_alias: str) -> bool:
 
 
 class LangfuseListParams(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
 
     limit: int = 100
     trace_id: str | None = Field(default=None, alias="traceId")
     name: str | None = None
-    from_start_time: str | None = Field(default=None, alias="fromStartTime")
+    from_start_time: str = Field(alias="fromStartTime")
+    to_start_time: str = Field(alias="toStartTime")
+    fields: str = "core,basic,io,metadata,model,usage"
+    expand_metadata: str = Field(default="attributes", alias="expandMetadata")
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,45 +230,6 @@ class LangfuseCreds:
                 )
             ]
         )
-
-
-@dataclass(frozen=True, slots=True)
-class WeaveCreds:
-    """Weights & Biases Weave credentials for a key-scoped ``weave_otel`` callback.
-
-    The proxy still needs WANDB_API_KEY / WANDB_PROJECT_ID in its own environment:
-    the weave_otel logger is constructed from those before the per-key vars are
-    applied, so a key-scoped callback on a proxy without them never initializes.
-    The per-key vars are what direct THIS key's spans at this project.
-    """
-
-    api_key: str
-    project_id: str
-
-    def key_logging_metadata(self) -> KeyMetadata:
-        return KeyMetadata(
-            logging=[
-                KeyLoggingCallback(
-                    callback_name="weave_otel",
-                    callback_type="success_and_failure",
-                    callback_vars=KeyLoggingCallbackVars(
-                        wandb_api_key=self.api_key,
-                        weave_project_id=self.project_id,
-                    ),
-                )
-            ]
-        )
-
-
-def load_weave_creds() -> WeaveCreds:
-    api_key = os.getenv("WANDB_API_KEY")
-    project_id = (os.getenv("WEAVE_PROJECT_ID") or os.getenv("WANDB_PROJECT_ID") or "").strip()
-    if not (api_key and project_id):
-        pytest.fail(
-            "Weave e2e requires WANDB_API_KEY and WEAVE_PROJECT_ID (or WANDB_PROJECT_ID, "
-            "format <entity>/<project>); missing credentials is a hard failure, not a skip"
-        )
-    return WeaveCreds(api_key=api_key, project_id=project_id)
 
 
 def load_langfuse_creds() -> LangfuseCreds:
@@ -619,14 +599,16 @@ class LoggingClient:
         name: str | None = None,
         from_start_time: str | None = None,
     ) -> list[LangfuseObservation]:
-        result = get(
-            URL(f"{creds.host}/api/public/observations"),
+        now: Final = datetime.now(timezone.utc)
+        result: Final = get(
+            URL(f"{creds.host}/api/public/v2/observations"),
             headers=creds.auth_headers,
             params=LangfuseListParams(
                 limit=100,
                 traceId=trace_id,
                 name=name,
-                fromStartTime=from_start_time,
+                fromStartTime=from_start_time or (now - timedelta(minutes=15)).isoformat(),
+                toStartTime=now.isoformat(),
             ),
             response_type=LangfuseObservationList,
             timeout=30.0,

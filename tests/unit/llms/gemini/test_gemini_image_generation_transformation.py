@@ -294,7 +294,7 @@ def test_gemini_image_generation_preserves_tool_config_side_effect():
     }
 
 
-def test_gemini_image_generation_usage_without_output_details_treats_output_as_image():
+def test_gemini_image_generation_preserves_unspecified_output_modality():
     config = GoogleImageGenConfig()
     raw_response = httpx.Response(
         status_code=200,
@@ -334,8 +334,8 @@ def test_gemini_image_generation_usage_without_output_details_treats_output_as_i
     )
 
     usage = result.model_dump()["usage"]
-    assert usage["completion_tokens_details"]["text_tokens"] == 0
-    assert usage["completion_tokens_details"]["image_tokens"] == 1716
+    assert usage["completion_tokens_details"] == {}
+    assert usage["output_tokens"] == 1716
 
 
 def test_gemini_image_generation_response_tracks_web_search_requests():

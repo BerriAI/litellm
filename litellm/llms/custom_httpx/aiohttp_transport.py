@@ -110,6 +110,15 @@ def map_aiohttp_exceptions() -> Generator[None, None, None]:
         raise mapped_exc(message) from exc
 
 
+def _unread_payload(content: object) -> bytes:
+    """Bytes the upstream sent before the connection dropped that aiohttp buffered but never handed out, since its
+    reads raise the stored payload error ahead of the buffer."""
+    if not isinstance(content, aiohttp.StreamReader):
+        return b""
+    buffered: Final = b"".join(content._buffer)  # pyright: ignore[reportPrivateUsage]  # no public read drains it
+    return buffered[content._buffer_offset :]  # pyright: ignore[reportPrivateUsage]  # see above
+
+
 def _release_transport_anchor(_transport: object) -> None:
     """Release a transport anchored to a response stream. See ``_anchor_transport_to``."""
 
@@ -128,6 +137,13 @@ def _anchor_transport_to(stream: "AiohttpResponseStream", transport: object) -> 
     weakref.finalize(stream, _release_transport_anchor, transport)
 
 
+def _abort_unreleased_connection(response: ClientResponse) -> None:
+    connection: Final = response.connection
+    transport: Final = None if connection is None else connection.transport
+    if transport is not None:
+        transport.abort()
+
+
 class AiohttpResponseStream(httpx.AsyncByteStream):
     CHUNK_SIZE = 1024 * 16
 
@@ -144,6 +160,12 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             raise httpx.ReadError(str(e)) from e
         except aiohttp.http_exceptions.TransferEncodingError as e:
             raise httpx.ReadError(str(e)) from e
+        except aiohttp.ClientPayloadError:
+            unread: Final = _unread_payload(self._aiohttp_response.content)
+            if unread:
+                yield unread
+            with map_aiohttp_exceptions():
+                raise
         except Exception:
             # For other exceptions, use the normal mapping
             with map_aiohttp_exceptions():
@@ -157,9 +179,11 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             # until the proxy is restarted, even after the backend recovers.
             # On a fully-read response the connection was already released
             # at EOF and close() is a no-op.
+            _abort_unreleased_connection(self._aiohttp_response)
             self._aiohttp_response.close()
 
     async def aclose(self) -> None:
+        _abort_unreleased_connection(self._aiohttp_response)
         with map_aiohttp_exceptions():
             await self._aiohttp_response.__aexit__(None, None, None)
 

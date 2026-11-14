@@ -9,7 +9,7 @@ from litellm.llms.azure_ai.rerank.transformation import AzureAIRerankConfig
 class TestAzureAIRerankConfigGetCompleteUrl:
     def setup_method(self):
         self.config = AzureAIRerankConfig()
-        self.model = "azure_ai/cohere-rerank-v3-english"
+        self.model = "azure_ai/cohere-rerank-v4.0-pro"
 
     def test_api_base_required(self):
         with pytest.raises(ValueError, match='Azure AI API Base is required\\. api_base=None\\. Set in') as exc_info:
@@ -99,7 +99,7 @@ class TestAzureAIRerankConfigValidateEnvironment:
     def test_uses_api_key_when_set(self):
         headers = AzureAIRerankConfig().validate_environment(
             headers={},
-            model="azure_ai/cohere-rerank-v3-english",
+            model="azure_ai/cohere-rerank-v4.0-pro",
             api_key="my-key",
         )
 
@@ -111,7 +111,7 @@ class TestAzureAIRerankConfigValidateEnvironment:
 
         headers = AzureAIRerankConfig().validate_environment(
             headers={},
-            model="azure_ai/cohere-rerank-v3-english",
+            model="azure_ai/cohere-rerank-v4.0-pro",
             litellm_params={"azure_ad_token": "entra-token"},
         )
 

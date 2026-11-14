@@ -4,8 +4,8 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.secret_managers.main import get_secret_str
 
 SUPPORTED_OPENAI_PARAMS: Final = (

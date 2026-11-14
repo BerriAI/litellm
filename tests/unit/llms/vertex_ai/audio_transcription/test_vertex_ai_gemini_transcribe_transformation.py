@@ -1,9 +1,12 @@
 import base64
 import json
 import os
+from types import MappingProxyType
+from typing import Final, Literal, cast
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.llms.vertex_ai.audio_transcription.gemini_transcribe_transformation import (
@@ -13,6 +16,7 @@ from litellm.llms.vertex_ai.audio_transcription.transformation import (
     VertexAIAudioTranscriptionConfig,
 )
 from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import LlmProviders, TranscriptionUsageTokensObject
 from litellm.utils import ProviderConfigManager, get_optional_params_transcription
 
@@ -255,6 +259,20 @@ class TestTransformResponse:
         with pytest.raises(VertexAIError, match="non-JSON"):
             config.transform_audio_transcription_response(raw_response)
 
+    def test_non_json_error_omits_response_body(self, config):
+        raw_response = httpx.Response(status_code=200, text='{"candidates": [{"content": {"parts": [{"text": "sensitive')
+        with pytest.raises(VertexAIError) as excinfo:
+            config.transform_audio_transcription_response(raw_response)
+        assert "sensitive" not in str(excinfo.value)
+
+    def test_field_of_unexpected_type_omits_response_body(self, config):
+        raw_response = httpx.Response(
+            status_code=200, json={"candidates": [{"content": {"parts": "sensitive transcript"}}]}
+        )
+        with pytest.raises(ValidationError) as excinfo:
+            config.transform_audio_transcription_response(raw_response)
+        assert "sensitive" not in str(excinfo.value)
+
 
 class TestValidateEnvironment:
     def test_sets_oauth_headers(self):
@@ -309,3 +327,72 @@ class TestOptionalParams:
 
 class TestModelCostEntry:
     REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
+
+
+_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
+_IDENTITY: Final = MappingProxyType({"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"})
+_PROXY_METADATA: Final = MappingProxyType({**_IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})
+
+
+def _transcription_request_body() -> dict[str, object]:
+    data: Final = (
+        VertexGeminiAudioTranscriptionConfig()
+        .transform_audio_transcription_request(
+            model="gemini-3.5-transcribe-preview",
+            audio_file=AUDIO_BYTES,
+            optional_params={"language": "en"},
+            litellm_params={"metadata": dict(_PROXY_METADATA)},
+        )
+        .data
+    )
+    assert isinstance(data, dict)
+    return data
+
+
+def test_gemini_transcription_carries_identity_labels_only_while_the_setting_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _transcription_request_body()
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _transcription_request_body()
+
+    assert "labels" not in setting_off
+    assert {key: value for key, value in setting_on.items() if key != "labels"} == setting_off
+    assert setting_on["labels"] == {**_IDENTITY, "cost-center": "cc-1"}
+    assert list(cast(dict[str, str], setting_on["labels"])) == [*_IDENTITY, "cost-center"]
+
+
+class _TokenStubbedConfig(VertexGeminiAudioTranscriptionConfig):
+    def _ensure_access_token(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    ) -> tuple[str, str]:
+        return "fake-token", "resolved-project"
+
+
+def _transcription_headers(caller_headers: dict[str, str]) -> dict[str, str]:
+    return _TokenStubbedConfig().validate_environment(
+        headers=caller_headers,
+        model="gemini-3.5-transcribe-preview",
+        messages=[],
+        optional_params={},
+        litellm_params={"vertex_project": "resolved-project"},
+    )
+
+
+def test_gemini_transcription_drops_a_caller_labels_header_only_while_the_setting_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    forged: Final = base64.b64encode(json.dumps({"user_api_key_team_alias": "forged"}).encode()).decode()
+    caller_headers: Final = {"X-Vertex-AI-Labels": forged, "x-trace-id": "t-1"}
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _transcription_headers(caller_headers)
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _transcription_headers(caller_headers)
+
+    assert setting_off["X-Vertex-AI-Labels"] == forged
+    assert "X-Vertex-AI-Labels" not in setting_on
+    assert setting_on["x-trace-id"] == "t-1"
