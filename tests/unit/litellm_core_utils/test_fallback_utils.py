@@ -5,6 +5,7 @@ import contextlib
 import json
 import pathlib
 import threading
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final, NoReturn
 
@@ -28,7 +29,7 @@ from litellm.main import acompletion as python_acompletion
 from litellm.main import completion as python_completion
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-from litellm.types.utils import CallTypesLiteral, Choices, CredentialItem, LLMResponseTypes, Message, ModelResponse
+from litellm.types.utils import CallTypes, CallTypesLiteral, Choices, CredentialItem, LLMResponseTypes, Message, ModelResponse
 from litellm.vector_stores.vector_store_registry import LiteLLM_ManagedVectorStore, VectorStoreRegistry
 
 LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
@@ -849,6 +850,94 @@ async def test_acompletion_with_empty_per_call_fallbacks_logs_one_success(
     await _flush_success_logs()
 
     assert recorder.models == ["first"]
+
+
+class _EverySuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[tuple[str, object]] = []
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.events.append(("sync", kwargs.get("model")))
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.events.append(("async", kwargs.get("model")))
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.asyncio
+async def test_atext_completion_through_the_global_model_fallbacks_logs_one_success(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder: Final = _EverySuccessRecorder()
+    logging_executor: Final = ThreadPoolExecutor(max_workers=2)
+    monkeypatch.setattr(litellm.utils, "executor", logging_executor)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/second"])
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    chat_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=_replies(("fallback answer",))
+    )
+    text_route: Final = respx_mock.post("https://api.openai.com/v1/completions").mock(
+        side_effect=(_model_unavailable(),)
+    )
+
+    response: Final = await litellm.atext_completion(model="openai/first", prompt="hello")
+    await _flush_success_logs()
+    logging_executor.shutdown(wait=True)
+
+    assert response.choices[0].text == "fallback answer"
+    assert _requested_models(text_route) == ("first",)
+    assert _requested_models(chat_route) == ("second",)
+    assert len(recorder.events) == 1
+
+
+class _DeploymentAttemptRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts: list[tuple[str, object]] = []
+
+    async def async_post_call_failure_deployment_hook(
+        self,
+        request_data: Mapping[str, object],
+        exception: Exception,
+        call_type: CallTypes | None,
+        fallback_depth: int | None = None,
+    ) -> None:
+        self.attempts.append(("failure", request_data.get("model")))
+
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: LLMResponseTypes, call_type: CallTypes | None
+    ) -> LLMResponseTypes | None:
+        self.attempts.append(("success", request_data.get("model")))
+        return response
+
+
+@pytest.mark.timeout(30, method="thread")
+def test_completion_with_fallbacks_reports_every_attempt_to_the_deployment_hooks_in_order(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder: Final = _DeploymentAttemptRecorder()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=_replies((None, None, "third answer"))
+    )
+
+    response: Final = python_completion(
+        model="openai/first",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        fallbacks=["openai/second", "openai/third"],
+    )
+
+    assert response.choices[0].message.content == "third answer"
+    assert recorder.attempts == [("failure", "openai/first"), ("failure", "openai/second"), ("success", "openai/third")]
 
 
 CREDENTIAL_ROUTES: Final = (

@@ -187,14 +187,26 @@ async def async_completion_with_fallbacks(**kwargs: object) -> object:
         raise _all_attempts_failed(last_error) from last_error
 
 
+def _is_fallback_attempt(request_kwargs: Mapping[str, object], call_type: str) -> bool:
+    return call_type == CallTypes.completion.value and request_kwargs.get(FALLBACK_ATTEMPT_KWARG) is True
+
+
 def checked_fallback_attempt(request_kwargs: Mapping[str, object], call_type: str, response: object) -> object:
-    if call_type != CallTypes.completion.value or request_kwargs.get(FALLBACK_ATTEMPT_KWARG) is not True:
+    if not _is_fallback_attempt(request_kwargs, call_type):
         return response
     from litellm.utils import async_post_call_success_deployment_hook
 
     return run_async_function(
         async_post_call_success_deployment_hook, request_kwargs, response, CallTypes.completion, include_v2=True
     )
+
+
+def report_failed_sync_fallback_attempt(request_kwargs: Mapping[str, object], call_type: str, error: Exception) -> None:
+    if not _is_fallback_attempt(request_kwargs, call_type) or request_kwargs.get("acompletion") is True:
+        return
+    from litellm.utils import async_post_call_failure_deployment_hook
+
+    run_async_function(async_post_call_failure_deployment_hook, request_kwargs, error, call_type, include_v2=True)
 
 
 def _completion_with_pre_call_hooks(request_kwargs: Mapping[str, object]) -> object:

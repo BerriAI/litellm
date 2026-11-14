@@ -105,7 +105,12 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
-from litellm.litellm_core_utils.fallback_utils import checked_fallback_attempt, uses_fallbacks
+from litellm.litellm_core_utils.fallback_utils import (
+    checked_fallback_attempt,
+    report_failed_sync_fallback_attempt,
+    uses_fallbacks,
+    without_global_fallbacks,
+)
 from litellm.litellm_core_utils.get_model_cost_map import (
     GetModelCostMap,
     fetch_registration_document,
@@ -2360,7 +2365,11 @@ def client(original_function):
 
             clamp_max_tokens(model, args, kwargs, call_type)
             # MODEL CALL
-            result = original_function(*args, **kwargs)
+            try:
+                result = original_function(*args, **kwargs)
+            except Exception as deployment_error:
+                report_failed_sync_fallback_attempt(kwargs, call_type, deployment_error)
+                raise
             end_time = datetime.datetime.now()
             if _returns_requested_stream(kwargs, call_type, result) or _is_converted_stream_result(result):
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
@@ -8503,7 +8512,8 @@ def check_valid_key(model: str, api_key: str):
     """
     messages: Final = [{"role": "user", "content": "Hey, how's it going?"}]
     try:
-        litellm.completion(model=model, messages=messages, api_key=api_key, max_tokens=10)
+        with without_global_fallbacks():
+            litellm.completion(model=model, messages=messages, api_key=api_key, max_tokens=10)
         return True
     except AuthenticationError:
         return False

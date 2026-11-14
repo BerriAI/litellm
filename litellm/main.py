@@ -5912,7 +5912,10 @@ def completion(
         routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
         fallbacks: Final = resolve_fallbacks(routing_kwargs)
         if fallbacks is not None:
-            return completion_with_fallbacks(  # pyright: ignore[reportReturnType]  # fallback runner is untyped; resolves to ModelResponse|CustomStreamWrapper at runtime
+            fallback_runner: Final = (
+                async_completion_with_fallbacks if acompletion is True else completion_with_fallbacks
+            )
+            return fallback_runner(  # pyright: ignore[reportReturnType]  # fallback runner is untyped; resolves to ModelResponse|CustomStreamWrapper (or its coroutine) at runtime
                 **{**args, "kwargs": {**kwargs, "fallbacks": fallbacks}}
             )
         if model_list is not None:
