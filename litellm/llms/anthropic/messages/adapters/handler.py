@@ -48,6 +48,7 @@ from litellm.llms.anthropic.messages.safeguards import (
     with_safeguard_results,
 )
 from litellm.llms.anthropic.messages.utils import (
+    KNOWN_REASONING_EFFORTS,
     REASONING_EFFORT_OFF,
     RESPONSES_API_PROVIDERS,
     ProxySubCallLoggingKwargs,
@@ -690,10 +691,26 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         return True
 
     @staticmethod
-    def _drops_unconfirmed_client_none(completion_kwargs: _CompletionKwargs) -> bool:
+    def _client_effort(completion_kwargs: _CompletionKwargs) -> object:
         reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
         effort_options: Final = as_str_mapping(reasoning_effort)
-        effort: Final = reasoning_effort if effort_options is None else effort_options.get("effort")
+        return reasoning_effort if effort_options is None else effort_options.get("effort")
+
+    @staticmethod
+    def _drops_unknown_client_effort(completion_kwargs: _CompletionKwargs) -> bool:
+        effort: Final = LiteLLMMessagesToCompletionTransformationHandler._client_effort(completion_kwargs)
+        if not isinstance(effort, str) or effort in KNOWN_REASONING_EFFORTS:
+            return False
+        verbose_logger.warning(
+            "Dropping reasoning_effort=%r for %s, no reasoning API defines it, because drop_params is set",
+            effort,
+            completion_kwargs.get("model", ""),
+        )
+        return True
+
+    @staticmethod
+    def _drops_unconfirmed_client_none(completion_kwargs: _CompletionKwargs) -> bool:
+        effort: Final = LiteLLMMessagesToCompletionTransformationHandler._client_effort(completion_kwargs)
         model: Final = completion_kwargs.get("model", "")
         if not is_unconfirmed_none(
             effort,
@@ -904,7 +921,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             drop_params
             and target_provider in RESPONSES_API_PROVIDERS
             and "reasoning_effort" in openai_request
-            and LiteLLMMessagesToCompletionTransformationHandler._drops_unconfirmed_client_none(completion_kwargs)
+            and (
+                LiteLLMMessagesToCompletionTransformationHandler._drops_unknown_client_effort(completion_kwargs)
+                or LiteLLMMessagesToCompletionTransformationHandler._drops_unconfirmed_client_none(completion_kwargs)
+            )
         ):
             del completion_kwargs["reasoning_effort"]
 

@@ -706,6 +706,44 @@ class TestAnOpenAIChatRouteRequestGetsTheResponsesBridgeThinkingControls:
 
         assert sent["reasoning_effort"] == "low"
 
+    def test_a_bare_output_effort_stays_off_a_model_whose_chat_config_takes_no_reasoning_effort(
+        self, local_model_cost_map: None
+    ) -> None:
+        assert "reasoning_effort" not in (
+            litellm.get_supported_openai_params(model="chat-latest", custom_llm_provider="openai") or ()
+        )
+
+        sent: Final = _chat_completion_kwargs(
+            "openai/chat-latest", "openai", thinking=None, messages=MESSAGES, output_config={"effort": "medium"}
+        )
+
+        assert "reasoning_effort" not in sent
+
+    @pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+    @pytest.mark.parametrize(
+        "thinking, reasoning_effort",
+        [(None, None), ({"type": "adaptive"}, None), ({"type": "adaptive"}, "low")],
+        ids=["bare-effort", "adaptive", "adaptive-over-a-pinned-effort"],
+    )
+    def test_an_effort_no_reasoning_api_defines_is_dropped_only_under_drop_params(
+        self,
+        local_model_cost_map: None,
+        drop_params: bool,
+        thinking: dict[str, object] | None,
+        reasoning_effort: str | None,
+    ) -> None:
+        sent: Final = _chat_completion_kwargs(
+            "openai/gpt-5-mini",
+            "openai",
+            thinking=thinking,
+            messages=MESSAGES,
+            output_config={"effort": "turbo"},
+            reasoning_effort=reasoning_effort,
+            drop_params=drop_params,
+        )
+
+        assert sent.get("reasoning_effort") == (None if drop_params else "turbo")
+
     @pytest.mark.parametrize("model, provider", OTHER_PROVIDER_CHAT_TARGETS)
     @pytest.mark.parametrize(
         "thinking, messages",
