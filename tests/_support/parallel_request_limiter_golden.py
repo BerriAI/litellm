@@ -1,7 +1,6 @@
 import dataclasses
 import json
 import math
-import os
 import re
 from collections.abc import Mapping, Set
 from datetime import datetime, timezone
@@ -11,7 +10,6 @@ from typing import Final
 
 from pydantic import BaseModel
 
-GOLDEN_RECORD_ENV: Final = "LITELLM_PARALLEL_REQUEST_LIMITER_GOLDEN_RECORD"
 GOLDEN_PATH: Final = (
     Path(__file__).resolve().parents[1] / "unit" / "proxy" / "hooks" / "parallel_request_limiter_v3_golden.json"
 )
@@ -107,32 +105,25 @@ def matches(expected: object, actual: object) -> bool:
 
 class Golden:
     def __init__(self, path: Path = GOLDEN_PATH) -> None:
-        self.target: Final = os.environ.get(GOLDEN_RECORD_ENV)
-        self.expected: Final[dict[str, list[object]]] = (
-            {} if self.target or not path.exists() else json.loads(path.read_text())
-        )
-        self.recorded: Final[dict[str, list[object]]] = {}
+        self.expected: Final[dict[str, list[object]]] = json.loads(path.read_text())
         self.case = ""
         self.origin = 0.0
         self.position = 0
-        self.ran = False
+        self.skipped = False
 
     def start(self, case: str) -> None:
         self.case = case
         self.origin = 0.0
         self.position = 0
-        self.ran = False
+        self.skipped = False
+
+    def skip_case(self) -> None:
+        self.skipped = True
 
     def anchor(self, start: datetime) -> None:
         self.origin = start.timestamp()
-        self.ran = True
 
-    def agree(self, python: object, native: object, context: object = None) -> None:
-        assert python == native, (context, python, native)
-        self.ran = True
-        if self.target:
-            self.recorded.setdefault(self.case, []).append(plain(python, self.origin))
-            return
+    def agree(self, native: object, context: object = None) -> None:
         expected: Final = self.expected.get(self.case)
         assert expected is not None, f"{self.case} has no recorded golden values"
         assert self.position < len(expected), (self.case, self.position, context)
@@ -141,15 +132,7 @@ class Golden:
         self.position += 1
 
     def finish_case(self) -> None:
-        if self.target or not self.ran:
+        if self.skipped:
             return
-        expected: Final = self.expected.get(self.case, [])
-        assert self.position == len(expected), (self.case, self.position)
-
-    def write(self) -> None:
-        if self.target:
-            lines = (
-                f"{json.dumps(case)}: {json.dumps(points, sort_keys=True, separators=(',', ':'))}"
-                for case, points in sorted(self.recorded.items())
-            )
-            Path(self.target).write_text("{\n" + ",\n".join(lines) + "\n}\n")
+        recorded: Final = len(self.expected.get(self.case, []))
+        assert self.position == recorded, f"{self.case} consumed {self.position} of {recorded} recorded golden values"
