@@ -6,12 +6,16 @@ import asyncio
 import gc
 import warnings
 from collections.abc import Mapping, Sequence
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
+from weakref import ReferenceType, ref
 
 import pytest
+from starlette.requests import Request
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
@@ -25,7 +29,6 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     spend_counter_batch_scope,
 )
 from litellm.rust_bridge._native import NativeRedisStoreError
-from litellm.caching.redis_batch import request_redis_batch_scope
 from tests.unit.caching.redis_batch_double import FakeNativePending, FakeNatives, fake_send
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
@@ -40,6 +43,36 @@ TOKEN_KEYS = frozenset(
         "spend:org:org",
     }
 )
+
+
+def _request_key_supplier(batch: SpendCounterBatch) -> ReferenceType[Request]:
+    request: Final = Request({"type": "http", "headers": [(b"x-counter-key", b"spend:customer_org:org")]})
+    batch.provide_counter_keys(lambda: frozenset((request.headers["x-counter-key"],)))
+    return ref(request)
+
+
+def test_consumed_counter_key_supplier_releases_its_request() -> None:
+    batch: Final = SpendCounterBatch(FakeSpendCounters().store())
+    request: Final = _request_key_supplier(batch)
+    assert request() is not None
+
+    batch.bind(frozenset(("spend:key:key",)))
+
+    assert batch.counter_keys == frozenset(("spend:key:key", "spend:customer_org:org"))
+    gc.collect()
+    assert request() is None
+
+
+def test_closed_batch_releases_an_unused_counter_key_supplier_request() -> None:
+    batch: Final = SpendCounterBatch(FakeSpendCounters().store())
+    request: Final = _request_key_supplier(batch)
+    assert request() is not None
+
+    batch.close()
+
+    assert not batch.is_open
+    gc.collect()
+    assert request() is None
 
 
 def test_admission_counter_keys_cover_every_entity_the_checks_read():

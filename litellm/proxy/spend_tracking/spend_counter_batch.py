@@ -86,8 +86,10 @@ class SpendCounterBatch:
     def bind(self, counter_keys: frozenset[str]) -> None:
         if self._open:
             if counter_keys and not self._provided and self._keys_provider is not None:
+                provider: Final = self._keys_provider
+                self._keys_provider = None
                 self._provided = True
-                self._keys = self._keys | self._keys_provider()
+                self._keys = self._keys | provider()
             self._keys = self._keys | counter_keys
 
     def provide_counter_keys(self, provider: Callable[[], frozenset[str]]) -> None:
@@ -97,6 +99,7 @@ class SpendCounterBatch:
     def close(self) -> None:
         """Later reads go to Redis directly; call before any read-then-write on the counters."""
         self._open = False
+        self._keys_provider = None
 
     async def read(self, counter_key: str) -> tuple[float | None, bool] | None:
         """(value, authoritative) for a bound counter, None when the caller must read Redis itself."""
