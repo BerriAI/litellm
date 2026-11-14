@@ -214,7 +214,7 @@ class AppTokenManager:
             return _session(config, cached, self._monotonic())
         future, owner = self._claim(key)
         if owner:
-            await asyncio.to_thread(self._fill, key, config, future)
+            _ = asyncio.get_running_loop().run_in_executor(None, self._fill, key, config, future)
         return _session(config, await asyncio.wrap_future(future), self._monotonic())
 
     def _cache_key(self, config: AppConfig) -> str:
@@ -246,10 +246,10 @@ class AppTokenManager:
         try:
             cached: Final = self._get(key)
             result: Final = cached if cached is not None else self._fetch(config)
-        except BaseException as error:
+        except BaseException as error:  # noqa: BLE001  # every waiter receives the error through the future
             self._settle(key, None)
             future.set_exception(error)
-            raise
+            return
         self._settle(key, result)
         future.set_result(result)
 

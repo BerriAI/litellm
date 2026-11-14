@@ -252,6 +252,29 @@ async def test_callers_waiting_on_a_mint_leave_the_default_thread_pool_free(priv
     assert len(mints) == 1
 
 
+async def test_cancelled_caller_still_finishes_the_refresh_for_later_callers(private_key: str) -> None:
+    pool_busy: Final = threading.Event()
+    mints: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        mints.append(request)
+        return httpx.Response(201, json=token_payload())
+
+    auth: Final = manager(private_key, respond, Clock())
+    loop: Final = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    blocker: Final = loop.run_in_executor(None, pool_busy.wait, 10)
+    first_caller: Final = asyncio.create_task(auth.aresolve(_CONFIG))
+    await asyncio.sleep(0.05)
+    _ = first_caller.cancel()
+    pool_busy.set()
+    _ = await blocker
+    with pytest.raises(asyncio.CancelledError):
+        await first_caller
+    assert (await asyncio.wait_for(auth.aresolve(_CONFIG), 2)).token == "installation-token"
+    assert len(mints) == 1
+
+
 @pytest.mark.parametrize(
     ("status", "error_type"),
     [
