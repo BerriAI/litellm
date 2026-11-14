@@ -50864,14 +50864,20 @@ export interface components {
             }[] | null;
             /** Model */
             model: string;
+            parallel_tool_calls?: components["schemas"]["JsonValue"];
             /** Prompt */
             prompt?: string | null;
+            reasoning_effort?: components["schemas"]["JsonValue"];
+            response_format?: components["schemas"]["JsonValue"];
             /** System */
             system?: unknown | null;
+            thinking?: components["schemas"]["JsonValue"];
+            tool_choice?: components["schemas"]["JsonValue"];
             /** Tools */
             tools?: {
                 [key: string]: unknown;
             }[] | null;
+            web_search_options?: components["schemas"]["JsonValue"];
         };
         /** TokenCountResponse */
         TokenCountResponse: {
