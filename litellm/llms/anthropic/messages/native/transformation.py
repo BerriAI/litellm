@@ -138,6 +138,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "reasoning_effort",
             "safeguards",
             "thread",
+            "diagnostics",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
