@@ -10757,12 +10757,30 @@ def test_azure_ai_forwards_reasoning_effort_once_the_deployment_declares_levels(
     ] == "none"
 
 
-def test_a_model_map_declaration_alone_leaves_reasoning_effort_to_drop_params(
-    local_model_cost_map: None, respx_mock: respx.MockRouter
-) -> None:
-    assert "reasoning_effort" not in _chat_body_sent(
-        respx_mock, "azure_ai/FW-Kimi-K3", "medium", {"id": "kimi-azure-1"}, drop_params=True
+@pytest.fixture
+def foundry_reasoner_row(monkeypatch: pytest.MonkeyPatch) -> str:
+    from litellm.litellm_core_utils.get_model_cost_map import (
+        GetModelCostMap,
+        ModelCostMapReloaded,
+        install_model_cost_map,
     )
+
+    model: Final = "azure_ai/FW-Reasoner"
+    monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+    catalog: Final = {
+        **GetModelCostMap.load_local_model_cost_map(),
+        model: {"litellm_provider": "azure_ai", "mode": "chat", "reasoning_effort_levels": ["low", "high", "max"]},
+    }
+    assert isinstance(install_model_cost_map(json.dumps(catalog).encode()), ModelCostMapReloaded)
+    return model
+
+
+def test_a_model_map_declaration_alone_forwards_reasoning_effort_without_rounding_it(
+    foundry_reasoner_row: str, respx_mock: respx.MockRouter
+) -> None:
+    assert _chat_body_sent(respx_mock, foundry_reasoner_row, "medium", {"id": "reasoner-1"}, drop_params=True)[
+        "reasoning_effort"
+    ] == "medium"
 
 
 @pytest.mark.parametrize("model_info, expected", [(_KIMI_DEPLOYMENT, "high"), (None, "medium")])
