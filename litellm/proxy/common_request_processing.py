@@ -194,11 +194,16 @@ from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemet
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     HookRun,
     ProxyLogging,
+    StreamingHookResponse,
+    StreamingReasoningState,
+    StreamingToolCallState,
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_and_merge_model_level_guardrails,
     hook_fields,
     routes_through_apply_guardrail,
     run_hook_subscribers,
+    streaming_reasoning_with_response,
+    streaming_tool_calls_with_response,
 )
 from litellm.responses.mcp.parked_stream_dispatch import in_flight_round_biller, parked_success
 from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect, spawn_logging_task
@@ -5450,6 +5455,44 @@ class ProxyBaseLLMRequestProcessing:
     _finalize_streaming_generator_cleanup = finalize_streaming_generator_cleanup
 
     @staticmethod
+    def _streaming_chunk_response_text(chunk: StreamingHookResponse | Mapping[str, object]) -> str:
+        if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+            return litellm.get_response_string(response_obj=chunk)
+        if isinstance(chunk, Mapping):
+            return _content_text(chunk)
+        if isinstance(chunk, str):
+            return ""
+        try:
+            data: Final = chunk.model_dump(mode="json", exclude_none=True)
+            return _content_text(data)
+        except Exception:
+            return ""
+
+    @staticmethod
+    async def _apply_streaming_chunk_hook(
+        *,
+        chunk: Any,  # noqa: ANN401  # streaming callbacks may replace chunks with provider-specific response types
+        proxy_logging_obj: ProxyLogging,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict[str, object],  # mutable-ok: ProxyLogging requires the existing mutable request payload
+        str_so_far: str,
+        streaming_tool_calls_so_far: StreamingToolCallState,
+        streaming_reasoning_so_far: StreamingReasoningState = (),
+    ) -> tuple[StreamingHookResponse, StreamingToolCallState, StreamingReasoningState]:
+        return (
+            await proxy_logging_obj.async_post_call_streaming_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=chunk,
+                data=request_data,
+                str_so_far=str_so_far,
+                streaming_tool_calls_so_far=streaming_tool_calls_so_far,
+                streaming_reasoning_so_far=streaming_reasoning_so_far,
+            ),
+            streaming_tool_calls_with_response(streaming_tool_calls_so_far, chunk),
+            streaming_reasoning_with_response(streaming_reasoning_so_far, chunk),
+        )
+
+    @staticmethod
     def record_first_chunk_overhead(
         logging_obj: LiteLLMLoggingObj | None, chunk_received_at: float, is_provider_output: bool = True
     ) -> None:
@@ -5519,6 +5562,8 @@ class ProxyBaseLLMRequestProcessing:
         release_stream_failure: Final = _ClientStreamFailureReport.hold_while_streaming(timing_sink)
         try:
             str_so_far = ""
+            streaming_tool_calls_so_far: StreamingToolCallState = ()  # rebind-ok: accumulated streaming state advances after each chunk
+            streaming_reasoning_so_far: StreamingReasoningState = ()  # rebind-ok: accumulated streaming state advances after each chunk
             async for chunk in guarded_stream:
                 chunk_received_at = time.perf_counter()
                 # ``.format(chunk)`` was previously evaluated for every chunk
@@ -5527,25 +5572,21 @@ class ProxyBaseLLMRequestProcessing:
                     verbose_proxy_logger.debug("async_data_generator: received streaming chunk - %s", chunk)
 
                 if not fast_path:
-                    chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+                    (
+                        chunk,
+                        streaming_tool_calls_so_far,
+                        streaming_reasoning_so_far,
+                    ) = await ProxyBaseLLMRequestProcessing._apply_streaming_chunk_hook(
+                        chunk=chunk,
+                        proxy_logging_obj=proxy_logging_obj,
                         user_api_key_dict=user_api_key_dict,
-                        response=chunk,
-                        data=request_data,
+                        request_data=cast(dict[str, object], request_data),  # cast-ok: request JSON has string keys
                         str_so_far=str_so_far,
+                        streaming_tool_calls_so_far=streaming_tool_calls_so_far,
+                        streaming_reasoning_so_far=streaming_reasoning_so_far,
                     )
 
-                    if isinstance(chunk, (ModelResponse, ModelResponseStream)):
-                        response_str = litellm.get_response_string(response_obj=chunk)
-                        str_so_far += response_str
-                    elif hasattr(chunk, "model_dump"):
-                        try:
-                            d = chunk.model_dump(mode="json", exclude_none=True)
-                            if isinstance(d, dict):
-                                str_so_far += _content_text(d)
-                        except Exception:
-                            pass
-                    elif isinstance(chunk, dict):
-                        str_so_far += str(chunk.get("content", ""))
+                    str_so_far += ProxyBaseLLMRequestProcessing._streaming_chunk_response_text(chunk)
 
                     model_name = request_data.get("model", "")
                     chunk = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(

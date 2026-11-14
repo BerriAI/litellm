@@ -100,6 +100,30 @@ def _simple_chunk(model: str = "gpt-4", content: str = "hi") -> ModelResponseStr
     )
 
 
+def _tool_call_chunk(arguments: str) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-tool-call",
+        choices=[
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "type": "function",
+                            "function": {"name": "run_command", "arguments": arguments},
+                        }
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+
 def _sse_text(frame: str | bytes) -> str:
     return frame.decode() if isinstance(frame, bytes) else frame
 
@@ -1025,12 +1049,15 @@ def test_serialize_streaming_chunk_invalid_input_raises_attribute_error():
 async def test_apply_streaming_chunk_hooks_appends_to_str_so_far(monkeypatch):
     chunk = _simple_chunk(content="abc")
 
-    async def _passthrough(*, user_api_key_dict, response, data, str_so_far=None):
+    async def _passthrough(
+        *, user_api_key_dict, response, data, str_so_far=None, streaming_tool_calls_so_far=(),
+        streaming_reasoning_so_far=(),
+    ):
         return response
 
     monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _passthrough)
 
-    new_chunk, new_str = await _apply_streaming_chunk_hooks(
+    new_chunk, new_str, tool_calls, _ = await _apply_streaming_chunk_hooks(
         chunk=chunk,
         user_api_key_dict=_user_auth(),
         request_data={},
@@ -1041,12 +1068,38 @@ async def test_apply_streaming_chunk_hooks_appends_to_str_so_far(monkeypatch):
         "chunk_is_basemodel": isinstance(new_chunk, ModelResponseStream),
         "str_so_far": new_str,
         "grew": len(new_str) > len("prior:"),
+        "tool_calls": tool_calls,
     }
     assert observed == {
         "chunk_is_basemodel": True,
         "str_so_far": "prior:abc",
         "grew": True,
+        "tool_calls": (),
     }
+
+
+@pytest.mark.asyncio
+async def test_apply_streaming_chunk_hooks_compacts_tool_call_history(monkeypatch):
+    async def _passthrough(
+        *, user_api_key_dict, response, data, str_so_far=None, streaming_tool_calls_so_far=(),
+        streaming_reasoning_so_far=(),
+    ):
+        return response
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _passthrough)
+    stream_state = ()
+
+    for arguments in ('{"command":"', "blocked-", "command", '"}'):
+        _, _, stream_state, _ = await _apply_streaming_chunk_hooks(
+            chunk=_tool_call_chunk(arguments),
+            user_api_key_dict=_user_auth(),
+            request_data={},
+            str_so_far="",
+            streaming_tool_calls_so_far=stream_state,
+        )
+
+    assert len(stream_state) == 1
+    assert stream_state[0].arguments == '{"command":"blocked-command"}'
 
 
 @pytest.mark.asyncio
@@ -1345,6 +1398,80 @@ def test_serialize_streaming_chunk_keeps_streaming_when_unencodable_values_sit_u
     assert "mixed_keys" not in payload
     assert "bytes_keys" not in payload
     assert "read_only_view" not in payload
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_preserves_tool_calls_through_per_chunk_hook(
+    monkeypatch,
+):
+    class _PassThrough(CustomLogger):
+        async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+            return response
+
+    callback = _PassThrough()
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    _patch_logging_flags(monkeypatch, needs_per_chunk=True)
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-tools",
+        choices=[
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call-weather",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": "",
+                            },
+                        },
+                        {
+                            "index": 1,
+                            "id": "call-time",
+                            "type": "function",
+                            "function": {"name": "get_time", "arguments": ""},
+                        },
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ],
+        created=0,
+        model="gpt-4o-mini",
+        object="chat.completion.chunk",
+    )
+
+    out = []
+    async for line in async_data_generator(
+        response=_async_iter([chunk]),
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "gpt-4o-mini"},
+    ):
+        out.append(line)
+
+    first = out[0]
+    assert isinstance(first, (str, bytes))
+    first_text = first.decode() if isinstance(first, bytes) else first
+    assert first_text.startswith("data: {")
+    payload = json.loads(first_text.removeprefix("data: ").removesuffix("\n\n"))
+    assert payload["choices"][0]["delta"]["tool_calls"] == [
+        {
+            "index": 0,
+            "id": "call-weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": ""},
+        },
+        {
+            "index": 1,
+            "id": "call-time",
+            "type": "function",
+            "function": {"name": "get_time", "arguments": ""},
+        },
+    ]
+    assert out[-1] == "data: [DONE]\n\n"
 
 
 @pytest.mark.asyncio
