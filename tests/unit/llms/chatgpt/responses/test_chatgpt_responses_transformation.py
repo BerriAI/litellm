@@ -13,9 +13,13 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from openai.types.responses import ResponseInputMessageItem, ResponseInputText, ResponseOutputMessage, ResponseOutputText
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.llms.chatgpt.authenticator import Authenticator
+from litellm.llms.chatgpt.common_utils import get_chatgpt_default_instructions
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.openai.common_utils import OpenAIError
@@ -98,6 +102,35 @@ class TestChatGPTResponsesAPITransformation:
             user_item,
             {**system_blocks_item, "role": "developer"},
             developer_item,
+        ]
+
+    def test_chatgpt_accepts_sdk_response_objects_replayed_as_input(self) -> None:
+        prior_reply: Final = ResponseOutputMessage(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            status="completed",
+            content=[ResponseOutputText(type="output_text", text="Hi!", annotations=[])],
+        )
+        system_item: Final = ResponseInputMessageItem(
+            id="msg_2",
+            type="message",
+            role="system",
+            content=[ResponseInputText(type="input_text", text="Answer in French.")],
+        )
+        user_item: Final = {"role": "user", "content": "Again"}
+        request: Final = ChatGPTResponsesAPIConfig().transform_responses_api_request(
+            model="chatgpt/gpt-6.1-sol",
+            input=[prior_reply, system_item, user_item],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [
+            prior_reply.model_dump(exclude_none=True),
+            {**system_item.model_dump(exclude_none=True), "role": "developer"},
+            user_item,
         ]
 
     @pytest.mark.parametrize(
@@ -726,6 +759,112 @@ def test_chat_response_format_reaches_the_codex_backend_as_text_format(
     )
 
     assert json.loads(upstream.call_args.args[0].content)["text"]["format"] == expected_format
+
+
+_JSON_INSTRUCTION: Final = "Reply in JSON with the keys city and country."
+
+
+class _ForwardedRequest(TypedDict):
+    instructions: ReadOnly[str]
+    input: ReadOnly[list[dict[str, object]]]
+
+
+_FORWARDED_REQUEST: Final = TypeAdapter(_ForwardedRequest)
+
+
+def _send_responses_with_instructions(
+    instructions: str,
+    text_format: dict[str, object],
+    user_content: str | list[dict[str, str]] = "Paris is the capital of France. Return the city and country.",
+    earlier_turns: tuple[dict[str, object], ...] = (),
+) -> _ForwardedRequest:
+    upstream: Final = _completed_codex_upstream('{"city": "Paris", "country": "France"}')
+    litellm.responses(
+        model="chatgpt/gpt-6.1-sol",
+        instructions=instructions,
+        input=[*earlier_turns, {"role": "user", "content": user_content}],
+        text={"format": text_format},
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream))),
+    )
+    return _FORWARDED_REQUEST.validate_json(upstream.call_args.args[0].content)
+
+
+@pytest.mark.usefixtures("chatgpt_token_dir")
+@pytest.mark.parametrize(
+    ("instructions", "earlier_turns"),
+    [
+        (_JSON_INSTRUCTION, ()),
+        (f"{get_chatgpt_default_instructions()}\n\n{_JSON_INSTRUCTION}", ()),
+        (
+            _JSON_INSTRUCTION,
+            (
+                {"role": "user", "content": "I will ask you about a city."},
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Sure, I will answer as a json object."}],
+                },
+            ),
+        ),
+    ],
+    ids=["caller_only", "with_codex_base", "only_assistant_turn_says_json"],
+)
+def test_json_object_instructions_reach_the_codex_backend_as_an_input_message(
+    instructions: str, earlier_turns: tuple[dict[str, object], ...]
+) -> None:
+    forwarded: Final = _send_responses_with_instructions(
+        instructions, {"type": "json_object"}, earlier_turns=earlier_turns
+    )
+
+    assert forwarded["input"][0] == {"role": "developer", "content": _JSON_INSTRUCTION}
+    assert forwarded["instructions"] == get_chatgpt_default_instructions()
+
+
+@pytest.mark.usefixtures("chatgpt_token_dir")
+@pytest.mark.parametrize(
+    ("instructions", "user_content"),
+    [
+        (_JSON_INSTRUCTION, "Paris is the capital of France. Return the city and country as JSON."),
+        (_JSON_INSTRUCTION, [{"type": "input_text", "text": "Paris is the capital of France. Answer as JSON."}]),
+        ("Answer in French.", "Paris is the capital of France. Return the city and country."),
+    ],
+    ids=["input_says_json", "input_part_says_json", "instructions_lack_json"],
+)
+def test_json_object_instructions_stay_in_the_codex_instructions_when_moving_them_cannot_help(
+    instructions: str, user_content: str | list[dict[str, str]]
+) -> None:
+    forwarded: Final = _send_responses_with_instructions(instructions, {"type": "json_object"}, user_content)
+
+    assert forwarded["instructions"] == f"{get_chatgpt_default_instructions()}\n\n{instructions}"
+    assert forwarded["input"] == [{"role": "user", "content": user_content}]
+
+
+@pytest.mark.usefixtures("chatgpt_token_dir")
+@pytest.mark.parametrize("role", ["developer", "system"])
+def test_json_in_instruction_turns_keeps_caller_instructions_in_place(role: str) -> None:
+    user_content: Final = "Paris is the capital of France. Return the city and country."
+    forwarded: Final = _send_responses_with_instructions(
+        _JSON_INSTRUCTION,
+        {"type": "json_object"},
+        user_content,
+        earlier_turns=({"role": role, "content": "Answer as JSON."},),
+    )
+
+    assert forwarded["instructions"] == f"{get_chatgpt_default_instructions()}\n\n{_JSON_INSTRUCTION}"
+    assert forwarded["input"] == [
+        {"role": "developer", "content": "Answer as JSON."},
+        {"role": "user", "content": user_content},
+    ]
+
+
+@pytest.mark.usefixtures("chatgpt_token_dir")
+def test_json_schema_instructions_stay_in_the_codex_instructions() -> None:
+    forwarded: Final = _send_responses_with_instructions(
+        _JSON_INSTRUCTION, {"type": "json_schema", "name": "city", "schema": _CITY_SCHEMA, "strict": True}
+    )
+
+    assert forwarded["instructions"] == f"{get_chatgpt_default_instructions()}\n\n{_JSON_INSTRUCTION}"
+    assert all(item.get("role") != "developer" for item in forwarded["input"])
 
 
 @pytest.mark.usefixtures("chatgpt_token_dir")
