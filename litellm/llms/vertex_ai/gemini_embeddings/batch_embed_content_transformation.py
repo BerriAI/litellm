@@ -11,8 +11,10 @@ from typing import Annotated, Final, Literal, cast
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.base_llm.embedding.transformation import extra_body_fields
 from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX, gemini_video_metadata_from_openai
+from litellm.types.caching import EMBEDDING_ITEM_USAGE_HIDDEN_PARAM
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.vertex_ai import (
     BlobType,
@@ -531,7 +533,15 @@ def transform_openai_input_gemini_embed_content(
 
 
 _IMAGE_MIME_TYPES: Final = frozenset({"image/png", "image/jpeg"})
+_Modality = Literal["text", "image", "audio", "video", "other"]
 _usage_metadata_adapter: Final = TypeAdapter(UsageMetadata)
+
+
+def _validated_usage_metadata(fields: Mapping[str, object]) -> UsageMetadata | None:
+    try:
+        return _usage_metadata_adapter.validate_python(fields)
+    except ValidationError:
+        return None
 
 
 def _parse_usage_metadata(raw_usage_metadata: object) -> UsageMetadata | None:
@@ -539,24 +549,30 @@ def _parse_usage_metadata(raw_usage_metadata: object) -> UsageMetadata | None:
     if fields is None or "promptTokenCount" not in fields:
         return None
     details: Final = fields.get("promptTokensDetails", fields.get("promptTokenDetails"))
-    try:
-        return _usage_metadata_adapter.validate_python({**fields, "promptTokensDetails": details or []})
-    except ValidationError:
-        return None
+    return _validated_usage_metadata({**fields, "promptTokensDetails": details or []}) or _validated_usage_metadata(
+        {**fields, "promptTokensDetails": []}
+    )
 
 
 def _flatten_input(input: GeminiEmbeddingInput) -> tuple[GeminiEmbeddingElement, ...]:
     return tuple(_elements(input))
 
 
+def _element_mime_type(
+    element: GeminiEmbeddingElement,
+    resolved_files: Mapping[str, Mapping[str, str]],
+) -> str | None:
+    if isinstance(element, str):
+        return _source_mime_type(element, None, resolved_files)
+    block: Final = _parse_file_block(element, drop_params=True)
+    return _source_mime_type(_file_block_source(block), block.file.format, resolved_files)
+
+
 def _is_image_element(
     element: GeminiEmbeddingElement,
     resolved_files: Mapping[str, Mapping[str, str]],
 ) -> bool:
-    if isinstance(element, str):
-        return _source_mime_type(element, None, resolved_files) in _IMAGE_MIME_TYPES
-    block: Final = _parse_file_block(element, drop_params=True)
-    return _source_mime_type(_file_block_source(block), block.file.format, resolved_files) in _IMAGE_MIME_TYPES
+    return _element_mime_type(element, resolved_files) in _IMAGE_MIME_TYPES
 
 
 def _is_image_only_input(
@@ -697,6 +713,83 @@ def _batch_embed_usage(
     return _usage_from_usage_metadata(input, usage_metadata, resolved_files)
 
 
+def _modality(
+    element: GeminiEmbeddingElement,
+    resolved_files: Mapping[str, Mapping[str, str]],
+) -> _Modality:
+    if not _is_multimodal_element(element):
+        return "text"
+    mime_type: Final = _element_mime_type(element, resolved_files) or ""
+    if mime_type.startswith("image/") or mime_type == "application/pdf":
+        return "image"
+    if mime_type.startswith("audio/"):
+        return "audio"
+    if mime_type.startswith("video/"):
+        return "video"
+    return "other"
+
+
+def _item_modalities(
+    item: GeminiEmbeddingElement | list[str] | list[GeminiEmbeddingElement],
+    resolved_files: Mapping[str, Mapping[str, str]],
+) -> frozenset[_Modality]:
+    parts: Final = item if isinstance(item, list) else (item,)
+    return frozenset(_modality(part, resolved_files) for part in parts)
+
+
+def _holders(item_modalities: Sequence[frozenset[_Modality]], modality: _Modality) -> tuple[int, ...]:
+    holders: Final = tuple(index for index, modalities in enumerate(item_modalities) if modality in modalities)
+    return holders or tuple(range(len(item_modalities)))
+
+
+def _share(total: int, holders: tuple[int, ...], index: int) -> int:
+    if index not in holders:
+        return 0
+    quotient, remainder = divmod(total, len(holders))
+    return quotient + (1 if holders.index(index) < remainder else 0)
+
+
+def _item_usage(text: int, image: int, audio: int, video: int, unattributed: int) -> Usage:
+    prompt_tokens: Final = text + image + audio + video + unattributed
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        total_tokens=prompt_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=text,
+            image_tokens=image,
+            audio_tokens=audio,
+            video_tokens=video,
+        ),
+    )
+
+
+def _per_item_usage(
+    input: GeminiEmbeddingInput,
+    usage: Usage,
+    resolved_files: Mapping[str, Mapping[str, str]],
+) -> tuple[Usage, ...]:
+    items: Final = _top_level_elements(input)
+    details: Final = usage.prompt_tokens_details
+    if details is None or len(items) < 2:
+        return ()
+    modalities: Final = tuple(_item_modalities(item, resolved_files) for item in items)
+    text: Final = details.text_tokens or 0
+    image: Final = details.image_tokens or 0
+    audio: Final = details.audio_tokens or 0
+    video: Final = details.video_tokens or 0
+    every_item: Final = tuple(range(len(items)))
+    return tuple(
+        _item_usage(
+            text=_share(text, _holders(modalities, "text"), index),
+            image=_share(image, _holders(modalities, "image"), index),
+            audio=_share(audio, _holders(modalities, "audio"), index),
+            video=_share(video, _holders(modalities, "video"), index),
+            unattributed=_share(usage.prompt_tokens - text - image - audio - video, every_item, index),
+        )
+        for index in every_item
+    )
+
+
 def process_response(
     input: GeminiEmbeddingInput,
     model_response: EmbeddingResponse,
@@ -704,11 +797,16 @@ def process_response(
     _predictions: VertexAIBatchEmbeddingsResponseObject,
     resolved_files: Mapping[str, Mapping[str, str]] | None = None,
 ) -> EmbeddingResponse:
-    model_response.data = [
-        Embedding(embedding=embedding["values"], index=idx, object="embedding")
-        for idx, embedding in enumerate(_predictions["embeddings"])
-    ]
-    model_response.model = model
-    model_response.usage = _batch_embed_usage(input, model, _predictions.get("usageMetadata"), resolved_files or {})
-
-    return model_response
+    usage: Final = _batch_embed_usage(input, model, _predictions.get("usageMetadata"), resolved_files or {})
+    return EmbeddingResponse(
+        model=model,
+        data=[
+            Embedding(embedding=embedding["values"], index=idx, object="embedding")
+            for idx, embedding in enumerate(_predictions["embeddings"])
+        ],
+        usage=usage,
+        hidden_params={
+            **(get_hidden_params(model_response) or {}),
+            EMBEDDING_ITEM_USAGE_HIDDEN_PARAM: _per_item_usage(input, usage, resolved_files or {}),
+        },
+    )

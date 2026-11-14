@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from enum import Enum
 from typing import Any, Final, Literal, Protocol, cast
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._internal_context import current_service_target, service_target
@@ -26,13 +26,14 @@ from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.integrations.otel.runtime import phase_span
 from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.model_param_helper import (
     ModelParamHelper,
     embeds_thought_signature_in_tool_call_id,
     peek_reasoning_summary_aliases,
 )
 from litellm.types.caching import *
-from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
+from litellm.types.utils import EmbeddingResponse, Usage, is_litellm_owned_kwarg
 
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
@@ -48,6 +49,7 @@ from .s3_cache import S3Cache
 RESPONSE_CACHE_TARGET: Final = "llm_response"
 _ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token", "return_token_ids"})
 _DECODED_LITERAL: Final = TypeAdapter(object)
+_ITEM_USAGE_ADAPTER: Final = TypeAdapter(tuple[Usage, ...])
 _REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
     list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
@@ -870,6 +872,19 @@ class Cache:
         except KeyError as e:
             raise ValueError(f"Missing expected key in embedding response: {e}")
 
+    @staticmethod
+    def _provider_item_usage(result: EmbeddingResponse, idx_in_result_data: int, num_items: int) -> Usage | None:
+        hidden_params: Final = get_hidden_params(result)
+        if hidden_params is None:
+            return None
+        try:
+            item_usages: Final = _ITEM_USAGE_ADAPTER.validate_python(
+                hidden_params.get(EMBEDDING_ITEM_USAGE_HIDDEN_PARAM, ())
+            )
+        except ValidationError:
+            return None
+        return item_usages[idx_in_result_data] if len(item_usages) == num_items else None
+
     def _get_per_item_prompt_tokens_details(
         self,
         result: EmbeddingResponse,
@@ -880,9 +895,14 @@ class Cache:
 
         For single-item responses (common for multimodal providers like Bedrock Titan,
         Nova, Vertex AI), returns the full prompt_tokens_details.
-        For multi-item responses, distributes integer fields evenly across items
-        so that summing all per-item details reconstructs the original totals.
+        For multi-item responses, uses the per-item usage the provider attributed when it
+        set one, else distributes integer fields evenly across items so that summing all
+        per-item details reconstructs the original totals.
         """
+        num_items: Final = len(result.data)
+        item_usage: Final = self._provider_item_usage(result, idx_in_result_data, num_items)
+        if item_usage is not None and item_usage.prompt_tokens_details is not None:
+            return item_usage.prompt_tokens_details.model_dump(exclude_none=True)
         if result.usage is None or result.usage.prompt_tokens_details is None:
             return None
 
@@ -897,7 +917,6 @@ class Cache:
         if not details_dict:
             return None
 
-        num_items: Final = len(result.data)
         if num_items <= 1:
             return details_dict
 
@@ -922,14 +941,18 @@ class Cache:
         Extract the per-item prompt_tokens from a response for caching.
 
         Single-item responses store the full usage.prompt_tokens. Multi-item
-        responses distribute it evenly (with remainder) so that summing all
+        responses use the provider's per-item usage when it set one, else
+        distribute it evenly (with remainder) so that summing all
         per-item values on retrieval reconstructs the original total.
         """
+        num_items: Final = len(result.data)
+        item_usage: Final = self._provider_item_usage(result, idx_in_result_data, num_items)
+        if item_usage is not None:
+            return item_usage.prompt_tokens
         if result.usage is None or result.usage.prompt_tokens is None:
             return None
 
         total: Final = result.usage.prompt_tokens
-        num_items: Final = len(result.data)
         if num_items <= 1:
             return total
 
