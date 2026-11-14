@@ -39,7 +39,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus_helpers import (
     PrometheusLabelFactoryContext,
     get_cached_end_user_id_for_cost_tracking,
-    native_store,
 )
 from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker import (
     BoundedPrometheusSeriesTracker,
@@ -103,6 +102,7 @@ if TYPE_CHECKING:
     from prometheus_client import Gauge
     from prometheus_client.metrics import MetricWrapperBase
 
+    from litellm.integrations.prometheus_helpers import native_store
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
     from litellm.rust_bridge._native import NativePrometheusMetric
@@ -631,6 +631,8 @@ class PrometheusLogger(CustomLogger):
     ):
         try:
             from prometheus_client import Counter, Gauge, Histogram
+
+            from litellm.integrations.prometheus_helpers import native_store
 
             # Validate the caller-identity mode before any collector registers so an
             # invalid value cannot leave partially-registered metrics behind in the
@@ -1793,6 +1795,8 @@ class PrometheusLogger(CustomLogger):
         self._track_end_user_metric_series(counter, metric_name, _labels)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        from litellm.integrations.prometheus_helpers import native_store
+
         # Define prometheus client
         verbose_logger.debug(
             "prometheus Logging - Enters success logging function (kwargs keys: %s)",
@@ -2959,6 +2963,8 @@ class PrometheusLogger(CustomLogger):
             )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        from litellm.integrations.prometheus_helpers import native_store
+
         verbose_logger.debug(
             "prometheus Logging - Enters failure logging function (kwargs keys: %s)",
             list(kwargs.keys()) if isinstance(kwargs, dict) else type(kwargs).__name__,
@@ -4433,6 +4439,8 @@ class PrometheusLogger(CustomLogger):
     ) -> None:
         from prometheus_client import Gauge
 
+        from litellm.integrations.prometheus_helpers import native_store
+
         labels: Final = prometheus_label_factory(
             supported_enum_labels=self.get_labels_for_metric(metric_name=metric_name), enum_values=enum_values
         )
@@ -5462,6 +5470,8 @@ class PrometheusLogger(CustomLogger):
     ) -> None:
         if self._native_store is None:
             return
+        from litellm.integrations.prometheus_helpers import native_store
+
         self._native_store.op(
             "budget",
             {
