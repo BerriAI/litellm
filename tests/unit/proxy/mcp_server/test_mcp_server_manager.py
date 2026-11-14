@@ -2615,6 +2615,80 @@ class TestMCPServerManager:
         }
         assert client.call_tool.await_count == 1
 
+    async def _call_managed_tool_refused_for_gist(self, caller: UserAPIKeyAuth | None) -> pytest.ExceptionInfo:
+        server: Final = MCPServer(
+            server_id="managed-scope",
+            name="managed-scope",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+        )
+        manager: Final = MCPServerManager()
+        client: Final = AsyncMock()
+        client.call_tool = AsyncMock(
+            side_effect=self._upstream_status_error(403, 'Bearer error="insufficient_scope", scope="gist"')
+        )
+        manager.create_mcp_client = AsyncMock(return_value=client)
+        with pytest.raises(MCPUpstreamAuthError) as raised:
+            await manager._call_regular_mcp_tool(
+                mcp_server=server,
+                original_tool_name="tool",
+                arguments={},
+                tasks=[],
+                mcp_auth_header=None,
+                mcp_server_auth_headers=None,
+                oauth2_headers=None,
+                raw_headers=None,
+                proxy_logging_obj=None,
+                user_api_key_auth=caller,
+            )
+        assert (raised.value.status_code, raised.value.required_scope) == (403, "gist")
+        assert client.call_tool.await_count == 1
+        return raised
+
+    @pytest.mark.asyncio
+    async def test_managed_scope_refusal_notes_the_scope_on_the_callers_grant(
+        self, credentials_prisma: SimpleNamespace
+    ) -> None:
+        from litellm.proxy.mcp_server import db
+
+        for user_id in ("alice", "bob"):
+            await db.store_user_oauth_credential(credentials_prisma, user_id, "managed-scope", "vendor-token")
+        await self._call_managed_tool_refused_for_gist(UserAPIKeyAuth(user_id="alice"))
+        alice: Final = await db.get_user_oauth_credential(credentials_prisma, "alice", "managed-scope")
+        bob: Final = await db.get_user_oauth_credential(credentials_prisma, "bob", "managed-scope")
+        assert (alice or {}).get("needs_scopes") == ["gist"]
+        assert bob is not None and "needs_scopes" not in bob
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("caller", [None, UserAPIKeyAuth()])
+    async def test_managed_scope_refusal_without_a_caller_user_notes_nothing(
+        self, credentials_prisma: SimpleNamespace, caller: UserAPIKeyAuth | None
+    ) -> None:
+        rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+        rows.find_unique = AsyncMock(return_value=None)
+        await self._call_managed_tool_refused_for_gist(caller)
+        rows.find_unique.assert_not_awaited()
+        assert rows.writes == 0
+
+    @pytest.mark.asyncio
+    async def test_managed_scope_refusal_is_relayed_when_the_note_cannot_be_written(
+        self, credentials_prisma: SimpleNamespace
+    ) -> None:
+        unnoted: Final = await self._call_managed_tool_refused_for_gist(None)
+        credentials_prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(
+            side_effect=RuntimeError("database unavailable")
+        )
+        failed_note: Final = await self._call_managed_tool_refused_for_gist(UserAPIKeyAuth(user_id="alice"))
+        relayed: Final = failed_note.value.to_http_exception("https://gateway.test", "/managed-scope/mcp")
+        expected: Final = unnoted.value.to_http_exception("https://gateway.test", "/managed-scope/mcp")
+        assert (relayed.status_code, relayed.headers, relayed.detail) == (
+            expected.status_code,
+            expected.headers,
+            expected.detail,
+        )
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("is_error", [False, True])
     async def test_call_passthrough_returns_tool_result_unchanged(self, is_error):
