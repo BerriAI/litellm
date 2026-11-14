@@ -903,10 +903,13 @@ def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
     a100_80gb_price_per_second_public: Final = (
         DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND  # assume all calls sent to A100 80GB for now
     )
-    if total_time == 0.0:  # total time is in ms
+    if total_time == 0.0:  # total_time is in ms
+        # `completion_response` is a dict, so `created`/`ended` are unix timestamps in
+        # seconds -- subtract them in seconds rather than routing the difference through
+        # the millisecond conversion below, which under-billed this path by 1000x.
         start_time: Final = completion_response.get("created", time.time())
-        end_time: Final = getattr(completion_response, "ended", time.time())
-        total_time = end_time - start_time
+        end_time: Final = completion_response.get("ended", time.time())
+        return a100_80gb_price_per_second_public * max(end_time - start_time, 0.0)
 
     return a100_80gb_price_per_second_public * total_time / 1000
 
