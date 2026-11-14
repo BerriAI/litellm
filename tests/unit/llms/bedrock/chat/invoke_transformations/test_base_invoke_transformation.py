@@ -611,9 +611,13 @@ _GUARDRAIL_AWS_PARAMS: Final = MappingProxyType(
 )
 
 
-def _completion_from(model: str, body: Mapping[str, object]) -> ModelResponse:
+def _completion_from(
+    model: str, body: Mapping[str, object], headers: Mapping[str, str] = MappingProxyType({})
+) -> ModelResponse:
     client: Final = HTTPHandler(
-        client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)))
+        client=httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body, headers=dict(headers)))
+        )
     )
     return litellm.completion(
         model=model,
@@ -638,21 +642,58 @@ def test_invoke_reports_a_guardrail_block_as_content_filter(
     assert response.choices[0].finish_reason == ("content_filter" if blocked else "stop")
 
 
+_MODEL_RAN_HEADERS: Final = MappingProxyType(
+    {
+        "x-amzn-bedrock-invocation-latency": "959",
+        "x-amzn-bedrock-input-token-count": "30",
+        "x-amzn-bedrock-output-token-count": "39",
+    }
+)
+_NO_HEADERS: Final = MappingProxyType({})
+
+
+def _mistral_invoke_body(guardrail_fields: Mapping[str, object]) -> Mapping[str, object]:
+    return {"outputs": [{"text": _GUARDRAIL_BLOCKED_TEXT, "stop_reason": "stop"}], **guardrail_fields}
+
+
+def _twelvelabs_invoke_body(guardrail_fields: Mapping[str, object]) -> Mapping[str, object]:
+    return {"message": _GUARDRAIL_BLOCKED_TEXT, "finishReason": "stop", **guardrail_fields}
+
+
 @pytest.mark.parametrize(
-    ("guardrail_fields", "blocked"),
+    ("model", "invoke_body"),
     [
-        pytest.param({**_INTERVENED, "amazon-bedrock-trace": _BLOCKED_AND_MASKED_TRACE}, True, id="blocked_per_trace"),
-        pytest.param({**_INTERVENED, "amazon-bedrock-trace": _MASKED_TRACE}, False, id="masked_per_trace"),
-        pytest.param(_INTERVENED, False, id="no_trace_and_no_usage_to_tell"),
+        pytest.param("bedrock/invoke/mistral.mistral-7b-instruct-v0:2", _mistral_invoke_body, id="mistral"),
+        pytest.param("bedrock/invoke/us.twelvelabs.pegasus-1-2-v1:0", _twelvelabs_invoke_body, id="twelvelabs"),
     ],
 )
-def test_invoke_without_body_usage_reports_a_guardrail_block_only_when_the_trace_shows_it(
-    guardrail_fields: Mapping[str, object], blocked: bool
+@pytest.mark.parametrize(
+    ("guardrail_fields", "headers", "blocked"),
+    [
+        pytest.param(_INTERVENED, _NO_HEADERS, True, id="model_never_ran"),
+        pytest.param(_INTERVENED, _MODEL_RAN_HEADERS, False, id="model_ran"),
+        pytest.param(
+            {**_INTERVENED, "amazon-bedrock-trace": _BLOCKED_AND_MASKED_TRACE},
+            _MODEL_RAN_HEADERS,
+            True,
+            id="blocked_per_trace",
+        ),
+        pytest.param({**_INTERVENED, "amazon-bedrock-trace": _MASKED_TRACE}, _NO_HEADERS, False, id="masked_per_trace"),
+        pytest.param(
+            MappingProxyType({"amazon-bedrock-guardrailAction": "NONE"}), _NO_HEADERS, False, id="guardrail_passed"
+        ),
+    ],
+)
+def test_invoke_without_body_usage_reads_bedrock_invocation_headers_for_a_guardrail_block(
+    model: str,
+    invoke_body: Callable[[Mapping[str, object]], Mapping[str, object]],
+    guardrail_fields: Mapping[str, object],
+    headers: Mapping[str, str],
+    blocked: bool,
 ) -> None:
-    body: Final = {"message": _GUARDRAIL_BLOCKED_TEXT, "finishReason": "stop", **guardrail_fields}
+    response: Final = _completion_from(model, invoke_body(guardrail_fields), headers)
 
-    response: Final = _completion_from("bedrock/invoke/us.twelvelabs.pegasus-1-2-v1:0", body)
-
+    assert response.choices[0].message.content == _GUARDRAIL_BLOCKED_TEXT
     assert response.choices[0].finish_reason == ("content_filter" if blocked else "stop")
 
 

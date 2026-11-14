@@ -71,6 +71,7 @@ _BEDROCK_INVOKE_GUARDRAIL_ACTION_FIELD: Final = "amazon-bedrock-guardrailAction"
 
 _BEDROCK_INVOKE_INVOCATION_METRICS_FIELD: Final = "amazon-bedrock-invocationMetrics"
 _BEDROCK_GUARDRAIL_REPLY_ID_PREFIX: Final = "bedrock-guardrails-"
+_BEDROCK_INVOCATION_LATENCY_HEADER: Final = "x-amzn-bedrock-invocation-latency"
 _BEDROCK_INVOKE_TOKEN_COUNT_FIELDS: Final = (
     "input_tokens",
     "output_tokens",
@@ -90,9 +91,11 @@ def _token_counts(source: object) -> tuple[object, ...]:
     return tuple(fields[name] for name in _BEDROCK_INVOKE_TOKEN_COUNT_FIELDS if name in fields)
 
 
-def _reports_zero_usage(body: Mapping[str, object]) -> bool:
+def _model_never_ran(body: Mapping[str, object], headers: Mapping[str, str]) -> bool:
     counts: Final = (*_token_counts(body), *_token_counts(body.get("usage")))
-    return bool(counts) and all(count == 0 for count in counts)
+    if counts:
+        return all(count == 0 for count in counts)
+    return _BEDROCK_INVOCATION_LATENCY_HEADER not in headers
 
 
 def _reports_model_run(event: Mapping[str, object]) -> bool:
@@ -114,11 +117,11 @@ def _trace_actions(payload: Mapping[str, object]) -> frozenset[str] | None:
     return None if trace is None else guardrail_trace_actions(trace)
 
 
-def bedrock_invoke_guardrail_blocked(body: Mapping[str, object]) -> bool:
+def bedrock_invoke_guardrail_blocked(body: Mapping[str, object], headers: Mapping[str, str]) -> bool:
     if not _intervened(body):
         return False
     actions: Final = _trace_actions(body)
-    return _reports_zero_usage(body) if actions is None else "BLOCKED" in actions
+    return _model_never_ran(body, headers) if actions is None else "BLOCKED" in actions
 
 
 @dataclass(frozen=True, slots=True)
