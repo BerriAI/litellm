@@ -1,14 +1,12 @@
 import base64
-import json
 from typing import Final
 
+import httpx
 import pytest
 import respx
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
-from litellm.llms.minimax.image_edit.transformation import MinimaxImageEditConfig
-from litellm.types.router import GenericLiteLLMParams
 
 EDITS_URL: Final = "https://api.minimax.io/v1/images/edits"
 PNG_BYTES: Final = base64.b64decode(
@@ -17,6 +15,24 @@ PNG_BYTES: Final = base64.b64decode(
 PROMPT_TEXT_TOKENS: Final = 2950
 INPUT_IMAGE_TOKENS: Final = 1024
 OUTPUT_IMAGE_TOKENS: Final = 4096
+SECOND_PNG_BYTES: Final = PNG_BYTES + b"second"
+
+
+def _multipart_parts(request: httpx.Request) -> tuple[tuple[str, bool, bytes], ...]:
+    boundary: Final = request.headers["content-type"].split("boundary=", 1)[1].encode()
+    sections: Final = tuple(part.split(b"\r\n\r\n", 1) for part in request.read().split(b"--" + boundary))
+    return tuple(
+        (head.split(b'name="', 1)[1].split(b'"', 1)[0].decode(), b"filename=" in head, body.removesuffix(b"\r\n"))
+        for head, body in (section for section in sections if len(section) == 2)
+    )
+
+
+def _form_fields(request: httpx.Request) -> dict[str, str]:
+    return {name: value.decode() for name, is_file, value in _multipart_parts(request) if not is_file}
+
+
+def _uploaded_images(request: httpx.Request) -> tuple[bytes, ...]:
+    return tuple(value for name, is_file, value in _multipart_parts(request) if is_file and name == "image[]")
 
 
 def _edit_response(model: str) -> dict[str, object]:
@@ -36,33 +52,31 @@ def _edit_response(model: str) -> dict[str, object]:
     }
 
 
-def test_minimax_image_edit_sends_json_image_url():
-    config = MinimaxImageEditConfig()
-    assert config.use_multipart_form_data() is False
-    assert (
-        config.get_complete_url(model="MiniMax-H3-Image", api_base=None, litellm_params={})
-        == "https://api.minimax.io/v1/images/edits"
-    )
-    body, files = config.transform_image_edit_request(
-        model="MiniMax-H3-Image",
-        prompt="make it night",
-        image="https://example.com/ref.png",
-        image_edit_optional_request_params={"aspect_ratio": "1:1", "area": "1K"},
-        litellm_params=GenericLiteLLMParams(),
-        headers={},
-    )
-    assert files == []
-    assert body == {
+def test_minimax_image_edit_uploads_every_image_as_a_multipart_file():
+    with respx.mock(assert_all_called=True) as router:
+        route: Final = router.post(EDITS_URL).respond(200, json=_edit_response("MiniMax-H3-Image"))
+        litellm.image_edit(
+            model="minimax/MiniMax-H3-Image",
+            image=[PNG_BYTES, SECOND_PNG_BYTES],
+            prompt="put the cat from picture 2 into picture 1",
+            api_key="sk-fake",
+            aspect_ratio="1:1",
+            area="1K",
+        )
+
+    request: Final = route.calls.last.request
+    assert request.headers["content-type"].startswith("multipart/form-data")
+    assert _uploaded_images(request) == (PNG_BYTES, SECOND_PNG_BYTES)
+    assert _form_fields(request) == {
         "model": "MiniMax-H3-Image",
-        "images": [{"image_url": "https://example.com/ref.png"}],
+        "prompt": "put the cat from picture 2 into picture 1",
         "aspect_ratio": "1:1",
         "area": "1K",
-        "prompt": "make it night",
     }
 
 
 @pytest.mark.parametrize("model", ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed"])
-def test_minimax_image_edit_uploads_file_as_data_url_and_bills_its_token_rates(model: str):
+def test_minimax_image_edit_bills_its_token_rates(model: str):
     with respx.mock(assert_all_called=True) as router:
         route: Final = router.post(EDITS_URL).respond(200, json=_edit_response(model))
         response: Final = litellm.image_edit(
@@ -75,35 +89,46 @@ def test_minimax_image_edit_uploads_file_as_data_url_and_bills_its_token_rates(m
             output_format="png",
         )
 
-    sent: Final = json.loads(route.calls.last.request.content)
+    request: Final = route.calls.last.request
     row: Final = litellm.model_cost[f"minimax/{model}"]
     expected_cost: Final = (
         PROMPT_TEXT_TOKENS * row["input_cost_per_token"]
         + INPUT_IMAGE_TOKENS * row["input_cost_per_image_token"]
         + OUTPUT_IMAGE_TOKENS * row["output_cost_per_image_token"]
     )
-    assert sent == {
+    assert _uploaded_images(request) == (PNG_BYTES,)
+    assert _form_fields(request) == {
         "model": model,
-        "images": [{"image_url": f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"}],
+        "prompt": "make it night",
         "aspect_ratio": "1:1",
         "area": "1K",
         "output_format": "png",
-        "prompt": "make it night",
     }
     assert response.data[0].url == "https://example.com/h3-image/edit-0.jpg"
     assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
 
 
 @pytest.mark.parametrize(
-    ("params", "expected_body_params"),
+    ("params", "expected_fields"),
     [
         ({"extra_body": {"area": "1K"}}, {"area": "1K"}),
         ({"area": "2K", "extra_body": {"area": "1K"}}, {"area": "1K"}),
-        ({"extra_body": {"model": "MiniMax-H3-Image-Highspeed", "seed": 7}}, {"seed": 7}),
+        ({"extra_body": {"model": "MiniMax-H3-Image-Highspeed", "seed": 7}}, {"seed": "7"}),
+        (
+            {
+                "extra_body": {
+                    "prompt": "make it day",
+                    "image": "https://example.com/day.png",
+                    "images": [{"image_url": "https://example.com/day.png"}],
+                    "seed": 7,
+                }
+            },
+            {"seed": "7"},
+        ),
     ],
 )
-def test_minimax_image_edit_sends_extra_body_fields_at_the_top_level(
-    params: dict[str, object], expected_body_params: dict[str, object]
+def test_minimax_image_edit_sends_extra_body_fields_as_form_fields(
+    params: dict[str, object], expected_fields: dict[str, str]
 ):
     with respx.mock(assert_all_called=True) as router:
         route: Final = router.post(EDITS_URL).respond(200, json=_edit_response("MiniMax-H3-Image"))
@@ -115,28 +140,53 @@ def test_minimax_image_edit_sends_extra_body_fields_at_the_top_level(
             **params,
         )
 
-    assert json.loads(route.calls.last.request.content) == {
-        "model": "MiniMax-H3-Image",
-        "images": [{"image_url": f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"}],
-        "prompt": "make it night",
-        **expected_body_params,
-    }
+    request: Final = route.calls.last.request
+    assert _uploaded_images(request) == (PNG_BYTES,)
+    assert _form_fields(request) == {"model": "MiniMax-H3-Image", "prompt": "make it night", **expected_fields}
 
 
-def test_minimax_image_edit_sends_form_output_compression_as_a_number():
+def test_minimax_image_edit_sends_no_prompt_from_extra_body_without_a_top_level_prompt():
     with respx.mock(assert_all_called=True) as router:
         route: Final = router.post(EDITS_URL).respond(200, json=_edit_response("MiniMax-H3-Image"))
         litellm.image_edit(
             model="minimax/MiniMax-H3-Image",
             image=PNG_BYTES,
-            prompt="make it night",
             api_key="sk-fake",
-            output_format="jpeg",
-            output_compression="80",
+            extra_body={"prompt": "make it night", "seed": 7},
         )
 
-    sent: Final = json.loads(route.calls.last.request.content)
-    assert sent["output_compression"] == 80
+    request: Final = route.calls.last.request
+    assert _uploaded_images(request) == (PNG_BYTES,)
+    assert _form_fields(request) == {"model": "MiniMax-H3-Image", "seed": "7"}
+
+
+def test_minimax_image_edit_reports_each_failed_image_and_the_size_minimax_made():
+    body: Final = {
+        **_edit_response("MiniMax-H3-Image"),
+        "data": [
+            {"url": "https://example.com/h3-image/edit-0.jpg", "size": "1360x768", "revised_prompt": "night"},
+            {"error": {"code": "1027", "message": "generated image failed the content safety check"}},
+        ],
+    }
+    with respx.mock(assert_all_called=True) as router:
+        router.post(EDITS_URL).respond(200, json=body)
+        response: Final = litellm.image_edit(
+            model="minimax/MiniMax-H3-Image",
+            image=PNG_BYTES,
+            prompt="make it night",
+            api_key="sk-fake",
+            n=2,
+            aspect_ratio="16:9",
+        )
+
+    assert [image.url for image in response.data] == ["https://example.com/h3-image/edit-0.jpg", None]
+    assert response.data[0].revised_prompt == "night"
+    assert response.data[0].provider_specific_fields is None
+    assert response.data[1].provider_specific_fields == {
+        "error": {"code": "1027", "message": "generated image failed the content safety check"}
+    }
+    assert response.size == "1360x768"
+    assert response.quality is None
 
 
 @pytest.mark.parametrize("stream", [True, "true"])
@@ -169,7 +219,7 @@ def test_minimax_image_edit_accepts_stream_off(stream: bool | str):
         )
 
     assert route.call_count == 1
-    assert "stream" not in json.loads(route.calls.last.request.content)
+    assert "stream" not in _form_fields(route.calls.last.request)
 
 
 def test_minimax_image_edit_drops_stream_under_drop_params():
@@ -185,4 +235,4 @@ def test_minimax_image_edit_drops_stream_under_drop_params():
         )
 
     assert route.call_count == 1
-    assert "stream" not in json.loads(route.calls.last.request.content)
+    assert "stream" not in _form_fields(route.calls.last.request)
