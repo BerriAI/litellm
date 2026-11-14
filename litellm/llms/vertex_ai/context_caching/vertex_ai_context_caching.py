@@ -24,6 +24,7 @@ from ..vertex_llm_base import VertexBase, publisher_model_location
 from .known_cached_contents import KnownCachedContents, known_cached_contents
 from .transformation import (
     cached_messages_end_on_supported_turn,
+    reject_unusable_tool_call_arguments,
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
 )
@@ -455,6 +456,7 @@ class ContextCachingEndpoints(VertexBase):
         if skip_reason is not None:
             verbose_logger.debug("%s Skipping context caching.", skip_reason)
             return messages, optional_params, None
+        reject_unusable_tool_call_arguments(cached_messages, target.model, custom_llm_provider, drop_params)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -606,6 +608,7 @@ class ContextCachingEndpoints(VertexBase):
         if skip_reason is not None:
             verbose_logger.debug("%s Skipping context caching.", skip_reason)
             return messages, optional_params, None
+        reject_unusable_tool_call_arguments(cached_messages, target.model, custom_llm_provider, drop_params)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
