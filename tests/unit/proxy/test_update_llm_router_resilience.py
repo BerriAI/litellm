@@ -443,18 +443,42 @@ class TestDeleteDeploymentKeepsEditedConfigModels:
             return await ProxyConfig()._delete_deployment(db_models=[])
 
     @pytest.mark.asyncio
-    async def test_edited_config_model_keeps_serving_old_params_while_removed_and_db_models_evict(self, tmp_path):
+    @pytest.mark.parametrize(
+        ("held_model_info", "edited_model_info_yaml", "edited_id"),
+        [
+            pytest.param(
+                {},
+                "",
+                deployment_id(model_group="config-model", litellm_params={"model": "gpt-4o-mini", "max_retries": 2}),
+                id="hashed-id",
+            ),
+            pytest.param(
+                {"model_info": {"id": "old-id"}}, "    model_info:\n      id: new-id\n", "new-id", id="explicit-id"
+            ),
+        ],
+    )
+    async def test_edited_config_model_keeps_serving_old_params_while_removed_and_db_models_evict(
+        self,
+        tmp_path,
+        held_model_info: dict[str, dict[str, str]],
+        edited_model_info_yaml: str,
+        edited_id: str,
+    ):
         config_file_path: Final = str(tmp_path / "config.yaml")
         (tmp_path / "config.yaml").write_text(
             "model_list:\n"
             "  - model_name: config-model\n"
             "    litellm_params:\n"
             "      model: gpt-4o-mini\n"
-            "      max_retries: 2\n"
+            "      max_retries: 2\n" + edited_model_info_yaml
         )
         router: Final = self._router(
             [
-                {"model_name": "config-model", "litellm_params": {"model": "gpt-4o-mini", "max_retries": 1}},
+                {
+                    "model_name": "config-model",
+                    "litellm_params": {"model": "gpt-4o-mini", "max_retries": 1},
+                    **held_model_info,
+                },
                 {"model_name": "removed-model", "litellm_params": {"model": "gpt-4o-mini"}},
                 {
                     "model_name": "config-model",
@@ -473,12 +497,48 @@ class TestDeleteDeploymentKeepsEditedConfigModels:
 
         assert self._served(router, "config-model") == frozenset({(held_id, 1)})
         assert frozenset(router.registry().names(kind="ids")) == frozenset({held_id})
-        assert result == frozenset(
-            {
-                held_id,
-                deployment_id(model_group="config-model", litellm_params={"model": "gpt-4o-mini", "max_retries": 2}),
-            }
+        assert result == frozenset({held_id, edited_id})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model_name_yaml",
+        [
+            pytest.param("    model_name: [config-model, other]\n", id="list"),
+            pytest.param("    model_name: {config-model: 1}\n", id="mapping"),
+            pytest.param("    model_name: 7\n", id="int"),
+            pytest.param("", id="missing"),
+        ],
+    )
+    async def test_explicit_id_entry_with_odd_model_name_keeps_its_id_and_still_evicts_db_models(
+        self, tmp_path, model_name_yaml: str
+    ):
+        config_file_path: Final = str(tmp_path / "config.yaml")
+        (tmp_path / "config.yaml").write_text(
+            "model_list:\n"
+            "  - litellm_params:\n"
+            "      model: gpt-4o-mini\n"
+            "    model_info:\n"
+            "      id: explicit-id\n" + model_name_yaml
         )
+        router: Final = self._router(
+            [
+                {
+                    "model_name": "config-model",
+                    "litellm_params": {"model": "gpt-4o-mini"},
+                    "model_info": {"id": "explicit-id"},
+                },
+                {
+                    "model_name": "config-model",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": "db-model-1", "db_model": True},
+                },
+            ]
+        )
+
+        result: Final = await self._reconcile(router, config_file_path)
+
+        assert frozenset(router.registry().names(kind="ids")) == frozenset({"explicit-id"})
+        assert result == frozenset({"explicit-id"})
 
     @pytest.mark.asyncio
     async def test_member_removed_from_a_still_listed_group_keeps_serving_until_restart(self, tmp_path):
