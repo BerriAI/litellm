@@ -1329,6 +1329,79 @@ def test_bedrock_deployment_keeps_custom_prices_when_profile_lookup_fails(
         } == configured_prices
 
 
+@pytest.mark.parametrize(
+    ("loaded", "upserted", "arn_deployment_id"),
+    (
+        (("model_id", "arn"), (), "by-arn-deployment"),
+        (("arn", "model_id"), (), "by-arn-deployment"),
+        (("arn",), ("model_id",), "by-arn-deployment"),
+        (("arn",), ("model_id",), "by-model-id-deployment"),
+    ),
+    ids=("model_id_first", "arn_first", "model_id_added_later", "arn_edited_into_model_id"),
+)
+def test_bedrock_model_id_deployment_prices_the_same_beside_an_arn_deployment_of_its_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    loaded: tuple[str, ...],
+    upserted: tuple[str, ...],
+    arn_deployment_id: str,
+) -> None:
+    from litellm.cost_calculator import completion_cost
+    from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+
+    model: Final = "anthropic.arn-sibling-profile-pricing-test"
+    profile: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/arn-sibling-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            model: {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0.03,
+                "output_cost_per_token": 0.04,
+                "cache_read_input_token_cost": 0.001,
+            },
+        },
+    )
+    deployments: Final = MappingProxyType(
+        {
+            "arn": Deployment(
+                model_name="by-arn",
+                litellm_params=LiteLLM_Params(model=f"bedrock/{profile}"),
+                model_info=ModelInfo(id=arn_deployment_id),
+            ),
+            "model_id": Deployment(
+                model_name="by-model-id",
+                litellm_params=LiteLLM_Params(model=f"bedrock/converse/{model}", model_id=profile),
+                model_info=ModelInfo(
+                    id="by-model-id-deployment", input_cost_per_token=0.01, output_cost_per_token=0.02
+                ),
+            ),
+        }
+    )
+    router: Final = Router(model_list=[deployments[name].to_json(exclude_none=True) for name in loaded])
+    for name in upserted:
+        router.upsert_deployment(deployments[name])
+    assert router.has_model_id("by-model-id-deployment")
+    assert router.has_model_id(arn_deployment_id)
+    assert completion_cost(
+        model=model,
+        completion_response=ModelResponse(
+            model=model,
+            usage=Usage(
+                prompt_tokens=100,
+                completion_tokens=3,
+                total_tokens=103,
+                prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=80),
+            ),
+        ),
+        custom_llm_provider="bedrock",
+        custom_pricing=True,
+        router_model_id="by-model-id-deployment",
+    ) == pytest.approx(20 * 0.01 + 80 * 0.001 + 3 * 0.02)
+
+
 def test_partial_custom_pricing_inherits_builtin_cache_pricing():
     """A deployment that overrides only input/output cost on a cache-supporting
     model must still bill cache_read and cache_creation tokens. Before the

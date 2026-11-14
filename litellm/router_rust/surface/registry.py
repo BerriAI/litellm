@@ -61,6 +61,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
+from litellm.cost_calculator import cost_map_key_prices_anything
 from litellm.litellm_core_utils.access_windows import access_windows_config_error
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, without
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -416,7 +417,7 @@ def cost_map_backend_model(deployment: Deployment) -> str:
     if isinstance(invoked_model, str) and invoked_model and _bedrock_profile(params, model):
         profile_model: Final = invoked_model if invoked_model.startswith("bedrock/") else f"bedrock/{invoked_model}"
         profile_info: Final = lookup_model_info_for_registration(model=profile_model, custom_llm_provider="bedrock")
-        if not isinstance(profile_info, ModelInfoLookupMiss):
+        if not isinstance(profile_info, ModelInfoLookupMiss) and cost_map_key_prices_anything(profile_info["key"]):
             return profile_model
     return model
 
