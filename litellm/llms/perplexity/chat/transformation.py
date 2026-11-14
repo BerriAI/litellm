@@ -2,12 +2,12 @@
 Translate from OpenAI's `/v1/chat/completions` to Perplexity's `/v1/chat/completions`
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -22,6 +22,19 @@ if TYPE_CHECKING:
 
 _PERPLEXITY_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = MappingProxyType({"X-Pplx-Integration": "litellm"})
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+
+
+class _StreamedSearchSources(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+    citations: tuple[str, ...] | None = None
+    search_results: tuple[Mapping[str, object], ...] | None = None
+
+
+def _streamed_search_sources(chunk: object) -> _StreamedSearchSources:
+    try:
+        return _StreamedSearchSources.model_validate(chunk)
+    except ValidationError:
+        return _StreamedSearchSources()
 
 
 class PerplexityChatConfig(OpenAIGPTConfig):
@@ -119,6 +132,18 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             verbose_logger.debug("Error extracting Perplexity-specific usage fields: %s", e)
 
         return model_response
+
+    def apply_assembled_streaming_response_metadata(self, response: ModelResponse, chunks: Sequence[object]) -> None:
+        sources: Final = tuple(map(_streamed_search_sources, reversed(chunks)))
+        citations: Final = next((source.citations for source in sources if source.citations), ())
+        search_results: Final = next((source.search_results for source in sources if source.search_results), ())
+        fields: Final = (
+            ("citations", list(citations)),
+            ("search_results", [dict(result) for result in search_results]),
+        )
+        for field_name, value in fields:
+            if value:
+                setattr(response, field_name, value)
 
     def _enhance_usage_with_perplexity_fields(self, model_response: ModelResponse, raw_response_json: dict) -> None:
         """
