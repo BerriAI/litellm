@@ -158,9 +158,9 @@ describe("Chat Models page", () => {
     const user = userEvent.setup();
     renderWithProviders(<ChatModelsPage />);
 
-    const publishedModel = await screen.findByRole("button", { name: /^published-chat/ });
-    expect(screen.queryByRole("button", { name: /^research-private/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^image-studio/ })).not.toBeInTheDocument();
+    const publishedModel = await screen.findByRole("row", { name: "Open model published-chat" });
+    expect(screen.queryByRole("row", { name: "Open model research-private" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: "Open model image-studio" })).not.toBeInTheDocument();
     await user.click(publishedModel);
 
     const details = await screen.findByRole("dialog", { name: PUBLISHED_MODEL.model_group });
