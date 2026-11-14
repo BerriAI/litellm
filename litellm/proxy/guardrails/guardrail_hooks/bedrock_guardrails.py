@@ -3174,7 +3174,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Args:
             content_list: List of content items
             masked_texts: List of masked text strings
-            starting_index: Starting index in the masked_texts list
+            masking_index: Starting index in the masked_texts list
 
         Returns:
             Updated content list with masked items
