@@ -55,7 +55,7 @@ class _ModelProfile:
 _SEEDANCE_PROFILE: Final[_ModelProfile] = _ModelProfile(
     resolutions=frozenset({"480p", "720p", "1080p", "4k"}),
     resolution_tiers=((480, "480p"), (720, "720p"), (1080, "1080p"), (sys.maxsize, "4k")),
-    default_resolution="720p",
+    default_resolution=None,
     integer_duration=False,
     reference_key="image_url",
     reference_as_list=False,
