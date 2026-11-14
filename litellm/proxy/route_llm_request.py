@@ -280,7 +280,10 @@ REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = Map
 )
 
 BODY_PARAM_ALTERNATIVES_BY_ROUTE: Final[Mapping[str, Mapping[str, tuple[str, ...]]]] = MappingProxyType(
-    {"acreate_interaction": MappingProxyType({"input": ("continuation_token",)})}
+    {
+        "acreate_interaction": MappingProxyType({"input": ("continuation_token",)}),
+        "avector_store_search": MappingProxyType({"query": ("query_image",)}),
+    }
 )
 
 JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])

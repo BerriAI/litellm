@@ -4,13 +4,16 @@ import _hashlib
 import asyncio
 import copy
 import hashlib
+import importlib
 import inspect
 import logging
 import os
+import sys
 import tempfile
 import warnings
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
+from types import ModuleType
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -570,3 +573,18 @@ def free_and_paid_router() -> "litellm.Router":
             _per_token_priced("paid-model", "openai/paid-backend", 1e-6, 2e-6),
         ]
     )
+
+
+@pytest.fixture
+def import_without_redis_installed(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], ModuleType]:
+    def _import(module_name: str) -> ModuleType:
+        package_name, _, attribute = module_name.rpartition(".")
+        monkeypatch.setattr(sys.modules[package_name], attribute, sys.modules[module_name])
+        monkeypatch.setitem(sys.modules, "redis", None)
+        for name in tuple(sys.modules):
+            if name.startswith("redis."):
+                monkeypatch.setitem(sys.modules, name, None)
+        monkeypatch.delitem(sys.modules, module_name)
+        return importlib.import_module(module_name)
+
+    return _import
