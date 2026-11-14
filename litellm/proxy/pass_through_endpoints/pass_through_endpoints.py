@@ -3133,11 +3133,11 @@ def _turn_in_flight(
 
 
 def _passthrough_close(
-    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None, unfinished_turn: asyncio.Event
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None, turn_cut: bool
 ) -> ResponsesWebSocketClose:
     if upstream_frame_kind is None:
         return "settled_by_its_log"
-    return "turn_unfinished" if unfinished_turn.is_set() else "turns_finished"
+    return "turn_unfinished" if turn_cut else "turns_finished"
 
 
 def _turn_owed(
@@ -3790,7 +3790,12 @@ async def websocket_passthrough_request(
                 await websocket.close()
         finally:
             await proxy_logging_obj.arelease_responses_websocket_slot(
-                user_api_key_dict, _passthrough_close(upstream_frame_kind, unfinished_turn), socket_logging.finished
+                user_api_key_dict,
+                _passthrough_close(
+                    upstream_frame_kind,
+                    unfinished_turn.is_set() or _turn_owed(upstream_frame_kind, websocket_messages, ledger),
+                ),
+                socket_logging.finished,
             )
 
 

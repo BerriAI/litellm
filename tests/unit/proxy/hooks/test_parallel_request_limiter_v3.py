@@ -5885,7 +5885,8 @@ async def test_a_closed_responses_websocket_gives_back_its_slot_and_tpm_reservat
     assert 2 * reserved > 100
     assert handler._gauge_in_flight_from_cache_value(_local(handler, parallel_key)) == 1
 
-    await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished")
+    async with _background_work_awaited():
+        await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished")
 
     assert int(_local(handler, tokens_key) or 0) == 0
     assert handler._gauge_in_flight_from_cache_value(_local(handler, parallel_key)) == 0
@@ -5916,18 +5917,19 @@ async def test_a_responses_websocket_admission_reservation_is_refunded_exactly_o
             user_api_key_dict=auth,
         )
 
-    match settles:
-        case "close_twice":
-            await close()
-            await close()
-        case "close_then_failure_row":
-            await close()
-            await failure_row()
-        case "failure_row_then_close":
-            await failure_row()
-            await close()
-        case _:
-            await asyncio.gather(close(), failure_row())
+    async with _background_work_awaited():
+        match settles:
+            case "close_twice":
+                await close()
+                await close()
+            case "close_then_failure_row":
+                await close()
+                await failure_row()
+            case "failure_row_then_close":
+                await failure_row()
+                await close()
+            case _:
+                await asyncio.gather(close(), failure_row())
 
     assert int(_local(handler, tokens_key) or 0) == 0
 
@@ -5948,7 +5950,8 @@ async def test_a_closed_responses_websocket_gives_back_its_project_token_reserva
     await _admit_responses_websocket(handler, cache, auth, "project-socket")
     assert int(_local(handler, project_keys[1]) or 0) > 0
 
-    await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished")
+    async with _background_work_awaited():
+        await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished")
 
     assert [int(_local(handler, key) or 0) for key in project_keys] == [0, 0]
 
@@ -6027,7 +6030,8 @@ async def test_a_responses_websocket_close_refunds_its_tpm_only_once_its_turns_l
             )
         )
 
-    await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished", turns_logged)
+    async with _background_work_awaited():
+        await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished", turns_logged)
 
     assert reserved > 0
     assert while_turns_logged == [(reserved, 0)]
@@ -6098,7 +6102,8 @@ async def test_a_closed_responses_websocket_keeps_the_team_ptu_estimate_only_onc
     ptu_reserved: Final = int(_local(handler, ptu_key) or 0)
     key_reserved: Final = int(_local(handler, tokens_key) or 0)
 
-    await proxy_logging_obj.arelease_responses_websocket_slot(auth, close)
+    async with _background_work_awaited():
+        await proxy_logging_obj.arelease_responses_websocket_slot(auth, close)
 
     assert ptu_reserved > 0 and key_reserved > 0
     assert int(_local(handler, ptu_key) or 0) == (ptu_reserved if keeps_the_ptu_estimate else 0)

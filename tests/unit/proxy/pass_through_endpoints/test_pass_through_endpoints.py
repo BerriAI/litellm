@@ -9004,6 +9004,53 @@ async def test_websocket_passthrough_holds_its_tpm_reservation_until_its_turn_ro
 
 
 @pytest.mark.asyncio
+async def test_websocket_passthrough_cancelled_mid_turn_keeps_its_tpm_reservation():
+    limited: Final = _TpmLimitedKey.new("sk-socket-cancelled-mid-turn")
+    upstream_ws: Final = ScriptedUpstreamWebSocket(replies=[[]])
+    client_leaves: Final = asyncio.Event()
+    frames: Final = iter([_received_frame(json.dumps({"type": "response.create", "model": "gpt-5.4-mini"}))])
+
+    async def receive() -> Mapping[str, str | bytes]:
+        frame: Final = next(frames, None)
+        if frame is not None:
+            return frame
+        await client_leaves.wait()
+        return {"type": "websocket.disconnect"}
+
+    async def turn_sent_upstream() -> None:
+        while upstream_ws.send.await_count == 0:
+            await asyncio.sleep(0)
+
+    with _patched_websocket_passthrough_environment(upstream_ws) as proxy_logging:
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=limited.admit)
+        proxy_logging.arelease_responses_websocket_slot = limited.proxy_logging_obj.arelease_responses_websocket_slot
+        session: Final = asyncio.create_task(
+            websocket_passthrough_request(
+                websocket=_client_websocket(receive),
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=limited.key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+            )
+        )
+        await asyncio.wait_for(turn_sent_upstream(), timeout=10)
+        tasks_before_the_cancel: Final = asyncio.all_tasks()
+        session.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await session
+        await asyncio.wait_for(asyncio.gather(*(asyncio.all_tasks() - tasks_before_the_cancel)), timeout=10)
+        admitted_after_the_cancel: Final = await limited.admits_another_session()
+        client_leaves.set()
+        await upstream_ws.close()
+
+    assert not admitted_after_the_cancel
+
+
+@pytest.mark.asyncio
 async def test_websocket_passthrough_without_a_turn_classifier_leaves_its_tpm_reservation_to_its_session_row():
     limited: Final = _TpmLimitedKey.new("sk-socket-session-row")
     rows: Final[list[asyncio.Task[None]]] = []
