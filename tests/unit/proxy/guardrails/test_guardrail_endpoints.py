@@ -4231,8 +4231,8 @@ class _BedrockGuardrailCall(NamedTuple):
 
 
 class _CapturingLogger(CustomLogger):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, message_logging: bool = True) -> None:
+        super().__init__(turn_off_message_logging=not message_logging)
         self.logged: Final[list[Mapping[str, object]]] = []
         self.failure_hook_requests: Final[list[Mapping[str, object]]] = []
 
@@ -4275,6 +4275,7 @@ async def _apply_bedrock_guardrail_over_http(
     bedrock_answers: Sequence[Mapping[str, object]],
     body: Mapping[str, object],
     guardrail: Callable[[AsyncHTTPHandler], CustomGuardrail] = _bedrock_guard,
+    message_logging: bool = True,
 ) -> _BedrockGuardrailCall:
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.guardrails.guardrail_endpoints import router
@@ -4287,7 +4288,7 @@ async def _apply_bedrock_guardrail_over_http(
         sent.append(request)
         return httpx.Response(200, json=bedrock_answers[len(sent) - 1])
 
-    capture: Final = _CapturingLogger()
+    capture: Final = _CapturingLogger(message_logging)
     spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
     mocker.patch.object(
         litellm,
@@ -4366,3 +4367,31 @@ async def test_apply_guardrail_never_logs_a_verdict_the_caller_supplied(mocker: 
     )
 
     assert _logged_verdicts(call) == [("bedrock-guard", "success")]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_keeps_the_prompt_out_of_the_verdict_a_redacting_callback_receives(
+    mocker: MockerFixture,
+) -> None:
+    masked: Final = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "please bill my card {CREDIT_DEBIT_CARD_NUMBER}"}],
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {"type": "CREDIT_DEBIT_CARD_NUMBER", "match": "4111111111111111", "action": "ANONYMIZED"}
+                    ]
+                }
+            }
+        ],
+    }
+
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (masked,), {"text": "please bill my card 4111111111111111"}, message_logging=False
+    )
+
+    assert call.response.status_code == 200
+    assert [name for name, _ in _logged_verdicts(call)] == ["bedrock-guard"]
+    assert "please bill my card" not in str(call.logged["guardrail_information"])
+    assert "4111111111111111" not in str(call.logged["guardrail_information"])

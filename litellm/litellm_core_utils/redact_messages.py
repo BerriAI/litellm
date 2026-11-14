@@ -21,6 +21,7 @@ from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     attribute_or_none,
     get_metadata_variable_name_from_kwargs,
     has_attributes,
@@ -33,7 +34,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import BaselineRouteStamp
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import PROMPT_CARRYING_GUARDRAIL_FIELDS, StandardCallbackDynamicParams
 from litellm.types.vector_stores import RETRIEVAL_QUERY_PARAMS
 
 if TYPE_CHECKING:
@@ -247,6 +248,23 @@ def _redact_choice_content(choice):
 
 def _as_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # keys are read one by one
+
+
+def _guardrail_entry_without_prompt_text(entry: object) -> object:
+    fields: Final = _as_mapping(entry)
+    if fields is None:
+        return entry
+    return {
+        field: REDACTED_BY_LITELLM if field in PROMPT_CARRYING_GUARDRAIL_FIELDS and value is not None else value
+        for field, value in fields.items()
+    }
+
+
+def _guardrail_information_without_prompt_text(guardrail_information: object) -> object:
+    entries: Final = as_object_list(guardrail_information)
+    if entries is None:
+        return _guardrail_entry_without_prompt_text(guardrail_information)
+    return [_guardrail_entry_without_prompt_text(entry) for entry in entries]
 
 
 def _redact_provider_specific_fields(message: object) -> None:
@@ -519,6 +537,11 @@ def _redact_standard_logging_object(
 
     if standard_logging_object.get("messages") is not None:
         standard_logging_object["messages"] = [{"role": "user", "content": redacted_str}]
+    guardrail_information: Final = standard_logging_object.get("guardrail_information")
+    if guardrail_information is not None:
+        standard_logging_object["guardrail_information"] = _guardrail_information_without_prompt_text(
+            guardrail_information
+        )
     model_parameters: Final = _as_mapping(standard_logging_object.get("model_parameters"))
     if model_parameters is not None and redact_instructions:
         standard_logging_object["model_parameters"] = _with_redacted_request_fields(model_parameters)

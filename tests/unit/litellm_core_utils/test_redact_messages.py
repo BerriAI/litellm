@@ -2434,3 +2434,38 @@ def test_perform_redaction_strips_the_matched_text_from_the_bedrock_guardrail_tr
     assert "US_SSN" in redacted.model_dump_json(), "the finding stays, only its matched text goes"
     assert "123-45-6789" not in str(redacted_dict)
     assert "123-45-6789" in response.model_dump_json(), "the caller's own response is not redacted"
+
+
+_GUARDRAIL_RECORD: Final = MappingProxyType(
+    {
+        "guardrail_name": "bedrock-guard",
+        "guardrail_status": "guardrail_intervened",
+        "guardrail_request": {"texts": ["my card is 4111 1111 1111 1111"]},
+        "guardrail_response": {"outputs": [{"text": "my card is 4111 1111 1111 1111"}]},
+        "match_details": [{"snippet": "4111 1111 1111 1111"}],
+        "classification": {"reason": "card 4111 1111 1111 1111"},
+        "guardrail_cost": 0.00075,
+        "duration": 0.4,
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "guardrail_information",
+    [[dict(_GUARDRAIL_RECORD)], dict(_GUARDRAIL_RECORD)],
+    ids=["list", "bare_record"],
+)
+def test_redaction_keeps_the_guardrail_verdict_and_drops_the_prompt_it_quotes(
+    guardrail_information: object,
+) -> None:
+    payload: Final = {"messages": [{"role": "user", "content": "x"}], "guardrail_information": guardrail_information}
+
+    redacted: Final = redacted_standard_logging_payload(payload)["guardrail_information"]
+
+    records: Final = redacted if isinstance(redacted, list) else [redacted]
+    assert "4111" not in str(records)
+    assert [
+        (record["guardrail_name"], record["guardrail_status"], record["guardrail_cost"], record["duration"])
+        for record in records
+    ] == [("bedrock-guard", "guardrail_intervened", 0.00075, 0.4)]
+    assert "4111" in str(payload["guardrail_information"]), "the caller's payload is not redacted in place"
