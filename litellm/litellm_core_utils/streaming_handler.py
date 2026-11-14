@@ -2401,7 +2401,7 @@ class CustomStreamWrapper:
         )
 
     def _maybe_set_final_chunk_usage(self, chunk: ModelResponseStream) -> None:
-        if self.sent_last_chunk is True and self.stream_options is None:
+        if self.sent_last_chunk is True and not self.send_stream_usage:
             self._set_final_chunk_usage(chunk)
 
     def __next__(self) -> "ModelResponseStream":
@@ -2483,8 +2483,8 @@ class CustomStreamWrapper:
                         if is_empty:
                             continue
                     # add usage as hidden param
+                    self._maybe_set_final_chunk_usage(response)
                     if self.sent_last_chunk is True and self.stream_options is None:
-                        self._set_final_chunk_usage(response)
                         # Add MCP metadata to final chunk if present
                         response = self._add_mcp_metadata_to_final_chunk(response)
                     # RETURN RESULT
@@ -2546,7 +2546,7 @@ class CustomStreamWrapper:
                 # (shared by reference), so mutating it here also corrects
                 # the user's copy.
                 if (
-                    self.stream_options is None
+                    not self.send_stream_usage
                     and complete_streaming_response is not None
                     and self._last_returned_hidden_params is not None
                 ):
@@ -2565,8 +2565,7 @@ class CustomStreamWrapper:
                 final_chunk_for_logging: Final = self._final_chunk_for_logging(processed_chunk)
                 if final_chunk_for_logging is not None:
                     self.chunks.append(final_chunk_for_logging)
-                if self.stream_options is None:
-                    self._set_final_chunk_usage(processed_chunk)
+                self._maybe_set_final_chunk_usage(processed_chunk)
                 ## LOGGING
                 executor.submit(
                     self.run_success_logging_and_cache_storage,
@@ -2698,17 +2697,11 @@ class CustomStreamWrapper:
                             if isinstance(choice, StreamingChoices):
                                 self._accumulate_streamed_delta(choice.delta)
                         self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
-                        if getattr(processed_chunk, "usage", None) is None or (
-                            not self.send_stream_usage and processed_chunk.choices
-                        ):
-                            self.chunks.append(processed_chunk)
-                            self._maybe_set_final_chunk_usage(processed_chunk)
-                            return processed_chunk
-                        usage_free_chunk = self._record_and_strip_usage_chunk(processed_chunk)
-                        if usage_free_chunk is None:
+                        returned_chunk = self._returned_sync_stream_chunk(processed_chunk)
+                        if returned_chunk is None:
                             continue
-                        self._maybe_set_final_chunk_usage(usage_free_chunk)
-                        return usage_free_chunk
+                        self._maybe_set_final_chunk_usage(returned_chunk)
+                        return returned_chunk
         except (StopAsyncIteration, StopIteration):
             if self._should_fail_on_clean_eof():
                 await self.aclose()
@@ -2759,7 +2752,7 @@ class CustomStreamWrapper:
             # Update hidden_params with final usage from
             # stream_chunk_builder (see sync __next__ for full comment).
             if (
-                self.stream_options is None
+                not self.send_stream_usage
                 and complete_streaming_response is not None
                 and self._last_returned_hidden_params is not None
             ):
@@ -2810,8 +2803,7 @@ class CustomStreamWrapper:
             final_chunk_for_logging: Final = self._final_chunk_for_logging(processed_chunk)
             if final_chunk_for_logging is not None:
                 self.chunks.append(final_chunk_for_logging)
-            if self.stream_options is None:
-                self._set_final_chunk_usage(processed_chunk)
+            self._maybe_set_final_chunk_usage(processed_chunk)
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log
@@ -2928,6 +2920,12 @@ class CustomStreamWrapper:
             ),
         )
         return None if is_model_response_stream_empty(model_response=usage_free_chunk) else usage_free_chunk
+
+    def _returned_sync_stream_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
+        if getattr(chunk, "usage", None) is None or (not self.send_stream_usage and chunk.choices):
+            self.chunks.append(chunk)
+            return chunk
+        return self._record_and_strip_usage_chunk(chunk)
 
     def _accumulate_streamed_delta(self, delta: object) -> None:
         get: Final = getattr(delta, "get", None)
