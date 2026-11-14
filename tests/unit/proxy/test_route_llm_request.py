@@ -547,7 +547,7 @@ def test_e2e_proxy_config_opts_in_to_the_mock_params_its_suite_sends():
         for param in GATED_MOCK_PARAM_NAMES
         if f"{param}=" in source or f'"{param}"' in source
     )
-    config = yaml.safe_load((repo_root / "proxy_server_config.yaml").read_text(encoding="utf-8"))
+    config = yaml.safe_load(Path(__file__).with_name("proxy_server_config.yaml").read_text(encoding="utf-8"))
     general_settings = config.get("general_settings") or {}
 
     assert not senders or general_settings.get(MOCK_TESTING_CONFIG_KEY) is True, (

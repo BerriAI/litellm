@@ -1,8 +1,13 @@
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import google.auth
+import google.auth.credentials
 import httpx
 import pytest
+import respx
+
+import litellm
 
 
 from litellm.llms.vertex_ai.multimodal_embeddings.transformation import (
@@ -174,3 +179,30 @@ class TestVertexMultimodalEmbedding:
             headers={},
         )
         assert "parameters" not in request
+
+
+class _StaticGoogleCredentials(google.auth.credentials.Credentials):
+    def refresh(self, request: object) -> None:
+        self.token = "test-token"
+
+
+def test_extra_body_fields_reach_the_multimodal_predict_body(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(google.auth, "default", lambda scopes: (_StaticGoogleCredentials(), "test-project"))
+    route = respx_mock.post(host="us-central1-aiplatform.googleapis.com").mock(
+        return_value=httpx.Response(200, json={"predictions": [{"textEmbedding": [0.1, 0.2]}]})
+    )
+
+    litellm.embedding(
+        model="vertex_ai/multimodalembedding@001",
+        input="Hello world",
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        extra_body={"dimension": 128},
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "instances": [{"text": "Hello world"}],
+        "parameters": {"dimension": 128},
+    }
