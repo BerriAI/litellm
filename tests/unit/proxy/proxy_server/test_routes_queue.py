@@ -367,6 +367,55 @@ def test_queued_chat_carries_key_team_and_caller_tags_and_the_budget_reservation
     assert metadata["user_api_key_budget_reservation"] == reservation
 
 
+def test_a_queued_spend_row_stores_the_trace_id_the_caller_sent(
+    client: TestClient, auth_as: Callable[..., AbstractContextManager[None]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _queue_router(monkeypatch, default_priority=0)
+    logger: Final = _QueueRequestLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    with auth_as():
+        response: Final = client.post(
+            "/queue/chat/completions",
+            json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+            headers={"x-litellm-trace-id": "queue-trace-1"},
+        )
+    assert response.status_code == 200, response.text
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(
+        kwargs=logger.requests.get_nowait(),
+        response_obj=litellm.ModelResponse.model_validate(response.json()),
+        start_time=now,
+        end_time=now,
+    )
+    assert payload["session_id"] == "queue-trace-1"
+
+
+def test_a_queued_stream_error_carries_the_call_id_in_its_header_and_body(
+    client: TestClient, auth_as: Callable[..., AbstractContextManager[None]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def provider_rate_limited() -> AsyncGenerator[litellm.ModelResponseStream, None]:
+        raise litellm.RateLimitError(message="slow down", llm_provider="openai", model="gpt-4")
+        yield litellm.ModelResponseStream()
+
+    router: Final = MagicMock()
+    router.health.return_value.split_priority.return_value = (0, {})
+    router.health.return_value.priority_header_fields.return_value = {}
+    router.registry.return_value.deployments.return_value = []
+    router.schedule_acompletion = AsyncMock(return_value=provider_rate_limited())
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=MagicMock()))
+    monkeypatch.setattr(proxy_server, "general_settings", {"include_call_id_in_error_body": True})
+    with auth_as():
+        response: Final = client.post(
+            "/queue/chat/completions",
+            json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+            headers={"x-litellm-call-id": "queue-call-1"},
+        )
+    assert response.status_code == 429, response.text
+    assert response.headers.get("x-litellm-call-id") == "queue-call-1"
+    assert response.json()["error"]["litellm_call_id"] == "queue-call-1"
+
+
 class _QueueSuccessLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()

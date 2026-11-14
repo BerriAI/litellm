@@ -19530,6 +19530,9 @@ async def async_queue_request(
             # if users are using user_api_key_auth, set `user` in `data`
             data["user"] = user_api_key_dict.user_id
 
+        litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
+        data["litellm_call_id"] = litellm_call_id
+
         if not isinstance(data.get("metadata"), dict):
             # Covers both missing and JSON-string metadata (multipart /
             # extra_body); see above for the same guard upstream.
@@ -19549,6 +19552,9 @@ async def async_queue_request(
             user_api_key_dict, "team_object_permission_id", None
         )
         data["metadata"]["endpoint"] = str(request.url)
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=_headers, data=data, _metadata_variable_name="metadata"
+        )
         queued_tags: Final = LiteLLMProxyRequestSetup.merged_request_tags(
             request=request,
             metadata_tags=data["metadata"].get("tags"),
@@ -19584,6 +19590,7 @@ async def async_queue_request(
             )
         )
         queued_priority, _ = router.health().split_priority(data["model"], data)
+        queued_headers: Final = {"x-litellm-priority": str(queued_priority), LITELLM_CALL_ID_HEADER: litellm_call_id}
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
             async def produce_queue_stream() -> StreamingResponse | JSONResponse:
@@ -19597,8 +19604,9 @@ async def async_queue_request(
                         request=request,
                     ),
                     media_type="text/event-stream",
-                    headers={"x-litellm-priority": str(queued_priority)},
+                    headers=queued_headers,
                     request=request,
+                    general_settings=general_settings_view(),
                 )
 
             async def audit_late_failure(exc: Exception) -> HTTPException | None:
@@ -19613,7 +19621,7 @@ async def async_queue_request(
             )
 
         response: Final = _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
-        fastapi_response.headers.update({"x-litellm-priority": str(queued_priority)})
+        fastapi_response.headers.update(queued_headers)
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
