@@ -88,7 +88,7 @@ def _resolve_model_from_preferences(
         from litellm.proxy.proxy_server import llm_router
 
         if llm_router is not None:
-            available_model_names = llm_router.get_model_names()
+            available_model_names = llm_router.registry().names()
     except Exception:
         pass
     if not available_model_names and litellm.model_list:

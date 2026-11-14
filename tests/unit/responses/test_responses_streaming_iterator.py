@@ -277,6 +277,7 @@ async def _failure_payload_after_mid_stream_timeout(
     request_input: str | list[dict[str, object]],
     upstream: _UpstreamThatTimesOutAfterThreeDeltas | None = None,
     background_fields: Mapping[str, object] | None = None,
+    replays_stored_stream: bool = False,
 ) -> tuple[FailureRecorder, StandardLoggingPayload]:
     upstream_response: Final = upstream or _UpstreamThatTimesOutAfterThreeDeltas()
     recorder = FailureRecorder()
@@ -297,6 +298,7 @@ async def _failure_payload_after_mid_stream_timeout(
         logging_obj=logging_obj,
         custom_llm_provider="openai",
         request_data={"model": "gpt-5.4-nano", "input": request_input, "stream": True, **(background_fields or {})},
+        replays_stored_stream=replays_stored_stream,
     )
     received = _ChunkRecorder()
 
@@ -349,6 +351,17 @@ async def test_mid_stream_failure_of_a_background_response_bills_nothing_since_r
     _, payload = await _failure_payload_after_mid_stream_timeout(
         monkeypatch, _SEA_PROMPT, background_fields={"background": True}
     )
+
+    assert payload["status"] == "failure"
+    assert payload["completion_tokens"] == 0
+    assert payload["response_cost"] == 0
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_failure_of_a_resumed_background_stream_bills_nothing_since_its_create_bills_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, payload = await _failure_payload_after_mid_stream_timeout(monkeypatch, _SEA_PROMPT, replays_stored_stream=True)
 
     assert payload["status"] == "failure"
     assert payload["completion_tokens"] == 0
@@ -597,6 +610,21 @@ def test_partial_response_on_disconnect_bills_the_relayed_text_at_the_served_ser
         model="gpt-5.4-nano", messages=[{"role": "user", "content": "tell me a story"}]
     )
     assert partial.usage.total_tokens == partial.usage.input_tokens + partial.usage.output_tokens
+
+
+def test_disconnecting_from_a_resumed_background_stream_bills_no_partial_answer():
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=_make_logging_obj(),
+        custom_llm_provider="openai",
+        replays_stored_stream=True,
+    )
+    for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("Once upon a time ", 1), _text_delta("a fox slept.", 2)):
+        iterator._process_chunk(json.dumps(event))
+
+    assert iterator.partial_response_on_disconnect() is None
 
 
 @pytest.mark.parametrize(

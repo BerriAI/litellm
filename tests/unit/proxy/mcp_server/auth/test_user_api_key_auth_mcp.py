@@ -1,7 +1,7 @@
 import contextlib
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -21,6 +21,7 @@ from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
+    LitellmUserRoles,
     ProxyException,
     SpecialHeaders,
     SpecialMCPServerNames,
@@ -32,6 +33,7 @@ from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
     _agent_capped_servers,
     is_mcp_admitted_user_subject,
 )
+from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentCaller
 
 
@@ -1599,9 +1601,7 @@ class TestMCPRequestHandler:
             team_id="test-team-id",
         )
 
-        with patch(
-            "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth"
-        ) as mock_user_api_key_auth:
+        with patch("litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth") as mock_user_api_key_auth:
             mock_user_api_key_auth.return_value = mock_auth_result
 
             # Call the method
@@ -1663,10 +1663,10 @@ class TestMCPOAuth2AuthFlow:
     as LiteLLM API keys, causing auth failures and empty tool listings.
     """
 
-    async def test_oauth2_token_in_authorization_header_requires_litellm_admission(self):
+    async def test_oauth2_upstream_token_on_legacy_delegate_is_admitted_anonymously(self) -> None:
         """
-        A bare Authorization token on the legacy delegated mode must establish
-        a LiteLLM principal rather than entering anonymously.
+        A bare upstream OAuth token on the legacy delegated mode is admitted
+        anonymously without LiteLLM key validation and kept for egress.
         """
         from litellm.types.mcp import MCPAuth
 
@@ -1702,10 +1702,11 @@ class TestMCPOAuth2AuthFlow:
                 raw_headers,
             ) = await MCPRequestHandler.process_mcp_request(scope)
 
-            assert isinstance(auth_result, UserAPIKeyAuth)
-            assert auth_result.user_id == "admitted-user"
-            mock_auth.assert_awaited_once()
-            assert oauth2_headers.get("Authorization") == "Bearer atlassian-oauth2-access-token-xyz"
+            assert auth_result.user_id is None
+            assert auth_result.api_key is None
+            assert auth_result.mcp_forwards_caller_authorization is True
+            mock_auth.assert_not_awaited()
+            assert oauth2_headers == {"Authorization": "Bearer atlassian-oauth2-access-token-xyz"}
 
     async def test_explicit_litellm_key_with_oauth2_authorization(self):
         """
@@ -2545,9 +2546,10 @@ class TestMCPDelegateAuthToUpstream:
     """
     Tests for the ``delegate_auth_to_upstream`` per-server flag.
 
-    The legacy flag no longer bypasses LiteLLM admission. OAuth discovery may
-    still use the anonymous cold-start challenge, but a presented bearer must
-    authenticate to LiteLLM unless a separate admission credential is supplied.
+    A bare bearer that is a LiteLLM credential takes normal admission and is
+    never forwarded. Any other bearer is the upstream token: it is forwarded,
+    and the caller is admitted as the JWT or custom-auth user it also proves
+    when that user is granted the server, else anonymously.
     """
 
     @staticmethod
@@ -2652,37 +2654,497 @@ class TestMCPDelegateAuthToUpstream:
             assert isinstance(auth_result, UserAPIKeyAuth)
             mock_auth.assert_awaited_once()
 
-    async def test_delegate_with_only_upstream_token_requires_litellm_auth(self):
-        """
-        An upstream token cannot establish a LiteLLM principal and must not
-        reopen anonymous admission.
-        """
-        from litellm.types.mcp import MCPAuth
-
-        scope = {
+    @staticmethod
+    def _bearer_scope(token: str) -> dict[str, object]:
+        return {
             "type": "http",
             "method": "POST",
             "path": "/mcp/delegated_oauth_server",
-            "headers": [(b"authorization", b"Bearer upstream-pkce-token")],
+            "headers": [(b"authorization", f"Bearer {token}".encode())],
         }
 
+    @staticmethod
+    def _jwt(issuer: str = "https://idp.example") -> str:
+        import jwt
+
+        return jwt.encode({"iss": issuer, "sub": "jwt-user"}, "test-signing-secret", algorithm="HS256")
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _delegate_admission(
+        admission: AsyncMock, allowed_server_ids: Sequence[str] = ("test-server-id",)
+    ) -> Iterator[None]:
+        from litellm.types.mcp import MCPAuth
+
         with (
-            patch(
-                "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-                new_callable=AsyncMock,
-                side_effect=HTTPException(status_code=401, detail="Invalid API key"),
-            ) as mock_auth,
+            patch("litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth", admission),
             patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = TestMCPDelegateAuthToUpstream._make_server(
                 auth_type=MCPAuth.oauth2,
                 delegate_auth_to_upstream=True,
             )
-            with pytest.raises(HTTPException) as exc_info:
-                await MCPRequestHandler.process_mcp_request(scope)
+            mock_mgr.get_allowed_mcp_servers = AsyncMock(return_value=list(allowed_server_ids))
+            yield
 
-            assert exc_info.value.status_code == 401
-            mock_auth.assert_awaited_once()
+    @staticmethod
+    @contextlib.contextmanager
+    def _jwt_auth_enabled(auth_jwt: AsyncMock) -> Iterator[None]:
+        from litellm.proxy import proxy_server
+        from litellm.proxy._types import LiteLLM_JWTAuth
+
+        with (
+            patch.dict(proxy_server.general_settings, {"enable_jwt_auth": True}),
+            patch.object(proxy_server, "premium_user", True),
+            patch.object(proxy_server, "user_custom_auth", None),
+            patch.object(proxy_server.jwt_handler, "auth_jwt", auth_jwt),
+            patch.object(proxy_server.jwt_handler, "litellm_jwtauth", LiteLLM_JWTAuth(), create=True),
+            patch.dict(os.environ),
+        ):
+            os.environ.pop("JWT_ISSUER", None)
+            yield
+
+    async def test_delegate_forwards_unknown_sk_token_after_key_table_miss(self) -> None:
+        """An sk- token the key table does not hold, such as a provider API key, belongs to the upstream:
+        it is forwarded anonymously rather than rejected for its prefix."""
+        from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+
+        admission: Final = AsyncMock()
+        with (
+            TestMCPDelegateAuthToUpstream._delegate_admission(admission),
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
+                new_callable=AsyncMock,
+                side_effect=KeyNotFoundError("hashed-token"),
+            ),
+        ):
+            auth_result, _, _, _, oauth2_headers, _ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope("sk-proj-upstream-provider-key")
+            )
+
+        assert auth_result.api_key is None
+        assert auth_result.mcp_forwards_caller_authorization is True
+        assert oauth2_headers == {"Authorization": "Bearer sk-proj-upstream-provider-key"}
+        admission.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "lookup_effect",
+        [None, RuntimeError("key table unreachable")],
+        ids=["key-held", "lookup-fault"],
+    )
+    async def test_delegate_litellm_key_refusal_propagates(self, lookup_effect: Exception | None) -> None:
+        """A key the table holds, or one the lookup could not check, takes normal admission, so its
+        refusal reaches the caller instead of becoming an anonymous request that forwards the key."""
+        refusal: Final = ProxyException(
+            message="Budget has been exceeded", type="budget_exceeded", param=None, code=400
+        )
+        with (
+            TestMCPDelegateAuthToUpstream._delegate_admission(AsyncMock(side_effect=refusal)),
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
+                new_callable=AsyncMock,
+                side_effect=lookup_effect,
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(TestMCPDelegateAuthToUpstream._bearer_scope("sk-held-key"))
+
+        assert exc_info.value is refusal
+
+    async def test_delegate_master_key_is_admitted_and_never_forwarded(self) -> None:
+        """The master key is not in the key table, so only recognizing it directly stops it from being
+        treated as the upstream's token and sent to the upstream server."""
+        from litellm.proxy import proxy_server
+        from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+
+        admission: Final = AsyncMock(return_value=UserAPIKeyAuth(api_key="sk-master-secret", user_role="proxy_admin"))
+        with (
+            patch.object(proxy_server, "master_key", "sk-master-secret"),
+            TestMCPDelegateAuthToUpstream._delegate_admission(admission),
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
+                new_callable=AsyncMock,
+                side_effect=KeyNotFoundError("hashed-master-key"),
+            ),
+        ):
+            auth_result, _, _, _, oauth2_headers, _ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope("sk-master-secret")
+            )
+
+        admission.assert_awaited_once()
+        assert auth_result.mcp_forwards_caller_authorization is False
+        assert oauth2_headers is None
+
+    @pytest.mark.parametrize(
+        "signing_secret, expires_in, forwarded",
+        [
+            ("sk-master-secret", timedelta(hours=1), False),
+            ("sk-master-secret", timedelta(hours=-1), False),
+            ("upstream-idp-signing-secret", timedelta(hours=1), True),
+        ],
+        ids=["master-key-signed", "master-key-signed-expired", "signed-elsewhere"],
+    )
+    async def test_delegate_master_key_signed_jwt_is_never_forwarded(
+        self, signing_secret: str, expires_in: timedelta, forwarded: bool
+    ) -> None:
+        """LiteLLM signs dashboard and OAuth tokens with the master key, so such a JWT is LiteLLM's own even
+        once expired: it takes normal admission and never reaches the upstream. A JWT signed by anyone
+        else is the upstream's token."""
+        import jwt
+
+        from litellm.proxy import proxy_server
+
+        token: Final = jwt.encode(
+            {"sub": "dashboard-user", "exp": datetime.now(timezone.utc) + expires_in}, signing_secret, algorithm="HS256"
+        )
+        admission: Final = AsyncMock(return_value=UserAPIKeyAuth(user_id="dashboard-user"))
+        with (
+            patch.object(proxy_server, "master_key", "sk-master-secret"),
+            TestMCPDelegateAuthToUpstream._delegate_admission(admission),
+        ):
+            auth_result, *_ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope(token)
+            )
+
+        assert auth_result.mcp_forwards_caller_authorization is forwarded
+        assert admission.await_count == (0 if forwarded else 1)
+
+    @pytest.mark.parametrize(
+        "token, ui_token_lookup",
+        [
+            ("llm_env_sealed-bridge-envelope", None),
+            ("llm_refresh_sealed-refresh-envelope", None),
+            ("v2:gcm:sealed-credential-blob", None),
+            ("dashboard-login-token", lambda: MagicMock(return_value=UserAPIKeyAuth(user_id="dashboard-user"))),
+            ("unreadable-dashboard-token", lambda: MagicMock(side_effect=ValueError("Invalid hash key"))),
+        ],
+        ids=["bridge-envelope", "refresh-envelope", "gcm-blob", "dashboard-token", "unreadable-dashboard-token"],
+    )
+    async def test_delegate_sealed_litellm_token_takes_normal_admission(
+        self, token: str, ui_token_lookup: Callable[[], MagicMock] | None
+    ) -> None:
+        """A token only LiteLLM issues is LiteLLM's own, even one it fails to read, so it goes through
+        normal admission and is never marked for forwarding upstream."""
+        from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
+        admission: Final = AsyncMock(return_value=UserAPIKeyAuth(user_id="litellm-user"))
+        ui_lookup: Final = (
+            patch.object(ExperimentalUIJWTToken, "get_key_object_from_ui_hash_key", ui_token_lookup())
+            if ui_token_lookup is not None
+            else contextlib.nullcontext()
+        )
+        with TestMCPDelegateAuthToUpstream._delegate_admission(admission), ui_lookup:
+            auth_result, *_ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope(token)
+            )
+
+        admission.assert_awaited_once()
+        assert auth_result.mcp_forwards_caller_authorization is False
+
+    @staticmethod
+    def _unknown_user_refusal() -> ProxyException:
+        from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+
+        refusal: Final = ProxyException(message="User doesn't exist in db", type="auth_error", param=None, code=401)
+        refusal.__cause__ = UserNotFoundError(user_id="jwt-user")
+        return refusal
+
+    @pytest.mark.parametrize(
+        "auth_jwt_effect, admission, allowed_server_ids, expected_user_id",
+        [
+            (
+                None,
+                lambda: AsyncMock(return_value=UserAPIKeyAuth(user_id="jwt-user", jwt_claims={"sub": "jwt-user"})),
+                ["test-server-id"],
+                "jwt-user",
+            ),
+            (
+                None,
+                lambda: AsyncMock(return_value=UserAPIKeyAuth(user_id="jwt-user", jwt_claims={"sub": "jwt-user"})),
+                [],
+                None,
+            ),
+            (
+                None,
+                lambda: AsyncMock(side_effect=TestMCPDelegateAuthToUpstream._unknown_user_refusal()),
+                ["test-server-id"],
+                None,
+            ),
+            (
+                ValueError("Signature verification failed"),
+                lambda: AsyncMock(return_value=UserAPIKeyAuth(user_id="jwt-user")),
+                ["test-server-id"],
+                None,
+            ),
+        ],
+        ids=["granted-user", "user-not-granted", "user-unknown-to-litellm", "signature-rejected"],
+    )
+    async def test_delegate_jwt_is_forwarded_as_granted_user_or_anonymously(
+        self,
+        auth_jwt_effect: Exception | None,
+        admission: Callable[[], AsyncMock],
+        allowed_server_ids: Sequence[str],
+        expected_user_id: str | None,
+    ) -> None:
+        """A JWT LiteLLM also accepts admits that user when granted the server; a user who is not
+        granted, unknown to LiteLLM, or whose signature fails is admitted anonymously. The JWT is always
+        forwarded, because on this server it is the upstream's token."""
+        token: Final = TestMCPDelegateAuthToUpstream._jwt()
+        with (
+            TestMCPDelegateAuthToUpstream._jwt_auth_enabled(AsyncMock(side_effect=auth_jwt_effect)),
+            TestMCPDelegateAuthToUpstream._delegate_admission(admission(), allowed_server_ids),
+        ):
+            auth_result, _, _, _, oauth2_headers, _ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope(token)
+            )
+
+        assert auth_result.user_id == expected_user_id
+        assert auth_result.mcp_forwards_caller_authorization is True
+        assert oauth2_headers == {"Authorization": f"Bearer {token}"}
+
+    @pytest.mark.parametrize(
+        "refusal",
+        [
+            ProxyException(message="Budget has been exceeded", type="budget_exceeded", param=None, code=400),
+            ProxyException(message="Team=t1 is blocked", type="auth_error", param=None, code=401),
+        ],
+        ids=["over-budget", "blocked-team"],
+    )
+    async def test_delegate_jwt_refusal_after_valid_signature_propagates(self, refusal: ProxyException) -> None:
+        """Once the signature verifies, LiteLLM knows who the caller is, so a budget or an explicit
+        disallowment is enforced and the request fails instead of continuing anonymously."""
+        with (
+            TestMCPDelegateAuthToUpstream._jwt_auth_enabled(AsyncMock(return_value={"sub": "jwt-user"})),
+            TestMCPDelegateAuthToUpstream._delegate_admission(AsyncMock(side_effect=refusal)),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(
+                    TestMCPDelegateAuthToUpstream._bearer_scope(TestMCPDelegateAuthToUpstream._jwt())
+                )
+
+        assert exc_info.value is refusal
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _idp_auth_enabled(
+        mechanism: Literal["oauth2", "oauth2_proxy"], verify: AsyncMock, premium: bool = True
+    ) -> Iterator[None]:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.auth.oauth2_check import Oauth2Handler
+
+        settings: Final = {"enable_oauth2_auth": True} if mechanism == "oauth2" else {"enable_oauth2_proxy_auth": True}
+        verifier: Final = (
+            patch.object(Oauth2Handler, "check_oauth2_token", verify)
+            if mechanism == "oauth2"
+            else patch("litellm.proxy.auth.oauth2_proxy_hook.handle_oauth2_proxy_request", verify)
+        )
+        with (
+            patch.dict(proxy_server.general_settings, settings),
+            patch.object(proxy_server, "premium_user", premium),
+            patch.object(proxy_server, "user_custom_auth", None),
+            verifier,
+        ):
+            yield
+
+    @pytest.mark.parametrize(
+        "verify_effect, allowed_server_ids, expected_user_id",
+        [
+            (None, ["test-server-id"], "idp-user"),
+            (None, [], None),
+            (ValueError("Missing trusted proxy header"), ["test-server-id"], None),
+        ],
+        ids=["granted-user", "user-not-granted", "identity-rejected"],
+    )
+    async def test_delegate_proxy_header_identity_follows_the_jwt_rules(
+        self,
+        verify_effect: Exception | None,
+        allowed_server_ids: Sequence[str],
+        expected_user_id: str | None,
+    ) -> None:
+        """Trusted reverse-proxy headers admit a granted user by name, and a user who is not granted or not
+        vouched for anonymously. The bearer is forwarded either way."""
+        admission: Final = AsyncMock(return_value=UserAPIKeyAuth(user_id="idp-user"))
+        with (
+            TestMCPDelegateAuthToUpstream._idp_auth_enabled("oauth2_proxy", AsyncMock(side_effect=verify_effect)),
+            TestMCPDelegateAuthToUpstream._delegate_admission(admission, allowed_server_ids),
+        ):
+            auth_result, _, _, _, oauth2_headers, _ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope("opaque-idp-token")
+            )
+
+        assert auth_result.user_id == expected_user_id
+        assert auth_result.mcp_forwards_caller_authorization is True
+        assert oauth2_headers == {"Authorization": "Bearer opaque-idp-token"}
+
+    @pytest.mark.parametrize(
+        "provider_status, active, allowed_server_ids, expected_user_id",
+        [
+            (200, True, ["test-server-id"], "idp-user"),
+            (200, True, [], None),
+            (200, False, ["test-server-id"], None),
+            (401, True, ["test-server-id"], None),
+        ],
+        ids=["granted-user", "user-not-granted", "token-inactive", "provider-rejects-token"],
+    )
+    async def test_delegate_oauth2_introspects_once_and_follows_the_jwt_rules(
+        self, provider_status: int, active: bool, allowed_server_ids: Sequence[str], expected_user_id: str | None
+    ) -> None:
+        """The provider is asked about the token once per request. A token it vouches for admits a granted
+        user by name, and one it reports inactive or rejects outright is forwarded anonymously instead of
+        failing the request."""
+        import httpx
+
+        from litellm.proxy import proxy_server
+        from litellm.types.mcp import MCPAuth
+
+        async def introspect(outbound: httpx.Request, **kwargs: object) -> httpx.Response:
+            return httpx.Response(provider_status, request=outbound, json={"active": active, "sub": "idp-user"})
+
+        with (
+            patch.dict(proxy_server.general_settings, {"enable_oauth2_auth": True}),
+            patch.object(proxy_server, "premium_user", True),
+            patch.object(proxy_server, "user_custom_auth", None),
+            patch.object(proxy_server, "master_key", "sk-fixture-master"),
+            patch.object(proxy_server, "prisma_client", None),
+            patch.object(proxy_server, "user_api_key_cache", DualCache()),
+            patch.dict(
+                os.environ,
+                {
+                    "OAUTH_TOKEN_INFO_ENDPOINT": "https://idp.fixture.test/introspect",
+                    "OAUTH_CLIENT_ID": "fixture-client",
+                    "OAUTH_CLIENT_SECRET": "fixture-client-secret",
+                },
+            ),
+            patch("httpx.AsyncClient.send", side_effect=introspect) as network,
+            patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = TestMCPDelegateAuthToUpstream._make_server(
+                auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True
+            )
+            mock_mgr.get_allowed_mcp_servers = AsyncMock(return_value=list(allowed_server_ids))
+            auth_result, _, _, _, oauth2_headers, _ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope("opaque-idp-token")
+            )
+
+        assert network.call_count == 1
+        assert auth_result.user_id == expected_user_id
+        assert auth_result.mcp_forwards_caller_authorization is True
+        assert oauth2_headers == {"Authorization": "Bearer opaque-idp-token"}
+
+    async def test_delegate_oauth2_rejection_admits_anonymously_whether_or_not_auth_wraps_it(self) -> None:
+        """A provider rejection is the provider declining to vouch, so the bearer is forwarded anonymously
+        even when it reaches admission as the bare validation error rather than a wrapped auth error."""
+        from litellm.proxy.auth.oauth2_check import OAuth2TokenValidationError
+
+        with (
+            TestMCPDelegateAuthToUpstream._idp_auth_enabled("oauth2", AsyncMock()),
+            TestMCPDelegateAuthToUpstream._delegate_admission(
+                AsyncMock(side_effect=OAuth2TokenValidationError("Token is not active"))
+            ),
+        ):
+            auth_result, _, _, _, oauth2_headers, _ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope("opaque-idp-token")
+            )
+
+        assert auth_result.user_id is None
+        assert auth_result.mcp_forwards_caller_authorization is True
+        assert oauth2_headers == {"Authorization": "Bearer opaque-idp-token"}
+
+    @pytest.mark.parametrize("mechanism", ["oauth2", "oauth2_proxy"])
+    async def test_delegate_idp_user_refusal_propagates(self, mechanism: Literal["oauth2", "oauth2_proxy"]) -> None:
+        """Once the provider vouches for the caller, LiteLLM's budget and permission refusals apply."""
+        refusal: Final = ProxyException(
+            message="Budget has been exceeded", type="budget_exceeded", param=None, code=400
+        )
+        with (
+            TestMCPDelegateAuthToUpstream._idp_auth_enabled(mechanism, AsyncMock()),
+            TestMCPDelegateAuthToUpstream._delegate_admission(AsyncMock(side_effect=refusal)),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(
+                    TestMCPDelegateAuthToUpstream._bearer_scope("opaque-idp-token")
+                )
+
+        assert exc_info.value is refusal
+
+    async def test_delegate_oauth2_without_premium_never_calls_the_provider(self) -> None:
+        """OAuth2 introspection is enterprise-only, so without a license the bearer is the upstream's alone."""
+        introspect: Final = AsyncMock()
+        with (
+            TestMCPDelegateAuthToUpstream._idp_auth_enabled("oauth2", introspect, premium=False),
+            TestMCPDelegateAuthToUpstream._delegate_admission(
+                AsyncMock(return_value=UserAPIKeyAuth(user_id="idp-user"))
+            ),
+        ):
+            auth_result, *_ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope("opaque-idp-token")
+            )
+
+        assert auth_result.user_id is None
+        assert auth_result.mcp_forwards_caller_authorization is True
+        introspect.assert_not_awaited()
+
+    async def test_delegate_jwt_from_unconfigured_issuer_is_forwarded_without_jwt_auth(self) -> None:
+        """A JWT from an issuer LiteLLM's JWT auth is not configured for never reaches JWT auth."""
+        auth_jwt: Final = AsyncMock(return_value={"sub": "jwt-user"})
+        admission: Final = AsyncMock(return_value=UserAPIKeyAuth(user_id="jwt-user"))
+        with (
+            TestMCPDelegateAuthToUpstream._jwt_auth_enabled(auth_jwt),
+            patch.dict(os.environ, {"JWT_ISSUER": "https://litellm-idp.example"}),
+            TestMCPDelegateAuthToUpstream._delegate_admission(admission),
+        ):
+            auth_result, *_ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope(
+                    TestMCPDelegateAuthToUpstream._jwt(issuer="https://upstream-idp.example")
+                )
+            )
+
+        assert auth_result.user_id is None
+        assert auth_result.mcp_forwards_caller_authorization is True
+        auth_jwt.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "admission, expected_user_id",
+        [
+            (
+                lambda: AsyncMock(return_value=UserAPIKeyAuth(user_id="custom-user", api_key="upstream-custom-token")),
+                "custom-user",
+            ),
+            (
+                lambda: AsyncMock(
+                    side_effect=ProxyException(message="custom auth rejected", type="auth_error", param=None, code=401)
+                ),
+                None,
+            ),
+        ],
+        ids=["accepted", "rejected"],
+    )
+    async def test_delegate_custom_auth_decides_alone(
+        self, admission: Callable[[], AsyncMock], expected_user_id: str | None
+    ) -> None:
+        """With custom auth configured, its answer alone decides: accepted admits that user, any failure
+        admits anonymously. The bearer is forwarded either way."""
+        from litellm.proxy import proxy_server
+
+        with (
+            patch.object(proxy_server, "user_custom_auth", AsyncMock()),
+            TestMCPDelegateAuthToUpstream._delegate_admission(admission()),
+        ):
+            auth_result, _, _, _, oauth2_headers, _ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope("upstream-custom-token")
+            )
+
+        assert auth_result.user_id == expected_user_id
+        assert auth_result.mcp_forwards_caller_authorization is True
+        assert oauth2_headers == {"Authorization": "Bearer upstream-custom-token"}
+
+    def test_forwarding_marker_cannot_be_forged_from_input(self) -> None:
+        """Only admission may mark a caller's Authorization for forwarding; caller-shaped input never can."""
+        assert UserAPIKeyAuth(mcp_forwards_caller_authorization=True).mcp_forwards_caller_authorization is False
+        assert (
+            UserAPIKeyAuth.model_validate({"mcp_forwards_caller_authorization": True}).mcp_forwards_caller_authorization
+            is False
+        )
 
     async def test_delegate_off_still_requires_litellm_auth(self):
         """
@@ -2753,7 +3215,12 @@ class TestMCPDelegateAuthToUpstream:
                 await MCPRequestHandler.process_mcp_request(scope)
             assert exc_info.value.status_code == 401
 
-    async def test_delegate_mixed_targets_fail_closed(self):
+    @pytest.mark.parametrize(
+        "bearer_headers",
+        [[], [(b"authorization", b"Bearer upstream-pkce-token")]],
+        ids=["no-bearer", "upstream-bearer"],
+    )
+    async def test_delegate_mixed_targets_fail_closed(self, bearer_headers: list[tuple[bytes, bytes]]) -> None:
         """
         x-mcp-servers can list multiple targets. If ANY of them does not opt in
         to delegate_auth_to_upstream, the bypass must NOT fire — otherwise an
@@ -2769,6 +3236,7 @@ class TestMCPDelegateAuthToUpstream:
             "path": "/mcp",
             "headers": [
                 (b"x-mcp-servers", b"delegated_oauth,plain_oauth"),
+                *bearer_headers,
             ],
         }
 
@@ -2863,9 +3331,8 @@ class TestMCPDelegateAuthToUpstream:
 
     async def test_authorization_bearer_on_delegate_server_establishes_litellm_principal(self):
         """
-        A bare Authorization bearer now follows normal LiteLLM admission. A
-        separate x-litellm-api-key is required when Authorization is intended
-        for the upstream server.
+        A bare sk- bearer the key table may hold takes normal LiteLLM admission
+        and is never marked for forwarding upstream.
         """
         from litellm.types.mcp import MCPAuth
 
@@ -2898,6 +3365,7 @@ class TestMCPDelegateAuthToUpstream:
             ) = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             assert auth_result.user_id == "real-user"
+            assert auth_result.mcp_forwards_caller_authorization is False
             assert oauth2_headers.get("Authorization") == "Bearer sk-9876"
             mock_auth.assert_awaited_once()
 
@@ -3079,8 +3547,9 @@ class TestMCPDelegateAuthToUpstream:
             mock_auth.assert_awaited_once()
             assert auth.api_key is None
 
-    async def test_get_allowed_servers_excludes_legacy_delegates(self):
-        """Legacy delegated servers are never added to anonymous access."""
+    async def test_get_allowed_servers_includes_interactive_legacy_delegates_for_anonymous(self) -> None:
+        """Anonymous callers reach interactive legacy delegates, never an M2M server whose stored
+        client credentials would let them act as LiteLLM's service account."""
         from litellm.proxy.mcp_server.mcp_server_manager import (
             MCPServerManager,
         )
@@ -3118,7 +3587,7 @@ class TestMCPDelegateAuthToUpstream:
         ):
             result = await manager.get_allowed_mcp_servers(None)
 
-        assert result == []
+        assert result == ["pkce-server"]
 
     async def test_true_passthrough_skips_litellm_auth_anonymously(self):
         """auth_type=true_passthrough performs no admission auth: the caller's Authorization is an
@@ -7644,9 +8113,7 @@ class TestMCPDcrBridgeDualCredential:
                     new_callable=AsyncMock,
                     return_value=UserAPIKeyAuth(user_id=presented_user, api_key="any-hash"),
                 ),
-                patch(
-                    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager"
-                ) as mock_mgr,
+                patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
                 patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
             ):
                 mock_mgr.get_mcp_server_by_name.return_value = self._DELEGATE._bridge_delegate_server()
@@ -7697,7 +8164,9 @@ class TestMCPDcrBridgeDualCredential:
 @pytest.mark.parametrize("root_path", ["", "/litellm"])
 @pytest.mark.parametrize("invalid_token", [False, True])
 def test_gateway_challenge_metadata_contains_the_public_resource(
-    public_path: str, root_path: str, invalid_token: bool,
+    public_path: str,
+    root_path: str,
+    invalid_token: bool,
 ) -> None:
     from mcp.shared.auth_utils import check_resource_allowed
     from starlette.requests import Request
@@ -7710,8 +8179,12 @@ def test_gateway_challenge_metadata_contains_the_public_resource(
     )
 
     scope: Final[Scope] = {
-        "type": "http", "method": "POST", "scheme": "https", "path": "/mcp",
-        "root_path": root_path, "_original_path": f"{root_path}{public_path}",
+        "type": "http",
+        "method": "POST",
+        "scheme": "https",
+        "path": "/mcp",
+        "root_path": root_path,
+        "_original_path": f"{root_path}{public_path}",
         "headers": [(b"host", b"gateway.example.com")],
     }
     request: Final = Request(scope)
@@ -7720,8 +8193,7 @@ def test_gateway_challenge_metadata_contains_the_public_resource(
     metadata_url: Final = header.split('resource_metadata="', 1)[1].split('"', 1)[0]
     toolset: Final = public_path in ("/toolset/analysis/mcp", "/analysis/mcp")
     assert metadata_url == (
-        f"https://gateway.example.com{root_path}/.well-known/oauth-protected-resource"
-        + ("" if toolset else "/mcp")
+        f"https://gateway.example.com{root_path}/.well-known/oauth-protected-resource" + ("" if toolset else "/mcp")
     )
     metadata: Final = (
         oauth_protected_resource_root(request) if toolset else _build_aggregate_protected_resource_response(request)
@@ -7924,9 +8396,7 @@ class TestAggregateGatewayDcrChallenge:
         ):
             with (
                 patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
-                patch(
-                    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager"
-                ) as mock_mgr,
+                patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             ):
                 mock_mgr.get_mcp_server_by_name.return_value = server
                 with pytest.raises(HTTPException) as exc_info:
@@ -7972,9 +8442,7 @@ class TestAggregateGatewayDcrChallenge:
             with (
                 patch.dict(os.environ, {"SERVER_ROOT_PATH": "/litellm"}),
                 patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
-                patch(
-                    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager"
-                ) as mock_mgr,
+                patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             ):
                 mock_mgr.get_mcp_server_by_name.return_value = server
                 with pytest.raises(HTTPException) as exc_info:
@@ -8005,9 +8473,7 @@ class TestAggregateGatewayDcrChallenge:
         ):
             with (
                 patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
-                patch(
-                    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager"
-                ) as mock_mgr,
+                patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             ):
                 mock_mgr.get_mcp_server_by_name.return_value = resolved
                 mock_mgr.get_mcp_server_by_identifier.return_value = resolved
@@ -8052,9 +8518,7 @@ class TestAggregateGatewayDcrChallenge:
             (None, None),
         ]
         for resolved, expected in cases:
-            with patch(
-                "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_mgr:
+            with patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr:
                 mock_mgr.get_mcp_server_by_identifier.return_value = resolved
                 assert _gateway_dcr_challenge_target("/mcp/srv", None, None) == expected, resolved
         assert _gateway_dcr_challenge_target("/mcp/a,b", None, None) is None
@@ -8626,7 +9090,7 @@ class TestUserSubjectTeamUnion:
         assert billed is not None and billed.team_id == "t1", "throttling and billing pick the same source"
 
         descriptors: list = []
-        limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=MagicMock())
+        limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
         limiter._add_mcp_per_team_rate_limit_descriptor(auth, "srv1", descriptors)
         charged = {d["value"]: d["rate_limit"]["requests_per_unit"] for d in descriptors}
         assert charged == {"t1:srv1": 5}, "only the attributing team's bucket is charged"
@@ -9678,443 +10142,99 @@ class TestSessionBearerEgressScrub:
         assert per_server == {"github": {"Authorization": "Bearer gh_injected_upstream"}}
 
     @pytest.mark.parametrize(
-        "context",
-        ["per_server", "mcp_auth", "oauth2_authorization", "raw_authorization"],
-    )
-    @pytest.mark.parametrize(
         "caller_value",
-        ["sk-caller-admission-key-123", "Bearer sk-caller-admission-key-123"],
+        [
+            "sk-caller-admission-key-123",
+            "Bearer sk-caller-admission-key-123",
+            "BEARER sk-caller-admission-key-123",
+            "Bearer  sk-caller-admission-key-123",
+            "Basic sk-caller-admission-key-123",
+        ],
     )
-    async def test_scrub_removes_caller_admission_key_from_each_egress_context(
-        self,
-        context: Literal["per_server", "mcp_auth", "oauth2_authorization", "raw_authorization"],
-        caller_value: str,
-    ) -> None:
+    async def test_scrub_drops_caller_key_only_from_implicit_authorization(self, caller_value: str) -> None:
         caller_key: Final = "sk-caller-admission-key-123"
-        upstream_token: Final = "Bearer real-upstream-token"
-        oauth2_headers: Final = {"Authorization": caller_value if context == "oauth2_authorization" else upstream_token}
         raw_headers: Final = {
             "x-litellm-api-key": f"Bearer {caller_key}",
-            "authorization": caller_value if context == "raw_authorization" else upstream_token,
-            "x-upstream-token": upstream_token,
-        }
-        mcp_auth_header: Final = caller_value if context == "mcp_auth" else upstream_token
-        mcp_server_auth_headers: Final = {
-            "echo_srv": {
-                "Authorization": caller_value if context == "per_server" else upstream_token,
-            }
+            "authorization": caller_value,
+            "x-tenant": caller_value,
         }
 
         oauth2, raw, mcp_auth, per_server = MCPRequestHandler.scrub_gateway_admission_credentials(
             admitted=False,
-            oauth2_headers=oauth2_headers,
+            oauth2_headers={"Authorization": caller_value},
             raw_headers=raw_headers,
-            mcp_auth_header=mcp_auth_header,
-            mcp_server_auth_headers=mcp_server_auth_headers,
+            mcp_auth_header=caller_value,
+            mcp_server_auth_headers={"echo_srv": {"Authorization": caller_value}},
             admitted_credential=caller_key,
         )
 
-        assert raw["x-litellm-api-key"] == f"Bearer {caller_key}"
-        assert raw["x-upstream-token"] == upstream_token
-        if context == "raw_authorization":
-            assert "authorization" not in raw
-        else:
-            assert raw["authorization"] == upstream_token
-        if context == "oauth2_authorization":
-            assert oauth2 is None
-        else:
-            assert oauth2 == {"Authorization": upstream_token}
-        if context == "mcp_auth":
-            assert mcp_auth is None
-        else:
-            assert mcp_auth == upstream_token
-        if context == "per_server":
-            assert not per_server
-        else:
-            assert per_server == {"echo_srv": {"Authorization": upstream_token}}
+        assert oauth2 is None
+        assert raw == raw_headers
+        assert mcp_auth == caller_value
+        assert per_server == {"echo_srv": {"Authorization": caller_value}}
 
-    async def test_scrub_keeps_non_ascii_per_server_token(self) -> None:
-        upstream_token: Final = "Bearer t\u00f6ken"
-        _oauth2, _raw, _mcp_auth, per_server = MCPRequestHandler.scrub_gateway_admission_credentials(
+    async def test_scrub_keeps_distinct_upstream_authorization(self) -> None:
+        upstream_token: Final = "Bearer real-upstream-token"
+        oauth2, _raw, _mcp_auth, _per_server = MCPRequestHandler.scrub_gateway_admission_credentials(
             admitted=False,
-            admitted_credential="sk-caller-admission-key-123",
-            oauth2_headers=None,
+            oauth2_headers={"Authorization": upstream_token},
             raw_headers={},
             mcp_auth_header=None,
-            mcp_server_auth_headers={"echo_srv": {"Authorization": upstream_token}},
+            mcp_server_auth_headers=None,
+            admitted_credential="sk-caller-admission-key-123",
         )
 
-        assert per_server == {"echo_srv": {"Authorization": upstream_token}}
-
-    async def test_scrub_keeps_caller_key_when_admission_credential_is_missing(self) -> None:
-        caller_key: Final = "Bearer sk-caller-admission-key-123"
-        oauth2, raw, mcp_auth, per_server = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": caller_key},
-            raw_headers={"x-litellm-api-key": caller_key, "authorization": caller_key},
-            mcp_auth_header=caller_key,
-            mcp_server_auth_headers={"echo_srv": {"Authorization": caller_key}},
-            admitted_credential=None,
-        )
-
-        assert oauth2 == {"Authorization": caller_key}
-        assert raw == {"x-litellm-api-key": caller_key, "authorization": caller_key}
-        assert mcp_auth == caller_key
-        assert per_server == {"echo_srv": {"Authorization": caller_key}}
+        assert oauth2 == {"Authorization": upstream_token}
 
     @pytest.mark.parametrize(
-        "admission_value,per_server_value",
-        (
-            ("Bearer sk-caller-admission-key-123", "BEARER sk-caller-admission-key-123"),
-            ("Bearer sk-caller-admission-key-123", "Bearer  sk-caller-admission-key-123"),
-            ("Bearer sk-caller-admission-key-123", "Basic sk-caller-admission-key-123"),
-            ("Basic sk-caller-admission-key-123", "sk-caller-admission-key-123"),
-            ("Bearer sk-caller-admission-key-123", "bearer sk-caller-admission-key-123"),
-        ),
+        ("headers", "custom_key_header_name", "expected"),
+        [
+            (
+                {
+                    "x-litellm-api-key": "Bearer sk-caller",
+                    "authorization": "Bearer upstream",
+                    SpecialHeaders.azure_authorization.value: "provider",
+                },
+                None,
+                "sk-caller",
+            ),
+            (
+                {"authorization": "Bearer sk-caller", SpecialHeaders.azure_authorization.value: "provider"},
+                None,
+                "sk-caller",
+            ),
+            (
+                {"x-custom-api-key": "Bearer sk-caller", "x-litellm-api-key": "Bearer standard"},
+                "x-custom-api-key",
+                "sk-caller",
+            ),
+            ({"x-litellm-api-key": "", "authorization": "sk-caller"}, None, "sk-caller"),
+            ({"authorization": "", "api-key": "sk-caller"}, None, "sk-caller"),
+            (
+                {
+                    SpecialHeaders.azure_authorization.value: "azure-key",
+                    SpecialHeaders.anthropic_authorization.value: "anthropic-key",
+                    SpecialHeaders.google_ai_studio_authorization.value: "google-key",
+                    SpecialHeaders.azure_apim_authorization.value: "apim-key",
+                },
+                None,
+                "azure-key",
+            ),
+            ({SpecialHeaders.anthropic_authorization.value: "anthropic-key"}, None, "anthropic-key"),
+            ({SpecialHeaders.google_ai_studio_authorization.value: "google-key"}, None, "google-key"),
+            ({SpecialHeaders.azure_apim_authorization.value: "apim-key"}, None, "apim-key"),
+        ],
     )
-    async def test_caller_admission_credential_scrubs_bearer_variants_and_basic(
-        self,
-        admission_value: str,
-        per_server_value: str,
+    async def test_caller_admission_credential_matches_admission_header_precedence(
+        self, headers: dict[str, str], custom_key_header_name: str | None, expected: str
     ) -> None:
-        upstream_authorization: Final = "Bearer unrelated-upstream-token"
-        headers: Final = Headers(
-            {
-                "x-litellm-api-key": admission_value,
-                "authorization": upstream_authorization,
-                "x-mcp-auth": per_server_value,
-                "x-mcp-echo_srv-authorization": per_server_value,
-                "x-upstream-token": upstream_authorization,
-            }
-        )
-        user_api_key_auth: Final = UserAPIKeyAuth(api_key="stored-key-hash")
         admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
-            user_api_key_auth,
-            custom_key_header_name=None,
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": upstream_authorization},
-            raw_headers=dict(headers),
-            mcp_auth_header=per_server_value,
-            mcp_server_auth_headers={
-                "echo_srv": {"Authorization": per_server_value},
-                "other_srv": {"Authorization": upstream_authorization},
-            },
-            admitted_credential=admitted_credential,
-        )
-
-        assert result == (
-            {"Authorization": upstream_authorization},
-            {
-                "x-litellm-api-key": admission_value,
-                "authorization": upstream_authorization,
-                "x-upstream-token": upstream_authorization,
-            },
-            None,
-            {"other_srv": {"Authorization": upstream_authorization}},
-        )
-
-    @pytest.mark.parametrize(
-        ("empty_header", "admission_header"),
-        (("x-litellm-api-key", "authorization"), ("authorization", "api-key")),
-    )
-    async def test_empty_admission_header_falls_back_to_authenticated_key(
-        self, empty_header: str, admission_header: str
-    ) -> None:
-        caller_key: Final = "sk-caller-admission-key-123"
-        headers: Final = Headers({empty_header: "", admission_header: caller_key})
-        credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers, UserAPIKeyAuth(api_key="stored-key-hash"), custom_key_header_name=None
-        )
-        assert credential == caller_key
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": f"Bearer {caller_key}"},
-            raw_headers={**dict(headers), "x-upstream-token": caller_key, "x-tenant": "tenant-control"},
-            mcp_auth_header=caller_key,
-            mcp_server_auth_headers={"echo": {"Authorization": caller_key}},
-            admitted_credential=credential,
-        )
-        assert result == (None, {empty_header: "", "x-tenant": "tenant-control"}, None, {})
-
-    @pytest.mark.parametrize("claims", [None, {"sub": "caller"}])
-    @pytest.mark.parametrize("bearer", ["validated-jwt", "sk-admission-key"])
-    async def test_scrubbing_preserves_only_validated_jwt_admission(
-        self, claims: dict[str, str] | None, bearer: str
-    ) -> None:
-        headers: Final = Headers({"Authorization": f"Bearer {bearer}"})
-        auth: Final = UserAPIKeyAuth(api_key="stored-key-hash", jwt_claims=claims)
-        credential: Final = MCPRequestHandler.caller_admission_credential(headers, auth, custom_key_header_name=None)
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": f"Bearer {bearer}"},
-            raw_headers={**dict(headers), "x-mcp-echo-authorization": f"Bearer {bearer}"},
-            mcp_auth_header=bearer,
-            mcp_server_auth_headers={"echo": {"Authorization": f"Bearer {bearer}"}},
-            admitted_credential=credential,
-            preserve_jwt_subject=bool(claims),
-        )
-        expected: Final = {"Authorization": f"Bearer {bearer}"} if claims and not bearer.startswith("sk-") else None
-        assert result == (None, dict(headers) if expected else {}, None, {})
-
-    async def test_caller_admission_credential_prefers_x_litellm_header(self) -> None:
-        caller_key: Final = "sk-caller-admission-key-123"
-        upstream_authorization: Final = "Bearer unrelated-upstream-token"
-        provider_key: Final = "provider-key-not-admitted"
-        headers: Final = Headers(
-            {
-                "x-litellm-api-key": f"Bearer {caller_key}",
-                "authorization": upstream_authorization,
-                SpecialHeaders.azure_authorization.value: provider_key,
-                "x-mcp-auth": f"Bearer {caller_key}",
-                "x-mcp-echo_srv-authorization": f"Bearer {caller_key}",
-            }
-        )
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
+            Headers(headers),
             UserAPIKeyAuth(api_key="stored-key-hash"),
-            custom_key_header_name=None,
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": upstream_authorization},
-            raw_headers=dict(headers),
-            mcp_auth_header=f"Bearer {caller_key}",
-            mcp_server_auth_headers={
-                "echo_srv": {"Authorization": f"Bearer {caller_key}"},
-                "other_srv": {"Authorization": upstream_authorization},
-            },
-            admitted_credential=admitted_credential,
+            custom_key_header_name=custom_key_header_name,
         )
 
-        assert result == (
-            {"Authorization": upstream_authorization},
-            {
-                "x-litellm-api-key": f"Bearer {caller_key}",
-                "authorization": upstream_authorization,
-                "api-key": provider_key,
-            },
-            None,
-            {"other_srv": {"Authorization": upstream_authorization}},
-        )
-
-    async def test_caller_admission_credential_prefers_authorization_before_provider_headers(self) -> None:
-        caller_key: Final = "sk-caller-admission-key-123"
-        provider_key: Final = "provider-key-not-admitted"
-        headers: Final = Headers(
-            {
-                "authorization": f"Bearer {caller_key}",
-                SpecialHeaders.azure_authorization.value: provider_key,
-                "x-mcp-auth": f"Bearer {caller_key}",
-                "x-mcp-echo_srv-authorization": f"Bearer {caller_key}",
-            }
-        )
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
-            UserAPIKeyAuth(api_key="stored-key-hash"),
-            custom_key_header_name=None,
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": f"Bearer {caller_key}"},
-            raw_headers=dict(headers),
-            mcp_auth_header=f"Bearer {caller_key}",
-            mcp_server_auth_headers={"echo_srv": {"Authorization": f"Bearer {caller_key}"}},
-            admitted_credential=admitted_credential,
-        )
-
-        assert result == (
-            None,
-            {"api-key": provider_key},
-            None,
-            {},
-        )
-
-    async def test_caller_admission_credential_uses_configured_custom_header(self) -> None:
-        caller_key: Final = "sk-caller-admission-key-123"
-        standard_key: Final = "Bearer standard-key-not-admitted"
-        upstream_authorization: Final = "Bearer unrelated-upstream-token"
-        headers: Final = Headers(
-            {
-                "x-custom-api-key": f"Bearer {caller_key}",
-                "x-litellm-api-key": standard_key,
-                "authorization": upstream_authorization,
-                "x-mcp-auth": f"Bearer {caller_key}",
-                "x-mcp-echo_srv-authorization": f"Bearer {caller_key}",
-            }
-        )
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
-            UserAPIKeyAuth(api_key="stored-key-hash"),
-            custom_key_header_name="x-custom-api-key",
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": upstream_authorization},
-            raw_headers=dict(headers),
-            mcp_auth_header=f"Bearer {caller_key}",
-            mcp_server_auth_headers={"echo_srv": {"Authorization": f"Bearer {caller_key}"}},
-            admitted_credential=admitted_credential,
-        )
-
-        assert result == (
-            {"Authorization": upstream_authorization},
-            {
-                "x-litellm-api-key": standard_key,
-                "authorization": upstream_authorization,
-            },
-            None,
-            {},
-        )
-
-    async def test_caller_admission_credential_falls_back_to_standard_headers_when_custom_header_is_absent(
-        self,
-    ) -> None:
-        caller_value: Final = "Bearer sk-caller-admission-key-123"
-        headers: Final = Headers(
-            {
-                "x-litellm-api-key": caller_value,
-                "authorization": caller_value,
-                "x-mcp-auth": caller_value,
-                "x-mcp-echo_srv-authorization": caller_value,
-            }
-        )
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
-            UserAPIKeyAuth(api_key="stored-key-hash"),
-            custom_key_header_name="x-custom-api-key",
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": caller_value},
-            raw_headers=dict(headers),
-            mcp_auth_header=caller_value,
-            mcp_server_auth_headers={"echo_srv": {"Authorization": caller_value}},
-            admitted_credential=admitted_credential,
-        )
-
-        assert admitted_credential == "sk-caller-admission-key-123"
-        assert result == (
-            None,
-            {"x-litellm-api-key": caller_value},
-            None,
-            {},
-        )
-
-    async def test_caller_admission_credential_uses_master_key_alias_as_admission_gate(self) -> None:
-        master_key: Final = "sk-" + "1234"
-        headers: Final = Headers(
-            {
-                "x-litellm-api-key": f"Bearer {master_key}",
-                "authorization": f"Bearer {master_key}",
-                "x-mcp-auth": f"Bearer {master_key}",
-                "x-mcp-echo_srv-authorization": f"Bearer {master_key}",
-            }
-        )
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
-            UserAPIKeyAuth(api_key="litellm_proxy_master_key"),
-            custom_key_header_name=None,
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers={"Authorization": f"Bearer {master_key}"},
-            raw_headers=dict(headers),
-            mcp_auth_header=f"Bearer {master_key}",
-            mcp_server_auth_headers={"echo_srv": {"Authorization": f"Bearer {master_key}"}},
-            admitted_credential=admitted_credential,
-        )
-
-        assert result == (
-            None,
-            {"x-litellm-api-key": f"Bearer {master_key}"},
-            None,
-            {},
-        )
-
-    @pytest.mark.parametrize(
-        "provider_header_name",
-        (
-            SpecialHeaders.azure_authorization.value,
-            SpecialHeaders.anthropic_authorization.value,
-            SpecialHeaders.google_ai_studio_authorization.value,
-            SpecialHeaders.azure_apim_authorization.value,
-        ),
-    )
-    async def test_caller_admission_credential_scrubs_provider_header(
-        self,
-        provider_header_name: str,
-    ) -> None:
-        provider_key: Final = "provider-admission-key"
-        headers: Final = Headers(
-            {
-                provider_header_name: provider_key,
-                "x-mcp-auth": f"Bearer {provider_key}",
-                "x-mcp-echo_srv-authorization": f"Bearer {provider_key}",
-                "x-upstream-token": "Bearer unrelated-upstream-token",
-            }
-        )
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
-            UserAPIKeyAuth(api_key="stored-key-hash"),
-            custom_key_header_name=None,
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers=None,
-            raw_headers=dict(headers),
-            mcp_auth_header=f"Bearer {provider_key}",
-            mcp_server_auth_headers={
-                "echo_srv": {"Authorization": f"Bearer {provider_key}"},
-                "other_srv": {"Authorization": "Bearer unrelated-upstream-token"},
-            },
-            admitted_credential=admitted_credential,
-        )
-
-        assert result == (
-            None,
-            {"x-upstream-token": "Bearer unrelated-upstream-token"},
-            None,
-            {"other_srv": {"Authorization": "Bearer unrelated-upstream-token"}},
-        )
-
-    async def test_caller_admission_credential_follows_provider_header_precedence(self) -> None:
-        azure_key: Final = "azure-admission-key"
-        headers: Final = Headers(
-            {
-                SpecialHeaders.azure_authorization.value: azure_key,
-                SpecialHeaders.anthropic_authorization.value: "anthropic-not-admitted",
-                SpecialHeaders.google_ai_studio_authorization.value: "google-not-admitted",
-                SpecialHeaders.azure_apim_authorization.value: "apim-not-admitted",
-                "x-mcp-echo_srv-authorization": f"Bearer {azure_key}",
-            }
-        )
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-            headers,
-            UserAPIKeyAuth(api_key="stored-key-hash"),
-            custom_key_header_name=None,
-        )
-        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
-            admitted=False,
-            oauth2_headers=None,
-            raw_headers=dict(headers),
-            mcp_auth_header=f"Bearer {azure_key}",
-            mcp_server_auth_headers={"echo_srv": {"Authorization": f"Bearer {azure_key}"}},
-            admitted_credential=admitted_credential,
-        )
-
-        assert result == (
-            None,
-            {
-                "x-api-key": "anthropic-not-admitted",
-                "x-goog-api-key": "google-not-admitted",
-                "ocp-apim-subscription-key": "apim-not-admitted",
-            },
-            None,
-            {},
-        )
+        assert admitted_credential == expected
 
     async def test_caller_admission_credential_returns_none_without_admitted_api_key(self) -> None:
         caller_value: Final = "Bearer sk-caller-admission-key-123"
@@ -10950,14 +11070,15 @@ async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session
     from litellm.proxy import proxy_server
     from litellm.types.mcp_server.mcp_toolset import MCPToolset
 
-    permission = LiteLLM_ObjectPermissionTable(
-        object_permission_id="current-policy", mcp_toolsets=["session-toolset"]
-    )
+    permission = LiteLLM_ObjectPermissionTable(object_permission_id="current-policy", mcp_toolsets=["session-toolset"])
     toolset: Final = MCPToolset(
-        toolset_id="session-toolset", toolset_name="session-toolset",
+        toolset_id="session-toolset",
+        toolset_name="session-toolset",
         tools=[{"server_id": "current-server", "tool_name": "read"}],
     )
-    tables: Final = SimpleNamespace(litellm_mcptoolsettable=SimpleNamespace(find_many=AsyncMock(return_value=[toolset])))
+    tables: Final = SimpleNamespace(
+        litellm_mcptoolsettable=SimpleNamespace(find_many=AsyncMock(return_value=[toolset]))
+    )
     monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=tables, writer_db=tables))
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     current = UserAPIKeyAuth(
@@ -10984,10 +11105,13 @@ async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session
     caller.mcp_toolset_id = "session-toolset"
     refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
     reload_key.assert_awaited_once_with("owned-key-hash", check_db_only=True)
-    assert refreshed.object_permission == permission.model_copy(update={
-        "mcp_servers": ["current-server"], "mcp_toolsets": [],
-        "mcp_tool_permissions": {"current-server": ["read"]},
-    })
+    assert refreshed.object_permission == permission.model_copy(
+        update={
+            "mcp_servers": ["current-server"],
+            "mcp_toolsets": [],
+            "mcp_tool_permissions": {"current-server": ["read"]},
+        }
+    )
     assert refreshed.object_permission_id == "current-policy"
     assert (refreshed.team_id, refreshed.org_id, refreshed.project_id, refreshed.user_id) == (
         "new-team",
@@ -11985,7 +12109,6 @@ async def test_personal_key_display_name_billing_uses_original_tool_grant(
 async def test_personal_key_display_name_billing_uses_allowed_servers(
     monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
 ) -> None:
-    from litellm.proxy import proxy_server
     from litellm.proxy.auth import auth_checks
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
     from litellm.types.mcp import MCPTransport
@@ -12091,9 +12214,7 @@ async def test_personal_key_guardrail_auth_preserves_native_tool_name_matching_s
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
-        return _personal_key_team_granting_tools(
-            team_id, ("math-multiply",) if team_id == "team-b" else ("other",)
-        )
+        return _personal_key_team_granting_tools(team_id, ("math-multiply",) if team_id == "team-b" else ("other",))
 
     monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
     monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
@@ -12132,9 +12253,7 @@ async def test_personal_key_mcp_billing_inherits_adopted_organization_limits(
     )
 
     async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
-        return _personal_key_team_granting_tools(team_id, ("divide",)).model_copy(
-            update={"organization_id": "org-1"}
-        )
+        return _personal_key_team_granting_tools(team_id, ("divide",)).model_copy(update={"organization_id": "org-1"})
 
     org_loader: Final = AsyncMock(return_value=organization)
     monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
@@ -12180,16 +12299,12 @@ async def test_personal_key_mcp_billing_keeps_key_organization_limits(
     )
 
     async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
-        return _personal_key_team_granting_tools(team_id, ("divide",)).model_copy(
-            update={"organization_id": "org-1"}
-        )
+        return _personal_key_team_granting_tools(team_id, ("divide",)).model_copy(update={"organization_id": "org-1"})
 
     org_loader: Final = AsyncMock(return_value=organization)
     monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
     monkeypatch.setattr(auth_checks, "get_org_object_for_request", org_loader)
-    auth: Final = personal_key_owner_teams.model_copy(
-        update={"org_id": "org-k", "organization_rpm_limit": 9}
-    )
+    auth: Final = personal_key_owner_teams.model_copy(update={"org_id": "org-k", "organization_rpm_limit": 9})
     server: Final = global_mcp_server_manager.registry["srv-b"]
 
     with patch.object(global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server):
@@ -12321,9 +12436,7 @@ async def test_personal_key_mcp_billing_uses_fresh_team_and_membership_for_stric
             }
         )
 
-    async def _get_team_membership(
-        user_id: str, team_id: str, **kwargs: object
-    ) -> LiteLLM_TeamMembership:
+    async def _get_team_membership(user_id: str, team_id: str, **kwargs: object) -> LiteLLM_TeamMembership:
         database_value: Final = bool(kwargs.get("check_db_only"))
         return LiteLLM_TeamMembership(
             user_id=user_id,
@@ -12388,7 +12501,7 @@ async def test_personal_key_team_mcp_rpm_limit_charges_granting_team(
 
     stamped: Final = personal_key_owner_teams.model_copy(update={"mcp_source_team_rpm_limits": limits})
     descriptors: list[RateLimitDescriptor] = []
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=MagicMock())
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
     limiter._add_mcp_per_team_rate_limit_descriptor(stamped, server_b.name, descriptors)
     assert len(descriptors) == 1
     assert descriptors[0]["key"] == "mcp_per_team"
@@ -12740,3 +12853,58 @@ async def test_personal_key_mcp_access_is_denied_when_owner_teams_cannot_be_read
     assert await MCPRequestHandler.get_allowed_mcp_servers(personal_key_owner_teams) == []
     assert await MCPRequestHandler.get_allowed_tools_for_server("srv-a", personal_key_owner_teams) == []
     assert await MCPRequestHandler.get_allowed_tools_for_server("srv-open", personal_key_owner_teams) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+@pytest.mark.parametrize(
+    "owner_role",
+    [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
+    ids=["proxy_admin", "proxy_admin_viewer"],
+)
+@pytest.mark.parametrize(
+    ("key_team_id", "expected_servers"),
+    [("team-a", {"srv-a", "srv-open"}), ("team-without-mcp", {"srv-open"})],
+    ids=["team_grants_one_server", "team_grants_no_server"],
+)
+@pytest.mark.parametrize(
+    "credential_shape",
+    [{"is_session_token": False}, {"is_session_token": True}, {"api_key": None, "jwt_claims": {"sub": "admin"}}],
+    ids=["virtual_key", "cli_session", "jwt"],
+)
+async def test_admin_owned_team_key_reaches_only_its_team_mcp_servers(
+    monkeypatch: pytest.MonkeyPatch,
+    personal_key_owner_teams: UserAPIKeyAuth,
+    owner_role: LitellmUserRoles,
+    key_team_id: str,
+    expected_servers: set[str],
+    credential_shape: dict[str, object],
+) -> None:
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return _personal_key_team(team_id) if team_id in _PERSONAL_KEY_TEAMS else LiteLLM_TeamTable(team_id=team_id)
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    team_key: Final = personal_key_owner_teams.model_copy(
+        update={"team_id": key_team_id, "user_role": owner_role, **credential_shape}
+    )
+
+    assert set(await global_mcp_server_manager.get_allowed_mcp_servers(team_key)) == expected_servers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_admin_dashboard_session_keeps_the_whole_mcp_registry(
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    dashboard_session: Final = personal_key_owner_teams.model_copy(
+        update={"team_id": UI_TEAM_ID, "user_role": LitellmUserRoles.PROXY_ADMIN}
+    )
+
+    assert set(await global_mcp_server_manager.get_allowed_mcp_servers(dashboard_session)) == set(
+        global_mcp_server_manager.get_registry()
+    )

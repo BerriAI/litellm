@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.streaming_iterator import (
     _ERROR_CODE_HTTP_STATUS,
     BaseResponsesAPIStreamingIterator,
@@ -73,6 +74,83 @@ def _make_iterator() -> BaseResponsesAPIStreamingIterator:
 def _make_error_chunk(error_type: str, code: str, message: str = "err") -> ErrorEvent:
     error_obj = ErrorEventError(type=error_type, code=code, message=message)
     return ErrorEvent(type=ResponsesAPIStreamEvents.ERROR, sequence_number=0, error=error_obj)
+
+
+@pytest.mark.parametrize(
+    "error_type,error_code",
+    (
+        ("resource_unavailable", "flex_unavailable"),
+        ("resource_unavailable", None),
+        (None, "flex_unavailable"),
+    ),
+)
+def test_streamed_flex_unavailable_maps_to_429(error_type: str | None, error_code: str | None) -> None:
+    assert _status_code_for_error_fields(error_type, error_code) == 429
+
+
+def test_streamed_unrelated_server_error_still_maps_to_500() -> None:
+    assert _status_code_for_error_fields("server_error", "server_error") == 500
+
+
+FLEX_UNAVAILABLE_ERROR: Final = {
+    "type": "resource_unavailable",
+    "code": "flex_unavailable",
+    "message": "Flex processing is temporarily unavailable. Please try again later or use standard processing.",
+}
+
+
+def _flex_outage_sse(kind: str) -> str:
+    pending: Final = {
+        "id": "resp_flex",
+        "object": "response",
+        "created_at": 1700000000,
+        "model": "gpt-5",
+        "status": "in_progress",
+        "output": [],
+    }
+    failure: Final = (
+        {"type": "error", "sequence_number": 1, "error": FLEX_UNAVAILABLE_ERROR}
+        if kind == "error"
+        else {
+            "type": "response.failed",
+            "sequence_number": 1,
+            "response": {**pending, "status": "failed", "error": FLEX_UNAVAILABLE_ERROR},
+        }
+    )
+    events: Final = ({"type": "response.created", "sequence_number": 0, "response": pending}, failure)
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("error", "response.failed"))
+async def test_streamed_flex_outage_raises_rate_limit_like_the_non_streamed_path(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    async_client: Final = AsyncHTTPHandler(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, text=_flex_outage_sse(kind)
+            )
+        )
+    )
+    try:
+        stream: Final = await litellm.aresponses(
+            model="openai/gpt-5",
+            input="hi",
+            service_tier="flex",
+            stream=True,
+            api_key="sk-test",
+            client=async_client,
+        )
+        with pytest.raises(MidStreamFallbackError) as raised:
+            _ = [event async for event in stream]
+    finally:
+        await async_client.close()
+    assert raised.value.status_code == 429, raised.value
+    assert isinstance(raised.value.original_exception, litellm.RateLimitError), raised.value.original_exception
+    assert "Flex processing is temporarily unavailable" in str(raised.value.original_exception)
 
 
 @pytest.mark.parametrize("provider", ("openai", "azure", "bedrock"))
@@ -166,21 +244,24 @@ def test_maybe_raise_for_error_event_maps_context_length_code_to_400():
     assert not isinstance(exc_info.value, MidStreamFallbackError)
 
 
-def test_maybe_raise_for_error_event_raises_context_window_exceeded_directly():
+@pytest.mark.parametrize(
+    "message",
+    (
+        "This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens.",
+        "Your input exceeds the context window of this model. Please adjust your input and try again.",
+    ),
+)
+def test_maybe_raise_for_error_event_raises_context_window_exceeded_directly(message: str) -> None:
     """A context-length error event maps to ContextWindowExceededError exactly like the non-streaming
     path and, being a non-retriable client error, is raised directly rather than wrapped for mid-stream
     fallback, preserving the direct-SDK 400 contract from issue #15785."""
-    iterator = _make_iterator()
-    chunk = _make_error_chunk(
-        "invalid_request_error",
-        "context_length_exceeded",
-        "This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens.",
-    )
+    iterator: Final = _make_iterator()
+    chunk: Final = _make_error_chunk("invalid_request_error", "context_length_exceeded", message)
     with pytest.raises(litellm.ContextWindowExceededError) as exc_info:
         iterator._maybe_raise_for_error_event(chunk)
     assert exc_info.value.status_code == 400
     assert not isinstance(exc_info.value, MidStreamFallbackError)
-    assert "maximum context length" in str(exc_info.value)
+    assert message in str(exc_info.value)
 
 
 CONTENT_POLICY_MESSAGE = "This content was flagged for possible cybersecurity risk. The response was halted mid-stream."
@@ -878,3 +959,73 @@ async def test_responses_websocket_turn_failure_reports_the_deployment_it_was_se
 
     assert failure is not None
     _assert_names_the_azure_deployment(failure, reported_api_base)
+
+
+_BEDROCK_SERVICE_UNAVAILABLE_CHUNK: Final = {
+    "error": {
+        "message": "The server had an error while processing your request. Sorry about that!",
+        "type": "server_error",
+        "code": "service_unavailable",
+    }
+}
+
+
+def _real_config_iterator(provider: str, model: str, events: tuple[Mapping[str, object], ...]):
+    payload: Final = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events)
+
+    async def aiter_bytes():
+        yield payload
+
+    response: Final = Mock()
+    response.headers = {}
+    response.aiter_bytes = aiter_bytes
+    logging_obj: Final = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj.completion_start_time = None
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        provider=litellm.LlmProviders(provider), model=model
+    )
+    assert config is not None
+    return ResponsesAPIStreamingIterator(
+        response=response,
+        model=model,
+        responses_api_provider_config=config,
+        logging_obj=logging_obj,
+        custom_llm_provider=provider,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [
+        ("bedrock", "us.openai.gpt-5.6-sol"),
+        ("openai", "gpt-5.5"),
+        ("volcengine", "doubao-seed-1-6"),
+        ("bigmodel", "glm-5"),
+    ],
+)
+async def test_untyped_mid_stream_error_chunk_raises_the_upstream_error(provider: str, model: str):
+    iterator: Final = _real_config_iterator(
+        provider,
+        model,
+        (
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "partial ",
+                "sequence_number": 1,
+            },
+            _BEDROCK_SERVICE_UNAVAILABLE_CHUNK,
+        ),
+    )
+    stream: Final = aiter(iterator)
+    assert (await anext(stream)).type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        await anext(stream)
+    assert "The server had an error while processing your request" in str(exc_info.value.original_exception)
+    assert exc_info.value.status_code >= 500
+    assert exc_info.value.generated_content == "partial "

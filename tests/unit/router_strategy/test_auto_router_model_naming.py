@@ -772,3 +772,21 @@ def test_deployed_decision_classifier_is_a_model_access_dependency() -> None:
         ("cheap", "tier"),
         ("decision-deployment", "classifier"),
     )
+
+
+@pytest.mark.parametrize(
+    "classifier, tiers, expected",
+    [
+        ("custom", {"quick": "fast", "careful": "capable"}, True),
+        ("custom", {"SIMPLE": "fast", "SECURITY": "capable"}, True),
+        ("custom", {"SIMPLE": "fast", "REASONING": "capable"}, False),
+        ("heuristic", {"quick": "fast"}, False),
+    ],
+)
+def test_inferred_custom_tiers_claim_existing_gateway_capability(
+    classifier: str,
+    tiers: dict[str, str],
+    expected: bool,
+) -> None:
+    capabilities: Final = claimed_capabilities({"classifier_type": classifier, "tiers": tiers})
+    assert any(capability.key == "tier_or_classifier_prompt" for capability in capabilities) is expected

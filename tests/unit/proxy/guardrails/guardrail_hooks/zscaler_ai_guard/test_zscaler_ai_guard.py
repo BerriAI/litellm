@@ -23,6 +23,8 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard import ZscalerAIGuard
+from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
+from litellm.types.utils import GenericGuardrailAPIInputs
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -139,6 +141,216 @@ async def test_apply_guardrail_text_concatenation(mock_api_call):
     mock_api_call.assert_called_once()
     call_args = mock_api_call.call_args
     assert call_args.kwargs["content"] == "Hello world"
+
+
+_CONVERSATION: Final = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "What is two plus two?"},
+    {"role": "assistant", "content": "Four."},
+]
+
+
+async def _execute_policy_bodies(
+    inputs: GenericGuardrailAPIInputs,
+    input_type: Literal["request", "response"],
+    scan_only_tool_results: bool = False,
+) -> tuple[object, ...]:
+    received: Final = asyncio.Queue[object]()
+
+    async def execute_policy(request: web.Request) -> web.Response:
+        await received.put(await request.json())
+        return web.json_response({"statusCode": 200, "action": "ALLOW"})
+
+    app: Final = web.Application()
+    app.router.add_post("/v1/detection/execute-policy", execute_policy)
+    handler: Final = InMemoryGuardrailHandler()
+    async with TestServer(app) as server:
+        guardrail_id: Final = handler.initialize_guardrail(
+            guardrail={
+                "guardrail_name": "zscaler-last-user-turn",
+                "litellm_params": {
+                    "guardrail": "zscaler_ai_guard",
+                    "mode": "pre_call",
+                    "api_key": "test_key",
+                    "api_base": str(server.make_url("/v1/detection/execute-policy")),
+                    "policy_id": 1,
+                    "scan_only_tool_results": scan_only_tool_results,
+                },
+            },
+        )["guardrail_id"]
+        try:
+            guardrail: Final = handler.guardrail_id_to_custom_guardrail[guardrail_id]
+            assert guardrail is not None
+            returned: Final = await guardrail.apply_guardrail(inputs, {}, input_type)
+        finally:
+            handler.delete_in_memory_guardrail(guardrail_id)
+
+    assert returned is inputs
+    return tuple(received.get_nowait() for _ in range(received.qsize()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("inputs", "expected_content"),
+    [
+        (
+            {
+                "texts": ["every", "message", "flattened"],
+                "structured_messages": [*_CONVERSATION, {"role": "user", "content": "And three plus three?"}],
+            },
+            "And three plus three?",
+        ),
+        (
+            {
+                "texts": ["every", "message", "flattened"],
+                "structured_messages": [
+                    *_CONVERSATION,
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "And three"}, {"type": "text", "text": "plus three?"}],
+                    },
+                ],
+            },
+            "And three plus three?",
+        ),
+        (
+            {
+                "texts": ["every", "message", "flattened"],
+                "structured_messages": [
+                    *_CONVERSATION,
+                    {"role": "user", "content": "And three plus three?"},
+                    {"role": "user", "content": "Answer in words."},
+                ],
+            },
+            "And three plus three? Answer in words.",
+        ),
+        (
+            {
+                "texts": ["Summarize", "this report"],
+                "structured_messages": [
+                    {
+                        "role": "user",
+                        "parts": [{"kind": "text", "text": "Summarize"}, {"kind": "text", "text": "this report"}],
+                        "messageId": "msg-1",
+                    }
+                ],
+            },
+            "Summarize this report",
+        ),
+        ({"texts": ["first input", "second input"]}, "first input second input"),
+        (
+            {
+                "texts": ["every", "message"],
+                "structured_messages": [*_CONVERSATION, {"role": "assistant", "content": "Prefilled answer:"}],
+            },
+            "What is two plus two?",
+        ),
+        (
+            {
+                "texts": ["every", "message"],
+                "structured_messages": [
+                    *_CONVERSATION,
+                    {"role": "tool", "tool_call_id": "call_1", "content": "tool output"},
+                ],
+            },
+            "What is two plus two?",
+        ),
+        (
+            {
+                "texts": ["every", "message"],
+                "structured_messages": [
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "assistant", "content": "Prefilled answer:"},
+                ],
+            },
+            None,
+        ),
+        (
+            {
+                "texts": ["You are a helpful assistant.", "   "],
+                "structured_messages": [
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "user", "content": "   "},
+                ],
+            },
+            None,
+        ),
+        (
+            {
+                "texts": ["every", "message", "\n"],
+                "structured_messages": [
+                    *_CONVERSATION,
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "\n"},
+                            {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+                        ],
+                    },
+                ],
+            },
+            None,
+        ),
+    ],
+    ids=[
+        "string-content",
+        "content-parts",
+        "consecutive-user-messages",
+        "a2a-message-parts",
+        "texts-only-route",
+        "ends-on-assistant",
+        "ends-on-tool",
+        "no-user-message",
+        "whitespace-only-latest-turn",
+        "whitespace-text-beside-image",
+    ],
+)
+async def test_request_scan_sends_only_the_last_user_turn(
+    inputs: GenericGuardrailAPIInputs, expected_content: str | None
+) -> None:
+    bodies: Final = await _execute_policy_bodies(inputs, "request")
+
+    assert bodies == (
+        () if expected_content is None else ({"direction": "IN", "content": expected_content, "policyId": 1},)
+    )
+
+
+@pytest.mark.asyncio
+async def test_response_scan_sends_every_text() -> None:
+    inputs: Final = GenericGuardrailAPIInputs(
+        texts=["First choice.", "Second choice."],
+        structured_messages=[*_CONVERSATION, {"role": "user", "content": "And three plus three?"}],
+    )
+
+    bodies: Final = await _execute_policy_bodies(inputs, "response")
+
+    assert bodies == ({"direction": "OUT", "content": "First choice. Second choice.", "policyId": 1},)
+
+
+@pytest.mark.asyncio
+async def test_scan_only_tool_results_sends_the_tool_results() -> None:
+    inputs: Final = GenericGuardrailAPIInputs(
+        texts=["Sunny, 22C"],
+        structured_messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "Sunny, 22C"},
+        ],
+    )
+
+    bodies: Final = await _execute_policy_bodies(inputs, "request", scan_only_tool_results=True)
+
+    assert bodies == ({"direction": "IN", "content": "Sunny, 22C", "policyId": 1},)
 
 
 @pytest.mark.asyncio

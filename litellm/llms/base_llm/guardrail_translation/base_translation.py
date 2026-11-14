@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, Protocol
+
+from litellm.litellm_core_utils.core_helpers import has_attributes
 
 if TYPE_CHECKING:
     from fastapi import HTTPException
@@ -13,6 +15,10 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> object: ...
 
 
 @dataclass(slots=True)
@@ -81,7 +87,7 @@ class BaseTranslation(ABC):
 
     @staticmethod
     def transform_user_api_key_dict_to_metadata(
-        user_api_key_dict: Any | None,
+        user_api_key_dict: object,
     ) -> dict[str, object]:
         """
         Transform user_api_key_dict to a metadata dict with prefixed keys.
@@ -99,7 +105,11 @@ class BaseTranslation(ABC):
             return {}
 
         # Convert to dict if it's a Pydantic object
-        user_dict = user_api_key_dict.model_dump() if hasattr(user_api_key_dict, "model_dump") else user_api_key_dict
+        user_dict: Final = (
+            user_api_key_dict.model_dump()
+            if has_attributes(user_api_key_dict, _ModelDumpable, "model_dump")
+            else user_api_key_dict
+        )
 
         if not isinstance(user_dict, dict):
             return {}
@@ -257,11 +267,12 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def get_structured_messages(self, data: dict) -> list["AllMessageValues"] | None:
+    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list["AllMessageValues"] | None:
         """
         Convert request data to OpenAI-spec structured messages.
 
-        Override in subclasses for format-specific conversion.
+        Override in subclasses for format-specific conversion. ``keep_tool_errors`` copies a provider's
+        tool-failure marker onto tool messages as ``is_error``; only for copies that are never sent to a model.
 
         Returns None if no convertible content is found.
         """

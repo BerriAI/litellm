@@ -15,7 +15,7 @@ from httpx._types import RequestFiles
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.videos.main import VideoObject
+from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
 
 from ..common_utils import EdenAIException, authorized_headers, endpoint_url, reported_cost
 
@@ -36,6 +36,14 @@ def _usage_with_reported_cost(
 
 
 class EdenAIVideoConfig(OpenAIVideoConfig):
+    def map_openai_params(
+        self,
+        video_create_optional_params: VideoCreateOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+    ) -> dict[str, object]:  # mutable-ok: inherited BaseVideoConfig return contract
+        return dict(video_create_optional_params)
+
     def validate_environment(
         self,
         headers: dict[str, object],  # mutable-ok: inherited contract
@@ -134,7 +142,7 @@ class EdenAIVideoConfig(OpenAIVideoConfig):
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: inherited contract
+    ) -> object:
         raw_response.raise_for_status()  # the shared GET helpers return error bodies instead of raising
         return super().transform_video_list_response(
             raw_response=raw_response, logging_obj=logging_obj, custom_llm_provider=custom_llm_provider

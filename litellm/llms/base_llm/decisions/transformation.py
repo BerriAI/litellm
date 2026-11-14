@@ -1,7 +1,7 @@
 import json
 from abc import ABC
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
@@ -12,6 +12,7 @@ from pydantic_core import ErrorDetails
 from typing_extensions import assert_never
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -297,13 +298,7 @@ def _systemone_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
             assert_never(question)
 
 
-def ir_to_systemone_request(
-    model: str, request: DecisionsIRRequest, *, supports_audio: bool = False, supports_video: bool = False
-) -> Mapping[str, object] | UnsupportedDecisionsRequest:
-    if request.audio and not supports_audio:
-        return UnsupportedDecisionsRequest(reason="audio input is not supported by this Decisions model")
-    if request.videos and not supports_video:
-        return UnsupportedDecisionsRequest(reason="video input is not supported by this Decisions model")
+def ir_to_systemone_request(model: str, request: DecisionsIRRequest) -> Mapping[str, object]:
     state: Final = _systemone_state(request.input)
     keyed_questions: Final = zip(systemone_keys(request.questions), request.questions, strict=True)
     images: Final = input_images(request.input)
@@ -436,6 +431,10 @@ class DecisionsResponseValidationError(BaseLLMException):
     pass
 
 
+def _lacks_confidence(answer: DecisionsIRAnswer) -> bool:
+    return isinstance(answer, (DecisionsIRChoiceAnswer, DecisionsIRScoreAnswer)) and answer.confidence is None
+
+
 def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
     return systemone_response_to_ir(
         _SYSTEMONE_RESPONSE_ADAPTER.validate_python(_normalize_systemone_response(payload)), request
@@ -503,12 +502,28 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
     )
 
 
+def catalog_mode(model: str, custom_llm_provider: str) -> str | None:
+    try:
+        key: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)["key"]
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which the catalog does not list
+        return None
+    entry: Final = GetModelCostMap.loaded_model_cost_map().get(key)
+    mode: Final = entry.get("mode") if entry is not None else None
+    return mode if isinstance(mode, str) else None
+
+
 def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
     try:
         model_mode: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get("mode")
     except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which has no mode
         return False
     return is_decisions_model_mode(model_mode)
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsInputLimits:
+    max_request_tokens: int | None = None
+    max_question_tokens: int | None = None
 
 
 class BaseDecisionsConfig(ABC):
@@ -523,6 +538,8 @@ class BaseDecisionsConfig(ABC):
     max_total_image_bytes: int | None = None
     image_media_types: frozenset[str] | None = None
     inlines_remote_images: bool = False
+    openai_evidence_fields: frozenset[str] = frozenset()
+    confidence_optional: bool = False
     health_check_questions: Mapping[str, Mapping[str, object]] = MappingProxyType(
         {"reachable": MappingProxyType({"type": "noul", "instructions": "Is the service reachable?"})}
     )
@@ -533,6 +550,19 @@ class BaseDecisionsConfig(ABC):
     def provider_reported_cost(self, response: DecisionsIRResponse) -> float | None:
         return None
 
+    def get_input_limits(
+        self, model: str, custom_llm_provider: str, headers: Mapping[str, str]
+    ) -> DecisionsInputLimits:
+        try:
+            limit: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get(
+                "max_input_tokens"
+            )
+        except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model
+            return DecisionsInputLimits()
+        return DecisionsInputLimits(
+            max_request_tokens=limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else None
+        )
+
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return f"api_base is required for Decisions provider '{custom_llm_provider}'"
 
@@ -542,7 +572,11 @@ class BaseDecisionsConfig(ABC):
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or self._first_secret(self.api_key_env)
 
+    def validate_client_connection(self, api_base: str | None, api_key: str | None) -> None:
+        return
+
     def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
+        self.validate_client_connection(api_base, api_key)
         return self.resolve_api_base(api_base), self.resolve_api_key(api_key)
 
     def resolve_credential(
@@ -621,12 +655,16 @@ class BaseDecisionsConfig(ABC):
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-    def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
+    def supports_audio_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
+        if deployment_flag is not None:
+            return deployment_flag
         return _is_decisions_model(model, custom_llm_provider) and litellm.supports_audio_input(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-    def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
+    def supports_video_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
+        if deployment_flag is not None:
+            return deployment_flag
         return _is_decisions_model(model, custom_llm_provider) and litellm.supports_video_input(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -637,12 +675,7 @@ class BaseDecisionsConfig(ABC):
         request: DecisionsIRRequest,
         custom_llm_provider: str,
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
-        return ir_to_systemone_request(
-            self.request_model(model),
-            request,
-            supports_audio=self.supports_audio_input(model, custom_llm_provider),
-            supports_video=self.supports_video_input(model, custom_llm_provider),
-        )
+        return ir_to_systemone_request(self.request_model(model), request)
 
     def unwrap_response(self, payload: object) -> object:
         return payload
@@ -659,13 +692,20 @@ class BaseDecisionsConfig(ABC):
     ) -> DecisionsIRResponse:
         try:
             payload: Final[object] = _PAYLOAD_ADAPTER.validate_json(raw_response.content)
-            return self.parse_response(payload, request)
+            response: Final = self.parse_response(payload, request)
         except ValidationError as error:
             raise DecisionsResponseValidationError(
                 status_code=500,
                 message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
                 f"{error.title} {_validation_summary(error)}",
             ) from error
+        if not self.confidence_optional and any(_lacks_confidence(answer) for answer in response.answers):
+            raise DecisionsResponseValidationError(
+                status_code=500,
+                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
+                "a choice or score answer has no confidence",
+            )
+        return response
 
     def get_error_class(
         self,

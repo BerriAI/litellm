@@ -4,6 +4,7 @@ from typing import Final
 
 from fastapi import APIRouter
 
+from litellm.proxy.common_utils.claude_code_marketplace_auth import marketplace_auth_required
 from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.proxy.mcp_server.stdio_gate import is_mcp_stdio_enabled
 from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
@@ -51,4 +52,5 @@ async def get_ui_config():
         workers=proxy_config.worker_registry if is_control_plane else [],
         mcp_stdio_enabled=is_mcp_stdio_enabled(),
         use_si_terminology=use_si_terminology,
+        claude_code_marketplace_auth_required=marketplace_auth_required(),
     )

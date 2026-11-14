@@ -4,7 +4,7 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
@@ -73,8 +73,8 @@ _NO_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 
 def with_attribution_headers(
     attribution_headers: Mapping[str, str],
-    headers: dict[str, str] | None,  # mutable-ok: returned as-is when there is nothing to add
-) -> dict[str, str] | None:  # mutable-ok: becomes the request's outbound headers
+    headers: dict[str, object] | None,  # mutable-ok: returned as-is when there is nothing to add
+) -> dict[str, object] | None:  # mutable-ok: becomes the request's outbound headers
     """
     `headers` plus any attribution header the caller didn't already set (names
     compared case-insensitively). Builds a new dict; `headers` is never mutated.
@@ -199,12 +199,19 @@ class BaseConfig(ABC):
 
     def translate_developer_role_to_system_role(
         self,
-        messages: list[AllMessageValues],
-    ) -> list[AllMessageValues]:
+        messages: Sequence[AllMessageValues],
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        model_info: object,
+    ) -> Sequence[AllMessageValues]:
         """
         Translate `developer` role to `system` role for non-OpenAI providers.
 
-        Overriden by OpenAI/Azure
+        Overridden by OpenAI, which also places the instructions in one leading system
+        message for an OpenAI-compatible model declared to reject a later system
+        message, and by the o-series and Azure configs.
         """
         return map_developer_role_to_system_role(messages=messages)
 

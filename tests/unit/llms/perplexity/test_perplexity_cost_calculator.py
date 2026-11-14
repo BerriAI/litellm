@@ -6,9 +6,12 @@ search queries, and reasoning tokens.
 """
 
 import json
+import logging
 import math
 import os
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -117,7 +120,8 @@ class TestPerplexityCostCalculator:
         assert completion_cost == 0.008
         assert prompt_cost + completion_cost == 0.008
 
-    def test_uses_perplexity_provided_cost_when_normalized_to_float(self):
+    @pytest.mark.parametrize("reported_cost", (0.0, 0.008))
+    def test_uses_perplexity_provided_cost_when_normalized_to_float(self, reported_cost: float):
         """
         Regression: for Responses API / Agent API models, `ResponseAPIUsage.parse_cost`
         (litellm/types/llms/openai.py) already flattens Perplexity's
@@ -133,12 +137,75 @@ class TestPerplexityCostCalculator:
         perplexity/openai/gpt-5.2 before rates existed).
         """
         usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
-        usage.cost = 0.008
+        usage.cost = reported_cost
 
         prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-pro", usage=usage)
 
         assert prompt_cost == 0.0
-        assert completion_cost == 0.008
+        assert completion_cost == reported_cost
+
+    @pytest.mark.parametrize(
+        ("legacy_pricing", "expected_search_rate"),
+        (
+            pytest.param({}, 0.01, id="missing"),
+            pytest.param({"search_queries_cost_per_query": None}, 0.01, id="null"),
+            pytest.param({"search_queries_cost_per_query": 0.0}, 0.0, id="free"),
+            pytest.param({"search_queries_cost_per_query": 0.004}, 0.004, id="paid"),
+        ),
+    )
+    def test_search_cost_preserves_zero_and_defaults_only_when_unset(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        legacy_pricing: Mapping[str, float | None],
+        expected_search_rate: float,
+    ) -> None:
+        model: Final = "perplexity/search-pricing-fixture"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {
+                "litellm_provider": "perplexity",
+                "mode": "chat",
+                "input_cost_per_token": 2e-6,
+                "output_cost_per_token": 8e-6,
+                "output_cost_per_reasoning_token": 3e-6,
+                "citation_cost_per_token": 2e-6,
+                "search_context_cost_per_query": {"search_context_size_low": 0.01},
+                **legacy_pricing,
+            },
+        )
+        usage: Final = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=2),
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=10),
+            citation_tokens=25,
+        )
+
+        prompt_cost, completion_cost = litellm.cost_per_token(model=model, usage_object=usage)
+
+        assert prompt_cost == pytest.approx((100 + 25) * 2e-6)
+        assert completion_cost == pytest.approx(40 * 8e-6 + 10 * 3e-6 + 2 * expected_search_rate)
+
+    @pytest.mark.parametrize(
+        "reported_cost",
+        [float("nan"), float("inf"), {"total_cost": float("nan")}],
+        ids=["nan", "inf", "nan-total-cost-dict"],
+    )
+    def test_a_non_finite_perplexity_cost_is_priced_like_no_reported_cost_with_a_warning(
+        self, reported_cost: float | dict, caplog: pytest.LogCaptureFixture
+    ):
+        unreported: Final = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        reported: Final = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        reported.cost = reported_cost
+
+        token_priced: Final = perplexity_cost_per_token(model="sonar-pro", usage=unreported)
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            reported_priced: Final = perplexity_cost_per_token(model="sonar-pro", usage=reported)
+
+        assert sum(token_priced) > 0
+        assert reported_priced == token_priced
+        assert [record for record in caplog.records if "non-finite provider-reported cost" in record.getMessage()]
 
     OFF_PEAK_MODEL = "sonar-off-peak-test"
     OFF_PEAK_WINDOW = "14:00-00:00"

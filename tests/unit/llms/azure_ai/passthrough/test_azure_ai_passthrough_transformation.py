@@ -1,5 +1,7 @@
 import json
+from collections.abc import Mapping
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -517,6 +519,162 @@ def test_cohere_rerank_relay_is_costed_per_search_unit():
     assert logging_obj.call_type == "arerank"
     assert per_query > 0
     assert logging_obj.response_cost_calculator(result=result) == pytest.approx(2 * per_query)
+
+
+COHERE_EMBED_BODY: Final[Mapping[str, object]] = {
+    "id": "embed-1",
+    "texts": ["hello world"],
+    "embeddings": {"float": [[0.1, 0.2]]},
+    "meta": {"api_version": {"version": "2"}, "billed_units": {"input_tokens": 2, "image_tokens": 0}},
+    "response_type": "embeddings_by_type",
+}
+COHERE_V1_EMBED_META: Final[Mapping[str, object]] = {
+    "api_version": {"version": "1"},
+    "billed_units": {"input_tokens": 2, "image_tokens": 0},
+}
+TWO_VECTORS: Final = [[0.1, 0.2], [0.3, 0.4]]
+
+
+def _cohere_embed_relay_result(
+    body: Mapping[str, object], native_path: str = "providers/cohere/v2/embed"
+) -> tuple[object, Logging]:
+    return _relay_logging_result(AzureAIPassthroughConfig(), "embed-v-4-0", native_path, body)
+
+
+def _foundry_embed_price(price_key: str) -> float:
+    return litellm.get_model_info("azure_ai/embed-v-4-0")[price_key]
+
+
+def test_native_cohere_embed_relay_is_costed_per_billed_input_token() -> None:
+    result, logging_obj = _cohere_embed_relay_result(COHERE_EMBED_BODY)
+    per_token: Final = _foundry_embed_price("input_cost_per_token")
+
+    assert isinstance(result, EmbeddingResponse)
+    assert logging_obj.call_type == "aembedding"
+    assert per_token > 0
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(2 * per_token)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {
+            "id": "embed-1",
+            "texts": ["hello world", "second text"],
+            "embeddings": {"float": TWO_VECTORS},
+            "meta": COHERE_V1_EMBED_META,
+            "response_type": "embeddings_by_type",
+        },
+        {
+            "id": "embed-1",
+            "texts": ["hello world", "second text"],
+            "embeddings": TWO_VECTORS,
+            "meta": COHERE_V1_EMBED_META,
+            "response_type": "embeddings_floats",
+        },
+    ],
+    ids=["embeddings_by_type", "embeddings_floats"],
+)
+def test_native_cohere_v1_embed_relay_is_costed_per_billed_input_token(body: Mapping[str, object]) -> None:
+    result, logging_obj = _cohere_embed_relay_result(body, "providers/cohere/v1/embed")
+    per_token: Final = _foundry_embed_price("input_cost_per_token")
+
+    assert isinstance(result, EmbeddingResponse)
+    assert [(row["index"], row["embedding"]) for row in result.data] == list(enumerate(TWO_VECTORS))
+    assert logging_obj.call_type == "aembedding"
+    assert per_token > 0
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(2 * per_token)
+
+
+def test_native_cohere_embed_relay_prices_an_image_at_the_input_tokens_foundry_already_folded_it_into() -> None:
+    body: Final = {
+        **COHERE_EMBED_BODY,
+        "texts": [],
+        "images": [{"width": 64, "height": 64, "format": "image/png", "bit_depth": 8}],
+        "meta": {"api_version": {"version": "2"}, "billed_units": {"input_tokens": 24, "image_tokens": 6}},
+    }
+    result, logging_obj = _cohere_embed_relay_result(body)
+    per_token: Final = _foundry_embed_price("input_cost_per_token")
+    per_image_token: Final = _foundry_embed_price("input_cost_per_image_token")
+
+    assert isinstance(result, EmbeddingResponse)
+    assert per_token > 0
+    assert per_image_token > 0
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(24 * per_token)
+
+
+
+def test_native_cohere_embed_relay_rows_keep_their_embedding_type() -> None:
+    result, _ = _cohere_embed_relay_result({**COHERE_EMBED_BODY, "embeddings": {"float": TWO_VECTORS, "int8": [[1, 2]]}})
+
+    assert isinstance(result, EmbeddingResponse)
+    assert [(row["type"], row["index"], row["embedding"]) for row in result.data] == [
+        ("float", 0, TWO_VECTORS[0]),
+        ("float", 1, TWO_VECTORS[1]),
+        ("int8", 0, [1, 2]),
+    ]
+
+@pytest.mark.parametrize("texts", [None, "hello world", [1, 2], ["hello", 3]])
+def test_native_cohere_embed_relay_with_billed_units_is_costed_whatever_texts_holds(texts: object) -> None:
+    result, logging_obj = _cohere_embed_relay_result({**COHERE_EMBED_BODY, "texts": texts})
+
+    assert isinstance(result, EmbeddingResponse)
+    assert logging_obj.call_type == "aembedding"
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(
+        2 * _foundry_embed_price("input_cost_per_token")
+    )
+
+
+def test_native_cohere_embed_relay_without_texts_is_costed_per_billed_input_token() -> None:
+    body: Final = {key: value for key, value in COHERE_EMBED_BODY.items() if key != "texts"}
+    result, logging_obj = _cohere_embed_relay_result(body)
+
+    assert isinstance(result, EmbeddingResponse)
+    assert logging_obj.call_type == "aembedding"
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(
+        2 * _foundry_embed_price("input_cost_per_token")
+    )
+
+
+@pytest.mark.parametrize(
+    ("texts", "counted_texts"),
+    [
+        (["hello world", "a longer second text"], ["hello world", "a longer second text"]),
+        (["before <|endoftext|> after"], ["before <|endoftext|> after"]),
+        ("hello world", []),
+        (["hello", 3], []),
+        (None, []),
+    ],
+)
+def test_native_cohere_embed_relay_without_billed_units_is_costed_from_the_echoed_texts(
+    texts: object, counted_texts: list[str]
+) -> None:
+    result, logging_obj = _cohere_embed_relay_result({**COHERE_EMBED_BODY, "texts": texts, "meta": {}})
+    per_token: Final = _foundry_embed_price("input_cost_per_token")
+    echoed_tokens: Final = sum(len(litellm.encoding.encode(text, disallowed_special=())) for text in counted_texts)
+
+    assert isinstance(result, EmbeddingResponse)
+    assert logging_obj.call_type == "aembedding"
+    assert result.usage.prompt_tokens == echoed_tokens
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(echoed_tokens * per_token)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"message": "no embeddings here"},
+        {**COHERE_EMBED_BODY, "embeddings": None},
+        {**COHERE_EMBED_BODY, "embeddings": "vectors"},
+        {**COHERE_EMBED_BODY, "meta": "not an object"},
+    ],
+)
+def test_native_cohere_embed_relay_with_a_non_embed_body_keeps_the_passthrough_object_and_call_type(
+    body: Mapping[str, object],
+) -> None:
+    result, logging_obj = _cohere_embed_relay_result(body)
+
+    assert result == {"response": body}
+    assert logging_obj.call_type == "allm_passthrough_route"
 
 
 def test_image_generation_relay_is_costed_per_image():

@@ -55,14 +55,25 @@ class TestPolicyFromLitellmParams:
         assert policy.is_same is True
 
 
-class _FakeRouter:
-    """Minimal stand-in for litellm.Router.deployments_for_request, for policy_for_model."""
+class _FakeRegistry:
+    """Minimal stand-in for litellm.Router.registry().deployments(source="for_request"), for policy_for_model."""
 
     def __init__(self, deployments: list[dict[str, Any]]):
         self._deployments = deployments
 
-    def deployments_for_request(self, model, request_kwargs):
+    def deployments(self, model, *, source, request):
+        assert source == "for_request"
         return [d for d in self._deployments if d.get("model_name") == model]
+
+
+class _FakeRouter:
+    """Minimal stand-in for litellm.Router.registry(), for policy_for_model."""
+
+    def __init__(self, deployments: list[dict[str, Any]]):
+        self._registry = _FakeRegistry(deployments)
+
+    def registry(self):
+        return self._registry
 
 
 def _marker(compression: dict[str, str], tags: list[str] | None = None) -> dict[str, Any]:

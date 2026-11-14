@@ -12,7 +12,7 @@ import subprocess
 import time
 import urllib
 import urllib.parse
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Final, Protocol, TypeVar
 
@@ -35,8 +35,178 @@ from litellm.proxy.db.token_auth import (
 from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from types import TracebackType
+
     from prisma import Prisma
+    from prisma import models as prisma_models
     from prisma.types import HttpConfig
+    from typing_extensions import Self
+
+    from litellm.repositories.prisma_protocols import TableActions
+
+    _DEFAULT_TX_MAX_WAIT: Final = timedelta(seconds=2)
+    _DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
+
+    class PrismaBatchActions(Protocol):
+        def create(self, data: Mapping[str, object], include: Mapping[str, object] | None = None) -> None: ...
+
+        def create_many(self, data: Sequence[Mapping[str, object]], *, skip_duplicates: bool | None = None) -> None: ...
+
+        def delete(self, where: Mapping[str, object], include: Mapping[str, object] | None = None) -> None: ...
+
+        def update(
+            self,
+            data: Mapping[str, object],
+            where: Mapping[str, object],
+            include: Mapping[str, object] | None = None,
+        ) -> None: ...
+
+        def upsert(
+            self,
+            where: Mapping[str, object],
+            data: Mapping[str, object],
+            include: Mapping[str, object] | None = None,
+        ) -> None: ...
+
+        def update_many(self, data: Mapping[str, object], where: Mapping[str, object]) -> None: ...
+
+        def delete_many(self, where: Mapping[str, object] | None = None) -> None: ...
+
+    class PrismaBatchSession(Protocol):
+        @property
+        def litellm_customermembertable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_customerteamtable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_customerorganizationtable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_agentstable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_budgettable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_dailymodelusage(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_dailyteamspend(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_dailytoolspend(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_endusertable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_modelaccessgroupbudgettable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_organizationmembership(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_organizationtable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_projecttable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_proxymodeltable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_tagtable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_teammembership(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_teamtable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_usertable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_verificationtoken(self) -> PrismaBatchActions: ...
+
+        def execute_raw(self, query: str, *args: object) -> None: ...
+
+        async def commit(self) -> None: ...
+
+        async def __aenter__(self) -> Self: ...
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            exc_tb: TracebackType | None,
+            /,
+        ) -> None: ...
+
+    class PrismaTransaction(Protocol):
+        @property
+        def litellm_accessgrouptable(self) -> TableActions[prisma_models.LiteLLM_AccessGroupTable]: ...
+
+        @property
+        def litellm_agentstable(self) -> TableActions[prisma_models.LiteLLM_AgentsTable]: ...
+
+        @property
+        def litellm_budgettable(self) -> TableActions[prisma_models.LiteLLM_BudgetTable]: ...
+
+        @property
+        def litellm_invitationlink(self) -> TableActions[prisma_models.LiteLLM_InvitationLink]: ...
+
+        @property
+        def litellm_mcpservertable(self) -> TableActions[prisma_models.LiteLLM_MCPServerTable]: ...
+
+        @property
+        def litellm_mcpuserenvvars(self) -> TableActions[prisma_models.LiteLLM_MCPUserEnvVars]: ...
+
+        @property
+        def litellm_objectpermissiontable(self) -> TableActions[prisma_models.LiteLLM_ObjectPermissionTable]: ...
+
+        @property
+        def litellm_organizationtable(self) -> TableActions[prisma_models.LiteLLM_OrganizationTable]: ...
+
+        @property
+        def litellm_proxymodeltable(self) -> TableActions[prisma_models.LiteLLM_ProxyModelTable]: ...
+
+        @property
+        def litellm_teamtable(self) -> TableActions[prisma_models.LiteLLM_TeamTable]: ...
+
+        @property
+        def litellm_usertable(self) -> TableActions[prisma_models.LiteLLM_UserTable]: ...
+
+        @property
+        def litellm_verificationtoken(self) -> TableActions[prisma_models.LiteLLM_VerificationToken]: ...
+
+        @property
+        def litellm_workflowevent(self) -> TableActions[prisma_models.LiteLLM_WorkflowEvent]: ...
+
+        @property
+        def litellm_workflowrun(self) -> TableActions[prisma_models.LiteLLM_WorkflowRun]: ...
+
+        def batch_(self) -> PrismaBatchSession: ...
+
+        async def execute_raw(self, query: str, *args: object) -> int: ...
+
+        async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
+
+        async def query_first(self, query: str, *args: object) -> Mapping[str, object] | None: ...
+
+    class PrismaTransactionManager(Protocol):
+        async def __aenter__(self) -> PrismaTransaction: ...
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            exc_tb: TracebackType | None,
+            /,
+        ) -> None: ...
+
 
 _ENVIRONMENT_VARIABLES_REVISION_MIGRATION: Final = "20261015120000_add_environment_variables_revision_trigger"
 
@@ -395,11 +565,25 @@ class PrismaWrapper:
         self._retirement_tasks = self._retirement_tasks.difference((retirement_task,))
 
     async def connect(self, timeout: int | timedelta | None = None) -> None:
-        if timeout is None:
-            await self._original_prisma.connect()
-        else:
-            await self._original_prisma.connect(timeout)
+        await self._connect_prisma(self._original_prisma, timeout)
         self._active_drain_tracker = self._instrument_prisma_client(self._original_prisma)
+
+    @staticmethod
+    async def _connect_prisma(prisma_client: "Prisma", timeout: int | timedelta | None = None) -> None:
+        new_connection: Final = prisma_client.is_connected() is False
+        if new_connection:
+            from litellm.proxy.db.prisma_engine import initialize_query_engine
+
+            initialize_query_engine(prisma_client)
+        try:
+            if timeout is None:
+                await prisma_client.connect()
+            else:
+                await prisma_client.connect(timeout)
+        except (Exception, asyncio.CancelledError):
+            if new_connection:
+                await prisma_client.disconnect()
+            raise
 
     @staticmethod
     async def _kill_engine_process(pid: int) -> None:
@@ -685,7 +869,7 @@ class PrismaWrapper:
         else:
             self._original_prisma = Prisma()
 
-        await self._original_prisma.connect()
+        await self._connect_prisma(self._original_prisma)
         self._active_drain_tracker = self._instrument_prisma_client(self._original_prisma)
         self._engine_generation += 1
 
@@ -716,7 +900,7 @@ class PrismaWrapper:
         if old_drain_tracker is None:
             old_drain_tracker = self._instrument_prisma_client(old_prisma)
         try:
-            await replacement_prisma.connect()
+            await self._connect_prisma(replacement_prisma)
         except (Exception, asyncio.CancelledError):
             self._schedule_engine_retirement(self._get_engine_pid(replacement_prisma), None)
             raise
@@ -904,6 +1088,27 @@ class PrismaWrapper:
 
         async def disconnect(self, timeout: float | timedelta | None = None) -> None: ...
 
+        async def execute_raw(self, query: str, *args: object) -> int: ...
+
+        async def query_first(self, query: str, *args: object) -> Mapping[str, object] | None: ...
+
+        def tx(
+            self, *, max_wait: int | timedelta = _DEFAULT_TX_MAX_WAIT, timeout: int | timedelta = _DEFAULT_TX_TIMEOUT
+        ) -> PrismaTransactionManager: ...
+
+        def batch_(self) -> PrismaBatchSession: ...
+
+        @property
+        def litellm_deprecatedverificationtoken(
+            self,
+        ) -> TableActions[prisma_models.LiteLLM_DeprecatedVerificationToken]: ...
+
+        @property
+        def litellm_mcpservertable(self) -> TableActions[prisma_models.LiteLLM_MCPServerTable]: ...
+
+        @property
+        def litellm_shadowevaljob(self) -> TableActions[prisma_models.LiteLLM_ShadowEvalJob]: ...
+
     def __getattr__(self, name: str):
         """
         Proxy attribute access to the underlying Prisma client.
@@ -1085,6 +1290,7 @@ class PrismaManager:
                     from litellm_proxy_extras.utils import ProxyExtrasDBManager
 
                     ProxyExtrasDBManager.raise_if_lens_rename_pending()
+                    ProxyExtrasDBManager.raise_if_customer_member_budget_rename_pending()  # pyright: ignore[reportUnknownMemberType]  # litellm-proxy-extras is an optional install
                     PrismaManager._raise_if_partitioned_spend_logs()
                     run_prisma(
                         [
@@ -1127,16 +1333,16 @@ class PrismaManager:
         return ProxyExtrasDBManager.build_request_log_indexes()
 
     @staticmethod
-    def migration_data_check_report(use_migrate: bool = True) -> str | None:
-        """The read-only pre-migration row check on its own, for `--check_migrations_against_existing_data`: the
-        refusal the migration step would print, or None when the pending schema changes
-        can be applied to the rows the database has."""
+    def migration_dry_run_summary(use_migrate: bool = True) -> tuple[bool, str]:
+        """`--check_migrations_against_existing_data` on its own: the pending migrations applied inside a
+        transaction that is rolled back, as (whether they all applied, what the operator reads)."""
         from litellm_proxy_extras.utils import (
             ProxyExtrasDBManager,  # pyright: ignore[reportUnknownVariableType]  # litellm-proxy-extras is an optional install
         )
+        from pydantic import TypeAdapter
 
-        refusal: Final[object] = ProxyExtrasDBManager.migration_data_check_report(use_migrate=use_migrate)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm-proxy-extras is an optional install
-        return refusal if isinstance(refusal, str) else None
+        summary: Final[object] = ProxyExtrasDBManager.migration_dry_run_summary(use_migrate=use_migrate)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm-proxy-extras is an optional install
+        return TypeAdapter(tuple[bool, str]).validate_python(summary)
 
     @staticmethod
     def start_request_log_index_build() -> None:

@@ -32,7 +32,7 @@ second regression, since the global-credential fallback then reaches the
 container anyway.
 
 The streaming cell repeats the flow with ``stream=True`` and uploads right
-after the last event. The OpenAI SDK closes the connection at ``[DONE]``, so an
+after the last event. The OpenAI SDK closes the connection after the last frame, so an
 ownership row written after the stream is cancelled with the body task and every
 follow-up container call 403s (LIT-8612); the row has to land before the
 ``response.completed`` frame goes out.
