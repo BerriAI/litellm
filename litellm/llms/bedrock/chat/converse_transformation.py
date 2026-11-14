@@ -261,6 +261,10 @@ def _is_guarded_user_turn(message: object) -> bool:
     return _is_user_turn(message) and _has_guarded_text(message)
 
 
+def _is_tool_or_function_turn(message: object) -> bool:
+    return message_field(message, "role") in ("tool", "function")
+
+
 def _becomes_a_user_turn(message: object) -> bool:
     return _is_user_turn(message) or is_system_message(message)
 
@@ -1705,7 +1709,7 @@ class AmazonConverseConfig(BaseConfig):
         if (
             litellm.bedrock_neutralize_orphaned_tool_blocks
             and not optional_params.get("tools")
-            and self._has_orphaned_tool_blocks(messages)
+            and any(map(_is_tool_or_function_turn, messages))
         ):
             return False
         reordered: Final = chain.from_iterable(
