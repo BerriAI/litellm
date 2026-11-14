@@ -6,6 +6,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from typing import Final, NoReturn, cast  # noqa: TID251  # runtime Mapping keys and values are objects
 
@@ -170,6 +171,12 @@ def _raise_failure(failure: _Failure, now: float) -> NoReturn:
     raise ServiceUnavailableError(message=failure.message, llm_provider="github_copilot", model="")
 
 
+def _session(config: AppConfig, result: _Token | _Failure, now: float) -> GithubCopilotUserSession:
+    if isinstance(result, _Failure):
+        _raise_failure(result, now)
+    return GithubCopilotUserSession(token=result.value, api_base=config.api_base, is_app=True)
+
+
 def _new_client() -> httpx.Client:
     return httpx.Client(timeout=httpx.Timeout(15, connect=5), follow_redirects=False, verify=get_ssl_configuration())
 
@@ -187,27 +194,32 @@ class AppTokenManager:
         self._clock = clock
         self._monotonic = monotonic
         self._cache: OrderedDict[str, _Token | _Failure] = OrderedDict()  # mutable-ok: locked token cache
+        self._in_flight: dict[str, Future[_Token | _Failure]] = {}  # mutable-ok: locked single-flight registry
         self._cache_lock = threading.Lock()
-        self._locks = tuple(threading.Lock() for _ in range(64))
 
     def resolve(self, config: AppConfig) -> GithubCopilotUserSession:
-        try:
-            private_key: Final = (
-                _stored_private_key(config.credential_name)
-                if config.credential_name is not None
-                else self._secret_reader(config.private_key_ref)
-            )
-        except Exception:  # noqa: BLE001  # secret backends can raise arbitrary errors containing credentials
-            raise AuthenticationError(
-                message="Unable to read the GitHub App private-key secret.", llm_provider="github_copilot", model=""
-            ) from None
-        if not private_key:
-            raise AuthenticationError(
-                message="GitHub App private-key secret is empty or unavailable.",
-                llm_provider="github_copilot",
-                model="",
-            )
-        cache_key: Final = hashlib.sha256(
+        key: Final = self._cache_key(config)
+        cached: Final = self._get(key)
+        if cached is not None:
+            return _session(config, cached, self._monotonic())
+        future, owner = self._claim(key)
+        if owner:
+            self._fill(key, config, future)
+        return _session(config, future.result(), self._monotonic())
+
+    async def aresolve(self, config: AppConfig) -> GithubCopilotUserSession:
+        key: Final = self._cache_key(config)
+        cached: Final = self._get(key)
+        if cached is not None:
+            return _session(config, cached, self._monotonic())
+        future, owner = self._claim(key)
+        if owner:
+            await asyncio.to_thread(self._fill, key, config, future)
+        return _session(config, await asyncio.wrap_future(future), self._monotonic())
+
+    def _cache_key(self, config: AppConfig) -> str:
+        stored_key: Final = _stored_private_key(config.credential_name) if config.credential_name is not None else None
+        return hashlib.sha256(
             json.dumps(
                 (
                     config.host,
@@ -215,21 +227,44 @@ class AppTokenManager:
                     config.installation_id,
                     config.private_key_ref,
                     config.credential_name,
-                    private_key,
+                    stored_key,
                 )
             ).encode()
         ).hexdigest()
-        with self._locks[int(cache_key[:8], 16) % len(self._locks)]:
-            cached: Final = self._get(cache_key)
-            result: Final = cached if cached is not None else self._mint(config, private_key)
-            if cached is None:
-                self._put(cache_key, result)
-            if isinstance(result, _Failure):
-                _raise_failure(result, self._monotonic())
-            return GithubCopilotUserSession(token=result.value, api_base=config.api_base, is_app=True)
 
-    async def aresolve(self, config: AppConfig) -> GithubCopilotUserSession:
-        return await asyncio.to_thread(self.resolve, config)
+    def _claim(self, key: str) -> tuple[Future[_Token | _Failure], bool]:
+        with self._cache_lock:
+            existing: Final = self._in_flight.get(key)
+            if existing is not None:
+                return existing, False
+            future: Final = Future[_Token | _Failure]()
+            _ = future.set_running_or_notify_cancel()
+            self._in_flight[key] = future
+            return future, True
+
+    def _fill(self, key: str, config: AppConfig, future: Future[_Token | _Failure]) -> None:
+        try:
+            cached: Final = self._get(key)
+            result: Final = cached if cached is not None else self._fetch(config)
+        except BaseException as error:
+            self._settle(key, None)
+            future.set_exception(error)
+            raise
+        self._settle(key, result)
+        future.set_result(result)
+
+    def _fetch(self, config: AppConfig) -> _Token | _Failure:
+        try:
+            private_key: Final = (
+                _stored_private_key(config.credential_name)
+                if config.credential_name is not None
+                else self._secret_reader(config.private_key_ref)
+            )
+        except Exception:  # noqa: BLE001  # secret backends can raise arbitrary errors containing credentials
+            return self._failure("Unable to read the GitHub App private-key secret.", 401, cooldown=0)
+        if not private_key:
+            return self._failure("GitHub App private-key secret is empty or unavailable.", 401, cooldown=0)
+        return self._mint(config, private_key)
 
     def _get(self, key: str) -> _Token | _Failure | None:
         with self._cache_lock:
@@ -244,12 +279,15 @@ class AppTokenManager:
             self._cache.move_to_end(key)
             return cached
 
-    def _put(self, key: str, value: _Token | _Failure) -> None:
+    def _settle(self, key: str, value: _Token | _Failure | None) -> None:
         with self._cache_lock:
+            _ = self._in_flight.pop(key, None)
+            if value is None:
+                return
             self._cache[key] = value
             self._cache.move_to_end(key)
             while len(self._cache) > _CACHE_SIZE:
-                self._cache.popitem(last=False)
+                _ = self._cache.popitem(last=False)
 
     def _failure(self, message: str, status: int, cooldown: float = 5) -> _Failure:
         return _Failure(message, status, self._monotonic() + cooldown)

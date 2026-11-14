@@ -3467,9 +3467,10 @@ def _github_app_values() -> dict[str, str]:
     }
 
 
+@pytest.mark.parametrize("credential_info", [{"custom_llm_provider": "GITHUB_COPILOT"}, {}])
 @pytest.mark.parametrize("invalid", ["-----BEGIN PRIVATE KEY-----", "oidc/https://attacker.example", ""])
 def test_create_github_app_rejects_invalid_key_reference_before_storage(
-    credential_store: _InstallCredentialStore, invalid: str
+    credential_store: _InstallCredentialStore, invalid: str, credential_info: dict[str, str]
 ) -> None:
     create: Final = AsyncMock()
     credential_store(create=create)
@@ -3477,7 +3478,7 @@ def test_create_github_app_rejects_invalid_key_reference_before_storage(
         {
             "credential_name": "copilot-app",
             "credential_values": {**_github_app_values(), "github_copilot_app_private_key_ref": invalid},
-            "credential_info": {"custom_llm_provider": "GITHUB_COPILOT"},
+            "credential_info": credential_info,
         }
     )
     assert response.status_code == 400

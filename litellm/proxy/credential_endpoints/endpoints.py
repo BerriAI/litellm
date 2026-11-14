@@ -107,9 +107,7 @@ def _normalized_github_copilot_values(
     return {**credential_values, GITHUB_COPILOT_HOST_KEY: host}
 
 
-def _validate_github_app_values(values: Mapping[str, object], info: Mapping[str, object]) -> None:
-    if stored_credential_provider(info.get("custom_llm_provider")) != _GITHUB_COPILOT_PROVIDER:
-        return
+def _validate_github_app_values(values: Mapping[str, object]) -> None:
     from litellm.exceptions import BadRequestError
     from litellm.llms.github_copilot.app_auth import app_config
 
@@ -371,7 +369,7 @@ async def create_credential(
             credential_info,
         )
         _reject_non_admin_wif_fields(server_owned_wif_fields_written(normalized_values), user_api_key_dict)
-        _validate_github_app_values(normalized_values, credential_info)
+        _validate_github_app_values(normalized_values)
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential.credential_name, prisma_client), user_api_key_dict
         )
@@ -1070,8 +1068,7 @@ async def update_credential(
             )
             merged_credential: Final = update_db_credential(db_credential, normalized_patch)
             _validate_github_app_values(
-                _CREDENTIAL_DICT_ADAPTER.validate_python(decrypted_credential(merged_credential).credential_values),
-                effective_info,
+                _CREDENTIAL_DICT_ADAPTER.validate_python(decrypted_credential(merged_credential).credential_values)
             )
             credential_object_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
                 "dict[str, object]", jsonify_object(merged_credential.model_dump(exclude_none=True))

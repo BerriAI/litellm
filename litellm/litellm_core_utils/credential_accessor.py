@@ -30,7 +30,6 @@ class CredentialAccessor:
         credential: Final = CredentialAccessor.find_credential(credential_name)
         if credential is None:
             return {}
-        # App signing keys are consumed only by the auth provider, never merged into model kwargs.
         return deepcopy(
             {
                 key: value

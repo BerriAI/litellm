@@ -2837,7 +2837,8 @@ def _complete_custom_openai(
         copilot_headers: Final = get_copilot_default_headers(
             user_session.token if user_session is not None else Authenticator().get_api_key()
         )
-        if headers:
+        is_app_session: Final = user_session is not None and user_session.is_app
+        if headers and is_app_session:
             copilot_headers.update(
                 cast("dict[str, str]", headers)  # cast-ok: HTTP request headers have string names and values
             )
@@ -2848,7 +2849,8 @@ def _complete_custom_openai(
         if user_session is not None:
             pin_session_authorization(copilot_headers, user_session.token, user_session.integration_id)
         extra_headers = copilot_headers
-        headers = dict[str, object](copilot_headers)  # rebind-ok: pin headers in both transports
+        if is_app_session:
+            headers = dict[str, object](copilot_headers)  # rebind-ok: pin App headers in both transports
 
     request_headers: Final = cast("dict[str, object] | None", headers)  # cast-ok: untyped request header boundary
     outbound_headers: Final = (

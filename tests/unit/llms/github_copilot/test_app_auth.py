@@ -160,15 +160,34 @@ async def test_concurrent_callers_mint_one_token(private_key: str, async_calls: 
     assert len(requests) == 1
 
 
-def test_app_installation_host_and_rotated_key_never_share_tokens(private_key: str) -> None:
+def test_app_installation_host_and_rotated_key_never_share_tokens(
+    private_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     requests: Final[list[httpx.Request]] = []
-    secrets: Final = {"current": private_key}
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return httpx.Response(201, json=token_payload(f"token-{len(requests)}"))
 
-    auth: Final = manager(private_key, respond, Clock(), lambda _: secrets["current"])
+    def upload(key: str) -> None:
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="uploaded",
+                    credential_values={
+                        "github_copilot_auth_type": "github_app",
+                        "github_copilot_app_id": _CONFIG.app_id,
+                        "github_copilot_app_installation_id": "123",
+                        "github_copilot_app_private_key": key,
+                    },
+                    credential_info={"custom_llm_provider": "github_copilot"},
+                )
+            ],
+        )
+
+    auth: Final = manager(private_key, respond, Clock())
     configs: Final = (
         _CONFIG,
         AppConfig("other-app", 123, _CONFIG.private_key_ref),
@@ -176,9 +195,61 @@ def test_app_installation_host_and_rotated_key_never_share_tokens(private_key: s
         AppConfig(_CONFIG.app_id, 123, _CONFIG.private_key_ref, "example.ghe.com"),
     )
     assert tuple(auth.resolve(config).token for config in configs) == ("token-1", "token-2", "token-3", "token-4")
-    secrets["current"] = private_key + "\n"
-    assert auth.resolve(_CONFIG).token == "token-5"
-    assert auth.resolve(configs[1]).token == "token-6"
+    upload(private_key)
+    uploaded: Final = app_config({"litellm_credential_name": "uploaded"})
+    assert uploaded is not None
+    assert auth.resolve(uploaded).token == "token-5"
+    upload(private_key + "\n")
+    assert auth.resolve(uploaded).token == "token-6"
+    assert auth.resolve(configs[1]).token == "token-2"
+
+
+async def test_cached_token_is_served_without_reading_the_key_secret_again(private_key: str) -> None:
+    reads: Final[list[str]] = []
+    mints: Final[list[httpx.Request]] = []
+
+    def read_secret(ref: str) -> str:
+        reads.append(ref)
+        if len(reads) > 1:
+            raise RuntimeError("secret backend is down")
+        return private_key
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        mints.append(request)
+        return httpx.Response(201, json=token_payload())
+
+    auth: Final = manager(private_key, respond, Clock(), read_secret)
+    assert auth.resolve(_CONFIG).token == "installation-token"
+    assert {(await auth.aresolve(_CONFIG)).token for _ in range(3)} == {"installation-token"}
+    assert auth.resolve(_CONFIG).token == "installation-token"
+    assert (len(reads), len(mints)) == (1, 1)
+
+
+async def test_callers_waiting_on_a_mint_leave_the_default_thread_pool_free(private_key: str) -> None:
+    started: Final = threading.Event()
+    release: Final = threading.Event()
+    mints: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        mints.append(request)
+        started.set()
+        _ = release.wait(10)
+        return httpx.Response(201, json=token_payload())
+
+    auth: Final = manager(private_key, respond, Clock())
+    loop: Final = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=2))
+    try:
+        callers: Final = tuple(asyncio.create_task(auth.aresolve(_CONFIG)) for _ in range(10))
+        while not started.is_set():
+            await asyncio.sleep(0.01)
+        assert await asyncio.wait_for(loop.run_in_executor(None, lambda: "unrelated job ran"), 2) == (
+            "unrelated job ran"
+        )
+    finally:
+        release.set()
+    assert {session.token for session in await asyncio.gather(*callers)} == {"installation-token"}
+    assert len(mints) == 1
 
 
 @pytest.mark.parametrize(
@@ -434,16 +505,59 @@ def _model_payload(surface: str) -> Mapping[str, object]:
     }
 
 
-def test_app_session_is_deployment_owned_but_excluded_from_shared_response_cache() -> None:
+def test_app_session_is_deployment_owned_and_shares_the_response_cache() -> None:
     from litellm.caching.caching_handler import _is_response_cache_excluded
     from litellm.router_utils.cooldown_handlers import _is_per_user_provider_request
 
     params: Final = {
         "github_copilot_user_session": GithubCopilotUserSession("app-token", _CONFIG.api_base, is_app=True)
     }
+    per_user: Final = {"github_copilot_user_session": GithubCopilotUserSession("user-token", _CONFIG.api_base)}
     assert not is_github_copilot_per_user_request(params)
     assert not _is_per_user_provider_request({"litellm_params": params})
-    assert _is_response_cache_excluded("github_copilot/claude-sonnet-5.5", params)
+    assert not _is_response_cache_excluded("github_copilot/claude-sonnet-5.5", params)
+    assert _is_response_cache_excluded("github_copilot/claude-sonnet-5.5", per_user)
+
+
+@pytest.mark.parametrize("async_call", [False, True])
+@pytest.mark.parametrize("app", [False, True])
+async def test_caller_headers_keep_device_login_wire_headers_and_cannot_unpin_app_identity(
+    private_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    tmp_path: Path,
+    app: bool,
+    async_call: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(app_auth, "APP_TOKEN_MANAGER", AppTokenManager())
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("TEST_APP_KEY", private_key)
+    _ = (tmp_path / "access-token").write_text("gho_device_token")
+    _ = respx_mock.post(_CONFIG.token_url).respond(201, json=token_payload())
+    upstream: Final = respx_mock.post(host="api.githubcopilot.com").respond(200, json=_model_payload("chat"))
+    app_fields: Final = {
+        "github_copilot_auth_type": "github_app",
+        "github_copilot_app_id": _CONFIG.app_id,
+        "github_copilot_app_installation_id": str(_CONFIG.installation_id),
+        "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
+    }
+    args: Final = {
+        "model": "github_copilot/claude-sonnet-5.5",
+        "messages": [{"role": "user", "content": "hi"}],
+        "headers": {"x-forwarded": "client", "Copilot-Integration-ID": "client-integration"},
+        **(app_fields if app else {}),
+    }
+    _ = await litellm.acompletion(**args) if async_call else litellm.completion(**args)
+    sent: Final = upstream.calls.last.request.headers
+    assert sent["x-forwarded"] == "client"
+    if app:
+        assert sent["authorization"] == "Bearer installation-token"
+        assert sent.get_list("copilot-integration-id") == ["copilot-developer-cli"]
+        assert "editor-version" in sent
+    else:
+        assert sent.get_list("copilot-integration-id") == ["client-integration"]
+        assert "editor-version" not in sent
 
 
 def test_app_mode_without_session_cannot_fall_back_to_user_login() -> None:
@@ -557,7 +671,8 @@ def test_secret_backend_failure_is_sanitized() -> None:
     with pytest.raises(AuthenticationError) as error:
         auth.resolve(_CONFIG)
     assert "sensitive-backend-details" not in str(error.value)
-    assert error.value.__suppress_context__
+    assert error.value.__cause__ is None
+    assert error.value.__suppress_context__ or error.value.__context__ is None
 
 
 def test_token_cache_is_bounded(private_key: str, monkeypatch: pytest.MonkeyPatch) -> None:
