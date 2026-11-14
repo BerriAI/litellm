@@ -34,6 +34,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -843,6 +844,8 @@ def _encrypt_if_plaintext(key: str, value: object) -> object:
         # No salt key / master key configured — leave the value as-is rather
         # than crash the write. Dev environments without LITELLM_SALT_KEY hit
         # this path; production always has a master key so encryption proceeds.
+        if fips_mode_active():
+            raise
         return value
 
 
