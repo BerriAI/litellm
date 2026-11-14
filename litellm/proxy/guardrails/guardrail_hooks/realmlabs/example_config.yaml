@@ -1,0 +1,28 @@
+# Set ANTHROPIC_API_KEY and REALMLABS_API_KEY before starting the proxy
+# Run: litellm --config litellm/proxy/guardrails/guardrail_hooks/realmlabs/example_config.yaml
+
+model_list:
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+guardrails:
+  - guardrail_name: realmlabs-guard
+    litellm_params:
+      guardrail: realmlabs
+      mode: [pre_call, post_call]
+      api_key: os.environ/REALMLABS_API_KEY
+      api_base: https://mls.realmlabs.ai
+      default_on: true
+
+      probes: [hazard_prompt]
+      hazard_threshold: 0.703
+      pii: true
+      pii_mask: true
+      block_on_error: false
+
+      # All seven tuning settings can use either location; non-null nested values win
+      optional_params:
+        enable_thinking: false
+        timeout: 15  # seconds
