@@ -190,6 +190,8 @@ _NATIVE_CALL_TYPES: Final = frozenset(
         CallTypes.agenerate_content,
         CallTypes.generate_content_stream,
         CallTypes.agenerate_content_stream,
+        CallTypes.image_edit,
+        CallTypes.aimage_edit,
     }
 )
 _NATIVE_ROUTES: Final = frozenset(

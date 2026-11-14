@@ -510,6 +510,7 @@ def _refused_over_http(
     path: str,
     body: Mapping[str, object],
     upstream_token: str | None = None,
+    upload: str | None = None,
 ) -> Refusal:
     _use_native(proxy, native)
 
@@ -564,12 +565,21 @@ def _refused_over_http(
         )
 
     monkeypatch.setattr(proxy.logging, "post_call_failure_hook", recording)
-    response: Final = TestClient(proxy_server.app, raise_server_exceptions=False).post(
-        path,
-        json=body,
-        headers={"Authorization": f"Bearer {API_KEY}"}
+    headers: Final = (
+        {"Authorization": f"Bearer {API_KEY}"}
         if upstream_token is None
-        else {"x-litellm-api-key": API_KEY, "Authorization": f"Bearer {upstream_token}"},
+        else {"x-litellm-api-key": API_KEY, "Authorization": f"Bearer {upstream_token}"}
+    )
+    client: Final = TestClient(proxy_server.app, raise_server_exceptions=False)
+    response: Final = (
+        client.post(path, json=body, headers=headers)
+        if upload is None
+        else client.post(
+            path,
+            data={name: str(value) for name, value in body.items()},
+            files={upload: ("upload.bin", b"\x00" * 16, "application/octet-stream")},
+            headers=headers,
+        )
     )
     return Refusal(
         status=response.status_code,
@@ -755,6 +765,7 @@ def test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_re
 ROUTED_MODELS: Final = (
     ("gpt-realtime", "openai/gpt-realtime"),
     ("gpt-image-1", "openai/gpt-image-1"),
+    ("gpt-4o-transcribe", "openai/gpt-4o-transcribe"),
     ("gemini-2.5-pro", "gemini/gemini-2.5-pro"),
     ("llama-rank", "together_ai/Salesforce/Llama-Rank-V1"),
     ("gpt-4o-mini-tts", "openai/gpt-4o-mini-tts"),
@@ -767,6 +778,7 @@ class Family:
     body: Mapping[str, object]
     call_type: CallTypesLiteral
     upstream_token: str | None = None
+    upload: str | None = None
 
 
 FAMILIES: Final[Mapping[str, Family]] = {
@@ -809,6 +821,9 @@ FAMILIES: Final[Mapping[str, Family]] = {
         "/v1/realtime/translations/client_secrets",
         {"model": "gpt-realtime"},
         call_type="acreate_realtime_translation_client_secret",
+    ),
+    "image_edit": Family(
+        "/v1/images/edits", {"model": "gpt-image-1", "prompt": "a cat"}, call_type="aimage_edit", upload="image"
     ),
 }
 
@@ -865,8 +880,12 @@ def test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_re
     proxy: Proxy, monkeypatch: pytest.MonkeyPatch, family: Family
 ) -> None:
     _route_the_family_models(monkeypatch)
-    python: Final = _refused_over_http(proxy, False, monkeypatch, family.path, family.body, family.upstream_token)
-    native: Final = _refused_over_http(proxy, True, monkeypatch, family.path, family.body, family.upstream_token)
+    python: Final = _refused_over_http(
+        proxy, False, monkeypatch, family.path, family.body, family.upstream_token, family.upload
+    )
+    native: Final = _refused_over_http(
+        proxy, True, monkeypatch, family.path, family.body, family.upstream_token, family.upload
+    )
 
     assert python.status == 422
     assert native == python
