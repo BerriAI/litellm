@@ -1,4 +1,5 @@
-from collections.abc import Mapping
+import logging
+from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -6,8 +7,8 @@ import pytest
 from fastapi import HTTPException
 from pydantic import TypeAdapter
 
-from litellm.proxy._types import LiteLLM_UserTable
-from litellm.proxy.management_endpoints.scim.scim_v2 import _apply_patch_ops, patch_user
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+from litellm.proxy.management_endpoints.scim.scim_v2 import _apply_patch_ops, _sync_requested_teams, patch_user
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_METADATA_KEY,
     SCIM_ENTERPRISE_USER_SCHEMA,
@@ -111,9 +112,11 @@ async def test_patch_user_manages_group_memberships():
     mock_client = MagicMock()
     mock_db = MagicMock()
     mock_client.db = mock_db
+    mock_client.writer_db = mock_client.db
     mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
     mock_db.litellm_usertable.update = AsyncMock(side_effect=mock_update)
     mock_db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    mock_db.litellm_teamtable.find_many = AsyncMock(return_value=_team_rows(("new-team", "old-team")))
 
     # Mock the transformation function to return a proper SCIMUser
     mock_scim_user = SCIMUser(
@@ -577,8 +580,8 @@ def test_apply_patch_ops_replace_groups_empty_value_does_not_use_path_filter():
                 SCIMPatchOperation(op="add", path="groups", value=[{"value": "team-mu"}]),
                 SCIMPatchOperation(op="remove", path='groups[value eq "team-delta"]'),
             ],
-            ("team-delta", "team-omega", "team-beta"),
-            id="a_replace_wins_over_later_group_ops",
+            ("team-omega", "team-beta", "team-mu"),
+            id="group_ops_after_a_replace_apply_in_order",
         ),
         pytest.param(
             [
@@ -603,6 +606,252 @@ def test_apply_patch_ops_keeps_team_order_so_the_first_team_stays_first(
     _, final_teams = _apply_patch_ops(existing_user=user, patch_ops=SCIMPatchOp(Operations=operations))
 
     assert final_teams == expected_teams
+
+
+def _team_rows(team_ids: Sequence[str]) -> list[MagicMock]:
+    return [MagicMock(team_id=team_id) for team_id in team_ids]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "record_teams,requested_teams,teams_with_rows,expected_teams,expected_added,expected_removed",
+    [
+        pytest.param(
+            [],
+            ["team-real", "team-gone"],
+            ["team-real"],
+            ("team-real",),
+            ["team-real"],
+            [],
+            id="an_add_with_no_team_row_is_left_out_and_the_real_team_is_written",
+        ),
+        pytest.param(
+            ["team-real", "team-gone"],
+            ["team-real"],
+            ["team-real"],
+            ("team-real",),
+            None,
+            None,
+            id="a_remove_with_no_team_row_makes_no_roster_write_and_is_dropped_from_the_record",
+        ),
+        pytest.param(
+            ["team-real"],
+            ["team-real", "team-gone"],
+            [],
+            ("team-real",),
+            None,
+            None,
+            id="an_add_with_no_team_row_makes_no_roster_write_and_keeps_the_record_teams",
+        ),
+    ],
+)
+async def test_sync_requested_teams_leaves_out_groups_with_no_team_row(
+    record_teams: list[str],
+    requested_teams: list[str],
+    teams_with_rows: list[str],
+    expected_teams: tuple[str, ...],
+    expected_added: list[str] | None,
+    expected_removed: list[str] | None,
+):
+    mock_client: Final = MagicMock()
+    mock_client.writer_db = mock_client.db
+    mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=_team_rows(teams_with_rows))
+    mock_patch_team_membership: Final = AsyncMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        mock_patch_team_membership,
+    ):
+        teams: Final = await _sync_requested_teams(
+            prisma_client=mock_client,
+            user_id="user-groups",
+            record_teams=record_teams,
+            requested_teams=requested_teams,
+        )
+
+    assert teams == expected_teams
+    if expected_added is None:
+        mock_patch_team_membership.assert_not_called()
+        return
+    write: Final = mock_patch_team_membership.call_args.kwargs
+    assert write["teams_ids_to_add_user_to"] == expected_added
+    assert write["teams_ids_to_remove_user_from"] == expected_removed
+
+
+@pytest.mark.asyncio
+async def test_sync_requested_teams_reads_no_team_rows_when_the_groups_did_not_change():
+    mock_client: Final = MagicMock()
+    mock_client.writer_db = mock_client.db
+    mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+
+    teams: Final = await _sync_requested_teams(
+        prisma_client=mock_client,
+        user_id="user-groups",
+        record_teams=["team-real"],
+        requested_teams=["team-real"],
+    )
+
+    assert teams == ("team-real",)
+    mock_client.db.litellm_teamtable.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sync_requested_teams_adds_a_team_the_read_replica_has_not_seen_yet():
+    mock_client: Final = MagicMock()
+    mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    mock_client.writer_db.litellm_teamtable.find_many = AsyncMock(return_value=_team_rows(["team-new"]))
+    mock_patch_team_membership: Final = AsyncMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        mock_patch_team_membership,
+    ):
+        teams: Final = await _sync_requested_teams(
+            prisma_client=mock_client,
+            user_id="user-groups",
+            record_teams=[],
+            requested_teams=["team-new"],
+        )
+
+    assert teams == ("team-new",)
+    assert mock_patch_team_membership.call_args.kwargs["teams_ids_to_add_user_to"] == ["team-new"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("teams_with_rows", "expected_warnings"),
+    [
+        pytest.param(["team-real"], 1, id="a_group_with_no_team_row_is_named_in_one_warning"),
+        pytest.param(["team-real", "team-new"], 0, id="no_warning_when_every_group_has_a_team_row"),
+    ],
+)
+async def test_sync_requested_teams_warns_only_about_groups_it_left_out(
+    teams_with_rows: list[str],
+    expected_warnings: int,
+    caplog: pytest.LogCaptureFixture,
+):
+    mock_client: Final = MagicMock()
+    mock_client.writer_db = mock_client.db
+    mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=_team_rows(teams_with_rows))
+
+    with (
+        patch("litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership", AsyncMock()),
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+    ):
+        await _sync_requested_teams(
+            prisma_client=mock_client,
+            user_id="user-groups",
+            record_teams=[],
+            requested_teams=["team-real", "team-new"],
+        )
+
+    warnings: Final = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == expected_warnings
+    assert all("team-new" in warning and "team-real" not in warning for warning in warnings)
+
+
+@pytest.mark.asyncio
+async def test_sync_requested_teams_warning_stays_on_one_line_when_the_user_id_holds_line_breaks(
+    caplog: pytest.LogCaptureFixture,
+):
+    mock_client: Final = MagicMock()
+    mock_client.writer_db = mock_client.db
+    mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership", AsyncMock()),
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+    ):
+        await _sync_requested_teams(
+            prisma_client=mock_client,
+            user_id="user-groups\r\nCRITICAL forged line",
+            record_teams=[],
+            requested_teams=["team-new"],
+        )
+
+    warnings: Final = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "\n" not in warnings[0] and "\r" not in warnings[0]
+    assert "user-groupsCRITICAL forged line" in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_patch_user_ignores_a_group_with_no_team_named_like_the_scim_admin_group():
+    mock_user: Final = LiteLLM_UserTable(
+        user_id="not-an-admin",
+        user_email="not-an-admin@example.com",
+        teams=[],
+        metadata={},
+    )
+    mock_client: Final = MagicMock()
+    mock_client.writer_db = mock_client.db
+    mock_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
+    mock_client.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
+    mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    mock_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[SCIMPatchOperation(op="add", path="groups", value=[{"value": "litellm-admins"}])]
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_client),
+        patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config,
+        patch("litellm.default_internal_user_params", None),
+    ):
+        mock_proxy_config.get_config = AsyncMock(
+            return_value={"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+        )
+        await patch_user(user_id="not-an-admin", patch_ops=patch_ops)
+
+    update_data: Final = mock_client.db.litellm_usertable.update.call_args.kwargs["data"]
+    assert update_data["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    assert update_data["teams"] == []
+
+
+@pytest.mark.asyncio
+async def test_patch_user_deactivates_and_blocks_keys_when_a_group_has_no_team():
+    mock_user: Final = LiteLLM_UserTable(
+        user_id="user-leaver",
+        user_email="leaver@example.com",
+        teams=[],
+        metadata={},
+    )
+    mock_client: Final = MagicMock()
+    mock_db: Final = MagicMock()
+    mock_client.db = mock_db
+    mock_client.writer_db = mock_client.db
+    mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
+
+    async def mock_update(*, where: Mapping[str, object], data: Mapping[str, object]) -> LiteLLM_UserTable:
+        assert where == {"user_id": "user-leaver"}
+        return mock_user
+
+    mock_db.litellm_usertable.update = AsyncMock(side_effect=mock_update)
+    mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    mock_block_keys: Final = AsyncMock(return_value=1)
+    mock_patch_team_membership: Final = AsyncMock()
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(op="replace", path="active", value=False),
+            SCIMPatchOperation(op="add", path="groups", value=[{"value": "no-such-team"}]),
+        ]
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_client),
+        patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config,
+        patch("litellm.proxy.management_endpoints.scim.scim_v2._set_user_keys_blocked", mock_block_keys),
+        patch("litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership", mock_patch_team_membership),
+    ):
+        mock_proxy_config.get_config = AsyncMock(return_value={})
+        await patch_user(user_id="user-leaver", patch_ops=patch_ops)
+
+    update_data: Final = mock_db.litellm_usertable.update.call_args.kwargs["data"]
+    metadata: Final = TypeAdapter(dict[str, object]).validate_json(update_data["metadata"])
+    assert metadata["scim_active"] is False
+    assert update_data["teams"] == []
+    mock_patch_team_membership.assert_not_called()
+    mock_block_keys.assert_awaited_once_with(user_id="user-leaver", blocked=True)
 
 
 @pytest.mark.asyncio

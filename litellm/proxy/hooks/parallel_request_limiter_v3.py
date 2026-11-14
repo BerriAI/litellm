@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Literal,
@@ -27,10 +28,11 @@ from typing import (
 )
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 from starlette.status import HTTP_400_BAD_REQUEST, HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
+import litellm
 from litellm import DualCache
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -164,6 +166,105 @@ class RateLimitedModel:
             return None
         requested_limit: Final = limits.get(self.requested)
         return requested_limit if requested_limit is not None else limits.get(self.group)
+
+
+def dynamic_rate_limiter_covers(model_group: str) -> bool:
+    from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return False
+    group: Final = llm_router.registry().group(model_group)
+    if group is None or (group.tpm is None and group.rpm is None):
+        return False
+    return any(
+        callback == "dynamic_rate_limiter_v3" or isinstance(callback, PROXY_DynamicRateLimitHandlerV3)
+        for callback in litellm.callbacks
+    )
+
+
+def inherited_team_model_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+    model: RateLimitedModel,
+    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+) -> int | None:
+    """The team's per-model limit a key inherits, or None when the key sets its own limit for that model."""
+    team_limit: Final = model.limit_in(
+        get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", rate_limit_key)
+    )
+    if (
+        team_limit is None
+        or model.limit_in(get_key_own_model_rate_limit(user_api_key_dict, rate_limit_key)) is not None
+    ):
+        return None
+    return team_limit
+
+
+TEAM_MODEL_LIMIT_MAX_BORROW_MULTIPLE: Final = "team_model_limit_max_borrow_multiple"
+MAX_BORROW_MULTIPLE_CEILING: Final = 1_000_000
+_MAX_BORROW_MULTIPLE: Final[TypeAdapter[float]] = TypeAdapter(
+    Annotated[float, Field(ge=1, le=MAX_BORROW_MULTIPLE_CEILING, allow_inf_nan=False)]
+)
+
+
+@dataclass(frozen=True, slots=True)
+class BorrowingTeamModelLimits:
+    """Inherited team per-model limits the dynamic rate limiter enforces at saturation instead of the regular limiter."""
+
+    tpm: int | None
+    rpm: int | None
+    max_borrow_multiple: float | None = None
+
+    def share(self, rate_limit_type: str) -> int | None:
+        return self.rpm if rate_limit_type == "requests" else self.tpm
+
+    def borrow_ceiling(self) -> "BorrowingTeamModelLimits | None":
+        """The most the team may use while borrowing, or None when it may borrow up to the model's own limit."""
+        if self.max_borrow_multiple is None:
+            return None
+        return BorrowingTeamModelLimits(
+            tpm=None if self.tpm is None else int(self.tpm * self.max_borrow_multiple),
+            rpm=None if self.rpm is None else int(self.rpm * self.max_borrow_multiple),
+        )
+
+
+NO_BORROWING: Final = BorrowingTeamModelLimits(tpm=None, rpm=None)
+
+
+def team_model_limit_max_borrow_multiple(user_api_key_dict: UserAPIKeyAuth) -> float | None:
+    raw: Final[object] = (user_api_key_dict.team_metadata or {}).get(TEAM_MODEL_LIMIT_MAX_BORROW_MULTIPLE)
+    if raw is None:
+        return None
+    try:
+        return _MAX_BORROW_MULTIPLE.validate_python(raw)
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "Ignoring %s=%r on team %s: expected a number from 1 to %d, so the team borrows up to the model limit",
+            TEAM_MODEL_LIMIT_MAX_BORROW_MULTIPLE,
+            raw,
+            user_api_key_dict.team_id,
+            MAX_BORROW_MULTIPLE_CEILING,
+        )
+        return None
+
+
+def borrowing_team_model_limits(user_api_key_dict: UserAPIKeyAuth, model: RateLimitedModel) -> BorrowingTeamModelLimits:
+    settings: Final = litellm.priority_reservation_settings
+    if (
+        settings is None
+        or not settings.team_model_limit_borrows_idle_capacity_from_other_teams
+        or user_api_key_dict.team_id is None
+    ):
+        return NO_BORROWING
+    limits: Final = BorrowingTeamModelLimits(
+        tpm=inherited_team_model_limit(user_api_key_dict, model, "model_tpm_limit"),
+        rpm=inherited_team_model_limit(user_api_key_dict, model, "model_rpm_limit"),
+    )
+    if limits == NO_BORROWING or not dynamic_rate_limiter_covers(model.group):
+        return NO_BORROWING
+    return BorrowingTeamModelLimits(
+        tpm=limits.tpm, rpm=limits.rpm, max_borrow_multiple=team_model_limit_max_borrow_multiple(user_api_key_dict)
+    )
 
 
 def _resolve_media_models(router: "Router | None", model: str, team_id: str | None) -> tuple[str, ...]:
@@ -469,6 +570,23 @@ class CallTypeRateLimiter(Protocol):
     ) -> Exception | str | dict[str, object] | None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class BorrowingTeamModelHold:
+    """A router fallback target's team share with the tokens held on it, settled to actual usage or given back.
+
+    An idle target holds no descriptor: its usage is not charged to the share, and settlement still finds the hold so
+    the admitting model's reservation is given back instead of taking the target's tokens.
+    """
+
+    descriptor: RateLimitDescriptor | None
+    reserved_tokens: int = 0
+    window: ReservationWindowIdentity | None = None
+    cap: RateLimitDescriptor | None = None
+    cap_reserved_tokens: int = 0
+    cap_window: ReservationWindowIdentity | None = None
+    share: RateLimitDescriptor | None = None
+
+
 @dataclass(slots=True)
 class RequestRateLimiterStash:
     """
@@ -493,6 +611,7 @@ class RequestRateLimiterStash:
     """
 
     owner_litellm_call_id: str | None = None
+    call_type: str | None = None
     rate_limit_response: RateLimitResponse | None = None
     parallel_slot: ParallelSlotAcquisition | None = None
     parallel_slot_reused_at: datetime | None = None
@@ -512,6 +631,18 @@ class RequestRateLimiterStash:
     otpm_reserved_window_identities: frozenset[ReservationWindowIdentity] = field(default_factory=frozenset)
     batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
     batch_tpd_refund_ops: tuple[ReservationOperation, ...] = ()
+    borrowing_team_model_limit: RateLimitDescriptor | None = None
+    borrowing_team_model_reserved_tokens: int = 0
+    borrowing_team_model_reserved_window: ReservationWindowIdentity | None = None
+    borrowing_team_model_share: RateLimitDescriptor | None = None
+    borrowing_team_model_cap: RateLimitDescriptor | None = None
+    borrowing_team_model_cap_reserved_tokens: int = 0
+    borrowing_team_model_cap_reserved_window: ReservationWindowIdentity | None = None
+    borrowing_team_model_fallback_limits: Mapping[str, BorrowingTeamModelHold] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    priority_class_share: RateLimitDescriptor | None = None
+    dynamic_limiter_priority: str | None = None
     reservation_released: bool = False
     io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
@@ -604,7 +735,7 @@ def get_or_create_request_stash() -> RequestRateLimiterStash:
     return stash
 
 
-def claim_request_stash_for_data(data: dict) -> RequestRateLimiterStash:
+def claim_request_stash_for_data(data: Mapping[str, object]) -> RequestRateLimiterStash:
     stash: Final = get_or_create_request_stash()
     owner_call_id: Final = data.get("litellm_call_id")
     if isinstance(owner_call_id, str):
@@ -657,6 +788,23 @@ def _is_socket_turn(kwargs: Mapping[str, object]) -> bool:
         and connection_call_id is not None
         and connection_call_id == connection_stash.owner_litellm_call_id
     )
+
+
+def callback_kwargs_mapping(kwargs: object) -> Mapping[str, object]:
+    """A logging callback's kwargs as a typed mapping, empty when they are not a mapping."""
+    return _callback_kwargs_mapping(kwargs)
+
+
+def request_stash_for_callback(kwargs: Mapping[str, object]) -> RequestRateLimiterStash | None:
+    """The stash of the request a logging callback settles, or the connection's for a Responses WebSocket turn.
+
+    A nested call (an LLM judge, a silent experiment) mints its own call id and gets None.
+    """
+    call_id: Final = kwargs.get("litellm_call_id")
+    call_stash: Final = get_request_stash_for_call(call_id if isinstance(call_id, str) else None)
+    if call_stash is not None:
+        return call_stash
+    return get_request_stash() if _is_socket_turn(kwargs) else None
 
 
 _AGENT_DESCRIPTOR_KEYS: Final = frozenset({"agent", "agent_session"})
@@ -955,6 +1103,37 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         existing_cap: Final = data.get(cap_field)
         if existing_cap is None or effective_cap < existing_cap:
             data[cap_field] = effective_cap  # rebind-ok: downstream routing requires the bounded output cap
+
+    def estimate_request_tokens(
+        self,
+        data: object,
+        model: str,
+        min_configured_tpm_limit: int,
+        call_type: str | None,
+        team_id: str | None,
+        rate_limit_type: str = "total",
+    ) -> int:
+        """The reservation this limiter would hold for the request, for another limiter settling the same call."""
+        if rate_limit_type == "total":
+            return self._estimate_tokens_for_request(
+                data=data,
+                model=model,
+                min_configured_tpm_limit=min_configured_tpm_limit,
+                call_type=call_type,
+                team_id=team_id,
+            )
+        estimated_input, output_budget = self._estimate_input_and_output_tokens(
+            data=data,
+            min_configured_tpm_limit=min_configured_tpm_limit,
+            call_type=call_type,
+            team_id=team_id,
+            media_model_resolver=self._media_model_resolver,
+        )
+        return output_budget if rate_limit_type == "output" else estimated_input
+
+    def bound_output_for_limit(self, data: object, min_configured_limit: int, call_type: str | None) -> None:
+        """Cap a request without an explicit output cap the way this limiter does for its own small TPM limits."""
+        self._apply_implicit_output_cap(data=data, min_configured_limit=min_configured_limit, call_type=call_type)
 
     def _estimate_tokens_for_request(
         self,
@@ -2440,6 +2619,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if response["overall_code"] == "OVER_LIMIT":
             self._handle_rate_limit_error(response, tpm_windows, requested_model)
 
+    def rate_limited_model(self, requested_model: str | None) -> RateLimitedModel | None:
+        """The requested name and the model group it resolves to, so limits keyed by either name are found."""
+        return self._rate_limited_model(requested_model)
+
     def _rate_limited_model(self, requested_model: str | None) -> RateLimitedModel | None:
         if not requested_model:
             return None
@@ -2509,6 +2692,50 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             },
         )
 
+    def _customer_hierarchy_rate_limit_descriptors(
+        self, user_api_key_dict: UserAPIKeyAuth
+    ) -> tuple[RateLimitDescriptor, ...]:
+        """One descriptor per customer org, team and member level that carries a TPM or RPM limit."""
+        scopes: Final = user_api_key_dict.customer_hierarchy.scopes if user_api_key_dict.customer_hierarchy else ()
+        return tuple(
+            RateLimitDescriptor(
+                key=scope.key,
+                value=scope.entity_id,
+                rate_limit={
+                    "requests_per_unit": scope.rpm_limit,
+                    "tokens_per_unit": scope.tpm_limit,
+                    "window_size": self.window_size,
+                },
+            )
+            for scope in scopes
+            if scope.rpm_limit is not None or scope.tpm_limit is not None
+        )
+
+    def _customer_hierarchy_model_rate_limit_descriptors(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+    ) -> tuple[RateLimitDescriptor, ...]:
+        """The ``model_per_customer_*`` descriptors for every level whose budget limits this model group."""
+        model: Final = self._rate_limited_model(requested_model)
+        if model is None or user_api_key_dict.customer_hierarchy is None:
+            return ()
+        limits: Final = tuple(
+            (scope, model.limit_in(scope.model_tpm_limit), model.limit_in(scope.model_rpm_limit))
+            for scope in user_api_key_dict.customer_hierarchy.scopes
+        )
+        return tuple(
+            RateLimitDescriptor(
+                key=f"model_per_{scope.key}",
+                value=f"{scope.entity_id}:{model.group}",
+                rate_limit={
+                    "requests_per_unit": rpm_limit,
+                    "tokens_per_unit": tpm_limit,
+                    "window_size": self.window_size,
+                },
+            )
+            for scope, tpm_limit, rpm_limit in limits
+            if tpm_limit is not None or rpm_limit is not None
+        )
+
     def _end_user_model_rate_limit_descriptor(
         self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
     ) -> RateLimitDescriptor | None:
@@ -2551,11 +2778,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         model: Final = self._rate_limited_model(requested_model)
         if model is None:
             return
-        model_specific_tpm_limit: Final = model.limit_in(
-            get_key_model_tpm_limit(user_api_key_dict, model_name=model.group)
+        borrowing: Final = borrowing_team_model_limits(user_api_key_dict, model)
+        model_specific_tpm_limit: Final = (
+            None
+            if borrowing.tpm is not None
+            else model.limit_in(get_key_model_tpm_limit(user_api_key_dict, model_name=model.group))
         )
-        model_specific_rpm_limit: Final = model.limit_in(
-            get_key_model_rpm_limit(user_api_key_dict, model_name=model.group)
+        model_specific_rpm_limit: Final = (
+            None
+            if borrowing.rpm is not None
+            else model.limit_in(get_key_model_rpm_limit(user_api_key_dict, model_name=model.group))
         )
         if model_specific_tpm_limit is None and model_specific_rpm_limit is None:
             return
@@ -3012,6 +3244,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
+        descriptors.extend(self._customer_hierarchy_rate_limit_descriptors(user_api_key_dict))
+
         # Model rate limits
         requested_model: Final = data.get("model", None)
         model_candidates: Final = expand_model_latest_alias(requested_model if isinstance(requested_model, str) else "")
@@ -3023,6 +3257,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             if (end_user_model := self._end_user_model_rate_limit_descriptor(user_api_key_dict, candidate)) is not None:
                 descriptors.append(end_user_model)
+            descriptors.extend(self._customer_hierarchy_model_rate_limit_descriptors(user_api_key_dict, candidate))
 
         # Per-request-tag rate limits scoped to this key
         self._add_tag_per_key_rate_limit_descriptor(
@@ -3134,12 +3369,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         model: RateLimitedModel,
         rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
     ) -> int | None:
-        team_limit: Final = model.limit_in(
-            get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", rate_limit_key)
-        )
-        if team_limit is None or self._key_owns_model_limit(user_api_key_dict, model, rate_limit_key):
-            return None
-        return team_limit
+        return inherited_team_model_limit(user_api_key_dict, model, rate_limit_key)
 
     def _key_owns_model_tpm_limit_from_request_metadata(
         self,
@@ -3165,8 +3395,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         model: Final = self._rate_limited_model(requested_model)
         if model is None:
             return
-        team_rpm_limit: Final = self._inherited_team_model_limit(user_api_key_dict, model, "model_rpm_limit")
-        team_tpm_limit: Final = self._inherited_team_model_limit(user_api_key_dict, model, "model_tpm_limit")
+        borrowing: Final = borrowing_team_model_limits(user_api_key_dict, model)
+        team_rpm_limit: Final = (
+            None
+            if borrowing.rpm is not None
+            else inherited_team_model_limit(user_api_key_dict, model, "model_rpm_limit")
+        )
+        team_tpm_limit: Final = (
+            None
+            if borrowing.tpm is not None
+            else inherited_team_model_limit(user_api_key_dict, model, "model_tpm_limit")
+        )
         if team_rpm_limit is None and team_tpm_limit is None:
             return
         descriptors.append(
@@ -3347,6 +3586,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     headers={
                         "retry-after": str(self.window_size),
                         "rate_limit_type": str(status["rate_limit_type"]),
+                        "rate_limited_by": descriptor_key,
                         "reset_at": reset_time_formatted,
                     },
                     rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
@@ -3769,6 +4009,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             *await self._create_tag_rate_limit_descriptors(data),
         ]
 
+    async def raise_if_over_limit_before_body(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Refuse a request from its headers alone once a limit that needs no body is exhausted.
+
+        Counters are only read, never incremented, so an admitted request is still charged by
+        ``async_pre_call_hook`` after its body is parsed. Limits that need the model are not checked here.
+        """
+        descriptors: Final = await self._build_request_rate_limit_descriptors(
+            user_api_key_dict=user_api_key_dict, data={}, call_type=None
+        )
+        if not descriptors:
+            return
+        response: Final = await self.should_rate_limit(
+            descriptors=descriptors,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            read_only=True,
+            skip_tpm_check=self.tpm_reservation_enabled,
+        )
+        if response["overall_code"] == "OVER_LIMIT":
+            self._handle_rate_limit_error(response=response, descriptors=descriptors)
+
     async def _release_request_capacity_when_admitted(
         self,
         admission: asyncio.Task[RateLimitResponse],
@@ -3870,6 +4130,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
         stash: Final = claim_request_stash_for_data(data)
+        stash.call_type = call_type
         reuses_request_slot: Final = call_type == CallTypes.call_mcp_tool.value and stash.parallel_slot is not None
         if reuses_request_slot:
             stash.parallel_slot_reused_at = self._get_current_time()
@@ -4577,12 +4838,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             targets.append(("end_user", user_api_key_end_user_id))
         if user_api_key_organization_id:
             targets.append(("organization", user_api_key_organization_id))
+        customer_scope_owners: Final = (
+            ("customer_org", standard_logging_metadata.get("user_api_key_customer_org_id")),
+            ("customer_team", standard_logging_metadata.get("user_api_key_customer_team_id")),
+            ("customer_member", standard_logging_metadata.get("user_api_key_customer_member_id")),
+        )
+        targets.extend((scope, owner) for scope, owner in customer_scope_owners if owner)
         model_scope_owners: Final = (
             ("model_per_key", user_api_key),
             ("model_per_team", user_api_key_team_id),
             ("model_per_end_user", f"{user_api_key_end_user_id}" if user_api_key_end_user_id else None),
             ("model_per_organization", user_api_key_organization_id),
             ("model_per_project", user_api_key_project_id),
+            *((f"model_per_{scope}", owner) for scope, owner in customer_scope_owners),
         )
         if model_group:
             for group in dict.fromkeys(model_groups or (model_group,)):

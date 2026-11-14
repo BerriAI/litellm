@@ -17,7 +17,8 @@ which outcome callbacks the Python router would still have running for a request
 router core.
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Iterable, Mapping, Sequence
+from functools import partial
 from itertools import chain
 from typing import TYPE_CHECKING, Final
 from weakref import WeakSet
@@ -27,6 +28,17 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import PROMPT_CACHE_PIN_CACHE_MAX_SIZE
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2.enums import Hook
+from litellm.integrations.custom_logger_v2.hook_point_fields import CandidateFields
+from litellm.integrations.custom_logger_v2.legacy import (
+    Admit,
+    hook_subscribers,
+    kwargs_after,
+    kwargs_patch,
+    run_subscribers,
+)
+from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
+from litellm.integrations.custom_logger_v2.outcomes import Patch
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.routing_common_utils import get_request_team_id
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
@@ -51,6 +63,8 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.redis.stores.router_session_pins import RouterSessionPinStore
+    from litellm.redis.stores.router_usage import RouterUsage
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.steps.selection import StrategySelectors
     from litellm.router_rust.surface.registry import HostRegistry
@@ -109,6 +123,8 @@ class OptionalChecks:
         owner: "GlobalCallbackHolder",
         host: "PythonHost",
         cache: DualCache,
+        usage: "RouterUsage",
+        pins: "RouterSessionPinStore",
         hosted: "HostRegistry",
         ctx: object,
         arguments: Mapping[str, object],
@@ -116,6 +132,8 @@ class OptionalChecks:
         self._owner: Final = owner
         self._host: Final = host
         self._cache: Final = cache
+        self._usage: Final = usage
+        self._pins: Final = pins
         self._hosted: Final = hosted
         self._ctx: Final = ctx
         self.optional_callbacks: list[object] | None = None  # mutable-ok: the router's live list, as Python keeps it
@@ -209,7 +227,7 @@ class OptionalChecks:
 
     def _affinity_check(self, user_key: bool, responses_api: bool, session_id: bool) -> DeploymentAffinityCheck:
         return DeploymentAffinityCheck(
-            cache=self._cache,
+            pins=self._pins,
             ttl_seconds=self.deployment_affinity_ttl_seconds,  # pyright: ignore[reportArgumentType]  # the argument as passed
             enable_user_key_affinity=user_key,
             enable_responses_api_affinity=responses_api,
@@ -313,7 +331,7 @@ class OptionalChecks:
                 )
                 self.router_budget_logger = callback
             elif name == "enforce_model_rate_limits":
-                callback = ModelRateLimitingCheck(dual_cache=self._cache)
+                callback = ModelRateLimitingCheck(usage=self._usage)
             if callback is None:
                 continue
             if self.optional_callbacks is not None and any(
@@ -454,7 +472,11 @@ class OptionalChecks:
 
     def has_filters(self) -> bool:
         """Whether ``filter_deployments`` would run any callback: without one it keeps every deployment."""
-        return any(filters_deployments(callback) for callback in self.routing_callbacks())
+        callbacks: Final = tuple(self.routing_callbacks())
+        return any(filters_deployments(callback) for callback in callbacks) or (
+            Hook.filter_deployments in CustomLoggerV2.declared_hooks
+            and hook_subscribers(Hook.filter_deployments, callbacks, admit=Admit.every_logger).has_v2
+        )
 
     async def filter_deployments(
         self,
@@ -467,25 +489,25 @@ class OptionalChecks:
         turn, then the prompt caching check names the deployment it prefers among the rest, which
         the Rust core takes only if its later filters keep it; a filter's error is raised for the
         Rust core to decide on."""
-        remaining: list[object] = list(deployments)  # mutable-ok: filter contract  # rebind-ok: narrowed
+        remaining: object = list(deployments)  # rebind-ok: narrowed by each filter
         request_kwargs: Final = dict(request)
         callbacks: Final = tuple(self.routing_callbacks())
-        for callback in callbacks:
-            if not isinstance(callback, CustomLogger) or not filters_deployments(callback):
-                continue
-            if isinstance(callback, PromptCachingDeploymentCheck):
-                continue
-            remaining = await callback.async_filter_deployments(  # pyright: ignore[reportUnknownMemberType, reportAssignmentType, reportUnknownVariableType]  # see above
-                model=model,
-                healthy_deployments=remaining,
-                messages=messages,  # pyright: ignore[reportArgumentType]  # the request's messages, as given
-                request_kwargs=request_kwargs,
-                parent_otel_span=None,
-            )
+        if (
+            Hook.filter_deployments in CustomLoggerV2.declared_hooks
+            and (subscribers := hook_subscribers(Hook.filter_deployments, callbacks, admit=Admit.every_logger)).has_v2
+        ):
+            filters: Final = partial(_start_filter, model, messages, request_kwargs)
+            narrowed: Final = await run_subscribers(subscribers, CandidateFields(remaining, model), filters)
+            remaining = kwargs_after(narrowed)  # rebind-ok: narrowed by the hook's subscribers
+        else:
+            for callback in callbacks:
+                started = _filter_call(callback, model, messages, request_kwargs, remaining)
+                if started is not None:
+                    remaining = await started
         prompt_caching: Final = next((cb for cb in callbacks if isinstance(cb, PromptCachingDeploymentCheck)), None)
         if prompt_caching is None:
-            return remaining, None
-        return remaining, await prompt_caching.async_preferred_deployment_id(
+            return remaining, None  # pyright: ignore[reportReturnType]  # whatever the last filter returned
+        return remaining, await prompt_caching.async_preferred_deployment_id(  # pyright: ignore[reportReturnType]  # see above
             model,
             remaining,  # pyright: ignore[reportArgumentType]  # RustCore's deployment dicts
             messages,  # pyright: ignore[reportArgumentType]  # the request's messages, as given
@@ -572,6 +594,41 @@ def _request_with_failed_ids(request: Mapping[str, object], step: Mapping[str, o
 
 def _ids_of(value: object) -> Sequence[object]:
     return value if isinstance(value, list | tuple) else ()  # pyright: ignore[reportUnknownVariableType]  # the step's id list
+
+
+def _filter_call(
+    callback: object,
+    model: str,
+    messages: object,
+    request_kwargs: dict[str, object],  # mutable-ok: the filters take the request dict
+    remaining: object,
+) -> Awaitable[object] | None:
+    if not isinstance(callback, CustomLogger) or not filters_deployments(callback):
+        return None
+    if isinstance(callback, PromptCachingDeploymentCheck):
+        return None
+    return callback.async_filter_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped deployment dicts
+        model=model,
+        healthy_deployments=remaining,  # pyright: ignore[reportArgumentType]  # whatever the previous filter returned
+        messages=messages,  # pyright: ignore[reportArgumentType]  # the request's messages, as given
+        request_kwargs=request_kwargs,
+        parent_otel_span=None,
+    )
+
+
+def _start_filter(
+    model: str,
+    messages: object,
+    request_kwargs: dict[str, object],  # mutable-ok: the filters take the request dict
+    callback: object,
+    remaining: object,
+) -> Awaitable[Patch | None] | None:
+    started: Final = _filter_call(callback, model, messages, request_kwargs, remaining)
+    return None if started is None else _narrowed_by(remaining, started)
+
+
+async def _narrowed_by(remaining: object, started: Awaitable[object]) -> Patch | None:
+    return kwargs_patch(remaining, await started)
 
 
 def filters_deployments(callback: object) -> bool:

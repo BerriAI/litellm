@@ -2504,6 +2504,25 @@ def test_is_bad_request_without_fallback_only_stops_on_a_real_400_when_the_flag_
 
 
 @pytest.mark.asyncio
+async def test_a_role_less_request_is_not_retried_on_the_fallback_group() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "house",
+                "litellm_params": {"model": "house-model", "custom_llm_provider": "openai", "mock_response": "ok"},
+            },
+            {"model_name": "backup", "litellm_params": {"model": "openai/gpt-5.6", "mock_response": "ok"}},
+        ],
+        fallbacks=[{"house": ["backup"]}],
+        fallback_on_unsupported_params=False,
+    )
+
+    with pytest.raises(litellm.MalformedRequestFieldError, match="Missing required parameter") as exc_info:
+        await router.acompletion(model="house", messages=json.loads('[{"content": "hi"}]'))
+    assert "Fallback to backup" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_run_async_fallback_skips_a_target_the_rate_limit_check_rejects() -> None:
     checked: Final = []  # mutable-ok: records the targets the check saw
 
@@ -2611,3 +2630,19 @@ async def test_run_async_fallback_never_re_reserves_the_requested_model_group() 
     with pytest.raises(Exception, match="model group 'primary' failed"):
         await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
     assert checked == ["fallback"]
+
+
+@pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.rust_bridge import catalog
+    from litellm.rust_bridge.configuration import Rollout
+
+    monkeypatch.setattr(
+        catalog,
+        "RULES",
+        tuple(
+            rule
+            for rule in catalog.RULES
+            if not (rule.route is catalog.Route.MESSAGES and rule.rollout is Rollout.RUST_REQUIRED)
+        ),
+    )

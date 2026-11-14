@@ -655,6 +655,26 @@ def test_aggregated_routes_return_scoped_results(
     assert len(body["results"]) == 2, response.text
 
 
+@pytest.mark.parametrize("model", (None, "popular"))
+def test_aggregated_activity_can_omit_entities_without_changing_chart_data(
+    daily_activity_client: tuple[TestClient, _FakeRepository], model: str | None
+) -> None:
+    client, _ = daily_activity_client
+    params: Final = {**_DATE_PARAMS, **({"model": model} if model else {})}
+    full: Final = client.get("/user/daily/activity/aggregated", params=params)
+    compact: Final = client.get(
+        "/user/daily/activity/aggregated", params={**params, "include_entity_breakdown": "false"}
+    )
+    assert full.status_code == compact.status_code == 200
+    body: Final = full.json()
+    assert all(day["breakdown"]["entities"] for day in body["results"])
+    assert compact.json() == {
+        **body,
+        "metadata": {**body["metadata"], "entity_total_api_keys": None},
+        "results": [{**day, "breakdown": {**day["breakdown"], "entities": {}}} for day in body["results"]],
+    }
+
+
 def _ptu_sized_router(
     model_group: str, shares: Mapping[str, int] = MappingProxyType({"team-a": 30, "team-b": 20})
 ) -> Router:

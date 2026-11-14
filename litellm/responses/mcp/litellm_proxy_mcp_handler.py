@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_allowed_tools_tool_choice,
     tool_calls_the_choice_excludes,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy.mcp_server.utils import (
@@ -1178,7 +1179,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     def should_raise_mcp_guardrail_block(error: Exception) -> bool:
-        return getattr(error, "mcp_block_behavior", None) == "raise"
+        return attribute_or_none(error, "mcp_block_behavior") == "raise"
 
     @staticmethod
     def create_follow_up_messages_for_chat(

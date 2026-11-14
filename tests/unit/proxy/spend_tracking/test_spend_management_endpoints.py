@@ -944,8 +944,47 @@ async def test_ui_view_spend_logs_user_filter_reads_spend_logs_through_the_users
     assert '"LiteLLM_VerificationToken"' in lookup_sql
     assert lookup_params == ("alice", "2026-08-31", "2026-09-04", SPEND_LOG_API_KEY_SCOPE_MAX_KEYS + 1)
     page_sql, _, scoped_api_keys = _spend_logs_page_query(queries)
-    assert scoped_api_keys == ["sk-deleted", "sk-live"]
+    assert scoped_api_keys == ["sk-deleted", "sk-live", ""]
     assert '"user" = $' in page_sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner_filter", ["user_id", "team_id"])
+async def test_ui_view_spend_logs_owner_filter_preserves_empty_key_rows(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, owner_filter: str
+) -> None:
+    logs: Final = [
+        _owned_log("known", "sk-live", "alice", "team-alpha"),
+        _owned_log("unknown-key", "", "alice", "team-alpha"),
+        _owned_log("foreign", "", "bob", "team-beta"),
+    ]
+    monkeypatch.setattr(
+        ps,
+        "prisma_client",
+        make_ui_spend_logs_mock_prisma(
+            logs,
+            _owner_filtered_logs(logs),
+            owner_api_keys_fn=_owner_api_keys(
+                daily_rows={}, live_keys={"alice": {"sk-live"}, "team-alpha": {"sk-live"}}
+            ),
+        ),
+    )
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        ps.user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"),
+    )
+    response: Final = client.get(
+        "/spend/logs/ui",
+        params={
+            owner_filter: "alice" if owner_filter == "user_id" else "team-alpha",
+            "start_date": "2026-09-01 00:00:00",
+            "end_date": "2026-09-03 23:59:59",
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    assert response.status_code == 200, response.text
+    assert {row["request_id"] for row in response.json()["data"]} == {"known", "unknown-key"}
 
 
 @pytest.mark.asyncio
@@ -989,7 +1028,7 @@ async def test_ui_view_spend_logs_team_filter_reads_spend_logs_through_the_teams
     _, lookup_params = next((sql, params) for sql, params in queries if '"LiteLLM_DailyTeamSpend"' in sql)
     assert lookup_params[:3] == (["team-alpha"], "2026-08-31", "2026-09-04")
     page_sql, _, scoped_api_keys = _spend_logs_page_query(queries)
-    assert scoped_api_keys == ["sk-alpha-1", "sk-alpha-2"]
+    assert scoped_api_keys == ["sk-alpha-1", "sk-alpha-2", ""]
     assert "team_id = $" in page_sql
 
 
@@ -4058,7 +4097,7 @@ class TestSpendLogsPayload:
                     "model": "gpt-4o",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"user_api_key_user_email": null, "actor_agent_id": null, "target_agent_id": null, "billing_agent_id": null, "agent_execution_mode": null, "verified_human_user_id": null, "applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "autorouter_savings_estimate": null, "autorouter_baseline_observation": null, "azure_spillover": null, "used_client_oauth_token": null, "litellm_roi_estimator": false, "billed_retry_attempt": false, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
+                    "metadata": '{"user_api_key_customer_usage": null, "user_api_key_user_email": null, "actor_agent_id": null, "target_agent_id": null, "billing_agent_id": null, "agent_execution_mode": null, "verified_human_user_id": null, "applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "autorouter_savings_estimate": null, "autorouter_baseline_observation": null, "azure_spillover": null, "used_client_oauth_token": null, "litellm_roi_estimator": false, "billed_retry_attempt": false, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.00022500000000000002,
                     "total_tokens": 30,

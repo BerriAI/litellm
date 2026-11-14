@@ -12,6 +12,7 @@ from pydantic import ValidationError
 import litellm
 from litellm import anthropic_beta_headers_manager
 from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAnthropicTokenCounter
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import CountContextManagement, TokenCountResponse
 
 API_BASE: Final = "https://my-resource.services.ai.azure.com"
@@ -370,6 +371,7 @@ async def _betas_azure_inference_sends(context_management: Mapping[str, object])
             api_key="azure-key",
             api_base=API_BASE,
             context_management=context_management,
+            client=AsyncHTTPHandler(),
         )
     return frozenset(filter(None, route.calls.last.request.headers.get("anthropic-beta", "").split(",")))
 

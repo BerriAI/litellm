@@ -1066,7 +1066,7 @@ async def test_mcp_tool_execution_events_creation():
 
 
 @pytest.mark.asyncio
-async def test_aresponses_mcp_call_does_not_forward_admission_authorization(
+async def test_aresponses_mcp_call_forwards_listed_admission_authorization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import importlib
@@ -1097,7 +1097,10 @@ async def test_aresponses_mcp_call_does_not_forward_admission_authorization(
     monkeypatch.setattr(manager, "registry", {server.server_id: server})
 
     mcp_client: Final = AsyncMock()
-    mcp_client.list_tools.return_value = [MCPTool(name="whoami", inputSchema={"type": "object", "properties": {}})]
+    mcp_client.discovery_auth_fingerprint.return_value = "test-credential-hash"
+    mcp_client.list_tools_result.return_value = ListToolsResult(
+        tools=[MCPTool(name="whoami", inputSchema={"type": "object", "properties": {}})]
+    )
     mcp_client.call_tool.return_value = CallToolResult(
         content=[TextContent(type="text", text="ok")],
         isError=False,
@@ -1165,7 +1168,10 @@ async def test_aresponses_mcp_call_does_not_forward_admission_authorization(
 
     assert mcp_client.call_tool.await_args is not None
     assert manager.create_mcp_client.await_args is not None
-    assert manager.create_mcp_client.await_args.kwargs["extra_headers"] == {"x-tenant": "tenant-a"}
+    assert manager.create_mcp_client.await_args.kwargs["extra_headers"] == {
+        "Authorization": "Bearer sk-" + "1234",
+        "x-tenant": "tenant-a",
+    }
 
 
 @pytest.mark.asyncio

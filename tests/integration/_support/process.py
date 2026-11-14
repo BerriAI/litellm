@@ -145,6 +145,11 @@ def signal_group(group: int, action: int) -> None:
         pass
 
 
+def send_signal(process: subprocess.Popen[bytes], signum: signal.Signals) -> None:
+    with suppress(ProcessLookupError):
+        process.send_signal(signum)
+
+
 def graceful_stop_seconds() -> float:
     return readiness_for(import_seconds(), 1)
 
@@ -941,6 +946,15 @@ def configless_proxy_process(
         _stop_launch(launch)
 
 
+def _gateway_environment(
+    gateway: Gateway, overrides: Mapping[str, str], source: Mapping[str, str] = os.environ
+) -> Mapping[str, str]:
+    root: Final = _proxy_root()
+    environment: Final = _proxy_environment(gateway, overrides, (), source)
+    paths: Final = (str(root / "litellm/runtime"), str(root / "tests"), str(root), environment.get("PYTHONPATH", ""))
+    return MappingProxyType({**environment, "PYTHONPATH": os.pathsep.join(path for path in paths if path)})
+
+
 @contextmanager
 def owned_gateway_image(
     gateway: Gateway, directory: Path, overrides: Mapping[str, str], *, config: Path, workers: int
@@ -949,11 +963,11 @@ def owned_gateway_image(
     `python -m gateway.launch`, with the config handed over as `CONFIG_FILE_PATH`. It serves the data plane only,
     so keys come from a proxy that shares its database."""
     root: Final = _proxy_root()
-    environment: Final = _proxy_environment(gateway, {**overrides, "CONFIG_FILE_PATH": str(config)}, ())
+    environment: Final = _gateway_environment(gateway, {**overrides, "CONFIG_FILE_PATH": str(config)})
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
     command: Final = (
-        str(root / "docker-entrypoint.sh"),
+        str(root / "litellm/deploy/docker/docker-entrypoint.sh"),
         sys.executable,
         "-m",
         "gateway.launch",

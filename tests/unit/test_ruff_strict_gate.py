@@ -50,19 +50,20 @@ def test_parse_changed_lines_handles_single_and_ranged_hunks(hunk):
 
 
 def _lint_section(config_name: str) -> dict:
-    return tomllib.loads((_REPO_ROOT / config_name).read_text())["lint"]
+    config: Final = tomllib.loads((_REPO_ROOT / config_name).read_text())
+    return (config["tool"]["ruff"] if config_name == "pyproject.toml" else config)["lint"]
 
 
 def _base_external() -> tuple[str, ...]:
-    return tuple(_lint_section("ruff.toml")["external"])
+    return tuple(_lint_section("pyproject.toml")["external"])
 
 
 def _strict_external() -> tuple[str, ...]:
-    return tuple(_lint_section("ruff-strict.toml")["external"])
+    return tuple(_lint_section(".github/linters/ruff-strict.toml")["external"])
 
 
 def _strict_selected() -> frozenset:
-    return frozenset(_lint_section("ruff-strict.toml")["select"])
+    return frozenset(_lint_section(".github/linters/ruff-strict.toml")["select"])
 
 
 def _prefix_covered(code: str, prefixes: tuple[str, ...]) -> bool:
@@ -70,7 +71,7 @@ def _prefix_covered(code: str, prefixes: tuple[str, ...]) -> bool:
 
 
 def _selected_by_the_normal_config() -> frozenset:
-    return frozenset(_lint_section("ruff.toml")["extend-select"]) | _ENABLED_BY_RUFF_DEFAULTS
+    return frozenset(_lint_section("pyproject.toml")["extend-select"]) | _ENABLED_BY_RUFF_DEFAULTS
 
 
 def _ruff_binary() -> str | None:
@@ -110,7 +111,7 @@ def test_every_strict_gate_rule_is_protected_from_base_ruf100():
     )
     assert unprotected == frozenset(), (
         f"`ruff check` deletes any `# noqa` naming {sorted(unprotected)} as unused, so suppressing "
-        "one of those strict-gate rules breaks lint. Cover them in ruff.toml's lint.external or "
+        "one of those strict-gate rules breaks lint. Cover them in pyproject.toml's lint.external or "
         "enable them in its lint.extend-select."
     )
 
@@ -132,7 +133,7 @@ def test_every_selected_rule_keeps_stale_noqa_detection_somewhere():
     assert shadowed == frozenset(), (
         f"no config's RUF100 can ever report a stale `# noqa` for {sorted(shadowed)}: every config "
         "that selects each of them also shadows it with an external entry. Narrow the external "
-        "entry in ruff.toml or ruff-strict.toml."
+        "entry in pyproject.toml or .github/linters/ruff-strict.toml."
     )
 
 
@@ -167,7 +168,7 @@ def test_every_base_owned_rule_is_external_or_selected_in_the_strict_config(all_
     )
     assert stranded == frozenset(), (
         f"the strict gate's RUF100 reads a valid `# noqa` for {sorted(stranded)} as unused, the "
-        "spurious-breach trap ruff-strict.toml's external override exists to prevent. Cover them "
+        "spurious-breach trap .github/linters/ruff-strict.toml's external override exists to prevent. Cover them "
         "there."
     )
     double_booked = frozenset(
@@ -178,7 +179,7 @@ def test_every_base_owned_rule_is_external_or_selected_in_the_strict_config(all_
     assert double_booked == frozenset(), (
         f"{sorted(double_booked)} are selected by the strict config yet shadowed by its external "
         "list, so their stale suppressions can never be reported. Narrow the external entry in "
-        "ruff-strict.toml."
+        ".github/linters/ruff-strict.toml."
     )
 
 
@@ -225,8 +226,9 @@ def test_a_graduated_rule_can_still_be_suppressed_without_tripping_unused_noqa()
 
 
 def test_editing_either_ruff_config_or_upgrading_ruff_rekeys_the_base_counts(tmp_path: Path) -> None:
-    strict: Final = tmp_path / "ruff-strict.toml"
-    base: Final = tmp_path / "ruff.toml"
+    strict: Final = tmp_path / ".github/linters/ruff-strict.toml"
+    base: Final = tmp_path / "pyproject.toml"
+    strict.parent.mkdir(parents=True)
     strict.write_text("strict v1\n")
     base.write_text("base v1\n")
 
