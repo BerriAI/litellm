@@ -3053,6 +3053,31 @@ def test_chat_on_a_foundry_project_v1_base_sends_no_api_version(
     assert response.choices[0].message.content == "ok"
 
 
+@pytest.mark.parametrize("model", ["azure/o4-mini", "azure/o_series/model-router"])
+@pytest.mark.parametrize(
+    ("api_base", "api_version"),
+    [
+        (f"{_FOUNDRY_PROJECT_ROOT}/openai/v1", "2025-04-01-preview"),
+        ("https://apim.example.com/my-foundry/openai/v1", "none"),
+    ],
+)
+def test_o_series_chat_on_a_v1_base_sends_no_api_version(
+    respx_mock, model: str, api_base: str, api_version: str
+) -> None:
+    route: Final = respx_mock.post().mock(return_value=httpx.Response(200, json=_CHAT_COMPLETION_BODY))
+
+    response: Final = litellm.completion(
+        model=model,
+        api_base=api_base,
+        api_key="project-key",
+        api_version=api_version,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert route.calls.last.request.url == httpx.URL(f"{api_base}/chat/completions")
+    assert response.choices[0].message.content == "ok"
+
+
 _TEXT_COMPLETION_BODY: Final = {
     "id": "cmpl-1",
     "object": "text_completion",

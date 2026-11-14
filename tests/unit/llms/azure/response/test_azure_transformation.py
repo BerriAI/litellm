@@ -227,6 +227,8 @@ def test_foundry_project_v1_responses_url_never_carries_an_api_version(
     [
         ("https://apim.example.com/my-foundry/openai/v1", "none", "https://apim.example.com/my-foundry/openai/v1/responses"),
         ("https://apim.example.com/my-foundry", "None", "https://apim.example.com/my-foundry/openai/v1/responses"),
+        ("https://x.openai.azure.com/openai/responses", "none", "https://x.openai.azure.com/openai/v1/responses"),
+        ("https://x.openai.azure.com/openai", "none", "https://x.openai.azure.com/openai/v1/responses"),
         (
             "https://apim.example.com/my-foundry/openai/v1?tenant=example&api-version=preview",
             "none",
