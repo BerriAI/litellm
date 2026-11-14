@@ -37074,7 +37074,7 @@ export interface components {
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Github Copilot App Id */
-            github_copilot_app_id?: string | null;
+            github_copilot_app_id?: string | number | null;
             /** Github Copilot App Installation Id */
             github_copilot_app_installation_id?: string | number | null;
             /** Github Copilot App Private Key */
@@ -53370,7 +53370,7 @@ export interface components {
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Github Copilot App Id */
-            github_copilot_app_id?: string | null;
+            github_copilot_app_id?: string | number | null;
             /** Github Copilot App Installation Id */
             github_copilot_app_installation_id?: string | number | null;
             /** Github Copilot App Private Key */

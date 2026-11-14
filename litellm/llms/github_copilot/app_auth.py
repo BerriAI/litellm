@@ -81,11 +81,11 @@ def app_config(source: object, *, validate_stored_key: bool = False) -> AppConfi
         and (not key_ref.startswith("oidc/") or key_ref.startswith("oidc/file/"))
     )
     host: Final = normalized_github_host(_value(values, "github_copilot_host"))
-    installation_text: Final = str(installation) if isinstance(installation, (str, int)) else ""
+    app_id_text: Final = _id_text(app_id).strip()
+    installation_text: Final = _id_text(installation)
     if (
         mode != APP_AUTH_TYPE
-        or not isinstance(app_id, str)
-        or not app_id.strip()
+        or not app_id_text
         or not installation_text.isascii()
         or not installation_text.isdecimal()
         or int(installation_text) <= 0
@@ -101,12 +101,18 @@ def app_config(source: object, *, validate_stored_key: bool = False) -> AppConfi
     if stored_key_selected and validate_stored_key:
         validate_private_key(stored_key)
     return AppConfig(
-        app_id.strip(),
+        app_id_text,
         int(installation_text),
         key_ref if isinstance(key_ref, str) else "",
         host,
         credential.credential_name if stored_key_selected and credential is not None else None,
     )
+
+
+def _id_text(value: object) -> str:
+    if isinstance(value, bool):
+        return ""
+    return str(value) if isinstance(value, (str, int)) else ""
 
 
 def validate_private_key(value: object) -> None:

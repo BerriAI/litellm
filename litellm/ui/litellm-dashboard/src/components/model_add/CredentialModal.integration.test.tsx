@@ -1054,6 +1054,25 @@ describe("CredentialModal with OpenAI workload identity federation", () => {
   });
 });
 
+describe("CredentialModal stored provider", () => {
+  it.each([
+    ["SageMaker", "AWS SageMaker"],
+    ["openai", "OpenAI"],
+    ["text-completion-openai", "OpenAI Text Completion"],
+  ])("opens a credential stored as %s under the %s provider", async (storedProvider, shownProvider) => {
+    renderModal({
+      mode: "edit",
+      existingCredential: {
+        credential_name: "stored-provider",
+        credential_values: {},
+        credential_info: { custom_llm_provider: storedProvider },
+      },
+    });
+
+    expect(await screen.findByRole("combobox", { name: /Provider/ })).toHaveValue(shownProvider);
+  });
+});
+
 describe("CredentialModal display name wiring", () => {
   it("submits the typed label alongside the credential name and stored values", async () => {
     const user = userEvent.setup();

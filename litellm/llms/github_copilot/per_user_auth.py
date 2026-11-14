@@ -794,6 +794,18 @@ def _strip_caller_authorization(
             }
 
 
+def names_unloaded_credential(deployment_params: Mapping[str, object]) -> bool:
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+
+    credential_name: Final = deployment_params.get("litellm_credential_name")
+    return (
+        isinstance(credential_name, str)
+        and bool(credential_name)
+        and deployment_params.get(GITHUB_COPILOT_AUTH_TYPE_KEY) is None
+        and CredentialAccessor.find_credential(credential_name) is None
+    )
+
+
 def attach_github_copilot_user_session(
     kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
 ) -> None:

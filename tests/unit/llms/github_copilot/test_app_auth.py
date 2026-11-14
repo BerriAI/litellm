@@ -371,7 +371,7 @@ def test_named_credential_owns_auth_configuration(monkeypatch: pytest.MonkeyPatc
 
 @pytest.mark.parametrize("field", APP_FIELDS)
 def test_app_configuration_is_server_owned(field: str) -> None:
-    with pytest.raises(ValueError, match="cannot be set in a request body"):
+    with pytest.raises(ValueError, match="server-owned GitHub Copilot authentication parameter"):
         reject_server_owned_wif_fields({field: "attacker"})
     assert holds_secret_pointer("github_copilot_app_private_key_ref")
 
@@ -581,6 +581,112 @@ async def test_caller_headers_keep_device_login_wire_headers_and_cannot_unpin_ap
     else:
         assert sent.get_list("copilot-integration-id") == ["client-integration"]
         assert "editor-version" not in sent
+
+
+@pytest.mark.parametrize("async_call", [False, True])
+async def test_deployment_naming_an_unloaded_credential_never_falls_back_to_the_shared_device_login(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, async_call: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "credential_list", [])
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "copilot",
+                "litellm_params": {
+                    "model": "github_copilot/claude-sonnet-5.5",
+                    "litellm_credential_name": "copilot-service-a",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    async def call() -> object:
+        if async_call:
+            return await router.acompletion(model="copilot", messages=messages)
+        return router.completion(model="copilot", messages=messages)
+
+    with pytest.raises(BadRequestError, match="names a credential that is not loaded"):
+        await call()
+    assert respx_mock.calls.call_count == 0
+
+
+async def test_unloaded_credential_name_keeps_inline_app_auth_and_other_providers_working(
+    private_key: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    clock: Final = Clock()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "credential_list", [])
+    monkeypatch.setattr(app_auth, "APP_TOKEN_MANAGER", AppTokenManager(clock=clock.wall, monotonic=clock.monotonic))
+    monkeypatch.setenv("TEST_APP_KEY", private_key)
+    respx_mock.post(_CONFIG.token_url).respond(201, json=token_payload())
+    copilot: Final = respx_mock.post(host="api.githubcopilot.com").respond(200, json=_model_payload("chat"))
+    openai: Final = respx_mock.post(host="api.openai.com").respond(200, json=_model_payload("chat"))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "copilot",
+                "litellm_params": {
+                    "model": "github_copilot/claude-sonnet-5.5",
+                    "litellm_credential_name": "not-loaded",
+                    "github_copilot_auth_type": "github_app",
+                    "github_copilot_app_id": _CONFIG.app_id,
+                    "github_copilot_app_installation_id": _CONFIG.installation_id,
+                    "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
+                },
+            },
+            {
+                "model_name": "openai",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5",
+                    "litellm_credential_name": "not-loaded",
+                    "api_key": "sk-test",
+                },
+            },
+        ],
+        num_retries=0,
+    )
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    await router.acompletion(model="copilot", messages=messages)
+    await router.acompletion(model="openai", messages=messages)
+
+    assert copilot.calls.last.request.headers["authorization"] == "Bearer installation-token"
+    assert openai.calls.last.request.headers["authorization"] == "Bearer sk-test"
+
+
+async def test_numeric_app_id_from_yaml_boots_and_signs_as_that_app(
+    private_key: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    clock: Final = Clock()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(app_auth, "APP_TOKEN_MANAGER", AppTokenManager(clock=clock.wall, monotonic=clock.monotonic))
+    monkeypatch.setenv("TEST_APP_KEY", private_key)
+    mint: Final = respx_mock.post(_CONFIG.token_url).respond(201, json=token_payload())
+    upstream: Final = respx_mock.post(host="api.githubcopilot.com").respond(200, json=_model_payload("chat"))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "copilot",
+                "litellm_params": {
+                    "model": "github_copilot/claude-sonnet-5.5",
+                    "github_copilot_auth_type": "github_app",
+                    "github_copilot_app_id": 424242,
+                    "github_copilot_app_installation_id": _CONFIG.installation_id,
+                    "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    await router.acompletion(model="copilot", messages=[{"role": "user", "content": "hi"}])
+
+    app_jwt: Final = mint.calls.last.request.headers["authorization"].removeprefix("Bearer ")
+    assert jwt.decode(app_jwt, options={"verify_signature": False})["iss"] == "424242"
+    assert upstream.calls.last.request.headers["authorization"] == "Bearer installation-token"
 
 
 def test_app_mode_without_session_cannot_fall_back_to_user_login() -> None:

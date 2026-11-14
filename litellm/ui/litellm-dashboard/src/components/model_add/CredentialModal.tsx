@@ -228,7 +228,9 @@ export default function CredentialModal({
                 {(control) => {
                   const provider = typeof control.value === "string" ? control.value : null;
                   const displayName = getProviderLogoAndName(provider ?? "").displayName;
-                  const selectedOption = providerOptions.find(({ label }) => label === displayName);
+                  const selectedOption =
+                    providerOptions.find(({ value }) => value === provider) ??
+                    providerOptions.find(({ label }) => label === displayName);
                   return (
                     <SearchSelect
                       inputId={control.id}
