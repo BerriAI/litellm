@@ -322,6 +322,28 @@ def test_openai_encoding_exposes_the_tiktoken_vocabulary_surface(name: str) -> N
         encoding.encode_single_token("<|not-a-token|>")
 
 
+@pytest.mark.parametrize("text", ("\ud800", "x\udc80", "\ud83d\ude42"))
+def test_openai_unstable_encoding_preserves_python_unicode_errors(text: str) -> None:
+    reference: Final = tiktoken.get_encoding("cl100k_base")
+    encoding: Final = OpenAIEncoding.from_tiktoken(reference.name)
+
+    with pytest.raises(UnicodeEncodeError) as expected:
+        reference.encode_with_unstable(text)
+    with pytest.raises(type(expected.value)) as actual:
+        encoding.encode_with_unstable(text)
+
+    assert actual.value.args == expected.value.args
+    assert encoding.encode(text) == reference.encode(text)
+
+
+@pytest.mark.parametrize("token", (-1, -(2**100), 2**32 - 1, 2**32, 2**100))
+def test_openai_special_token_membership_handles_large_python_integers(token: int) -> None:
+    reference: Final = tiktoken.get_encoding("cl100k_base")
+    encoding: Final = OpenAIEncoding.from_tiktoken(reference.name)
+
+    assert encoding.is_special_token(token) == reference.is_special_token(token)
+
+
 def test_huggingface_tokenizer_exposes_the_tokenizers_vocabulary_surface() -> None:
     reference: Final = ReferenceTokenizer.from_str(TOKENIZER_JSON)
     reference.enable_padding(pad_id=0, pad_token="[UNK]", length=4)
