@@ -12570,7 +12570,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(generate_content_provider_config.transform_caller_headers(extra_headers))
 
         # Get the request body from the provider config
         data: Final = generate_content_provider_config.transform_generate_content_request(
@@ -12580,9 +12580,12 @@ class BaseLLMHTTPHandler:
             generate_content_config_dict=generate_content_config_dict,
             system_instruction=system_instruction,
         )
+        request_fields: Final = generate_content_provider_config.transform_top_level_request_fields(
+            extra_body, litellm_params
+        )
 
-        if extra_body:
-            data.update(extra_body)
+        if request_fields:
+            data.update(request_fields)
 
         log_request: Final = partial(_log_generate_content_request, logging_obj, contents, api_base, headers)
         log_request(data)
@@ -12674,7 +12677,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(generate_content_provider_config.transform_caller_headers(extra_headers))
 
         # Get the request body from the provider config
         data: Final = generate_content_provider_config.transform_generate_content_request(
@@ -12684,9 +12687,12 @@ class BaseLLMHTTPHandler:
             generate_content_config_dict=generate_content_config_dict,
             system_instruction=system_instruction,
         )
+        request_fields: Final = generate_content_provider_config.transform_top_level_request_fields(
+            extra_body, litellm_params
+        )
 
-        if extra_body:
-            data.update(extra_body)
+        if request_fields:
+            data.update(request_fields)
 
         log_request: Final = partial(_log_generate_content_request, logging_obj, contents, api_base, headers)
         log_request(data)
