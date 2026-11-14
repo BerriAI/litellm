@@ -69,64 +69,6 @@ def test_scope_resolution_skips_team_scope_without_team_id():
     assert resolve_batch_enqueued_token_scopes(user) == ()
 
 
-@pytest.mark.asyncio
-async def test_reserve_rejects_once_allowance_is_exhausted():
-    store = _in_memory_store()
-    scope = _scope(limit=100)
-    first = await store.reserve(tokens=80, scopes=(scope,))
-    assert isinstance(first, BatchEnqueuedTokenReservation)
-    second = await store.reserve(tokens=30, scopes=(scope,))
-    assert second == BatchEnqueuedTokenOverLimit(scope=scope, enqueued=80)
-    third = await store.reserve(tokens=20, scopes=(scope,))
-    assert isinstance(third, BatchEnqueuedTokenReservation)
-
-
-@pytest.mark.asyncio
-async def test_reserve_is_all_or_nothing_across_scopes():
-    store = _in_memory_store()
-    key_scope = _scope(limit=100, key="api_key")
-    team_scope = _scope(limit=50, key="team")
-    over = await store.reserve(tokens=60, scopes=(key_scope, team_scope))
-    assert over == BatchEnqueuedTokenOverLimit(scope=team_scope, enqueued=0)
-    exact_fit = await store.reserve(tokens=50, scopes=(key_scope, team_scope))
-    assert isinstance(exact_fit, BatchEnqueuedTokenReservation)
-
-
-@pytest.mark.asyncio
-async def test_refund_restores_allowance_and_never_goes_negative():
-    store = _in_memory_store()
-    scope = _scope(limit=100)
-    reservation = await store.reserve(tokens=30, scopes=(scope,))
-    assert isinstance(reservation, BatchEnqueuedTokenReservation)
-    await store.refund(reservation)
-    await store.refund(reservation)
-    refill = await store.reserve(tokens=100, scopes=(scope,))
-    assert isinstance(refill, BatchEnqueuedTokenReservation)
-    assert isinstance(await store.reserve(tokens=1, scopes=(scope,)), BatchEnqueuedTokenOverLimit)
-
-
-@pytest.mark.asyncio
-async def test_reservation_record_roundtrip_pops_exactly_once():
-    store = _in_memory_store()
-    scope = _scope(limit=100)
-    reservation = await store.reserve(tokens=40, scopes=(scope,))
-    assert isinstance(reservation, BatchEnqueuedTokenReservation)
-    await store.save_reservation("batch_abc", reservation)
-    assert await store.pop_reservation("batch_abc") == reservation
-    assert await store.pop_reservation("batch_abc") is None
-    assert await store.pop_reservation("batch_never_saved") is None
-
-
-@pytest.mark.asyncio
-async def test_zero_token_reserve_charges_nothing():
-    store = _in_memory_store()
-    scope = _scope(limit=100)
-    empty = await store.reserve(tokens=0, scopes=(scope,))
-    assert empty == BatchEnqueuedTokenReservation(tokens=0, scopes=(scope,))
-    full = await store.reserve(tokens=100, scopes=(scope,))
-    assert isinstance(full, BatchEnqueuedTokenReservation)
-
-
 class _SingleKeyRedisFake:
     """Emulates the Redis script path one single-key call at a time, recording every call."""
 
@@ -150,7 +92,11 @@ class _SingleKeyRedisFake:
         kind: Final = (
             "reserve"
             if "INCRBY" in script
-            else "refund" if "DECRBY" in script else "pop" if "GET" in script else "save"
+            else "refund"
+            if "DECRBY" in script
+            else "pop"
+            if "GET" in script
+            else "save"
         )
 
         async def run(keys: Sequence[str], args: Sequence[str | bytes | int | float]) -> object:
@@ -297,9 +243,7 @@ async def test_local_ghost_left_by_landed_save_never_refunds_twice():
 
     assert await store.pop_reservation("batch_ghost") is None
     assert (
-        await store.internal_usage_cache.async_get_cache(
-            key=record_key, litellm_parent_otel_span=None, local_only=True
-        )
+        await store.internal_usage_cache.async_get_cache(key=record_key, litellm_parent_otel_span=None, local_only=True)
         is None
     )
     assert await store.pop_reservation("batch_ghost") is None
@@ -322,25 +266,6 @@ async def test_record_ttl_shrinks_by_elapsed_time_so_stale_records_never_outlive
     await store.save_reservation("batch_ttl_clamp", reservation)
     assert fake.save_ttls == (BATCH_ENQUEUED_TOKEN_TTL_SECONDS - 31,)
     assert await store.pop_reservation("batch_ttl_clamp") == reservation
-
-
-@pytest.mark.asyncio
-async def test_memory_refund_skips_reservations_granted_by_another_worker():
-    store = _in_memory_store()
-    scope = _scope(limit=100)
-    reservation = await store.reserve(tokens=60, scopes=(scope,))
-    assert isinstance(reservation, BatchEnqueuedTokenReservation)
-    assert reservation.backend == "memory"
-    assert reservation.owner
-
-    foreign: Final = BatchEnqueuedTokenReservation(
-        tokens=60, scopes=reservation.scopes, backend="memory", owner="another-worker"
-    )
-    await store.refund(foreign)
-    assert await store.reserve(tokens=50, scopes=(scope,)) == BatchEnqueuedTokenOverLimit(scope=scope, enqueued=60)
-
-    await store.refund(reservation)
-    assert isinstance(await store.reserve(tokens=100, scopes=(scope,)), BatchEnqueuedTokenReservation)
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,7 @@ mod logger;
 mod marshal;
 mod model_cost;
 mod model_registry;
+mod parallel_request_limiter;
 mod preflight;
 mod python_settings;
 mod redis;
@@ -46,6 +47,10 @@ mod _native {
     };
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
+    #[pymodule_export]
+    use crate::parallel_request_limiter::{
+        NativeParallelRequestLimiter, NativeParallelRequestLimiterState,
+    };
     #[pymodule_export]
     use crate::redis::breaker::{NativeAdmission, NativeRedisBreaker, native_redis_breaker_states};
     #[pymodule_export]
@@ -166,6 +171,8 @@ mod tests {
                 "GuardedReply",
                 "GaugesAcquired",
                 "GaugeOverLimit",
+                "NativeParallelRequestLimiter",
+                "NativeParallelRequestLimiterState",
                 "NativePending",
                 "NativeRouterCooldowns",
                 "NativeRouterUsage",

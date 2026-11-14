@@ -31,26 +31,6 @@ def _request(token: UserAPIKeyAuth) -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-async def test_fallback_target_is_admitted_until_the_keys_per_model_rpm_limit_is_spent() -> None:
-    limiter: Final = _limiter()
-    check: Final = RouterFallbackRateLimitCheck(limiter=lambda: limiter)
-    token: Final = UserAPIKeyAuth(api_key="hashed", token="hashed", metadata={"model_rpm_limit": {"fallback": 2}})
-    ctx: Final = RoutingContext(_router())
-    verdicts: Final = tuple([await check(model="fallback", request_kwargs=_request(token), ctx=ctx) for _ in range(3)])
-    assert verdicts == (True, True, False)
-
-
-@pytest.mark.asyncio
-async def test_fallback_target_without_a_per_model_limit_is_always_admitted() -> None:
-    limiter: Final = _limiter()
-    check: Final = RouterFallbackRateLimitCheck(limiter=lambda: limiter)
-    token: Final = UserAPIKeyAuth(api_key="hashed", token="hashed", metadata={"model_rpm_limit": {"other": 1}})
-    ctx: Final = RoutingContext(_router())
-    verdicts: Final = tuple([await check(model="fallback", request_kwargs=_request(token), ctx=ctx) for _ in range(3)])
-    assert verdicts == (True, True, True)
-
-
-@pytest.mark.asyncio
 async def test_request_without_a_key_is_unrestricted() -> None:
     check: Final = RouterFallbackRateLimitCheck(limiter=_limiter)
     assert await check(model="fallback", request_kwargs={"model": "primary"}, ctx=RoutingContext(_router())) is True

@@ -30,11 +30,14 @@ from litellm.proxy.hooks.batch_rate_limiter import BatchFileUsage
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
     PROXY_DynamicRateLimitHandlerV3 as DynamicRateLimitHandler,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    PROXY_MaxParallelRequestsHandler_v3,
-)
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.redis.stores.rate_limits import RateLimitScope
+from tests._support.rust_parallel_request_limiter import PROXY_MaxParallelRequestsHandler_v3
+
+
+@pytest.fixture(autouse=True)
+def _native_parallel_request_limiter(monkeypatch):
+    monkeypatch.setenv("LITELLM_NATIVE_PARALLEL_REQUEST_LIMITER", "true")
 
 
 def _make_phase1_barrier(num_concurrent: int, timeout: float = 0.1):
@@ -203,7 +206,7 @@ async def test_dynamic_rate_limiter_v3_concurrent_bypasses_model_capacity(monkey
     MAX_SEQUENTIAL_SUCCESSES = MODEL_RPM + 1
 
     monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
-    litellm.priority_reservation = {"high": 0.9, "low": 0.1}
+    monkeypatch.setattr(litellm, "priority_reservation", {"high": 0.9, "low": 0.1})
 
     dual_cache = DualCache()
     handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
@@ -277,7 +280,7 @@ async def test_dynamic_rate_limiter_v3_uses_atomic_check_and_increment(monkeypat
     enforced, priority counter is incremented for tracking only.
     """
     monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
-    litellm.priority_reservation = {"high": 0.9, "low": 0.1}
+    monkeypatch.setattr(litellm, "priority_reservation", {"high": 0.9, "low": 0.1})
 
     dual_cache = DualCache()
     handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
@@ -406,7 +409,7 @@ async def test_dynamic_rate_limiter_v3_fails_closed_on_unknown_descriptor(monkey
     from fastapi import HTTPException
 
     monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
-    litellm.priority_reservation = {"high": 0.9, "low": 0.1}
+    monkeypatch.setattr(litellm, "priority_reservation", {"high": 0.9, "low": 0.1})
 
     dual_cache = DualCache()
     handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)

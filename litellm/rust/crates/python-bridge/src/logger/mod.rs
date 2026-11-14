@@ -122,7 +122,9 @@ impl Sink for PythonSink {
             report(
                 py,
                 py.import(MODULE)
-                    .and_then(|module| module.call_method1("enabled", (level(metadata.level()),)))
+                    .and_then(|module| {
+                        module.call_method1("enabled", (level(metadata.level()), metadata.target()))
+                    })
                     .and_then(|enabled| enabled.extract()),
             )
         })

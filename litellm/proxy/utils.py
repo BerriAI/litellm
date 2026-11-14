@@ -301,6 +301,12 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401, RUF
     PROXY_MaxParallelRequestsHandler_v3,
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
+from litellm.proxy.hooks.parallel_request_limiter_v3_native import (
+    ParallelRequestLimiterNativeLogger,
+    PreCallAuthScope,
+    native_parallel_request_limiter,
+    native_parallel_request_limiter_enabled,
+)
 from litellm.proxy.hooks.sensitive_data_routing import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_SensitiveDataRoutingHandler,
     _PROXY_SensitiveDataRoutingHandler,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -2400,6 +2406,14 @@ class ProxyLogging:
             }
             passed_in_args = {name: value for name, value in available_args.items() if name in expected_args}
             proxy_hook_obj = proxy_hook(**passed_in_args)
+            if (
+                isinstance(proxy_hook_obj, _PROXY_MaxParallelRequestsHandler_v3)
+                and native_parallel_request_limiter_enabled()
+                and not any(isinstance(callback, ParallelRequestLimiterNativeLogger) for callback in litellm.callbacks)
+            ):
+                litellm.logging_callback_manager.add_litellm_callback(
+                    native_parallel_request_limiter(proxy_hook_obj)  # pyright: ignore[reportArgumentType]  # a V2 native takes its list position like a legacy callback
+                )
             litellm.logging_callback_manager.add_litellm_callback(proxy_hook_obj)
 
             self.proxy_hook_mapping[hook] = proxy_hook_obj
@@ -3580,21 +3594,22 @@ class ProxyLogging:
             )
             request_fields: Final = KwargsFields(run.latest, PROXY_REQUEST_KEYS)
             try:
-                result: Final = await run_subscribers(
-                    subscribers,
-                    with_sources(
-                        request_fields,
-                        PRE_CALL_SOURCES,
-                        HookArgs(auth=run.user_api_key_dict, request=run.latest, call_type=run.call_type),
+                with PreCallAuthScope(run.user_api_key_dict):
+                    result: Final = await run_subscribers(
+                        subscribers,
+                        with_sources(
+                            request_fields,
+                            PRE_CALL_SOURCES,
+                            HookArgs(auth=run.user_api_key_dict, request=run.latest, call_type=run.call_type),
+                        )
+                        if subscribers.has_v2
+                        else request_fields,
+                        partial(self._pre_call_start, run),
+                        between=partial(self._pre_call_deferred_reroute, run),
+                        call=proxy_call_facts(run.latest, run.call_type, run.user_api_key_dict, run.endpoint_type.value)
+                        if subscribers.has_v2
+                        else None,
                     )
-                    if subscribers.has_v2
-                    else request_fields,
-                    partial(self._pre_call_start, run),
-                    between=partial(self._pre_call_deferred_reroute, run),
-                    call=proxy_call_facts(run.latest, run.call_type, run.user_api_key_dict, run.endpoint_type.value)
-                    if subscribers.has_v2
-                    else None,
-                )
             finally:
                 run.settle_parallel()
             run.latest = _request_dict(kwargs_after(raise_v2_abort(result)))

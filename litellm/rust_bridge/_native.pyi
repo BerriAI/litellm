@@ -769,6 +769,8 @@ __all__ = [
     "NativeInstalled",
     "NativeModelCostMap",
     "NativeModelCostMapState",
+    "NativeParallelRequestLimiter",
+    "NativeParallelRequestLimiterState",
     "NativePending",
     "NativeProvenance",
     "NativeRateLimits",
@@ -1390,3 +1392,124 @@ class RouterCall(Generic[_S]):
     # candidate ids, pick first; pre_route: see _PreRouteStep; cache: see _CacheStep; secrets, build and model_info:
     # see those steps; first call: None.
     def next(self, outcome: object) -> _S: ...
+
+@final
+class NativeParallelRequestLimiterState:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
+
+@final
+class NativeParallelRequestLimiter:
+    def __new__(
+        cls,
+        rate_limits: NativeRateLimits,
+        window_size: int,
+        tpm_reservation_enabled: bool,
+        now: Callable[[], float] | None = None,
+        monotonic: Callable[[], float] | None = None,
+        output_cap: tuple[float, int, int] | None = None,
+    ) -> NativeParallelRequestLimiter: ...
+    def manifest(self) -> str: ...
+    def request_state(self) -> NativeParallelRequestLimiterState: ...
+    def handle(
+        self,
+        hook: str,
+        fields: Mapping[str, object],
+        call: Mapping[str, object] | None,
+        state: NativeParallelRequestLimiterState | None,
+        /,
+        request: NativeRequestRedis | None = None,
+        inputs: Mapping[str, object] | None = None,
+    ) -> Future[object]: ...
+    def start(
+        self,
+        hook: str,
+        fields: Mapping[str, object],
+        call: Mapping[str, object] | None,
+        state: NativeParallelRequestLimiterState,
+        host: object,
+        /,
+        request: NativeRequestRedis | None = None,
+        inputs: Mapping[str, object] | None = None,
+        body: object = None,
+    ) -> Execution: ...
+    def lock_memory(self) -> None: ...
+    def unlock_memory(self) -> None: ...
+    def should_rate_limit(
+        self,
+        descriptors: str,
+        read_only: bool,
+        skip_tpm_check: bool,
+        parallel_slot_id: str | None,
+        skip_parallel_check: bool,
+        policy: str,
+        request: NativeRequestRedis | None = None,
+    ) -> Future[Mapping[str, object]]: ...
+    def atomic_check_and_increment(
+        self,
+        descriptors: str,
+        increments: Sequence[tuple[int, int]],
+        policy: str,
+        request: NativeRequestRedis | None = None,
+    ) -> Future[Mapping[str, object]]: ...
+    def release_slots(self, slot_id: str, gauges: Sequence[tuple[str, str]]) -> Future[None]: ...
+    def owner_call_id(self, state: NativeParallelRequestLimiterState) -> str | None: ...
+    def identity(self, state: NativeParallelRequestLimiterState) -> str | None: ...
+    def hand_over(self, state: NativeParallelRequestLimiterState) -> Mapping[str, object]: ...
+    def view(self, state: NativeParallelRequestLimiterState) -> Mapping[str, object]: ...
+    def enqueued_reserve(self, tokens: int, scopes: str) -> Future[Mapping[str, object]]: ...
+    def enqueued_refund(self, reservation: str) -> Future[None]: ...
+    def enqueued_save(self, batch_id: str, reservation: str) -> Future[None]: ...
+    def enqueued_pop(self, batch_id: str) -> Future[Mapping[str, object] | None]: ...
+    def owned(self, state: NativeParallelRequestLimiterState) -> bool: ...
+    def rate_limit_response(self, state: NativeParallelRequestLimiterState) -> Mapping[str, object] | None: ...
+    def reserved_model(self, state: NativeParallelRequestLimiterState) -> tuple[str, str] | None: ...
+    def reserved_tokens(self, state: NativeParallelRequestLimiterState) -> int: ...
+    def holds_parallel_slot(self, state: NativeParallelRequestLimiterState) -> bool: ...
+    def descriptors(self, state: NativeParallelRequestLimiterState) -> Sequence[Mapping[str, object]]: ...
+    def implicit_output_cap(
+        self,
+        state: NativeParallelRequestLimiterState,
+        min_configured_limit: int | None,
+        configured_output_tokens: int | None = None,
+        cap_applied: bool = False,
+    ) -> int | None: ...
+    def estimate_input_and_output_tokens(
+        self,
+        data: object,
+        call_type: str,
+        min_configured_tpm_limit: int | None,
+        configured_output_tokens: int | None,
+        include_media: bool = True,
+    ) -> tuple[int, int] | None: ...
+    def estimate_tokens_for_request(
+        self,
+        data: object,
+        call_type: str,
+        min_configured_tpm_limit: int | None,
+        configured_output_tokens: int | None,
+    ) -> int | None: ...
+    def take_parallel_slot(
+        self, state: NativeParallelRequestLimiterState
+    ) -> Future[tuple[str, list[tuple[str, str]]] | None]: ...
+    def settle_success(
+        self, state: NativeParallelRequestLimiterState, facts: str, request: NativeRequestRedis | None = None
+    ) -> Future[None]: ...
+    def settle_failure(
+        self, state: NativeParallelRequestLimiterState, facts: str, request: NativeRequestRedis | None = None
+    ) -> Future[None]: ...
+    def settle_turn(
+        self, state: NativeParallelRequestLimiterState, facts: str, request: NativeRequestRedis | None = None
+    ) -> Future[None]: ...
+    def post_call_failure(self, state: NativeParallelRequestLimiterState, facts: str) -> Future[None]: ...
+    def release_for_settlement(
+        self, state: NativeParallelRequestLimiterState, call_id: str | None, request: NativeRequestRedis | None = None
+    ) -> Future[None]: ...
+    def release_on_disconnect(self, state: NativeParallelRequestLimiterState) -> Future[None]: ...
+    def fallback_target_allowed(
+        self,
+        state: NativeParallelRequestLimiterState | None,
+        descriptors: str,
+        model: str,
+        policy: str,
+        request: NativeRequestRedis | None = None,
+    ) -> Future[Mapping[str, object]]: ...
