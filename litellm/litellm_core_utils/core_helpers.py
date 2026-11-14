@@ -69,13 +69,14 @@ def as_object_list(value: object) -> Sequence[object] | None:
 
 _OBJECT_ENTRIES: Final = TypeAdapter(list[object])
 _OBJECT_KEYS: Final = TypeAdapter(dict[object, object])
+_PARAM_NAME: Final = re.compile(r"\w+")
 
 
 def allowed_openai_param_names(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
     if isinstance(value, str):
-        return tuple("".join(char if char.isalnum() or char == "_" else " " for char in value).split())
+        return tuple(_PARAM_NAME.findall(value))
     if isinstance(value, Mapping):
         return tuple(key for key in _OBJECT_KEYS.validate_python(value) if isinstance(key, str))
     try:
