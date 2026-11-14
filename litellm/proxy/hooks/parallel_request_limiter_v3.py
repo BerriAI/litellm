@@ -1229,8 +1229,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         estimate; when it exceeds the safety floor, the cap is raised to that
         value instead of clamping every tenant to the same floor.
         """
-        if not isinstance(data, dict):
-            return
         base_capped_floor: Final = PROXY_MaxParallelRequestsHandler_v3.no_max_tokens_output_floor(min_configured_limit)
         capped_floor: Final = (
             max(base_capped_floor, RESPONSES_API_MIN_OUTPUT_TOKENS)
@@ -1261,11 +1259,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
     @staticmethod
-    def write_implicit_output_cap(
-        data: dict[str, object],  # mutable-ok: the cap is written into the routed request
-        call_type: str | None,
-        effective_cap: int,
-    ) -> bool:
+    def write_implicit_output_cap(data: object, call_type: str | None, effective_cap: int) -> bool:
+        if not isinstance(data, dict):
+            return False
         if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES:
             config_field: Final = "config" if "config" in data or "generationConfig" not in data else "generationConfig"
             config: Final = data.get(config_field)
@@ -1278,7 +1274,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return False
         cap_field: Final = "max_output_tokens" if call_type in RESPONSES_API_CALL_TYPES else "max_tokens"
         existing_cap: Final = data.get(cap_field)
-        if existing_cap is None or effective_cap < existing_cap:  # pyright: ignore[reportOperatorIssue]  # an unparsable existing cap fails as it always has
+        if existing_cap is None or effective_cap < existing_cap:
             data[cap_field] = effective_cap  # rebind-ok: downstream routing requires the bounded output cap
             return True
         return False
@@ -6069,7 +6065,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],  # mutable-ok: the base hook declares this parameter as a dict
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,

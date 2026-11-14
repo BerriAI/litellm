@@ -520,7 +520,7 @@ class _PreCallHost:
 
 
 _HOST_INT: Final = TypeAdapter(int)
-_HOST_OPTIONAL_INT: Final = TypeAdapter(int | None)
+_HOST_OPTIONAL_INT: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
 
 
 @functools.cache
