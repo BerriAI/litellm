@@ -10,7 +10,7 @@ Covers:
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import httpx
@@ -784,7 +784,7 @@ def test_gemini_batch_embedding_usage_comes_from_usage_metadata(
     ],
 )
 def test_gemini_batch_usage_metadata_without_a_prompt_count_bills_like_none_was_sent(
-    usage_metadata: dict[str, object],
+    usage_metadata: Mapping[str, object],
 ) -> None:
     def usage_for(predictions: VertexAIBatchEmbeddingsResponseObject) -> Usage:
         return process_response(
@@ -834,13 +834,58 @@ async def test_gemini_batch_embedding_bills_a_files_image_at_the_image_rate_with
     )
 
 
+def test_gemini_batch_embedding_adds_nothing_to_the_logged_hidden_params() -> None:
+    response: Final = process_response(
+        input=["a red apple", IMAGE_DATA_URI],
+        model_response=EmbeddingResponse(hidden_params={"custom_llm_provider": "gemini"}),
+        model="gemini-embedding-2",
+        _predictions={
+            "embeddings": [{"values": [0.1]}, {"values": [0.2]}],
+            "usageMetadata": {
+                "promptTokenCount": 261,
+                "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 3}, {"modality": "IMAGE", "tokenCount": 258}],
+            },
+        },
+    )
+
+    assert response.hidden_params == {"custom_llm_provider": "gemini"}
+    assert len(response.item_usage) == 2
+
+
+async def _cache_hits(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    batch: tuple[str, ...],
+    usage_metadata: Mapping[str, object],
+    hit_inputs: tuple[str, ...],
+) -> tuple[int, tuple[EmbeddingResponse, ...]]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"embeddings": [{"values": [0.1, 0.2]} for _ in batch], "usageMetadata": dict(usage_metadata)},
+        )
+    )
+
+    async def embed(input: list[str]) -> EmbeddingResponse:
+        return await litellm.aembedding(model="gemini/gemini-embedding-2", input=input, api_key="gemini-test-key")
+
+    await embed(list(batch))
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    hits: Final = tuple([await embed([item]) for item in hit_inputs])
+    return route.call_count, hits
+
+
 @pytest.mark.asyncio
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize(
     ("batch", "usage_metadata", "expected_hits"),
     [
         pytest.param(
-            ["a red apple", IMAGE_DATA_URI, "a green pear"],
+            ("a red apple", IMAGE_DATA_URI, "a green pear"),
             {
                 "promptTokenCount": 267,
                 "promptTokenDetails": [
@@ -852,7 +897,7 @@ async def test_gemini_batch_embedding_bills_a_files_image_at_the_image_rate_with
             id="modality-details",
         ),
         pytest.param(
-            ["a red apple", "a green pear"],
+            ("a red apple", "a green pear"),
             {"promptTokenCount": 7},
             (("a red apple", (4, 0, 0)), ("a green pear", (3, 0, 0))),
             id="prompt-count-only",
@@ -862,29 +907,15 @@ async def test_gemini_batch_embedding_bills_a_files_image_at_the_image_rate_with
 async def test_gemini_batch_embedding_cache_hits_report_each_inputs_own_modality_tokens(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
-    batch: list[str],
-    usage_metadata: dict[str, object],
+    batch: tuple[str, ...],
+    usage_metadata: Mapping[str, object],
     expected_hits: tuple[tuple[str, tuple[int, int, int]], ...],
 ) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
-    route: Final = respx_mock.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
-    ).mock(
-        return_value=httpx.Response(
-            200,
-            json={"embeddings": [{"values": [0.1, 0.2]} for _ in batch], "usageMetadata": usage_metadata},
-        )
+    calls, hits = await _cache_hits(
+        respx_mock, monkeypatch, batch, usage_metadata, tuple(item for item, _ in expected_hits)
     )
 
-    async def embed(input: list[str]) -> EmbeddingResponse:
-        return await litellm.aembedding(model="gemini/gemini-embedding-2", input=input, api_key="gemini-test-key")
-
-    await embed(batch)
-    await asyncio.gather(*_PENDING_CACHE_WRITES)
-    hits: Final = [(item, await embed([item])) for item, _ in expected_hits]
-
-    assert route.call_count == 1
+    assert calls == 1
     assert tuple(
         (
             item,
@@ -894,8 +925,27 @@ async def test_gemini_batch_embedding_cache_hits_report_each_inputs_own_modality
                 hit.usage.prompt_tokens_details.image_tokens,
             ),
         )
-        for item, hit in hits
+        for (item, _), hit in zip(expected_hits, hits, strict=True)
     ) == expected_hits
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_batch_embedding_cache_hits_split_text_tokens_by_each_inputs_length(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    long_text: Final = " ".join(("a red apple",) * 200)
+    calls, (short_hit, long_hit) = await _cache_hits(
+        respx_mock,
+        monkeypatch,
+        ("hello", long_text),
+        {"promptTokenCount": 601, "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 601}]},
+        ("hello", long_text),
+    )
+
+    assert calls == 1
+    assert short_hit.usage.prompt_tokens + long_hit.usage.prompt_tokens == 601
+    assert short_hit.usage.prompt_tokens * 100 < long_hit.usage.prompt_tokens
 
 
 @pytest.mark.parametrize("use_embed_content", [False, True])

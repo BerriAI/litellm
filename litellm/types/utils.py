@@ -2523,6 +2523,9 @@ class Embedding(OpenAIObject):
         setattr(self, key, value)
 
 
+_ITEM_USAGE: Final = TypeAdapter(tuple[Usage, ...], config=ConfigDict(strict=True))
+
+
 class EmbeddingResponse(OpenAIObject):
     model: str | None = None
     """The model used for embedding."""
@@ -2588,7 +2591,14 @@ class EmbeddingResponse(OpenAIObject):
 
         if hidden_params:
             self._hidden_params = hidden_params
-        self._item_usage = item_usage
+        self._item_usage = EmbeddingResponse._typed_item_usage(item_usage)
+
+    @staticmethod
+    def _typed_item_usage(value: object) -> tuple[Usage, ...]:
+        try:
+            return _ITEM_USAGE.validate_python(value)
+        except ValidationError:
+            return ()
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
