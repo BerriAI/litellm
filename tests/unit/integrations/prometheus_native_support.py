@@ -27,11 +27,13 @@ def companion_of(logger: PrometheusLogger) -> PrometheusCompanion:
     return companion
 
 
-async def _deliver(event: Event, logger: PrometheusLogger, kwargs: dict[str, object], response: object) -> None:
+async def _deliver(
+    event: Event, logger: PrometheusLogger, kwargs: dict[str, object], response: object, start: object, end: object
+) -> None:
     if event == "success":
-        await logger.async_log_success_event(kwargs, response, kwargs.get("start_time"), kwargs.get("end_time"))
+        await logger.async_log_success_event(kwargs, response, start, end)
     else:
-        await logger.async_log_failure_event(kwargs, response, kwargs.get("start_time"), kwargs.get("end_time"))
+        await logger.async_log_failure_event(kwargs, response, start, end)
 
 
 async def _run_line(
@@ -39,10 +41,14 @@ async def _run_line(
     logger: PrometheusLogger,
     kwargs: dict[str, object],
     response: object,
+    start_time: object,
+    end_time: object,
     monkeypatch: pytest.MonkeyPatch | None,
 ) -> None:
     import litellm
 
+    start: Final = kwargs.get("start_time") if start_time is None else start_time
+    end: Final = kwargs.get("end_time") if end_time is None else end_time
     line: Final = (logger, companion_of(logger))
     patcher: Final = monkeypatch or pytest.MonkeyPatch()
     try:
@@ -53,7 +59,7 @@ async def _run_line(
             messages=[],
             stream=kwargs.get("stream") is True,
             call_type="acompletion",
-            start_time=kwargs.get("start_time"),
+            start_time=start,
             litellm_call_id=str(kwargs.get("litellm_call_id", "native")),
             function_id="native",
         )
@@ -61,21 +67,21 @@ async def _run_line(
         args: Final = HookArgs(
             request=kwargs,
             result=response,
-            start_time=kwargs.get("start_time"),
-            end_time=kwargs.get("end_time"),
+            start_time=start,
+            end_time=end,
             outcome=Outcome.success if event == "success" else Outcome.failure,
             logging_obj=owner,
         )
 
         async def deliver(callback: object, current: object) -> None:
             if callback is logger and isinstance(current, dict):
-                await _deliver(event, logger, current, response)
+                await _deliver(event, logger, current, response, start, end)
 
         _ = await run_subscribers(
             hook_subscribers(Hook.attempt_ended, line, admit=Admit.every_entry),
             with_sources(KwargsFields(kwargs, LOGGING_KEYS), DERIVED_ATTEMPT_FIELDS, args),
             deliver,
-            call=owner.v2_call_facts(kwargs.get("end_time")),
+            call=owner.v2_call_facts(end),
         )
     finally:
         if monkeypatch is None:
@@ -85,23 +91,23 @@ async def _run_line(
 async def native_success(
     logger: PrometheusLogger,
     kwargs: dict[str, object],
-    response: object,
+    response_obj: object,
     start_time: object = None,
     end_time: object = None,
     monkeypatch: pytest.MonkeyPatch | None = None,
 ) -> None:
-    await _run_line("success", logger, kwargs, response, monkeypatch)
+    await _run_line("success", logger, kwargs, response_obj, start_time, end_time, monkeypatch)
 
 
 async def native_failure(
     logger: PrometheusLogger,
     kwargs: dict[str, object],
-    response: object,
+    response_obj: object,
     start_time: object = None,
     end_time: object = None,
     monkeypatch: pytest.MonkeyPatch | None = None,
 ) -> None:
-    await _run_line("failure", logger, kwargs, response, monkeypatch)
+    await _run_line("failure", logger, kwargs, response_obj, start_time, end_time, monkeypatch)
 
 
 def _label_text(value: object) -> str:
