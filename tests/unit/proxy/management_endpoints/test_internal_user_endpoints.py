@@ -6060,3 +6060,93 @@ async def test_fips_user_update_hashes_off_the_event_loop(pbkdf2_on_event_loop: 
 
     assert pbkdf2_on_event_loop == [False]
     assert data["password"].startswith("pbkdf2:")
+
+
+def _soft_budget_prisma(mocker: MockerFixture, saved_users: tuple[LiteLLM_UserTable, ...]) -> MagicMock:
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_users[0] if saved_users else None)
+    prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=list(saved_users))
+    prisma_client.get_data = mocker.AsyncMock(return_value=list(saved_users))
+    prisma_client.update_data = mocker.AsyncMock()
+    prisma_client.insert_data = mocker.AsyncMock()
+    prisma_client.tx = lambda: _transaction_over(prisma_client.db)
+    mocker.patch(
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    )  # test-quality-ok: substitute the database dependency
+    return prisma_client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("saved_users", "update"),
+    [
+        pytest.param(
+            (LiteLLM_UserTable(user_id="u-soft", user_role="proxy_admin_viewer", soft_budget=8),),
+            UpdateUserRequest(user_id="u-soft", user_role="internal_user"),
+            id="role-change-injects-lower-max",
+        ),
+        pytest.param(
+            (),
+            UpdateUserRequest(user_email="new@example.test", soft_budget=100, max_budget=50),
+            id="email-upsert-of-new-user",
+        ),
+        pytest.param(
+            (LiteLLM_UserTable(user_id="u-soft", soft_budget=8),),
+            UpdateUserRequest(user_id="u-soft", max_budget=8),
+            id="max-lowered-to-stored-soft",
+        ),
+    ],
+)
+async def test_user_update_rejects_soft_budget_at_or_above_effective_max_budget(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    saved_users: tuple[LiteLLM_UserTable, ...],
+    update: UpdateUserRequest,
+) -> None:
+    import litellm
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+
+    monkeypatch.setattr(litellm, "max_internal_user_budget", 5.0)
+    prisma_client: Final = _soft_budget_prisma(mocker, saved_users)
+
+    with pytest.raises(HTTPException) as caught:
+        await _update_single_user_helper(
+            user_request=update,
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-soft", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert caught.value.status_code == 400
+    assert "soft_budget" in str(caught.value.detail)
+    prisma_client.update_data.assert_not_awaited()
+    prisma_client.insert_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_updates",
+    [{"soft_budget": 5.0}, {"max_budget": 4.0}],
+    ids=["soft-above-one-users-max", "max-below-one-users-soft"],
+)
+async def test_bulk_user_update_checks_soft_budget_against_each_user(
+    mocker: MockerFixture, user_updates: dict[str, float]
+) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
+
+    saved_users: Final = (
+        LiteLLM_UserTable(user_id="u-open"),
+        LiteLLM_UserTable(user_id="u-tight", max_budget=3.0, soft_budget=None),
+        LiteLLM_UserTable(user_id="u-soft", soft_budget=6.0),
+    )
+    prisma_client: Final = _soft_budget_prisma(mocker, saved_users)
+    prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=len(saved_users))
+
+    with pytest.raises(HTTPException) as caught:
+        await bulk_user_update(
+            data=BulkUpdateUserRequest(all_users=True, user_updates=user_updates),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-soft", user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_changed_by=None,
+        )
+
+    assert caught.value.status_code == 400
+    prisma_client.db.litellm_usertable.update_many.assert_not_awaited()

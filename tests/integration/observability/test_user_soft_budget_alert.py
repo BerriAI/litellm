@@ -103,7 +103,7 @@ def test_user_over_soft_budget_gets_alert_and_request_still_succeeds(
         assert response["choices"], response
         (alert, *_) = alerts_naming(alerting.alerts, user_id, seconds=ALERT_SECONDS)
         assert "Soft Budget Crossed" in alert, alert
-        assert "soft_budget: 0.5" in alert, alert
+        assert "*soft_budget:* `0.5`" in alert, alert
 
 
 def test_user_under_soft_budget_gets_no_alert(alerting: AlertingProxy) -> None:

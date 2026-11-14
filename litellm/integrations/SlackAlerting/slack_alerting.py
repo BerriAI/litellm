@@ -93,17 +93,12 @@ def _budget_alert_email_html(webhook_event: WebhookEvent, email_logo_url: str, e
             Best, <br />
             The LiteLLM team <br />
             """
-    if webhook_event.event == "soft_budget_crossed":
-        hard_limit: Final = (
-            f" until your budget of ${webhook_event.max_budget} is reached"
-            if webhook_event.max_budget is not None
-            else ""
-        )
+    if webhook_event.event == "soft_budget_crossed" and webhook_event.event_group == Litellm_EntityType.USER:
         return f"""
             <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
             <p> Hi {user_id}, <br/>
             Your LLM API spend of <b> ${webhook_event.spend} </b> has reached your <b> soft budget of ${webhook_event.soft_budget} </b>. <br /> <br />
-            This is a warning only. API requests keep going through{hard_limit}. <br /> <br />
+            This is a warning only. API requests keep going through. <br /> <br />
             If you have any questions, please send an email to {email_support_contact} <br /> <br />
             Best, <br />
             The LiteLLM team <br />

@@ -305,6 +305,11 @@ def _validate_user_soft_budget(soft_budget: float | None, max_budget: float | No
         )
 
 
+def _validate_updated_user_soft_budget(updates: _UserBudgetRow, stored: _UserBudgetRow) -> None:
+    budgets: Final = stored.model_copy(update=updates.model_dump(exclude_unset=True))
+    _validate_user_soft_budget(soft_budget=budgets.soft_budget, max_budget=budgets.max_budget)
+
+
 async def _check_duplicate_user_field(
     field_name: str,
     field_value: str | None,
@@ -1642,14 +1647,14 @@ async def _update_single_user_helper(
         existing_user_row = await _user_table(prisma_client).find_first(where={"user_email": user_request.user_email})
 
     _check_user_update_authz(user_request, user_api_key_dict, existing_user_row)
+    if "soft_budget" in non_default_values or "max_budget" in non_default_values:
+        _validate_updated_user_soft_budget(
+            _UserBudgetRow.model_validate(non_default_values),
+            _UserBudgetRow.model_validate(existing_user_row) if existing_user_row is not None else _UserBudgetRow(),
+        )
 
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable.model_validate(existing_user_row.model_dump(exclude_none=True))
-        requested: Final = user_request.model_fields_set
-        _validate_user_soft_budget(
-            soft_budget=user_request.soft_budget if "soft_budget" in requested else existing_user_row.soft_budget,
-            max_budget=user_request.max_budget if "max_budget" in requested else existing_user_row.max_budget,
-        )
         if (
             "budget_reset_at" in non_default_values
             and isinstance(non_default_values["budget_duration"], str)
@@ -2128,16 +2133,7 @@ async def bulk_user_update(
 
         if "soft_budget" in non_default_values or "max_budget" in non_default_values:
             for user_budget in _USER_BUDGET_ROWS.validate_python(all_users_in_db, from_attributes=True):
-                _validate_user_soft_budget(
-                    soft_budget=(
-                        data.user_updates.soft_budget
-                        if "soft_budget" in non_default_values
-                        else user_budget.soft_budget
-                    ),
-                    max_budget=(
-                        data.user_updates.max_budget if "max_budget" in non_default_values else user_budget.max_budget
-                    ),
-                )
+                _validate_updated_user_soft_budget(_UserBudgetRow.model_validate(non_default_values), user_budget)
 
         shared_values: Final = MappingProxyType({k: v for k, v in non_default_values.items() if k != "budget_limits"})
 
