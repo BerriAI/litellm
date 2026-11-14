@@ -841,3 +841,33 @@ async def test_a_resized_reservation_is_carried_at_its_resized_cost_to_the_count
     assert reservation["reserved_cost"] == pytest.approx(0.1)
     assert spend.get_local("spend:key:hashed") == pytest.approx(9.9)
     assert spend.get_local("spend:team:team") == pytest.approx(2.1)
+
+
+@pytest.mark.asyncio
+async def test_should_raise_503_when_counter_increment_fails_and_fail_closed(monkeypatch, native_budgets_on):
+    from fastapi import HTTPException
+
+    from litellm.caching.dual_cache import DualCache
+
+    redis = _RespRedis(values={}, failing=frozenset({"INCRBYFLOAT"}))
+    token = UserAPIKeyAuth(token="key-budget-reserve-fail-closed", spend=0.0, max_budget=1.0)
+
+    with _resp_store(redis) as spend:
+        _native_reservation_fixture(monkeypatch, spend)
+        with pytest.raises(HTTPException) as exc_info:
+            await native_reserve_budget_for_request(
+                request_body={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=DualCache(),
+                proxy_logging_obj=MagicMock(),
+                fail_closed_budget_enforcement=True,
+            )
+
+    assert exc_info.value.status_code == 503
+    assert redis.deleted() == {"spend:key:key-budget-reserve-fail-closed"}, redis.commands
+    assert redis.values == {}
