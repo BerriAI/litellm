@@ -505,8 +505,10 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
 
 def catalog_mode(model: str, custom_llm_provider: str) -> str | None:
     try:
-        key: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)["key"]
-    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which the catalog does not list
+        key: Final = get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider, catalog_only=True)[
+            "key"
+        ]
+    except Exception:  # noqa: BLE001  # the lookup raises bare Exception for an unmapped model, which the catalog does not list
         return None
     entry: Final = GetModelCostMap.loaded_model_cost_map().get(key)
     mode: Final = entry.get("mode") if entry is not None else None

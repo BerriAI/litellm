@@ -1,5 +1,7 @@
 import json
-from collections.abc import Mapping
+import threading
+from collections.abc import Iterator, Mapping
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 
 import httpx
@@ -13,6 +15,7 @@ from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
     DecisionsInputLimits,
     DecisionsResponseValidationError,
+    catalog_mode,
     ir_to_systemone_request,
     ir_to_systemone_response,
     parse_systemone_response,
@@ -72,6 +75,43 @@ def test_decision_input_limits_use_only_positive_catalog_limits(
 
 def test_unmapped_decision_model_limits_remain_unknown(local_model_cost_map: None) -> None:
     assert BaseDecisionsConfig().get_input_limits("unmapped-input-limit", "databricks", {}) == DecisionsInputLimits()
+
+
+@pytest.fixture
+def ollama_server_paths(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
+    paths: Final[list[str]] = []  # mutable-ok: the server thread records each request path it receives
+
+    class RecordingOllama(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            paths.append(self.path)
+            body: Final = json.dumps({"template": "", "model_info": {}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), RecordingOllama)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("OLLAMA_API_BASE", f"http://127.0.0.1:{server.server_port}")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield paths
+    finally:
+        litellm.get_model_info.cache_clear()
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+def test_catalog_mode_of_an_unmapped_ollama_model_reads_only_the_catalog(
+    local_model_cost_map: None, ollama_server_paths: list[str], provider: str
+) -> None:
+    assert catalog_mode("catalog-mode-probe", provider) is None
+    assert ollama_server_paths == []
 
 
 @pytest.mark.parametrize(
