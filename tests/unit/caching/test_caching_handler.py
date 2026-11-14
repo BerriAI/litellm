@@ -1412,6 +1412,12 @@ def test_is_chat_completion_cached_dict():
     assert not _is_chat_completion_cached_dict(
         {"id": "resp_abc", "object": "response", "output": []}
     )
+    # The bridge stores a Responses API object under a chatcmpl- id; `object` decides.
+    assert not _is_chat_completion_cached_dict(
+        {"id": "chatcmpl-bridge", "object": "response", "output": []}
+    )
+    # No `object` at all: the chatcmpl- id still marks a chat completion.
+    assert _is_chat_completion_cached_dict({"id": "chatcmpl-abc"})
 
 
 def test_convert_cached_aresponses_bridge_chat_completion_stream():
@@ -2095,6 +2101,52 @@ def test_convert_cached_responses_legacy_nonstream_path():
 
     assert isinstance(result, ResponsesAPIResponse)
     assert result.id == "resp_legacy_nonstream"
+
+
+def test_convert_cached_responses_bridge_responses_object_keeps_chatcmpl_id():
+    """
+    Responses to chat completions bridge (for example anthropic/): the stored object is a
+    Responses API response whose id is the bridge's chatcmpl- id. The cache hit must replay it
+    as a Responses API response, not rebuild it as a chat completion without `choices`.
+    """
+    from litellm import responses
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import CallTypes
+
+    caching_handler = LLMCachingHandler(
+        original_function=responses, request_kwargs={}, start_time=datetime.now()
+    )
+    cached_result = {
+        "id": "chatcmpl-bridge-responses-object",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": "claude-sonnet-4-5",
+        "object": "response",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_bridge",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "hello", "annotations": []}
+                ],
+            }
+        ],
+    }
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=CallTypes.responses.value,
+        kwargs={"model": "anthropic/claude-sonnet-4-5", "input": "hi", "stream": False},
+        logging_obj=_build_logging_obj(CallTypes.responses.value, stream=False),
+        model="anthropic/claude-sonnet-4-5",
+        args=(),
+    )
+
+    assert isinstance(result, ResponsesAPIResponse)
+    assert result.id == "chatcmpl-bridge-responses-object"
+    assert result.output_text == "hello"
 
 
 def test_convert_cached_responses_legacy_stream_path():
