@@ -18806,6 +18806,17 @@ _ADMIN_ONLY_ENDPOINT_URL_FIELDS: Final = frozenset(
 )
 
 
+def _credentials_for_non_admin(credentials: Mapping[str, object]) -> Mapping[str, object]:
+    """A provider credentials mapping with its endpoint `url` removed.
+
+    WatsonX resolves its endpoint from `wx_credentials.url` /
+    `watsonx_credentials.url` when present (litellm/llms/watsonx/common_utils.py),
+    so the nested `url` is an endpoint URL even though the credential keys
+    around it are masked separately.
+    """
+    return {k: v for k, v in credentials.items() if k != "url"}
+
+
 def _params_for_non_admin(params: Mapping[str, object]) -> Mapping[str, object]:
     """litellm_params with deployment endpoint URLs removed.
 
@@ -18814,12 +18825,21 @@ def _params_for_non_admin(params: Mapping[str, object]) -> Mapping[str, object]:
     (Hugging Face treats a model starting with http(s):// as its API base),
     and the codebase's own upstream_origins helper counts a URL in `model`
     as an upstream origin. Ordinary model identifiers contain no "://", so
-    they pass through untouched.
+    they pass through untouched. Also drops the top-level `url` alias and the
+    `url` nested in WatsonX credential mappings: provider code consumes
+    `url` as the api_base fallback (litellm/main.py, watsonx common_utils),
+    so it is an endpoint URL under another name.
     """
     return {
-        k: v
+        k: (
+            _credentials_for_non_admin(v)
+            if k in ("wx_credentials", "watsonx_credentials") and isinstance(v, Mapping)
+            else v
+        )
         for k, v in params.items()
-        if k not in _ADMIN_ONLY_ENDPOINT_URL_FIELDS and not (k == "model" and isinstance(v, str) and "://" in v)
+        if k not in _ADMIN_ONLY_ENDPOINT_URL_FIELDS
+        and k != "url"
+        and not (k == "model" and isinstance(v, str) and "://" in v)
     }
 
 
