@@ -15,20 +15,20 @@ served the turn. Updates are batched in-memory and flushed to Postgres every
 
 ```yaml
 model_list:
-  - model_name: gpt-4o
+  - model_name: gpt-5.6
     litellm_params:
-      model: openai/gpt-4o
+      model: openai/gpt-5.6
     model_info:
-      input_cost_per_token: 0.0000025
+      input_cost_per_token: 0.000004
       adaptive_router_preferences:
         quality_tier: 3
         strengths: ["code_generation", "analytical_reasoning"]
 
-  - model_name: gpt-4o-mini
+  - model_name: gpt-5.6-luna
     litellm_params:
-      model: openai/gpt-4o-mini
+      model: openai/gpt-5.6-luna
     model_info:
-      input_cost_per_token: 0.00000015
+      input_cost_per_token: 0.0000002
       adaptive_router_preferences:
         quality_tier: 2
         strengths: ["general", "factual_lookup"]
@@ -36,9 +36,9 @@ model_list:
   - model_name: smart-router
     litellm_params:
       model: auto_router/adaptive_router
-      adaptive_router_default_model: gpt-4o-mini
+      adaptive_router_default_model: gpt-5.6-luna
       adaptive_router_config:
-        available_models: ["gpt-4o", "gpt-4o-mini"]
+        available_models: ["gpt-5.6", "gpt-5.6-luna"]
         weights:
           quality: 0.7
           cost: 0.3

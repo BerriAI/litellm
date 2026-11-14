@@ -169,7 +169,7 @@ def render_jsonl(model: str) -> bytes:
         "body": {
             "model": model,
             "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 8,
+            "max_completion_tokens": 8,
         },
     }
     return (json.dumps(line) + "\n").encode()
@@ -792,7 +792,7 @@ def _multi_request_jsonl(model: str, n: int) -> bytes:
                 "body": {
                     "model": model,
                     "messages": [{"role": "user", "content": "ping"}],
-                    "max_tokens": 8,
+                    "max_completion_tokens": 8,
                 },
             }
         )
