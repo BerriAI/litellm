@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.core_helpers import (
     iter_items,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
+from litellm.litellm_core_utils.prompt_templates.factory import pair_tool_calls_with_results
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     prompt_cache_breakpoint_with_readable_mode,
     whole_prompt_cache_breakpoint_or_none,
@@ -1269,8 +1270,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         supports_prompt_cache_breakpoint: Final = any(
             supports_openai_prompt_cache_breakpoint(name, provider, model_info) for name in named_models
         )
+        typed_optional_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
+        # The Responses API rejects a function_call without its output and an output without its call.
+        # With previous_response_id the calls live in the stored response, so the chat history is kept.
+        paired_messages: Final = (
+            messages
+            if typed_optional_params.get("previous_response_id")
+            else list(pair_tool_calls_with_results(messages))
+        )
         converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
-            messages,
+            paired_messages,
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
             target_trims_breakpoints=drops_unsupported_params(litellm_params.get("drop_params")),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
@@ -1280,7 +1289,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
         # Keep the system text in input instead of instructions when the Responses API needs it there.
         # It rejects an empty input, and json_object requires the word "json" in input, ignoring instructions.
-        typed_optional_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
         system_goes_in_input: Final = converted_instructions is not None and (
             not converted_input_items or _payload_type(typed_optional_params.get("response_format")) == "json_object"
         )

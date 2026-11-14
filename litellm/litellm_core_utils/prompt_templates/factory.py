@@ -2802,7 +2802,23 @@ def sanitize_messages_for_tool_calling(
     return [msg for idx, msg in enumerate(sanitized_messages) if idx not in duplicates_to_remove]
 
 
-def _pair_tool_calls_with_results(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+def pair_tool_calls_with_results(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
+    """
+    Cases A and B of ``sanitize_messages_for_tool_calling`` for providers that accept empty text.
+
+    Adds a placeholder result for each tool call that has none and drops tool results whose
+    call the preceding assistant message did not announce. Empty text is left as is, because
+    the placeholder for it (Case C) is an Anthropic workaround. Active only when
+    ``litellm.modify_params`` is True, like the Anthropic path.
+    """
+    if not litellm.modify_params:
+        return messages
+    return _pair_tool_calls_with_results(messages, sanitize_empty_text=False)
+
+
+def _pair_tool_calls_with_results(
+    messages: Sequence[AllMessageValues], *, sanitize_empty_text: bool = True
+) -> tuple[AllMessageValues, ...]:
     latest_assistant_tool_call_ids: Final = tuple(
         itertools.accumulate(messages, _tool_call_ids_of_the_latest_assistant, initial=frozenset[object]())
     )
@@ -2813,7 +2829,8 @@ def _pair_tool_calls_with_results(messages: Sequence[AllMessageValues]) -> tuple
         current_message = messages[i]
 
         # Case C: Sanitize empty text content
-        current_message = _sanitize_empty_text_content(current_message)
+        if sanitize_empty_text:
+            current_message = _sanitize_empty_text_content(current_message)
 
         # Case A: Check if assistant message has tool_calls without following tool results
         if current_message.get("role") == "assistant":

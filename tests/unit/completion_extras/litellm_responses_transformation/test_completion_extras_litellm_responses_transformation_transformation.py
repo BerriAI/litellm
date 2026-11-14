@@ -7058,3 +7058,85 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
     assert content == expected_content
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+def _lookup_call(call_id: str) -> dict[str, object]:
+    return {"id": call_id, "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+
+
+_BROKEN_TOOL_PAIRS: Final[tuple[dict[str, object], ...]] = (
+    {"role": "user", "content": "check both"},
+    {"role": "assistant", "content": None, "tool_calls": [_lookup_call("call_1"), _lookup_call("call_2")]},
+    {"role": "tool", "tool_call_id": "call_1", "content": "first"},
+    {"role": "tool", "tool_call_id": "call_9", "content": "orphan"},
+    {"role": "user", "content": "go on"},
+)
+
+
+def _tool_items(
+    messages: Sequence[Mapping[str, object]], optional_params: dict[str, object] | None = None
+) -> list[tuple[object, object]]:
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5",
+        messages=cast(list[AllMessageValues], [dict(message) for message in messages]),
+        optional_params=optional_params or {},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    return [(item.get("type"), item.get("call_id") or item.get("role")) for item in request["input"]]
+
+
+def test_transform_request_pairs_tool_calls_with_results_when_modify_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    assert _tool_items(_BROKEN_TOOL_PAIRS) == [
+        ("message", "user"),
+        ("function_call", "call_1"),
+        ("function_call", "call_2"),
+        ("function_call_output", "call_1"),
+        ("function_call_output", "call_2"),
+        ("message", "user"),
+    ]
+
+
+def test_transform_request_keeps_tool_pairs_without_modify_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "modify_params", False)
+
+    assert _tool_items(_BROKEN_TOOL_PAIRS) == [
+        ("message", "user"),
+        ("function_call", "call_1"),
+        ("function_call", "call_2"),
+        ("function_call_output", "call_1"),
+        ("function_call_output", "call_9"),
+        ("message", "user"),
+    ]
+
+
+def test_transform_request_keeps_tool_output_for_previous_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+    messages: Final = ({"role": "tool", "tool_call_id": "call_stored", "content": "result"},)
+
+    assert _tool_items(messages, {"previous_response_id": "resp_1"}) == [("function_call_output", "call_stored")]
+
+
+def test_transform_request_stub_keeps_tool_kind_and_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+    custom_call: Final = {"id": "call_c", "type": "custom", "custom": {"name": "apply_patch", "input": "x"}}
+    messages: Final = (
+        {"role": "user", "content": "patch and look"},
+        {"role": "assistant", "content": "", "tool_calls": [_lookup_call("call_1"), custom_call]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "rendered"},
+        {"role": "user", "content": [{"type": "text", "text": "images from the tool results"}]},
+        {"role": "user", "content": "next question"},
+    )
+
+    assert _tool_items(messages) == [
+        ("message", "user"),
+        ("function_call", "call_1"),
+        ("custom_tool_call", "call_c"),
+        ("function_call_output", "call_1"),
+        ("custom_tool_call_output", "call_c"),
+        ("message", "user"),
+        ("message", "user"),
+    ]
