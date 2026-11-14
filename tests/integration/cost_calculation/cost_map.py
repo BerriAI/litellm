@@ -115,6 +115,7 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "mode": "chat",
         "input_cost_per_token": 1.13e-06,
         "output_cost_per_token": 1.05e-06,
+        "cache_read_input_token_cost": 1.13e-07,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.005,
             "search_context_size_medium": 0.008,

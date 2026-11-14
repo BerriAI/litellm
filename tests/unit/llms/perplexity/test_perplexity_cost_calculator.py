@@ -93,6 +93,45 @@ class TestPerplexityCostCalculator:
             assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
             assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
+    @pytest.mark.parametrize(
+        ("cache_read_rate", "expected_cached_rate"),
+        [
+            pytest.param(1e-07, 1e-07, id="cache_read_rate_set"),
+            pytest.param(0.0, 0.0, id="cache_read_rate_zero"),
+            pytest.param(None, 1e-06, id="no_cache_read_rate_keeps_input_rate"),
+        ],
+    )
+    def test_fallback_bills_cached_prompt_tokens_at_the_cache_read_rate(
+        self, monkeypatch: pytest.MonkeyPatch, cache_read_rate: float | None, expected_cached_rate: float
+    ):
+        """
+        Regression: with no usage.cost in the response, cached prompt tokens were billed at
+        input_cost_per_token and the model's cache_read_input_token_cost was never read.
+        """
+        model: Final = "sonar-cached-prompt-test"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"perplexity/{model}",
+            {
+                "litellm_provider": "perplexity",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 5e-06,
+                **({} if cache_read_rate is None else {"cache_read_input_token_cost": cache_read_rate}),
+            },
+        )
+        usage: Final = Usage(
+            prompt_tokens=1000,
+            completion_tokens=10,
+            total_tokens=1010,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=900),
+        )
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(model=model, usage=usage)
+
+        assert math.isclose(prompt_cost, 100 * 1e-06 + 900 * expected_cached_rate, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 10 * 5e-06, rel_tol=1e-10)
+
     def test_uses_perplexity_provided_cost_when_available(self):
         """
         Test that when Perplexity provides pre-calculated cost in usage.cost.total_cost,
