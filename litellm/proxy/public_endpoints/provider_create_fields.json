@@ -960,6 +960,34 @@
     "default_model_placeholder": "clf_ai_gateway/glm-5.3"
   },
   {
+    "provider": "DULUS",
+    "provider_display_name": "Dulus",
+    "litellm_provider": "dulus",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://control.dulus.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "dulus/dulus-b-27b"
+  },
+  {
     "provider": "CLOUDFLARE",
     "provider_display_name": "Cloudflare",
     "litellm_provider": "cloudflare",
@@ -2523,7 +2551,10 @@
         "tooltip": "jwt_bearer_obo: on-behalf-of with the JWT bearer grant (Microsoft Entra). rfc8693: standard OAuth 2.0 token exchange.",
         "required": false,
         "field_type": "select",
-        "options": ["jwt_bearer_obo", "rfc8693"],
+        "options": [
+          "jwt_bearer_obo",
+          "rfc8693"
+        ],
         "default_value": "jwt_bearer_obo"
       },
       {

@@ -25641,6 +25641,179 @@
             "notes": "Nimble Search API pay-as-you-go list price: $5 per 1,000 searches, up to 100 results per search. Volume plans price differently."
         }
     },
+    "dulus/dulus-a-9b": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-b-27b": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-coder-30b": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-vl-72b": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-llama-3.2-11b-vision": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-x-397b": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-free-9b": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-free-7b": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-free-20b": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-glm-5.3": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-glm-5.2": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-deepseek-v4-flash-0731": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-kimi-k2.7-code": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-qwen3.8-27b": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-qwen2.5-coder-32b": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-llama-3.3-70b": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-gpt-oss-120b": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-gpt-oss-20b": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
+    "dulus/dulus-mistral-small-3.1-24b": {
+        "litellm_provider": "dulus",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://control.dulus.ai/v1/models"
+    },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",

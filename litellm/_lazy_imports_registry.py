@@ -290,6 +290,7 @@ LITELLM_ATTRIBUTES: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
         "OpenAIImageVariationConfig": (".llms.openai.image_variations.transformation", "OpenAIImageVariationConfig"),
         "DeepInfraConfig": (".llms.deepinfra.chat.transformation", "DeepInfraConfig"),
         "ClfAiGatewayConfig": (".llms.clf_ai_gateway.chat.transformation", "ClfAiGatewayConfig"),
+        "DulusConfig": (".llms.dulus.chat.transformation", "DulusConfig"),
         "DeepgramAudioTranscriptionConfig": (
             ".llms.deepgram.audio_transcription.transformation",
             "DeepgramAudioTranscriptionConfig",
