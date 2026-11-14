@@ -89,7 +89,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
 from litellm.llms.oss_decision import validate_oss_request
-from litellm.llms.pass_through.guardrail_translation.handler import FIELDS_SKIPPED_BY_FULL_PAYLOAD_SCAN
+from litellm.llms.pass_through.guardrail_translation.handler import skipped_by_full_payload_scan
 from litellm.llms.vertex_ai.common_utils import get_vertex_model_id_from_url
 from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._lazy_features import lazy_owned_routes
@@ -669,7 +669,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_call_id: str | None = None,
     ) -> dict:
         """
-        Filter out litellm params from the request body, except on configured pass-through routes
+        Filter out litellm params from the request body
         """
         from litellm.proxy.proxy_server import llm_router
 
@@ -690,12 +690,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             team_id=user_api_key_dict.team_id,
         )
 
-        configured_route: Final = request_dispatched_to_pass_through_endpoint(request)
-        litellm_param_names_in_body: Final = tuple(k for k in types_utils.all_litellm_params if k in _parsed_body)
-        litellm_keys_in_body: Final = MappingProxyType({k: _parsed_body[k] for k in litellm_param_names_in_body})
-        keys_dropped_from_body: Final = ("litellm_logging_obj",) if configured_route else litellm_param_names_in_body
-        for k in keys_dropped_from_body:
-            _parsed_body.pop(k, None)
+        litellm_keys_in_body: Final = MappingProxyType(
+            {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
+        )
         kept_out_of_litellm_params: Final = (
             _KEPT_OUT_OF_LITELLM_PARAMS
             if _key_or_team_allows_client_pricing_override(user_api_key_dict)
@@ -749,7 +746,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # charging a counter anyway would track spend that nothing can refuse, and
         # would attribute it to a budget the operator scoped to a LiteLLM model that
         # merely shares the name.
-        if not configured_route:
+        if not request_dispatched_to_pass_through_endpoint(request):
             _metadata["model_group"] = managed_model if isinstance(managed_model, str) else None
             _metadata["user_api_key_model_max_budget"] = user_api_key_dict.model_max_budget
             _metadata["user_api_key_team_model_max_budget"] = user_api_key_dict.team_model_max_budget
@@ -1256,27 +1253,26 @@ def _client_litellm_fields(
     )
 
 
-def _client_fields_pre_call_guardrails_scanned(
-    client_fields: Mapping[str, object],
-    body: Mapping[str, object],
+def _client_fields_safe_to_forward(
+    client_fields: Mapping[str, object] | None,
+    hooked_body: Mapping[str, object],
     has_pre_call_guardrails: Callable[[Mapping[str, object]], bool],
-) -> Mapping[str, object]:
-    if client_fields.keys().isdisjoint(FIELDS_SKIPPED_BY_FULL_PAYLOAD_SCAN) or not has_pre_call_guardrails(body):
+) -> Mapping[str, object] | None:
+    if (
+        client_fields is None
+        or not any(map(skipped_by_full_payload_scan, client_fields))
+        or not has_pre_call_guardrails(hooked_body)
+    ):
         return client_fields
-    return {k: v for k, v in client_fields.items() if k not in FIELDS_SKIPPED_BY_FULL_PAYLOAD_SCAN}
+    return {k: v for k, v in client_fields.items() if not skipped_by_full_payload_scan(k)}
 
 
 def _with_client_litellm_fields(
-    body: Mapping[str, object] | None,
-    client_fields: Mapping[str, object] | None,
-    has_pre_call_guardrails: Callable[[Mapping[str, object]], bool],
+    body: Mapping[str, object] | None, client_fields: Mapping[str, object] | None
 ) -> Mapping[str, object] | None:
     if body is None or client_fields is None:
         return body
-    return {
-        **{k: v for k, v in body.items() if k not in types_utils.all_litellm_params},
-        **_client_fields_pre_call_guardrails_scanned(client_fields, body, has_pre_call_guardrails),
-    }
+    return {**body, **client_fields}
 
 
 def _eu_jev_client_body(custom_llm_provider: str | None, body: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -1520,6 +1516,9 @@ async def pass_through_request(
         client_user_id: Final = _anthropic_user_id_to_forward(
             hooked_body, str(url), proxy_logging_obj.request_has_pre_call_guardrails
         )
+        forwarded_client_fields: Final = _client_fields_safe_to_forward(
+            client_litellm_fields, hooked_body, proxy_logging_obj.request_has_pre_call_guardrails
+        )
         kwargs = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(  # rebind-ok: pre-existing rebinding on a rename-only line
             user_api_key_dict=user_api_key_dict,
             _parsed_body=_parsed_body,
@@ -1689,9 +1688,7 @@ async def pass_through_request(
 
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
         upstream_body: Final = _with_anthropic_user_id(
-            _with_client_litellm_fields(
-                outgoing_body, client_litellm_fields, proxy_logging_obj.request_has_pre_call_guardrails
-            ),
+            _with_client_litellm_fields(outgoing_body, forwarded_client_fields),
             client_user_id,
             str(url),
         )
@@ -1984,10 +1981,7 @@ async def pass_through_request(
         )
 
         if response.status_code < 400 and response_body is not None and guardrails_to_run:
-            hook_data: Final = {
-                **{k: v for k, v in _json_object(_parsed_body).items() if k not in types_utils.all_litellm_params},
-                "metadata": {"guardrails": guardrails_to_run},
-            }
+            hook_data: Final = {**_json_object(_parsed_body), "metadata": {"guardrails": guardrails_to_run}}
             post_call_guardrail_data = hook_data
             response_body = await proxy_logging_obj.post_call_success_hook(
                 data=hook_data,

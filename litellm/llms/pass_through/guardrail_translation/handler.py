@@ -28,7 +28,9 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
-FIELDS_SKIPPED_BY_FULL_PAYLOAD_SCAN: Final = frozenset({"metadata", "litellm_metadata", "litellm_logging_obj"})
+
+def skipped_by_full_payload_scan(key: str) -> bool:
+    return key.startswith("_") or key in ("metadata", "litellm_metadata", "litellm_logging_obj")
 
 
 class PassThroughEndpointHandler(BaseTranslation):
@@ -92,7 +94,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         payload_to_check: Final = {
             k: v
             for k, v in without_server_streaming_classification(data).items()
-            if not k.startswith("_") and k not in FIELDS_SKIPPED_BY_FULL_PAYLOAD_SCAN
+            if not skipped_by_full_payload_scan(k)
         }
         verbose_proxy_logger.debug("PassThroughEndpointHandler: Using full payload for guardrail")
         return safe_dumps(payload_to_check)

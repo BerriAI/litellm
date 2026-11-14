@@ -11683,10 +11683,14 @@ async def test_configured_pass_through_forwards_the_client_body_unchanged(tmp_pa
             {"id": "rec-1", "tags": ["a"], "metadata": {"note": "x"}, "litellm_metadata": {"note": "y"}},
             {"id": "rec-1", "tags": ["a"]},
         ),
+        (
+            {"id": "rec-1", "_router_weights": {"note": "x"}},
+            {"id": "rec-1"},
+        ),
     ],
-    ids=["json-rpc", "metadata-the-guardrail-does-not-scan"],
+    ids=["json-rpc", "metadata", "underscore-litellm-param"],
 )
-async def test_configured_pass_through_with_a_pre_call_guardrail_forwards_only_client_fields_it_scans(
+async def test_configured_pass_through_with_a_pre_call_guardrail_forwards_no_client_field_the_scan_skips(
     tmp_path, monkeypatch, body, forwarded_body
 ):
     proxy: Final = await _boot_db_backed_proxy(
@@ -11713,6 +11717,52 @@ async def test_configured_pass_through_with_a_pre_call_guardrail_forwards_only_c
 
     assert response.status_code == 200
     assert [json.loads(request.content) for request in upstream_requests] == [forwarded_body]
+
+
+@pytest.mark.asyncio
+async def test_configured_pass_through_with_a_pre_call_guardrail_logs_no_hook_written_auth_metadata(
+    tmp_path, monkeypatch
+):
+    logged: Final = asyncio.get_running_loop().create_future()
+
+    class LoggedRequestRecorder(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            if not logged.done():
+                logged.set_result(
+                    (
+                        json.loads(kwargs["input"][0]["content"]),
+                        kwargs["litellm_params"]["proxy_server_request"]["body"],
+                    )
+                )
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {
+                "path": "/cfg-guarded",
+                "target": "http://upstream.test/guarded",
+                "auth": False,
+                "guardrails": {"route-guard": {}},
+            },
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CustomGuardrail(guardrail_name="route-guard", default_on=False, event_hook=GuardrailEventHooks.pre_call)],
+    )
+    monkeypatch.setattr(litellm, "_async_success_callback", [LoggedRequestRecorder()])
+    client_body: Final = {"jsonrpc": "2.0", "id": 7, "method": "skills/list", "params": {}}
+
+    response, _ = await _send_through_proxy("/cfg-guarded", {}, body=client_body)
+    logged_bodies: Final = await asyncio.wait_for(logged, timeout=10)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    assert response.status_code == 200
+    assert [{k: v for k, v in body.items() if k not in client_body} for body in logged_bodies] == [{}, {}]
 
 
 @pytest.mark.asyncio
