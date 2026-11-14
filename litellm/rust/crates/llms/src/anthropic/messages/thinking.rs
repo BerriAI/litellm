@@ -296,11 +296,34 @@ fn with_thinking_off(
     }
 }
 
-pub fn without_thinking(
+fn without_thinking(
     params: MessagesOptionalParams,
     context: &ThinkingContext,
 ) -> MessagesOptionalParams {
     with_thinking_off(params, None, context)
+}
+
+pub fn without_dropped_thinking(
+    request: MessagesRequest,
+    context: &ThinkingContext,
+) -> MessagesRequest {
+    if effort_decides_thinking(&request, &context.capabilities) {
+        return request;
+    }
+    MessagesRequest {
+        params: without_thinking(request.params, context),
+        ..request
+    }
+}
+
+fn effort_decides_thinking(
+    request: &MessagesRequest,
+    capabilities: &MessagesModelCapabilities,
+) -> bool {
+    matches!(request.params.reasoning_effort, Some(Recognized::Known(_)))
+        || (known_effort(request).is_some()
+            && !capabilities.supports_adaptive_thinking
+            && !supports_effort_param(capabilities))
 }
 
 fn translate_reasoning_effort(

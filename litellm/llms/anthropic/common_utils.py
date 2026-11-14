@@ -2234,6 +2234,27 @@ def drop_clear_thinking_edits_for_model(
     )
 
 
+def drop_clear_thinking_edits_for_dropped_thinking(
+    params: MutableMapping[str, object],  # mutable-ok: edits in place
+    model: str,
+    custom_llm_provider: str,
+) -> None:
+    if _effort_decides_thinking(params, model, custom_llm_provider):
+        return
+    drop_clear_thinking_edits_for_model(params, model, custom_llm_provider)
+
+
+def _effort_decides_thinking(params: Mapping[str, object], model: str, custom_llm_provider: str) -> bool:
+    output_config: Final = as_str_mapping(params.get("output_config"))
+    if output_config is None or output_config.get("effort") is None:
+        return False
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    return not AnthropicConfig.is_adaptive_thinking_model(
+        model, custom_llm_provider
+    ) and not AnthropicConfig.model_supports_effort_param(model, custom_llm_provider)
+
+
 def _has_clear_thinking_edit(params: Mapping[str, object]) -> bool:
     raw_context_management: Final = params.get("context_management")
     if not isinstance(raw_context_management, dict):

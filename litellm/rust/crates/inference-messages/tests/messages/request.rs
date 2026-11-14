@@ -328,6 +328,88 @@ async fn additional_drop_params_thinking_drops_the_clear_thinking_edit(
     assert_eq!(sent["context_management"]["edits"], expected_edits);
 }
 
+#[rstest]
+#[case::reasoning_effort_turns_thinking_back_on(
+    MessagesModelCapabilities {
+        supports_reasoning: true,
+        ..MessagesModelCapabilities::default()
+    },
+    json!({"reasoning_effort": "high"}),
+    json!({"type": "enabled", "budget_tokens": 2999}),
+    json!([{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}])
+)]
+#[case::legacy_effort_turns_thinking_back_on(
+    MessagesModelCapabilities {
+        supports_reasoning: true,
+        ..MessagesModelCapabilities::default()
+    },
+    json!({"output_config": {"effort": "high"}}),
+    json!({"type": "enabled", "budget_tokens": 2999}),
+    json!([{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}])
+)]
+#[case::native_effort_leaves_thinking_off(
+    MessagesModelCapabilities {
+        supports_reasoning: true,
+        supports_output_config: true,
+        effort_tiers: SupportedEffortTiers { high: true, ..SupportedEffortTiers::default() },
+        ..MessagesModelCapabilities::default()
+    },
+    json!({"output_config": {"effort": "high"}}),
+    Value::Null,
+    json!([{"type": "clear_tool_uses_20250919"}])
+)]
+#[case::adaptive_model_effort_leaves_thinking_off(
+    MessagesModelCapabilities {
+        supports_reasoning: true,
+        supports_adaptive_thinking: true,
+        ..MessagesModelCapabilities::default()
+    },
+    json!({"output_config": {"effort": "high"}}),
+    Value::Null,
+    json!([{"type": "clear_tool_uses_20250919"}])
+)]
+#[tokio::test]
+async fn additional_drop_params_thinking_leaves_the_edit_to_the_effort_translation(
+    call: MessagesCall,
+    #[case] capabilities: MessagesModelCapabilities,
+    #[case] effort: Value,
+    #[case] expected_thinking: Value,
+    #[case] expected_edits: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        shaping: MessagesShaping {
+            capabilities,
+            settings: MessagesSettings {
+                additional_drop_params: vec!["thinking".into()],
+                ..MessagesSettings::default()
+            },
+        },
+        ..with_fields(
+            call,
+            object(json!({
+                "max_tokens": 3000,
+                "thinking": {"type": "adaptive"},
+                "context_management": {"edits": [{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}]},
+            }))
+            .into_iter()
+            .chain(object(effort))
+            .collect(),
+        )
+    })
+    .await;
+
+    let sent = only_request(&upstream).await.json();
+    assert_eq!(
+        sent.get("thinking").cloned().unwrap_or(Value::Null),
+        expected_thinking
+    );
+    assert_eq!(sent["context_management"]["edits"], expected_edits);
+}
+
 fn sent_betas(request: &wiremock::Request) -> BetaSet {
     let [header] = <[&str; 1]>::try_from(request.header_values("anthropic-beta"))
         .unwrap_or_else(|values| panic!("expected one anthropic-beta header, got {values:?}"));

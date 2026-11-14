@@ -320,6 +320,25 @@ def test_body_params_drop_the_clear_thinking_edit_with_a_deployment_dropped_thin
     assert (body.get("thinking"), body["context_management"]) == (None, {"edits": kept_edits})
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_body_params_keep_the_clear_thinking_edit_when_the_effort_turns_thinking_back_on() -> None:
+    edits: Final = [_CLEAR_THINKING_EDIT, _CLEAR_TOOL_USES_EDIT]
+    request: Final[dict[str, object]] = {
+        "model": "claude-sonnet-4-5",
+        "custom_llm_provider": "anthropic",
+        "messages": [],
+        "max_tokens": 2048,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
+        "context_management": {"edits": edits},
+        "additional_drop_params": ["thinking"],
+    }
+
+    body: Final = messages_host.body_params(request, asynchronous=True)
+
+    assert body["context_management"] == {"edits": edits}
+
+
 @pytest.mark.parametrize(
     ("thread", "expected"),
     [

@@ -356,7 +356,10 @@ class AnthropicMessagesRequestUtils:
         filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
         if model is not None:
             from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-            from litellm.llms.anthropic.common_utils import AnthropicModelInfo, drop_clear_thinking_edits_for_model
+            from litellm.llms.anthropic.common_utils import (
+                AnthropicModelInfo,
+                drop_clear_thinking_edits_for_dropped_thinking,
+            )
 
             AnthropicConfig.maybe_drop_speed_param(
                 model=model,
@@ -380,7 +383,9 @@ class AnthropicMessagesRequestUtils:
                         output_key=param,
                     )
             if params.get("thinking") is not None and "thinking" not in valid_keys:
-                drop_clear_thinking_edits_for_model(filtered_params, model, custom_llm_provider or "anthropic")
+                drop_clear_thinking_edits_for_dropped_thinking(
+                    filtered_params, model, custom_llm_provider or "anthropic"
+                )
         if is_reasoning_auto_summary_enabled():
             thinking_param: Final = filtered_params.get("thinking")
             thinking_mapping: Final = as_str_mapping(thinking_param)

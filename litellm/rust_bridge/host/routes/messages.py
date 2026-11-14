@@ -41,7 +41,7 @@ from litellm.llms.anthropic.common_utils import (
     AnthropicError,
     AnthropicModelInfo,
     anthropic_pass_through_api_base,
-    drop_clear_thinking_edits_for_model,
+    drop_clear_thinking_edits_for_dropped_thinking,
     strip_provider_specific_fields_from_anthropic_messages,
 )
 from litellm.llms.anthropic.messages.native import handler
@@ -188,7 +188,7 @@ def _without_unthought_edits(
     if "thinking" not in dropped or request.get("thinking") is None:
         return params
     kept: Final = {**params}
-    drop_clear_thinking_edits_for_model(
+    drop_clear_thinking_edits_for_dropped_thinking(
         kept, str(request["model"]), optional_str(request.get("custom_llm_provider")) or "anthropic"
     )
     return kept

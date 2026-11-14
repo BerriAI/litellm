@@ -13,7 +13,7 @@ use litellm_host::interceptors::{
     Cost, ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext,
     ResponseHead, ResultSource, WireRequest,
 };
-use litellm_llms::anthropic::messages::thinking::without_thinking;
+use litellm_llms::anthropic::messages::thinking::without_dropped_thinking;
 use litellm_llms::base_llm::{
     auth::{Authenticated, ValidatedEnvironment, resolve_auth},
     messages::{
@@ -500,10 +500,7 @@ fn without_dropped_keys(
         request.params.thinking.is_some() && keys.iter().any(|key| key == "thinking");
     let trimmed = without_additional_drop_params(request, keys)?;
     Ok(if drops_sent_thinking {
-        MessagesRequest {
-            params: without_thinking(trimmed.params, &context.thinking),
-            ..trimmed
-        }
+        without_dropped_thinking(trimmed, &context.thinking)
     } else {
         trimmed
     })

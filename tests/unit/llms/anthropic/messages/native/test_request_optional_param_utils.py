@@ -207,6 +207,53 @@ def test_deployment_dropped_thinking_drops_the_clear_thinking_edit(
     assert result == {"context_management": {"edits": kept_edits}}
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "effort", "kept_edits"),
+    [
+        pytest.param(
+            "claude-sonnet-4-5",
+            {"output_config": {"effort": "high"}},
+            [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT],
+            id="effort-mapped-to-thinking-keeps-the-edit",
+        ),
+        pytest.param(
+            "claude-sonnet-4-5",
+            {"reasoning_effort": "high"},
+            [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT],
+            id="reasoning-effort-keeps-the-edit",
+        ),
+        pytest.param(
+            "claude-opus-4-5",
+            {"output_config": {"effort": "high"}},
+            [CLEAR_TOOL_USES_EDIT],
+            id="native-effort-takes-the-edit",
+        ),
+        pytest.param(
+            "claude-sonnet-4-6",
+            {"output_config": {"effort": "high"}},
+            [CLEAR_TOOL_USES_EDIT],
+            id="adaptive-model-effort-takes-the-edit",
+        ),
+    ],
+)
+def test_deployment_dropped_thinking_leaves_the_edit_to_the_effort_translation(
+    model: str, effort: dict[str, object], kept_edits: list[dict[str, str]]
+):
+    result: Final = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+        params={
+            "thinking": {"type": "adaptive"},
+            **effort,
+            "context_management": {"edits": [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT]},
+        },
+        model=model,
+        custom_llm_provider="anthropic",
+        additional_drop_params=("thinking",),
+    )
+
+    assert result == {**effort, "context_management": {"edits": kept_edits}}
+
+
 def test_param_missing_from_the_drop_list_still_raises_the_unsupported_param_400(monkeypatch):
     monkeypatch.setattr(litellm, "drop_params", False)
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="does not support top_p") as raised:
