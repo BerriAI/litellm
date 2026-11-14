@@ -216,6 +216,12 @@ def test_deployment_dropped_thinking_drops_the_clear_thinking_edit(
             id="reasoning-effort-keeps-the-edit",
         ),
         pytest.param(
+            "claude-sonnet-4-5",
+            {"reasoning_effort": "none"},
+            [CLEAR_TOOL_USES_EDIT],
+            id="reasoning-effort-none-takes-the-edit",
+        ),
+        pytest.param(
             "claude-opus-4-5",
             {"output_config": {"effort": "high"}},
             [CLEAR_TOOL_USES_EDIT],
@@ -226,6 +232,12 @@ def test_deployment_dropped_thinking_drops_the_clear_thinking_edit(
             {"output_config": {"effort": "high"}},
             [CLEAR_TOOL_USES_EDIT],
             id="adaptive-model-effort-takes-the-edit",
+        ),
+        pytest.param(
+            "github_copilot/claude-opus-4.8",
+            {"output_config": {"effort": "high"}},
+            [CLEAR_TOOL_USES_EDIT],
+            id="adaptive-model-without-native-effort-takes-the-edit",
         ),
     ],
 )

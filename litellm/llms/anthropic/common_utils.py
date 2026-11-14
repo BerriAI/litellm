@@ -1788,6 +1788,8 @@ def drop_clear_thinking_edits_for_model(
     model: str,
     custom_llm_provider: str,
 ) -> None:
+    if _requests_thinking(params):
+        return
     thinks_without_thinking_param: Final = any(
         AnthropicModelInfo.supports_model_capability(model, capability, custom_llm_provider)
         for capability in ("thinking_always_on", "thinking_on_by_default")
@@ -1806,7 +1808,7 @@ def drop_clear_thinking_edits_for_dropped_thinking(
     model: str,
     custom_llm_provider: str,
 ) -> None:
-    if _thinking_stays_on(params, model, custom_llm_provider):
+    if _effort_decides_thinking(params, model, custom_llm_provider):
         return
     drop_clear_thinking_edits_for_model(params, model, custom_llm_provider)
 
@@ -1816,11 +1818,17 @@ def _mapping_field(params: Mapping[str, object], key: str, field: str) -> object
     return OBJECT_MAPPING_ADAPTER.validate_python(value).get(field) if isinstance(value, dict) else None
 
 
-def _thinking_stays_on(params: Mapping[str, object], model: str, custom_llm_provider: str) -> bool:
-    if _mapping_field(params, "thinking", "type") not in (None, "disabled"):
-        return True
-    if isinstance(params.get("reasoning_effort"), str):
-        return True
+def _requests_thinking(params: Mapping[str, object]) -> bool:
+    match params:
+        case {"thinking": True | {"type": "enabled" | "adaptive"}}:
+            return True
+        case {"reasoning_effort": str() as effort}:
+            return effort != "none"
+        case _:
+            return False
+
+
+def _effort_decides_thinking(params: Mapping[str, object], model: str, custom_llm_provider: str) -> bool:
     if _mapping_field(params, "output_config", "effort") is None:
         return False
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig

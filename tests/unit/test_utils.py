@@ -3454,21 +3454,35 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
         }
 
     @pytest.mark.usefixtures("local_model_cost_map")
-    def test_deployment_dropped_thinking_keeps_the_edit_when_reasoning_effort_turns_thinking_on(self):
+    @pytest.mark.parametrize(
+        ("effort", "sent_thinking_type", "kept_thinking_edit"),
+        [
+            pytest.param({"reasoning_effort": "high"}, "enabled", True, id="reasoning-effort-turns-thinking-on"),
+            pytest.param({"reasoning_effort": "none"}, None, False, id="reasoning-effort-none-leaves-thinking-off"),
+            pytest.param({"output_config": {"effort": "high"}}, None, False, id="output-config-effort-adds-no-thinking"),
+        ],
+    )
+    def test_deployment_dropped_thinking_keeps_the_edit_only_when_reasoning_effort_turns_thinking_on(
+        self, effort: dict[str, object], sent_thinking_type: str | None, kept_thinking_edit: bool
+    ):
         from litellm.utils import get_optional_params
 
-        edits: Final = [{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}]
+        clear_thinking: Final = {"type": "clear_thinking_20251015"}
+        clear_tool_uses: Final = {"type": "clear_tool_uses_20250919"}
         result: Final = get_optional_params(
             model="claude-sonnet-4-5",
             custom_llm_provider="anthropic",
             thinking={"type": "enabled", "budget_tokens": 1024},
-            reasoning_effort="high",
-            context_management={"edits": edits},
+            context_management={"edits": [clear_thinking, clear_tool_uses]},
             max_tokens=8192,
             additional_drop_params=["thinking"],
+            **effort,
         )
 
-        assert (result["thinking"]["type"], result["context_management"]) == ("enabled", {"edits": edits})
+        assert ((result.get("thinking") or {}).get("type"), result["context_management"]) == (
+            sent_thinking_type,
+            {"edits": [clear_thinking, clear_tool_uses] if kept_thinking_edit else [clear_tool_uses]},
+        )
 
     def test_additional_drop_params_filters_for_bedrock(self):
         """
