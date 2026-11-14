@@ -1817,12 +1817,13 @@ _OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_outpu
 
 def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
     inference_config: Final = request_body.get("inferenceConfig")
+    generation_config: Final = request_body.get("generationConfig")
     candidates: Final = (
         *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
         inference_config.get("maxTokens") if isinstance(inference_config, Mapping) else None,
+        generation_config.get("maxOutputTokens") if isinstance(generation_config, Mapping) else None,
     )
     return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
-
 
 def _get_output_multiplier(request_body: dict) -> int:
     output_multiplier = 1
@@ -1830,6 +1831,14 @@ def _get_output_multiplier(request_body: dict) -> int:
         value = _to_int(request_body.get(key))
         if value is not None:
             output_multiplier = max(output_multiplier, value)
+
+    # Gemini candidateCount support
+    generation_config = request_body.get("generationConfig")
+    if isinstance(generation_config, Mapping):
+        cand_count = _to_int(generation_config.get("candidateCount"))
+        if cand_count is not None:
+            output_multiplier = max(output_multiplier, cand_count)
+
     return output_multiplier
 
 
