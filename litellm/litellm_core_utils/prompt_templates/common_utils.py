@@ -1004,12 +1004,19 @@ def _is_json_object(
     return isinstance(value, dict)
 
 
-def _mapping_or_empty(value: object) -> Mapping[str, object]:
-    return value if _is_json_object(value) else {}
+class MalformedDefsError(ValueError):
+    pass
+
+
+def _defs_object(node: Mapping[str, object], key: str) -> Mapping[str, object]:
+    value: Final = node.get(key, {})
+    if not _is_json_object(value):
+        raise MalformedDefsError(f"{key} is a {type(value).__name__}, not a JSON object")
+    return value
 
 
 def _local_defs(node: Mapping[str, object]) -> Mapping[str, object]:
-    return dict(chain.from_iterable(_mapping_or_empty(node.get(key)).items() for key in _DEFS_KEYS))
+    return dict(chain.from_iterable(_defs_object(node, key).items() for key in _DEFS_KEYS))
 
 
 def _scope_with_local_defs(scope: _DefsScope, local_defs: Mapping[str, object]) -> _DefsScope:
@@ -1082,8 +1089,10 @@ def unpack_defs(
 
                 target_schema = _resolve_in_scope(active_defs, ref_name)
                 # Unknown reference – leave untouched
-                if not _is_json_object(target_schema):
+                if target_schema is None:
                     continue
+                if not _is_json_object(target_schema):
+                    raise MalformedDefsError(f"$ref {ref!r} points at a {type(target_schema).__name__}, not a schema")
 
                 if max_inlined_bytes is not None:
                     inlined_bytes += _estimate_json_bytes(target_schema)
