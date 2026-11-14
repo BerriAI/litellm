@@ -11,6 +11,7 @@ Per OpenAPI spec (https://ai.google.dev/static/api/interactions.openapi.json):
 
 import types
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -117,6 +118,13 @@ class BaseInteractionsAPIConfig(ABC):
         if api_base is None:
             raise ValueError("api_base is required")
         return api_base
+
+    def transform_top_level_request_fields(
+        self,
+        request_fields: Mapping[str, object] | None,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object] | None:
+        return request_fields
 
     @abstractmethod
     def transform_request(
