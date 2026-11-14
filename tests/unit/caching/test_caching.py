@@ -495,6 +495,20 @@ def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token()
     assert cache.get_cache_key(**request, continuation_token="") == first_segment_key
 
 
+def test_cache_key_tells_apart_requests_that_forward_different_payload_fields() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:111111111111:runtime/docs_agent",
+        "messages": [{"role": "user", "content": "Summarize the document"}],
+        "forward_payload_fields": ["context"],
+    }
+
+    first_document_key: Final = cache.get_cache_key(**request, context={"document": "Q3 revenue grew 4 percent."})
+
+    assert cache.get_cache_key(**request, context={"document": "Q4 revenue fell 2 percent."}) != first_document_key
+    assert cache.get_cache_key(**request, context={"document": "Q3 revenue grew 4 percent."}) == first_document_key
+
+
 def test_cache_key_tells_apart_requests_that_ask_for_token_ids() -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     request: Final = {"model": "hosted_vllm/qwen3", "messages": [{"role": "user", "content": "count"}]}

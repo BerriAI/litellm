@@ -571,6 +571,8 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # Deployment opt-in: a caller-supplied false would switch off identity
     # forwarding and let the caller choose the `user` Fireworks sees.
     "fireworks_forward_user_id",
+    # Deployment opt-in: a caller-supplied list would copy deployment-set params into the AgentCore payload.
+    "forward_payload_fields",
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",
