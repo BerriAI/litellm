@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast
+from urllib.parse import urlparse
 
 from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -457,6 +458,7 @@ class OpenTelemetryConfig:
 
 
 class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
+    logs_every_failed_attempt: ClassVar[bool] = True
     wants_failed_prompt_token_estimate: ClassVar[bool] = True
 
     def __init__(
@@ -1347,7 +1349,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         return _otel_internal
 
-    def _emit_once(self, kwargs: dict, *scope: object) -> bool:
+    def _emit_once(self, kwargs: dict[str, object], *scope: object) -> bool:
         """Return True the first time this handler is asked to emit a span
         for the given (handler, scope) on this kwargs; False on repeats.
 
@@ -1381,6 +1383,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         dedupe_key: Final = (
             self.__class__.__name__,
             id(self),
+            kwargs.get("current_attempt_api_call_start_time") if scope == ("failure",) else None,
             *(_freeze_for_dedupe(part) for part in scope),
         )
         if spans_logged.get(dedupe_key) is True:
@@ -2495,6 +2498,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
             if standard_logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
+
+            api_base: Final = _JSON_OBJECT.validate_python(standard_logging_payload).get("api_base")
+            destination: Final = urlparse(api_base if isinstance(api_base, str) else "")
+            if destination.hostname:
+                span.set_attribute("server.address", destination.hostname)
+            if destination.port:
+                span.set_attribute("server.port", destination.port)
 
             # https://github.com/open-telemetry/semantic-conventions/blob/main/model/registry/gen-ai.yaml
             # Following Conventions here: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/llm-spans.md

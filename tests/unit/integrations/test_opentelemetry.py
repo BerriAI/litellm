@@ -5612,6 +5612,29 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         )
         self.assertEqual(litellm_spans[0].status.status_code, StatusCode.ERROR)
 
+    def test_handle_failure_emits_each_attempt_with_its_destination(self) -> None:
+        from opentelemetry.trace import StatusCode
+
+        from litellm.integrations.opentelemetry import LITELLM_REQUEST_SPAN_NAME
+
+        exporter: Final = InMemorySpanExporter()
+        provider: Final = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        otel: Final = OpenTelemetry(tracer_provider=provider)
+        kwargs: Final = self._build_kwargs(exception=True)
+        start: Final = datetime(2026, 1, 1)
+        for index in range(3):
+            marker: Final = start + timedelta(seconds=index)
+            kwargs["current_attempt_api_call_start_time"] = marker
+            kwargs["standard_logging_object"]["api_base"] = f"https://region-{index}.example:{8443 + index}/v1"
+            otel._handle_failure(kwargs, None, marker, marker + timedelta(milliseconds=500))
+            otel._handle_failure(kwargs, None, marker, marker + timedelta(milliseconds=500))
+        spans: Final = tuple(s for s in exporter.get_finished_spans() if s.name == LITELLM_REQUEST_SPAN_NAME)
+        assert len(spans) == 3
+        assert [s.attributes["server.address"] for s in spans] == [f"region-{i}.example" for i in range(3)]
+        assert [s.attributes["server.port"] for s in spans] == [8443, 8444, 8445]
+        assert all(s.status.status_code is StatusCode.ERROR for s in spans)
+
     def test_create_guardrail_span_dedupes_across_lifecycle_entrypoints(self):
         """``_create_guardrail_span`` is called from post-call-success hook,
         ``_handle_success``, and ``_handle_failure``. A single guardrail
