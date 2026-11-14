@@ -476,7 +476,10 @@ async def acreate_realtime_translation_client_secret(
         timeout=timeout or request_timeout,
         provider_config=provider_config,
         model=model_name,
-        extra_headers=resolved_extra_headers,
+        extra_headers={
+            **(resolved_extra_headers or {}),
+            **_realtime_organization_header(custom_llm_provider, resolved_extra_headers, litellm_params.organization),
+        },
         client=client if isinstance(client := kwargs.get("client"), (HTTPHandler, AsyncHTTPHandler)) else None,
         api_version=litellm_params.api_version,
     )

@@ -1316,6 +1316,33 @@ async def test_realtime_http_routes_keep_the_organization_off_other_providers(
     assert "OpenAI-Organization" not in gateway.headers
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "extra_headers", "expected_organization"),
+    [
+        pytest.param("openai", None, "org-deployment", id="deployment-organization"),
+        pytest.param("openai", {"openai-organization": "org-caller"}, "org-caller", id="caller-header-wins"),
+        pytest.param("azure", None, None, id="azure-gets-no-organization"),
+    ],
+)
+async def test_translation_client_secret_sends_the_deployment_organization(
+    custom_llm_provider: str, extra_headers: Mapping[str, str] | None, expected_organization: str | None
+) -> None:
+    gateway: Final = _GatewayThatRecordsTheHeaders()
+    await realtime_main.acreate_realtime_translation_client_secret.__wrapped__(
+        model="gpt-realtime-translate",
+        custom_llm_provider=custom_llm_provider,
+        api_base="https://realtime-gateway.example",
+        api_key="fake-key",
+        api_version="2025-08-28",
+        organization="org-deployment",
+        extra_headers=extra_headers,
+        litellm_logging_obj=_realtime_http_logging("translation_client_secrets"),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+    assert gateway.headers.get("OpenAI-Organization") == expected_organization
+
+
 class _ClientWebSocketWithHeaders:
     def __init__(self, headers: tuple[tuple[bytes, bytes], ...]) -> None:
         self.scope: Final = {"headers": headers}
