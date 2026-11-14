@@ -4306,6 +4306,125 @@ def test_add_litellm_metadata_groups_opencode_turns_into_one_session():
         assert turn["litellm_trace_id"] == OPENCODE_SESSION_ID
 
 
+def test_add_litellm_metadata_groups_opencode_turns_with_session_affinity_only():
+    turns: Final = [{"metadata": {}}, {"metadata": {}}]
+    headers: Final = {"x-session-affinity": OPENCODE_SESSION_ID, "User-Agent": "opencode/1.18.28"}
+    for turn in turns:
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=headers, data=turn, _metadata_variable_name="metadata"
+        )
+
+    for turn in turns:
+        assert turn["metadata"]["session_id"] == OPENCODE_SESSION_ID
+        assert turn["metadata"]["trace_id"] == OPENCODE_SESSION_ID
+        assert turn["litellm_session_id"] == OPENCODE_SESSION_ID
+        assert turn["litellm_trace_id"] == OPENCODE_SESSION_ID
+
+
+def test_get_chain_id_from_headers_bare_session_id_extracts_valid_value():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"x-session-id": OPENCODE_SESSION_ID}) == OPENCODE_SESSION_ID
+    assert get_chain_id_from_headers({"X-Session-Id": OPENCODE_SESSION_ID}) == OPENCODE_SESSION_ID
+
+
+def test_get_chain_id_from_headers_session_affinity_extracts_when_session_id_absent():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"x-session-affinity": OPENCODE_SESSION_ID}) == OPENCODE_SESSION_ID
+    assert get_chain_id_from_headers({"X-Session-Affinity": OPENCODE_SESSION_ID}) == OPENCODE_SESSION_ID
+
+
+def test_get_chain_id_from_headers_prefers_session_id_over_session_affinity():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert (
+        get_chain_id_from_headers(
+            {
+                "x-session-id": "ses_primary_12345678",
+                "x-session-affinity": "ses_fallback_87654321",
+            }
+        )
+        == "ses_primary_12345678"
+    )
+    assert (
+        get_chain_id_from_headers(
+            {
+                "x-session-id": "short",
+                "x-session-affinity": OPENCODE_SESSION_ID,
+            }
+        )
+        == OPENCODE_SESSION_ID
+    )
+
+
+@pytest.mark.parametrize("value", ["short", "has spaces!!", "", "invalid/slash"])
+def test_get_chain_id_from_headers_session_affinity_ignores_implausible_value(value: str):
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"x-session-affinity": value}) is None
+
+
+def test_get_chain_id_from_headers_missing_session_headers():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers(None) is None
+    assert get_chain_id_from_headers({}) is None
+    assert get_chain_id_from_headers({"authorization": "Bearer token", "user-agent": "curl/7.68.0"}) is None
+
+
+@pytest.mark.asyncio
+async def test_session_affinity_header_pins_consecutive_requests_with_least_busy():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "affinity-model",
+                "litellm_params": {"model": "openai/test-1", "api_key": "fake-1", "mock_response": "resp-1"},
+                "model_info": {"id": "deploy-1"},
+            },
+            {
+                "model_name": "affinity-model",
+                "litellm_params": {"model": "openai/test-2", "api_key": "fake-2", "mock_response": "resp-2"},
+                "model_info": {"id": "deploy-2"},
+            },
+            {
+                "model_name": "affinity-model",
+                "litellm_params": {"model": "openai/test-3", "api_key": "fake-3", "mock_response": "resp-3"},
+                "model_info": {"id": "deploy-3"},
+            },
+        ],
+        routing_strategy="least-busy",
+        optional_pre_call_checks=["session_affinity", "deployment_affinity"],
+    )
+    headers: Final = {"x-session-affinity": OPENCODE_SESSION_ID, "User-Agent": "opencode/1.18.28"}
+    try:
+        turn_data: Final = {"metadata": {}}
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=headers, data=turn_data, _metadata_variable_name="metadata"
+        )
+        first_response: Final = await router.acompletion(
+            model="affinity-model",
+            messages=[{"role": "user", "content": "turn 0"}],
+            metadata=turn_data["metadata"],
+        )
+        pinned_id: Final = first_response._hidden_params["model_id"]
+
+        consecutive_responses: Final = tuple(
+            [
+                await router.acompletion(
+                    model="affinity-model",
+                    messages=[{"role": "user", "content": f"turn {i}"}],
+                    metadata=turn_data["metadata"],
+                )
+                for i in range(1, 6)
+            ]
+        )
+        assert len(consecutive_responses) == 5
+        assert all(resp._hidden_params["model_id"] == pinned_id for resp in consecutive_responses)
+    finally:
+        router.retire()
+
+
 @pytest.mark.parametrize("value", ["short", "has spaces!!", ""])
 def test_get_chain_id_from_headers_bare_session_id_ignores_implausible_value(value: str):
     from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers

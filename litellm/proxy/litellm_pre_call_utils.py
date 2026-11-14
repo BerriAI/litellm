@@ -1100,14 +1100,17 @@ def _extract_bare_session_id_from_headers(
     normalized: Mapping[str, str],
 ) -> str | None:
     """
-    Read a vendor-less ``x-session-id`` header (opencode sends ``X-Session-Id``
-    alongside ``x-session-affinity`` on every turn of a session). Checked after
-    the ``x-<vendor>-session-id`` scan so a more specific header such as
+    Read a vendor-less ``x-session-id`` or ``x-session-affinity`` header (opencode sends
+    ``x-session-affinity``, occasionally alongside ``X-Session-Id``, on every turn of a session).
+    Checked after the ``x-<vendor>-session-id`` scan so a more specific header such as
     opencode's ``x-parent-session-id`` on subagent calls keeps winning.
     """
     value: Final = normalized.get("x-session-id")
     if isinstance(value, str) and _SESSION_ID_VALUE_RE.match(value):
         return value
+    fallback: Final = normalized.get("x-session-affinity")
+    if isinstance(fallback, str) and _SESSION_ID_VALUE_RE.match(fallback):
+        return fallback
     return None
 
 
@@ -1121,7 +1124,7 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     3. Any ``x-<vendor>-session-id`` header whose value looks like a session id
        (alphanumeric / UUID, at least 8 chars).  E.g. ``x-claude-code-session-id``.
     4. Codex's unprefixed ``session-id`` / ``thread-id``, for Codex callers only.
-    5. A vendor-less ``x-session-id`` header (e.g. opencode), same value rules.
+    5. A vendor-less ``x-session-id`` or ``x-session-affinity`` header (e.g. opencode), same value rules.
 
     Header keys are matched case-insensitively so this works with raw header
     dicts from any transport.
