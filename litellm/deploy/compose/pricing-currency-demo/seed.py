@@ -57,7 +57,10 @@ SYNTHETIC_TRAFFIC: Final = (
 )
 
 
-def _call(method: str, path: str, key: str, body: object | None = None) -> tuple[int, dict[str, object], dict[str, str]]:
+Response = tuple[int, dict[str, object], dict[str, str]]
+
+
+def _call(method: str, path: str, key: str, body: object | None = None) -> Response:
     request: Final = urllib.request.Request(
         f"{PROXY}{path}",
         method=method,

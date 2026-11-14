@@ -304,7 +304,8 @@ def test_the_source_view_round_trips_to_the_same_usd_prices_after_an_unrelated_e
     edited: Final = _normalized({**params, "rpm": 10}, {k: v for k, v in info.items() if k != USD_PRICING})
     assert edited.litellm_params["input_cost_per_token"] == USD_INPUT
     assert edited.model_info["output_cost_per_token"] == USD_OUTPUT
-    assert edited.source is not None and edited.source.revision == first.source.revision  # pyright: ignore[reportOptionalMemberAccess]  # asserted above
+    assert edited.source is not None and first.source is not None
+    assert edited.source.revision == first.source.revision
 
 
 def test_configuration_errors_ignore_legacy_usd_and_read_back_projection() -> None:
