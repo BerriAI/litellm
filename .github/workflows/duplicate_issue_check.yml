@@ -13,9 +13,9 @@ on:
       - .github/workflows/duplicate_issue_check.yml
       - .github/prompts/duplicate-issue-check.md
       - .github/prompts/duplicate-issue-check.schema.json
-      - scripts/flag-duplicate-issue.ts
-      - scripts/flag-duplicate-issue.test.ts
-      - scripts/auto-close-duplicates.ts
+      - litellm/scripts/flag-duplicate-issue.ts
+      - litellm/scripts/flag-duplicate-issue.test.ts
+      - litellm/scripts/auto-close-duplicates.ts
 
 permissions: {}
 
@@ -38,7 +38,7 @@ jobs:
           bun-version: "1.4.0"
 
       - name: Test the flag step
-        run: bun test scripts/flag-duplicate-issue.test.ts
+        run: bun test litellm/scripts/flag-duplicate-issue.test.ts
 
   classify:
     if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
@@ -125,7 +125,7 @@ jobs:
       - name: Checkout scripts
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          sparse-checkout: scripts
+          sparse-checkout: litellm/scripts
           persist-credentials: false
 
       - name: Setup Bun
@@ -134,7 +134,7 @@ jobs:
           bun-version: "1.4.0"
 
       - name: Comment and label
-        run: bun run scripts/flag-duplicate-issue.ts
+        run: bun run litellm/scripts/flag-duplicate-issue.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERDICT: ${{ needs.classify.outputs.verdict }}
