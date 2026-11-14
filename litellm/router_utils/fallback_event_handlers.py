@@ -599,6 +599,28 @@ def _resolved_a_specific_chain(
     return generic_idx is None or resolved is not fallbacks[generic_idx]["*"]
 
 
+def get_fallback_chain_for_lookup_groups(
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
+    lookup_groups: tuple[str, ...],
+) -> tuple[str, list[str]] | None:  # mutable-ok: mirrors get_fallback_model_group's contract
+    """The chain a request follows, with the lookup group that owns it.
+
+    The owner is "*" when the chain comes from the generic entry, which applies to every
+    model group rather than to one of the lookup groups. A pre-routing hook makes the tier
+    the first lookup group, so the owner is not always the group the caller requested.
+    """
+    results: Final = tuple(
+        _get_fallback_model_group_with_owner(fallbacks=fallbacks, model_group=group) for group in lookup_groups
+    )
+    specific: Final = next((entry for entry in results if entry[0] not in (None, "*")), None)
+    resolved: Final = (
+        specific if specific is not None else next((entry for entry in results if entry[1] is not None), None)
+    )
+    if resolved is None or resolved[0] is None or resolved[1] is None:
+        return None
+    return resolved[0], resolved[1]
+
+
 def get_fallback_model_group_for_lookup_groups(
     fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
     lookup_groups: tuple[str, ...],
@@ -629,36 +651,56 @@ def get_fallback_model_group(
     - provider-prefixed model group match
     - generic fallback
     """
-    generic_fallback_idx: int | None = None
-    stripped_model_fallback: list[str] | None = None
-    fallback_model_group: list[str] | None = None
+    _, chain, generic_idx = _get_fallback_model_group_with_owner(fallbacks, model_group)
+    return chain, generic_idx
+
+
+def _get_fallback_model_group_with_owner(
+    fallbacks: Sequence[Mapping[str, list[str]] | str],  # mutable-ok: accepts the existing fallback configuration
+    model_group: str,
+) -> tuple[str | None, list[str] | None, int | None]:  # mutable-ok: retains the router's fallback list contract
+    indexed: Final = tuple(enumerate(fallbacks))
+    exact: Final = next(
+        (
+            (index, item)
+            for index, item in indexed
+            if isinstance(item, dict) and item and next(iter(item)) == model_group
+        ),
+        None,
+    )
+    preceding: Final = indexed[: exact[0]] if exact is not None else indexed
+    generic_idx: Final = next(
+        (index for index, item in reversed(preceding) if isinstance(item, dict) and next(iter(item), None) == "*"),
+        None,
+    )
+    if exact is not None:
+        return model_group, exact[1][model_group], generic_idx
+    plain_target: Final = next((item for _, item in reversed(preceding) if isinstance(item, str)), None)
+    if plain_target is not None:
+        return plain_target, [plain_target], generic_idx
     fallback_keys: Final = tuple(next(iter(item)) for item in fallbacks if isinstance(item, dict) and item)
     prefixed_model_group: Final = _provider_prefixed_model_group(model_group, fallback_keys)
-    ## check for specific model group-specific fallbacks
-    for idx, item in enumerate(fallbacks):
-        if isinstance(item, dict):
-            if not item:
-                continue  # an empty entry names no group: the next entries still apply
-            fallback_key = next(iter(item))
-            if fallback_key == model_group:  # check exact match
-                fallback_model_group = item[model_group]
-                break
-            elif fallback_key == prefixed_model_group or _check_stripped_model_group(
-                model_group=model_group, fallback_key=fallback_key
-            ):  # check generic fallback
-                stripped_model_fallback = item[fallback_key]
-            elif fallback_key == "*":  # check generic fallback
-                generic_fallback_idx = idx
-        elif isinstance(item, str):
-            fallback_model_group = [item]
-    ## if none, check for generic fallback
-    if fallback_model_group is None:
-        if stripped_model_fallback is not None:
-            fallback_model_group = stripped_model_fallback
-        elif generic_fallback_idx is not None:
-            fallback_model_group = fallbacks[generic_fallback_idx]["*"]
-
-    return fallback_model_group, generic_fallback_idx
+    matching: Final = next(
+        (
+            (next(iter(item)), item)
+            for _, item in reversed(indexed)
+            if isinstance(item, dict)
+            and item
+            and (
+                next(iter(item)) == prefixed_model_group
+                or _check_stripped_model_group(model_group=model_group, fallback_key=next(iter(item)))
+            )
+        ),
+        None,
+    )
+    if matching is not None:
+        key, entry = matching
+        return key, entry[key], generic_idx
+    if generic_idx is not None:
+        generic: Final = fallbacks[generic_idx]
+        if isinstance(generic, Mapping):
+            return "*", generic["*"], generic_idx
+    return None, None, None
 
 
 def _resolved_fallback_chain(entries: Sequence[object], lookup_groups: tuple[str, ...]) -> Sequence[object]:

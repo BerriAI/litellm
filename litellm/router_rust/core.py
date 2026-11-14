@@ -61,7 +61,9 @@ from litellm.litellm_core_utils.core_helpers import (
     without,
 )
 from litellm.litellm_core_utils.routing_common_utils import (
+    compact_fallback_error_detail,
     format_content_policy_fallback_hint,
+    format_context_window_fallback_hint,
     format_fallback_outcome_message,
     format_no_fallback_group_message,
     get_request_team_id,
@@ -4868,7 +4870,8 @@ class _Driver:
                 at = level if isinstance(level, int) else 0
                 _log_level_traceback(self._level_errors.get(at, self._last_error))
                 self._explains_failure = self._explains_failure or at == self._base_level
-                self._hint_level_failure(self._level_errors.get(at, self._last_error), str(event.get("model")))
+                if at == self._base_level == 0:
+                    self._hint_level_failure(self._level_errors.get(at, self._last_error), str(event.get("model")))
                 continue
             if event.get("kind") == "fallback_done":
                 level = event.get("level")
@@ -5565,9 +5568,6 @@ class _Driver:
         return primary
 
     def _hint_level_failure(self, error: BaseException | None, model: str) -> None:
-        """A level that reaches its fallback handling on a context-window or content-policy error
-        with no list of its own appends the hint to set one, before any hop runs, as every level of
-        the Python walk does: a stream's failure event, still queued then, reads the hint."""
         from litellm.router_utils.fallback_event_handlers import check_non_standard_fallback_format
 
         if (
@@ -5587,19 +5587,18 @@ class _Driver:
     def _kind_hint(self, error: BaseException, model: str, fallbacks: object) -> str:
         """The hint a context-window or content-policy error gets when its own list is unset."""
         import litellm.exceptions as litellm_exceptions
+        from litellm.router_utils.fallback_event_handlers import fallback_lookup_groups
 
         walked: Final = self._core._walked_fallbacks  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        lookup: Final = fallback_lookup_groups(self._request, model)
         if isinstance(error, litellm_exceptions.ContextWindowExceededError):
             if self._request.get("context_window_fallbacks", walked["context_window_fallbacks"]) is not None:
                 return ""
-            return (
-                f"\nmodel={model}. context_window_fallbacks=None. fallbacks={fallbacks}.\n\n"
-                "Set 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks"
-            )
+            return "\n" + format_context_window_fallback_hint(model, None, fallbacks, lookup)
         if isinstance(error, litellm_exceptions.ContentPolicyViolationError):
             if self._request.get("content_policy_fallbacks", walked["content_policy_fallbacks"]) is not None:
                 return ""
-            return "\n" + format_content_policy_fallback_hint(model, None, fallbacks)  # pyright: ignore[reportArgumentType]  # the list as configured
+            return "\n" + format_content_policy_fallback_hint(model, None, lookup)
         return ""
 
     def _explanation(self, primary: BaseException, model: str) -> str:
@@ -5651,7 +5650,7 @@ class _Driver:
 
     def _fallback_detail(self, primary: BaseException) -> str:
         """``run_async_fallback`` raises its last hop's error, or the primary's when no hop ran."""
-        return truncate_fallback_error_detail(redact_string(str(self._level_errors.get(1, primary))))
+        return compact_fallback_error_detail(redact_string(str(self._level_errors.get(1, primary))))
 
 
 __all__ = [

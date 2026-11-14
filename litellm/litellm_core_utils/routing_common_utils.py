@@ -3,7 +3,7 @@ import json
 from collections.abc import Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import TYPE_CHECKING, Final, TypeVar, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
-from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
+from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS, ROUTER_FALLBACK_GROUP_LISTING_MAX_GROUPS
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -230,13 +230,29 @@ def truncate_fallback_error_detail(detail: str) -> str:
     return f"{detail[:ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS]}... [truncated {dropped} characters]"
 
 
+def compact_fallback_error_detail(detail: str) -> str:
+    compacted: Final = " ".join(line.strip() for line in detail.splitlines() if line.strip())
+    return truncate_fallback_error_detail(compacted)
+
+
+def _configured_groups_text(configured: Sequence[str]) -> str:
+    """Name a few configured model groups, never the whole config.
+
+    This is one sentence of an error a caller reads; listing every group makes the message
+    grow with the size of the router config instead of with the request.
+    """
+    if not configured:
+        return " No fallbacks are configured."
+    listed: Final = configured[:ROUTER_FALLBACK_GROUP_LISTING_MAX_GROUPS]
+    remainder: Final = len(configured) - len(listed)
+    return f" Fallbacks are configured for: {', '.join(listed)}" + (f" and {remainder} more." if remainder else ".")
+
+
 def format_no_fallback_group_message(lookup_groups: Sequence[str], fallbacks: Sequence[Mapping[str, object]]) -> str:
     """User-facing explanation appended when a request fails and no fallback chain matches its model group."""
     requested: Final = " -> ".join(lookup_groups)
     configured: Final = tuple(dict.fromkeys(key for entry in fallbacks for key in entry))
-    configured_text: Final = (
-        f" Fallbacks are configured for: {', '.join(configured)}." if configured else " No fallbacks are configured."
-    )
+    configured_text: Final = _configured_groups_text(configured)
     return (
         f"\n\nLiteLLM: model group '{requested}' failed with the error above and no fallback model group was found "
         f"for it, so the request was not retried on another model.{configured_text}"
@@ -318,21 +334,67 @@ def format_fallback_outcome_message(
     return f"{lead} Fallback model group(s) configured: {targets}."
 
 
-def format_content_policy_fallback_hint(
-    model_group: str | None, content_policy_fallbacks: object, fallbacks: object
-) -> str:
-    return (
-        f"model={model_group}. content_policy_fallback={mask_sensitive_structure(content_policy_fallbacks)}. "
-        f"fallbacks={mask_sensitive_structure(fallbacks)}.\n\nSet 'content_policy_fallback' - "
-        "https://docs.litellm.ai/docs/routing#fallbacks"
-    )
-
-
 def _as_fallback_entries(fallbacks: object) -> tuple[Mapping[str, object], ...] | None:
     try:
         return _FALLBACK_ENTRIES_ADAPTER.validate_python(fallbacks)
     except ValidationError:
         return None
+
+
+def format_chain_for_lookup_groups(config_name: str, configured: object, lookup_groups: Sequence[str]) -> str:
+    """Name only the chain a request would follow, never the whole fallback config.
+
+    Every fallback hop appends its own hint, so dumping each configured group repeats the
+    entire config per hop and pushes the actual failure out of the message.
+    """
+    if configured is None:
+        return f"{config_name} is not set"
+    entries: Final = _as_fallback_entries(configured)
+    if entries is None or not lookup_groups:
+        return f"{config_name}={mask_sensitive_structure(configured)}"
+    from litellm.router_utils.fallback_event_handlers import get_fallback_chain_for_lookup_groups
+
+    resolved: Final = get_fallback_chain_for_lookup_groups(
+        fallbacks=cast("Sequence[Mapping[str, list[str]]]", entries),  # cast-ok: only keys and values are read
+        lookup_groups=tuple(lookup_groups),
+    )
+    if resolved is None:
+        configured_groups: Final = frozenset(chain.from_iterable(entries))
+        others: Final = len(configured_groups.difference(lookup_groups))
+        searched: Final = " -> ".join(repr(group) for group in lookup_groups)
+        return f"{config_name} has no chain for {searched}" + (
+            f" ({others} other model groups are configured)" if others else ""
+        )
+    owner, fallback_chain = resolved
+    return f"{config_name}: {owner!r} -> {mask_sensitive_structure(fallback_chain)}"
+
+
+def format_content_policy_fallback_hint(
+    model_group: str | None,
+    content_policy_fallbacks: object,
+    lookup_groups: Sequence[str],
+) -> str:
+    chain: Final = format_chain_for_lookup_groups("content_policy_fallbacks", content_policy_fallbacks, lookup_groups)
+    return (
+        f"model={model_group}. {chain}. "
+        "To retry content-policy errors on another model, set content_policy_fallbacks for this model group - "
+        "https://docs.litellm.ai/docs/routing#fallbacks"
+    )
+
+
+def format_context_window_fallback_hint(
+    model_group: str | None,
+    context_window_fallbacks: object,
+    fallbacks: object,
+    lookup_groups: Sequence[str],
+) -> str:
+    return (
+        f"model={model_group}. "
+        f"{format_chain_for_lookup_groups('context_window_fallbacks', context_window_fallbacks, lookup_groups)}. "
+        f"{format_chain_for_lookup_groups('fallbacks', fallbacks, lookup_groups)}. "
+        "To give context-window errors their own chain, set context_window_fallbacks - "
+        "https://docs.litellm.ai/docs/routing#fallbacks"
+    )
 
 
 def format_content_policy_no_fallback_note(
@@ -342,12 +404,14 @@ def format_content_policy_no_fallback_note(
     fallbacks: object,
     nested_fallback_hop: bool,
 ) -> str:
-    outcome: Final = "" if nested_fallback_hop else format_fallback_outcome_message(model_group, None, "")
+    if nested_fallback_hop:
+        return ""
+    outcome: Final = format_fallback_outcome_message(model_group, None, "")
     if content_policy_fallbacks is not None:
         return outcome
-    hint: Final = f"\n{format_content_policy_fallback_hint(model_group, content_policy_fallbacks, fallbacks)}"
+    hint: Final = f"\n{format_content_policy_fallback_hint(model_group, content_policy_fallbacks, lookup_groups)}"
     fallback_entries: Final = _as_fallback_entries(fallbacks) if fallbacks is not None else None
-    if fallback_entries is None or not lookup_groups or nested_fallback_hop:
+    if fallback_entries is None or not lookup_groups:
         return hint + outcome
     return hint + format_no_fallback_group_message(lookup_groups, fallback_entries)
 

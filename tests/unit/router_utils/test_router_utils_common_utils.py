@@ -15,8 +15,10 @@ from litellm.litellm_core_utils.routing_common_utils import (
     add_model_file_id_mappings,
     filter_team_based_models,
     filter_web_search_deployments,
+    format_chain_for_lookup_groups,
     format_content_policy_no_fallback_note,
     format_fallback_outcome_message,
+    format_no_fallback_group_message,
     provider_for_generic_call,
     resolve_model_group_alias,
     truncate_fallback_error_detail,
@@ -671,9 +673,80 @@ def test_format_fallback_outcome_preserves_attempted_failure_wording_without_ski
 def test_content_policy_note_explains_the_failure_when_fallbacks_are_a_plain_model_list() -> None:
     note: Final = format_content_policy_no_fallback_note("gpt-bg", ("gpt-bg",), None, ["backup"], False)
 
-    assert "content_policy_fallback=None" in note
+    assert "content_policy_fallbacks is not set" in note
     assert "LiteLLM: model group 'gpt-bg' failed with the error above. No fallback was attempted." in note
     assert "Fallbacks are configured for" not in note
+
+
+def test_no_fallback_group_message_lists_every_group_when_the_config_is_small() -> None:
+    message: Final = format_no_fallback_group_message(("primary",), ({"a": ["x"]}, {"b": ["y"]}))
+
+    assert "Fallbacks are configured for: a, b." in message
+
+
+def test_no_fallback_group_message_caps_the_listing_at_the_configured_group_count() -> None:
+    """The listing is one line of an error a caller reads, so it must not grow with the config."""
+    small: Final = format_no_fallback_group_message(("primary",), tuple({f"g{i}": ["x"]} for i in range(5)))
+    huge: Final = format_no_fallback_group_message(("primary",), tuple({f"g{i}": ["x"]} for i in range(200)))
+
+    assert "and 195 more." in huge
+    assert "g5" not in huge
+    assert len(huge) - len(small) < len(" and 195 more.") + 1
+
+
+def test_chain_names_the_lookup_group_that_owns_it_not_the_first_one_searched() -> None:
+    """A pre-routing hook puts the tier first, and the chain usually belongs to the group
+    behind it; naming the tier would point a reader at the wrong config entry."""
+    chain: Final = format_chain_for_lookup_groups(
+        "fallbacks",
+        [{"cheap-tier": ["tier-backup"]}, {"requested-model": ["requested-backup"]}],
+        ("cheap-tier", "requested-model"),
+    )
+    behind_the_tier: Final = format_chain_for_lookup_groups(
+        "fallbacks", [{"requested-model": ["requested-backup"]}], ("cheap-tier", "requested-model")
+    )
+
+    assert chain == "fallbacks: 'cheap-tier' -> ['tier-backup']"
+    assert behind_the_tier == "fallbacks: 'requested-model' -> ['requested-backup']"
+
+
+def test_chain_attributes_a_generic_entry_to_the_wildcard_not_to_a_lookup_group() -> None:
+    chain: Final = format_chain_for_lookup_groups("fallbacks", [{"*": ["backup"]}], ("tier", "requested-model"))
+
+    assert chain == "fallbacks: '*' -> ['backup']"
+
+
+@pytest.mark.parametrize(
+    ("requested", "configured"),
+    (("openai/gpt-x", "gpt-x"), ("gpt-4o", "openai/gpt-4o")),
+    ids=("provider-stripped", "provider-prefixed"),
+)
+def test_chain_names_the_matched_config_key_when_provider_matching_resolves_another_name(
+    requested: str, configured: str
+) -> None:
+    message: Final = format_chain_for_lookup_groups(
+        "fallbacks", [{"*": ["generic"]}, {configured: ["backup"]}], ("tier", requested)
+    )
+
+    assert message == f"fallbacks: {configured!r} -> ['backup']"
+
+
+def test_chain_renders_fallback_entries_that_override_request_params_instead_of_dumping_the_config() -> None:
+    chain: Final = format_chain_for_lookup_groups(
+        "fallbacks", [{"a": [{"model": "b", "api_key": "sk-secret"}]}, {"unrelated": ["c"]}], ("a",)
+    )
+
+    assert chain.startswith("fallbacks: 'a' -> [{'model': 'b'")
+    assert "sk-secret" not in chain
+    assert "unrelated" not in chain
+
+
+def test_chain_says_which_lookup_groups_it_searched_when_none_of_them_has_one() -> None:
+    chain: Final = format_chain_for_lookup_groups(
+        "fallbacks", [{"x": ["y"]}, {"z": ["w"]}], ("tier", "requested-model")
+    )
+
+    assert chain == "fallbacks has no chain for 'tier' -> 'requested-model' (2 other model groups are configured)"
 
 
 class TestWarnOnProviderCredentialMismatch:
