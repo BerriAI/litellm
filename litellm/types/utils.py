@@ -1215,6 +1215,8 @@ class PassthroughCallTypes(Enum):
 
 
 class TopLogprob(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     token: str
     """The token."""
 
@@ -1236,6 +1238,8 @@ class TopLogprob(OpenAIObject):
 
 
 class ChatCompletionTokenLogprob(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     token: str
     """The token."""
 
@@ -1328,11 +1332,15 @@ CHOICE_LOGPROBS_OR_JSON: Final[TypeAdapter[ChoiceLogprobs | JsonValue]] = TypeAd
 
 
 class FunctionCall(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     arguments: str
     name: str | None = None
 
 
 class Function(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     arguments: str
     name: str | None  # can be None - openai e.g.: ChoiceDeltaToolCallFunction(arguments='{"', name=None), type=None)
 
@@ -1378,6 +1386,8 @@ class Function(OpenAIObject):
 
 
 class ChatCompletionDeltaToolCall(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     id: str | None = None
     function: Function
     type: str | None = None
@@ -1401,6 +1411,8 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
 
 
 class _CustomToolCallAccess(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     def __contains__(self, key) -> bool:
         return hasattr(self, key)
 
@@ -1438,6 +1450,8 @@ class ChatCompletionDeltaCustomToolCall(_CustomToolCallAccess):
 
 
 class ChatCompletionMessageToolCall(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     def __init__(
         self,
         function: dict | Function,
@@ -1540,6 +1554,8 @@ def add_provider_specific_fields(object: BaseModel, provider_specific_fields: di
 
 
 class Message(SafeAttributeModel, OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     content: str | None
     role: Literal["assistant", "user", "system", "tool", "function"]
     refusal: str | None = None
@@ -1661,6 +1677,8 @@ class Message(SafeAttributeModel, OpenAIObject):
 
 
 class Delta(SafeAttributeModel, OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     if TYPE_CHECKING:
         # Stored in __pydantic_extra__ at runtime (extra='allow'), set directly in
         # __init__ rather than via self.<attr> = .... Declared here only so type
@@ -1798,6 +1816,8 @@ class Delta(SafeAttributeModel, OpenAIObject):
 
 
 class Choices(SafeAttributeModel, OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     finish_reason: OpenAIChatCompletionFinishReason
     index: int
     message: Message
@@ -2207,6 +2227,8 @@ class UnreportedUsage(Usage):
 
 
 class StreamingChoices(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     if TYPE_CHECKING:
         finish_reason: str | None
         index: int
@@ -2273,6 +2295,8 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
 
 
 class ModelResponseBase(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     id: str
     """A unique identifier for the completion."""
 
@@ -2506,6 +2530,8 @@ class ModelResponse(ModelResponseBase):
 
 
 class Embedding(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     embedding: list | str = []
     index: int
     object: Literal["embedding"]
@@ -2524,6 +2550,8 @@ class Embedding(OpenAIObject):
 
 
 class EmbeddingResponse(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     model: str | None = None
     """The model used for embedding."""
 
@@ -2608,6 +2636,8 @@ class EmbeddingResponse(OpenAIObject):
 
 
 class Logprobs(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     text_offset: list[int] | None
     token_logprobs: list[float | None] | None
     tokens: list[str] | None
@@ -2615,6 +2645,8 @@ class Logprobs(OpenAIObject):
 
 
 class TextChoices(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     def __init__(self, finish_reason=None, index=0, text=None, logprobs=None, **params) -> None:
         super().__init__(**params)
         if finish_reason:
@@ -2676,6 +2708,8 @@ class TextCompletionResponse(OpenAIObject):
         "usage": response["usage"]
     }
     """
+
+    model_config = ConfigDict(defer_build=False)
 
     id: str
     object: str
