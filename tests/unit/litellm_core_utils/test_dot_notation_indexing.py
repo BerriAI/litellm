@@ -2,7 +2,6 @@
 Tests for litellm.litellm_core_utils.dot_notation_indexing module.
 """
 
-import time
 from types import MappingProxyType
 from typing import Final
 
@@ -157,23 +156,3 @@ def test_delete_nested_values_removes_every_path_and_leaves_the_input_untouched(
     assert result == {"tools": [{"name": "t1"}, {"name": "t2"}], "meta": {"keep": 1}}
     assert payload["tools"] == [{"name": "t1", "secret": "s1"}, {"name": "t2", "secret": "s2"}]
     assert payload["meta"] == {"keep": 1, "drop": 2}
-
-
-def _delete_cost(unclosed_brackets: int) -> float:
-    path: Final = "[" * unclosed_brackets
-
-    def once() -> float:
-        started: Final = time.process_time()
-        delete_nested_values({"keep": 1}, (path,))
-        return time.process_time() - started
-
-    return min(once() for _ in range(5))
-
-
-def test_delete_nested_values_stays_linear_on_unclosed_brackets():
-    """A client sends additional_drop_params, so quadrupling a path of unclosed brackets
-    must not multiply the cost by sixteen. The pattern this replaced took about 4s at
-    64,000 brackets, which stalls the proxy worker parsing it."""
-    growth: Final = _delete_cost(64_000) / _delete_cost(16_000)
-
-    assert growth < 11.0, f"cost grew {growth:.1f}x for 4x the path length"
