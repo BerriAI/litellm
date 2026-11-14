@@ -106,7 +106,7 @@ def running_loop_token() -> int | None:
         return id(loop)
 
 
-def _close_function(client: object) -> Callable[[], object] | None:
+def close_function(client: object) -> Callable[[], object] | None:
     close_fn: Final[Callable[[], object] | None] = getattr(client, "aclose", None) or getattr(client, "close", None)
     return close_fn
 
@@ -214,7 +214,7 @@ class EvictedClientCloser:
         except TypeError:
             pass  # values that cannot be weak-referenced are never litellm clients
 
-    def _is_owned(self, client: object) -> bool:
+    def is_owned(self, client: object) -> bool:
         try:
             return client in self._owned
         except TypeError:
@@ -228,9 +228,9 @@ class EvictedClientCloser:
         Every queued entry comes due within one grace window, so the capacity it
         occupies is returned within that window rather than held.
         """
-        if client is None or not self._is_owned(client):
+        if client is None or not self.is_owned(client):
             return
-        close_fn: Final = _close_function(client)
+        close_fn: Final = close_function(client)
         if close_fn is None:
             return
         loop_token: Final = running_loop_token()
@@ -330,7 +330,7 @@ class EvictedClientCloser:
             del self._buckets[key]
 
     def _close(self, client: object) -> None:
-        close_fn: Final = _close_function(client)
+        close_fn: Final = close_function(client)
         if close_fn is None:
             return
         try:

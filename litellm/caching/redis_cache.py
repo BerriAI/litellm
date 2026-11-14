@@ -716,11 +716,10 @@ class RedisCache(BaseCache):
             # Create new connection pool and client for current event loop
             self.async_redis_conn_pool = get_redis_connection_pool(**self.redis_kwargs)
             redis_async_client = get_redis_async_client(connection_pool=self.async_redis_conn_pool, **self.redis_kwargs)
-            in_memory_llm_clients_cache.set_cache(
-                key=cache_key,
-                value=redis_async_client,
-                litellm_owned_client=isinstance(redis_async_client, RedisCluster),
-            )
+            if not isinstance(redis_async_client, RedisCluster):
+                # The pool is this client's alone, and redis-py keeps a passed-in pool open on aclose()
+                redis_async_client.auto_close_connection_pool = True
+            in_memory_llm_clients_cache.set_cache(key=cache_key, value=redis_async_client, litellm_owned_client=True)
 
         self.redis_async_client = redis_async_client
         return redis_async_client
