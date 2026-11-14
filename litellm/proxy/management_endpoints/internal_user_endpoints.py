@@ -23,7 +23,7 @@ from typing import Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -103,6 +103,7 @@ from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_
 from litellm.redis.stores.spend_counters import (
     user_counter,
 )
+from litellm.repositories.chunked_in import update_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -141,6 +142,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
 _USER_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
+_JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 _LOCK_ALL_USERS_SQL: Final = (
@@ -2113,15 +2115,12 @@ async def bulk_user_update(
                         ),
                     )
                 for windows_json in frozenset(windows_by_user.values()):
-                    _ = await user_tx_db(transaction).update_many(
-                        where={
-                            "user_id": {
-                                "in": [
-                                    uid for uid, user_windows in windows_by_user.items() if user_windows == windows_json
-                                ]
-                            }
-                        },
+                    _ = await update_many_in(
+                        user_tx_db(transaction),
+                        "user_id",
+                        (uid for uid, user_windows in windows_by_user.items() if user_windows == windows_json),
                         data={"budget_limits": windows_json},
+                        atomicity="caller_transaction",
                     )
 
             for start in range(0, len(locked_users), _USER_CACHE_INVALIDATION_BATCH_SIZE):
@@ -2156,7 +2155,7 @@ async def bulk_user_update(
                             "user_id": user.user_id,
                             **non_default_values,
                             **(
-                                {"budget_limits": windows_by_user[user.user_id]}
+                                {"budget_limits": _JSON_VALUE_ADAPTER.validate_json(windows_by_user[user.user_id])}
                                 if user.user_id in windows_by_user
                                 else {}
                             ),

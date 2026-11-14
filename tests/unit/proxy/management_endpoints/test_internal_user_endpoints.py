@@ -2724,6 +2724,15 @@ async def test_bulk_user_windows_keep_each_users_resets_inside_the_all_users_tra
     for write in window_writes:
         _assert_resent_windows_keep_their_resets(write["data"]["budget_limits"])
     assert all(cache.budget_windows_absent_cache.get_cache(key=marker) is None for marker in markers)
+    written_windows: Final = dict(
+        chain.from_iterable(
+            ((user_id, json.loads(write["data"]["budget_limits"])) for user_id in write["where"]["user_id"]["in"])
+            for write in window_writes
+        )
+    )
+    assert {
+        result.user_id: (result.updated_user or {}).get("budget_limits") for result in response.results
+    } == written_windows
 
 
 @pytest.mark.asyncio
