@@ -8752,7 +8752,7 @@ async def test_get_end_user_object_default_budget_gate_keeps_fetching_unrestrict
     budget_row.dict = lambda: {"budget_id": "default-eu-budget", "max_budget": 25.0}
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
     mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
 
@@ -8765,7 +8765,7 @@ async def test_get_end_user_object_default_budget_gate_keeps_fetching_unrestrict
     assert result is not None
     assert result.litellm_budget_table is not None
     assert result.litellm_budget_table.max_budget == 25.0
-    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
+    mock_prisma.db.query_raw.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -8782,7 +8782,7 @@ async def test_get_end_user_object_token_budget_gate_keeps_fetching_unrestricted
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1", spend=100.0))
     cache = UserApiKeyCache()
 
@@ -8796,7 +8796,7 @@ async def test_get_end_user_object_token_budget_gate_keeps_fetching_unrestricted
     assert result is not None
     assert result.spend == 100.0
     mock_prisma.db.litellm_endusertable.find_unique.assert_awaited_once()
-    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
+    mock_prisma.db.query_raw.assert_not_awaited()
 
 
 def _budget_lookup_by_id(budgets: Mapping[str, float]) -> AsyncMock:
@@ -8827,7 +8827,7 @@ async def test_get_end_user_object_key_default_budget_beats_global_default_witho
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-shared"))
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id(
         {"global-eu-budget": 100.0, "svc-a-budget": 0.5, "svc-b-budget": 7.0}
@@ -8871,7 +8871,7 @@ async def test_get_end_user_object_cached_row_does_not_carry_another_keys_defaul
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-shared"))
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 0.5})
     cache = UserApiKeyCache()
@@ -8905,7 +8905,7 @@ async def test_get_end_user_object_caches_row_with_global_default_but_never_a_ke
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-cached"))
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 0.5, "global-budget": 7.0})
     cache = UserApiKeyCache()
@@ -8934,7 +8934,7 @@ async def test_get_end_user_object_key_default_budget_loads_unrestricted_row_wit
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1", spend=3.0))
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 2.0})
 
@@ -8949,7 +8949,7 @@ async def test_get_end_user_object_key_default_budget_loads_unrestricted_row_wit
     assert result.spend == 3.0
     assert result.litellm_budget_table is not None
     assert result.litellm_budget_table.max_budget == 2.0
-    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
+    mock_prisma.db.query_raw.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -9015,7 +9015,7 @@ async def test_end_user_id_validation_gate_still_resolves_unrestricted_end_users
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", True)
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-known-1"))
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=None)
@@ -9027,7 +9027,7 @@ async def test_end_user_id_validation_gate_still_resolves_unrestricted_end_users
     )
 
     assert resolved == "eu-known-1"
-    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
+    mock_prisma.db.query_raw.assert_not_awaited()
 
 
 @pytest.mark.asyncio
