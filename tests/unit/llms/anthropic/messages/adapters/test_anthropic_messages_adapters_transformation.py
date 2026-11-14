@@ -15,6 +15,8 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+    TOOL_RESULT_MEDIA_BOUNDARY,
+    TOOL_RESULT_MEDIA_PLACEHOLDER,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
@@ -4902,22 +4904,42 @@ def _base64_pdf_block():
     }
 
 
-def test_tool_result_single_document_kept_as_pdf_data_url():
-    adapter = LiteLLMAnthropicMessagesAdapter()
-    translated = adapter.translate_anthropic_messages_to_openai(
-        messages=[
+@pytest.mark.parametrize(
+    ("leading_blocks", "expected_tool_content"),
+    [
+        ((), TOOL_RESULT_MEDIA_PLACEHOLDER),
+        (
+            ({"type": "text", "text": "PDF file read: pong.pdf (579 bytes)"},),
+            [{"type": "text", "text": "PDF file read: pong.pdf (579 bytes)"}],
+        ),
+    ],
+    ids=["document_only", "text_and_document"],
+)
+def test_tool_result_pdf_document_reaches_openai_compatible_providers_as_file_part(
+    leading_blocks: tuple[dict[str, str], ...], expected_tool_content: object
+) -> None:
+    request_messages: Final = _run_chat_completions_pipeline(
+        [
             _anthropic_tool_use_turn("toolu_01"),
-            _anthropic_tool_result_turn({"toolu_01": [_base64_pdf_block()]}),
+            _anthropic_tool_result_turn({"toolu_01": [*leading_blocks, _base64_pdf_block()]}),
         ]
     )
 
-    tool_messages = [m for m in translated if m.get("role") == "tool"]
-    assert len(tool_messages) == 1
-    assert tool_messages[0]["content"] == [
+    assert request_messages[1:] == [
+        {"role": "tool", "tool_call_id": "toolu_01", "content": expected_tool_content},
         {
-            "type": "image_url",
-            "image_url": {"url": f"data:application/pdf;base64,{TOOL_RESULT_PDF_B64}"},
-        }
+            "role": "user",
+            "content": [
+                {"type": "text", "text": TOOL_RESULT_MEDIA_BOUNDARY},
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "document.pdf",
+                        "file_data": f"data:application/pdf;base64,{TOOL_RESULT_PDF_B64}",
+                    },
+                },
+            ],
+        },
     ]
 
 
