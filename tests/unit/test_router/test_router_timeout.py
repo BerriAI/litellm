@@ -323,7 +323,36 @@ def test_a_live_responses_stream_keeps_the_stream_timeout_when_fake_stream_is_se
     assert route.calls.last.request.extensions["timeout"]["read"] == 2.0
 
 
-def _router_with_a_bridged_fake_stream() -> Router:
+@pytest.mark.asyncio
+async def test_a_live_generic_stream_keeps_the_stream_timeout_when_the_request_timeout_is_an_httpx_timeout(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, text="", headers={"content-type": "text/event-stream"})
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "live",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "fake-key",
+                    "stream_timeout": 2,
+                    "timeout": httpx.Timeout(600.0, connect=5.0),
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    await router.aresponses(model="live", input="hi", stream=True)
+
+    assert route.call_count == 1
+    assert route.calls.last.request.extensions["timeout"]["read"] == 2.0
+
+
+def _router_with_a_bridged_fake_stream(request_timeout: int | httpx.Timeout = 600) -> Router:
     return Router(
         model_list=[
             {
@@ -333,7 +362,7 @@ def _router_with_a_bridged_fake_stream() -> Router:
                     "api_base": "https://together.test/v1",
                     "api_key": "fake-key",
                     "stream_timeout": 2,
-                    "timeout": 600,
+                    "timeout": request_timeout,
                     "fake_stream": True,
                 },
             }
@@ -344,14 +373,15 @@ def _router_with_a_bridged_fake_stream() -> Router:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entrypoint", ["aresponses", "aanthropic_messages"])
+@pytest.mark.parametrize("request_timeout", [600, httpx.Timeout(600.0, connect=5.0)], ids=["seconds", "httpx_timeout"])
 async def test_a_fake_stream_bridged_into_completion_waits_for_the_request_timeout(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, entrypoint: str
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, entrypoint: str, request_timeout: int | httpx.Timeout
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://together.test/v1/chat/completions").mock(
         return_value=httpx.Response(200, json=_PLAIN_ANSWER)
     )
-    router: Final = _router_with_a_bridged_fake_stream()
+    router: Final = _router_with_a_bridged_fake_stream(request_timeout)
 
     if entrypoint == "aresponses":
         await router.aresponses(model="bridged", input="hi", stream=True)

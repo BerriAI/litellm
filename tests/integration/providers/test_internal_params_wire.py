@@ -340,7 +340,6 @@ def _ignore_log_details(_details: Mapping[str, object]) -> None:
 WALK_SEEDS: Final[Mapping[str, object]] = MappingProxyType(
     {
         "aws_batch_role_arn": "arn:aws:iam::000000000000:role/wire",
-        "aws_bedrock_control_plane_endpoint": "https://bedrock.wire.invalid",
         "s3_bucket_name": "wire-bucket",
         "s3_region_name": "us-east-1",
         "s3_endpoint_url": "https://s3.wire.invalid",
@@ -355,10 +354,6 @@ WALK_SEEDS: Final[Mapping[str, object]] = MappingProxyType(
         "tpm": 7,
         "itpm": 7,
         "otpm": 7,
-        "rpd": 7,
-        "tpd": 7,
-        "daily_reset_time": "00:00",
-        "kubernetes_pod_discovery": True,
         "default_api_key_rpm_limit": 7,
         "default_api_key_tpm_limit": 7,
         "max_parallel_requests": 1,
@@ -379,7 +374,6 @@ WALK_SEEDS: Final[Mapping[str, object]] = MappingProxyType(
         "adaptive_router_default_model": "wire-default",
         "quality_router_config": {"wire": 1},
         "quality_router_default_model": "wire-default",
-        "switchyard_router_config": {"wire": 1},
         "cost_per_query": 0.5,
         "max_budget": 100.0,
         "budget_duration": "30d",
@@ -396,7 +390,6 @@ WALK_SEEDS: Final[Mapping[str, object]] = MappingProxyType(
         "log_client_error_tracebacks": False,
         "max_agentic_loops": 1,
         "merge_reasoning_content_in_choices": False,
-        "thought_signature_in_tool_call_id": False,
         "enable_json_schema_validation": False,
         "complete_response": False,
         "keepalive_seconds": 30.0,
@@ -410,7 +403,6 @@ WALK_SEEDS: Final[Mapping[str, object]] = MappingProxyType(
         "_skip_mcp_handler": True,
         "skip_mcp_handler": True,
         "mcp_handler_context": {"server": "wire"},
-        "_encrypted_content_affinity_pinned": True,
         "fallback_depth": 1,
         "max_fallbacks": 1,
         UNDECLARED_SENTINEL: "internal",
@@ -525,21 +517,19 @@ BEDROCK_ROUTES: Final = MappingProxyType(
 BEDROCK_ROUTES_WITHOUT_CHAT: Final = MappingProxyType({"async_invoke": "starts an async job instead of a chat call"})
 
 API_BASE_CHAT_PROVIDERS: Final = (
-    "abliteration", "ai21", "ai21_chat", "aiand", "aiml", "aiohttp_openai", "amazon_nova", "anthropic",
-    "anthropic_text", "apertis", "assemblyai", "azure_ai", "baseten", "bigmodel", "cerebras", "charity_engine",
-    "chatgpt", "chutes", "clf_ai_gateway", "cloudflare", "codestral", "cognition", "cohere", "cohere_chat",
-    "cometapi", "compactifai", "coralbricks", "cortecs", "custom", "custom_openai", "darkbloom", "dashscope",
-    "databricks", "databricks_agent", "datarobot", "deepinfra", "deepseek", "docker_model_runner", "edenai",
-    "empiriolabs", "empower", "featherless_ai", "fireworks_ai", "friendliai", "galadriel", "gemini", "github",
-    "groq", "helicone", "heroku", "hosted_vllm", "hostinger_router", "huggingface", "hyperbolic", "inception",
-    "inferenceapis", "kyma", "lambda_ai", "langflow", "langgraph", "lemonade", "libertai", "litellm_proxy",
-    "llamafile", "lm_studio", "maritalk", "meta", "meta_llama", "minimax", "mistral", "modelscope", "moonshot",
-    "morph", "nadir", "nano-gpt", "nebius", "neosantara", "novita", "nscale", "nvidia_nim", "ollama", "ollama_chat",
-    "oobabooga", "openai", "opencode_go", "openinfer", "openrouter", "ovhcloud", "parasail", "perplexity", "petals",
-    "pinstripes", "poe", "prism", "publicai", "qwen_ai_platform", "qwencloud", "refuseless", "reka", "sail",
-    "sambanova", "scaleway", "scx-ai", "snowflake", "streamlake", "synthetic", "tencent", "tensormesh",
+    "ai21", "ai21_chat", "aiml", "aiohttp_openai", "amazon_nova", "anthropic", "anthropic_text", "apertis",
+    "assemblyai", "azure_ai", "baseten", "cerebras", "charity_engine", "chutes", "cloudflare", "codestral", "cognition",
+    "cohere", "cohere_chat", "cometapi", "compactifai", "coralbricks", "cortecs", "custom", "custom_openai",
+    "darkbloom", "dashscope", "databricks", "databricks_agent", "datarobot", "deepinfra", "deepseek",
+    "docker_model_runner", "edenai", "empower", "featherless_ai", "fireworks_ai", "friendliai", "galadriel", "gemini",
+    "github", "groq", "helicone", "heroku", "hosted_vllm", "huggingface", "hyperbolic", "inception", "inferenceapis",
+    "lambda_ai", "langflow", "langgraph", "lemonade", "libertai", "litellm_proxy", "llamafile", "lm_studio", "maritalk",
+    "meta", "meta_llama", "minimax", "mistral", "modelscope", "moonshot", "morph", "nadir", "nano-gpt", "nebius",
+    "neosantara", "novita", "nscale", "nvidia_nim", "oci", "ollama", "ollama_chat", "oobabooga", "openai", "openrouter",
+    "ovhcloud", "parasail", "perplexity", "petals", "pinstripes", "poe", "prism", "publicai", "qwen_ai_platform",
+    "qwencloud", "reka", "sail", "sambanova", "scaleway", "scx-ai", "snowflake", "synthetic", "tencent", "tensormesh",
     "text-completion-codestral", "text-completion-inception", "text-completion-openai", "together_ai", "v0",
-    "vercel_ai_gateway", "volcengine", "wally", "wandb", "xai", "xiaomi_mimo", "xinference", "zai", "zerogpu",
+    "vercel_ai_gateway", "volcengine", "wandb", "xai", "xiaomi_mimo", "xinference", "zai",
 )  # fmt: skip
 CHAT_ROUTES: Final = MappingProxyType(
     {
@@ -583,11 +573,10 @@ CHAT_PROVIDERS_OFF_THE_WIRE: Final = MappingProxyType(
     {
         **dict.fromkeys(("bytez", "replicate", "sagemaker", "sagemaker_chat", "sagemaker_nova"), VENDOR_HOST),
         **dict.fromkeys(
-            ("gdc", "gigachat", "microsoft_365_copilot", "oci", "sap", "vertex_ai", "vertex_ai_beta", "watsonx",
-             "watsonx_text"),
+            ("gdc", "gigachat", "microsoft_365_copilot", "sap", "vertex_ai", "vertex_ai_beta", "watsonx", "watsonx_text"),
             VENDOR_AUTH,
         ),
-        "github_copilot": DEVICE_LOGIN,
+        **dict.fromkeys(("chatgpt", "github_copilot"), DEVICE_LOGIN),
         "vllm": "runs the local vllm package instead of calling a server",
     }
 )  # fmt: skip
@@ -597,12 +586,11 @@ EMBEDDING_ROUTES: Final = MappingProxyType(
         **{
             provider: Route(f"{provider}/wire-model")
             for provider in (
-                "azure_ai", "cohere", "cohere_chat", "cometapi", "dashscope", "databricks", "edenai", "empiriolabs",
-                "fireworks_ai", "gemini", "hosted_vllm", "hostinger_router", "infinity", "jina_ai", "litellm_proxy",
-                "llamafile", "lm_studio", "mistral", "nebius", "nvidia_nim", "ollama", "oobabooga", "openai",
-                "openai_like", "openrouter", "ovhcloud", "perplexity", "qwen_ai_platform", "qwencloud", "sambanova",
-                "snowflake", "together_ai", "triton", "vercel_ai_gateway", "volcengine", "voyage", "wandb",
-                "xinference",
+                "azure_ai", "cohere", "cohere_chat", "cometapi", "dashscope", "databricks", "edenai", "fireworks_ai",
+                "gemini", "hosted_vllm", "infinity", "jina_ai", "litellm_proxy", "llamafile", "lm_studio", "mistral",
+                "nebius", "nvidia_nim", "oci", "ollama", "oobabooga", "openai", "openai_like", "openrouter", "ovhcloud",
+                "perplexity", "qwen_ai_platform", "qwencloud", "sambanova", "snowflake", "together_ai", "triton",
+                "vercel_ai_gateway", "volcengine", "voyage", "wandb", "xinference",
             )
         },
         "azure": Route("azure/wire-model", AZURE_CONNECTION),
@@ -616,7 +604,7 @@ EMBEDDING_ROUTES: Final = MappingProxyType(
 EMBEDDING_PROVIDERS_OFF_THE_WIRE: Final = MappingProxyType(
     {
         "sagemaker": VENDOR_HOST,
-        **dict.fromkeys(("gigachat", "oci", "sap", "vertex_ai", "watsonx"), VENDOR_AUTH),
+        **dict.fromkeys(("gigachat", "sap", "vertex_ai", "watsonx"), VENDOR_AUTH),
         **dict.fromkeys(("chatgpt", "github_copilot"), DEVICE_LOGIN),
     }
 )

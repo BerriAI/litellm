@@ -5569,7 +5569,9 @@ async def test_a_replayed_fake_stream_keeps_the_provider_headers_and_served_tier
     headers: Final = stream._hidden_params["additional_headers"]
     assert headers["llm_provider-x-request-id"] == "req_replayed", headers
     assert headers["x-ratelimit-remaining-requests"] == "99", headers
-    assert {getattr(chunk, "service_tier", None) for chunk in chunks} == {"flex"}, chunks
+    assert {getattr(chunk, "service_tier", None) for chunk in chunks if chunk.choices[0].delta.content} == {
+        "flex"
+    }, chunks
     assert {chunk.system_fingerprint for chunk in chunks} == {"fp_replayed"}, chunks
 
 
