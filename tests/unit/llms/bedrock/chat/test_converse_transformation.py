@@ -4473,18 +4473,11 @@ async def test_guarded_part_after_an_unanswered_tool_call_without_tools_keeps_th
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
-    ("system_content", "keeps_guard_content"),
-    [
-        ("Be brief.", True),
-        ([{"type": "text", "text": "Be brief."}], True),
-        ("", False),
-        ([{"type": "text", "text": ""}], False),
-    ],
+    "system_content",
+    ["Be brief.", [{"type": "text", "text": "Be brief."}], "", [{"type": "text", "text": ""}]],
     ids=["string", "text_part", "empty_string", "empty_text_part"],
 )
-async def test_a_trailing_system_turn_with_text_to_guard_keeps_a_guarded_assistant_part_guarded(
-    use_async: bool, system_content: object, keeps_guard_content: bool
-):
+async def test_a_trailing_system_turn_sends_a_guarded_assistant_part_as_text(use_async: bool, system_content: object):
     config: Final = AmazonConverseConfig()
     kwargs: Final = dict(
         model="us.anthropic.claude-haiku-5-5",
@@ -4500,8 +4493,8 @@ async def test_a_trailing_system_turn_with_text_to_guard_keeps_a_guarded_assista
         await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
     )
     sent_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
-    assert (_GUARD_BLOCK in sent_blocks) is keeps_guard_content
-    assert ({"text": _GUARDED_PART_TEXT} in sent_blocks) is not keeps_guard_content
+    assert not any("guardContent" in block for block in sent_blocks)
+    assert {"text": _GUARDED_PART_TEXT} in sent_blocks
 
 
 @pytest.mark.asyncio
