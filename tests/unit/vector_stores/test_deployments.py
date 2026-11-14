@@ -358,19 +358,15 @@ async def test_a_cooldown_expiry_is_whole_seconds_and_a_zero_cooldown_records_no
     assert recorded == expiries
 
 
-def test_sync_search_on_a_group_fails_over_like_asearch(respx_mock, httpx_transport):
-    eastus = respx_mock.post(url__startswith=_EASTUS_SEARCH).mock(return_value=httpx.Response(503, json={}))
-    scus = respx_mock.post(url__startswith=_SCUS_SEARCH).mock(return_value=httpx.Response(200, json=_HIT))
+def test_sync_search_on_a_group_refuses_and_points_at_asearch(respx_mock, httpx_transport):
+    search_service = respx_mock.post(url__startswith="https://").mock(return_value=httpx.Response(200, json=_HIT))
 
-    response = litellm.vector_stores.search(
-        vector_store_id="claims-docs",
-        query="claims",
-        custom_llm_provider="azure_ai",
-        vector_store_deployment="kb-search",
-        litellm_embedding_model="openai/text-embedding-3-small",
-        litellm_embedding_config={"api_key": "sk-fake", "mock_response": [0.1, 0.2, 0.3]},
-    )
+    with pytest.raises(ValueError, match=r"only through litellm\.vector_stores\.asearch"):
+        litellm.vector_stores.search(
+            vector_store_id="claims-docs",
+            query="claims",
+            custom_llm_provider="azure_ai",
+            vector_store_deployment="kb-search",
+        )
 
-    assert eastus.call_count == 1 and scus.call_count == 1
-    assert response["data"][0]["content"][0]["text"] == "served by scus"
-    assert response["_hidden_params"]["additional_headers"]["x-litellm-vector-store-deployment"] == "scus"
+    assert not search_service.called

@@ -81,7 +81,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rag import RAGIngestResponse
 from litellm.types.utils import Choices, ModelResponse
-from litellm.vector_stores.deployments import primary_connection
+from litellm.vector_stores.deployments import VECTOR_STORE_DEPLOYMENT_PARAM, primary_connection
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -799,6 +799,14 @@ async def parse_rag_ingest_request(
         "api_base",
     }
     vector_store_opts: Final[object] = ingest_options.get("vector_store", {})
+    if isinstance(vector_store_opts, dict) and VECTOR_STORE_DEPLOYMENT_PARAM in vector_store_opts:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"'{VECTOR_STORE_DEPLOYMENT_PARAM}' cannot be set in ingest_options.vector_store. "
+                "A proxy admin binds a store to a deployment group through the config or /vector_store/new."
+            },
+        )
     if isinstance(vector_store_opts, dict):
         for field in _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS:
             if field in vector_store_opts:

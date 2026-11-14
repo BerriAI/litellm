@@ -26,6 +26,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import managed_file_ids_f
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
+from litellm.vector_stores.deployments import VECTOR_STORE_DEPLOYMENT_PARAM, connection_override_keys
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
@@ -79,6 +80,37 @@ def assert_proxy_admin_for_vector_store_index_management(
         status_code=403,
         detail=(f"Only proxy admins can {operation} vector store indexes. Contact your LiteLLM administrator."),
     )
+
+
+def assert_vector_store_deployment_binding_allowed(
+    litellm_params: object, litellm_credential_name: object, user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    """A store may name a vector_store_deployment group only when a proxy admin writes it, the group exists,
+    and the store carries none of the connection settings the group's deployments own."""
+    params: Final = as_str_mapping(litellm_params) or MappingProxyType({})
+    group: Final = params.get(VECTOR_STORE_DEPLOYMENT_PARAM)
+    if group is None:
+        return
+    if not _is_proxy_admin(user_api_key_dict):
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can bind a vector store to a vector_store_deployment group.",
+        )
+    if not isinstance(group, str):
+        raise HTTPException(status_code=400, detail="vector_store_deployment must be a group name.")
+    try:
+        owned: Final = connection_override_keys(group)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    sent: Final = sorted(
+        (owned & params.keys())
+        | ({"litellm_credential_name"} if litellm_credential_name is not None else frozenset[str]())
+    )
+    if sent:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A store bound to vector_store_deployment '{group}' cannot set {sent}; the group's deployments own its connection.",
+        )
 
 
 def _suffix_after_index_name(request_path: str, index_name: str) -> str | None:
