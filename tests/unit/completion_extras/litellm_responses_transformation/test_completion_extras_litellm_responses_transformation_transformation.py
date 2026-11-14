@@ -465,6 +465,29 @@ def test_bridged_chat_serves_a_foreground_run_when_background_is_dropped_or_off(
     assert "background" not in json.loads(upstream.calls.last.request.content)
 
 
+@_BRIDGED_PROVIDERS
+def test_bridged_chat_stream_forwards_background_and_streams_the_run(
+    monkeypatch: pytest.MonkeyPatch, model: str, url: str, provider_kwargs: Mapping[str, object]
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    request: Final = {**_bridged_request(model, provider_kwargs, stream=True), "background": True}
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=url).mock(
+            return_value=httpx.Response(
+                200,
+                text=_responses_sse(_searched_responses_body(model)),
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        stream: Final = litellm.completion(**request)
+        assert isinstance(stream, CustomStreamWrapper)
+        text: Final = "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices)
+
+    assert text == "pong"
+    assert json.loads(upstream.calls.last.request.content)["background"] is True
+
+
 def _json_message(item_id: str, document: Mapping[str, object]) -> Mapping[str, object]:
     return {
         "type": "message",

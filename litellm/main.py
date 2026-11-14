@@ -6418,22 +6418,24 @@ def completion(
             from litellm.litellm_core_utils.tool_fields import drop_policy
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
-            bridge_optional_params: Final = without_background_run(
-                _responses_bridge_optional_params(
-                    optional_params,
-                    rs_val,
-                    resolved_reasoning_effort,
-                    custom_llm_provider=custom_llm_provider,
-                    model=model,
-                    base_model=deployment_base_model,
-                    api_base=api_base,
-                    deployment_model_info=typed_deployment_model_info,
-                    drop_params=drop_unsupported_reasoning,
-                    additional_drop_params=routing_kwargs.get("additional_drop_params"),
-                ),
-                drop_policy(routing_kwargs),
-                model,
-                custom_llm_provider,
+            mapped_bridge_params: Final = _responses_bridge_optional_params(
+                optional_params,
+                rs_val,
+                resolved_reasoning_effort,
+                custom_llm_provider=custom_llm_provider,
+                model=model,
+                base_model=deployment_base_model,
+                api_base=api_base,
+                deployment_model_info=typed_deployment_model_info,
+                drop_params=drop_unsupported_reasoning,
+                additional_drop_params=routing_kwargs.get("additional_drop_params"),
+            )
+            bridge_optional_params: Final = (
+                mapped_bridge_params
+                if stream
+                else without_background_run(
+                    mapped_bridge_params, drop_policy(routing_kwargs), model, custom_llm_provider
+                )
             )
             reasoning_drop_warnings.log_unless_dropped_effort_sent(bridge_optional_params)
             return responses_api_bridge.completion(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
