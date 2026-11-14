@@ -24,7 +24,7 @@ from opentelemetry.sdk._logs.export import (
 )
 from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import Event, ReadableSpan, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace import Event, ReadableSpan, SpanLimits, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace import Span as SDKSpan
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
@@ -49,6 +49,7 @@ from litellm.integrations.otel.mappers.langfuse import (
     LANGFUSE_TRACE_NAME,
     LangfuseMapper,
 )
+from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.config import (
     CaptureMessageContent,
     ExporterOwner,
@@ -71,6 +72,7 @@ from litellm.integrations.otel.model.semconv import (
 from litellm.integrations.otel.model.spans import LiteLLMSpanKind
 from litellm.integrations.otel.plumbing.context import (
     request_destinations,
+    request_metadata,
     request_traces_excluded,
     suppressed_backends,
 )
@@ -469,9 +471,13 @@ def without_message_content(span: ReadableSpan) -> ReadableSpan:
 class _CountedSpanView(_SpanView):
     """A ``_SpanView`` of ``inner`` with other attributes that reports the dropped counts ``inner`` reports."""
 
-    def __init__(self, inner: ReadableSpan, attributes: Attributes) -> None:
+    def __init__(self, inner: ReadableSpan, attributes: Attributes, dropped_attributes: int = 0) -> None:
         super().__init__(inner, inner.resource, attributes, inner.events, inner.status, parent=inner.parent)
-        self._dropped_counts: Final = (inner.dropped_attributes, inner.dropped_events, inner.dropped_links)
+        self._dropped_counts: Final = (
+            inner.dropped_attributes + dropped_attributes,
+            inner.dropped_events,
+            inner.dropped_links,
+        )
 
     @property
     def dropped_attributes(self) -> int:
@@ -484,6 +490,60 @@ class _CountedSpanView(_SpanView):
     @property
     def dropped_links(self) -> int:
         return self._dropped_counts[2]
+
+
+def span_limits(span: object) -> SpanLimits:
+    """The limits ``span`` was built with; the env-configured defaults for a span the SDK did not build."""
+    if not isinstance(span, SDKSpan):
+        return SpanLimits()
+    return span._limits  # pyright: ignore[reportPrivateUsage]  # the SDK has no public accessor for a span's limits
+
+
+class _PendingMetadataSpan(_CountedSpanView):
+    """``inner`` as it ended, carrying the destination metadata added once the destination's view is built."""
+
+    def __init__(self, inner: ReadableSpan, metadata: tuple[tuple[str, str], ...], limits: SpanLimits) -> None:
+        super().__init__(inner, inner.attributes)
+        self.destination_metadata: Final = metadata
+        self.limits: Final = limits
+
+
+def with_destination_metadata(
+    span: ReadableSpan, metadata_keys: tuple[str, ...], metadata: Mapping[str, str], limits: SpanLimits
+) -> ReadableSpan:
+    """``span`` carrying the ``litellm.metadata.*`` values a destination's own ``metadata_keys`` select.
+
+    Bound when the span ends, so a tree held for sampling keeps its own request's values, along
+    with the span limits it ended under. :func:`with_pending_metadata` adds them once the
+    destination's view is built.
+    """
+    if not metadata_keys:
+        return span
+    promoted: Final = tuple(promoted_metadata(metadata, metadata_keys).items())
+    if not promoted:
+        return span
+    return _PendingMetadataSpan(span, promoted, limits)
+
+
+def with_pending_metadata(ended: ReadableSpan, exported: ReadableSpan) -> ReadableSpan:
+    """``exported``, the destination's view of ``ended``, plus the metadata ``ended`` carries.
+
+    Counted against what the destination exports rather than the span as it ended, since the view
+    can drop prompt content and backend-specific attributes. An exported attribute always wins, so a
+    destination key never replaces a value the global allowlist or the proxy's identity wrote.
+    Values are cut to the length limit, and keys past the count limit are dropped and counted.
+    """
+    if not isinstance(ended, _PendingMetadataSpan):
+        return exported
+    attributes: Final = exported.attributes or _NO_ATTRIBUTES
+    extra: Final = tuple((key, value) for key, value in ended.destination_metadata if key not in attributes)
+    max_attributes: Final = ended.limits.max_span_attributes
+    max_length: Final = ended.limits.max_span_attribute_length
+    room: Final = len(extra) if max_attributes is None else max(0, max_attributes - len(attributes))
+    kept: Final = {key: value if max_length is None else value[:max_length] for key, value in extra[:room]}
+    return _CountedSpanView(
+        exported, MappingProxyType({**attributes, **kept}), dropped_attributes=len(extra) - len(kept)
+    )
 
 
 def _is_litellm_span(span: ReadableSpan) -> bool:
@@ -761,9 +821,11 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._span_roots: weakref.WeakKeyDictionary[SDKSpan, int] = weakref.WeakKeyDictionary()
         self._verdicts: OrderedDict[_VerdictKey, bool] = OrderedDict()  # mutable-ok: bounded LRU
         self._drain: Final = drain_pool if drain_pool is not None else _DrainPool(capacity=pending_drains)
+        self._span_limits = SpanLimits()
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         context: Final = span.context
+        self._span_limits = span_limits(span)
         with self._lock:
             request: Final = self._request_of(span, trace.get_current_span(parent_context))
             if context is not None:
@@ -782,8 +844,11 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             if span.context is not None:
                 self._roots.pop(span.context.span_id, None)
         failed: Final = span.status.status_code is StatusCode.ERROR
-        for destination in request_destinations():
-            if (
+        metadata: Final = request_metadata()
+        deliveries: Final = tuple(
+            (destination, with_destination_metadata(span, destination.metadata_keys, metadata, self._span_limits))
+            for destination in request_destinations()
+            if not (
                 self._operator_already_writes(span, destination, suppressed)
                 or not _in_scope(span, destination.span_scope)
                 or _is_excluded_database_span(
@@ -792,12 +857,13 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                     if destination.excluded_db_systems is None
                     else destination.excluded_db_systems,
                 )
-            ):
-                continue
+            )
+        )
+        for destination, view in deliveries:
             if not _is_sampled(destination):
-                self._forward(span, destination)
+                self._forward(view, destination)
                 continue
-            for held_span, held_destination in self._route(request, span, destination, failed):
+            for held_span, held_destination in self._route(request, view, destination, failed):
                 self._forward(held_span, held_destination)
         for held_span, held_destination in self._settle(request, span, failed):
             self._forward(held_span, held_destination)
@@ -834,12 +900,11 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         if processor is None:
             return
         try:
-            processor.on_end(
-                _scoped(
-                    _for_destination(span, destination, self._default_capture_for(destination), self._langfuse_mapped),
-                    destination.span_scope,
-                )
+            exported: Final = _scoped(
+                _for_destination(span, destination, self._default_capture_for(destination), self._langfuse_mapped),
+                destination.span_scope,
             )
+            processor.on_end(with_pending_metadata(span, exported))
         except Exception as exc:  # noqa: BLE001  # one destination's failure must not cost the others their span
             verbose_logger.debug("OTel V2 fan-out: forwarding to %s failed: %s", destination.endpoint, exc)
         finally:

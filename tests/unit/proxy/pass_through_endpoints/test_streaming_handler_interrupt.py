@@ -446,6 +446,47 @@ async def test_chunk_processor_injects_cost_into_openai_passthrough_usage_frame(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("header_value", "cost_expected"), (("true", True), ("TRUE", True), ("1", False), ("false", False), (None, False))
+)
+async def test_chunk_processor_honors_the_opt_in_header_while_global_flag_is_off(
+    monkeypatch: pytest.MonkeyPatch, header_value: str | None, cost_expected: bool
+) -> None:
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+    chunks: Final = _openai_passthrough_stream_chunks()
+    logging_obj: Final = _unarmed_logging_obj(model="gpt-4o-mini")
+    headers: Final = {} if header_value is None else {"x-litellm-include-cost-in-streaming-usage": header_value}
+    logging_obj.model_call_details = {"litellm_params": {"proxy_server_request": {"headers": headers}}}
+
+    received: Final = [
+        chunk
+        async for chunk in PassThroughStreamingHandler.chunk_processor(
+            response=_make_streaming_response(chunks),
+            request_body={"model": "gpt-4o-mini", "stream": True},
+            litellm_logging_obj=logging_obj,
+            endpoint_type=EndpointType.OPENAI,
+            start_time=datetime(2026, 1, 1),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/openai/v1/chat/completions",
+            route_streaming_logging=AsyncMock(),
+        )
+    ]
+    await asyncio.sleep(0)
+
+    usage_payloads: Final = [
+        json.loads(chunk.decode("utf-8").split("data:", 1)[1].strip())
+        for chunk in received
+        if b'"total_tokens"' in chunk
+    ]
+    assert len(usage_payloads) == 1
+    assert ("cost" in usage_payloads[0]["usage"]) is cost_expected
+    if cost_expected:
+        assert usage_payloads[0]["usage"]["cost"] > 0
+    else:
+        assert received == chunks
+
+
+@pytest.mark.asyncio
 async def test_chunk_processor_injects_cost_into_usage_frame_fragmented_across_chunks(monkeypatch):
     """Regression: an SSE usage frame split across transport chunks must still get
     cost injected once the frame completes, instead of passing through untouched."""
@@ -826,7 +867,8 @@ async def test_dropped_attempt_logs_its_failure_without_claiming_the_shared_logg
 
     logging_obj.carry_failed_attempt_usage()
     retry: Final = _anthropic_messages_attempt(
-        logging_obj, _anthropic_stream_of((_anthropic_message_start_frame("msg_a2", 7), *_anthropic_completed_stream_tail()))
+        logging_obj,
+        _anthropic_stream_of((_anthropic_message_start_frame("msg_a2", 7), *_anthropic_completed_stream_tail())),
     )
     async for _ in retry:
         pass
@@ -857,6 +899,7 @@ async def test_every_dropped_attempt_logs_its_own_failure() -> None:
     assert all(isinstance(kwargs["exception"], httpx.ReadError) for kwargs in recorder.failure_kwargs)
     stashed: Final = logging_obj.model_call_details.get("combined_usage_object")
     assert isinstance(stashed, litellm.Usage) and stashed.prompt_tokens == 9
+
 
 def _anthropic_message_start_frame(message_id: str = "msg_1", input_tokens: int = 52) -> bytes:
     return _anthropic_sse(
@@ -890,7 +933,11 @@ def _anthropic_completed_stream_tail() -> tuple[bytes, ...]:
         _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
         _anthropic_sse(
             "message_delta",
-            {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 3}},
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 3},
+            },
         ),
         _anthropic_sse("message_stop", {"type": "message_stop"}),
     )
@@ -923,7 +970,9 @@ def _anthropic_stream_of(frames: tuple[bytes, ...]):
     "frames, billed",
     [
         pytest.param(
-            (_anthropic_message_start_frame(), _anthropic_overloaded_error_frame()), True, id="error-after-message-start"
+            (_anthropic_message_start_frame(), _anthropic_overloaded_error_frame()),
+            True,
+            id="error-after-message-start",
         ),
         pytest.param((_anthropic_overloaded_error_frame(),), False, id="error-frame-only"),
     ],
@@ -1102,7 +1151,8 @@ async def test_error_frame_then_exhausted_retry_bills_both_attempts() -> None:
     recorder: Final = _EventRecorder()
     logging_obj: Final = _anthropic_messages_logging_obj(recorder, "test-error-frame-terminal-billing")
     superseded: Final = _anthropic_messages_attempt(
-        logging_obj, _anthropic_stream_of((_anthropic_message_start_frame("msg_a1", 52), _anthropic_overloaded_error_frame()))
+        logging_obj,
+        _anthropic_stream_of((_anthropic_message_start_frame("msg_a1", 52), _anthropic_overloaded_error_frame())),
     )
     async for chunk in superseded:
         if b"event: error" in chunk:
@@ -1168,6 +1218,8 @@ async def test_retry_success_log_carries_its_own_usage_after_a_provider_error_fr
     success_payload = recorder.success_kwargs[0]["standard_logging_object"]
     assert success_payload["status"] == "success"
     assert (success_payload["prompt_tokens"], success_payload["completion_tokens"]) == (7, 3)
+
+
 def _google_sse(prompt_tokens: int, completion_tokens: int, text: str) -> bytes:
     payload = {
         "candidates": [{"content": {"parts": [{"text": text}], "role": "model"}, "index": 0}],

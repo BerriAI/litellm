@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import redact_secrets, verbose_router_logger
 from litellm.constants import MAX_EXCEPTION_MESSAGE_LENGTH
+from litellm.exceptions import MissingMessageRoleError
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments_with_debug_info,
@@ -44,6 +45,9 @@ async def send_llm_exception_alert(
 
     slack_alerting_logger: Final = ctx.observers().slack_alerting_logger
     if slack_alerting_logger is None:
+        return
+
+    if isinstance(original_exception, MissingMessageRoleError):
         return
 
     if "proxy_server_request" in request_kwargs:

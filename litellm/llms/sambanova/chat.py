@@ -32,6 +32,9 @@ class SambanovaConfig(OpenAIGPTConfig):
     response_format: dict | None = None
     tools: list | None = None
 
+    def _flattens_content_lists(self) -> bool:
+        return True
+
     def __init__(
         self,
         max_tokens: int | None = None,

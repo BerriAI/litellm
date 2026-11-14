@@ -35,6 +35,7 @@ from litellm.types.router import RoutingGroup, RoutingStrategy
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
     from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.redis.stores.router_usage import RouterUsage
     from litellm.router_python_host import PythonHost
 
 Selector: TypeAlias = (
@@ -68,6 +69,7 @@ def build_selector(
     strategy: str | None,
     args: Mapping[str, object],
     cache: "DualCache",
+    usage: "RouterUsage",
     reservations: "InMemoryCache | None" = None,
 ) -> Selector | None:
     """``_build_strategy_selector`` without registering: ``None`` for simple-shuffle and every
@@ -80,7 +82,7 @@ def build_selector(
         case "usage-based-routing":
             return LowestTPMLoggingHandler(router_cache=cache, routing_args=routing_args)
         case "usage-based-routing-v2":
-            return LowestTPMLoggingHandler_v2(router_cache=cache, routing_args=routing_args)
+            return LowestTPMLoggingHandler_v2(usage=usage, routing_args=routing_args)
         case "latency-based-routing":
             return LowestLatencyLoggingHandler(router_cache=cache, routing_args=routing_args)
         case "cost-based-routing":
@@ -98,11 +100,12 @@ class StrategySelectors:
     """The selectors of one router: the default group's, each routing group's, and the lazily
     built per-request override ones."""
 
-    def __init__(self, host: "PythonHost", cache: "DualCache") -> None:
+    def __init__(self, host: "PythonHost", cache: "DualCache", usage: "RouterUsage") -> None:
         from litellm.caching.in_memory_cache import InMemoryCache
 
         self._host: Final = host
         self._cache: Final = cache
+        self._usage: Final = usage
         # `_core_least_busy_reservations`: the picks least-busy reserved, shared by its selectors.
         self.reservations: Final = InMemoryCache(max_size_in_memory=SELECTION_RESERVATION_MAX_KEYS)
         self._strategy: str | None = None
@@ -144,7 +147,7 @@ class StrategySelectors:
         self._strategy = normalize_strategy(strategy)
         if configured:
             self._configured = self._strategy
-        self._default = build_selector(self._strategy, args, self._cache, self.reservations)
+        self._default = build_selector(self._strategy, args, self._cache, self._usage, self.reservations)
         if self._default is not None:
             self._register(self._default)
 
@@ -158,7 +161,7 @@ class StrategySelectors:
         if self._default is None or self._strategy != self._configured:
             return
         try:
-            rebuilt: Final = build_selector(self._strategy, args, self._cache, self.reservations)
+            rebuilt: Final = build_selector(self._strategy, args, self._cache, self._usage, self.reservations)
         except (TypeError, ValidationError):
             verbose_router_logger.exception(
                 "Invalid routing_strategy_args %s for '%s'; keeping the previous ones", dict(args), self._strategy
@@ -177,7 +180,7 @@ class StrategySelectors:
             for name, strategy, args in groups
             if (
                 selector := build_selector(
-                    None if strategy == "priority" else strategy, args, self._cache, self.reservations
+                    None if strategy == "priority" else strategy, args, self._cache, self._usage, self.reservations
                 )
             )
             is not None
@@ -239,7 +242,7 @@ class StrategySelectors:
             return self.default
         with self._lock:
             if strategy not in self._overrides:
-                self._overrides[strategy] = build_selector(strategy, {}, self._cache, self.reservations)
+                self._overrides[strategy] = build_selector(strategy, {}, self._cache, self._usage, self.reservations)
             selector: Final = self._overrides[strategy]
         if selector is not None and request is not None and strategy not in self._registered_strategies():
             from litellm.litellm_core_utils.litellm_logging import Logging

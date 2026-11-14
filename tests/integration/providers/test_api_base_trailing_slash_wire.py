@@ -1,9 +1,12 @@
+from pathlib import Path
 from typing import Final
 
 import anthropic
+import httpx
 import openai
 import pytest
 from integration._support.client import Gateway, Scenario, list_value, object_value
+from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from integration.providers._api_base_trailing_slash_support import (
     KEY,
@@ -309,6 +312,24 @@ def test_embedding_base_that_already_names_the_route_is_sent_as_is(gateway: Gate
         model: Final = deployment(scenario, row, f"{wire.url}{row.base}{trailing}")
         assert _embedding(gateway, model, marker) == list(VECTOR)
         assert_one_request(wire.drain(), row.target, marker)
+
+
+def test_explicit_ollama_embedding_base_does_not_probe_the_default_server(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = new_marker()
+    row: Final = Row(f"ollama/{marker}", "/ol/api/embed", "")
+    with (
+        wire_server(lambda _: Reply()) as default,
+        wire_server(provider_peer) as wire,
+        owned_proxy_process(gateway, tmp_path, {"OLLAMA_API_BASE": default.url}) as owned,
+        owned.gateway.scenario() as scenario,
+        httpx.Client(trust_env=False) as client,
+    ):
+        model: Final = deployment(scenario, row, f"{wire.url}{row.base}")
+        assert _embedding(owned.gateway, model, marker) == list(VECTOR)
+        assert_one_request(wire.drain(), row.target, marker)
+        control: Final = client.get(f"{default.url}/control")
+        assert control.status_code == 200, control.text
+        assert [(request.method, request.target) for request in default.drain()] == [("GET", "/control")]
 
 
 @pytest.mark.parametrize("trailing", TRAILING, ids=TRAILING_IDS)

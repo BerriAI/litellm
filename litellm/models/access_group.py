@@ -20,6 +20,7 @@ class LiteLLM_AccessGroupTable(LiteLLMPydanticObjectBase):
     mcp_tool_permissions: Mapping[str, Sequence[str]] | None = None
     access_agent_ids: list[str] = []
     access_skill_names: tuple[str, ...] = ()
+    access_vector_store_ids: tuple[str, ...] = ()
     assigned_team_ids: list[str] = []
     assigned_key_ids: list[str] = []
     created_at: datetime | None = None
