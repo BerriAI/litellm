@@ -10,6 +10,7 @@ Convers
 Docs - https://docs.cohere.com/v2/reference/embed
 """
 
+import os
 import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Sized
 from enum import Enum
@@ -25,7 +26,6 @@ from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm import BaseEmbeddingConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.bedrock import (
     CohereEmbeddingRequest,
     CohereEmbeddingRequestWithModel,
@@ -220,7 +220,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
     ) -> str:
         if api_base:
             return api_base
-        cohere_api_base: Final = get_secret_str("COHERE_API_BASE")
+        cohere_api_base: Final = os.getenv("COHERE_API_BASE")
         if not cohere_api_base:
             return COHERE_DEFAULT_EMBED_URL
         return _embed_url_from_cohere_api_base(cohere_api_base)
