@@ -29,6 +29,7 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_au
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     open_sse_before_first_byte,
+    refuse_s3_media_the_key_may_not_read,
     ttft_keepalive_interval,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -766,6 +767,7 @@ async def rag_query(
         general_settings,
         llm_router,
         proxy_config,
+        proxy_logging_obj,
         select_data_generator,
         version,
     )
@@ -827,6 +829,10 @@ async def rag_query(
             **retrieval_config,
             **store_data,
         }
+
+        await refuse_s3_media_the_key_may_not_read(
+            data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
+        )
 
         # Add litellm data
         request_data: dict[str, object] = {}

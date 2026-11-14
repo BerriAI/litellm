@@ -84,7 +84,7 @@ if TYPE_CHECKING:
 else:
     MCPTool = Any
 
-from .streaming_iterator import BaseResponsesAPIStreamingIterator
+from .streaming_iterator import BaseResponsesAPIStreamingIterator, ResponsesWsFrameCheck
 
 __all__ = (
     "acancel_responses",
@@ -2555,6 +2555,7 @@ async def _aresponses_websocket(
     api_base: str | None = None,
     api_key: str | None = None,
     timeout: float | None = None,
+    responses_ws_frame_check: ResponsesWsFrameCheck | None = None,
     **kwargs,
 ) -> Exception | None:
     """
@@ -2647,5 +2648,6 @@ async def _aresponses_websocket(
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
         custom_llm_provider=_custom_llm_provider,
         request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
+        frame_check=responses_ws_frame_check,
         **remaining_kwargs,
     )
