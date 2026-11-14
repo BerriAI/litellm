@@ -391,3 +391,120 @@ async def test_cohere_embed_v4_image_embedding(respx_mock: respx.MockRouter, syn
         "input_type": "image",
     }
     assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.125, -0.375]}]
+
+
+@pytest.mark.parametrize(
+    ("cohere_api_base", "expected_url"),
+    [
+        (None, "https://api.cohere.ai/v2/embed"),
+        ("https://gateway.example.com", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/cohere", "https://gateway.example.com/cohere/v2/embed"),
+        ("https://gateway.example.com/cohere-embed", "https://gateway.example.com/cohere-embed/v2/embed"),
+        ("https://gateway.example.com/cohere/v2", "https://gateway.example.com/cohere/v2/embed"),
+        ("https://gateway.example.com/v2/embed", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/v1/embed", "https://gateway.example.com/v1/embed"),
+        ("https://gateway.example.com/cohere/v1/embed/", "https://gateway.example.com/cohere/v1/embed/"),
+        ("https://gateway.example.com/v2/chat", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/v1/chat/", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/cohere/v2/chat", "https://gateway.example.com/cohere/v2/embed"),
+        ("https://gateway.example.com/v2/rerank", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/cohere/v1/rerank", "https://gateway.example.com/cohere/v2/embed"),
+        ("https://gateway.example.com/cohere?tenant=a", "https://gateway.example.com/cohere/v2/embed?tenant=a"),
+        ("https://gateway.example.com/v2/chat?tenant=a", "https://gateway.example.com/v2/embed?tenant=a"),
+        ("https://gateway.example.com/v2/embed?tenant=a", "https://gateway.example.com/v2/embed?tenant=a"),
+    ],
+)
+def test_get_complete_url_resolves_the_embed_endpoint_from_cohere_api_base(
+    monkeypatch: pytest.MonkeyPatch, cohere_api_base: str | None, expected_url: str
+) -> None:
+    if cohere_api_base is None:
+        monkeypatch.delenv("COHERE_API_BASE", raising=False)
+    else:
+        monkeypatch.setenv("COHERE_API_BASE", cohere_api_base)
+    url: Final = CohereEmbeddingConfig().get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="embed-english-v3.0",
+        optional_params={},
+        litellm_params={},
+    )
+    assert url == expected_url
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/gw/cohere-route",
+        "https://gateway.example.com/api/cohere?code=abc",
+        "https://gateway.example.com/cohere/v2/chat",
+    ],
+)
+def test_get_complete_url_sends_an_explicit_api_base_as_is(monkeypatch: pytest.MonkeyPatch, api_base: str) -> None:
+    monkeypatch.setenv("COHERE_API_BASE", "https://env-gateway.example.com")
+    url: Final = CohereEmbeddingConfig().get_complete_url(
+        api_base=api_base,
+        api_key=None,
+        model="embed-english-v3.0",
+        optional_params={},
+        litellm_params={},
+    )
+    assert url == api_base
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.parametrize(
+    ("cohere_api_base", "expected_url"),
+    [
+        ("https://gateway.example.com", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/v1/embed", "https://gateway.example.com/v1/embed"),
+        ("https://gateway.example.com/v2/chat", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/v2/rerank", "https://gateway.example.com/v2/embed"),
+    ],
+)
+async def test_cohere_embedding_sends_the_request_to_cohere_api_base(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, cohere_api_base: str, expected_url: str
+) -> None:
+    monkeypatch.setenv("COHERE_API_BASE", cohere_api_base)
+    route: Final = respx_mock.post(expected_url).mock(
+        return_value=httpx.Response(200, json=_cohere_v2_embed_response(FLOAT_VECTORS[:1], ["hello"]))
+    )
+
+    response: Final = await litellm.aembedding(model="cohere/embed-english-v3.0", input=["hello"], api_key="mock-key")
+
+    assert route.calls.call_count == 1
+    assert response.data[0]["embedding"] == FLOAT_VECTORS[0]
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+async def test_cohere_embedding_prefers_the_caller_api_base_over_cohere_api_base(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COHERE_API_BASE", "https://env-gateway.example.com")
+    route: Final = respx_mock.post("https://caller-gateway.example.com/gw/cohere-route").mock(
+        return_value=httpx.Response(200, json=_cohere_v2_embed_response(FLOAT_VECTORS[:1], ["hello"]))
+    )
+
+    await litellm.aembedding(
+        model="cohere/embed-english-v3.0",
+        input=["hello"],
+        api_key="mock-key",
+        api_base="https://caller-gateway.example.com/gw/cohere-route",
+    )
+
+    assert route.calls.call_count == 1
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+async def test_cohere_embedding_keeps_the_default_url_without_cohere_api_base(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("COHERE_API_BASE", raising=False)
+    route: Final = respx_mock.post(COHERE_V2_EMBED_URL).mock(
+        return_value=httpx.Response(200, json=_cohere_v2_embed_response(FLOAT_VECTORS[:1], ["hello"]))
+    )
+
+    response: Final = await litellm.aembedding(model="cohere/embed-english-v3.0", input=["hello"], api_key="mock-key")
+
+    assert route.calls.call_count == 1
+    assert response.data[0]["embedding"] == FLOAT_VECTORS[0]
