@@ -42,7 +42,13 @@ class RequestLogIndex:
 
     @property
     def columns(self) -> tuple[str, ...]:
-        return tuple(re.findall(r'"([^"]+)"', self.definition))
+        keys: Final = re.split(r"\s+WHERE\s+", self.definition, maxsplit=1, flags=re.IGNORECASE)[0]
+        return tuple(re.findall(r'"([^"]+)"', keys))
+
+    @property
+    def predicate(self) -> str | None:
+        parts: Final = re.split(r"\s+WHERE\s+", self.definition, maxsplit=1, flags=re.IGNORECASE)
+        return parts[1] if len(parts) == 2 else None
 
     def partition_index_name(self, partition: str) -> str:
         """The child index name for one partition, built the way Postgres names the
@@ -56,10 +62,23 @@ class RequestLogIndex:
         return f"{kept}_{digest}"
 
 
+END_USER_RESTRICTED_PREDICATE: Final = (
+    "(blocked OR (budget_id IS NOT NULL) OR (allowed_model_region IS NOT NULL) "
+    "OR (default_model IS NOT NULL) OR (object_permission_id IS NOT NULL) OR (models <> '{}'::text[]))"
+)
+END_USER_RESTRICTED_QUERY: Final = (
+    'SELECT user_id FROM "LiteLLM_EndUserTable" WHERE ' + END_USER_RESTRICTED_PREDICATE + " ORDER BY user_id LIMIT $1"
+)
+
 REQUEST_LOG_INDEXES: Final = (
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_api_key_startTime_idx", '("api_key", "startTime")'),
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_litellm_call_id_idx", '("litellm_call_id")'),
     RequestLogIndex("LiteLLM_DailyUserSpend", "LiteLLM_DailyUserSpend_api_key_date_idx", '("api_key", "date")'),
+    RequestLogIndex(
+        "LiteLLM_EndUserTable",
+        "LiteLLM_EndUserTable_restricted_idx",
+        '("user_id") WHERE ' + END_USER_RESTRICTED_PREDICATE,
+    ),
 )
 
 _IDENTIFIER_MAX_BYTES: Final = 63
@@ -71,6 +90,10 @@ _LOCK_HANDOVER_SECONDS: Final = 2.0
 _DIGEST_LENGTH: Final = 8
 _CREATE_INDEX_STATEMENT: Final = re.compile(
     r'^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"(?P<index>[^"]+)"\s+ON\b',
+    re.IGNORECASE,
+)
+_DROP_INDEX_STATEMENT: Final = re.compile(
+    r'^\s*DROP\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+EXISTS\s+)?(?:"[^"]+"\.)?"(?P<index>[^"]+)"\s*(?:CASCADE|RESTRICT)?\s*$',
     re.IGNORECASE,
 )
 _TABLE_KIND_SQL: Final = "SELECT c.relkind = 'p' AS partitioned FROM pg_class c WHERE c.oid = to_regclass(%s)"
@@ -87,7 +110,8 @@ _EQUIVALENT_INDEXES_SQL: Final = (
     "SELECT i.relname AS name, x.indisvalid AS valid "
     "FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid JOIN pg_am am ON am.oid = i.relam "
     "WHERE x.indrelid = to_regclass(%s) AND i.relname <> %s AND am.amname = 'btree' AND NOT x.indisunique "
-    "AND x.indexprs IS NULL AND x.indpred IS NULL AND x.indnkeyatts = x.indnatts "
+    "AND x.indexprs IS NULL AND pg_get_expr(x.indpred, x.indrelid) IS NOT DISTINCT FROM %s "
+    "AND x.indnkeyatts = x.indnatts "
     "AND NOT EXISTS (SELECT 1 FROM unnest(x.indoption::int2[]) o WHERE o <> 0) "
     "AND NOT EXISTS (SELECT 1 FROM unnest(x.indclass::oid[]) c JOIN pg_opclass oc ON oc.oid = c WHERE NOT oc.opcdefault) "
     "AND NOT EXISTS (SELECT 1 FROM unnest(x.indcollation::oid[]) WITH ORDINALITY c(coll, ord) "
@@ -130,17 +154,21 @@ class _TableKind:
 
 
 def filter_request_log_index_diff(diff_sql: str, indexes: tuple[RequestLogIndex, ...] = REQUEST_LOG_INDEXES) -> str:
-    """The `prisma migrate diff` script without the statements that create a migration-job-owned
-    index, which the schema declares and the migrations deliberately do not build."""
+    """Remove creates of builder-owned indexes and drops of partial indexes Prisma cannot declare."""
     names: Final = frozenset(index.name for index in indexes)
+    partial_names: Final = frozenset(index.name for index in indexes if index.predicate is not None)
     statements: Final = diff_sql.split(";")
-    kept: Final = tuple(statement for statement in statements if not _creates_one_of(statement, names))
+    kept: Final = tuple(
+        statement for statement in statements if not _changes_owned_index(statement, names, partial_names)
+    )
     return ";".join(kept) if any(part.strip() for part in kept) else ""
 
 
-def _creates_one_of(statement: str, names: frozenset[str]) -> bool:
-    match: Final = _CREATE_INDEX_STATEMENT.match(_without_comments(statement))
-    return match is not None and match["index"] in names
+def _changes_owned_index(statement: str, names: frozenset[str], partial_names: frozenset[str]) -> bool:
+    sql: Final = _without_comments(statement)
+    create: Final = _CREATE_INDEX_STATEMENT.match(sql)
+    drop: Final = _DROP_INDEX_STATEMENT.match(sql)
+    return (create is not None and create["index"] in names) or (drop is not None and drop["index"] in partial_names)
 
 
 def _without_comments(statement: str) -> str:
@@ -256,14 +284,15 @@ def _equivalent_indexes(
     index: RequestLogIndex,
 ) -> tuple[_EquivalentIndex, ...]:
     """The indexes on `table` other than `name` with the same definition: default btree
-    over the same columns in the same order, no expression, predicate, DESC or custom
+    over the same columns in the same order and the same deparsed predicate, no expression, DESC or custom
     opclass or collation, and not attached under a partitioned index. Valid ones first."""
     from psycopg.rows import class_row
 
     with connection.cursor(row_factory=class_row(_EquivalentIndex)) as cursor:
         return tuple(
             cursor.execute(
-                _EQUIVALENT_INDEXES_SQL, (_regclass_name(connection, schema, table), name, list(index.columns))
+                _EQUIVALENT_INDEXES_SQL,
+                (_regclass_name(connection, schema, table), name, index.predicate, list(index.columns)),
             ).fetchall()
         )
 

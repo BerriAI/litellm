@@ -10,8 +10,9 @@ import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from itertools import product
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 
 import psycopg
@@ -20,6 +21,8 @@ from litellm_proxy_extras import migration_data_checks, migration_dry_run, reque
 from litellm_proxy_extras.migration_lock import MIGRATION_LOCK_KEY, migration_lock
 from litellm_proxy_extras.migration_recovery import roll_back_failed_inert_migration
 from litellm_proxy_extras.request_log_indexes import (
+    END_USER_RESTRICTED_PREDICATE,
+    END_USER_RESTRICTED_QUERY,
     REQUEST_LOG_INDEXES,
     RequestLogIndex,
     build_index_on_partitioned_table,
@@ -61,6 +64,7 @@ ORIGINAL_MIGRATION_SQL: Final = MappingProxyType(
     }
 )
 CALL_ID_INDEX_DEFINITION: Final = next(index for index in REQUEST_LOG_INDEXES if index.name == CALL_ID_INDEX)
+END_USER_INDEX: Final = next(index for index in REQUEST_LOG_INDEXES if index.table == "LiteLLM_EndUserTable")
 RELEASES: Final = pytest.mark.parametrize(
     "release", (API_KEY_INDEX_MIGRATION, CALL_ID_INDEX_MIGRATION), ids=("v1.102.1", "v1.103.0")
 )
@@ -150,6 +154,10 @@ def scratch_database(release: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     database_url: Final = f"{admin_url.rsplit('/', 1)[0]}/{name}"
     try:
         _deploy_release(database_url, tmp_path / "prisma", release)
+        with psycopg.connect(database_url, autocommit=True) as conn:
+            conn.execute(
+                'ALTER TABLE "LiteLLM_EndUserTable" ADD COLUMN IF NOT EXISTS models TEXT[] DEFAULT ARRAY[]::TEXT[]'
+            )
         monkeypatch.delenv("DIRECT_URL", raising=False)
         monkeypatch.setenv("DATABASE_URL", database_url)
         yield database_url
@@ -248,13 +256,14 @@ def _ledger(database_url: str) -> Mapping[str, tuple[bool, bool]]:
     return MappingProxyType({row.name: (row.finished, row.rolled_back) for row in rows})
 
 
-def _index_oids(database_url: str) -> Mapping[str, int]:
-    """index name -> oid for every index on the SpendLogs parent or one of its partitions; a rebuild changes the oid."""
+def _index_oids(database_url: str, table: str = "LiteLLM_SpendLogs") -> Mapping[str, int]:
+    """Index OIDs on a table and its partitions. Rebuilding an index changes its OID."""
     with psycopg.connect(database_url) as conn, conn.cursor(row_factory=class_row(_OidRow)) as cursor:
         rows: Final = cursor.execute(
             "SELECT c.relname AS name, c.oid::int AS oid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
-            "WHERE i.indrelid = to_regclass('\"LiteLLM_SpendLogs\"') OR i.indrelid IN "
-            "(SELECT inhrelid FROM pg_inherits WHERE inhparent = to_regclass('\"LiteLLM_SpendLogs\"'))"
+            "WHERE i.indrelid = to_regclass(%s) OR i.indrelid IN "
+            "(SELECT inhrelid FROM pg_inherits WHERE inhparent = to_regclass(%s))",
+            (f'"{table}"', f'"{table}"'),
         ).fetchall()
     return MappingProxyType({row.name: row.oid for row in rows})
 
@@ -455,7 +464,7 @@ def _rebuild_as_another_replica(database_url: str, name: str, table: str, column
                 sql.Identifier(name), sql.Identifier(table), sql.Identifier(column)
             )
         )
-    return _index_oids(database_url)[name]
+    return _index_oids(database_url, table)[name]
 
 
 def _connecting_with_another_replica_acting_first(
@@ -853,7 +862,160 @@ def _create_index(database_url: str, name: str, table: str, columns: str) -> int
         conn.execute(
             sql.SQL("CREATE INDEX {} ON {} {}").format(sql.Identifier(name), sql.Identifier(table), sql.SQL(columns))
         )
-    return _index_oids(database_url)[name]
+    return _index_oids(database_url, table)[name]
+
+
+@requires_db
+@pytest.mark.parametrize("name", ("LiteLLM_EndUserTable_restricted_idx", "restricted_by_hand"))
+def test_a_partial_workaround_index_is_reused_without_a_second_copy(scratch_database: str, name: str) -> None:
+    original: Final = _create_index(
+        scratch_database,
+        name,
+        END_USER_INDEX.table,
+        "(user_id) WHERE (blocked OR budget_id IS NOT NULL OR allowed_model_region IS NOT NULL "
+        "OR default_model IS NOT NULL OR object_permission_id IS NOT NULL OR models <> '{}'::text[])",
+    )
+    assert ensure_request_log_indexes(scratch_database, "public", indexes=(END_USER_INDEX,)) is True
+    with psycopg.connect(scratch_database) as conn:
+        rows: Final = conn.execute(
+            "SELECT indexrelid::oid, pg_get_expr(indpred, indrelid) FROM pg_index "
+            "WHERE indrelid = '\"LiteLLM_EndUserTable\"'::regclass AND indpred IS NOT NULL"
+        ).fetchall()
+    assert rows == [(original, END_USER_RESTRICTED_PREDICATE)]
+
+
+@requires_db
+@pytest.mark.parametrize("definition", ("(user_id)", "(user_id) WHERE blocked", "(user_id) WHERE NOT blocked"))
+def test_a_different_partial_predicate_is_not_adopted(scratch_database: str, definition: str) -> None:
+    original: Final = _create_index(scratch_database, "different_predicate", END_USER_INDEX.table, definition)
+    assert ensure_request_log_indexes(scratch_database, "public", indexes=(END_USER_INDEX,)) is True
+    oids: Final = _index_oids(scratch_database, END_USER_INDEX.table)
+    assert oids["different_predicate"] == original
+    assert oids[END_USER_INDEX.name] != original
+
+
+@requires_db
+@RESOLVERS
+def test_a_pending_migration_upgrade_keeps_the_partial_workaround_index(
+    scratch_database: str,
+    use_v2_resolver: bool,
+) -> None:
+    original: Final = _create_index(
+        scratch_database, END_USER_INDEX.name, END_USER_INDEX.table, END_USER_INDEX.definition
+    )
+    assert ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=use_v2_resolver) is True
+    _assert_no_pending_migrations(scratch_database)
+    assert _index_oids(scratch_database, END_USER_INDEX.table)[END_USER_INDEX.name] == original
+    assert ensure_request_log_indexes(scratch_database, "public") is True
+    assert _index_oids(scratch_database, END_USER_INDEX.table)[END_USER_INDEX.name] == original
+
+
+@requires_db
+def test_a_failed_end_user_index_build_fails_the_job_after_applying_the_upgrade(scratch_database: str) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute(
+            sql.SQL('CREATE INDEX {} ON "LiteLLM_ErrorLogs" (request_id)').format(sql.Identifier(END_USER_INDEX.name))
+        )
+    assert ProxyExtrasDBManager.run_migration_job(use_migrate=True) is False
+    _assert_no_pending_migrations(scratch_database)
+    assert _indexed_table(scratch_database, END_USER_INDEX.name) == "LiteLLM_ErrorLogs"
+
+
+@requires_db
+def test_end_user_writes_continue_while_the_partial_index_build_waits(scratch_database: str) -> None:
+    outcome: Final[queue.Queue[bool]] = queue.Queue()
+    with psycopg.connect(scratch_database) as writer:
+        writer.execute("INSERT INTO \"LiteLLM_EndUserTable\" (user_id) VALUES ('open-writer')")
+        builder: Final = threading.Thread(
+            target=lambda: outcome.put(
+                ensure_request_log_indexes(scratch_database, "public", indexes=(END_USER_INDEX,))
+            )
+        )
+        builder.start()
+        try:
+            _wait_until_the_build_is_waiting(scratch_database)
+            with psycopg.connect(scratch_database, autocommit=True) as late:
+                late.execute("SET lock_timeout = '1s'")
+                late.execute("INSERT INTO \"LiteLLM_EndUserTable\" (user_id, blocked) VALUES ('late-writer', true)")
+                late.execute("UPDATE \"LiteLLM_EndUserTable\" SET blocked = true WHERE user_id = 'late-writer'")
+        finally:
+            writer.commit()
+            builder.join(timeout=30)
+    assert not builder.is_alive()
+    assert outcome.get_nowait() is True
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_literal_restricted_ids_match_the_prisma_filter_with_null_empty_and_array_values(
+    scratch_database: str,
+) -> None:
+    from prisma import Prisma
+    from litellm.repositories.table_repositories import EndUserRepository
+
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute('ALTER TABLE "LiteLLM_EndUserTable" ALTER COLUMN blocked DROP NOT NULL')
+        conn.execute(
+            'ALTER TABLE "LiteLLM_EndUserTable" DROP CONSTRAINT IF EXISTS "LiteLLM_EndUserTable_budget_id_fkey"'
+        )
+        conn.execute(
+            'ALTER TABLE "LiteLLM_EndUserTable" DROP CONSTRAINT IF EXISTS "LiteLLM_EndUserTable_object_permission_id_fkey"'
+        )
+        combinations: Final = product(
+            (False, True, None),
+            (None, "", "value"),
+            (None, "", "value"),
+            (None, "", "value"),
+            (None, "", "value"),
+            (None, [], [""], ["model"], [None], ["model", None]),
+        )
+        with conn.cursor() as cursor:
+            cursor.executemany(
+                'INSERT INTO "LiteLLM_EndUserTable" '
+                "(user_id, blocked, budget_id, allowed_model_region, default_model, object_permission_id, models) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                ((f"truth-{n}", *values) for n, values in enumerate(combinations)),
+            )
+    async with Prisma(datasource={"url": scratch_database}) as database:
+        expected: Final = frozenset(
+            row["user_id"]
+            for row in await database.litellm_endusertable.group_by(
+                by=["user_id"],
+                where={
+                    "OR": [
+                        {"blocked": True},
+                        {"budget_id": {"not": None}},
+                        {"allowed_model_region": {"not": None}},
+                        {"default_model": {"not": None}},
+                        {"object_permission_id": {"not": None}},
+                        {"models": {"is_empty": False}},
+                    ]
+                },
+            )
+        )
+        repository: Final = EndUserRepository(SimpleNamespace(db=database))
+        assert frozenset(await repository.find_restricted_ids(5001)) == expected
+        assert ensure_request_log_indexes(scratch_database, "public", indexes=(END_USER_INDEX,)) is True
+        assert frozenset(await repository.find_restricted_ids(5001)) == expected
+
+
+@requires_db
+def test_a_generic_registry_plan_reads_the_partial_index_not_unrestricted_rows(scratch_database: str) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute(
+            'INSERT INTO "LiteLLM_EndUserTable" (user_id) '
+            "SELECT 'unrestricted-' || n FROM generate_series(1, 10000) n"
+        )
+        conn.execute('ANALYZE "LiteLLM_EndUserTable"')
+        assert ensure_request_log_indexes(scratch_database, "public", indexes=(END_USER_INDEX,)) is True
+        conn.execute("SET plan_cache_mode = force_generic_plan")
+        conn.execute("PREPARE registry(bigint) AS " + END_USER_RESTRICTED_QUERY)
+        result: Final = conn.execute("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) EXECUTE registry(5001)").fetchone()
+        assert result is not None
+        scan: Final = result[0][0]["Plan"]["Plans"][0]
+        assert scan["Node Type"] == "Index Only Scan"
+        assert scan["Index Name"] == END_USER_INDEX.name
+        assert scan["Actual Rows"] == 0
 
 
 @requires_db

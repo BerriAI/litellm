@@ -8441,7 +8441,7 @@ async def test_get_end_user_object_db_fetch_returns_validated_end_user():
 
 def _end_user_registry_row(user_id: str):
     """A row as the restricted-id registry query sees it: only ``user_id`` is read off it."""
-    return SimpleNamespace(user_id=user_id)
+    return {"user_id": user_id}
 
 
 def _end_user_db_row(user_id: str, **fields):
@@ -8485,7 +8485,7 @@ async def test_get_end_user_object_never_queries_db_for_unrestricted_end_users(
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[_end_user_registry_row("eu-blocked")])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[_end_user_registry_row("eu-blocked")])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
     cache = UserApiKeyCache()
 
@@ -8499,14 +8499,10 @@ async def test_get_end_user_object_never_queries_db_for_unrestricted_end_users(
     )
     mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
 
-    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
-    registry_call = mock_prisma.db.litellm_endusertable.find_many.call_args
-    assert registry_call.kwargs["take"] == END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1
-    # Every field the callers of get_end_user_object consume has to be in this predicate, or an id
-    # the registry calls unrestricted would silently lose a restriction that is actually enforced.
-    assert registry_call.kwargs["where"] == _RESTRICTED_END_USER_WHERE
+    mock_prisma.db.query_raw.assert_awaited_once()
+    assert mock_prisma.db.query_raw.call_args.args[1] == END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1
 
-    mock_prisma.db.litellm_endusertable.find_many.reset_mock()
+    mock_prisma.db.query_raw.reset_mock()
     assert (
         await get_end_user_object(
             end_user_id="eu-anon-2",
@@ -8516,7 +8512,7 @@ async def test_get_end_user_object_never_queries_db_for_unrestricted_end_users(
         is None
     )
     # A second, different unknown id inside the TTL costs nothing: no rebuild, no row fetch.
-    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
+    mock_prisma.db.query_raw.assert_not_awaited()
     mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
 
 
@@ -8526,7 +8522,7 @@ async def test_get_end_user_object_still_fetches_restricted_end_user(end_user_re
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[_end_user_registry_row("eu-blocked")])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[_end_user_registry_row("eu-blocked")])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
         return_value=_end_user_db_row("eu-blocked", blocked=True)
     )
@@ -8559,7 +8555,7 @@ async def test_get_end_user_object_caches_empty_restricted_registry(end_user_reg
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
     cache = UserApiKeyCache()
 
@@ -8584,7 +8580,7 @@ async def test_get_end_user_object_caches_empty_restricted_registry(end_user_reg
         )
         is None
     )
-    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
+    mock_prisma.db.query_raw.assert_awaited_once()
     mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
 
 
@@ -8602,7 +8598,7 @@ async def test_get_end_user_object_registry_db_error_negative_caches_and_keeps_p
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(side_effect=Exception("registry query failed"))
+    mock_prisma.db.query_raw = AsyncMock(side_effect=Exception("registry query failed"))
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
         side_effect=lambda **kwargs: _end_user_db_row(kwargs["where"]["user_id"], blocked=True)
     )
@@ -8626,7 +8622,7 @@ async def test_get_end_user_object_registry_db_error_negative_caches_and_keeps_p
         user_api_key_cache=cache,
     )
     assert second is not None and second.blocked is True
-    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
+    mock_prisma.db.query_raw.assert_awaited_once()
 
     # The window closing (here: the entry expiring) puts the registry back in play.
     await cache.async_delete_cache(key=end_user_restricted_registry_cache_key())
@@ -8636,7 +8632,7 @@ async def test_get_end_user_object_registry_db_error_negative_caches_and_keeps_p
         user_api_key_cache=cache,
     )
     assert third is not None and third.blocked is True
-    assert mock_prisma.db.litellm_endusertable.find_many.await_count == 2
+    assert mock_prisma.db.query_raw.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -8649,7 +8645,7 @@ async def test_registry_db_error_is_logged_at_warning(end_user_registry_skip_ena
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(side_effect=Exception("registry query failed"))
+    mock_prisma.db.query_raw = AsyncMock(side_effect=Exception("registry query failed"))
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-1", blocked=True))
 
     with patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger") as mock_logger:
@@ -8679,12 +8675,12 @@ async def test_end_user_registry_load_is_single_flighted_across_concurrent_reque
     """
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
-    async def fake_find_many(**kwargs):
+    async def fake_query_raw(*args):
         await asyncio.sleep(0)
         return [_end_user_registry_row("eu-blocked")]
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(side_effect=fake_find_many)
+    mock_prisma.db.query_raw = AsyncMock(side_effect=fake_query_raw)
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
     cache = UserApiKeyCache()
 
@@ -8700,7 +8696,7 @@ async def test_end_user_registry_load_is_single_flighted_across_concurrent_reque
     )
 
     assert all(result is None for result in results)
-    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
+    mock_prisma.db.query_raw.assert_awaited_once()
     mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
 
 
@@ -8713,7 +8709,7 @@ async def test_get_end_user_object_oversized_registry_falls_back_and_stops_refet
 
     oversized = [_end_user_registry_row(f"eu-{index}") for index in range(END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1)]
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=oversized)
+    mock_prisma.db.query_raw = AsyncMock(return_value=oversized)
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
         side_effect=lambda **kwargs: _end_user_db_row(kwargs["where"]["user_id"], blocked=True)
     )
@@ -8736,7 +8732,7 @@ async def test_get_end_user_object_oversized_registry_falls_back_and_stops_refet
         user_api_key_cache=cache,
     )
     assert second is not None and second.blocked is True
-    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
+    mock_prisma.db.query_raw.assert_awaited_once()
     assert mock_prisma.db.litellm_endusertable.find_unique.await_count == 2
 
 
