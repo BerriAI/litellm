@@ -1758,6 +1758,8 @@ def billed_flat_cost(
     custom_llm_provider: str | None,
     model: str | None,
     litellm_logging_obj: LitellmLoggingObject | None,
+    input_cost: float | None,
+    output_cost: float | None,
 ) -> float:
     discounted_cost, discount_percent, discount_amount = _apply_cost_discount(
         base_cost=base_cost, custom_llm_provider=custom_llm_provider, model=model
@@ -1767,8 +1769,8 @@ def billed_flat_cost(
     )
     _store_cost_breakdown_in_logging_obj(
         litellm_logging_obj=litellm_logging_obj,
-        prompt_tokens_cost_usd_dollar=None,
-        completion_tokens_cost_usd_dollar=None,
+        prompt_tokens_cost_usd_dollar=input_cost,
+        completion_tokens_cost_usd_dollar=output_cost,
         cost_for_built_in_tools_cost_usd_dollar=0.0,
         total_cost_usd_dollar=billed_cost,
         original_cost=base_cost,

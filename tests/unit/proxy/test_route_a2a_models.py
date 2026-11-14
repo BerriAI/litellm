@@ -9,6 +9,7 @@ import base64
 import datetime
 import json
 import logging
+import uuid
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType
 from typing import Final
@@ -29,6 +30,7 @@ from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.agent_endpoints.a2a_routing import route_a2a_agent_request
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.agent_endpoints.databricks_oauth import databricks_app_oauth_token_cache
+from litellm.proxy.common_request_processing import cost_headers
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.agents import AgentResponse
@@ -849,6 +851,66 @@ async def test_route_a2a_bridge_agent_with_an_unusable_price_still_answers(
 
 
 @respx.mock
+async def test_route_a2a_bridge_token_priced_agent_reports_its_input_and_output_cost(
+    httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": 0.1})
+
+    cost, response, logging_obj = await _billed_chat_call(
+        _registry_with(_priced_dbx_agent("per-token", PER_TOKEN_PRICE)), "per-token"
+    )
+
+    headers: Final = cost_headers(response_cost=cost, litellm_logging_obj=logging_obj)
+    input_cost: Final = response.usage.prompt_tokens * 0.0001
+    output_cost: Final = response.usage.completion_tokens * 0.0002
+    assert float(headers["x-litellm-response-cost-input"]) == pytest.approx(input_cost)
+    assert float(headers["x-litellm-response-cost-output"]) == pytest.approx(output_cost)
+    assert cost == pytest.approx((input_cost + output_cost) * 1.1)
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("config_name", "config"),
+    [
+        ("cost_margin_config", {"global": {"percentage": "ten"}}),
+        ("cost_margin_config", {"global": {"fixed_amount": None}}),
+        ("cost_discount_config", {"databricks_agent": "a fifth"}),
+    ],
+)
+async def test_route_a2a_bridge_agent_with_a_malformed_cost_config_still_answers(
+    httpx_transport: None, monkeypatch: pytest.MonkeyPatch, config_name: str, config: Mapping[str, object]
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    monkeypatch.setattr(litellm, config_name, config)
+
+    cost, response, _ = await _billed_chat_call(
+        _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE)), "per-query"
+    )
+
+    assert response.choices[0].message.content == "pong"
+    assert cost is None
+
+
+@respx.mock
+async def test_route_a2a_bridge_agent_cost_adds_the_calls_additional_response_cost(httpx_transport: None) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    _, response, logging_obj = await _billed_chat_call(
+        _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE)), "per-query"
+    )
+
+    logging_obj.model_call_details["additional_response_cost"] = 0.01
+
+    assert logging_obj.response_cost_calculator(result=response) == pytest.approx(0.06)
+
+
+@respx.mock
 async def test_route_a2a_bridge_agent_responses_call_returns_the_callers_metadata_unchanged(
     httpx_transport: None,
 ) -> None:
@@ -876,15 +938,21 @@ async def test_route_a2a_bridge_agent_warns_once_about_prices_agent_billing_igno
     respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
         return_value=httpx.Response(200, json=AGENT_REPLY)
     )
-    registry: Final = _registry_with(_priced_dbx_agent("per-second", {"input_cost_per_second": 0.5}))
+    per_second_agent: Final = f"per-second-{uuid.uuid4().hex}"
+    per_query_agent: Final = f"per-query-{uuid.uuid4().hex}"
+    registry: Final = AgentRegistry()
+    registry.register_agent(_priced_dbx_agent(per_second_agent, {"input_cost_per_second": 0.5}))
+    registry.register_agent(_priced_dbx_agent(per_query_agent, PER_QUERY_PRICE))
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        await _billed_chat_call(registry, "per-second")
-        await _billed_chat_call(registry, "per-second")
+        await _billed_chat_call(registry, per_second_agent)
+        await _billed_chat_call(registry, per_second_agent)
+        await _billed_chat_call(registry, per_query_agent)
 
-    warnings: Final = [record.getMessage() for record in caplog.records if "input_cost_per_second" in record.getMessage()]
+    warnings: Final = [record.getMessage() for record in caplog.records if "agent billing ignores" in record.getMessage()]
     assert len(warnings) == 1
-    assert "per-second" in warnings[0]
+    assert per_second_agent in warnings[0]
+    assert "input_cost_per_second" in warnings[0]
 
 
 class _SpendRowCapture(CustomLogger):
@@ -904,7 +972,9 @@ class _SpendRowCapture(CustomLogger):
         )
 
 
-async def _logged_spend_row(agent: AgentResponse, stream: bool, monkeypatch: pytest.MonkeyPatch) -> SpendLogsPayload:
+async def _logged_spend_row(
+    agent: AgentResponse, stream: bool, monkeypatch: pytest.MonkeyPatch
+) -> tuple[SpendLogsPayload, str | None]:
     row: Final[asyncio.Future[SpendLogsPayload]] = asyncio.get_running_loop().create_future()
     capture: Final = _SpendRowCapture(row)
     monkeypatch.setattr(litellm, "callbacks", [capture])
@@ -918,9 +988,12 @@ async def _logged_spend_row(agent: AgentResponse, stream: bool, monkeypatch: pyt
     }
     with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
         response: Final = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
-        if isinstance(response, CustomStreamWrapper):
-            _: Final = [chunk async for chunk in response]
-    return await asyncio.wait_for(row, timeout=5)
+        text: Final = (
+            "".join([chunk.choices[0].delta.content or "" async for chunk in response])
+            if isinstance(response, CustomStreamWrapper)
+            else response.choices[0].message.content
+        )
+    return await asyncio.wait_for(row, timeout=5), text
 
 
 def _billed_fields(row: SpendLogsPayload) -> tuple[float, str | None, str | None, int, int]:
@@ -939,8 +1012,9 @@ async def test_route_a2a_bridge_agent_streamed_call_logs_the_same_spend_row_as_a
     )
     agent: Final = _priced_dbx_agent("priced", price)
 
-    plain_row: Final = await _logged_spend_row(agent, False, monkeypatch)
-    streamed_row: Final = await _logged_spend_row(agent, True, monkeypatch)
+    plain_row, plain_text = await _logged_spend_row(agent, False, monkeypatch)
+    streamed_row, streamed_text = await _logged_spend_row(agent, True, monkeypatch)
 
+    assert streamed_text == plain_text == "pong"
     assert _billed_fields(streamed_row) == _billed_fields(plain_row)
     assert _billed_fields(streamed_row) == (pytest.approx(expected_spend), "priced-id", "a2a/priced", 12, 34)

@@ -6,6 +6,7 @@ to define custom costs per agent query or per token.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, SupportsFloat, SupportsIndex
 
@@ -24,6 +25,16 @@ else:
 
 A2A_COST_PARAM_KEYS: Final = ("cost_per_query", "input_cost_per_token", "output_cost_per_token")
 _PRICE: Final = TypeAdapter(float)
+
+
+@dataclass(frozen=True, slots=True)
+class AgentCost:
+    total: float
+    input_cost: float | None = None
+    output_cost: float | None = None
+
+
+_UNPRICED: Final = AgentCost(total=0.0)
 
 
 def a2a_cost_params(litellm_params: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -89,17 +100,17 @@ class A2ACostCalculator:
         return A2ACostCalculator.agent_cost(
             cost_params=model_call_details.get("litellm_params", {}) or {},
             usage=usage if isinstance(usage, Usage) else None,
-        )
+        ).total
 
     @staticmethod
-    def agent_cost(cost_params: Mapping[str, object], usage: Usage | None) -> float:
+    def agent_cost(cost_params: Mapping[str, object], usage: Usage | None) -> AgentCost:
         cost_per_query: Final = _price(cost_params, "cost_per_query")
         if cost_per_query is not None:
-            return cost_per_query
+            return AgentCost(total=cost_per_query)
         input_cost_per_token: Final = _price(cost_params, "input_cost_per_token")
         output_cost_per_token: Final = _price(cost_params, "output_cost_per_token")
         if usage is None or (input_cost_per_token is None and output_cost_per_token is None):
-            return 0.0
-        return usage.prompt_tokens * (input_cost_per_token or 0.0) + usage.completion_tokens * (
-            output_cost_per_token or 0.0
-        )
+            return _UNPRICED
+        input_cost: Final = usage.prompt_tokens * (input_cost_per_token or 0.0)
+        output_cost: Final = usage.completion_tokens * (output_cost_per_token or 0.0)
+        return AgentCost(total=input_cost + output_cost, input_cost=input_cost, output_cost=output_cost)

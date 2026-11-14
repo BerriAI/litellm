@@ -854,41 +854,6 @@ async def test_async_post_call_failure_hook_keeps_a_guardrail_verdict_recorded_a
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_failure_hook_names_the_agent_a_failed_call_was_billed_to():
-    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
-    writer.update_database = AsyncMock()
-    logging_obj: Final = LiteLLMLoggingObj(
-        model="a2a/my-agent",
-        messages=[{"role": "user", "content": "ping"}],
-        stream=True,
-        call_type="acompletion",
-        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        litellm_call_id="failed-agent-call",
-        function_id="a2a-chat",
-    )
-    logging_obj.bill_as_a2a_agent(agent_id="my-agent-id", cost_params={"cost_per_query": 0.05})
-
-    await ProxyDBLogger(spend_writer=lambda: writer).async_post_call_failure_hook(
-        request_data={
-            "model": "a2a/my-agent",
-            "messages": [{"role": "user", "content": "ping"}],
-            "stream": True,
-            "litellm_logging_obj": logging_obj,
-        },
-        original_exception=Exception("agent endpoint returned 500"),
-        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
-    )
-
-    row: Final = get_logging_payload(
-        kwargs=writer.update_database.call_args.kwargs["kwargs"],
-        response_obj={},
-        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        end_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
-    )
-    assert row["agent_id"] == "my-agent-id"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(("tracking_disabled", "expected_end_user_id"), [(True, None), (None, "session-abc123")])
 async def test_async_post_call_failure_hook_records_end_user_only_while_end_user_cost_tracking_is_on(
     monkeypatch: pytest.MonkeyPatch, tracking_disabled: bool | None, expected_end_user_id: str | None

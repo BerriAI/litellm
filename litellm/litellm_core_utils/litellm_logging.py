@@ -2581,11 +2581,20 @@ class Logging(LiteLLMLoggingBaseClass):
     def _a2a_agent_response_cost(self, cost_params: Mapping[str, object], priced_result: object) -> float | None:
         from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 
+        provider: Final[object] = self.model_call_details.get("custom_llm_provider")
         try:
             agent_cost: Final = A2ACostCalculator.agent_cost(
                 cost_params, get_usage_object(completion_response=priced_result)
             )
-        except ValueError as e:
+            billed_cost: Final = billed_flat_cost(
+                base_cost=agent_cost.total,
+                custom_llm_provider=provider if isinstance(provider, str) else None,
+                model=self.model,
+                litellm_logging_obj=self,
+                input_cost=agent_cost.input_cost,
+                output_cost=agent_cost.output_cost,
+            )
+        except (ValueError, TypeError) as e:
             self.model_call_details["response_cost_failure_debug_information"] = (
                 StandardLoggingModelCostFailureDebugInformation(
                     error_str=str(e),
@@ -2594,13 +2603,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             )
             return None
-        provider: Final[object] = self.model_call_details.get("custom_llm_provider")
-        billed_cost: Final = billed_flat_cost(
-            base_cost=agent_cost,
-            custom_llm_provider=provider if isinstance(provider, str) else None,
-            model=self.model,
-            litellm_logging_obj=self,
-        )
         additional_response_cost: Final[object] = self.model_call_details.get("additional_response_cost")
         return self._recorded_response_cost(
             billed_cost + additional_response_cost
