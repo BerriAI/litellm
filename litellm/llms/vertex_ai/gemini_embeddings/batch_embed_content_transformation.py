@@ -386,6 +386,7 @@ _EMBED_CONTENT_CONFIG_SPELLINGS: Final = (_EMBED_CONTENT_CONFIG_FIELD, "embed_co
 _AUDIO_TRACK_EXTRACTION_SPELLINGS: Final = ("audioTrackExtraction", "audio_track_extraction")
 _GOOGLE_TRUE_VALUES: Final = frozenset({"true", "t", "yes", "y", "1", "1.0"})
 _STRING_KEYED_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_ANY_KEYED_FIELDS: Final = TypeAdapter(Mapping[object, object])
 _EMBED_CONTENT_CONFIG_FIELD_BY_PARAM: Final = MappingProxyType(
     {
         "document_ocr": "documentOcr",
@@ -410,8 +411,8 @@ def audio_track_extraction_enabled(optional_params: Mapping[str, object]) -> boo
 
 
 def _turns_on_audio_track_extraction(config: object) -> bool:
-    fields: Final[Mapping[str, object]] = (
-        _STRING_KEYED_FIELDS.validate_python(config) if isinstance(config, Mapping) else {}
+    fields: Final[Mapping[object, object]] = (
+        _ANY_KEYED_FIELDS.validate_python(config) if isinstance(config, Mapping) else {}
     )
     return any(str(fields.get(field)).lower() in _GOOGLE_TRUE_VALUES for field in _AUDIO_TRACK_EXTRACTION_SPELLINGS)
 

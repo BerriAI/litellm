@@ -1224,14 +1224,18 @@ def test_gemini_batch_embedding_gives_a_videos_extracted_audio_tokens_to_the_vid
     assert tuple(usage.prompt_tokens_details.audio_tokens for usage in response.item_usage) == expected_audio_tokens
 
 
-def test_gemini_batch_embedding_with_an_unreadable_embed_content_config_fails_before_calling_google(
+def test_gemini_batch_embedding_sends_an_embed_content_config_with_non_string_keys_to_google(
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
-    ).mock(return_value=httpx.Response(200, json={"embeddings": [{"values": [0.1, 0.2]}]}))
+    ).mock(
+        return_value=httpx.Response(
+            400, json={"error": {"code": 400, "message": "Invalid JSON payload received.", "status": "INVALID_ARGUMENT"}}
+        )
+    )
 
-    with pytest.raises(litellm.APIConnectionError, match="validation error"):
+    with pytest.raises(BadRequestError, match="Invalid JSON payload received"):
         litellm.embedding(
             model="gemini/gemini-embedding-2",
             input=["hello"],
@@ -1239,7 +1243,7 @@ def test_gemini_batch_embedding_with_an_unreadable_embed_content_config_fails_be
             extra_body={"embedContentConfig": {1: True}},
         )
 
-    assert route.call_count == 0
+    assert route.call_count == 1
 
 
 @pytest.mark.parametrize("use_embed_content", [False, True])
