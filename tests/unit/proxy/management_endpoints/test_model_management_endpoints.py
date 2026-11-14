@@ -11882,3 +11882,39 @@ def test_a_model_info_currency_can_be_switched_back_to_usd_in_model_info():
     assert "usd_per_currency_unit" not in info and "usd_per_currency_unit" not in params
     rebuilt: Final = Deployment(model_name="huf-model-info", litellm_params=params, model_info=info)  # pyright: ignore[reportArgumentType]  # a stored row
     assert rebuilt.model_info.input_cost_per_token == 2e-6
+
+
+@pytest.mark.parametrize(
+    ("db_model", "source_input_price"),
+    [(_huf_db_model, 0.0008), (_huf_model_info_db_model, 0.00072)],
+    ids=["in-litellm_params", "in-model_info"],
+)
+def test_the_same_currency_sent_in_both_sections_is_kept(db_model, source_input_price):
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    settings: Final = {"pricing_currency": "HUF", "usd_per_currency_unit": "0.0033"}
+    params, info = _stored(
+        update_db_model(
+            db_model=db_model(),
+            updated_patch=updateDeployment.model_validate({"litellm_params": settings, "model_info": settings}),
+        )
+    )
+
+    rebuilt: Final = Deployment(model_name="huf", litellm_params=params, model_info=info)  # pyright: ignore[reportArgumentType]  # a stored row
+    assert rebuilt.model_info.input_cost_per_token == pytest.approx(source_input_price * 0.0033, rel=1e-15)
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"litellm_params": {"usd_per_currency_unit": "0.0033"}, "model_info": {"usd_per_currency_unit": "0.004"}},
+        {"litellm_params": {"pricing_currency": "HUF"}, "model_info": {"pricing_currency": "EUR"}},
+    ],
+    ids=["conflicting-rates", "conflicting-currencies"],
+)
+def test_contradicting_currency_settings_in_one_patch_are_refused(patch):
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    with pytest.raises(HTTPException) as raised:
+        update_db_model(db_model=_huf_db_model(), updated_patch=updateDeployment.model_validate(patch))
+    assert raised.value.status_code == 400

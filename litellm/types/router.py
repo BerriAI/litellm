@@ -983,8 +983,9 @@ def _usd_priced(
     if boolean_error is not None:
         raise ValueError(boolean_error)
     normalized: Final = normalize_deployment_pricing(params, info)
-    if isinstance(normalized, PricingCurrencyError):
-        raise ValueError(normalized.message)
+    match normalized:
+        case PricingCurrencyError(message=message):
+            raise ValueError(message)
     return (
         litellm_params
         if normalized.litellm_params is params

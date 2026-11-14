@@ -628,7 +628,7 @@ def test_currency_settings_read_back_in_the_section_that_set_them() -> None:
         },
     )
     params, info = source_currency_view(dict(built.litellm_params), dict(built.model_info))
-    assert "pricing_currency" not in params and "usd_per_currency_unit" not in params
+    assert params.get("pricing_currency") is None and params.get("usd_per_currency_unit") is None
     assert (info["pricing_currency"], info["usd_per_currency_unit"], info["input_cost_per_token"]) == (
         "HUF",
         "0.003",

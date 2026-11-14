@@ -5775,20 +5775,20 @@ def validate_deployment_complexity_router_placement(model: Mapping[str, object])
         raise ValueError(f"model {model.get('model_name', '')!r}: {violation}")
 
 
-def validate_deployment_pricing_currency(
-    model: MutableMapping[str, object],  # mutable-ok: the config entry, normalized in place like its other fields
-) -> None:
-    """Drop a currency record the config file carries, since only a deployment build writes one, and refuse a
-    currency setting the deployment build would reject, naming the model."""
+def deployment_pricing_model_info(model: Mapping[str, object]) -> Mapping[str, object] | None:
+    """A config entry's model_info without a currency record, which only a deployment build writes, after refusing
+    a currency setting the deployment build would reject, naming the model."""
+    litellm_params: Final = _CONFIG_SECTION.validate_python(model.get("litellm_params") or {})
     configured_info: Final = model.get("model_info")
-    if isinstance(configured_info, dict):
-        model["model_info"] = dict(without_pricing_projection(configured_info))
-    pricing_error: Final = pricing_configuration_error(
-        _CONFIG_SECTION.validate_python(model.get("litellm_params") or {}),
-        _CONFIG_SECTION.validate_python(model.get("model_info") or {}),
+    model_info: Final = (
+        without_pricing_projection(_CONFIG_SECTION.validate_python(configured_info))
+        if isinstance(configured_info, Mapping)
+        else None
     )
+    pricing_error: Final = pricing_configuration_error(litellm_params, model_info or {})
     if pricing_error is not None:
         raise ValueError(f"Invalid pricing for model '{model.get('model_name', '')}': {pricing_error}")
+    return model_info
 
 
 def validate_deployment_access_windows(model: Mapping[str, object]) -> None:
@@ -7789,7 +7789,8 @@ class ProxyConfig:
                 validate_deployment_max_agentic_loops(model)
                 validate_deployment_complexity_router_placement(model)
                 validate_deployment_access_windows(model)
-                validate_deployment_pricing_currency(model)
+                if (pricing_model_info := deployment_pricing_model_info(model)) is not None:
+                    model["model_info"] = dict(pricing_model_info)
                 pin_complexity_router_model_id(model)
                 complexity_router_config = model["litellm_params"].get("complexity_router_config")
                 if isinstance(complexity_router_config, dict):
@@ -17299,6 +17300,25 @@ def _enrich_model_info_with_litellm_data(
     llm_router: Router | None = None,
     caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY,
 ) -> dict[str, Any]:
+    """The model row as configured, its currency-priced prices back in their source currency, enriched with
+    litellm model info (pricing, context window, etc.) and stripped of sensitive information."""
+    configured_params, configured_info = source_currency_view(
+        model.get("litellm_params") or {}, model.get("model_info") or {}
+    )
+    return _enrich_configured_model(
+        {**model, "litellm_params": dict(configured_params), "model_info": dict(configured_info)},
+        debug=debug,
+        llm_router=llm_router,
+        caller_aliases=caller_aliases,
+    )
+
+
+def _enrich_configured_model(
+    model: dict[str, Any],
+    debug: bool = False,
+    llm_router: Router | None = None,
+    caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY,
+) -> dict[str, Any]:
     """
     Enrich a model dictionary with litellm model info (pricing, context window, etc.)
     and remove sensitive information.
@@ -17312,12 +17332,7 @@ def _enrich_model_info_with_litellm_data(
     Returns:
         Enriched model dictionary with sensitive info removed
     """
-    configured_params, configured_info = source_currency_view(
-        model.get("litellm_params") or {}, model.get("model_info") or {}
-    )
-    model["litellm_params"] = dict(configured_params)
-    model["model_info"] = dict(configured_info)
-    model_info: Final = model["model_info"]
+    model_info: Final = model.get("model_info", {})
     if debug is True:
         _openai_client = "None"
         if llm_router is not None:

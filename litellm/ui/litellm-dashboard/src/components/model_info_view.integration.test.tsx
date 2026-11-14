@@ -38,7 +38,8 @@ vi.mock("./networking", () => ({
 const mockUseModelsInfo = vi.fn();
 const mockUseModelHub = vi.fn();
 
-vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+vi.mock("@/app/(dashboard)/hooks/models/useModels", async (importOriginal) => ({
+  modelKeys: (await importOriginal<typeof import("@/app/(dashboard)/hooks/models/useModels")>()).modelKeys,
   useModelsInfo: (...args: any[]) => mockUseModelsInfo(...args),
   useModelHub: (...args: any[]) => mockUseModelHub(...args),
 }));
@@ -417,6 +418,46 @@ describe("ModelInfoView", () => {
       expect(mockTestConnectionRequest).toHaveBeenCalled();
       expect(mockToast.success).toHaveBeenCalledWith("Connection test successful!");
     });
+  });
+
+  it("saves a HUF model's untouched settings without echoing its prices, currency or USD figures", async () => {
+    const user = userEvent.setup();
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: {
+              ...defaultModelData.litellm_params,
+              pricing_currency: "HUF",
+              usd_per_currency_unit: "0.003",
+              input_cost_per_token: 0.00072,
+            },
+            model_info: {
+              ...defaultModelData.model_info,
+              input_cost_per_token: 0.00072,
+              usd_pricing: { input_cost_per_token: 0.00000216 },
+              pricing_source: { currency: "HUF" },
+            },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(await screen.findByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalled());
+
+    const body = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(body.litellm_params).not.toHaveProperty("pricing_currency");
+    expect(body.litellm_params).not.toHaveProperty("usd_per_currency_unit");
+    expect(body.litellm_params).not.toHaveProperty("input_cost_per_token");
+    expect(body.model_info).not.toHaveProperty("usd_pricing");
+    expect(body.model_info).not.toHaveProperty("pricing_source");
+    expect(body.model_info).not.toHaveProperty("input_cost_per_token");
   });
 
   it("should pass model_info.id to disambiguate duplicate model_name deployments", async () => {

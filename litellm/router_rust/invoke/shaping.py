@@ -396,18 +396,11 @@ def _clientside_deployment(
 # --- the deployment --------------------------------------------------------------------------
 
 
-def _stamp_pricing_snapshot(
-    metadata: MutableMapping[str, object],  # mutable-ok: the request's metadata bucket, shaped in place
-    deployment: Mapping[str, object],
-) -> None:
+def _selected_pricing_snapshot(deployment: Mapping[str, object]) -> str | None:
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.surface.registry import selected_pricing_snapshot
 
-    snapshot: Final = selected_pricing_snapshot(PythonHost(), deployment)
-    if snapshot is None:
-        metadata.pop(PRICING_SNAPSHOT, None)
-    else:
-        metadata[PRICING_SNAPSHOT] = snapshot
+    return selected_pricing_snapshot(PythonHost(), deployment)
 
 
 def update_kwargs_with_deployment(
@@ -473,7 +466,11 @@ def update_kwargs_with_deployment(
             KUBERNETES_POD_ROUTING_KEY: routing,
         }
     )
-    _stamp_pricing_snapshot(metadata, deployment)
+    pricing_snapshot: Final = _selected_pricing_snapshot(deployment)
+    if pricing_snapshot is None:
+        metadata.pop(PRICING_SNAPSHOT, None)
+    else:
+        metadata[PRICING_SNAPSHOT] = pricing_snapshot
     other_bucket: Final = "metadata" if metadata_variable_name == "litellm_metadata" else "litellm_metadata"
     stale_snapshot_bucket: Final = kwargs.get(other_bucket)
     if isinstance(stale_snapshot_bucket, Mapping) and PRICING_SNAPSHOT in stale_snapshot_bucket:

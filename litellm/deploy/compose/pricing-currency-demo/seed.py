@@ -12,7 +12,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 
 PROXY: Final = os.environ.get("DEMO_PROXY_URL", "http://127.0.0.1:4000").rstrip("/")
@@ -30,9 +30,9 @@ BUDGET_KEY_LIMIT_USD: Final = 0.03
 SEED_PROGRESS: Final = "pricing_currency_demo_seeded_requests"
 SECRET_PATTERN: Final = re.compile(r"sk-[A-Za-z0-9_-]{6,}")
 
-Response = tuple[int, dict[str, object], dict[str, str]]
+type Response = tuple[int, Mapping[str, object], Mapping[str, str]]
 
-API_MODELS: Final[tuple[tuple[str, dict[str, object]], ...]] = (
+API_MODELS: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
     (
         "demo-eur-180",
         {
@@ -113,8 +113,8 @@ def _call(method: str, path: str, key: str, body: object | None = None) -> Respo
         return 0, {"raw": str(error.reason)}, {}
 
 
-def _fail(what: str, status: int, body: dict[str, object]) -> None:
-    sys.exit(f"{what} failed with HTTP {status}: {_redacted(json.dumps(body))}")
+def _fail(what: str, status: int, body: Mapping[str, object]) -> None:
+    sys.exit(f"{what} failed with HTTP {status}: {_redacted(json.dumps(dict(body), default=str))}")
 
 
 def _wait_until(description: str, ready: Callable[[], bool], attempts: int = 120) -> None:
@@ -142,13 +142,13 @@ def _ensure_models() -> None:
         print(f"model {model_id}: created")
 
 
-def _key_info(key: str) -> dict[str, object] | None:
+def _key_info(key: str) -> Mapping[str, object] | None:
     status, body, _ = _call("GET", f"/key/info?key={key}", MASTER_KEY)
     info: Final = body.get("info")
     return info if status == 200 and isinstance(info, dict) else None
 
 
-def _ensure_key(key: str, alias: str, max_budget: float | None) -> dict[str, object]:
+def _ensure_key(key: str, alias: str, max_budget: float | None) -> Mapping[str, object]:
     existing: Final = _key_info(key)
     if existing is not None:
         print(f"key {alias}: already exists")
@@ -174,7 +174,7 @@ def _ensure_key(key: str, alias: str, max_budget: float | None) -> dict[str, obj
     return created
 
 
-def _seeded_requests(key_info: dict[str, object]) -> int:
+def _seeded_requests(key_info: Mapping[str, object]) -> int:
     metadata: Final = key_info.get("metadata")
     progress: Final = metadata.get(SEED_PROGRESS) if isinstance(metadata, dict) else None
     return progress if isinstance(progress, int) else 0

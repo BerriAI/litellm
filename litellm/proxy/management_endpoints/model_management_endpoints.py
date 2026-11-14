@@ -1611,13 +1611,23 @@ def update_db_model(
         if is_server_derived_pricing_key(field):
             merged_model_info.pop(field, None)
 
-    for setting in CURRENCY_FIELDS:
-        if updated_patch.litellm_params and setting in updated_patch.litellm_params.model_fields_set:
+    currency_sent_in_params: Final = (
+        frozenset(updated_patch.litellm_params.model_fields_set) & CURRENCY_FIELDS
+        if updated_patch.litellm_params
+        else frozenset()
+    )
+    currency_sent_in_info: Final = (
+        frozenset(updated_patch.model_info.model_fields_set) & CURRENCY_FIELDS
+        if updated_patch.model_info
+        else frozenset()
+    )
+    for setting in currency_sent_in_params - currency_sent_in_info:
+        merged_model_info.pop(setting, None)
+    for setting in currency_sent_in_info - currency_sent_in_params:
+        merged_litellm_params.pop(setting, None)
+    for setting in currency_sent_in_info:
+        if getattr(updated_patch.model_info, setting) is None:
             merged_model_info.pop(setting, None)
-        if updated_patch.model_info and setting in updated_patch.model_info.model_fields_set:
-            merged_litellm_params.pop(setting, None)
-            if getattr(updated_patch.model_info, setting) is None:
-                merged_model_info.pop(setting, None)
 
     _validate_ptu_model_info(merged_model_info)
     sent_boolean_prices: Final = frozenset(
@@ -3312,9 +3322,7 @@ async def add_new_model(
         ) or pricing_configuration_error(configured_params, clean_model_info.model_dump(exclude_none=True))
         if pricing_error is not None:
             raise HTTPException(status_code=400, detail={"error": pricing_error})
-        model_params.litellm_params = LiteLLM_Params.model_validate(
-            dict(configured_params)
-        )  # rebind-ok: stored as typed
+        model_params.litellm_params = LiteLLM_Params.model_validate(dict(configured_params))  # rebind-ok: typed row
         model_params.model_info = (  # rebind-ok: downstream team-model handling mutates this same object
             clean_model_info.model_copy(update=MappingProxyType({"member_auto_router": True}))
             if member_write is not None
