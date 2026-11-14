@@ -66,7 +66,14 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.utils import CallTypes, Delta, GenericStreamingChunk, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    CallTypes,
+    Delta,
+    GenericStreamingChunk,
+    LlmProviders,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam, ResponseOutputItem
@@ -146,15 +153,15 @@ def _pending_audio_breakpoint(pending: object, part: object) -> object:
     return pending if pending is not None else _breakpoint_of(part)
 
 
-def _leading_system_string_count(messages: Sequence[Mapping[str, object]]) -> int:
-    return next(
-        (
-            index
-            for index, msg in enumerate(messages)
-            if msg.get("role") != "system" or not isinstance(msg.get("content", ""), str)
-        ),
-        len(messages),
-    )
+_PROVIDERS_CACHING_WITHOUT_BREAKPOINTS: Final = frozenset({LlmProviders.BEDROCK_MANTLE.value})
+
+
+def _is_system(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "system"
+
+
+def _is_system_string(message: Mapping[str, object]) -> bool:
+    return _is_system(message) and isinstance(message.get("content", ""), str)
 
 
 def _carried_breakpoints(content: Sequence[object]) -> tuple[object, ...]:
@@ -917,12 +924,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         *,
         drop_params: bool = False,
         keep_prompt_cache_breakpoints: bool = False,
+        keep_system_order: bool = False,
         replay_tool_search: bool = False,
         include_namespace: bool = False,
     ) -> tuple[list[object], str | None]:
         converted_input_items, instructions = self._convert_chat_completion_messages_to_responses_input(
             messages,
             drop_params=drop_params,
+            keep_system_order=keep_system_order,
             replay_tool_search=replay_tool_search,
             include_namespace=include_namespace,
         )
@@ -938,6 +947,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         messages: list["AllMessageValues"],
         *,
         drop_params: bool = False,
+        keep_system_order: bool = False,
         replay_tool_search: bool = False,
         include_namespace: bool = False,
     ) -> tuple[list[object], str | None]:
@@ -953,7 +963,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and isinstance(tool_call.get("custom"), dict)
         )
 
-        leading_system_string_count: Final = _leading_system_string_count(messages)
+        joins_instructions: Final = _is_system_string if keep_system_order else _is_system
+        leading_system_count: Final = next(
+            (index for index, msg in enumerate(messages) if not joins_instructions(msg)),
+            len(messages),
+        )
 
         for index, msg in enumerate(messages):
             role = msg.get("role")
@@ -963,7 +977,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
             if role == "system":
                 # Extract system message as instructions
-                if isinstance(content, str) and index < leading_system_string_count:
+                if isinstance(content, str) and index < leading_system_count:
                     if instructions:
                         # Concatenate multiple system prompts with a space
                         instructions = f"{instructions} {content}"
@@ -1185,18 +1199,27 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and bool(base_model)
             and supports_openai_prompt_cache_breakpoint(base_model, provider)
         )
-        bridged_messages: Final = (
-            [AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages]
-            if supports_prompt_cache_breakpoint
+        renames_cache_control: Final = (
+            supports_prompt_cache_breakpoint
+            and provider not in _PROVIDERS_CACHING_WITHOUT_BREAKPOINTS
             and _reads_prompt_cache_breakpoints(
                 model, litellm_params, _PromptCacheRequest.model_validate(optional_params).prompt_cache_options
             )
+        )
+        bridged_messages: Final = (
+            [AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages]
+            if renames_cache_control
             else messages
+        )
+        marked_a_system_string: Final = any(
+            _is_system_string(message) and not _is_system_string(bridged)
+            for message, bridged in zip(messages, bridged_messages, strict=True)
         )
         converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
             bridged_messages,
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
+            keep_system_order=marked_a_system_string,
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
             include_namespace=True,
         )
