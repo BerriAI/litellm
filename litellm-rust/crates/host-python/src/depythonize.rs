@@ -390,7 +390,7 @@ impl<'de> de::VariantAccess<'de> for Variant<'_> {
     where
         V: Visitor<'de>,
     {
-        visitor.visit_map(Depythonizer { input: &self.value }.items()?)
+        de::Deserializer::deserialize_map(Depythonizer { input: &self.value }, visitor)
     }
 }
 
@@ -629,6 +629,10 @@ def without_text():
         "{'tagged': {'Wrapped': make(CLASS, block=BLOCK)}}",
         Request { tagged: Some(Tagged::Wrapped { block: text_block() }), ..Request::default() }
     )]
+    #[case::dataclass_struct_variant(
+        "{'tagged': {'Wrapped': Holder(block=BLOCK)}}",
+        Request { tagged: Some(Tagged::Wrapped { block: text_block() }), ..Request::default() }
+    )]
     fn a_dict_subclass_fills_a_typed_value(
         namespace: Py<PyDict>,
         #[case] expression: &str,
@@ -667,6 +671,7 @@ def without_text():
     #[case::enum_with_two_keys("{'Text': 1, 'Other': 2}", error_pair::<Tagged>)]
     #[case::enum_with_a_non_str_key("{1: 2}", error_pair::<Tagged>)]
     #[case::enum_of_another_type("5", error_pair::<Tagged>)]
+    #[case::struct_variant_of_another_type("{'Wrapped': 5}", error_pair::<Tagged>)]
     #[case::missing_dataclass_attribute("without_text()", error_pair::<Value>)]
     fn a_rejected_input_fails_as_pythonize_fails_it(
         namespace: Py<PyDict>,
