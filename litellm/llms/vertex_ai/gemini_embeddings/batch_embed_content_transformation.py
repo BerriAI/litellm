@@ -723,7 +723,9 @@ def _even_weights(item_modalities: Sequence[frozenset[_Modality]], modality: _Mo
 
 
 def _text_length(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]) -> int:
-    return sum(len(part) for part in _parts(item) if isinstance(part, str) and not _is_multimodal_element(part))
+    return sum(
+        len(part.encode()) for part in _parts(item) if isinstance(part, str) and not _is_multimodal_element(part)
+    )
 
 
 def _text_weights(

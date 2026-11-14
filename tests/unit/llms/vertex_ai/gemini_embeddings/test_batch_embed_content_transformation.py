@@ -1040,6 +1040,25 @@ async def test_gemini_batch_embedding_cache_hits_split_text_tokens_by_each_input
     assert short_hit.usage.prompt_tokens * 100 < long_hit.usage.prompt_tokens
 
 
+
+async def test_gemini_batch_embedding_cache_hits_give_more_text_tokens_to_the_script_that_takes_more_tokens(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    english: Final = "a red apple"
+    chinese: Final = "一个红苹果一个红苹果一"
+    calls, (english_hit, chinese_hit) = await _cache_hits(
+        respx_mock,
+        monkeypatch,
+        (english, chinese),
+        {"promptTokenCount": 12, "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 12}]},
+        (english, chinese),
+    )
+
+    assert len(english) == len(chinese)
+    assert calls == 1
+    assert english_hit.usage.prompt_tokens + chinese_hit.usage.prompt_tokens == 12
+    assert english_hit.usage.prompt_tokens < chinese_hit.usage.prompt_tokens
+
 @pytest.mark.parametrize("use_embed_content", [False, True])
 def test_a_usage_detail_entry_without_a_token_count_keeps_googles_other_counts(use_embed_content: bool) -> None:
     usage_metadata: Final = {
