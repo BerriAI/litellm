@@ -1,3 +1,5 @@
+use crate::Feature;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("license public key is not a PEM encoded RSA public key")]
@@ -20,4 +22,21 @@ pub enum Error {
     Status(u16),
     #[error("license server reply has no boolean verify field")]
     Reply(#[source] Option<serde_json::Error>),
+    #[error("A LiteLLM license with the '{0}' feature lifts the limit.")]
+    MissingFeature(Feature),
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    fn missing_feature_names_the_license_spelling() {
+        assert_eq!(
+            Error::MissingFeature(Feature::AutoRouter).to_string(),
+            "A LiteLLM license with the 'auto_router' feature lifts the limit."
+        );
+    }
 }

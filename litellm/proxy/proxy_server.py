@@ -459,7 +459,7 @@ from litellm.proxy.auth.fallback_model_access import router_fallback_access_chec
 from litellm.proxy.auth.fallback_rate_limit import RouterFallbackRateLimitCheck
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.legacy_empty_models_check import warn_about_legacy_empty_models
-from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
+from litellm.proxy.auth.litellm_license import MISSING_AUTO_ROUTER_LICENSE, LicenseCheck
 from litellm.proxy.auth.login_throttle import (
     LoginThrottle,
     declared_proxy_ranges,
@@ -5657,7 +5657,7 @@ def validate_auto_router_capability_limits(model_list: Sequence[Mapping[str, obj
         is not None
     )
     if violations:
-        raise ValueError(f"config.yaml model_list: {' '.join(violations)} {AUTO_ROUTER_LICENSE_REMEDY}")
+        raise ValueError(f"config.yaml model_list: {' '.join(violations)} {MISSING_AUTO_ROUTER_LICENSE}")
 
 
 def pin_complexity_router_model_id(model: dict) -> None:  # mutable-ok: out-param, model_info is stamped in place
@@ -11642,7 +11642,7 @@ class ProxyStartupEvent:
         mutable: Final = mutable_tuned_identities(deployments, baselines)
         violation: Final = tuning_limit_violation(held=len(mutable), limit=limit)
         if violation is not None:
-            raise ValueError(f"model_list: {violation} {AUTO_ROUTER_LICENSE_REMEDY}")
+            raise ValueError(f"model_list: {violation} {MISSING_AUTO_ROUTER_LICENSE}")
         return baselines
 
     @classmethod

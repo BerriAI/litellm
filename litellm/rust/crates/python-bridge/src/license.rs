@@ -55,9 +55,7 @@ impl LicenseVerifier {
             .verify(&license, jiff::Zoned::now().datetime())
         {
             Ok(signed) => {
-                return Ok(Entitlements(litellm_license::Entitlements::Enterprise(
-                    Some(signed),
-                )));
+                return Ok(Entitlements(litellm_license::Entitlements::Signed(signed)));
             }
             Err(error) => error,
         };
@@ -65,7 +63,7 @@ impl LicenseVerifier {
             litellm_tracing::debug!("license not verified locally: {}", Report::new(&error));
         });
         Ok(Entitlements(if self.ask_server(py, license)? {
-            litellm_license::Entitlements::Enterprise(None)
+            litellm_license::Entitlements::ServerVerified
         } else {
             litellm_license::Entitlements::Community
         }))
@@ -109,9 +107,15 @@ impl Entitlements {
         Self(litellm_license::Entitlements::Community)
     }
 
+    /// The message for a limit that a license granting `feature` would lift
     #[staticmethod]
-    fn remedy(feature: &str) -> PyResult<String> {
-        Ok(parse_feature(feature)?.remedy())
+    fn missing_feature_error(feature: &str) -> PyResult<String> {
+        Ok(
+            Report::new(&litellm_license::Error::MissingFeature(parse_feature(
+                feature,
+            )?))
+            .to_string(),
+        )
     }
 
     fn is_enterprise(&self) -> bool {

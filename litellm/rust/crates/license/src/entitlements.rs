@@ -4,19 +4,19 @@ use crate::{Feature, License};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Entitlements {
     Community,
-    /// `None` when the license server vouched for the key, which carries no signed claims
-    Enterprise(Option<License>),
+    Signed(License),
+    ServerVerified,
 }
 
 impl Entitlements {
     pub fn is_enterprise(&self) -> bool {
-        matches!(self, Self::Enterprise(_))
+        !matches!(self, Self::Community)
     }
 
     pub fn license(&self) -> Option<&License> {
         match self {
-            Self::Enterprise(Some(license)) => Some(license),
-            Self::Enterprise(None) | Self::Community => None,
+            Self::Signed(license) => Some(license),
+            Self::ServerVerified | Self::Community => None,
         }
     }
 
@@ -48,18 +48,18 @@ mod tests {
     use super::*;
 
     fn signed() -> Entitlements {
-        Entitlements::Enterprise(Some(License {
+        Entitlements::Signed(License {
             expiration_date: date(2027, 11, 12),
             user_id: None,
             allowed_features: vec!["auto_router".into()],
             max_users: Some(10),
             max_teams: Some(2),
-        }))
+        })
     }
 
     #[rstest]
     #[case::community(Entitlements::Community, false)]
-    #[case::server_verified(Entitlements::Enterprise(None), true)]
+    #[case::server_verified(Entitlements::ServerVerified, true)]
     #[case::signed(signed(), true)]
     fn any_verified_license_is_enterprise(
         #[case] entitlements: Entitlements,
@@ -70,7 +70,7 @@ mod tests {
 
     #[rstest]
     #[case::community(Entitlements::Community, false)]
-    #[case::server_verified(Entitlements::Enterprise(None), false)]
+    #[case::server_verified(Entitlements::ServerVerified, false)]
     #[case::signed(signed(), true)]
     fn only_signed_claims_grant_features(
         #[case] entitlements: Entitlements,
@@ -81,7 +81,7 @@ mod tests {
 
     #[rstest]
     #[case::community(Entitlements::Community, None, false, false)]
-    #[case::server_verified(Entitlements::Enterprise(None), None, false, false)]
+    #[case::server_verified(Entitlements::ServerVerified, None, false, false)]
     #[case::signed(signed(), Some(10), true, true)]
     fn limits_come_from_signed_claims(
         #[case] entitlements: Entitlements,

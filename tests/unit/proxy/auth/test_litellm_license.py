@@ -7,7 +7,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
-from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, Entitlements, LicenseCheck
+from litellm.proxy.auth.litellm_license import MISSING_AUTO_ROUTER_LICENSE, Entitlements, LicenseCheck
 from tests._support.license import license_verifier, serve_license_server, sign_license
 
 UNSIGNED_LICENSE: Final = "test-only-private-license-marker"
@@ -94,8 +94,8 @@ def test_auto_router_limit_lifts_only_for_a_license_granting_it(
     assert _licensed(monkeypatch, private_key, **claims).auto_router_capability_limit() == limit
 
 
-def test_auto_router_remedy_names_the_license_feature() -> None:
-    assert AUTO_ROUTER_LICENSE_REMEDY == "A LiteLLM license with the 'auto_router' feature lifts the limit."
+def test_missing_auto_router_license_names_the_license_feature() -> None:
+    assert MISSING_AUTO_ROUTER_LICENSE == "A LiteLLM license with the 'auto_router' feature lifts the limit."
 
 
 def test_an_unknown_feature_name_is_refused() -> None:

@@ -8,7 +8,7 @@ from litellm.rust_bridge._native import Entitlements, LicenseVerifier
 if TYPE_CHECKING:
     from litellm.proxy._types import EnterpriseLicenseData
 
-AUTO_ROUTER_LICENSE_REMEDY: Final = Entitlements.remedy("auto_router")
+MISSING_AUTO_ROUTER_LICENSE: Final = Entitlements.missing_feature_error("auto_router")
 
 
 class LicenseCheck:
