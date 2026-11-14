@@ -4594,18 +4594,25 @@ class Router:
     def _call_timeouts(
         self, kwargs: dict[str, object], litellm_params: dict[str, object], function_name: str | None
     ) -> tuple[float | int | None, float | int | None]:
-        request_timeout: Final = self._get_non_stream_timeout(kwargs=kwargs, data=litellm_params)
-        replay_timeout: Final = (
-            request_timeout
-            if kwargs.get("stream") and _requests_fake_stream(kwargs, self.default_litellm_params, litellm_params)
-            else None
+        replays: Final = bool(kwargs.get("stream")) and _requests_fake_stream(
+            kwargs, self.default_litellm_params, litellm_params
         )
+        request_timeout: Final = self._get_non_stream_timeout(kwargs=kwargs, data=litellm_params)
         if function_name == "_ageneric_api_call_with_fallbacks":
-            return self._passthrough_timeout(kwargs=kwargs, litellm_params=litellm_params), replay_timeout
+            return (
+                self._passthrough_timeout(kwargs=kwargs, litellm_params=litellm_params),
+                (
+                    request_timeout
+                    if isinstance(request_timeout, httpx.Timeout)
+                    else self._passthrough_timeout(kwargs={**kwargs, "stream": False}, litellm_params=litellm_params)
+                )
+                if replays
+                else None,
+            )
         stream_timeout: Final = (
             self._get_stream_timeout(kwargs=kwargs, data=litellm_params) if kwargs.get("stream") else None
         )
-        return (request_timeout if stream_timeout is None else stream_timeout), replay_timeout
+        return (request_timeout if stream_timeout is None else stream_timeout), (request_timeout if replays else None)
 
     def _passthrough_timeout(self, kwargs: Mapping[str, object], litellm_params: Mapping[str, object]) -> float:
         from litellm.passthrough.timeout_utils import resolve_llm_passthrough_timeout

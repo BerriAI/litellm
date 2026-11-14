@@ -14,6 +14,8 @@ from urllib.parse import parse_qs
 
 import openai
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.upstream import INTERNAL_FIELDS
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import TypeAdapter
@@ -455,6 +457,18 @@ AWS_CONNECTION: Final = MappingProxyType(
     {"aws_access_key_id": "fake", "aws_secret_access_key": "fake", "aws_region_name": "us-east-1"}
 )
 AWS_BASE_PARAMS: Final = ("api_base", "aws_bedrock_runtime_endpoint")
+OCI_CONNECTION: Final = MappingProxyType(
+    {
+        **SYNTHETIC_KEY,
+        "oci_user": "ocid1.user.oc1..wire",
+        "oci_fingerprint": "00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff",
+        "oci_tenancy": "ocid1.tenancy.oc1..wire",
+        "oci_compartment_id": "ocid1.compartment.oc1..wire",
+        "oci_key": rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        .decode(),
+    }
+)
 ONE_PIXEL_GIF: Final = "data:image/gif;base64,R0lGODlhAQABAAAAACw="
 
 
@@ -525,7 +539,7 @@ API_BASE_CHAT_PROVIDERS: Final = (
     "github", "groq", "helicone", "heroku", "hosted_vllm", "huggingface", "hyperbolic", "inception", "inferenceapis",
     "lambda_ai", "langflow", "langgraph", "lemonade", "libertai", "litellm_proxy", "llamafile", "lm_studio", "maritalk",
     "meta", "meta_llama", "minimax", "mistral", "modelscope", "moonshot", "morph", "nadir", "nano-gpt", "nebius",
-    "neosantara", "novita", "nscale", "nvidia_nim", "oci", "ollama", "ollama_chat", "oobabooga", "openai", "openrouter",
+    "neosantara", "novita", "nscale", "nvidia_nim", "ollama", "ollama_chat", "oobabooga", "openai", "openrouter",
     "ovhcloud", "parasail", "perplexity", "petals", "pinstripes", "poe", "prism", "publicai", "qwen_ai_platform",
     "qwencloud", "reka", "sail", "sambanova", "scaleway", "scx-ai", "snowflake", "synthetic", "tencent", "tensormesh",
     "text-completion-codestral", "text-completion-inception", "text-completion-openai", "together_ai", "v0",
@@ -558,6 +572,7 @@ CHAT_ROUTES: Final = MappingProxyType(
         ),
         "gradient_ai": Route("gradient_ai/wire-model"),
         "nlp_cloud": Route("nlp_cloud/chatdolphin", base_suffix="/"),
+        "oci": Route("oci/wire-model", OCI_CONNECTION),
         "predibase": Route("predibase/wire-model", MappingProxyType({**SYNTHETIC_KEY, "predibase_tenant_id": "wire"})),
         "ragflow": Route("ragflow/chat/wire-chat/wire-model"),
         "scaledown": Route("scaledown/summarize"),
@@ -588,13 +603,14 @@ EMBEDDING_ROUTES: Final = MappingProxyType(
             for provider in (
                 "azure_ai", "cohere", "cohere_chat", "cometapi", "dashscope", "databricks", "edenai", "fireworks_ai",
                 "gemini", "hosted_vllm", "infinity", "jina_ai", "litellm_proxy", "llamafile", "lm_studio", "mistral",
-                "nebius", "nvidia_nim", "oci", "ollama", "oobabooga", "openai", "openai_like", "openrouter", "ovhcloud",
+                "nebius", "nvidia_nim", "ollama", "oobabooga", "openai", "openai_like", "openrouter", "ovhcloud",
                 "perplexity", "qwen_ai_platform", "qwencloud", "sambanova", "snowflake", "together_ai", "triton",
                 "vercel_ai_gateway", "volcengine", "voyage", "wandb", "xinference",
             )
         },
         "azure": Route("azure/wire-model", AZURE_CONNECTION),
         "huggingface": Route("huggingface/wire-model", request=MappingProxyType({"input_type": "feature-extraction"})),
+        "oci": Route("oci/wire-model", OCI_CONNECTION),
         "bedrock/amazon": _bedrock("amazon.titan-embed-image-v1"),
         "bedrock/cohere": _bedrock("cohere.embed-english-v3"),
         "bedrock/nova": _bedrock("amazon.nova-2-multimodal-embeddings-v1:0"),

@@ -233,10 +233,12 @@ class CustomStreamWrapper:
         make_call: Callable | None = None,
         _response_headers: dict | httpx.Headers | None = None,
         count_prompt_tokens: Callable[[], int] | None = None,
+        replayed_service_tier: str | None = None,
     ):
         self.model = model
         self.make_call = make_call
         self.count_prompt_tokens = count_prompt_tokens
+        self.replayed_service_tier = replayed_service_tier
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = completion_stream
@@ -1785,7 +1787,9 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason == "stop" and self.tool_call
         ):  # don't overwrite for other - potential error finish reasons
             model_response.choices[0].finish_reason = "tool_calls"
-        return model_response
+        if self.replayed_service_tier is None:
+            return model_response
+        return model_response.model_copy(update={"service_tier": self.replayed_service_tier})
 
     def _record_usage_only_chunk(self, model_response: "ModelResponseStream") -> None:
         """

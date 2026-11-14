@@ -1164,6 +1164,7 @@ def _replayed_stream(
 ) -> CustomStreamWrapper:
     hidden_params: Final = get_hidden_params(response)
     provider_headers: Final = hidden_params.get("additional_headers") if hidden_params is not None else None
+    served_tier: Final[object] = getattr(response, "service_tier", None)
     return CustomStreamWrapper(
         completion_stream=MockResponseIterator(model_response=response),
         model=response.model,
@@ -1174,6 +1175,7 @@ def _replayed_stream(
             if isinstance(provider_headers, Mapping)
             else None
         ),
+        replayed_service_tier=served_tier if isinstance(served_tier, str) and served_tier else None,
     )
 
 
