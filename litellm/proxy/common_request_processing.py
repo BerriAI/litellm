@@ -65,7 +65,7 @@ from litellm.constants import (
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
-from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
+from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException, is_guardrail_intervention
 from litellm.integrations.custom_logger import subclass_overrides_hook
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
 from litellm.integrations.custom_logger_v2.legacy import hook_subscribers
@@ -344,6 +344,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     get_metadata_variable_name,
     global_then_key_alias_target,
     pre_call_served_model,
+    redact_blocked_request_body_snapshot,
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
     sanitize_for_log,
@@ -2309,6 +2310,11 @@ def _timing_values(
     return getattr(logging_obj, "response_timing_metrics", None) or {}
 
 
+def _redact_snapshot_when_guardrail_blocked(exc: BaseException, data: Mapping[str, object]) -> None:
+    if isinstance(exc, Exception) and is_guardrail_intervention(exc):
+        redact_blocked_request_body_snapshot(data)
+
+
 def _fallback_refusal_ends_the_walk(
     exc: Exception, at_saturation: bool, general_settings: Mapping[str, object]
 ) -> bool:
@@ -3166,12 +3172,16 @@ class ProxyBaseLLMRequestProcessing:
         prefetch_model = self.data.get("model")
         if llm_router is not None and isinstance(prefetch_model, str):
             RoutingContext(llm_router).arm_read_prefetch(prefetch_model, self.data)
-        self.data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            data=self.data,
-            call_type=route_type,
-            skip_guardrails=skip_guardrails,
-        )
+        try:
+            self.data = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                data=self.data,
+                call_type=route_type,
+                skip_guardrails=skip_guardrails,
+            )
+        except Exception as e:
+            _redact_snapshot_when_guardrail_blocked(e, self.data)
+            raise
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
             tags_before_guardrails=self._tags_before_guardrails,
@@ -3433,8 +3443,9 @@ class ProxyBaseLLMRequestProcessing:
                     route_type=route_type,  # pyright: ignore[reportArgumentType]  # the proxy hands its route literal over as str, as the two calls above take it
                     llm_router=llm_router,
                 )
-            except BaseException:
+            except BaseException as e:
                 user_api_key_dict.matched_model_access_groups = requested_groups  # rebind-ok: undo the fallback
+                _redact_snapshot_when_guardrail_blocked(e, rate_limited_data)
                 self.data = rate_limited_data
                 raise
         finally:

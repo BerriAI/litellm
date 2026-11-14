@@ -2799,6 +2799,25 @@ def refresh_proxy_server_request_body_snapshot(
         )
 
 
+def redact_blocked_request_body_snapshot(data: Mapping[str, object]) -> None:
+    """
+    Replace the stored ``proxy_server_request`` body with a redacted placeholder.
+
+    A guardrail that blocks in pre_call_hook raises before the post-guardrail
+    refresh runs, so the snapshot taken by add_litellm_data_to_request still
+    holds the raw pre-guardrail body, including whatever got the request blocked.
+    """
+    proxy_server_request: Final = data.get("proxy_server_request")
+    if not isinstance(proxy_server_request, dict):
+        return
+    model: Final = data.get("model")
+    proxy_server_request["body"] = (
+        {"model": model, "[redacted]": "blocked by guardrail"}
+        if isinstance(model, str)
+        else {"[redacted]": "blocked by guardrail"}
+    )
+
+
 async def add_litellm_data_to_request(
     data: dict,
     request: Request,

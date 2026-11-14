@@ -15,6 +15,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -326,7 +327,12 @@ class DynamoAIGuardrails(CustomGuardrail):
             # If any violations are detected, raise an error
             if violations_detected:
                 error_message: Final = self._create_error_message(processed_result)
-                raise ValueError(error_message)
+                raise GuardrailRaisedException(
+                    guardrail_name=self.guardrail_name,
+                    message=error_message,
+                    should_wrap_with_default_message=False,
+                    blocked_content=True,
+                )
 
         # Add guardrail to applied guardrails header
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
@@ -371,7 +377,12 @@ class DynamoAIGuardrails(CustomGuardrail):
             # If any violations are detected, raise an error
             if violations_detected:
                 error_message: Final = self._create_error_message(processed_result)
-                raise ValueError(error_message)
+                raise GuardrailRaisedException(
+                    guardrail_name=self.guardrail_name,
+                    message=error_message,
+                    should_wrap_with_default_message=False,
+                    blocked_content=True,
+                )
 
         # Add guardrail to applied guardrails header
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
@@ -439,7 +450,12 @@ class DynamoAIGuardrails(CustomGuardrail):
                 # If any violations are detected, raise an error
                 if violations_detected:
                     error_message: Final = self._create_error_message(processed_result)
-                    raise ValueError(error_message)
+                    raise GuardrailRaisedException(
+                        guardrail_name=self.guardrail_name,
+                        message=error_message,
+                        should_wrap_with_default_message=False,
+                        blocked_content=True,
+                    )
 
         # Add guardrail to applied guardrails header
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)

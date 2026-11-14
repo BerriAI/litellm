@@ -1432,6 +1432,40 @@ def test_refresh_proxy_server_request_body_snapshot_picks_up_guardrail_masking()
     assert "123-45-6789" not in json.dumps(refreshed_body)
 
 
+def test_redact_blocked_request_body_snapshot_replaces_body_with_placeholder():
+    from litellm.proxy.litellm_pre_call_utils import redact_blocked_request_body_snapshot
+
+    data = {
+        "model": "small",
+        "messages": [{"role": "user", "content": "my token is glpat-FAKE-NOT-A-REAL-TOKEN-1111"}],
+        "proxy_server_request": {
+            "url": "http://localhost/v1/chat/completions",
+            "method": "POST",
+            "body": {
+                "model": "small",
+                "messages": [{"role": "user", "content": "my token is glpat-FAKE-NOT-A-REAL-TOKEN-1111"}],
+            },
+        },
+    }
+
+    redact_blocked_request_body_snapshot(data)
+
+    assert data["proxy_server_request"]["body"] == {
+        "model": "small",
+        "[redacted]": "blocked by guardrail",
+    }, "blocked request body still holds the raw prompt in the spend-log snapshot"
+
+
+def test_redact_blocked_request_body_snapshot_is_noop_without_snapshot():
+    from litellm.proxy.litellm_pre_call_utils import redact_blocked_request_body_snapshot
+
+    data = {"model": "small", "messages": [{"role": "user", "content": "hello"}]}
+
+    redact_blocked_request_body_snapshot(data)
+
+    assert data == {"model": "small", "messages": [{"role": "user", "content": "hello"}]}
+
+
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection():
     """Regression: metadata arriving as a JSON string (multipart/form-data or
