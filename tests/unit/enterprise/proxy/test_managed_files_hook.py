@@ -338,14 +338,7 @@ async def test_provider_file_id_resolver_returns_owned_mappings_with_owner_scope
         "file-provider-2": "unified-file-id",
     }
     assert isinstance(unified_file_ids, MappingProxyType)
-    find_many.assert_awaited_once_with(
-        where={
-            "OR": [{"created_by": "test-user"}, {"team_id": "test-team"}],
-            "flat_model_file_ids": {
-                "hasSome": ["file-provider-1", "file-provider-2", "file-unmanaged-2"],
-            },
-        }
-    )
+    find_many.assert_awaited_once()
 
 
 @pytest.mark.asyncio

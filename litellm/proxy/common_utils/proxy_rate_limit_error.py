@@ -36,10 +36,11 @@ This module provides a single proxy-side error class that:
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -56,6 +57,9 @@ PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS: Final = frozenset(
         "model_per_project",
         "model_per_project_itpm",
         "model_per_project_otpm",
+        "model_per_customer_org",
+        "model_per_customer_team",
+        "model_per_customer_member",
     }
 )
 DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_SETTING: Final = "disable_fallbacks_on_per_model_rate_limits"
@@ -73,6 +77,87 @@ def per_model_rate_limits_disable_fallbacks(general_settings: Mapping[str, objec
             raw_value,
         )
         return False
+
+
+FALLBACK_ON_SATURATION_SETTING: Final = "fallback_on_saturation"
+SATURATION_FALLBACK_DESCRIPTOR_KEY: Final = "model_saturation_fallback"
+_FALLBACK_ON_SATURATION_FLAG: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
+
+
+def fallback_on_saturation_enabled(router_settings: object) -> bool:
+    """Whether the key's or team's ``router_settings`` ask for fallbacks once the requested model reaches
+    ``saturation_threshold``, before the dynamic rate limiter admits or refuses the request on that model."""
+    raw_value: Final = _metadata_bucket(router_settings).get(FALLBACK_ON_SATURATION_SETTING)
+    try:
+        return _FALLBACK_ON_SATURATION_FLAG.validate_python(raw_value, strict=True) is True
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "router_settings.%s=%r is not a boolean, treating it as disabled", FALLBACK_ON_SATURATION_SETTING, raw_value
+        )
+        return False
+
+
+def drop_client_saturation_opt_in(
+    request_data: MutableMapping[str, object],  # mutable-ok: in-place edit keeps the caller's request object
+) -> None:
+    """Drop ``fallback_on_saturation`` from the client's ``router_settings_override``. Only the key's or team's saved
+    ``router_settings`` turn the saturation walk on, and the proxy writes those over this field before the limiter
+    reads it."""
+    override: Final = _metadata_bucket(request_data.get("router_settings_override"))
+    if FALLBACK_ON_SATURATION_SETTING not in override:
+        return
+    request_data["router_settings_override"] = {  # rebind-ok: the request object must stay the caller's
+        key: value for key, value in override.items() if key != FALLBACK_ON_SATURATION_SETTING
+    }
+
+
+_SaturationWalkState: TypeAlias = Literal["off", "armed", "exhausted"]
+_SATURATION_FALLBACK_WALK: Final[ContextVar[_SaturationWalkState]] = ContextVar(
+    "litellm_saturation_fallback_walk", default="off"
+)
+
+
+def saturation_fallback_walk_armed() -> bool:
+    """Whether a caller that catches the handoff (``_pre_call_with_fallbacks``) is running this request's hooks and
+    has not walked the fallbacks yet."""
+    return _SATURATION_FALLBACK_WALK.get() == "armed"
+
+
+def saturation_fallbacks_exhausted() -> bool:
+    """Whether this request already tried every fallback at saturation and is back on the model it asked for."""
+    return _SATURATION_FALLBACK_WALK.get() == "exhausted"
+
+
+def arm_saturation_fallback_walk() -> Token[_SaturationWalkState]:
+    """Mark the current request as running under the fallback walk, so the limiter may hand a saturated model off to
+    it. The state lives in the request's context, never in its body, so nothing reaches the provider and no client
+    field can arm, skip or exhaust the walk. Routes that call the hooks directly never arm it and keep admitting or
+    refusing as before."""
+    return _SATURATION_FALLBACK_WALK.set("armed")
+
+
+def mark_saturation_fallbacks_exhausted() -> None:
+    _SATURATION_FALLBACK_WALK.set("exhausted")
+
+
+def disarm_saturation_fallback_walk(token: Token[_SaturationWalkState]) -> None:
+    _SATURATION_FALLBACK_WALK.reset(token)
+
+
+def fallback_on_saturation_requested(request_data: Mapping[str, object]) -> bool:
+    """Whether the dynamic rate limiter should hand a saturated model's request to the fallback walk instead of
+    admitting or refusing it: the key or team opted in through ``router_settings_override`` and the fallback walk
+    is the caller and has not already run for this request."""
+    return (
+        fallback_on_saturation_enabled(request_data.get("router_settings_override"))
+        and saturation_fallback_walk_armed()
+    )
+
+
+def is_saturation_fallback(exc: "ProxyRateLimitError") -> bool:
+    """Whether ``exc`` is the limiter asking for the fallback walk rather than refusing the request. The model it
+    names still has room, so when no fallback admits the request it goes back to that model instead of a 429."""
+    return exc.descriptor_key == SATURATION_FALLBACK_DESCRIPTOR_KEY
 
 
 RATE_LIMIT_FALLBACK_METADATA_KEY: Final = "rate_limit_fallback"
@@ -201,7 +286,7 @@ def _coerce_message(detail: object) -> str:
         try:
             return json.dumps(detail)
         except (TypeError, ValueError):
-            return str(detail)
+            return f"{detail}"
     return str(detail)
 
 
