@@ -4826,6 +4826,7 @@ class LlmProviders(str, Enum):
     MICROSOFT_365_COPILOT = "microsoft_365_copilot"
     MINIMAX = "minimax"
     SYNTHETIC = "synthetic"
+    APIKO = "apiko"
     APERTIS = "apertis"
     NANOGPT = "nano-gpt"
     POE = "poe"
