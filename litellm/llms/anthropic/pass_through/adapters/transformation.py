@@ -18,6 +18,7 @@ from litellm.llms.anthropic.pass_through.utils import (
     is_between_tool_calls,
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
+    local_model_name,
     maps_bare_output_effort,
     prompt_cache_key_from_user_id,
     reasoning_off_level,
@@ -1280,7 +1281,11 @@ class LiteLLMAnthropicMessagesAdapter:
             else self.translate_anthropic_thinking_to_reasoning_effort(cast(AnthropicThinkingParam, thinking))
             if thinking
             else self._bare_output_effort(output_effort, model, custom_llm_provider, deployment_model_info)
-            if translate_bare_output_effort and mirrors_responses_bridge
+            if translate_bare_output_effort
+            and mirrors_responses_bridge
+            and self._target_declares_reasoning_effort(
+                local_model_name(model, custom_llm_provider), custom_llm_provider
+            )
             else None
         )
         if not reasoning_effort:

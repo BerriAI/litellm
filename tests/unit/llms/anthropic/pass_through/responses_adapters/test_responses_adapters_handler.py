@@ -28,6 +28,7 @@ from litellm.llms.anthropic.pass_through.responses_adapters.handler import (
 )
 from litellm.llms.anthropic.pass_through.utils import model_reasoning_efforts
 from litellm.router import Router
+from litellm.utils import is_generalized_model_info
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
 from litellm.types.utils import StandardLoggingPayload
@@ -208,6 +209,35 @@ def test_build_responses_kwargs_never_turns_on_reasoning_the_client_left_off(
     reasoning: Final = responses_kwargs.get("reasoning")
     assert (reasoning is None) == (thinking is None and not reasons_unasked)
     assert reasoning is None or cast(Mapping[str, object], reasoning)["effort"] != "none"
+
+
+@pytest.mark.parametrize("model_info", [None, {"id": "router-deployment"}], ids=["sdk", "router"])
+@pytest.mark.parametrize(
+    "thinking, output_config, reasoning",
+    [
+        pytest.param({"type": "disabled"}, None, {"effort": "none"}, id="disabled"),
+        pytest.param(None, {"effort": "high"}, None, id="bare-effort"),
+    ],
+)
+def test_build_responses_kwargs_treats_a_name_only_the_family_rule_matches_as_unlisted_on_every_path(
+    model_info: dict[str, object] | None,
+    thinking: dict[str, object] | None,
+    output_config: AnthropicOutputConfig | None,
+    reasoning: dict[str, object] | None,
+) -> None:
+    model: Final = "openai/gpt-9.97-unlisted"
+    assert is_generalized_model_info(litellm.get_model_info(model))
+
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=model,
+        thinking=thinking,
+        output_config=output_config,
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": True, "model_info": model_info},
+    )
+
+    assert responses_kwargs.get("reasoning") == reasoning
 
 
 @pytest.mark.parametrize("thinking", [None, {"type": "adaptive"}], ids=["thinking-left-out", "adaptive"])
@@ -1505,3 +1535,81 @@ async def test_under_drop_params_another_400_about_the_summary_is_not_retried(
         await _summarized_turn(sync=sync, stream=False, drop_params=True)
 
     assert upstream.call_count == 1
+
+
+def _refuse_a_summary(request: httpx.Request) -> httpx.Response:
+    if "summary" in json.loads(request.content).get("reasoning", {}):
+        return httpx.Response(400, json=SUMMARY_REFUSAL)
+    return httpx.Response(200, json=TEXT_RESPONSE)
+
+
+def _upstream_refusing_every_summary(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> respx.Route:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-replay-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=_refuse_a_summary)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_under_drop_params_a_refused_summary_is_sent_again_once_and_not_logged_as_the_turn_failing(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    upstream: Final = _upstream_refusing_every_summary(respx_mock, monkeypatch)
+
+    if sync:
+        litellm.anthropic.messages.create(
+            max_tokens=1024,
+            messages=MESSAGES,
+            model="openai/gpt-5.6-luna",
+            thinking={"type": "adaptive", "display": "summarized"},
+            output_config={"effort": "high"},
+            drop_params=True,
+            num_retries=2,
+        )
+    else:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=1024,
+            messages=MESSAGES,
+            model="openai/gpt-5.6-luna",
+            thinking={"type": "adaptive", "display": "summarized"},
+            output_config={"effort": "high"},
+            drop_params=True,
+            num_retries=2,
+        )
+
+    assert ["summary" in json.loads(call.request.content)["reasoning"] for call in upstream.calls] == [True, False]
+    assert failure_log.rejections == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_a_summarized_turn_sent_again_without_replayed_reasoning_logs_only_its_outcome(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    _rejected_then(respx_mock, monkeypatch, httpx.Response(200, json=TEXT_RESPONSE))
+
+    if sync:
+        litellm.anthropic.messages.create(
+            max_tokens=1024,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            thinking={"type": "adaptive", "display": "summarized"},
+            drop_params=True,
+        )
+    else:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=1024,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            thinking={"type": "adaptive", "display": "summarized"},
+            drop_params=True,
+        )
+
+    assert failure_log.rejections == ()

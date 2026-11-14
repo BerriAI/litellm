@@ -4,7 +4,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from enum import Enum
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar, get_args
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
@@ -14,6 +14,7 @@ from litellm.constants import X_LITELLM_DISABLE_CALLBACKS
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, ModelInfo, StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
@@ -29,6 +30,7 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
     }
 )
 REASONING_EFFORT_OFF: Final = "none"
+KNOWN_REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
 RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
 _LOWEST_REASONING_TIERS: Final = ("minimal", "low")
 _UNCONFIRMED_MINIMAL_LOWEST_TIERS: Final = ("low",)
@@ -251,12 +253,13 @@ def thinking_off_switch(request: Mapping[str, object]) -> ThinkingOffSwitch | No
 
 
 def _mapped_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
-    from litellm.utils import get_model_info
+    from litellm.utils import get_model_info, is_generalized_model_info
 
     try:
-        return get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         return None
+    return None if is_generalized_model_info(model_info) else model_info
 
 
 def _deployment_model_info(

@@ -5,11 +5,13 @@ Used when the target model is an OpenAI or Azure model.
 """
 
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
-from typing import Final, TypeAlias, get_args
+from contextlib import AbstractContextManager, nullcontext
+from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm._internal_context import resent_on
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
@@ -36,7 +38,7 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
-from litellm.types.llms.openai import REASONING_EFFORT, ResponsesAPIResponse
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -47,6 +49,7 @@ from ..adapters.handler import (
 )
 from ..safeguards import with_safeguard_results
 from ..utils import (
+    KNOWN_REASONING_EFFORTS,
     REASONING_EFFORT_OFF,
     ClientEffort,
     ThinkingOffSwitch,
@@ -67,7 +70,6 @@ BlockRewrite: TypeAlias = Callable[[Mapping[str, object]], Mapping[str, object]]
 _BLOCK_LIST: Final = TypeAdapter(list[dict[str, object]])
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
-_KNOWN_REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
 _UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL: Final = "must be verified to generate reasoning summaries"
 
 
@@ -203,7 +205,7 @@ def _reasoning_for_target(
         if off_level is None or _responses_api_refuses_reasoning_effort(model, custom_llm_provider):
             return None
         return {**reasoning_params, "effort": off_level}
-    if drop_params and effort not in _KNOWN_REASONING_EFFORTS:
+    if drop_params and effort not in KNOWN_REASONING_EFFORTS:
         verbose_logger.warning(
             "Dropping reasoning.effort=%r for %s, no reasoning API defines it, because drop_params is set",
             effort,
@@ -238,13 +240,34 @@ def _model_excludes_effort(
     )
 
 
+def _drops_refused_summary(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> bool:
+    reasoning: Final = as_str_mapping(responses_kwargs.get("reasoning"))
+    return drop_params and reasoning is not None and "summary" in reasoning
+
+
+def _is_refused_summary(error: Exception) -> bool:
+    return isinstance(error, litellm.BadRequestError) and _UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL in error.message
+
+
+def _resent_without_refused_summary(
+    responses_kwargs: Mapping[str, object], *, drop_params: bool
+) -> AbstractContextManager[None]:
+    return (
+        resent_on(_is_refused_summary)
+        if _drops_refused_summary(responses_kwargs, drop_params=drop_params)
+        else nullcontext()
+    )
+
+
 def _retry_without_refused_summary(
     responses_kwargs: Mapping[str, object], error: litellm.BadRequestError, *, model: str, drop_params: bool
 ) -> Mapping[str, object] | None:
     reasoning: Final = as_str_mapping(responses_kwargs.get("reasoning"))
-    if not drop_params or reasoning is None or "summary" not in reasoning:
-        return None
-    if _UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL not in error.message:
+    if (
+        reasoning is None
+        or not _drops_refused_summary(responses_kwargs, drop_params=drop_params)
+        or not _is_refused_summary(error)
+    ):
         return None
     verbose_logger.warning(
         "Retrying %s without reasoning.summary, its OpenAI organization cannot get reasoning summaries until it is "
@@ -348,7 +371,7 @@ def _build_responses_kwargs(
 
     provider_hint: Final = forwarded_kwargs.get("custom_llm_provider")
     provider: Final = provider_hint if isinstance(provider_hint, str) else None
-    bridged_reasoning: Final = responses_kwargs.pop("reasoning", None)
+    bridged_reasoning: Final[object] = responses_kwargs.pop("reasoning", None)
     target_reasoning: Final = (
         _reasoning_for_target(
             bridged_reasoning,
@@ -430,7 +453,8 @@ def _kwarg_text(responses_kwargs: Mapping[str, object], key: str) -> str:
 
 async def _aresponses(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> _ResponsesResult:
     try:
-        return await litellm.aresponses(**responses_kwargs)
+        with _resent_without_refused_summary(responses_kwargs, drop_params=drop_params):
+            return await litellm.aresponses(**responses_kwargs)
     except litellm.BadRequestError as error:
         retry_kwargs: Final = _retry_without_refused_summary(
             responses_kwargs, error, model=_kwarg_text(responses_kwargs, "model"), drop_params=drop_params
@@ -442,7 +466,8 @@ async def _aresponses(responses_kwargs: Mapping[str, object], *, drop_params: bo
 
 def _responses(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> _SyncResponsesResult:
     try:
-        return litellm.responses(**responses_kwargs)
+        with _resent_without_refused_summary(responses_kwargs, drop_params=drop_params):
+            return litellm.responses(**responses_kwargs)
     except litellm.BadRequestError as error:
         retry_kwargs: Final = _retry_without_refused_summary(
             responses_kwargs, error, model=_kwarg_text(responses_kwargs, "model"), drop_params=drop_params
