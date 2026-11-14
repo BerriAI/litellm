@@ -72,6 +72,9 @@ class OpenCodeGoChatConfig(_GoReportedCostMixin, OpenAILikeChatConfig):
     def custom_llm_provider(self) -> str:
         return "opencode_go"
 
+    def get_supported_openai_params(self, model: str) -> list:
+        return super().get_supported_openai_params(model) + ["reasoning_effort"]
+
     def _get_openai_compatible_provider_info(
         self,
         api_base: str | None,

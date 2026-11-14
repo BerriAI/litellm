@@ -280,6 +280,25 @@ async def test_all_routes_use_model_protocol_and_preserve_session(
             assert message["usage"]["output_tokens"] == 5
 
 
+@pytest.mark.asyncio
+async def test_chat_route_forwards_reasoning_effort_when_drop_params(go_catalog: None) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        assert body["reasoning_effort"] == "none"
+        return httpx.Response(200, json=upstream_reply("chat/completions", "fixture-chat"))
+
+    with respx.mock(using="httpx") as transport:
+        transport.post().mock(side_effect=respond)
+        response: Final = await litellm.acompletion(
+            model="opencode_go/fixture-chat",
+            api_key="fake-go-key",
+            messages=[{"role": "user", "content": "hello"}],
+            reasoning_effort="none",
+            drop_params=True,
+        )
+    assert response.choices[0].message.content == "hello"
+
+
 def test_go_never_falls_back_to_other_provider_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
     monkeypatch.delenv("OPENCODE_GO_API_KEY", raising=False)
