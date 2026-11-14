@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_core_utils::decline::Decline;
 use litellm_core_utils::{
@@ -400,16 +402,18 @@ fn thinking_identity(block: &Value) -> Option<(&str, &str)> {
 /// Python's `_without_repeated_thinking`: a thinking block that several merged
 /// assistant messages carry is sent once, where it first appears.
 fn without_repeated_thinking(blocks: Vec<Value>) -> Vec<Value> {
+    let first_positions: HashMap<(&str, &str), usize> = blocks
+        .iter()
+        .enumerate()
+        .rev()
+        .filter_map(|(index, block)| Some((thinking_identity(block)?, index)))
+        .collect();
     blocks
         .iter()
         .enumerate()
         .filter(|(index, block)| {
-            thinking_identity(block).is_none_or(|identity| {
-                blocks
-                    .iter()
-                    .position(|other| thinking_identity(other) == Some(identity))
-                    == Some(*index)
-            })
+            thinking_identity(block)
+                .is_none_or(|identity| first_positions.get(&identity) == Some(index))
         })
         .map(|(_, block)| block.clone())
         .collect()
