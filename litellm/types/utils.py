@@ -4440,11 +4440,9 @@ class PricingCurrencyParams(LiteLLMBaseModel):
     def _numeric_prices_with_currency(cls, data: object) -> object:
         """A float field reads ``true`` as 1.0, so a boolean price in a currency-priced section is refused here,
         before validation hides it."""
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) or all(data.get(setting) is None for setting in _PRICING_CURRENCY_SETTINGS):
             return data
         section: Final = _RAW_SECTION.validate_python(data)
-        if all(section.get(setting) is None for setting in _PRICING_CURRENCY_SETTINGS):
-            return data
         booleans: Final = sorted(
             field for field, value in section.items() if isinstance(value, bool) and field in MONETARY_PRICING_FIELDS
         )

@@ -924,10 +924,10 @@ SPECIAL_MODEL_INFO_PARAMS = tuple(MirroredPricingParams.model_fields)
 def _usd_priced(
     litellm_params: "LiteLLM_Params | Mapping[str, object]", model_info: "ModelInfo"
 ) -> "tuple[LiteLLM_Params | Mapping[str, object], ModelInfo]":
+    if not needs_pricing_normalization(litellm_params, model_info):
+        return litellm_params, model_info
     params: Final[Mapping[str, object]] = dict(litellm_params)
     info: Final[Mapping[str, object]] = dict(model_info)
-    if not needs_pricing_normalization(params, info):
-        return litellm_params, model_info
     normalized: Final = normalize_deployment_pricing(params, info)
     if isinstance(normalized, PricingCurrencyError):
         raise ValueError(normalized.message)

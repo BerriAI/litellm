@@ -289,6 +289,12 @@ class LowestCostLoggingHandler(CustomLogger):
             if _deployment.get("litellm_params", {}).get("output_cost_per_token", None):
                 item_output_cost = _deployment.get("litellm_params", {}).get("output_cost_per_token")
 
+            if item_input_cost is None and _deployment.get("model_info", {}).get("input_cost_per_token", None):
+                item_input_cost = _deployment.get("model_info", {}).get("input_cost_per_token")
+
+            if item_output_cost is None and _deployment.get("model_info", {}).get("output_cost_per_token", None):
+                item_output_cost = _deployment.get("model_info", {}).get("output_cost_per_token")
+
             if item_input_cost is None:
                 item_input_cost = map_input_cost if map_input_cost is not None else 5.0
 

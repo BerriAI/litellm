@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, Overflow, localcontext
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
@@ -84,7 +84,11 @@ class NormalizedPricing:
     source: PricingSource | None
 
 
-def needs_pricing_normalization(litellm_params: Mapping[str, object], model_info: Mapping[str, object]) -> bool:
+class _ReadsFields(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def needs_pricing_normalization(litellm_params: _ReadsFields, model_info: _ReadsFields) -> bool:
     return (
         any(litellm_params.get(field) is not None or model_info.get(field) is not None for field in CURRENCY_FIELDS)
         or model_info.get(PRICING_SOURCE) is not None
