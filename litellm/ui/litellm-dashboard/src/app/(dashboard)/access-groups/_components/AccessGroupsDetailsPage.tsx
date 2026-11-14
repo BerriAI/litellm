@@ -3,6 +3,7 @@ import type { TFunction } from "i18next";
 import {
   ArrowLeftIcon,
   BotIcon,
+  DatabaseIcon,
   EditIcon,
   KeyIcon,
   LayersIcon,
@@ -146,6 +147,8 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
   const mcpServers = accessGroup.access_mcp_servers;
   const agents = accessGroup.access_agents;
   const skills = (accessGroup.access_skill_names ?? []).map((name) => ({ id: name, name: null }));
+  const vectorStores =
+    accessGroup.access_vector_stores ?? (accessGroup.access_vector_store_ids ?? []).map((id) => ({ id, name: null }));
   const keys = accessGroup.assigned_keys;
   const teams = accessGroup.assigned_teams;
 
@@ -273,7 +276,10 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
       <Card>
         <CardContent>
           <Tabs defaultValue="models">
-            <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
+            <TabsList
+              variant="line"
+              className="w-full flex-wrap justify-start rounded-none border-b p-0 group-data-horizontal/tabs:h-auto"
+            >
               <TabsTrigger value="models" className="flex-none gap-2 rounded-none px-4 py-2">
                 <LayersIcon className="size-4" />
                 {t("accessGroups.detail.tabs.models")}
@@ -294,6 +300,11 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
                 {t("accessGroups.detail.tabs.skills")}
                 <Badge variant="secondary">{skills.length}</Badge>
               </TabsTrigger>
+              <TabsTrigger value="vector-stores" className="flex-none gap-2 rounded-none px-4 py-2">
+                <DatabaseIcon className="size-4" />
+                {t("accessGroups.detail.tabs.vectorStores")}
+                <Badge variant="secondary">{vectorStores.length}</Badge>
+              </TabsTrigger>
             </TabsList>
             <TabsContent value="models" className="pt-4">
               <ResourceList items={models} emptyMessage={t("accessGroups.detail.empty.models")} />
@@ -307,6 +318,9 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             </TabsContent>
             <TabsContent value="skills" className="pt-4">
               <ResourceList items={skills} emptyMessage={t("accessGroups.detail.empty.skills")} />
+            </TabsContent>
+            <TabsContent value="vector-stores" className="pt-4">
+              <ResourceList items={vectorStores} emptyMessage={t("accessGroups.detail.empty.vectorStores")} />
             </TabsContent>
           </Tabs>
         </CardContent>

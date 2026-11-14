@@ -4,7 +4,7 @@ import asyncio
 import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from itertools import groupby
 from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
@@ -95,6 +95,17 @@ def _internal_call_origin(metadata: str) -> object:
     except ValidationError:
         return None
     return decoded.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+
+
+def utc_date_from_start_time(start_time: datetime | str) -> str | None:
+    try:
+        parsed: Final = (
+            datetime.fromisoformat(start_time.replace("Z", "+00:00")) if isinstance(start_time, str) else start_time
+        )
+    except ValueError:
+        return None
+    aware: Final = parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+    return aware.astimezone(timezone.utc).date().isoformat()
 
 
 def date_from_start_time(start_time: datetime | str) -> str | None:

@@ -169,6 +169,43 @@ async def test_select_without_messages_or_input_runs_no_context_window_check(mak
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("title", "snippet"),
+    [("release notes " * 100, ""), ("Release", "release notes " * 100)],
+    ids=["title", "snippet"],
+)
+async def test_server_tool_history_does_not_bypass_the_context_window_check(
+    make_core: MakeCore, title: str, snippet: str
+) -> None:
+    core: Final = make_core(model_list=[windowed("g", "server-tools", 50)], enable_pre_call_checks=True)
+    messages: Final = [
+        {"role": "user", "content": "Search release notes"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "server_tool_use", "id": "srv_1", "name": "web_search", "input": {"query": "release notes"}},
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srv_1",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://example.invalid",
+                            "title": title,
+                            "snippet": snippet,
+                            "encrypted_content": "opaque",
+                        }
+                    ],
+                },
+            ],
+        },
+        {"role": "user", "content": "Summarize"},
+    ]
+    with pytest.raises(litellm.ContextWindowExceededError, match="Context Window exceeded"):
+        await core.select("g", messages=messages)
+
+
+@pytest.mark.asyncio
 async def test_when_no_context_window_fits_select_raises_context_window_exceeded(make_core: MakeCore) -> None:
     core: Final = make_core(model_list=[windowed("g", "small", 5)], enable_pre_call_checks=True)
     with pytest.raises(litellm.ContextWindowExceededError) as error:

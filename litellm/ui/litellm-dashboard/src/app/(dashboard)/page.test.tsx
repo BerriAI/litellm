@@ -43,18 +43,22 @@ vi.mock("@/app/(dashboard)/home/_components/HomePage", () => ({
 vi.mock("@/components/common_components/LoadingScreen", () => ({
   default: () => <div data-testid="loading-screen" />,
 }));
-vi.mock("@/components/networking", () => ({
-  getRuntimeBackendBaseUrl: () => null,
-  getUiPageUrl: (url: string) => url,
-  proxyBaseUrl: "",
-}));
+vi.mock("@/components/networking", async () => {
+  const { normalizeBackendPageUrlToUiOrigin } =
+    await vi.importActual<typeof import("@/utils/returnUrlUtils")>("@/utils/returnUrlUtils");
+  return {
+    getRuntimeBackendBaseUrl: () => "https://backend.example",
+    getUiPageUrl: (url: string) =>
+      normalizeBackendPageUrlToUiOrigin(url, "https://backend.example", "http://localhost:3000"),
+    proxyBaseUrl: "",
+  };
+});
 vi.mock("@/utils/uiHref", () => ({ uiHref: mockUiHref }));
-vi.mock("@/utils/returnUrlUtils", () => ({
+vi.mock("@/utils/returnUrlUtils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/returnUrlUtils")>()),
   buildLoginUrlWithReturn: (u: string) => u,
   consumeReturnUrl: () => state.returnUrl,
   getLoginUrl: () => "/login",
-  isValidReturnUrl: () => true,
-  normalizeUrlForCompare: (u: string) => u,
   storeReturnUrl: () => undefined,
 }));
 
@@ -127,5 +131,15 @@ describe("dashboard landing", () => {
     state.returnUrl = "/ui/models-and-endpoints";
     render(<CreateKeyPage />);
     expect(mockLocationReplace).toHaveBeenCalledWith("http://localhost:3000/ui/models-and-endpoints");
+  });
+
+  it.each([
+    "/ui/?login=success",
+    "http://localhost:3000/ui?login=success",
+    "https://backend.example/ui/?login=success",
+  ])("does not reload when the return URL %s already matches the current page", (returnUrl) => {
+    state.returnUrl = returnUrl;
+    render(<CreateKeyPage />);
+    expect(mockLocationReplace).not.toHaveBeenCalled();
   });
 });

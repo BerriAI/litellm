@@ -65,6 +65,9 @@ vi.mock("@/components/networking", () => {
     getUiPageUrl: (url: string) => url,
     fetchMCPServers: (...args: unknown[]) => mockFetchMCPServers(...args),
     fetchMCPToolsets: vi.fn().mockResolvedValue([]),
+    getClaudeCodePluginsList: vi
+      .fn()
+      .mockResolvedValue({ plugins: [{ id: "private-skill", name: "private-skill", enabled: false, source: {} }] }),
     listMCPTools: (...args: unknown[]) => mockListMCPTools(...args),
   };
 });
@@ -368,6 +371,7 @@ describe("UserInfoView", () => {
         mcp_access_groups: ["dev-group"],
         mcp_toolsets: [],
         mcp_tool_permissions: { "srv-1": ["list_issues"] },
+        skills: [],
       };
       expect(payload.object_permission).toEqual(expectedObjectPermission);
       expect(payload).not.toHaveProperty("mcp_servers_and_groups");

@@ -6,8 +6,8 @@ import os
 import ssl
 import sys
 import threading
-from collections.abc import Generator, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Literal
@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from integration._support.tls import server_context, write_self_signed_cert
+from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, wire_server
 
 import litellm
@@ -38,6 +39,14 @@ _IMPORTED_MODEL_COST_INPUTS: Final = model_cost_inputs.snapshot()
 
 def _blob_id(body: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(body) + body, usedforsecurity=False).hexdigest()
+
+
+def _marked_utf8(text: str) -> bytes:
+    return b"\xef\xbb\xbf" + text.encode()
+
+
+def _utf16(text: str) -> bytes:
+    return text.encode("utf-16")
 
 
 def _document_with(**rows: Mapping[str, object]) -> bytes:
@@ -138,6 +147,10 @@ def test_boot_load_installs_the_served_document_and_records_its_provenance():
         (
             _Reply(body=json.dumps({"only": {"litellm_provider": "openai"}}).encode()),
             "Remote data failed integrity validation",
+        ),
+        (
+            _Reply(body=json.dumps({**json.loads(_BUNDLED), "_comment": "mirrored 2026-11-30"}).encode()),
+            "Remote fetch failed: invalid JSON from ",
         ),
     ],
 )
@@ -319,8 +332,13 @@ def test_reload_retries_a_429_after_its_retry_after():
             "model cost map from {url} failed integrity validation",
             1,
         ),
+        (
+            _Reply(body=json.dumps({**json.loads(_BUNDLED), "_comment": "mirrored 2026-11-30"}).encode()),
+            "invalid JSON from {url}: _comment",
+            1,
+        ),
     ],
-    ids=["gives-up-after-its-attempts", "not-json", "below-integrity-limits"],
+    ids=["gives-up-after-its-attempts", "not-json", "below-integrity-limits", "top-level-value-not-a-row"],
 )
 def test_a_failed_reload_keeps_the_installed_map(reply: _Reply, reason: str, requests: int):
     installed: Final = litellm.model_cost
@@ -333,6 +351,23 @@ def test_a_failed_reload_keeps_the_installed_map(reply: _Reply, reason: str, req
     assert server.requests == requests
     assert litellm.model_cost is installed
     assert get_model_cost_map_provenance() == provenance
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+@pytest.mark.parametrize(
+    "encode",
+    [_marked_utf8, _utf16],
+    ids=["utf-8-byte-order-mark", "utf-16"],
+)
+def test_a_reload_reads_a_document_that_starts_with_a_byte_order_mark(encode: Callable[[str], bytes]):
+    row: Final = {"litellm_provider": "openai", "mode": "chat"}
+    body: Final = encode(_document_with(**{"lit-marked-model": row}).decode())
+    with _serving(_Reply(body=body)) as server:
+        result: Final = asyncio.run(refetch_model_cost_map(url=server.url))
+
+    assert isinstance(result, ModelCostMapReloaded)
+    assert litellm.model_cost["lit-marked-model"] == row
+    assert get_model_cost_map_provenance()["source_revision"] == _blob_id(body)
 
 
 @pytest.mark.usefixtures("remote_source", "own_model_cost")
@@ -532,6 +567,98 @@ def test_an_s3_load_signs_for_the_region_and_reaches_the_endpoint_the_environmen
     assert get_model_cost_map_source_info()["source"] == "remote"
 
 
+_GCS_URL: Final = "gs://lit-prices/maps/cost.json"
+_GCS_OBJECT_TARGET: Final = "/storage/v1/b/lit-prices/o/maps%2Fcost.json?alt=media"
+_GCS_TOKEN: Final = "ya29.lit-scripted-gcs-token"
+
+
+@pytest.fixture
+def gcs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[[_Reply], AbstractContextManager[_Server]]:
+    @contextmanager
+    def serving(reply: _Reply) -> Generator[_Server]:
+        received: Final[list[Request]] = []  # mutable-ok: respond records every request the peer answers
+
+        def respond(request: Request) -> Reply:
+            received.append(request)
+            if request.target == "/_oauth/token":
+                return Reply(body=json.dumps({"access_token": _GCS_TOKEN, "expires_in": 3600}).encode())
+            return Reply(status=reply.status, body=reply.body, headers=reply.headers)
+
+        with wire_server(respond) as wire:
+            credentials: Final = tmp_path / "application_default_credentials.json"
+            credentials.write_text(service_account_json("lit-prices-project", wire.url))
+            monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(credentials))
+            monkeypatch.setenv("STORAGE_EMULATOR_HOST", wire.url)
+            yield _Server(url=_GCS_URL, received=received)
+
+    return serving
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+@pytest.mark.parametrize("load", ["boot", "reload", "register_model"])
+def test_every_load_reads_a_gs_url_from_the_emulator_without_credentials(
+    gcs: Callable[[_Reply], AbstractContextManager[_Server]], load: Literal["boot", "reload", "register_model"]
+):
+    body: Final = _document_with(**{"lit-gcs-model": {"litellm_provider": "openai", "mode": "chat"}})
+    with gcs(_Reply(body=body)) as server:
+        rows: Final = _rows_loaded_through(load, server.url)
+
+    assert server.targets == [_GCS_OBJECT_TARGET]
+    assert server.authorizations == [""]
+    assert "lit-gcs-model" in rows
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_a_gs_load_reaches_an_emulator_host_given_without_a_scheme(
+    gcs: Callable[[_Reply], AbstractContextManager[_Server]], monkeypatch: pytest.MonkeyPatch
+):
+    with gcs(_Reply()) as server:
+        emulator: Final = os.environ["STORAGE_EMULATOR_HOST"]
+        monkeypatch.setenv("STORAGE_EMULATOR_HOST", emulator.removeprefix("http://"))
+        litellm.get_model_cost_map(url=server.url, max_attempts=1)
+
+    assert server.targets == [_GCS_OBJECT_TARGET]
+    assert get_model_cost_map_source_info()["source"] == "remote"
+
+
+@pytest.mark.usefixtures("remote_source")
+def test_a_gs_boot_load_records_the_remote_source(gcs: Callable[[_Reply], AbstractContextManager[_Server]]):
+    with gcs(_Reply()) as server:
+        litellm.get_model_cost_map(url=server.url)
+
+    source: Final = get_model_cost_map_source_info()
+    assert (source["source"], source["url"], source["fallback_reason"]) == ("remote", _GCS_URL, None)
+
+
+@pytest.mark.usefixtures("remote_source")
+@pytest.mark.parametrize("status", [403, 404], ids=["denied", "missing"])
+def test_a_gs_boot_load_refused_by_storage_falls_back_without_a_retry(
+    gcs: Callable[[_Reply], AbstractContextManager[_Server]], status: int
+):
+    with gcs(_Reply(status=status, body=b"refused")) as server:
+        litellm.get_model_cost_map(url=server.url, max_attempts=3)
+
+    assert server.requests == 1
+    source: Final = get_model_cost_map_source_info()
+    assert source["source"] == "local"
+    assert source["fallback_reason"] == f"Remote fetch failed: HTTP {status} from {_GCS_URL}"
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+@pytest.mark.parametrize("status", [403, 404], ids=["denied", "missing"])
+def test_a_gs_reload_refused_by_storage_keeps_the_installed_map(
+    gcs: Callable[[_Reply], AbstractContextManager[_Server]], status: int
+):
+    installed: Final = litellm.model_cost
+    with gcs(_Reply(status=status, body=b"refused")) as server:
+        result: Final = asyncio.run(refetch_model_cost_map(url=server.url, max_attempts=3))
+
+    assert isinstance(result, ModelCostMapReloadUnavailable)
+    assert result.reason == f"HTTP {status} from {_GCS_URL}"
+    assert server.requests == 1
+    assert litellm.model_cost is installed
+
+
 @pytest.mark.usefixtures("remote_source", "own_model_cost")
 @pytest.mark.parametrize("load", ["boot", "reload"])
 def test_both_loads_fetch_through_the_proxy_the_environment_names(
@@ -562,6 +689,33 @@ def test_register_model_from_a_url_registers_the_served_rows_without_the_fallbac
     assert litellm.model_cost["lit-url-model"]["input_cost_per_token"] == 4e-06
     assert FALLBACK_GENERALIZATIONS_KEY not in litellm.model_cost
     assert model_cost_inputs.registered_keys() == [*GetModelCostMap.loaded_model_cost_map(), "lit-url-model"]
+
+
+@pytest.mark.usefixtures("own_model_cost")
+@pytest.mark.parametrize(
+    ("flag", "requests", "registered"),
+    [("LITELLM_OFFLINE_MODE", 0, False), ("LITELLM_LOCAL_MODEL_COST_MAP", 1, True)],
+    ids=["offline-mode-fetches-nothing", "bundled-map-flag-still-fetches-the-url"],
+)
+def test_register_model_from_a_url_under_a_flag_that_keeps_the_cost_map_local(
+    monkeypatch: pytest.MonkeyPatch, flag: str, requests: int, registered: bool
+):
+    monkeypatch.setenv(flag, "true")
+    document: Final = {"lit-url-model": {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 4e-06}}
+    with _serving(_Reply(body=json.dumps(document).encode())) as server:
+        litellm.register_model(server.url)
+
+    assert server.requests == requests
+    assert ("lit-url-model" in litellm.model_cost) is registered
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_register_model_from_a_url_reads_a_document_that_starts_with_a_byte_order_mark():
+    document: Final = {"lit-url-model": {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 4e-06}}
+    with _serving(_Reply(body=b"\xef\xbb\xbf" + json.dumps(document).encode())) as server:
+        litellm.register_model(server.url)
+
+    assert litellm.model_cost["lit-url-model"]["input_cost_per_token"] == 4e-06
 
 
 @pytest.mark.usefixtures("remote_source", "own_model_cost")

@@ -27,7 +27,13 @@ const calls: { path: string; query: URLSearchParams; method: string; body: unkno
 let status = "open";
 let rejectWrite = false;
 let rejectHistory = false;
-let monitoring = { enabled: true, alerts_used: 0, alert_limit: 5 as number | null, disabled_by_config: false };
+let monitoring = {
+  model_deprecations_enabled: true,
+  enabled: true,
+  alerts_used: 0,
+  alert_limit: 5 as number | null,
+  disabled_by_config: false,
+};
 let rejectMonitoring = false;
 function response(data: unknown, code = 200) {
   return new Response(JSON.stringify(data), { status: code, headers: { "Content-Type": "application/json" } });
@@ -41,7 +47,13 @@ describe("Alerts", () => {
     rejectWrite = false;
     rejectHistory = false;
     rejectMonitoring = false;
-    monitoring = { enabled: true, alerts_used: 0, alert_limit: 5, disabled_by_config: false };
+    monitoring = {
+      model_deprecations_enabled: true,
+      enabled: true,
+      alerts_used: 0,
+      alert_limit: 5,
+      disabled_by_config: false,
+    };
     role = "proxy_admin";
     document.cookie = `token=${btoa(JSON.stringify({ alg: "none" }))}.${btoa(JSON.stringify({ key: "example-session", exp: 4102444800 }))}.example; path=/`;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -57,7 +69,7 @@ describe("Alerts", () => {
         if (rejectMonitoring) return response({ detail: "Unavailable" }, 503);
         if (request.method === "PATCH") {
           if (rejectWrite) return response({ detail: "Unavailable" }, 503);
-          monitoring = { ...monitoring, enabled: body.enabled };
+          monitoring = { ...monitoring, ...body };
         }
         return response(monitoring);
       }
@@ -144,7 +156,7 @@ describe("Alerts", () => {
     expect(await screen.findByText("No resolved alerts.")).toBeInTheDocument();
   });
 
-  it("keeps deprecation email setup accessible from the inbox", async () => {
+  it("keeps alert email setup accessible from the inbox", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Alerts />);
     await user.click(await screen.findByRole("button", { name: "Set up email reminders" }));
@@ -161,12 +173,36 @@ describe("Alerts", () => {
     expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
   });
+  it("keeps notification opt-in separate from the model deprecation toggle", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    expect(
+      await screen.findByText(
+        "Model deprecation alerts are unlimited. Performance monitoring includes 5 free alerts, then requires Enterprise.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Manage alerts" }));
+    const toggle = await screen.findByRole("switch", { name: "Model deprecations" });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+    expect(calls.filter((call) => call.method === "PATCH")).toEqual([
+      expect.objectContaining({ path: "/alerts/monitoring", body: { model_deprecations_enabled: false } }),
+    ]);
+    expect(screen.getByRole("switch", { name: "Performance monitoring" })).toBeChecked();
+    expect(screen.getByText(/Opt in to Performance Alerts in email or Slack settings/)).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(await screen.findByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
+  });
+
   it("defaults on and persists opting out through the monitoring API", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Alerts />);
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
     const toggle = await screen.findByRole("switch", { name: "Performance monitoring" });
     expect(toggle).toBeChecked();
-    expect(screen.getByText("0 of 5 free alerts used.")).toBeInTheDocument();
+    expect(screen.getByText("0 of 5 free alerts generated.")).toBeInTheDocument();
     await user.click(toggle);
     expect(await screen.findByText("Off. Saved alerts remain available.")).toBeInTheDocument();
     expect(toggle).not.toBeChecked();
@@ -174,15 +210,15 @@ describe("Alerts", () => {
       path: "/alerts/monitoring",
       body: { enabled: false },
     });
-    expect(screen.getByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
     await user.click(toggle);
-    expect(await screen.findByText("0 of 5 free alerts used.")).toBeInTheDocument();
+    expect(await screen.findByText("0 of 5 free alerts generated.")).toBeInTheDocument();
   });
 
   it("explains exhaustion without blocking saved alerts or model deprecations", async () => {
     monitoring.alerts_used = 5;
     const user = userEvent.setup();
     renderWithProviders(<Alerts />);
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
     expect(
       await screen.findByText("You’ve used all 5 free alerts. New performance alerts are paused."),
     ).toBeInTheDocument();
@@ -190,8 +226,6 @@ describe("Alerts", () => {
       "href",
       "https://www.litellm.ai/enterprise",
     );
-    expect(screen.getByRole("button", { name: "Mark resolved" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Set up email reminders" })).toBeInTheDocument();
     await user.click(screen.getByRole("switch", { name: "Performance monitoring" }));
     expect(await screen.findByText("Off. Saved alerts remain available.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Upgrade to Enterprise" })).not.toBeInTheDocument();
@@ -200,6 +234,7 @@ describe("Alerts", () => {
   it("keeps the saved toggle value when an older refresh finishes later", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Alerts />);
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
     const toggle = await screen.findByRole("switch", { name: "Performance monitoring" });
     const originalFetch = vi.mocked(globalThis.fetch).getMockImplementation()!;
     const staleResponse = response(monitoring);
@@ -211,7 +246,9 @@ describe("Alerts", () => {
       }
       return originalFetch(input, init);
     });
-    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await act(async () => {
+      void testQueryClient.invalidateQueries({ queryKey: ["alert-monitoring"] });
+    });
     await user.click(toggle);
     expect(await screen.findByText("Off. Saved alerts remain available.")).toBeInTheDocument();
     await act(async () => {
@@ -227,6 +264,7 @@ describe("Alerts", () => {
     monitoring.alert_limit = null;
     monitoring.alerts_used = 5;
     renderWithProviders(<Alerts />);
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
     expect(await screen.findByText("On with Enterprise.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Upgrade to Enterprise" })).not.toBeInTheDocument();
   });
@@ -236,22 +274,26 @@ describe("Alerts", () => {
     monitoring.alerts_used = 5;
     monitoring.enabled = false;
     renderWithProviders(<Alerts />);
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
     expect(await screen.findByText("Disabled in proxy settings.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Upgrade to Enterprise" })).not.toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Performance monitoring" })).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("lets viewers see monitoring status without a toggle", async () => {
+  it("lets viewers inspect alert settings without changing them", async () => {
     role = "proxy_admin_viewer";
     renderWithProviders(<Alerts />);
-    expect(await screen.findByText("0 of 5 free alerts used.")).toBeInTheDocument();
-    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
+    expect(await screen.findByText("0 of 5 free alerts generated.")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Performance monitoring" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("switch", { name: "Model deprecations" })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("keeps the saved preference when a monitoring change fails", async () => {
     rejectWrite = true;
     const user = userEvent.setup();
     renderWithProviders(<Alerts />);
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
     await user.click(await screen.findByRole("switch", { name: "Performance monitoring" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not save monitoring settings");
     expect(screen.getByRole("switch", { name: "Performance monitoring" })).toBeChecked();
@@ -261,10 +303,12 @@ describe("Alerts", () => {
     rejectMonitoring = true;
     const user = userEvent.setup();
     renderWithProviders(<Alerts />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load monitoring settings");
-    expect(screen.getByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Manage alerts" }));
+    expect(await within(screen.getByRole("dialog")).findByRole("alert")).toHaveTextContent(
+      "Could not load monitoring settings",
+    );
     rejectMonitoring = false;
-    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("switch", { name: "Performance monitoring" })).toBeChecked();
   });
 });
