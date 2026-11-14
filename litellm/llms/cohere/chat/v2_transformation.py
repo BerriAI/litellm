@@ -1,5 +1,5 @@
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -14,7 +14,6 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAnnotation,
     ChatCompletionAnnotationURLCitation,
-    ChatCompletionToolCallChunk,
 )
 from litellm.types.utils import ModelResponse, Usage
 
@@ -28,6 +27,124 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    model_dump: Final = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped: Final = model_dump(exclude_none=True)
+        if isinstance(dumped, Mapping):
+            return dumped
+    return None
+
+
+def _sanitize_cohere_v2_tool_call(tool_call: object) -> Mapping[str, object] | None:
+    raw: Final = _as_mapping(tool_call)
+    if raw is None:
+        return None
+    fn_raw: Final = _as_mapping(raw.get("function"))
+    sanitized_fn: Final = (
+        {k: fn_raw[k] for k in ("name", "arguments") if k in fn_raw and fn_raw[k] is not None}
+        if fn_raw is not None
+        else raw.get("function")
+    )
+    return {
+        **({"id": raw["id"]} if raw.get("id") is not None else {}),
+        **({"type": raw["type"]} if raw.get("type") is not None else {}),
+        **({"function": sanitized_fn} if sanitized_fn is not None else {}),
+    }
+
+
+def _is_thinking_content_item(item: object) -> bool:
+    mapped: Final = _as_mapping(item)
+    return mapped is not None and mapped.get("type") in ("thinking", "redacted_thinking")
+
+
+def _text_from_content_item(item: object) -> str:
+    if isinstance(item, str):
+        return item
+    mapped: Final = _as_mapping(item)
+    if mapped is not None and mapped.get("type") == "text":
+        text: Final = mapped.get("text")
+        if isinstance(text, str):
+            return text
+    return ""
+
+
+def _extract_assistant_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
+        return "".join(_text_from_content_item(item) for item in content)
+    return ""
+
+
+def _strip_thinking_from_content(content: object) -> object:
+    if isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
+        return [item for item in content if not _is_thinking_content_item(item)]
+    return content
+
+
+def _sanitize_cohere_v2_message(message: object) -> object:
+    raw: Final = _as_mapping(message)
+    if raw is None:
+        return message
+    role: Final = raw.get("role")
+    if role == "assistant":
+        raw_tool_calls: Final = raw.get("tool_calls")
+        tool_calls: Final = (
+            [
+                sanitized
+                for tc in raw_tool_calls
+                if (sanitized := _sanitize_cohere_v2_tool_call(tc)) is not None
+            ]
+            if isinstance(raw_tool_calls, Sequence) and not isinstance(raw_tool_calls, (str, bytes))
+            else []
+        )
+        raw_content: Final = raw.get("content")
+        explicit_plan: Final = raw.get("tool_plan")
+        citations: Final = raw.get("citations")
+        if tool_calls:
+            tool_plan: Final = (
+                explicit_plan
+                if isinstance(explicit_plan, str) and explicit_plan
+                else _extract_assistant_text(raw_content)
+            )
+            return {
+                "role": "assistant",
+                "tool_calls": tool_calls,
+                **({"tool_plan": tool_plan} if tool_plan else {}),
+                **({"citations": citations} if citations is not None else {}),
+            }
+        cleaned_content: Final = _strip_thinking_from_content(raw_content)
+        return {
+            "role": "assistant",
+            **({"content": cleaned_content} if cleaned_content is not None else {}),
+            **({"tool_plan": explicit_plan} if explicit_plan is not None else {}),
+            **({"citations": citations} if citations is not None else {}),
+        }
+    if role == "tool":
+        return {
+            "role": "tool",
+            **({"tool_call_id": raw["tool_call_id"]} if raw.get("tool_call_id") is not None else {}),
+            **({"content": raw["content"]} if raw.get("content") is not None else {}),
+        }
+    return {
+        **({"role": role} if role is not None else {}),
+        **({"content": raw["content"]} if raw.get("content") is not None else {}),
+    }
+
+
+def _sanitize_cohere_v2_request_data(data: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: BaseConfig transform_request returns a mutable dict
+    raw_messages: Final = data.get("messages")
+    if not isinstance(raw_messages, Sequence) or isinstance(raw_messages, (str, bytes)):
+        return dict(data)
+    return {
+        **data,
+        "messages": [_sanitize_cohere_v2_message(msg) for msg in raw_messages],
+    }
 
 
 class CohereV2ChatConfig(OpenAIGPTConfig):
@@ -180,7 +297,21 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         """
         data: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
 
-        return data
+        return _sanitize_cohere_v2_request_data(data)
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: matches OpenAIGPTConfig.async_transform_request signature
+        optional_params: dict,  # mutable-ok: matches OpenAIGPTConfig.async_transform_request signature
+        litellm_params: dict,  # mutable-ok: matches OpenAIGPTConfig.async_transform_request signature
+        headers: dict,  # mutable-ok: matches OpenAIGPTConfig.async_transform_request signature
+    ) -> dict:  # mutable-ok: matches OpenAIGPTConfig.async_transform_request signature
+        data: Final = await super().async_transform_request(
+            model, messages, optional_params, litellm_params, headers
+        )
+
+        return _sanitize_cohere_v2_request_data(data)
 
     def transform_response(
         self,
@@ -226,13 +357,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         cohere_tools_response: Final = cohere_v2_chat_response["message"].get("tool_calls", [])
         if cohere_tools_response is not None and cohere_tools_response != []:
             # convert cohere_tools_response to OpenAI response format
-            tool_calls: Final[list[ChatCompletionToolCallChunk]] = []
-            for index, tool in enumerate(cohere_tools_response):
-                tool_call: ChatCompletionToolCallChunk = {
-                    **tool,
-                    "index": index,
-                }
-                tool_calls.append(tool_call)
+            tool_calls: Final = [{**tool} for tool in cohere_tools_response]
             _message: Final = litellm.Message(
                 tool_calls=tool_calls,
                 content=None,

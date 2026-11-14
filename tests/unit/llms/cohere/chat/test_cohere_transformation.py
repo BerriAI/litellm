@@ -872,3 +872,95 @@ async def test_cohere_v2_stream_closes_argument_less_tool_call_with_empty_object
         ("get_server_time_0", "get_server_time")
     ]
     assert json.loads("".join(call.function.arguments for call in streamed_calls)) == {}
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_cohere_v2_sanitizes_cross_provider_tool_history(
+    respx_mock: respx.MockRouter, sync_mode: bool
+) -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
+        }
+    ]
+    call: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'},
+    }
+    messages: Final = [
+        {"role": "user", "content": "What is the weather in Tokyo?", "name": "alice"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Checking weather tool."},
+                {"type": "text", "text": "Let me check the weather."},
+            ],
+            "reasoning_content": "I need to look up the weather.",
+            "tool_calls": [
+                {
+                    **call,
+                    "index": 0,
+                    "provider_specific_fields": {"thought_signature": "c2ln"},
+                    "extra_content": {"google": {"thought_signature": "c2ln"}},
+                }
+            ],
+            "citations": [{"start": 0, "end": 5, "text": "Tokyo"}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "name": "get_weather",
+            "content": '{"weather": "sunny"}',
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Synthesizing answer."},
+                {"type": "text", "text": "It is sunny in Tokyo."},
+            ],
+            "reasoning_content": "Synthesizing answer.",
+        },
+        {"role": "user", "content": "And Osaka?"},
+    ]
+    route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_cohere_v2_response({"content": [{"type": "text", "text": "It is rainy in Osaka."}]}),
+        )
+    )
+    kwargs: Final = {
+        "model": "cohere_chat/v2/command-a-03-2025",
+        "messages": messages,
+        "tools": tools,
+        "api_key": "cohere-test-key",
+    }
+
+    if sync_mode:
+        litellm.completion(**kwargs)
+    else:
+        await litellm.acompletion(**kwargs)
+
+    sent_body: Final = json.loads(route.calls.last.request.content)
+    assert sent_body["messages"] == [
+        {"role": "user", "content": "What is the weather in Tokyo?"},
+        {
+            "role": "assistant",
+            "tool_calls": [call],
+            "tool_plan": "Let me check the weather.",
+            "citations": [{"start": 0, "end": 5, "text": "Tokyo"}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"weather": "sunny"}'},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "It is sunny in Tokyo."}],
+        },
+        {"role": "user", "content": "And Osaka?"},
+    ]
+
