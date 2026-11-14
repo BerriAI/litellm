@@ -9004,9 +9004,11 @@ def test_anthropic_messages_pt_replays_a_recorded_search_once_when_two_assistant
         llm_provider="anthropic",
     )
 
-    assert [block["id"] for block in replayed[1]["content"] if block["type"] == "server_tool_use"] == [
-        "srvtoolu_01ONLY"
-    ]
+    assert [
+        (block["type"], block.get("id") or block.get("tool_use_id"))
+        for block in replayed[1]["content"]
+        if block["type"] in ("server_tool_use", "web_search_tool_result")
+    ] == [("server_tool_use", "srvtoolu_01ONLY"), ("web_search_tool_result", "srvtoolu_01ONLY")]
 
 
 @pytest.mark.parametrize(
@@ -9043,6 +9045,35 @@ def test_anthropic_messages_pt_replays_a_recorded_search_once_when_two_assistant
                 },
             },
             id="search_result_missing",
+        ),
+        pytest.param(
+            _with_block_order(
+                [
+                    *_recorded_search_turn()["provider_specific_fields"]["content_block_order"][:4],
+                    *_recorded_search_turn()["provider_specific_fields"]["content_block_order"][5:],
+                ]
+            ),
+            id="search_result_entry_missing",
+        ),
+        pytest.param(
+            _with_block_order(
+                [
+                    *_recorded_search_turn()["provider_specific_fields"]["content_block_order"][:5],
+                    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01ONLY"},
+                    *_recorded_search_turn()["provider_specific_fields"]["content_block_order"][5:],
+                ]
+            ),
+            id="search_result_entry_repeated",
+        ),
+        pytest.param(
+            _with_block_order(
+                [
+                    *_recorded_search_turn()["provider_specific_fields"]["content_block_order"][:4],
+                    {"type": "server_tool_use", "id": "srvtoolu_01ONLY"},
+                    *_recorded_search_turn()["provider_specific_fields"]["content_block_order"][4:],
+                ]
+            ),
+            id="search_entry_repeated",
         ),
         pytest.param(_with_block_order([{"length": 12}]), id="entry_without_type"),
         pytest.param(_with_block_order("thinking,text"), id="not_a_list"),

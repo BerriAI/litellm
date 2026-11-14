@@ -42,6 +42,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.types.llms.anthropic import (
+    AnthropicContentBlockOrderEntry,
     ContentBlockDelta,
     ContentBlockStart,
     ContentBlockStop,
@@ -78,7 +79,13 @@ from ..common_utils import (
     refusal_params,
     stop_reason_provider_specific_fields,
 )
-from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig, JsonModeRequest
+from .transformation import (
+    ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY,
+    AnthropicConfig,
+    JsonModeRequest,
+    content_block_order_entry,
+    recorded_content_block_order,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -771,6 +778,7 @@ class ModelResponseIterator:
         self._current_server_tool_name: str = ""
         self._server_tool_calls: tuple[ChatCompletionToolCallChunk, ...] = ()
         self._container_id: str | None = None
+        self._content_block_order: tuple[AnthropicContentBlockOrderEntry, ...] = ()
 
     @property
     def accumulated_json(self) -> str:
@@ -837,6 +845,7 @@ class ModelResponseIterator:
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
 
         if "text" in content_block["delta"]:
+            self._record_text_length(content_block["delta"]["text"])
             return (
                 self._hold_prose(content_block["delta"]["text"]),
                 tool_use,
@@ -911,6 +920,16 @@ class ModelResponseIterator:
             provider_specific_fields,
             reasoning_content,
         )
+
+    def _record_text_length(self, text: str) -> None:
+        match self._content_block_order[-1:]:
+            case (AnthropicContentBlockOrderEntry(type="text", length=length) as entry,):
+                self._content_block_order = (
+                    *self._content_block_order[:-1],
+                    entry.model_copy(update={"length": (length or 0) + len(text)}),
+                )
+            case _:
+                pass
 
     def _handle_redacted_thinking_content(
         self,
@@ -1037,6 +1056,10 @@ class ModelResponseIterator:
 
                 content_block_start: Final = self.get_content_block_start(chunk=chunk)
                 self.content_blocks = []  # reset content blocks when new block starts
+                self._content_block_order = (
+                    *self._content_block_order,
+                    content_block_order_entry(content_block_start["content_block"]),
+                )
                 # Track current content block type for filtering deltas
                 self.current_content_block_type = content_block_start["content_block"]["type"]
                 if self.current_content_block_type in _THINKING_BLOCK_TYPES:
@@ -1199,6 +1222,9 @@ class ModelResponseIterator:
             elif type_chunk == "message_delta":
                 finish_reason, usage, container, stop_reason_fields = self._handle_message_delta(chunk)
                 provider_specific_fields.update(stop_reason_fields)
+                block_order: Final = recorded_content_block_order(self._content_block_order)
+                if block_order is not None:
+                    provider_specific_fields["content_block_order"] = block_order
                 text = self._release_answer_close() + self._drain_split_answer_blocks() + self._release_held_prose()
                 if container:
                     provider_specific_fields["container"] = container

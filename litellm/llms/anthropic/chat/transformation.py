@@ -440,7 +440,7 @@ class _AnthropicResponseContent(BaseModel):
             return cls()
 
 
-def _content_block_order_entry(block: Mapping[str, object]) -> AnthropicContentBlockOrderEntry:
+def content_block_order_entry(block: Mapping[str, object]) -> AnthropicContentBlockOrderEntry:
     match block:
         case {"type": "text", "text": str() as text}:
             return AnthropicContentBlockOrderEntry(type="text", length=len(text))
@@ -452,11 +452,17 @@ def _content_block_order_entry(block: Mapping[str, object]) -> AnthropicContentB
             return AnthropicContentBlockOrderEntry(type=str(block.get("type")))
 
 
-def content_block_order(content: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...] | None:
-    kinds: Final = frozenset(block.get("type") for block in content)
+def recorded_content_block_order(
+    entries: Sequence[AnthropicContentBlockOrderEntry],
+) -> tuple[Mapping[str, object], ...] | None:
+    kinds: Final = frozenset(entry.type for entry in entries)
     if kinds.isdisjoint(("thinking", "redacted_thinking")) or "server_tool_use" not in kinds:
         return None
-    return tuple(_content_block_order_entry(block).model_dump(exclude_none=True) for block in content)
+    return tuple(entry.model_dump(exclude_none=True) for entry in entries)
+
+
+def content_block_order(content: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...] | None:
+    return recorded_content_block_order(tuple(content_block_order_entry(block) for block in content))
 
 
 def _provider_fields_with_tool_names(message: object, forward_map: Mapping[str, str]) -> Mapping[str, object] | None:

@@ -3021,12 +3021,17 @@ def _blocks_in_recorded_order(
     server_tool_uses: Final = frozenset(
         block_id for block_id, item in tool_uses.items() if _block_field(item, "type") == "server_tool_use"
     )
+    recorded_ids: Final = tuple(entry.id for entry in order if entry.id is not None)
+    recorded_tool_results: Final = tuple(entry.tool_use_id for entry in order if entry.tool_use_id is not None)
     if (
         tuple(entry.type for entry in order if entry.type in _THINKING_BLOCK_TYPES)
         != tuple(_block_field(block, "type") for block in thinking_blocks)
         or sum(entry.length or 0 for entry in order if entry.type == "text") != len(text)
         or recorded_server_tool_uses != server_tool_uses
         or not recorded_server_tool_uses.issubset(tool_results)
+        or len(frozenset(recorded_ids)) != len(recorded_ids)
+        or len(recorded_tool_results) != len(tool_results)
+        or frozenset(recorded_tool_results) != frozenset(tool_results)
     ):
         return None
     placed: Final = tuple(
@@ -3051,6 +3056,19 @@ def _blocks_in_recorded_order(
     )
     placed_objects: Final = frozenset(map(id, placed))
     return (*placed, *(item for item in tool_invokes if id(item) not in placed_objects))
+
+
+def _blocks_not_sent_before(
+    blocks: Sequence[_ReplayedBlock], sent_tool_ids: Container[object]
+) -> tuple[_ReplayedBlock, ...]:
+    repeated_ids: Final = frozenset(
+        block_id for block in blocks if (block_id := _block_field(block, "id")) in sent_tool_ids
+    )
+    return tuple(
+        block
+        for block in blocks
+        if _block_field(block, "id") not in repeated_ids and _block_field(block, "tool_use_id") not in repeated_ids
+    )
 
 
 def _replay_in_recorded_order(
@@ -3388,7 +3406,7 @@ def anthropic_messages_pt(
             )
 
             if _recorded_replay is not None:
-                for block in _recorded_replay:
+                for block in _blocks_not_sent_before(_recorded_replay, unique_tool_ids):
                     item_id = _block_field(block, "id")
                     if isinstance(item_id, str) and item_id in unique_tool_ids:
                         continue
