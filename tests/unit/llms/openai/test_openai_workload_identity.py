@@ -30,6 +30,7 @@ from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorSt
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.llms.openai.workload_identity import (
+    FEDERATED_BATCH_CREATE_MESSAGE,
     OpenAIWorkloadIdentityConfig,
     _workload_identity_auth,
     build_async_openai_client,
@@ -1357,15 +1358,6 @@ class TestDeploymentNonChatSurfaces:
                 id="file_content",
             ),
             pytest.param(
-                "POST",
-                BATCHES_URL,
-                httpx.Response(200, json=BATCH_BODY),
-                lambda p: litellm.create_batch(
-                    completion_window="24h", endpoint="/v1/chat/completions", input_file_id="file-1", **p
-                ),
-                id="create_batch",
-            ),
-            pytest.param(
                 "GET",
                 f"{BATCHES_URL}/batch-1",
                 httpx.Response(200, json=BATCH_BODY),
@@ -1501,6 +1493,67 @@ class TestDeploymentNonChatSurfaces:
         assert bearer_of(files_route) == "Bearer amanaged-bearer"
         assert bearer_of(batches_route) == "Bearer amanaged-bearer"
         assert bearer_of(jobs_route) == "Bearer amanaged-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("identity_source", ["deployment", "env"])
+    @pytest.mark.parametrize("is_async", [False, True])
+    async def test_federated_batch_create_is_refused_before_reaching_openai(
+        self,
+        deployment_wif: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+        identity_source: str,
+        is_async: bool,
+    ) -> None:
+        if identity_source == "env":
+            monkeypatch.setenv("OPENAI_IDENTITY_PROVIDER_ID", deployment_wif["openai_identity_provider_id"])
+            monkeypatch.setenv("OPENAI_SERVICE_ACCOUNT_ID", deployment_wif["openai_service_account_id"])
+            monkeypatch.setenv("OPENAI_IDENTITY_TOKEN_FILE", deployment_wif["openai_identity_token_file"])
+        identity_kwargs: Final = deployment_wif if identity_source == "deployment" else {}
+        exchange_route: Final = mock_token_exchange("batch-bearer")
+        batches_route: Final = respx.post(BATCHES_URL).mock(return_value=httpx.Response(200, json=BATCH_BODY))
+        batch_kwargs: Final = {
+            "completion_window": "24h",
+            "endpoint": "/v1/chat/completions",
+            "input_file_id": "file-1",
+            "custom_llm_provider": "openai",
+            **identity_kwargs,
+        }
+
+        async def create_batch() -> object:
+            if is_async:
+                return await litellm.acreate_batch(**batch_kwargs)
+            return litellm.create_batch(**batch_kwargs)
+
+        with pytest.raises(OpenAIError) as refusal:
+            await create_batch()
+
+        assert (refusal.value.status_code, refusal.value.message) == (400, FEDERATED_BATCH_CREATE_MESSAGE)
+        assert (exchange_route.call_count, batches_route.call_count) == (0, 0)
+
+    @respx.mock
+    @pytest.mark.parametrize("static_key_source", ["deployment", "env"])
+    def test_federated_deployment_creates_batches_with_its_static_key(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch, static_key_source: str
+    ) -> None:
+        if static_key_source == "env":
+            monkeypatch.setenv("OPENAI_API_KEY", "sk-batch-project")
+        static_key_kwargs: Final = {"api_key": "sk-batch-project"} if static_key_source == "deployment" else {}
+        exchange_route: Final = mock_token_exchange("batch-bearer")
+        batches_route: Final = respx.post(BATCHES_URL).mock(return_value=httpx.Response(200, json=BATCH_BODY))
+
+        batch: Final = litellm.create_batch(
+            completion_window="24h",
+            endpoint="/v1/chat/completions",
+            input_file_id="file-1",
+            custom_llm_provider="openai",
+            **deployment_wif,
+            **static_key_kwargs,
+        )
+
+        assert batch.id == BATCH_BODY["id"]
+        assert bearer_of(batches_route) == "Bearer sk-batch-project"
+        assert exchange_route.call_count == 0
 
     @respx.mock
     @pytest.mark.asyncio
