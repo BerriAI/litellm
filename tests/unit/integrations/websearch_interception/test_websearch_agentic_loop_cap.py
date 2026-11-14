@@ -11,14 +11,18 @@ Also covers the max_agentic_loops knob on websearch_interception_params, from
 config.yaml through to the settings the loop actually reads.
 """
 
+import asyncio
 import json
 import time
-from typing import Final
+from contextlib import suppress
+from typing import Final, TypedDict
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm.exceptions import AuthenticationError, RateLimitError
@@ -1236,6 +1240,10 @@ async def test_openai_chat_completion_stops_searching_at_the_agentic_loop_cap(
     assert {call.request.headers["authorization"] for call in openai_route.calls} == {"Bearer sk-test"}
 
 
+def _round_input_tokens(searches_done: int) -> int:
+    return 10 + 1000 * searches_done
+
+
 def _responses_reply_asking_for_another_search_until_enough_results(request: httpx.Request) -> httpx.Response:
     request_input: Final = json.loads(request.content)["input"]
     searches_done: Final = sum(1 for item in request_input if item.get("type") == "function_call_output")
@@ -1269,7 +1277,11 @@ def _responses_reply_asking_for_another_search_until_enough_results(request: htt
             "parallel_tool_calls": True,
             "tool_choice": "auto",
             "tools": [],
-            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            "usage": {
+                "input_tokens": _round_input_tokens(searches_done),
+                "output_tokens": 5,
+                "total_tokens": _round_input_tokens(searches_done) + 5,
+            },
         },
     )
 
@@ -1331,3 +1343,107 @@ async def test_responses_pinned_openai_chat_completion_keeps_its_search_follow_u
     assert chat_route.call_count == 0
     assert responses_route.call_count == SEARCHES_THE_MODEL_ASKS_FOR + 1
     assert response.choices[0].message.content == "Argentina won the 2022 World Cup."
+
+
+class _LoggedRow(TypedDict):
+    call_type: ReadOnly[str]
+    prompt_tokens: ReadOnly[int]
+
+
+class _ModelSpendRowRecorder(CustomLogger):
+    def __init__(self, rows_expected: int) -> None:
+        super().__init__()
+        self.prompt_tokens: Final[list[int]] = []
+        self._rows_expected: Final = rows_expected
+        self.all_rows_logged: Final = asyncio.Event()
+
+    def _record(self, kwargs: dict[str, object]) -> None:
+        row: Final = TypeAdapter(_LoggedRow).validate_python(kwargs["standard_logging_object"])
+        if row["call_type"] != "acompletion":
+            return
+        self.prompt_tokens.append(row["prompt_tokens"])
+        if len(self.prompt_tokens) >= self._rows_expected:
+            self.all_rows_logged.set()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record(kwargs)
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_responses_pinned_openai_chat_completion_bills_every_search_round_it_served(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    recorder: Final = _ModelSpendRowRecorder(rows_expected=2)
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder]
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    responses_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_asking_for_another_search_until_enough_results
+    )
+
+    await litellm.acompletion(
+        model="openai/responses/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}],
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        max_agentic_loops=1,
+    )
+    with suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(recorder.all_rows_logged.wait(), timeout=5)
+
+    assert responses_route.call_count == 2
+    assert sorted(recorder.prompt_tokens) == [_round_input_tokens(0), _round_input_tokens(1)]
+
+
+def _responses_reply_failing_after(searches_that_succeed: int):
+    def reply(request: httpx.Request) -> httpx.Response:
+        request_input: Final = json.loads(request.content)["input"]
+        searches_done: Final = sum(1 for item in request_input if item.get("type") == "function_call_output")
+        if searches_done >= searches_that_succeed:
+            return httpx.Response(400, json={"error": {"message": "rejected", "type": "invalid_request_error"}})
+        return _responses_reply_asking_for_another_search_until_enough_results(request)
+
+    return reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rounds_served", [1, 2])
+async def test_responses_pinned_openai_chat_completion_bills_each_served_round_once_when_a_follow_up_fails(
+    rounds_served: int,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    recorder: Final = _ModelSpendRowRecorder(rows_expected=2 * rounds_served + 1)
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder]
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_failing_after(rounds_served)
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        await litellm.acompletion(
+            model="openai/responses/gpt-5.6",
+            messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+            tools=[{"type": "web_search"}],
+            api_key="sk-test",
+            api_base=OPENAI_COMPATIBLE_API_BASE,
+            max_agentic_loops=SEARCHES_THE_MODEL_ASKS_FOR,
+        )
+    with suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(recorder.all_rows_logged.wait(), timeout=5)
+
+    assert sum(recorder.prompt_tokens) == sum(_round_input_tokens(served) for served in range(rounds_served))

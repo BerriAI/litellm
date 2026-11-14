@@ -2,13 +2,14 @@
 
 import json
 from collections.abc import Awaitable, Iterable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm._internal_context import internal_sub_call
+from litellm._internal_context import billed_separately, internal_sub_call
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.agentic_followup_failure import mark_agentic_followup_failure, rounds_served_before
@@ -61,6 +62,14 @@ _FOLLOWUP_INTERNAL_PARAMS: Final = frozenset(
 )
 
 
+def _bridged_parent_logged_before_the_loop(logging_obj: object) -> bool:
+    return (
+        isinstance(logging_obj, LiteLLMLoggingObject)
+        and logging_obj.bridged_chat_request is not None
+        and logging_obj.stream is not True
+    )
+
+
 async def bill_first_round_on_failure(
     dispatch: Awaitable[_DispatchResult], *, logging_obj: object, response: object, stream: bool
 ) -> _DispatchResult:
@@ -69,6 +78,9 @@ async def bill_first_round_on_failure(
     except Exception as error:
         if stream or not isinstance(logging_obj, LiteLLMLoggingObject):
             mark_agentic_followup_failure(error, rounds_served_before(error))
+            raise
+        if _bridged_parent_logged_before_the_loop(logging_obj):
+            mark_agentic_followup_failure(error, ())
             raise
         this_round: Final = logging_obj.served_round(response)
         served_rounds: Final = (*rounds_served_before(error), *(() if this_round is None else (this_round,)))
@@ -345,6 +357,12 @@ def _filter_followup_kwargs(source: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _followup_billing_scope(logging_obj: object) -> AbstractContextManager[None]:
+    if _bridged_parent_logged_before_the_loop(logging_obj):
+        return billed_separately()
+    return internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObject) else None)
+
+
 def _leave_pricing_to_the_request(response: object) -> None:
     hidden_params: Final = get_hidden_params(response)
     if hidden_params is not None and not served_from_cache(response):
@@ -392,7 +410,7 @@ async def _execute_chat_completion_agentic_plan(
     )
 
     try:
-        with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObject) else None):
+        with _followup_billing_scope(logging_obj):
             response_followup = await litellm.acompletion(
                 model=full_model_name,
                 messages=patch.messages,
