@@ -178,6 +178,41 @@ class _HTTP1Pool(httpx.AsyncBaseTransport):
         return httpx.Response(200, stream=httpx.ByteStream(b"ok"))
 
 
+class _MixedConnections:
+    def __init__(self, gate: asyncio.Event, http2_streams: Mapping[str, int]) -> None:
+        self._gate: Final = gate
+        self._http2_streams: Final = http2_streams
+        self.requested = 0
+        self.open = 0
+
+    def __call__(self, limits: httpx.Limits) -> "_MixedPool":
+        assert limits.max_connections is not None
+        return _MixedPool(self, asyncio.Semaphore(limits.max_connections))
+
+    async def serve(self, request: httpx.Request, pool_slots: asyncio.Semaphore) -> None:
+        self.requested += 1
+        streams: Final = self._http2_streams.get(request.url.netloc.decode())
+        async with pool_slots:
+            self.open += 1
+            if streams is None:
+                sent: Final = httpcore.Request(request.method, str(request.url))
+                await _emit(request, "http11.send_request_headers.started", {"request": sent})
+                await self._gate.wait()
+            else:
+                await _emit(request, "http2.receive_remote_settings.complete", {"return_value": _remote_settings(streams)})
+            self.open -= 1
+
+
+class _MixedPool(httpx.AsyncBaseTransport):
+    def __init__(self, connections: _MixedConnections, slots: asyncio.Semaphore) -> None:
+        self._connections: Final = connections
+        self._slots: Final = slots
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        await self._connections.serve(request, self._slots)
+        return httpx.Response(200, stream=httpx.ByteStream(b"ok"))
+
+
 async def _until(condition: Callable[[], bool]) -> None:
     for _ in range(1000):
         if condition():
@@ -209,13 +244,16 @@ async def test_async_spread_opens_another_connection_only_once_streams_run_out()
 
 
 @pytest.mark.parametrize(
+    "limits", [UNCAPPED, httpx.Limits(max_connections=HTTP2_STREAMS_PER_CONNECTION)], ids=["uncapped", "capped"]
+)
+@pytest.mark.parametrize(
     ("advertised", "through_tunnel", "streams"),
     [(FEW_STREAMS, False, FEW_STREAMS), (FEW_STREAMS, True, FEW_STREAMS), (None, False, 1)],
     ids=["few-streams", "few-streams-through-proxy-tunnel", "no-stream-limit-sent"],
 )
 @pytest.mark.asyncio
 async def test_async_spread_opens_another_connection_at_the_upstreams_stream_limit(
-    advertised: int | None, through_tunnel: bool, streams: int
+    advertised: int | None, through_tunnel: bool, streams: int, limits: httpx.Limits
 ):
     gate: Final = asyncio.Event()
     connections: Final = _AsyncConnections(
@@ -223,7 +261,7 @@ async def test_async_spread_opens_another_connection_at_the_upstreams_stream_lim
     )
     connections.settings_arrive.clear()
     burst: Final = 4 * streams
-    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, UNCAPPED)) as client:
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, limits)) as client:
         pending: Final = tuple(asyncio.create_task(client.get(URL)) for _ in range(burst))
         await _until(lambda: connections.in_flight() == 1)
 
@@ -456,6 +494,49 @@ async def test_async_spread_keeps_http1_connections_within_the_connection_cap():
 
         gate.set()
         assert {response.status_code for response in await asyncio.gather(*pending)} == {200}
+
+
+@pytest.mark.asyncio
+async def test_async_spread_keeps_connections_within_the_cap_after_upstreams_report_low_stream_limits():
+    gate: Final = asyncio.Event()
+    single_stream_hosts: Final = tuple(f"single-stream-{index}.example" for index in range(4))
+    connections: Final = _MixedConnections(gate, MappingProxyType({host: 1 for host in single_stream_hosts}))
+    cap: Final = len(single_stream_hosts)
+    burst: Final = 3 * cap
+    async with httpx.AsyncClient(
+        transport=AsyncHTTP2ConnectionSpread(connections, httpx.Limits(max_connections=cap))
+    ) as client:
+        for host in single_stream_hosts:
+            assert (await client.get(f"https://{host}/v1/search")).status_code == 200
+
+        pending: Final = tuple(asyncio.create_task(client.get("https://http1.example/x.png")) for _ in range(burst))
+        await _until(lambda: connections.requested == cap + burst)
+        assert connections.open <= cap
+
+        gate.set()
+        assert {response.status_code for response in await asyncio.gather(*pending)} == {200}
+
+
+@pytest.mark.asyncio
+async def test_async_spread_sends_a_new_upstreams_burst_at_once_when_the_connection_cap_is_already_reached():
+    gate: Final = asyncio.Event()
+    connections: Final = _AsyncConnections(gate)
+    two_connections_of_streams: Final = httpx.Limits(max_connections=2 * HTTP2_STREAMS_PER_CONNECTION)
+    filling: Final = 2 * HTTP2_STREAMS_PER_CONNECTION
+    async with httpx.AsyncClient(
+        transport=AsyncHTTP2ConnectionSpread(connections, two_connections_of_streams)
+    ) as client:
+        pending: Final = tuple(asyncio.create_task(client.get(URL)) for _ in range(filling))
+        await _until(lambda: connections.in_flight() == filling)
+
+        connections.settings_arrive.clear()
+        first_seen: Final = tuple(asyncio.create_task(client.get(OTHER_URL)) for _ in range(FEW_STREAMS))
+        await _until(lambda: connections.in_flight() == filling + FEW_STREAMS)
+        assert len(connections.opened) == 2
+
+        gate.set()
+        connections.settings_arrive.set()
+        assert {response.status_code for response in await asyncio.gather(*pending, *first_seen)} == {200}
 
 
 @pytest.mark.asyncio
