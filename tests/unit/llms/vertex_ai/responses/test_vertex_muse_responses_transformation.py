@@ -421,6 +421,8 @@ def test_muse_accepts_the_global_location(location: str | None, respx_mock: resp
         ("https://vertex-gateway.example/v1/", "https://vertex-gateway.example"),
         ("https://vertex-gateway.example/google-vertex/v1", "https://vertex-gateway.example/google-vertex"),
         ("https://vertex-gateway.example/google-vertex?tenant=a", "https://vertex-gateway.example/google-vertex"),
+        (ENDPOINT.removesuffix("/responses"), "https://aiplatform.googleapis.com"),
+        (ENDPOINT, "https://aiplatform.googleapis.com"),
     ],
 )
 def test_muse_sends_a_custom_api_base_to_the_meta_responses_path(
@@ -611,3 +613,83 @@ def test_muse_chat_completions_bridge_falls_back_to_the_alias_when_the_project_i
     )
     assert route.called
     assert response.choices[0].message.content == "Hello"
+
+
+def _row_levels(model: str, supported: bool) -> tuple[str, ...]:
+    row: Final = CATALOG.validate_json((ROOT / "model_prices_and_context_window.json").read_bytes())[
+        f"vertex_ai/meta/{model}"
+    ]
+    return tuple(
+        level
+        for level in ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+        if row.get(f"supports_{level}_reasoning_effort", True) is supported
+    )
+
+
+def _effort_cases(supported: bool) -> tuple[tuple[str, str], ...]:
+    return tuple((model, level) for model in MODELS for level in _row_levels(model, supported))
+
+
+def _call_with_effort(surface: str, model: str, level: str, **kwargs: object) -> None:
+    if surface == "responses":
+        _ = litellm.responses(
+            model=f"vertex_ai/meta/{model}", input="Say hello", reasoning={"effort": level, "summary": "auto"}, **kwargs
+        )
+        return
+    _ = litellm.completion(
+        model=f"vertex_ai/meta/{model}", messages=[{"role": "user", "content": "Say hello"}], reasoning_effort=level, **kwargs
+    )
+
+
+@pytest.mark.parametrize("surface", ["responses", "chat"])
+@pytest.mark.parametrize(("model", "level"), _effort_cases(supported=False))
+def test_muse_drops_a_reasoning_effort_its_row_refuses_only_under_drop_params(
+    surface: str, model: str, level: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response(model)))
+    with pytest.raises(litellm.UnsupportedParamsError, match=level):
+        _call_with_effort(surface, model, level, vertex_project="unit-project", num_retries=0)
+    assert not route.called
+    _call_with_effort(surface, model, level, vertex_project="unit-project", drop_params=True, num_retries=0)
+    assert "effort" not in FIELDS.validate_python(
+        FIELDS.validate_json(route.calls.last.request.content).get("reasoning") or {}
+    )
+
+
+@pytest.mark.parametrize(("model", "level"), _effort_cases(supported=True))
+def test_muse_forwards_a_reasoning_effort_its_row_accepts(model: str, level: str, respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response(model)))
+    _call_with_effort("responses", model, level, vertex_project="unit-project", num_retries=0)
+    assert FIELDS.validate_json(route.calls.last.request.content)["reasoning"] == {"effort": level, "summary": "auto"}
+
+
+def test_muse_messages_drop_disabled_thinking_under_drop_params(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-ember-1.0")))
+    _ = litellm.anthropic.messages.create(
+        model="vertex_ai/meta/muse-ember-1.0",
+        messages=[{"role": "user", "content": "Say hello"}],
+        max_tokens=64,
+        thinking={"type": "disabled"},
+        vertex_project="unit-project",
+        drop_params=True,
+    )
+    assert route.called
+    assert "effort" not in FIELDS.validate_python(
+        FIELDS.validate_json(route.calls.last.request.content).get("reasoning") or {}
+    )
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_muse_reaches_its_responses_endpoint_when_the_chat_completions_bridge_is_requested(
+    model: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response(model)))
+    response: Final = litellm.responses(
+        model=f"vertex_ai/meta/{model}",
+        input="Say hello",
+        vertex_project="unit-project",
+        use_chat_completions_api=True,
+        num_retries=0,
+    )
+    assert route.call_count == 1
+    assert response.output_text == "Hello"

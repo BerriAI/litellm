@@ -7,6 +7,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.llms.openai.chat.gpt_reasoning_transformation import unsupported_reasoning_effort_message
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig, drops_params
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase, graft_default_vertex_path
 from litellm.types.llms.openai import ResponseInputParam
@@ -21,6 +22,8 @@ _CREDENTIALS: Final[TypeAdapter[str | Mapping[str, JsonValue] | None]] = TypeAda
 _AUTH: Final = VertexBase()
 _MUSE_PREFIX: Final = "meta/muse-"
 _STORED_RESPONSE_PARAMS: Final = frozenset({"background", "conversation", "previous_response_id"})
+_MUSE_PUBLISHER_PATH: Final = "/publishers/meta/v1"
+_MUSE_RESPONSES_PATH: Final = f"{_MUSE_PUBLISHER_PATH}/responses"
 MUSE_CHAT_PARAMS: Final = (
     "max_tokens",
     "max_completion_tokens",
@@ -45,6 +48,24 @@ MUSE_CHAT_PARAMS: Final = (
 
 def is_vertex_muse_model(model: str | None) -> bool:
     return (model or "").removeprefix("vertex_ai/").startswith(_MUSE_PREFIX)
+
+
+def _reasoning_fields(reasoning: object) -> Mapping[str, object]:
+    return _FIELDS.validate_python(reasoning) if isinstance(reasoning, Mapping) else {}
+
+
+def _refused_reasoning_effort(model: str, reasoning: Mapping[str, object]) -> str | None:
+    from litellm.utils import is_explicitly_disabled_factory
+
+    effort: Final = reasoning.get("effort")
+    if not isinstance(effort, str):
+        return None
+    disabled: Final = is_explicitly_disabled_factory(
+        model=f"vertex_ai/{model.removeprefix('vertex_ai/')}",
+        custom_llm_provider=None,
+        key=f"supports_{effort}_reasoning_effort",
+    )
+    return effort if disabled else None
 
 
 class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -108,9 +129,14 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if not api_base:
             return default_url
         parsed_api_base: Final = urlparse(api_base)
-        if parsed_api_base.path.rstrip("/").endswith(("/v1", "/v1beta1")):
+        api_base_path: Final = parsed_api_base.path.rstrip("/")
+        if api_base_path.endswith(_MUSE_RESPONSES_PATH):
+            return api_base
+        if api_base_path.endswith(_MUSE_PUBLISHER_PATH):
+            return parsed_api_base._replace(path=api_base_path + "/responses").geturl()
+        if api_base_path.endswith(("/v1", "/v1beta1")):
             return graft_default_vertex_path(api_base, default_url)
-        return parsed_api_base._replace(path=parsed_api_base.path.rstrip("/") + urlparse(default_url).path).geturl()
+        return parsed_api_base._replace(path=api_base_path + urlparse(default_url).path).geturl()
 
     def transform_extra_body(
         self,
@@ -155,15 +181,28 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 status_code=400,
                 message="Vertex Muse supports only tool_choice='auto'. Set drop_params=True to normalize unsupported choices.",
             )
+        reasoning: Final = _reasoning_fields(response_api_optional_request_params.get("reasoning"))
+        refused_effort: Final = _refused_reasoning_effort(model, reasoning)
+        if refused_effort is not None and not drops_unsupported:
+            raise UnsupportedParamsError(
+                status_code=400,
+                message=unsupported_reasoning_effort_message("reasoning.effort", refused_effort, model),
+            )
+        kept_reasoning: Final = {key: value for key, value in reasoning.items() if key != "effort"}
         dropped_params: Final = (
             (_STORED_RESPONSE_PARAMS if drops_unsupported else frozenset[str]())
             | ({"tools"} if tool_choice == "none" else frozenset[str]())
             | ({"truncation"} if truncates else frozenset[str]())
+            | ({"reasoning"} if refused_effort is not None else frozenset[str]())
         )
         tool_params: Final = {
             key: value for key, value in response_api_optional_request_params.items() if key not in dropped_params
         }
-        normalized_params: Final = {**tool_params, **({"tool_choice": "auto"} if tool_choice is not None else {})}
+        normalized_params: Final = {
+            **tool_params,
+            **({"tool_choice": "auto"} if tool_choice is not None else {}),
+            **({"reasoning": kept_reasoning} if refused_effort is not None and kept_reasoning else {}),
+        }
         request: Final = _FIELDS.validate_python(
             super().transform_responses_api_request(  # pyright: ignore[reportUnknownMemberType]  # untyped bags
                 model, input, normalized_params, litellm_params, dict(headers)

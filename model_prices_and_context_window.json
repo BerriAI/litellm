@@ -54722,11 +54722,15 @@
             "global"
         ],
         "supports_function_calling": true,
+        "supports_max_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": true,
         "supports_native_structured_output": true,
+        "supports_none_reasoning_effort": false,
         "supports_pdf_input": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "vertex_ai/meta/muse-ember-1.0": {
         "cache_read_input_token_cost": 4e-09,
@@ -54754,11 +54758,15 @@
             "global"
         ],
         "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": true,
         "supports_native_structured_output": true,
+        "supports_none_reasoning_effort": false,
         "supports_pdf_input": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "vertex_ai/meta/muse-spark-1.3": {
         "cache_read_input_token_cost": 1.5e-07,
@@ -54782,11 +54790,15 @@
             "global"
         ],
         "supports_function_calling": true,
+        "supports_max_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": true,
         "supports_native_structured_output": true,
+        "supports_none_reasoning_effort": false,
         "supports_pdf_input": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "vertex_ai/meta/llama-3.1-405b-instruct-maas": {
         "input_cost_per_token": 5e-06,
