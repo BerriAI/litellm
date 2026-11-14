@@ -5,6 +5,7 @@ import logging
 import re
 import traceback
 import uuid
+from collections.abc import Sequence
 from datetime import timedelta
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
@@ -152,7 +153,7 @@ async def test_an_upstream_item_usage_key_still_caches_each_embedding_input(
         )
     )
 
-    async def embed(input: list[str]) -> EmbeddingResponse:
+    async def embed(input: Sequence[str]) -> EmbeddingResponse:
         return await aembedding(
             model="openai_like/m", input=input, api_base="http://upstream.test/v1", api_key="upstream-test-key"
         )
