@@ -739,3 +739,65 @@ async def test_fallback_preserves_adapter_rejection_of_unsupported_filter():
                     "unsupported-filter", query="q", filters={"type": "eq", "key": "tenant", "value": "mine"}
                 )
         assert len(upstream.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["connection", "timeout", "authentication", "authorization"])
+async def test_raw_native_backend_errors_fail_over_only_for_transport(monkeypatch: pytest.MonkeyPatch, failure: str):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from redis.asyncio import Redis
+    from redis.exceptions import AuthenticationError, AuthorizationError, ConnectionError, TimeoutError
+
+    from litellm.vector_stores.fallbacks import (
+        VectorStoreFallbackPlan,
+        VectorStoreTarget,
+        vector_store_fallback_context,
+    )
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    raw_error: Final = {
+        "connection": ConnectionError,
+        "timeout": TimeoutError,
+        "authentication": AuthenticationError,
+        "authorization": AuthorizationError,
+    }[failure]("native backend failure")
+    backend: Final = MagicMock(spec=Redis)
+    backend.ft.return_value.search = AsyncMock(side_effect=[raw_error, SimpleNamespace(docs=[])])
+    backend.aclose = AsyncMock()
+    monkeypatch.setattr(Redis, "from_url", MagicMock(return_value=backend))
+    params: Final = {
+        "valkey_host": "valkey.example",
+        "litellm_embedding_model": "openai/text-embedding-3-small",
+        "litellm_embedding_config": {"api_base": "https://native-error-embedding.example/v1", "api_key": "embedding"},
+    }
+    primary: Final = VectorStoreTarget("native-error-primary", "valkey", params)
+    backup: Final = VectorStoreTarget("native-error-backup", "valkey", params)
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post("https://native-error-embedding.example/v1/embeddings").respond(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+        )
+        with vector_store_fallback_context(VectorStoreFallbackPlan((primary, backup), cooldown_time=0)):
+            if failure in ("authentication", "authorization"):
+                expected_error: Final = (
+                    litellm.AuthenticationError if failure == "authentication" else litellm.PermissionDeniedError
+                )
+                with pytest.raises(expected_error, match="native backend failure"):
+                    await vector_stores_main.asearch("native-error-primary", query="q", max_num_results=1)
+                assert [call.args[0] for call in backend.ft.call_args_list] == ["native-error-primary"]
+                assert backend.aclose.await_count == 1
+            else:
+                response: Final = await vector_stores_main.asearch("native-error-primary", query="q", max_num_results=1)
+                assert [call.args[0] for call in backend.ft.call_args_list] == [
+                    "native-error-primary",
+                    "native-error-backup",
+                ]
+                assert backend.aclose.await_count == 2
+                assert response["data"] == []
