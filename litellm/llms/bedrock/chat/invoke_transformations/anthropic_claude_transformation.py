@@ -35,6 +35,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_capability_model,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
+    bedrock_mapped_max_output_tokens,
     bedrock_native_output_retry_requested,
     bedrock_supports_tool_search,
     deployment_model_info,
@@ -70,15 +71,6 @@ _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 def _anthropic_config_max_tokens() -> int | None:
     return litellm.AnthropicConfig.max_tokens
-
-
-def _mapped_max_tokens(model: str) -> int | None:
-    row: Final = object_mapping(litellm.model_cost.get(model)) or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # cost map rows are untyped JSON
-    match row.get("max_output_tokens"):
-        case int() as max_tokens:
-            return max_tokens
-        case _:
-            return None
 
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
@@ -326,7 +318,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                     (
                         max_tokens
                         for max_tokens in map(
-                            _mapped_max_tokens, self._default_max_tokens_models(model, litellm_params)
+                            bedrock_mapped_max_output_tokens, self._default_max_tokens_models(model, litellm_params)
                         )
                         if max_tokens is not None
                     ),
