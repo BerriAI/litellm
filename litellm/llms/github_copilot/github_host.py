@@ -2,6 +2,7 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Final
+from urllib.parse import urlparse
 
 from litellm.constants import GITHUB_COPILOT_DEFAULT_HOST
 
@@ -13,6 +14,7 @@ from .authenticator import (
 )
 
 _GHE_SUBDOMAIN_PATTERN: Final = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+_SHARED_LOGIN_URL_ENV_VARS: Final = ("GITHUB_COPILOT_ACCESS_TOKEN_URL", "GITHUB_COPILOT_API_KEY_URL")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +44,22 @@ def normalized_github_host(raw: object) -> str | None:
 
     subdomain: Final = host.removesuffix(".ghe.com")
     return host if _GHE_SUBDOMAIN_PATTERN.fullmatch(subdomain) is not None else None
+
+
+def _github_host_of_url(url: str) -> str | None:
+    try:
+        hostname: Final = urlparse(url).hostname
+    except ValueError:
+        return None
+    if hostname is None:
+        return None
+    return normalized_github_host(hostname.removeprefix("api."))
+
+
+def shared_login_github_host() -> str:
+    urls: Final = (os.getenv(name) for name in _SHARED_LOGIN_URL_ENV_VARS)
+    hosts: Final = (_github_host_of_url(url) for url in urls if url)
+    return next((host for host in hosts if host is not None), GITHUB_COPILOT_DEFAULT_HOST)
 
 
 def github_host_endpoints(host: str) -> GithubHostEndpoints:

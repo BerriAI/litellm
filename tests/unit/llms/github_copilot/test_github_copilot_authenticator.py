@@ -13,6 +13,9 @@ from litellm.llms.github_copilot.common_utils import GetAccessTokenError, GetDev
 COPILOT_USER_URL: Final = "https://api.github.com/copilot_internal/user"
 DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
 TENANT_API: Final = "https://api.tenant.githubcopilot.com"
+GHE_ACCESS_TOKEN_URL: Final = "https://octo.ghe.com/login/oauth/access_token"
+GHE_COPILOT_USER_URL: Final = "https://api.octo.ghe.com/copilot_internal/user"
+GHE_COPILOT_API: Final = "https://copilot-api.octo.ghe.com"
 TRUNCATED_UTF_16: Final = b"\xff\xfe\x00\xd8"
 
 
@@ -159,6 +162,64 @@ def test_get_api_base_does_not_trigger_device_login_without_saved_token(
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
     with patch("litellm.llms.github_copilot.authenticator.get_httpx_client") as get_client:
         assert Authenticator().get_api_base() is None
+    get_client.assert_not_called()
+
+
+
+@pytest.mark.parametrize(
+    ("env_var", "url"),
+    [
+        ("GITHUB_COPILOT_ACCESS_TOKEN_URL", GHE_ACCESS_TOKEN_URL),
+        ("GITHUB_COPILOT_API_KEY_URL", "https://api.octo.ghe.com/copilot_internal/v2/token"),
+    ],
+)
+def test_get_api_base_looks_up_a_ghe_login_on_its_own_tenant(
+    logged_in_token_dir: tuple[Path, str], monkeypatch: pytest.MonkeyPatch, env_var: str, url: str
+) -> None:
+    monkeypatch.setenv(env_var, url)
+    _, token = logged_in_token_dir
+    with respx.mock(assert_all_called=True) as router:
+        route: Final = router.get(GHE_COPILOT_USER_URL).respond(json={"endpoints": {"api": GHE_COPILOT_API}})
+        assert Authenticator().get_api_base() == GHE_COPILOT_API
+
+    assert route.calls.last.request.headers["authorization"] == f"token {token}"
+
+
+@pytest.mark.parametrize(
+    ("status_code", "body"),
+    [(503, None), (200, {"endpoints": {"api": "https://api.githubcopilot.com"}})],
+)
+def test_get_api_base_keeps_a_ghe_login_on_its_tenant_when_the_lookup_names_no_tenant_endpoint(
+    logged_in_token_dir: tuple[Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    body: dict[str, dict[str, str]] | None,
+) -> None:
+    monkeypatch.setenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", GHE_ACCESS_TOKEN_URL)
+    monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
+    with respx.mock(assert_all_called=True) as router:
+        router.get(GHE_COPILOT_USER_URL).respond(status_code=status_code, json=body)
+        assert Authenticator().get_api_base() == GHE_COPILOT_API
+
+
+def test_get_api_base_prefers_the_configured_fallback_over_a_ghe_tenant_default(
+    logged_in_token_dir: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", GHE_ACCESS_TOKEN_URL)
+    monkeypatch.setenv("GITHUB_COPILOT_API_BASE", "https://copilot-egress.example.com")
+    with respx.mock(assert_all_called=True) as router:
+        router.get(GHE_COPILOT_USER_URL).respond(status_code=503)
+        assert Authenticator().get_api_base() == "https://copilot-egress.example.com"
+
+
+def test_get_api_base_sends_a_ghe_login_to_its_tenant_before_the_first_login(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", GHE_ACCESS_TOKEN_URL)
+    monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
+    with patch("litellm.llms.github_copilot.authenticator.get_httpx_client") as get_client:
+        assert Authenticator().get_api_base() == GHE_COPILOT_API
     get_client.assert_not_called()
 
 

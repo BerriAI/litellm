@@ -3,7 +3,12 @@ import json
 import os
 import time
 from collections.abc import Mapping
-from typing import Final, Protocol, cast  # noqa: TID251  # pins untyped clients and caches to local Protocols
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # pins untyped clients and caches to local Protocols
+)
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
@@ -11,7 +16,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.constants import GITHUB_COPILOT_USER_SESSION_TTL_SECONDS
+from litellm.constants import GITHUB_COPILOT_DEFAULT_HOST, GITHUB_COPILOT_USER_SESSION_TTL_SECONDS
 from litellm.litellm_core_utils.asyncify import can_block_current_thread
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
@@ -19,6 +24,9 @@ from .common_utils import (
     GetAccessTokenError,
     GetDeviceCodeError,
 )
+
+if TYPE_CHECKING:
+    from .github_host import GithubHostEndpoints
 
 # Constants (default values — overridable via environment variables at call time)
 DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
@@ -72,7 +80,7 @@ _COPILOT_API_BASE_CACHE: Final[_CopilotAPIBaseCache] = cast(  # cast-ok: [LIT006
 )
 
 
-def _copilot_api_base_for_token(access_token: str) -> str | None:
+def _copilot_api_base_for_token(access_token: str, endpoints: "GithubHostEndpoints") -> str | None:
     cache_key: Final = hashlib.sha256(access_token.encode()).hexdigest()
     cached_api_base: Final[object] = _COPILOT_API_BASE_CACHE.get_cache(cache_key)
     if isinstance(cached_api_base, str):
@@ -83,20 +91,19 @@ def _copilot_api_base_for_token(access_token: str) -> str | None:
             _SyncGetClient,
             get_httpx_client(),
         ).get(
-            DEFAULT_GITHUB_COPILOT_USER_URL,
+            endpoints.copilot_user_url,
             headers=github_api_headers(access_token),
         )
         if not response.is_success:
             return None
         payload: Final[Mapping[str, object]] = _JSON_OBJECT.validate_python(response.json())
-        endpoints: Final[Mapping[str, object]] = _JSON_OBJECT.validate_python(payload.get("endpoints"))
-        api_base: Final[object] = endpoints.get("api")
+        advertised: Final[Mapping[str, object]] = _JSON_OBJECT.validate_python(payload.get("endpoints"))
+        api_base: Final[object] = advertised.get("api")
         if not isinstance(api_base, str):
             return None
-        from .github_host import github_host_endpoints
         from .per_user_auth import validated_copilot_api_base
 
-        validated: Final = validated_copilot_api_base(api_base, github_host_endpoints("github.com"))
+        validated: Final = validated_copilot_api_base(api_base, endpoints)
         if validated != api_base.rstrip("/"):
             return None
         _COPILOT_API_BASE_CACHE.set_cache(cache_key, validated)
@@ -192,10 +199,14 @@ class Authenticator:
 
     def get_api_base(self) -> str | None:
         """Return the Copilot API endpoint for a stored token without starting device flow."""
+        from .github_host import github_host_endpoints, shared_login_github_host
+
+        endpoints: Final = github_host_endpoints(shared_login_github_host())
         access_token: Final = self._stored_access_token()
-        if access_token is None:
-            return None
-        return _copilot_api_base_for_token(access_token)
+        looked_up: Final = None if access_token is None else _copilot_api_base_for_token(access_token, endpoints)
+        if looked_up is not None or endpoints.host == GITHUB_COPILOT_DEFAULT_HOST:
+            return looked_up
+        return os.getenv("GITHUB_COPILOT_API_BASE") or endpoints.default_copilot_api_base
 
     def _stored_access_token(self) -> str | None:
         try:
