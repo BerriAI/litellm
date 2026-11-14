@@ -1,7 +1,7 @@
 # this is a patch to allow for agentic loops covering llm_http_handler.py and openai sdk based calling flows for the .completion() api
 
 import json
-from collections.abc import Awaitable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
 from itertools import chain
 from types import MappingProxyType
@@ -649,14 +649,42 @@ async def maybe_run_chat_completion_agentic_loop(
             fingerprint=fingerprint,
         )
 
-    return _converted_stream_replay(
-        response,
-        kwargs=request_kwargs,
-        depth=depth,
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        logging_obj=logging_obj,
+    bridged_chat_turn: Final = (
+        await run_chat_completion_agentic_hooks(
+            response=response,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            kwargs=dict(request_kwargs),
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            stream=stream,
+            asking_only=runs_its_own_chat_completion_loop,
+        )
+        if isinstance(logging_obj, LiteLLMLoggingObject) and logging_obj.bridged_chat_request is not None
+        else None
     )
+    match bridged_chat_turn:
+        case CustomStreamWrapper():
+            return bridged_chat_turn
+        case ModelResponse():
+            return _end_refused_turn(
+                bridged_chat_turn,
+                kwargs=request_kwargs,
+                depth=depth,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+            )
+        case _:
+            return _converted_stream_replay(
+                response,
+                kwargs=request_kwargs,
+                depth=depth,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+            )
 
 
 async def run_chat_completion_agentic_hooks(
@@ -669,13 +697,14 @@ async def run_chat_completion_agentic_hooks(
     logging_obj: LiteLLMLoggingObject,
     custom_llm_provider: str,
     stream: bool,
+    asking_only: Callable[[CustomLogger], bool] | None = None,
 ) -> object | None:
     callbacks: Final = _custom_loggers(logging_obj)
     depth, max_loops, fingerprints = _agentic_loop_settings(kwargs)
     tools: Final = _request_tools(optional_params)
     hook_kwargs: Final = {**kwargs, "custom_llm_provider": custom_llm_provider}
 
-    for callback in callbacks:
+    for callback in callbacks if asking_only is None else tuple(filter(asking_only, callbacks)):
         try:
             should_run, tool_calls = await callback.async_should_run_chat_completion_agentic_loop(
                 response=response,

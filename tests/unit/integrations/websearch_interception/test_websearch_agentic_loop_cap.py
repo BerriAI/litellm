@@ -14,9 +14,10 @@ config.yaml through to the settings the loop actually reads.
 import asyncio
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import suppress
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Final, TypedDict
 from unittest.mock import MagicMock, patch
 
@@ -37,6 +38,7 @@ from litellm.integrations.websearch_interception.tools import get_litellm_web_se
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.model_cost_table import changed_in_place
 from litellm.litellm_core_utils.agentic_loop_settings import DEFAULT_MAX_AGENTIC_LOOPS
 from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
     FakeAnthropicMessagesStreamIterator,
@@ -1606,6 +1608,25 @@ async def test_responses_pinned_openai_chat_completion_parks_one_row_billing_eve
 
 ROUND_INPUT_TOKENS_UNDER_THE_LONG_CONTEXT_TIER: Final = 200_000
 ROUND_OUTPUT_TOKENS: Final = 5
+TEST_OWNED_TIER_PRICES: Final = MappingProxyType(
+    {
+        "input_cost_per_token": 1e-06,
+        "input_cost_per_token_above_272k_tokens": 3e-06,
+        "output_cost_per_token": 2e-06,
+        "output_cost_per_token_above_272k_tokens": 5e-06,
+    }
+)
+
+
+@pytest.fixture
+def gpt_5_6_at_test_owned_tier_prices(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    vendor_entry: Final = litellm.model_cost["gpt-5.6"]
+    assert isinstance(vendor_entry, dict)
+    unpriced: Final = {key: value for key, value in vendor_entry.items() if "cost" not in key}
+    monkeypatch.setitem(litellm.model_cost, "gpt-5.6", {**unpriced, **TEST_OWNED_TIER_PRICES})
+    changed_in_place()
+    yield
+    changed_in_place()
 
 
 def _long_context_round_reply(request: httpx.Request) -> httpx.Response:
@@ -1641,6 +1662,7 @@ def _price_of_rounds_priced_one_by_one(rounds: int) -> float:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("loops_allowed", [1, 2])
+@pytest.mark.usefixtures("gpt_5_6_at_test_owned_tier_prices")
 async def test_responses_pinned_openai_chat_completion_prices_each_round_of_its_one_row_at_that_rounds_size(
     loops_allowed: int,
     monkeypatch: pytest.MonkeyPatch,
@@ -1682,6 +1704,7 @@ async def test_responses_pinned_openai_chat_completion_prices_each_round_of_its_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("loops_allowed", [1, 2])
+@pytest.mark.usefixtures("gpt_5_6_at_test_owned_tier_prices")
 async def test_streamed_responses_pinned_openai_chat_completion_prices_each_round_at_that_rounds_size(
     loops_allowed: int,
     monkeypatch: pytest.MonkeyPatch,
@@ -1782,3 +1805,63 @@ async def test_responses_pinned_openai_chat_completion_still_runs_agentic_hooks_
     )
 
     assert response.choices[0].message.content == "Handled on the Responses API."
+
+
+class _AnswersOnBothApis(_AnswersOnTheResponsesApi):
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        return isinstance(response, litellm.ModelResponse), {}
+
+    async def async_build_chat_completion_agentic_loop_plan(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        optional_params: dict,
+        logging_obj: Logging,
+        stream: bool,
+        kwargs: dict,
+    ) -> AgenticLoopPlan:
+        assert isinstance(response, litellm.ModelResponse)
+        return AgenticLoopPlan(
+            response_override=litellm.ModelResponse(
+                model=response.model,
+                choices=[
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "Handled on the chat API."},
+                    }
+                ],
+            )
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("perplexity_search")
+async def test_responses_pinned_openai_chat_completion_runs_the_chat_hook_of_a_callback_with_both_agentic_hooks(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    monkeypatch.setattr(litellm, "callbacks", [_AnswersOnBothApis()])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_asking_for_another_search_until_enough_results
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/responses/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+    )
+
+    assert response.choices[0].message.content == "Handled on the chat API."
