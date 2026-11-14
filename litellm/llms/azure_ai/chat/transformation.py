@@ -56,6 +56,7 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
 
 
 _DEFAULT_REASONING_EFFORT: Final = "default"
+_REASONING_CONTENT_MODEL_PREFIXES: Final = (AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX.casefold(), "kimi-")
 _FOUNDRY_REASONING_EFFORTS: Final = (*REASONING_EFFORT_ADVERTISEMENT_ORDER, "auto")
 
 
@@ -105,11 +106,12 @@ def _reasoning_effort_level(
         return {}
     if not isinstance(level, str) or level not in _FOUNDRY_REASONING_EFFORTS:
         return _unsupported_reasoning_effort(requested, model, drop_params)
-    if fields is not None and any(key != "effort" for key in fields):
+    dropped: Final = {key: value for key, value in fields.items() if key != "effort"} if fields is not None else {}
+    if dropped:
         verbose_logger.warning(
-            "Dropping reasoning_effort=%r for model=%r because Azure AI Foundry takes only a level name, so %r is "
-            "sent without the other fields.",
-            requested,
+            "Dropping reasoning_effort=%r for model=%r because Azure AI Foundry takes only a level name, "
+            "so only %r is sent.",
+            dropped,
             model,
             level,
         )
@@ -127,7 +129,7 @@ def _declared_reasoning_effort_param(
 
 def _message_fields_to_strip(model: str, base_model: str | None) -> tuple[str, ...]:
     names: Final = _capability_models(model, base_model)
-    if not any(name.upper().startswith(AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX) for name in names):
+    if not any(name.casefold().startswith(_REASONING_CONTENT_MODEL_PREFIXES) for name in names):
         return NON_OPENAI_SPEC_MESSAGE_FIELDS
     return tuple(field for field in NON_OPENAI_SPEC_MESSAGE_FIELDS if field != "reasoning_content")
 

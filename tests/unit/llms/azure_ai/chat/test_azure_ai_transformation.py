@@ -486,7 +486,8 @@ def test_foundry_reasoning_effort_object_sends_its_level_and_warns_about_the_res
         )
 
     assert optional_params == {"reasoning_effort": "low"}
-    assert any("summary" in record.getMessage() for record in caplog.records) is warns
+    warnings: Final = tuple(record.getMessage() for record in caplog.records if "Dropping" in record.getMessage())
+    assert any("summary" in message and "'effort'" not in message for message in warnings) is warns
 
 
 NOT_A_FOUNDRY_LEVEL: Final = (
@@ -930,13 +931,19 @@ def test_azure_ai_strips_non_openai_spec_message_fields():
         pytest.param("FW-Kimi-K3", None, "I will pick the code word ZEBRAFINCH-42.", id="fireworks"),
         pytest.param("fw-kimi-k3", None, "I will pick the code word ZEBRAFINCH-42.", id="fireworks-lowercase"),
         pytest.param(
-            "kimi-k3-prod", "FW-Kimi-K3", "I will pick the code word ZEBRAFINCH-42.", id="fireworks-base-model"
+            "k3-prod", "FW-Kimi-K3", "I will pick the code word ZEBRAFINCH-42.", id="fireworks-base-model"
+        ),
+        pytest.param("kimi-k2.6", None, "I will pick the code word ZEBRAFINCH-42.", id="moonshot-kimi"),
+        pytest.param("Kimi-K3.1-Pro", None, "I will pick the code word ZEBRAFINCH-42.", id="moonshot-kimi-mixed-case"),
+        pytest.param(
+            "k26-prod", "azure_ai/kimi-k2.6", "I will pick the code word ZEBRAFINCH-42.", id="moonshot-kimi-base-model"
         ),
         pytest.param("Mistral-Large-3", None, None, id="not-fireworks"),
-        pytest.param("kimi-k3-prod", "Mistral-Large-3", None, id="not-fireworks-base-model"),
+        pytest.param("my-kimi-k2.6", None, None, id="kimi-not-at-start"),
+        pytest.param("k3-prod", "Mistral-Large-3", None, id="not-fireworks-base-model"),
     ],
 )
-def test_azure_ai_replays_reasoning_content_only_to_fireworks_models(
+def test_azure_ai_replays_reasoning_content_only_to_fireworks_and_kimi_models(
     model: str, base_model: str | None, replayed: str | None
 ) -> None:
     request: Final = AzureAIStudioConfig().transform_request(
