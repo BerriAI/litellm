@@ -153,6 +153,36 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             filtered["service_tier"] = service_tier
         return filtered
 
+    def sign_request(
+        self,
+        headers: dict,  # mutable-ok: mirrors the base hook signature
+        optional_params: dict,  # mutable-ok: mirrors the base hook signature
+        request_data: dict,  # mutable-ok: the hook contract allows in-place body fixes
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:  # mutable-ok: mirrors the base hook signature
+        # extra_body is merged into the payload after transform_responses_api_request
+        # (llm_http_handler does data.update(transform_extra_body(...)) after the
+        # transform), so a string input carried in extra_body re-introduces the
+        # shorthand the entry wrap removed and the backend 400s again. sign_request
+        # runs after the body is final, so re-apply the entry wrap's list form here.
+        request_input: Final[object] = request_data.get("input")
+        if isinstance(request_input, str):
+            request_data["input"] = [{"role": "user", "content": request_input}]  # rebind-ok: in-place final-body fix
+        return super().sign_request(
+            headers=headers,
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
+
     def transform_response_api_response(
         self,
         model: str,
