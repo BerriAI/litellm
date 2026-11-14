@@ -12,6 +12,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]
     httpxSpecialProvider,
@@ -80,13 +81,11 @@ class RepelloAIGuardrail(CustomGuardrail):
     def _extract_tool_call_args_from_message(cls, message: object) -> list[str]:
         args: Final[list[str]] = []
 
-        tool_calls: Final = cls._get_field(message, "tool_calls")
-        if _is_object_list(tool_calls):
-            for tool_call in tool_calls:
-                function = cls._get_field(tool_call, "function")
-                arguments = cls._get_field(function, "arguments")
-                if isinstance(arguments, str) and arguments.strip():
-                    args.append(arguments)
+        for tool_call in tool_calls_with_server_tool_calls(message):
+            function = cls._get_field(tool_call, "function")
+            arguments = cls._get_field(function, "arguments")
+            if isinstance(arguments, str) and arguments.strip():
+                args.append(arguments)
 
         function_call: Final = cls._get_field(message, "function_call")
         arguments = cls._get_field(function_call, "arguments")
