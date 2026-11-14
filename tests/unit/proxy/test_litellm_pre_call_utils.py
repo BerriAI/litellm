@@ -11871,3 +11871,28 @@ def test_stale_team_alias_bypass_flag_is_read_once_per_process(monkeypatch: pyte
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
 
     assert (first, pre_call_utils._stale_team_alias_bypass_enabled()) == (True, True)
+
+
+@pytest.mark.asyncio
+async def test_cache_control_s_maxage_header_sets_the_cache_ttl():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"cache-control", b"s-maxage=10")],
+        }
+    )
+    enriched: Final = await add_litellm_data_to_request(
+        data={"model": "qa-model", "messages": [{"role": "user", "content": "hi"}]},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="qa-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+    assert float(enriched["ttl"]) == 10
