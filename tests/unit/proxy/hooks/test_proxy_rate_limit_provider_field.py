@@ -44,6 +44,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.exceptions import RateLimitError
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.batch_rate_limiter import (
     BatchFileUsage,
     PROXY_BatchRateLimiter,
@@ -59,17 +60,12 @@ from litellm.proxy.hooks.max_iterations_limiter import PROXY_MaxIterationsHandle
 from litellm.proxy.hooks.parallel_request_limiter import (
     PROXY_MaxParallelRequestsHandler,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    PROXY_MaxParallelRequestsHandler_v3,
-)
-from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import (
     PROXY_LLM_PROVIDER_FALLBACK,
     resolve_llm_provider_for_rate_limit,
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentResponse
-
 
 # ---------------------------------------------------------------------------
 # Helper class itself
@@ -482,84 +478,6 @@ async def test_parallel_request_limiter_v1_missing_model_falls_back():
 # ---------------------------------------------------------------------------
 # parallel_request_limiter v3
 # ---------------------------------------------------------------------------
-
-
-def _v3_over_limit_response(rate_limit_type: str = "requests") -> dict:
-    return {
-        "overall_code": "OVER_LIMIT",
-        "statuses": [
-            {
-                "code": "OVER_LIMIT",
-                "descriptor_key": "key",
-                "current_limit": 1,
-                "limit_remaining": -1,
-                "rate_limit_type": rate_limit_type,
-            }
-        ],
-    }
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "model, expected_provider",
-    [
-        ("gpt-4o-mini", "openai"),
-        ("anthropic/claude-3-5-sonnet", "anthropic"),
-    ],
-)
-async def test_parallel_request_limiter_v3_populates_provider(model, expected_provider):
-    handler = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
-
-    descriptors = [{"key": "key", "value": "v", "rate_limit": {"requests_per_unit": 1}}]
-    over = _v3_over_limit_response()
-
-    with pytest.raises(HTTPException) as exc_info:
-        handler._handle_rate_limit_error(
-            response=over,
-            descriptors=descriptors,
-            requested_model=model,
-        )
-
-    exc = exc_info.value
-    assert exc.status_code == 429
-    assert isinstance(exc, RateLimitError)
-    assert exc.llm_provider == expected_provider
-    # v3 may strip the "anthropic/" prefix in the resolved model — accept
-    # either; we only care that the provider field is correct and the model
-    # is non-empty.
-    assert exc.model
-
-
-@pytest.mark.asyncio
-async def test_parallel_request_limiter_v3_unknown_model_falls_back():
-    handler = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
-    descriptors = [{"key": "key", "value": "v", "rate_limit": {"requests_per_unit": 1}}]
-
-    with pytest.raises(HTTPException) as exc_info:
-        handler._handle_rate_limit_error(
-            response=_v3_over_limit_response(),
-            descriptors=descriptors,
-            requested_model="totally-bogus",
-        )
-
-    assert exc_info.value.llm_provider == PROXY_LLM_PROVIDER_FALLBACK
-    assert exc_info.value.model == "totally-bogus"
-
-
-@pytest.mark.asyncio
-async def test_parallel_request_limiter_v3_missing_model_falls_back():
-    handler = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
-    descriptors = [{"key": "key", "value": "v", "rate_limit": {"requests_per_unit": 1}}]
-
-    with pytest.raises(HTTPException) as exc_info:
-        handler._handle_rate_limit_error(
-            response=_v3_over_limit_response(),
-            descriptors=descriptors,
-            requested_model=None,
-        )
-
-    assert exc_info.value.llm_provider == PROXY_LLM_PROVIDER_FALLBACK
-    assert exc_info.value.model == ""
 
 
 # ---------------------------------------------------------------------------

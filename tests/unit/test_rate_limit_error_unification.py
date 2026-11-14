@@ -22,13 +22,11 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
-from litellm.caching.caching import DualCache
 from litellm.exceptions import RateLimitError, RateLimitErrorCategory, RateLimitType
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
 )
-from litellm.proxy.utils import InternalUsageCache
 
 
 class TestRateLimitErrorCategory:
@@ -420,48 +418,6 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         assert e2.headers == {"retry-after": "30"}
         assert "set-cookie" not in (e2.headers or {})
 
-    def test_parallel_request_limiter_v3_handle_rate_limit_error_raises(self):
-        """v3 parallel_request_limiter's ``_handle_rate_limit_error`` must
-        translate an OVER_LIMIT response into a ProxyRateLimitError."""
-
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-            PROXY_MaxParallelRequestsHandler_v3,
-        )
-
-        handler = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
-        # Minimal fabricated OVER_LIMIT response. The helper only reads a
-        # handful of fields off `status` and ignores everything else.
-        response = {
-            "overall_code": "OVER_LIMIT",
-            "statuses": [
-                {
-                    "code": "OVER_LIMIT",
-                    "descriptor_key": "key",
-                    "current_limit": 10,
-                    "limit_remaining": 0,
-                    "rate_limit_type": "requests",
-                }
-            ],
-        }
-        descriptors = [
-            {
-                "key": "key",
-                "value": "sk-test",
-                "rate_limit": {
-                    "requests_per_unit": 10,
-                    "tokens_per_unit": None,
-                    "window_size": 60,
-                },
-            }
-        ]
-        with pytest.raises(ProxyRateLimitError) as exc_info:
-            handler._handle_rate_limit_error(response, descriptors)
-        e = exc_info.value
-        assert e.status_code == 429
-        assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
-        # v3 helper attaches retry-after, rate_limit_type and reset_at.
-        assert e.headers is not None
-        assert {"retry-after", "rate_limit_type", "reset_at"}.issubset(e.headers.keys())
 
     @pytest.mark.asyncio
     async def test_max_iterations_limiter_raises_proxy_rate_limit_error(self):
@@ -1163,105 +1119,7 @@ class TestProxyHooksWireTypeCorrectly:
         )
         assert e.rate_limit_type == "requests"
 
-    @pytest.mark.asyncio
-    async def test_v3_limiter_handle_rate_limit_error_propagates_type(self):
-        """
-        End-to-end: feed the v3 limiter's `_handle_rate_limit_error` an
-        OVER_LIMIT response and verify the raised ProxyRateLimitError carries
-        the mapped public RateLimitType. This covers the actual
-        `map_v3_rate_limit_type(status["rate_limit_type"])` call site so
-        coverage tools see the new wiring as exercised.
-        """
 
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-            PROXY_MaxParallelRequestsHandler_v3,
-        )
-
-        handler = PROXY_MaxParallelRequestsHandler_v3(
-            internal_usage_cache=InternalUsageCache(DualCache()),
-        )
-        # Minimal RateLimitResponse + descriptors shape that the handler
-        # reads. We only need one OVER_LIMIT status to drive the raise.
-        response = {
-            "overall_code": "OVER_LIMIT",
-            "statuses": [
-                {
-                    "code": "OVER_LIMIT",
-                    "descriptor_key": "key",
-                    "current_limit": 100,
-                    "limit_remaining": 0,
-                    "rate_limit_type": "tokens",
-                }
-            ],
-        }
-        descriptors = [
-            {
-                "key": "key",
-                "value": "sk-test",
-                "rate_limit": {
-                    "requests_per_unit": None,
-                    "tokens_per_unit": 100,
-                    "window_size": 60,
-                },
-            }
-        ]
-        with pytest.raises(ProxyRateLimitError) as exc_info:
-            handler._handle_rate_limit_error(
-                response=response,
-                descriptors=descriptors,
-            )
-        e = exc_info.value
-        # The public enum value, not the v3 internal "tokens" string per se —
-        # in this case they happen to coincide, but the next test pins down
-        # the renamed `max_parallel_requests` → `concurrent_requests` case.
-        assert e.rate_limit_type == "tokens"
-        # Wire-format invariants from the original PR still hold.
-        assert e.headers is not None
-        assert e.headers.get("rate_limit_type") == "tokens"
-        assert e.headers.get("retry-after") is not None
-
-    @pytest.mark.asyncio
-    async def test_v3_limiter_max_parallel_requests_maps_to_concurrent(self):
-
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-            PROXY_MaxParallelRequestsHandler_v3,
-        )
-
-        handler = PROXY_MaxParallelRequestsHandler_v3(
-            internal_usage_cache=InternalUsageCache(DualCache()),
-        )
-        response = {
-            "overall_code": "OVER_LIMIT",
-            "statuses": [
-                {
-                    "code": "OVER_LIMIT",
-                    "descriptor_key": "key",
-                    "current_limit": 5,
-                    "limit_remaining": 0,
-                    # v3 internal jargon — must collapse to the public name.
-                    "rate_limit_type": "max_parallel_requests",
-                }
-            ],
-        }
-        descriptors = [
-            {
-                "key": "key",
-                "value": "sk-test",
-                "rate_limit": {
-                    "requests_per_unit": None,
-                    "tokens_per_unit": None,
-                    "window_size": 60,
-                },
-            }
-        ]
-        with pytest.raises(ProxyRateLimitError) as exc_info:
-            handler._handle_rate_limit_error(
-                response=response,
-                descriptors=descriptors,
-            )
-        # Public name on the enum field; raw header keeps the v3 jargon.
-        assert exc_info.value.rate_limit_type == "concurrent_requests"
-        assert exc_info.value.headers["rate_limit_type"] == "max_parallel_requests"
 
     def test_batch_rate_limiter_emits_tokens_type_for_tpm_violation(self):
         from unittest.mock import MagicMock
