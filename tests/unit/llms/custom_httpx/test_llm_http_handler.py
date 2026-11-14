@@ -5,7 +5,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
@@ -19,12 +19,14 @@ from botocore.credentials import RefreshableCredentials
 from h2.events import ConnectionTerminated
 
 import litellm
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm._logging import verbose_logger
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Field, Hook, on
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure.vector_stores.transformation import AzureOpenAIVectorStoreConfig
@@ -72,6 +74,7 @@ from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoo
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    CallTypes,
     ImageObject,
     ImageResponse,
     ModelResponse,
@@ -453,6 +456,95 @@ def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_n
     assert sent.body["stream"] is False
     assert "stream_options" not in sent.body
     assert "stream_options" not in recorder.seen_kwargs
+
+
+class _LookupLoop(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.runs = 0
+
+    async def async_should_run_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        return True, {"tool_calls": [{"id": "call_lookup", "name": "lookup"}]}
+
+    async def async_run_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> object:
+        self.runs += 1
+        return response
+
+
+def _a_lookup_call(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "model": "gpt-4o",
+            "output": [
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_lookup",
+                    "name": "lookup",
+                    "arguments": "{}",
+                    "status": "completed",
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+@pytest.mark.parametrize("allowed_name,runs", [("get_time", 0), ("lookup", 1)])
+def test_response_api_handler_runs_no_hook_call_the_allowed_tools_choice_excludes(allowed_name: str, runs: int):
+    hook: Final = _LookupLoop()
+
+    response: Final = BaseLLMHTTPHandler().response_api_handler(
+        model="gpt-4o",
+        input="what time is it?",
+        responses_api_provider_config=AzureOpenAIResponsesAPIConfig(),
+        response_api_optional_request_params={
+            "tools": [
+                {"type": "function", "name": "get_time", "parameters": {"type": "object", "properties": {}}},
+                {"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {}}},
+            ],
+            "tool_choice": {
+                "type": "allowed_tools",
+                "mode": "auto",
+                "tools": [{"type": "function", "name": allowed_name}],
+            },
+        },
+        custom_llm_provider="azure",
+        litellm_params=GenericLiteLLMParams(
+            api_key="sk-test", api_base="https://example.openai.azure.com", api_version="2025-04-01-preview"
+        ),
+        logging_obj=Mock(litellm_call_id="call-1", dynamic_success_callbacks=[hook], model_call_details={}),
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_a_lookup_call))),
+    )
+
+    assert hook.runs == runs
+    assert isinstance(response, ResponsesAPIResponse)
+    assert len(response.output) == runs
 
 
 @pytest.mark.asyncio
@@ -4253,12 +4345,14 @@ def test_video_generation_with_input_reference_keeps_file_multipart():
 AZURE_AI_BASE = "https://myfoundry.services.ai.azure.com"
 AZURE_AI_CHAT_COMPLETIONS_URL = f"{AZURE_AI_BASE}/models/chat/completions"
 
+
 def _a_tool_with_an_unsupported_field() -> dict:
     return {
         "type": "function",
         "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
         "strict": True,
     }
+
 
 A_COMPLETION = {
     "id": "chatcmpl-1",
@@ -4457,6 +4551,45 @@ async def test_create_file_async_awaits_the_provider_credential_hook_instead_of_
     provider_config.avalidate_environment.assert_awaited_once()
     assert client.post.call_args.kwargs["headers"] == {"x-api-key": "federated"}
     assert client.post.call_args.kwargs["url"] == "https://files.example/v1/files"
+
+
+def test_create_file_sync_sends_a_presigned_upload_with_its_own_method_url_headers_and_body():
+    provider_config = Mock(spec=BaseFilesConfig)
+    provider_config.validate_environment.return_value = {"x-api-key": "unused-for-presigned"}
+    provider_config.get_complete_file_url.return_value = "https://files.example/v1/files"
+    provider_config.transform_create_file_request.return_value = {
+        "method": "PUT",
+        "url": "https://bucket.s3.example/batch.jsonl",
+        "headers": {"Authorization": "AWS4-HMAC-SHA256 signed"},
+        "data": b'{"recordId": "req-1"}',
+    }
+    file_object = object()
+    provider_config.transform_create_file_response.return_value = file_object
+    upload_response = Mock(spec=httpx.Response)
+    client = Mock(spec=HTTPHandler)
+    client.put.return_value = upload_response
+
+    result = BaseLLMHTTPHandler().create_file(
+        create_file_data={"file": b"{}", "purpose": "batch"},
+        litellm_params={},
+        provider_config=provider_config,
+        headers={},
+        api_base=None,
+        api_key=None,
+        logging_obj=Mock(),
+        client=client,
+        timeout=30,
+    )
+
+    assert result is file_object
+    client.post.assert_not_called()
+    client.put.assert_called_once_with(
+        url="https://bucket.s3.example/batch.jsonl",
+        headers={"Authorization": "AWS4-HMAC-SHA256 signed"},
+        data=b'{"recordId": "req-1"}',
+        timeout=30,
+    )
+    assert provider_config.transform_create_file_response.call_args.kwargs["raw_response"] is upload_response
 
 
 @pytest.mark.asyncio
@@ -4888,6 +5021,92 @@ async def test_json_mode_stream_reaches_the_iterator_of_a_config_without_a_reque
         {"sync_stream": True, "json_mode": True},
         {"sync_stream": False, "json_mode": False},
     ]
+
+
+class _PlainStreamRouteConfig(_TransformRecordingConfig):
+    def __init__(self):
+        super().__init__(transform_async=False)
+
+    def get_complete_url(self, api_base, api_key, model, optional_params, litellm_params, stream=None):
+        return f"{api_base}/{'stream' if stream else 'answer'}"
+
+
+class _StreamRouteConfig(_PlainStreamRouteConfig):
+    @property
+    def has_custom_stream_wrapper(self) -> bool:
+        return True
+
+
+def _answers_only_the_non_streaming_route(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/answer"):
+        return httpx.Response(200, json=json.loads(request.content))
+    return httpx.Response(403, json={"message": "not authorized to stream"})
+
+
+def _fake_streamed_completion(
+    acompletion: bool,
+    client: HTTPHandler | AsyncHTTPHandler,
+    fake_stream: object = True,
+    provider_config: BaseConfig | None = None,
+):
+    return BaseLLMHTTPHandler().completion(
+        model="stub-model",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://llm.example/v1/chat",
+        custom_llm_provider="openai",
+        model_response=ModelResponse(),
+        encoding=None,
+        logging_obj=_streaming_logging_obj(),
+        optional_params={"fake_stream": fake_stream},
+        timeout=10.0,
+        litellm_params={},
+        acompletion=acompletion,
+        stream=True,
+        client=client,
+        provider_config=provider_config or _StreamRouteConfig(),
+    )
+
+
+async def test_a_fake_streamed_completion_is_sent_to_the_non_streaming_route():
+    sync_client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_answers_only_the_non_streaming_route))
+    )
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_answers_only_the_non_streaming_route))
+
+    sync_chunks: Final = list(_fake_streamed_completion(acompletion=False, client=sync_client))
+    async_chunks: Final = [
+        chunk async for chunk in await _fake_streamed_completion(acompletion=True, client=async_client)
+    ]
+
+    assert (_streamed_text(sync_chunks), _streamed_text(async_chunks)) == ("sync", "sync")
+
+
+def _answers_only_the_streaming_route(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/stream"):
+        return _sse_echoing_transformed_by(request)
+    return httpx.Response(403, json={"message": "only streaming is allowed"})
+
+
+@pytest.mark.parametrize("fake_stream", ["true", 1], ids=["string", "int"])
+async def test_a_fake_stream_value_other_than_true_still_streams_from_the_streaming_route(fake_stream: object):
+    sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_answers_only_the_streaming_route)))
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_answers_only_the_streaming_route))
+
+    sync_chunks: Final = list(
+        _fake_streamed_completion(
+            acompletion=False, client=sync_client, fake_stream=fake_stream, provider_config=_PlainStreamRouteConfig()
+        )
+    )
+    async_chunks: Final = [
+        chunk
+        async for chunk in await _fake_streamed_completion(
+            acompletion=True, client=async_client, fake_stream=fake_stream, provider_config=_PlainStreamRouteConfig()
+        )
+    ]
+
+    assert (_streamed_text(sync_chunks), _streamed_text(async_chunks)) == ("sync", "sync")
 
 
 class _ImageEditRecordingConfig(BaseImageEditConfig):
@@ -5360,6 +5579,66 @@ async def test_responses_agentic_followup_sends_the_plans_request_param_over_a_s
     )
 
     assert followup_calls[0]["prompt_cache_key"] == "from-plan-params"
+
+
+def _messages_reply(message_id: str, input_tokens: int, output_tokens: int) -> dict[str, object]:
+    return {
+        "id": message_id,
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": "answer"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_agentic_follow_up_keeps_the_first_rounds_spend_row_on_its_own_id() -> None:
+    from datetime import datetime, timezone
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
+
+    request_messages: Final = [{"role": "user", "content": "search"}]
+    first_round: Final = Logging(
+        model="claude-sonnet-5-5",
+        messages=request_messages,
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="first-round",
+        function_id="first-round",
+    )
+    first_round.optional_params = {}
+    first_round.model_call_details["httpx_response"] = httpx.Response(
+        200,
+        json=_messages_reply("msg_first_round", 100, 10),
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+    follow_up_upstream: Final = httpx.MockTransport(
+        lambda request: httpx.Response(200, json=_messages_reply("msg_follow_up", 300, 30))
+    )
+
+    served: Final = await BaseLLMHTTPHandler()._execute_anthropic_agentic_plan(
+        plan=AgenticLoopPlan(run_agentic_loop=True, request_patch=AgenticLoopRequestPatch(messages=request_messages)),
+        model="anthropic/claude-sonnet-5-5",
+        messages=request_messages,
+        anthropic_messages_optional_request_params={},
+        logging_obj=first_round,
+        kwargs={"api_key": "test-key", "client": AsyncHTTPHandler(transport=follow_up_upstream)},
+        depth=0,
+        max_loops=3,
+        fingerprints=[],
+        fingerprint="fp",
+    )
+
+    assert isinstance(served, dict)
+    assert served["id"] == "msg_follow_up"
+    first_round_row: Final = first_round._anthropic_messages_logged_response(result=served).model_dump()
+    first_round_id: Final = get_spend_logs_id("anthropic_messages", first_round_row, {"litellm_call_id": "first-round"})
+    assert first_round_id == "msg_first_round"
 
 
 class _PlannedChatLoop(CustomLogger):
@@ -6277,7 +6556,7 @@ async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_
 
     upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(anthropic_answers))
     try:
-        await litellm.anthropic.messages.acreate(
+        await python_messages.anthropic_messages(
             max_tokens=16,
             messages=[{"role": "user", "content": "hi"}],
             model="anthropic/claude-sonnet-4-6",
@@ -6330,7 +6609,6 @@ async def _search_through(transport: httpx.MockTransport, is_async: bool) -> obj
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("environment_base", [None, "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"])
 @pytest.mark.parametrize(
     ("api_base", "explicit_header", "expected_session"),
     [
@@ -6341,7 +6619,6 @@ async def _search_through(transport: httpx.MockTransport, is_async: bool) -> obj
 )
 async def test_messages_opencode_session_header(
     stream: bool,
-    environment_base: str | None,
     api_base: str,
     explicit_header: str | None,
     expected_session: str | None,
@@ -6349,8 +6626,6 @@ async def test_messages_opencode_session_header(
 ) -> None:
     monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
-    if environment_base:
-        monkeypatch.setenv(environment_base, "https://opencode.ai/inference/go/anthropic")
     received: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
     payload: Final = {
         "id": "msg_test",
@@ -6378,11 +6653,11 @@ async def test_messages_opencode_session_header(
 
     upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
     try:
-        result: Final = await litellm.anthropic.messages.acreate(
+        result: Final = await python_messages.anthropic_messages(
             model="anthropic/claude-haiku-5-5",
             messages=[{"role": "user", "content": "hello"}],
             max_tokens=128000,
-            api_base=None if environment_base and api_base == "https://opencode.ai/inference/go/anthropic" else api_base,
+            api_base=api_base,
             api_key="test-key",
             stream=stream,
             litellm_session_id="conversation-123",
@@ -6522,20 +6797,6 @@ def _anthropic_messages_logging_obj():
     ("custom_llm_provider", "messages_config", "foundry_api_base", "forwarded_betas"),
     [
         pytest.param(
-            "anthropic",
-            "anthropic",
-            "https://my-resource.services.ai.azure.com/anthropic",
-            f"thinking-binding-controls-2026-08-01,{_BETA_THE_TABLE_DOES_NOT_LIST}",
-            id="anthropic-drops-what-the-azure-ai-row-rejects",
-        ),
-        pytest.param(
-            "anthropic",
-            "anthropic",
-            "https://my-resource.cognitiveservices.azure.com/anthropic",
-            f"thinking-binding-controls-2026-08-01,{_BETA_THE_TABLE_DOES_NOT_LIST}",
-            id="anthropic-on-a-cognitiveservices-host",
-        ),
-        pytest.param(
             "azure_ai",
             "azure_ai",
             "https://my-resource.services.ai.azure.com/anthropic",
@@ -6559,7 +6820,6 @@ async def test_async_anthropic_messages_handler_picks_the_beta_row_by_deployment
     forwarded_betas: str,
 ) -> None:
     from litellm import anthropic_beta_headers_manager
-    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
     from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
     from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 
@@ -6567,7 +6827,6 @@ async def test_async_anthropic_messages_handler_picks_the_beta_row_by_deployment
     monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
     assert _BETA_THE_TABLE_DOES_NOT_LIST not in anthropic_beta_headers_manager._load_beta_headers_config()["azure_ai"]
     configs: Final = {
-        "anthropic": AnthropicMessagesConfig,
         "azure_ai": AzureAnthropicMessagesConfig,
         "pass_through": OpenAILikeAnthropicMessagesConfig,
     }
@@ -6601,7 +6860,7 @@ async def test_first_foundry_request_with_betas_fetches_the_beta_table_off_the_e
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm import anthropic_beta_headers_manager, anthropic_beta_headers_url
-    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+    from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
 
     monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
     monkeypatch.delenv("LITELLM_OFFLINE_MODE", raising=False)
@@ -6619,9 +6878,9 @@ async def test_first_foundry_request_with_betas_fetches_the_beta_table_off_the_e
         await BaseLLMHTTPHandler().async_anthropic_messages_handler(
             model="claude-sonnet-4-6",
             messages=[{"role": "user", "content": "Hello"}],
-            anthropic_messages_provider_config=AnthropicMessagesConfig(),
+            anthropic_messages_provider_config=AzureAnthropicMessagesConfig(),
             anthropic_messages_optional_request_params={"max_tokens": 8},
-            custom_llm_provider="anthropic",
+            custom_llm_provider="azure_ai",
             litellm_params=GenericLiteLLMParams(api_base=foundry_api_base),
             logging_obj=_anthropic_messages_logging_obj(),
             api_key="sk-test",
@@ -6645,3 +6904,67 @@ async def test_a_stream_answered_with_one_json_body_is_not_replayed_for_a_provid
         )
         with pytest.raises(litellm.exceptions.MidStreamFallbackError, match="before any terminal event"):
             _ = tuple([event async for event in stream])
+
+
+@pytest.mark.parametrize("with_v2", [False, True])
+def test_sync_responses_send_the_params_the_pre_deployment_hook_returned(
+    monkeypatch: pytest.MonkeyPatch, with_v2: bool
+) -> None:
+    seen: Final[list[str]] = []
+
+    class TemperatureRewriter(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: CallTypes | None
+        ) -> dict[str, object] | None:
+            seen.append("legacy")
+            return {**kwargs, "temperature": 0.25}
+
+    class Gate(CustomLoggerV2):
+        @on(Hook.pre_deployment_call, may_abort=True)
+        async def gate(self, view: object, ctx: CallContext[object]) -> None:
+            seen.append("v2")
+
+    monkeypatch.setattr(litellm, "callbacks", [*([Gate()] if with_v2 else []), TemperatureRewriter()])
+    logging_obj: Final = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    _, _, _, response_params, _ = BaseLLMHTTPHandler()._run_sync_responses_pre_call_deployment_hook(
+        model="gpt-5.5",
+        input="hi",
+        custom_llm_provider="openai",
+        response_api_optional_request_params={"temperature": 1.0},
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+    )
+
+    assert response_params["temperature"] == 0.25
+    assert seen == (["v2", "legacy"] if with_v2 else ["legacy"])
+
+
+@pytest.mark.parametrize("with_v2", [False, True])
+def test_sync_responses_run_a_v2_callback_pre_deployment_hook_without_any_legacy_override(
+    monkeypatch: pytest.MonkeyPatch, with_v2: bool
+) -> None:
+    seen: Final[list[object]] = []
+
+    class Gate(CustomLoggerV2):
+        @on(Hook.pre_deployment_call, reads={Field.model}, may_abort=True)
+        async def gate(self, view: object, ctx: CallContext[object]) -> None:
+            seen.append(getattr(view, "model"))  # noqa: B009  # the view's declared field
+
+    monkeypatch.setattr(litellm, "callbacks", [CustomLogger(), *([Gate()] if with_v2 else [])])
+    logging_obj: Final = Mock()
+    logging_obj.dynamic_success_callbacks = []
+    params: Final[dict[str, object]] = {"temperature": 1.0}
+
+    _, _, _, response_params, _ = BaseLLMHTTPHandler()._run_sync_responses_pre_call_deployment_hook(
+        model="gpt-5.5",
+        input="hi",
+        custom_llm_provider="openai",
+        response_api_optional_request_params=params,
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+    )
+
+    assert seen == (["gpt-5.5"] if with_v2 else [])
+    assert response_params["temperature"] == 1.0

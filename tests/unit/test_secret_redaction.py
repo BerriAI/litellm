@@ -22,9 +22,104 @@ from litellm._logging import (
 from litellm.litellm_core_utils.secret_redaction import (
     redact_internal_details,
     redact_structured_value,
+    redact_tokens,
 )
 
 SECRET = "sk-proj-abc123def456ghi789jklmnopqrst"
+
+
+@pytest.mark.timeout(10)
+@pytest.mark.parametrize("header", ("-----BEGIN PRIVATE KEY-----\n", "-----BEGIN PRIVATE KEY----- ", "-----BEGIN A"))
+def test_token_redaction_preserves_many_unterminated_pem_blocks(header: str) -> None:
+    text: Final = header * 24_000
+    assert redact_tokens(text) == text
+
+
+@pytest.mark.timeout(10)
+def test_token_redaction_preserves_many_failed_jwt_starts_and_finds_an_inner_key() -> None:
+    text: Final = "eyJaaaaaaaaaa-" * 24_000
+    assert redact_tokens(text + "sk-" + "a" * 20) == text + "REDACTED"
+
+
+@pytest.mark.parametrize(
+    "token",
+    (
+        "ya29." + "a" * 20,
+        "AKIA" + "A" * 16,
+        "sk-" + "a" * 50_000,
+        "sk_live_" + "a" * 24,
+        "rk_test_" + "a" * 24,
+        "AIza" + "a" * 35,
+        "dapi" + "a" * 32,
+        "ghp_" + "a" * 36,
+        "github_pat_" + "a" * 82,
+        "glpat-" + "a" * 20,
+        "lin_api_" + "a" * 40,
+        "xoxb-" + "a" * 10,
+        "hf_" + "a" * 34,
+        "npm_" + "a" * 36,
+        "pypi-AgEIcHlwaS5vcmc" + "a" * 50,
+        "SG." + "a" * 22 + "." + "a" * 43,
+        "eyJ" + "a" * 50_000 + ".eyJ" + "b" * 50_000 + ".c",
+        "-----BEGIN " + "A" * 50_000 + " PRIVATE KEY-----\nbody\n-----END PRIVATE KEY-----",
+    ),
+)
+def test_token_redaction_masks_known_token_shapes(token: str) -> None:
+    assert redact_tokens("credential=" + token + " !") == "credential=REDACTED !"
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    (
+        ("", ""),
+        ("password: ordinary text", "password: ordinary text"),
+        ("sk-short", "sk-short"),
+        ("eyJ" + "a" * 12 + ".e30.fake_signature", "REDACTED"),
+        ("eyJ" + "a" * 12 + ".x.fake_signature", "REDACTED"),
+        ("not_a_json_header.e30.fake_signature", "not_a_json_header.e30.fake_signature"),
+        ("eyJ" + "a" * 12 + "..fake_signature", "eyJ" + "a" * 12 + "..fake_signature"),
+        ("SG." + "a" * 22 + "." + "b" * 42 + "- ", "REDACTED "),
+        ("SG." + "a" * 22 + "." + "b" * 42 + "_ ", "REDACTED "),
+        ("SG." + "a" * 22 + "." + "b" * 43 + "-x", "SG." + "a" * 22 + "." + "b" * 43 + "-x"),
+        ("eyJ" + "a" * 12 + "-SG." + "a" * 22 + "." + "b" * 43, "REDACTED"),
+        ("wordghp_" + "a" * 36, "wordghp_" + "a" * 36),
+        ("éghp_" + "a" * 36, "éghp_" + "a" * 36),
+        (r"\nghp_" + "a" * 36, r"\nREDACTED"),
+        ("AKIA" + "A" * 17, "AKIA" + "A" * 17),
+        ("-----BEGIN PRIVATE KEY-----\nmissing end", "-----BEGIN PRIVATE KEY-----\nmissing end"),
+        ("-----BEGIN PRIVATE KEY----- -----END PRIVATE KEY-----", "REDACTED"),
+        ("-----BEGIN PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----", "REDACTED"),
+        (
+            "-----BEGIN PRIVATE KEY-----\n-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----",
+            "-----BEGIN PRIVATE KEY-----\nREDACTED",
+        ),
+        ("-----BEGIN BAD-----\n-----END PRIVATE KEY-----", "-----BEGIN BAD-----\n-----END PRIVATE KEY-----"),
+    ),
+)
+def test_token_redaction_preserves_matching_rules(text: str, expected: str) -> None:
+    assert redact_tokens(text) == expected
+
+
+@pytest.mark.parametrize(
+    "content,expected",
+    (
+        ("-----BEGIN RSA PRIVATE KEY-----\nbody\n-----END RSA PRIVATE KEY-----", "REDACTED"),
+        ("ya29." + "a" * 20, "REDACTED"),
+        ("SG." + "a" * 22 + "." + "b" * 42 + "-", "REDACTED"),
+        ("AKIA" + "A" * 16 + "é", "AKIA" + "A" * 16 + "é"),
+        (
+            "SG." + "a" * 22 + "." + "b" * 43 + "!eyJ" + "a" * 12 + ".eyJ" + "b" * 12 + ".c",
+            "REDACTED!REDACTED",
+        ),
+        (
+            "sk-" + "a" * 20,
+            "REDACTED",
+        ),
+    ),
+)
+def test_failed_jwt_header_does_not_hide_other_tokens(content: str, expected: str) -> None:
+    prefix: Final = "eyJa-"
+    assert redact_tokens(prefix + content) == prefix + expected
 
 
 @pytest.fixture(autouse=True)
@@ -473,6 +568,7 @@ def test_vertex_error_message_no_credential_leak():
         VertexCredentialsInlineNotJson,
         raise_vertex_credentials_failure,
     )
+
     path = "/etc/litellm/vertexai.json"
     failures = (
         VertexCredentialsFileUnreadable(path, "No such file or directory (FileNotFoundError)"),

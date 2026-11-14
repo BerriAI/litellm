@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Final, Optional, Protocol, TypeAlias, TypedDic
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required
+from typing_extensions import TypedDict as ExtraItemsTypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -19,6 +20,7 @@ from litellm.litellm_core_utils.core_helpers import (
     chunk_usage,
     finite_cost,
     provider_reported_usage_cost,
+    require_attributes,
     stamp_litellm_bill_on_usage,
 )
 from litellm.litellm_core_utils.hidden_params import (
@@ -80,6 +82,18 @@ if TYPE_CHECKING:
         ChatCompletionRedactedThinkingBlock,
         ChatCompletionThinkingBlock,
     )
+
+
+class _UsageFields(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
+
+
+def _usage_fields(fields: Mapping[str, object]) -> _UsageFields:
+    return _UsageFields(**fields)
+
+
+class _SupportsModelDump(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
 
 
 class _ThinkingBlockFragment(TypedDict, total=False):
@@ -946,12 +960,12 @@ class ChunkProcessor:
             usage_chunk = chunk.hidden_params.get("usage", None)
 
         if isinstance(usage_chunk, dict):
-            return Usage(**usage_chunk)
+            return Usage(**_usage_fields(usage_chunk))
         if isinstance(usage_chunk, UnreportedUsage):
             return None
         if usage_chunk is None or isinstance(usage_chunk, Usage):
             return usage_chunk
-        return Usage(**usage_chunk.model_dump())
+        return Usage(**_usage_fields(require_attributes(usage_chunk, _SupportsModelDump, "model_dump").model_dump()))
 
     def _calculate_usage_per_chunk(
         self,
@@ -1275,7 +1289,7 @@ class ChunkProcessor:
             if value is not None
         }
 
-        returned_usage = Usage(**returned_usage.model_dump(), **provider_pricing_fields)
+        returned_usage = Usage(**_usage_fields(returned_usage.model_dump()), **provider_pricing_fields)
 
         return returned_usage
 
@@ -1500,7 +1514,11 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
     if isinstance(computed_cost, bool) or not isinstance(computed_cost, (int, float)) or computed_cost < 0:
         return
-    if computed_cost > 0 or isinstance(getattr(usage, "cost", None), (int, float)):
+    if (
+        computed_cost > 0
+        or isinstance(getattr(usage, "cost", None), (int, float))
+        or logging_obj.is_usage_explicitly_free(response)
+    ):
         stamp_litellm_bill_on_usage(response, usage, float(computed_cost))
 
 

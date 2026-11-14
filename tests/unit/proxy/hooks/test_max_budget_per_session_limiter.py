@@ -422,11 +422,16 @@ async def test_no_agent_id_passes():
 
 class _OpenBreakerRedis:
     def __init__(self) -> None:
-        from litellm.caching.redis_cache import RedisCircuitBreaker
+        from litellm._service_logger import ServiceLogging
+        from litellm.caching.redis_cache import RedisHealth
+        from litellm.redis.store_settings import RedisBreakerSettings
+        from litellm.rust_bridge._native import NativeRedisBreaker
 
-        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
-        for _ in range(3):
-            self._circuit_breaker.record_failure()
+        breaker: Final = NativeRedisBreaker(
+            RedisBreakerSettings(failure_threshold=1, recovery_timeout=60.0, timeout_min_duration=5.0)
+        )
+        breaker.failed(False)
+        self._health = RedisHealth(breaker, ServiceLogging())
 
     @_redis_circuit_breaker_guard
     async def async_get_cache(self, key, **kwargs):

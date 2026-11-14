@@ -22,11 +22,11 @@ import asyncio
 import builtins
 import logging
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import groupby
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from pydantic import TypeAdapter
 
@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.batch_utils import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
+    require_attributes,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds_from
 from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
@@ -51,13 +52,39 @@ from litellm.router_utils.cooldown_callbacks import (
     get_prometheus_logger_from_callbacks,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, RouterErrors
+from litellm.types.router import LiteLLM_Params, RouterErrors
 from litellm.types.utils import BudgetConfig, GenericBudgetConfigType, StandardLoggingPayload
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 
 DEFAULT_REDIS_SYNC_INTERVAL: Final = 1
 _CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
 _JOB_CHARGE_VALUES: Final = TypeAdapter(tuple[object, float])
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _model_info_id(deployment: Mapping[str, object]) -> object:
+    return require_attributes(deployment.get("model_info", {}), _SupportsGet, "get").get("id")
+
+
+def _deployment_budget(deployment: Mapping[str, object]) -> tuple[object, GenericBudgetInfo] | None:
+    litellm_params: Final = deployment.get("litellm_params", {})
+    model_id: Final = require_attributes(deployment.get("model_info") or {}, _SupportsGet, "get").get("id")
+    params: Final = require_attributes(litellm_params, _SupportsGet, "get")
+    max_budget: Final = params.get("max_budget")
+    budget_duration: Final = params.get("budget_duration")
+
+    verbose_router_logger.debug(
+        "Init Deployment Budget: max_budget: %s, budget_duration: %s, model_id: %s",
+        max_budget,
+        budget_duration,
+        model_id,
+    )
+    if max_budget is None or budget_duration is None or model_id is None:
+        return None
+    return model_id, GenericBudgetInfo(time_period=budget_duration, budget_limit=max_budget)
 
 
 class _LiteLLMParamsDictView:
@@ -124,7 +151,7 @@ class RouterBudgetLimiting(CustomLogger):
         self,
         dual_cache: DualCache,
         provider_budget_config: dict | None,
-        model_list: list[DeploymentTypedDict | dict[str, Any]] | None = None,
+        model_list: Sequence[Mapping[str, object]] | None = None,
         clock: Callable[[], float] = time.time,
     ):
         self.dual_cache = dual_cache
@@ -137,7 +164,7 @@ class RouterBudgetLimiting(CustomLogger):
         self._retired = False
         self._flush_after_retire: asyncio.Task[None] | None = None
         self.provider_budget_config: GenericBudgetConfigType | None = provider_budget_config
-        self.deployment_budget_config: GenericBudgetConfigType | None = None
+        self.deployment_budget_config: Mapping[object, GenericBudgetInfo] | None = None
         self.tag_budget_config: GenericBudgetConfigType | None = None
         self._init_provider_budgets()
         self._init_deployment_budgets(model_list=model_list)
@@ -251,9 +278,9 @@ class RouterBudgetLimiting(CustomLogger):
     def _filter_out_deployments_above_budget(
         self,
         potential_deployments: list[dict[str, object]],
-        healthy_deployments: list[dict[str, Any]],
+        healthy_deployments: Sequence[dict[str, object]],
         provider_configs: dict[str, GenericBudgetInfo],
-        deployment_configs: dict[str, GenericBudgetInfo],
+        deployment_configs: Mapping[object, GenericBudgetInfo],
         deployment_providers: list[str | None],
         spend_map: dict[str, float],
         request_tags: list[str],
@@ -300,9 +327,9 @@ class RouterBudgetLimiting(CustomLogger):
             # Check deployment budget
             if self.deployment_budget_config and is_within_budget:
                 _model_name = deployment.get("model_name")
-                _litellm_params = deployment.get("litellm_params") or {}
+                _litellm_params = require_attributes(deployment.get("litellm_params") or {}, _SupportsGet, "get")
                 _litellm_model_name = _litellm_params.get("model")
-                model_id = deployment.get("model_info", {}).get("id")
+                model_id = _model_info_id(deployment)
                 if model_id in deployment_configs:
                     config = deployment_configs[model_id]
                     current_spend = spend_map.get(f"deployment_spend:{model_id}:{config.budget_duration}", 0.0)
@@ -334,12 +361,12 @@ class RouterBudgetLimiting(CustomLogger):
 
     async def _async_get_cache_keys_for_router_budget_limiting(
         self,
-        healthy_deployments: list[dict[str, Any]],
+        healthy_deployments: Sequence[Mapping[str, object]],
         request_kwargs: dict | None = None,
     ) -> tuple[
         list[str],
         dict[str, GenericBudgetInfo],
-        dict[str, GenericBudgetInfo],
+        dict[object, GenericBudgetInfo],
         list[str | None],
     ]:
         """
@@ -354,7 +381,7 @@ class RouterBudgetLimiting(CustomLogger):
         """
         cache_keys: Final[list[str]] = []
         provider_configs: Final[dict[str, GenericBudgetInfo]] = {}
-        deployment_configs: Final[dict[str, GenericBudgetInfo]] = {}
+        deployment_configs: Final[dict[object, GenericBudgetInfo]] = {}
         deployment_providers: Final[list[str | None]] = []
 
         # Resolve tags once before the loop (loop-invariant)
@@ -378,7 +405,7 @@ class RouterBudgetLimiting(CustomLogger):
 
             # Check deployment budgets
             if self.deployment_budget_config:
-                model_id = deployment.get("model_info", {}).get("id")
+                model_id = _model_info_id(deployment)
                 if model_id is not None:
                     budget_config = self._get_budget_config_for_deployment(model_id)
                     if budget_config is not None:
@@ -768,7 +795,7 @@ class RouterBudgetLimiting(CustomLogger):
 
     def _get_budget_config_for_deployment(
         self,
-        model_id: str,
+        model_id: object,
     ) -> GenericBudgetInfo | None:
         if self.deployment_budget_config is None:
             return None
@@ -784,7 +811,7 @@ class RouterBudgetLimiting(CustomLogger):
             return None
         return self.tag_budget_config.get(tag, None)
 
-    def _get_llm_provider_for_deployment(self, deployment: dict) -> str | None:
+    def _get_llm_provider_for_deployment(self, deployment: Mapping[str, object]) -> str | None:
         try:
             deployment_litellm_params: Final = deployment.get("litellm_params") or {}
 
@@ -893,7 +920,7 @@ class RouterBudgetLimiting(CustomLogger):
     @staticmethod
     def should_init_router_budget_limiter(
         provider_budget_config: dict | None,
-        model_list: list[DeploymentTypedDict] | list[dict[str, Any]] | None = None,
+        model_list: Sequence[Mapping[str, object]] | None = None,
     ):
         """
         Returns `True` if the router budget routing settings are set and RouterBudgetLimiting should be initialized
@@ -913,7 +940,7 @@ class RouterBudgetLimiting(CustomLogger):
             return False
 
         for _model in model_list:
-            _litellm_params = _model.get("litellm_params", {})
+            _litellm_params = require_attributes(_model.get("litellm_params", {}), _SupportsGet, "get")
             if _litellm_params.get("max_budget") or _litellm_params.get("budget_duration") is not None:
                 return True
         return False
@@ -943,37 +970,20 @@ class RouterBudgetLimiting(CustomLogger):
 
     def _init_deployment_budgets(
         self,
-        model_list: list[DeploymentTypedDict | dict[str, Any]] | None = None,
+        model_list: Sequence[Mapping[str, object]] | None = None,
     ):
         if model_list is None:
             return
-        for _model in model_list:
-            _litellm_params = _model.get("litellm_params", {})
-            _model_info: dict = _model.get("model_info") or {}
-            _model_id = _model_info.get("id")
-            _max_budget = _litellm_params.get("max_budget")
-            _budget_duration = _litellm_params.get("budget_duration")
-
-            verbose_router_logger.debug(
-                "Init Deployment Budget: max_budget: %s, budget_duration: %s, model_id: %s",
-                _max_budget,
-                _budget_duration,
-                _model_id,
-            )
-            if _max_budget is not None and _budget_duration is not None and _model_id is not None:
-                _budget_config = GenericBudgetInfo(
-                    time_period=_budget_duration,
-                    budget_limit=_max_budget,
-                )
-                if self.deployment_budget_config is None:
-                    self.deployment_budget_config = {}
-                self.deployment_budget_config[_model_id] = _budget_config
+        for model_id, budget in filter(None, map(_deployment_budget, model_list)):
+            if not isinstance(self.deployment_budget_config, MutableMapping):
+                self.deployment_budget_config = dict(self.deployment_budget_config or {})
+            self.deployment_budget_config[model_id] = budget
 
         verbose_router_logger.debug("Initialized Deployment Budget Config: %s", self.deployment_budget_config)
 
     def register_deployment_budget(
         self,
-        deployment: dict[str, Any] | DeploymentTypedDict,
+        deployment: Mapping[str, object],
     ) -> None:
         """
         Register or refresh deployment-level budget config for a runtime-added deployment.
@@ -981,7 +991,7 @@ class RouterBudgetLimiting(CustomLogger):
         self._init_deployment_budgets(model_list=[deployment])
 
     def unregister_deployment_budget(self, model_id: str) -> None:
-        if self.deployment_budget_config is None:
+        if not isinstance(self.deployment_budget_config, MutableMapping):
             return
         self.deployment_budget_config.pop(model_id, None)
         if len(self.deployment_budget_config) == 0:

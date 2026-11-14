@@ -518,7 +518,7 @@ def _or_secrets(value: object, read: Callable[[str], object], *names: str) -> ob
     return reduce(lambda found, name: found or read(name), names, value)
 
 
-def _merge_redis_kwargs(
+def merge_redis_kwargs(
     env_overrides: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: _get_redis_client_logic swaps settings for client objects in place
     overrides: Final = {
@@ -580,7 +580,7 @@ def _get_redis_client_logic(**env_overrides):
     """
     Common functionality across sync + async redis client implementations
     """
-    redis_kwargs: Final = _merge_redis_kwargs(env_overrides)
+    redis_kwargs: Final = merge_redis_kwargs(env_overrides)
 
     _startup_nodes: Final = redis_kwargs.get("startup_nodes") or None
 

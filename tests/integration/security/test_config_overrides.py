@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 import httpx
 import pytest
-from integration._support.client import Gateway, object_value, string_value
+from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
 from integration._support.tls import write_self_signed_cert
@@ -88,6 +88,20 @@ def _stored_override(database_url: str, config_type: str) -> dict[str, JsonValue
 
 def _masked(value: str) -> str:
     return value[:4] + "*" * (len(value) - 8) + value[-4:]
+
+
+def _wait_for_spend_log(response: httpx.Response, database_url: str) -> None:
+    request_id: Final = string_value(object_value(response.json())["id"])
+    rows: Final = eventually(
+        lambda: read_rows(
+            'SELECT status FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
+            (request_id,),
+            database_url=database_url,
+        ),
+        lambda values: len(values) == 1,
+        seconds=70,
+    )
+    assert rows == [{"status": "success"}], rows
 
 
 def _assert_non_admin_refusal(response: httpx.Response, route: str, user_id: str) -> None:
@@ -504,6 +518,7 @@ def test_vault_partial_update_keeps_omitted_fields_encrypts_and_drives_secret_re
                 )
                 assert response_one.status_code == 200, response_one.text
                 assert response_one.json()["choices"][0]["message"]["content"] == marker_one, response_one.text
+                _wait_for_spend_log(response_one, database_url)
                 first_secret_reads: Final = tuple(
                     (request.method, request.target)
                     for request in vault_wire.drain()
@@ -562,6 +577,7 @@ def test_vault_partial_update_keeps_omitted_fields_encrypts_and_drives_secret_re
                 )
                 assert response_two.status_code == 200, response_two.text
                 assert response_two.json()["choices"][0]["message"]["content"] == marker_two, response_two.text
+                _wait_for_spend_log(response_two, database_url)
                 second_secret_reads: Final = tuple(
                     (request.method, request.target)
                     for request in vault_wire.drain()
@@ -628,6 +644,7 @@ def test_vault_partial_update_keeps_omitted_fields_encrypts_and_drives_secret_re
                 assert response_after_delete.json()["choices"][0]["message"]["content"] == "after-delete", (
                     response_after_delete.text
                 )
+                _wait_for_spend_log(response_after_delete, database_url)
                 after_delete_requests: Final = vault_wire.drain()
                 assert after_delete_requests == (), after_delete_requests
                 assert first_secret_reads + second_secret_reads == (
@@ -984,6 +1001,7 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
                 )
                 assert response_a.status_code == 200, response_a.text
                 assert response_a.json()["choices"][0]["message"]["content"] == marker_a, response_a.text
+                _wait_for_spend_log(response_a, database_url)
                 approle_targets: Final = frozenset({login_approle_path, login_cert_path, secret_a_path, secret_b_path})
                 approle_phase: Final = tuple(
                     request for request in vault_wire.drain() if request.target in approle_targets
@@ -1038,6 +1056,7 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
                 )
                 assert response_b.status_code == 200, response_b.text
                 assert response_b.json()["choices"][0]["message"]["content"] == marker_b, response_b.text
+                _wait_for_spend_log(response_b, database_url)
                 plain_phase_b: Final = vault_wire.drain()
                 assert plain_phase_b == (), plain_phase_b
                 cert_phase: Final = tuple(
@@ -1093,6 +1112,7 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
                 assert response_after_delete.json()["choices"][0]["message"]["content"] == "after-delete", (
                     response_after_delete.text
                 )
+                _wait_for_spend_log(response_after_delete, database_url)
                 after_delete_requests: Final = vault_wire.drain()
                 assert after_delete_requests == (), after_delete_requests
                 after_delete_tls_requests: Final = vault_tls_wire.drain()

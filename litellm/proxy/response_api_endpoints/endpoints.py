@@ -11,6 +11,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Literal,
@@ -61,10 +62,12 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.common_request_processing import (
+    RESPONSES_SSE_FRAMING,
     ProxyBaseLLMRequestProcessing,
     cost_headers,
     create_response,
     proxy_exception_from_route_error,
+    refuse_s3_media_the_key_may_not_read,
     resolve_counted_tool_fields,
     resolve_litellm_call_id,
 )
@@ -79,8 +82,9 @@ from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
     error_status_code,
     openai_error_type_for_status,
+    with_litellm_call_id,
 )
-from litellm.proxy.common_utils.token_count_log import rejected_token_count
+from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
@@ -109,7 +113,6 @@ from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
-    ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
 )
 from litellm.types.responses.main import DeleteResponseResult
@@ -397,6 +400,9 @@ async def responses_api(
         # instead of a polling ID that immediately fails in the background task.
         processor = ProxyBaseLLMRequestProcessing(data=data)
         try:
+            # A background request runs after its polling id is returned, so a total_timeout it
+            # cannot apply is refused (or a header one dropped) before the id is handed out.
+            _ = processor.total_timeout_for(request, "aresponses", is_streaming_request=None)
             data, _logging_obj = await processor.common_processing_pre_call_logic(
                 request=request,
                 general_settings=general_settings,
@@ -483,6 +489,7 @@ async def responses_api(
                 if requests_background(_PROXY_SERVER_REQUEST_ADAPTER.validate_python(data))
                 else native_data_generator
             ),
+            sse_framing=RESPONSES_SSE_FRAMING,
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,
@@ -541,7 +548,6 @@ async def responses_api(
             async def _blocked_stream() -> AsyncGenerator[str, None]:
                 for chunk in block_chunks:
                     yield chunk.decode()
-                yield "data: [DONE]\n\n"
 
             return await create_response(generator=_blocked_stream(), media_type="text/event-stream", headers={})
         return build_blocked_response(e)
@@ -908,6 +914,7 @@ async def get_response(
                 response_id,
                 read_settles_billing,
             ),
+            sse_framing=RESPONSES_SSE_FRAMING,
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,
@@ -1511,6 +1518,7 @@ class _TokenCountPayload(TypedDict):
     model: ReadOnly[str]
     messages: ReadOnly[tuple[Mapping[str, object], ...]]
     tools: ReadOnly[object]
+    tool_choice: ReadOnly[object]
 
 
 class _TokenCounter(Protocol):
@@ -1571,6 +1579,12 @@ def _proxy_managed_files_hook() -> _ManagedFileAccess | None:
 _managed_files_hook_dep: Final = Depends(_proxy_managed_files_hook)
 
 
+def _proxy_general_settings() -> Mapping[str, object]:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    return general_settings_view()
+
+
 async def _with_managed_file_id_mapping(
     data: Mapping[str, object], managed_files: _ManagedFileAccess | None, user_api_key_dict: UserAPIKeyAuth
 ) -> Mapping[str, object]:
@@ -1603,7 +1617,9 @@ def _with_authorized_previous_response(
     return {**data, "previous_response_id": authorized_id, ADDRESSED_RESPONSE_ID_FIELD: previous_response_id}
 
 
-def _responses_invalid_request_response(message: str, param: str | None, code: str | None) -> JSONResponse:
+def _responses_invalid_request_response(
+    message: str, param: str | None, code: str | None, body_call_id: str | None
+) -> JSONResponse:
     body: Final[_ResponsesApiErrorBody] = {
         "error": {
             "message": message,
@@ -1612,7 +1628,7 @@ def _responses_invalid_request_response(message: str, param: str | None, code: s
             "code": code,
         }
     }
-    return JSONResponse(status_code=400, content=body)
+    return JSONResponse(status_code=400, content={"error": with_call_id({**body["error"]}, body_call_id)})
 
 
 class _ProviderErrorMessage(TypedDict):
@@ -1677,16 +1693,17 @@ def _provider_count_error_body(raw_message: str, status_code: int) -> _Responses
     }
 
 
-def _provider_count_error_response(exc: ProxyException, request: Request) -> JSONResponse:
+def _provider_count_error_response(
+    exc: ProxyException, request: Request, general_settings: Mapping[str, object]
+) -> JSONResponse:
     from litellm.proxy.proxy_server import (
         _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; a route that answers an error itself must stamp the OTel server span like the global ProxyException handler does
-        general_settings_view,
     )
 
     status_code: Final = error_status_code(exc, 500)
     _close_dangling_otel_server_span(request, status_code, exc=exc)
     body: Final = _provider_count_error_body(exc.message, status_code)
-    call_id: Final = error_body_call_id(general_settings_view(), exc.headers.get(LITELLM_CALL_ID_HEADER))
+    call_id: Final = error_body_call_id(general_settings, exc.headers.get(LITELLM_CALL_ID_HEADER))
     return JSONResponse(
         status_code=status_code,
         content={"error": with_call_id({**body["error"]}, call_id)},
@@ -1694,26 +1711,29 @@ def _provider_count_error_response(exc: ProxyException, request: Request) -> JSO
     )
 
 
-def _missing_responses_param_response(param: str) -> JSONResponse:
+def _missing_responses_param_response(param: str, body_call_id: str | None) -> JSONResponse:
     return _responses_invalid_request_response(
         message=f"Missing required parameter: '{param}'.",
         param=param,
         code="missing_required_parameter",
+        body_call_id=body_call_id,
     )
 
 
 def _responses_input_as_token_count_messages(
     input_value: str | ResponseInputParam,
-    instructions: str | None,
+    request_params: Mapping[str, object],
 ) -> tuple[Mapping[str, object], ...]:
     from litellm.responses.litellm_completion_transformation.transformation import (
         LiteLLMCompletionResponsesConfig,
     )
 
-    request_params: Final[ResponsesAPIOptionalRequestParams] = {"instructions": instructions}
     transformed: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
         input=input_value,
-        responses_api_request=request_params,
+        responses_api_request={
+            "instructions": request_params.get("instructions"),
+            "tools": request_params.get("tools"),
+        },
         only_since_compaction=True,
     )
     return tuple(
@@ -1738,6 +1758,8 @@ def _responses_input_as_token_count_messages(
 )
 async def responses_input_tokens(
     request: Request,
+    fastapi_response: Response,
+    general_settings: Annotated[Mapping[str, object], Depends(_proxy_general_settings)],
     token_counter: _TokenCounter = _token_counter_dep,
     llm_router: Router | None = _llm_router_dep,
     user_api_key_dict: UserAPIKeyAuth = _user_api_key_auth_dep,
@@ -1762,19 +1784,50 @@ async def responses_input_tokens(
     Returns: `{"object": "response.input_tokens", "input_tokens": <count>}`
     """
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
+    return await answered_with_litellm_call_id(
+        _responses_input_tokens(
+            request,
+            token_counter,
+            llm_router,
+            user_api_key_dict,
+            response_id_security,
+            managed_files,
+            litellm_call_id,
+            general_settings,
+        ),
+        litellm_call_id,
+        request,
+        fastapi_response,
+    )
+
+
+async def _responses_input_tokens(
+    request: Request,
+    token_counter: _TokenCounter,
+    llm_router: Router | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    response_id_security: ResponsesIDSecurity | None,
+    managed_files: _ManagedFileAccess | None,
+    litellm_call_id: str,
+    general_settings: Mapping[str, object],
+) -> JSONResponse | _ResponsesInputTokensResult:
+    body_call_id: Final = error_body_call_id(general_settings, litellm_call_id)
     data: Final = await read_request_body(request=request)
     model_name: Final = data.get("model")
     input_value: Final = data.get("input")
     if not isinstance(model_name, str) or not model_name:
-        return rejected_token_count(_missing_responses_param_response("model"), litellm_call_id, None)
+        return rejected_token_count(_missing_responses_param_response("model", body_call_id), litellm_call_id, None)
     if input_value is None:
-        return rejected_token_count(_missing_responses_param_response("input"), litellm_call_id, model_name)
+        return rejected_token_count(
+            _missing_responses_param_response("input", body_call_id), litellm_call_id, model_name
+        )
     if isinstance(input_value, (str, list)) and not input_value:
         return rejected_token_count(
             _responses_invalid_request_response(
                 message="""One of "input" or "previous_response_id" or 'prompt' or 'conversation' must be provided.""",
                 param=None,
                 code="missing_required_parameter",
+                body_call_id=body_call_id,
             ),
             litellm_call_id,
             model_name,
@@ -1786,7 +1839,9 @@ async def responses_input_tokens(
     token_fields: Final = resolve_counted_tool_fields(counted_fields, llm_router, user_api_key_dict.team_id)
     if isinstance(token_fields, ProxyException):
         return rejected_token_count(
-            _responses_invalid_request_response(message=token_fields.message, param=token_fields.param, code=None),
+            _responses_invalid_request_response(
+                message=token_fields.message, param=token_fields.param, code=None, body_call_id=body_call_id
+            ),
             litellm_call_id,
             model_name,
         )
@@ -1794,17 +1849,18 @@ async def responses_input_tokens(
     try:
         payload: Final[_TokenCountPayload] = {
             "model": model_name,
-            "messages": _responses_input_as_token_count_messages(
-                input_value=input_value,
-                instructions=data.get("instructions"),
-            ),
+            "messages": _responses_input_as_token_count_messages(input_value=input_value, request_params=data),
             "tools": token_fields.get("tools"),
+            "tool_choice": token_fields.get("tool_choice"),
         }
         token_request: Final = TokenCountRequest.model_validate(payload)
     except ValidationError as e:
         return rejected_token_count(
             _responses_invalid_request_response(
-                message=first_validation_error(e), param=str(e.errors(include_url=False)[0]["loc"][0]), code=None
+                message=first_validation_error(e),
+                param=str(e.errors(include_url=False)[0]["loc"][0]),
+                code=None,
+                body_call_id=body_call_id,
             ),
             litellm_call_id,
             model_name,
@@ -1812,7 +1868,7 @@ async def responses_input_tokens(
     except Exception as e:
         return rejected_token_count(
             _responses_invalid_request_response(
-                message=f"Invalid request for token counting: {e}", param=None, code=None
+                message=f"Invalid request for token counting: {e}", param=None, code=None, body_call_id=body_call_id
             ),
             litellm_call_id,
             model_name,
@@ -1832,8 +1888,9 @@ async def responses_input_tokens(
             managed_files,
             user_api_key_dict,
         )
-    except ProxyException as e:
-        raise rejected_token_count(e, litellm_call_id, model_name)
+    except Exception as e:
+        rejected_token_count(e, litellm_call_id, model_name)
+        raise
     try:
         token_response: Final = await token_counter(
             request=token_request,
@@ -1844,7 +1901,7 @@ async def responses_input_tokens(
     except ProxyException as e:
         if e.type != _PROVIDER_COUNT_ERROR_TYPE:
             raise
-        return _provider_count_error_response(e, request)
+        return _provider_count_error_response(with_litellm_call_id(e, litellm_call_id), request, general_settings)
     result: Final[_ResponsesInputTokensResult] = {
         "object": "response.input_tokens",
         "input_tokens": token_response.total_tokens,
@@ -2213,6 +2270,17 @@ async def _key_team_object(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTab
         return team_from_key
 
 
+async def _refuse_s3_media_this_proxy_bars(data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth) -> None:
+    from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
+
+    await refuse_s3_media_the_key_may_not_read(
+        data,
+        user_api_key_dict,
+        _WS_FRAME.validate_python(general_settings),
+        proxy_logging_obj.get_proxy_hook("managed_files"),
+    )
+
+
 def _responses_ws_frame_guard(
     admitted: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
@@ -2220,6 +2288,9 @@ def _responses_ws_frame_guard(
     record_refused_turn: Callable[[tuple[Mapping[str, object], ...], Exception], None],
     *,
     team_object: Callable[[UserAPIKeyAuth], Awaitable[LiteLLM_TeamTable | None]] = _key_team_object,
+    refuse_s3_media: Callable[[Mapping[str, object], UserAPIKeyAuth], Awaitable[None]] = (
+        _refuse_s3_media_this_proxy_bars
+    ),
 ) -> ResponsesWsFrameGuard:
     """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
     ``response.create`` frame gets the pre_call and during_call guardrail walks the HTTP ``/v1/responses`` path runs on
@@ -2267,6 +2338,7 @@ def _responses_ws_frame_guard(
         )
         try:
             _reject_guarded_field_beside_nested_response(frame_obj, nested)
+            await refuse_s3_media({**frame_obj, **body, "model": model}, user_api_key_dict)
             await _check_frame_may_modify_guardrails(selection_sources, user_api_key_dict, team_object)
             frame_data: Final = {
                 **turn_data,
@@ -2624,7 +2696,6 @@ async def _responses_websocket_session(
             user_request_timeout=user_request_timeout,
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
-            model=resolved_model,
             route_type="_aresponses_websocket",
             skip_guardrails=True,
         )
@@ -2683,7 +2754,7 @@ async def _responses_websocket_session(
                 llm_router=llm_router,
                 user_model=user_model,
             )
-            outcome: Final = await llm_call
+            outcome: Final = _DECODED_JSON.validate_python(await llm_call)
         except asyncio.CancelledError:
             if refused_turns.first is not None:
                 _ = bill_socket_failure(refused_turns.first)

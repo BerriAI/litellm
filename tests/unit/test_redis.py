@@ -26,13 +26,13 @@ from litellm._redis import (
     _get_redis_env_kwarg_mapping,
     _get_redis_kwargs,
     _get_redis_url_kwargs,
-    _merge_redis_kwargs,
     _pretty_print_redis_config,
     _uses_tls,
     get_redis_async_client,
     get_redis_client,
     get_redis_connection_pool,
     get_redis_url_from_environment,
+    merge_redis_kwargs,
 )
 from litellm._redis_credential_provider import (
     AzureADCredentialProvider,
@@ -2069,7 +2069,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
 
 @pytest.mark.skipif(
     redis.VERSION != (5, 3, 1),
-    reason="the Rust interpreter in litellm-rust/crates/redis-resolve pins redis-py 5.3.1, per its AGENTS.md",
+    reason="the Rust interpreter in litellm/rust/crates/redis-resolve pins redis-py 5.3.1, per its AGENTS.md",
 )
 @pytest.mark.parametrize(
     ("kwargs", "environment", "merged", "expected"),
@@ -3337,7 +3337,7 @@ def test_redis_settings_resolve_like_the_rust_resolver_expects(monkeypatch, kwar
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
 
-    assert _merge_redis_kwargs(kwargs) == merged
+    assert merge_redis_kwargs(kwargs) == merged
     try:
         outcome = _resolution_view(kwargs)
     except (ValueError, TypeError, AttributeError, RedisError, RedisClusterException) as error:
@@ -3347,7 +3347,7 @@ def test_redis_settings_resolve_like_the_rust_resolver_expects(monkeypatch, kwar
     assert outcome == expected
 
 
-_REDIS_RESOLVE: Final = Path(__file__).parents[2] / "litellm-rust/crates/redis-resolve"
+_REDIS_RESOLVE: Final = Path(__file__).parents[2] / "litellm/rust/crates/redis-resolve"
 _REDIS_PY_KWARGS: Final = json.loads((_REDIS_RESOLVE / "redis-py-kwargs.json").read_text())
 
 

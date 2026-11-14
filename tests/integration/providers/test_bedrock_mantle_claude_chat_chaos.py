@@ -261,7 +261,7 @@ async def test_slow_native_streams_reach_every_caller_whole_and_are_logged_once(
         assert len(served) == 10
         for item in served:
             _assert_answered_with_its_own_marker(item)
-            assert item.text.rstrip().endswith("data: [DONE]"), item.text
+            assert item.text.rstrip().endswith("data: [DONE]") == (item.call.endpoint == "chat"), item.text
         _assert_native_requests_for(wire.drain(), calls)
         assert _spend_status_by_call(served) == {item.call_id: "success" for item in served}
 
