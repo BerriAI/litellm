@@ -2059,7 +2059,7 @@ def add_cache_control_to_content(
     | AnthropicMessagesDocumentParam
     | AnthropicMessagesToolUseParam
     | ChatCompletionThinkingBlock,
-    original_content_element: dict | AllMessageValues,
+    original_content_element: Mapping[str, object] | AllMessageValues,
 ):
     cache_control_param: Final = original_content_element.get("cache_control")
     if cache_control_param is not None and isinstance(cache_control_param, dict):
@@ -2574,18 +2574,30 @@ class _PlainTextPart(BaseModel):
 
     type: Literal["text"]
     text: str
+    cache_control: dict[str, JsonValue] | None = None
 
 
 _PLAIN_TEXT_PARTS: Final = TypeAdapter(tuple[_PlainTextPart, ...])
 
 
-def _plain_text(content: object) -> str | None:
+def _plain_text_parts(content: object) -> tuple[_PlainTextPart, ...] | None:
     if content is None or isinstance(content, str):
-        return content or ""
+        return (_PlainTextPart(type="text", text=content or ""),)
     try:
-        return "".join(part.text for part in _PLAIN_TEXT_PARTS.validate_python(content))
+        return _PLAIN_TEXT_PARTS.validate_python(content)
     except ValidationError:
         return None
+
+
+_TextBreakpoint: TypeAlias = tuple[int, Mapping[str, JsonValue] | AllMessageValues]
+
+
+def _text_breakpoints(parts: Sequence[_PlainTextPart], message: AllMessageValues) -> tuple[_TextBreakpoint, ...]:
+    ends: Final = tuple(itertools.accumulate(len(part.text) for part in parts))
+    from_parts: Final = tuple(
+        (end, {"cache_control": part.cache_control}) for end, part in zip(ends, parts) if part.cache_control is not None
+    )
+    return from_parts or ((ends[-1] if ends else 0, message),)
 
 
 def _block_field(block: Mapping[str, object], key: str) -> object:
@@ -2604,15 +2616,16 @@ def _recorded_block(
     text: str,
     tool_uses: Mapping[object, _AnthropicToolInvokeItem],
     tool_results: Mapping[object, _AnthropicToolInvokeItem],
-    message: ChatCompletionAssistantMessage,
+    text_breakpoints: Sequence[_TextBreakpoint],
 ) -> tuple[_ReplayedBlock, ...]:
     match entry:
         case AnthropicContentBlockOrderEntry(type="thinking" | "redacted_thinking"):
             return tuple(_replayable_thinking_blocks([thinking_blocks[thinking_seen - 1]]))
         case AnthropicContentBlockOrderEntry(type="text", length=int() as length) if length:
             text_block: Final = AnthropicMessagesTextParam(type="text", text=text[text_end - length : text_end])
-            if text_end == len(text):
-                add_cache_control_to_content(anthropic_content_element=text_block, original_content_element=message)
+            held: Final = tuple(source for end, source in text_breakpoints if text_end - length < end <= text_end)
+            if held:
+                add_cache_control_to_content(anthropic_content_element=text_block, original_content_element=held[-1])
             return (text_block,)
         case AnthropicContentBlockOrderEntry(id=str() as block_id) if block_id in tool_uses:
             return (tool_uses[block_id],)
@@ -2628,7 +2641,7 @@ def _blocks_in_recorded_order(
     tool_invokes: Sequence[_AnthropicToolInvokeItem],
     text: str,
     *,
-    message: ChatCompletionAssistantMessage,
+    text_breakpoints: Sequence[_TextBreakpoint],
 ) -> tuple[_ReplayedBlock, ...] | None:
     tool_uses: Final = MappingProxyType(
         {
@@ -2671,7 +2684,7 @@ def _blocks_in_recorded_order(
                 text=text,
                 tool_uses=tool_uses,
                 tool_results=tool_results,
-                message=message,
+                text_breakpoints=text_breakpoints,
             )
             for entry, thinking_seen, text_end in zip(
                 order,
@@ -2712,8 +2725,8 @@ def _replay_in_recorded_order(
     fields: Final = as_str_mapping(message.get("provider_specific_fields")) or {}
     order: Final = _recorded_content_block_order(fields.get("content_block_order"))
     tool_calls: Final = message.get("tool_calls")
-    text: Final = _plain_text(message.get("content"))
-    if order is None or tool_calls is None or text is None:
+    parts: Final = _plain_text_parts(message.get("content"))
+    if order is None or tool_calls is None or parts is None:
         return None
     tool_invokes: Final = convert_to_anthropic_tool_invoke(
         tool_calls,
@@ -2725,8 +2738,8 @@ def _replay_in_recorded_order(
         order,
         message.get("thinking_blocks") or (),
         tool_invokes,
-        text,
-        message=message,
+        "".join(part.text for part in parts),
+        text_breakpoints=_text_breakpoints(parts, message),
     )
 
 
@@ -3027,7 +3040,7 @@ def anthropic_messages_pt(
             elif (
                 thinking_blocks is not None
                 and _has_server_tool_calls
-                and _plain_text(assistant_content_block.get("content", None)) is not None
+                and (_acb_parts := _plain_text_parts(assistant_content_block.get("content", None))) is not None
             ):
                 # INTERLEAVED MODE: When we have both thinking blocks and server
                 # tool calls (e.g. web search), Anthropic's original response
@@ -3072,15 +3085,15 @@ def anthropic_messages_pt(
 
                 # Build the text block if content is a non-empty string
                 text_element = None
-                _acb_content = _plain_text(assistant_content_block.get("content"))
-                if isinstance(_acb_content, str) and _acb_content:
+                _acb_content = "".join(part.text for part in _acb_parts)
+                if _acb_content:
                     _anthropic_text_content_element = AnthropicMessagesTextParam(
                         type="text",
                         text=_acb_content,
                     )
                     _content_element = add_cache_control_to_content(
                         anthropic_content_element=_anthropic_text_content_element,
-                        original_content_element=dict(assistant_content_block),
+                        original_content_element=_text_breakpoints(_acb_parts, assistant_content_block)[-1][1],
                     )
                     if "cache_control" in _content_element:
                         _anthropic_text_content_element["cache_control"] = _content_element["cache_control"]
