@@ -60,6 +60,7 @@ from litellm.proxy.common_utils.claude_code_marketplace_auth import (
 )
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.deps.repositories import PluginUploadRepositoryDep
+from litellm.repositories.plugin_publication import read_plugin_publisher, read_plugin_review
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.claude_code_endpoints import (
@@ -666,6 +667,7 @@ async def register_plugin(
     response_model=ListPluginsResponse,
 )
 async def list_plugins(
+    uploads: PluginUploadRepositoryDep,
     enabled_only: bool = False,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> ListPluginsResponse:
@@ -678,6 +680,17 @@ async def list_plugins(
     Returns:
         List of plugins with their metadata.
     """
+    catalog: Final = await list_visible_plugins(enabled_only, user_api_key_dict)
+    if uploads is None:
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    counts: Final = await uploads.download_counts(tuple(plugin.id for plugin in catalog.plugins))
+    return ListPluginsResponse(
+        plugins=[plugin.model_copy(update={"download_count": counts.get(plugin.id, 0)}) for plugin in catalog.plugins],
+        count=catalog.count,
+    )
+
+
+async def list_visible_plugins(enabled_only: bool, user_api_key_dict: UserAPIKeyAuth) -> ListPluginsResponse:
     try:
         prisma_client: Final = await get_prisma_client()
 
@@ -693,9 +706,14 @@ async def list_plugins(
             # Parse manifest to get additional fields
             manifest = json.loads(p.manifest_json) if p.manifest_json else {}
 
+            review = read_plugin_review(MANIFEST_FIELDS.validate_python(manifest))
             plugin_list.append(
                 PluginListItem(
                     id=p.id,
+                    created_by=p.created_by,
+                    approved_by=review.approved_by if review else None,
+                    published_by=read_plugin_publisher(MANIFEST_FIELDS.validate_python(manifest)),
+                    security_scan_passed=review.security_scan_passed if review else False,
                     name=p.name,
                     version=p.version,
                     description=p.description,

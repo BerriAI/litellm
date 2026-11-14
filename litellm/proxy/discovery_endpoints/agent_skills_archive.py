@@ -17,7 +17,7 @@ import zlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import ClassVar, Final
+from typing import ClassVar, Final, Protocol
 
 import yaml
 from pydantic import ConfigDict, TypeAdapter, ValidationError
@@ -62,6 +62,15 @@ _YAML_NODES: Final = TypeAdapter(tuple[yaml.Node, ...], config=ConfigDict(arbitr
 _YAML_PAIRS: Final = TypeAdapter(
     tuple[tuple[yaml.Node, yaml.Node], ...], config=ConfigDict(arbitrary_types_allowed=True)
 )
+
+
+class _YamlValueNode(Protocol):
+    @property
+    def value(self) -> object: ...
+
+
+def _yaml_node_value(node: _YamlValueNode) -> object:
+    return node.value
 
 
 class _AgentSkillFrontmatterLoader(yaml.BaseLoader):
@@ -259,7 +268,7 @@ def agent_skill_frontmatter(manifest: bytes) -> Mapping[str, str]:
         return MappingProxyType({})
     if not isinstance(node, yaml.MappingNode) or not _valid_frontmatter_node(node):
         return MappingProxyType({})
-    pairs: Final = _YAML_PAIRS.validate_python(node.value)
+    pairs: Final = _YAML_PAIRS.validate_python(_yaml_node_value(node))
     fields: Final = {
         key_text: value_text
         for key, value in pairs
@@ -273,7 +282,7 @@ def agent_skill_frontmatter(manifest: bytes) -> Mapping[str, str]:
 def _frontmatter_string(node: yaml.Node) -> str | None:
     if not isinstance(node, yaml.ScalarNode) or node.tag != "tag:yaml.org,2002:str":
         return None
-    value: Final = _DECODED_YAML.validate_python(node.value)
+    value: Final = _yaml_node_value(node)
     return value if isinstance(value, str) else None
 
 
@@ -282,18 +291,18 @@ def _valid_frontmatter_node(node: yaml.Node, depth: int = 0) -> bool:
         return False
     if isinstance(node, yaml.ScalarNode):
         pattern: Final = _AGENT_SKILL_YAML_SCALARS.get(node.tag)
-        scalar: Final = _DECODED_YAML.validate_python(node.value)
+        scalar: Final = _yaml_node_value(node)
         return isinstance(scalar, str) and (
             node.tag == "tag:yaml.org,2002:str" or (pattern is not None and pattern.fullmatch(scalar) is not None)
         )
     if isinstance(node, yaml.SequenceNode):
-        values: Final = _YAML_NODES.validate_python(node.value)
+        values: Final = _YAML_NODES.validate_python(_yaml_node_value(node))
         return node.tag == "tag:yaml.org,2002:seq" and all(
             _valid_frontmatter_node(value, depth + 1) for value in values
         )
     if not isinstance(node, yaml.MappingNode) or node.tag != "tag:yaml.org,2002:map":
         return False
-    pairs: Final = _YAML_PAIRS.validate_python(node.value)
+    pairs: Final = _YAML_PAIRS.validate_python(_yaml_node_value(node))
     keys: Final = tuple(_frontmatter_string(key) for key, _ in pairs)
     return (
         None not in keys
