@@ -46,6 +46,7 @@ from typing import (
     Final,
     Literal,
     NamedTuple,
+    NoReturn,
     Optional,
     Protocol,
     TypeAlias,
@@ -283,8 +284,6 @@ try:
     import yaml
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.schedulers.base import STATE_STOPPED
-    from apscheduler.triggers.base import BaseTrigger
-    from apscheduler.triggers.interval import IntervalTrigger
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
@@ -376,8 +375,8 @@ from litellm.constants import (
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
+    SCHEDULED_JOB_POLL_INTERVAL_SECONDS,
     SPEND_CAPTURE_RATE_CHECK_JOB_ID,
-    SPEND_LOG_SIZE_CHECK_INTERVAL,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
     XAI_API_BASE,
@@ -437,6 +436,7 @@ from litellm.messages.dispatch import messages_target
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
+from litellm.proxy.alerting_endpoints.alerts import router as alerts_router
 from litellm.proxy.alerting_endpoints.model_deprecation_alerts import (
     router as model_deprecation_alerts_router,
 )
@@ -624,7 +624,6 @@ from litellm.proxy.common_utils.scheduled_job_stagger import (
     apply_scheduled_job_stagger,
     attach_job_timing_logger,
     parse_stagger_settings,
-    stagger_trigger,
 )
 from litellm.proxy.common_utils.slow_gc_logger import log_slow_gc_passes
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
@@ -678,7 +677,10 @@ from litellm.proxy.container_endpoints.endpoints import router as container_rout
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
-from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+    SPEND_LOG_RETENTION_JOB,
+    SPEND_LOG_SIZE_CHECK_JOB,
+)
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
@@ -704,6 +706,7 @@ from litellm.proxy.db.request_error_tracking import (
     flush_request_errors,
     request_error_accumulator,
 )
+from litellm.proxy.db.scheduled_job_runs import JobScheduler, register_poll
 from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
 from litellm.proxy.discovery_endpoints import (
     agent_skills_discovery_router,
@@ -1005,6 +1008,8 @@ from litellm.proxy.spend_tracking.background_interaction_settlement import (
     install_background_interaction_settlement,
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
+    BudgetCounter,
+    customer_window_counters,
     get_budget_window_start,
     release_unbound_budget_reservation,
     stamp_budget_reservation_actual_cost,
@@ -1127,6 +1132,7 @@ from litellm.types.llms.openai import (
     ResponseInProgressEvent,
     ResponsesAPIResponse,
 )
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds, CustomerScopeAuth
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -1217,7 +1223,7 @@ try:
 except Exception:
     # when using litellm docker image
     try:
-        import enterprise
+        from litellm import enterprise
     except Exception:
         pass
 
@@ -1600,7 +1606,7 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
     if prisma_client is None:
         resources.push_async_callback(client.aclose)
     await client.connect()
-    return client.writer_db
+    return client.writer_db  # pyright: ignore[reportReturnType]  # PrismaWrapper forwards query_raw via __getattr__
 
 
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
@@ -2998,6 +3004,7 @@ _ROUTE_MAX_REQUEST_SIZE_MB: Final[Mapping[tuple[str, str], float]] = MappingProx
         ("POST", "/claude-code/plugins/upload"): 11,
         ("POST", "/skill-hub/skills/upload"): 11,
         ("PUT", "/skill-hub/skills/{name}/upload"): 11,
+        ("PUT", "/skill-hub/submissions/{submission_id}/upload"): 11,
     }
 )
 
@@ -3422,7 +3429,7 @@ def fail_closed_budget_enforcement_enabled() -> bool:
     return _fail_closed_budget_enforcement()
 
 
-def _raise_budget_unverifiable(counter_key: str) -> None:
+def _raise_budget_unverifiable(counter_key: str) -> NoReturn:
     verbose_proxy_logger.warning(
         "fail_closed_budget_enforcement: rejecting request — spend for %s could "
         "not be verified against Redis or the database",
@@ -3434,7 +3441,7 @@ def _raise_budget_unverifiable(counter_key: str) -> None:
             "error": (
                 "Budget enforcement unavailable: current spend could not be "
                 "verified against Redis or the database, and "
-                "fail_closed_budget_enforcement is enabled, so the request was "
+                "an authoritative budget balance is required, so the request was "
                 "rejected to avoid exceeding the configured budget. Retry shortly."
             )
         },
@@ -3450,6 +3457,8 @@ async def get_current_spend(
     window_duration: str | None = None,
     window_start: datetime | None = None,
     fallback_authoritative: bool = False,
+    *,
+    require_authoritative_window: bool = False,
 ) -> float:
     """
     Read current spend from the cross-pod spend counter.
@@ -3480,7 +3489,16 @@ async def get_current_spend(
     and cached in-process for a few seconds, so a persistently stale counter
     drives at most one read per counter per window rather than one per request.
     """
-    current, verified = await _read_spend_counter_estimate(counter_key=counter_key, fallback_spend=fallback_spend)
+    current, verified = (
+        (
+            await _read_authoritative_window_spend(
+                counter_key, window_entity_type, window_entity_id, window_duration, window_start
+            ),
+            True,
+        )
+        if require_authoritative_window
+        else await _read_spend_counter_estimate(counter_key=counter_key, fallback_spend=fallback_spend)
+    )
     if fallback_authoritative:
         verified = True
 
@@ -3648,6 +3666,30 @@ async def read_spend_counter_cache_value(counter_key: str) -> tuple[float | None
     return (float(value) if value is not None else None), authoritative
 
 
+async def _read_authoritative_window_spend(
+    counter_key: str,
+    entity_type: str | None,
+    entity_id: str | None,
+    window_duration: str | None,
+    window_start: datetime | None,
+) -> float:
+    if entity_type is None or entity_id is None or window_start is None:
+        raise ValueError("Authoritative window reads require the window entity and start")
+    window_spend: Final = await SpendCounterReseed.coalesced_window(
+        prisma_client=prisma_client,
+        spend_counter_store=spend_counter_store,
+        counter_key=counter_key,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        window_duration=window_duration,
+        window_start=window_start,
+        require_authoritative=True,
+    )
+    if window_spend is None:
+        _raise_budget_unverifiable(counter_key)
+    return window_spend
+
+
 async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) -> tuple[float, bool]:
     """Return (spend, authoritative). ``authoritative`` is True when the value
     came from Redis or a fresh DB read (cross-pod truth), False when it came
@@ -3684,6 +3726,7 @@ async def increment_spend_counters(
     project_id: str | None = None,
     committed_spend_scope: EntitySpendCounterKeys | None = None,
     windows_from_ledger: bool = False,
+    customer_counters: Sequence[BudgetCounter] = (),
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3706,7 +3749,8 @@ async def increment_spend_counters(
             tags=tags,
             model_access_groups=model_access_groups,
             project_id=project_id,
-        ),
+        )
+        | frozenset(counter.counter_key for counter in customer_counters),
     ):
         await _increment_spend_counters_batched(
             token=token,
@@ -3722,6 +3766,7 @@ async def increment_spend_counters(
             project_id=project_id,
             committed_spend_scope=committed_spend_scope,
             windows_from_ledger=windows_from_ledger,
+            customer_counters=customer_counters,
         )
 
 
@@ -3751,7 +3796,44 @@ def _finish_pending_read(absent_key: str, pending_read: str, remember_absent: bo
     user_api_key_cache.budget_windows_absent_cache.delete_cache(absent_key)
 
 
-async def accounting_window_keys(token: str | None, team_id: str | None) -> tuple[Mapping[str, object], ...]:
+async def customer_accounting_counters(
+    ids: CustomerHierarchyIds | None,
+    admitted_scopes: tuple[CustomerScopeAuth, ...] | None = None,
+) -> tuple[BudgetCounter, ...]:
+    if ids is None:
+        return ()
+    from itertools import chain
+
+    from litellm.proxy.auth.customer_hierarchy_auth import get_customer_scopes_for_accounting
+
+    try:
+        scopes: Final = (
+            admitted_scopes
+            if admitted_scopes is not None
+            else (
+                await get_customer_scopes_for_accounting(ids, prisma_client, user_api_key_cache)
+                if prisma_client is not None
+                else ()
+            )
+        )
+    except Exception:
+        logging.getLogger(verbose_proxy_logger.name).exception(
+            "Unable to load customer budget windows for spend accounting"
+        )
+        return ()
+    now: Final = datetime.now(timezone.utc)
+    return tuple(
+        chain.from_iterable(
+            customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now) for scope in scopes
+        )
+    )
+
+
+async def accounting_window_keys(
+    token: str | None,
+    team_id: str | None,
+    customer_counters: Sequence[BudgetCounter] = (),
+) -> tuple[Mapping[str, object], ...]:
     scopes: Final = tuple(
         (entity_type, entity_id, cache_key)
         for entity_type, entity_id, cache_key in (
@@ -3768,7 +3850,16 @@ async def accounting_window_keys(token: str | None, team_id: str | None) -> tupl
     )
     from itertools import chain
 
-    return tuple(chain.from_iterable(snapshots))
+    return tuple(chain.from_iterable(snapshots)) + tuple(
+        {
+            "entity_type": counter.entity_type,
+            "entity_id": counter.entity_id,
+            "window_duration": counter.window_duration,
+            "window_start": counter.window_start.isoformat(),
+        }
+        for counter in customer_counters
+        if counter.window_start is not None
+    )
 
 
 async def _accounting_scope_windows(
@@ -3838,6 +3929,7 @@ async def _increment_spend_counters_batched(
     project_id: str | None = None,
     committed_spend_scope: EntitySpendCounterKeys | None = None,
     windows_from_ledger: bool = False,
+    customer_counters: Sequence[BudgetCounter] = (),
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
     the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
@@ -3862,25 +3954,22 @@ async def _increment_spend_counters_batched(
 
     cost: Final[float] = response_cost
 
-    async def _window_increment(
-        entity_type: Litellm_EntityType, entity_id: str, window: object
+    async def _resolved_window_increment(
+        entity_type: Litellm_EntityType,
+        entity_id: str,
+        window_counter: str,
+        duration: str,
+        window_start: datetime | None,
+        window_reset_at: datetime | str | None,
     ) -> PendingSpendIncrement | None:
-        duration: Final = (
-            window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
-        )
-        window_reset_at: Final = (
-            window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
-        )
-        window_counter: Final = (
-            key_window_counter(entity_id, str(duration))
-            if entity_type is Litellm_EntityType.KEY
-            else team_window_counter(entity_id, str(duration))
-        )
-        window_start: Final = get_budget_window_start(window)
         pending_window: Final = (
             await _prepare_window_spend_counter_increment(
                 counter_key=window_counter,
-                entity_type=entity_type.value.capitalize(),
+                entity_type=(
+                    entity_type.value.capitalize()
+                    if entity_type in (Litellm_EntityType.KEY, Litellm_EntityType.TEAM)
+                    else entity_type.value
+                ),
                 entity_id=entity_id,
                 window_duration=duration,
                 window_start=window_start,
@@ -3900,6 +3989,42 @@ async def _increment_spend_counters_batched(
                 request_started_at=request_started_at,
             )
         return pending_window
+
+    async def _window_increment(
+        entity_type: Litellm_EntityType, entity_id: str, window: object
+    ) -> PendingSpendIncrement | None:
+        duration: Final = (
+            window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
+        )
+        window_reset_at: Final = (
+            window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
+        )
+        window_counter: Final = (
+            key_window_counter(entity_id, str(duration))
+            if entity_type is Litellm_EntityType.KEY
+            else team_window_counter(entity_id, str(duration))
+        )
+        return await _resolved_window_increment(
+            entity_type, entity_id, window_counter, duration, get_budget_window_start(window), window_reset_at
+        )
+
+    async def _customer_windows() -> tuple[PendingSpendIncrement | BaseException, ...]:
+        pending: Final = await asyncio.gather(
+            *(
+                _resolved_window_increment(
+                    Litellm_EntityType(counter.entity_type),
+                    counter.entity_id,
+                    counter.counter_key,
+                    counter.window_duration,
+                    counter.window_start,
+                    counter.reset_at,
+                )
+                for counter in customer_counters
+                if counter.window_duration is not None
+            ),
+            return_exceptions=True,
+        )
+        return tuple(item for item in pending if item is not None)
 
     async def _window_increments(
         entity_type: Litellm_EntityType, entity_id: str, budget_limits: object
@@ -4000,6 +4125,7 @@ async def _increment_spend_counters_batched(
     scope_coros: Final = tuple(
         coro
         for coro in (
+            _customer_windows() if customer_counters else None,
             _key_scope(token) if token is not None else None,
             _team_scope(team_id) if team_id is not None else None,
             _team_member_scope(user_id, team_id) if user_id is not None and team_id is not None else None,
@@ -5755,7 +5881,6 @@ def should_load_db_object(object_type: str | SupportedDBObjectType) -> bool:
 _CONFIG_PERSISTED_SECTIONS: Final = ("general_settings", "router_settings", "litellm_settings")
 _CONFIG_UNMANAGED_EXCLUSIONS: Final = frozenset(("environment_variables", "model_list"))
 _CONFIG_SECTION_VALUES: Final = TypeAdapter(Mapping[str, JsonValue])
-_CONFIG_SECTION_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))"
 
 
 class _ConfigParamWhere(TypedDict):
@@ -5863,6 +5988,16 @@ def _reload_settings_store(section: Section, store: SettingsStore, section_confi
         store["pass_through_endpoints"] = serving_pass_throughs
 
 
+def _clear_db_settings_beside_pass_through_endpoints(section: Section, store: SettingsStore) -> None:
+    stored_pass_throughs: Final = store.db_value("pass_through_endpoints")
+    store.apply_db_row(
+        section,
+        MappingProxyType({"pass_through_endpoints": stored_pass_throughs})
+        if isinstance(stored_pass_throughs, list)
+        else _EMPTY_SETTINGS_MAPPING,
+    )
+
+
 def _general_settings_row_is_readable(row: _ConfigParamValueRow | None) -> bool:
     return row is None or row.param_value is None or isinstance(row.param_value, Mapping)
 
@@ -5917,6 +6052,28 @@ def _wants_size_check_job(settings: Mapping[str, object]) -> bool:
 
 def _wants_cleanup_jobs(settings: Mapping[str, object]) -> bool:
     return _wants_retention_job(settings) or _wants_size_check_job(settings)
+
+
+_SPEND_LOG_CLEANUP_POLLS: Final = (
+    (_SPEND_LOG_CLEANUP_JOB_ID, _wants_retention_job, SPEND_LOG_RETENTION_JOB),
+    (_SPEND_LOG_SIZE_CHECK_JOB_ID, _wants_size_check_job, SPEND_LOG_SIZE_CHECK_JOB),
+)
+
+
+def _register_spend_log_cleanup_jobs(
+    job_scheduler: JobScheduler, db: PrismaClient | None, settings: Mapping[str, object]
+) -> None:
+    """Poll LiteLLM_ScheduledJobRun for each cleanup job the settings ask for. Every pod polls, one claims each run."""
+    for job_id, wanted, job in _SPEND_LOG_CLEANUP_POLLS:
+        register_poll(
+            job_scheduler,
+            db,
+            job_id,
+            job,
+            wanted=wanted(settings),
+            poll_seconds=SCHEDULED_JOB_POLL_INTERVAL_SECONDS,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
 
 
 @lru_cache(maxsize=4096)
@@ -6308,7 +6465,7 @@ class ProxyConfig:
         prisma_client: PrismaClient,
     ) -> Mapping[str, JsonValue] | None:
         async with prisma_client.tx() as tx:
-            await tx.query_raw(_CONFIG_SECTION_LOCK_SQL, section_name)
+            await tx.query_raw(CONFIG_PARAM_LOCK_SQL, section_name)
             config_table: Final = cast("TableActions[_ConfigParamRow]", tx.litellm_config)
             config_where: Final[_ConfigParamWhere] = {"param_name": section_name}
             existing_row: Final[_ConfigParamRow | None] = await config_table.find_first(where=config_where)
@@ -6691,7 +6848,7 @@ class ProxyConfig:
             )
         else:
             for section, store in self._settings_stores.items():
-                store.apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
+                _clear_db_settings_beside_pass_through_endpoints(section, store)
 
         config = self._config_with_resolved_settings(config)
 
@@ -7064,7 +7221,7 @@ class ProxyConfig:
                 elif key == "priority_reservation_settings":
                     from litellm.types.utils import PriorityReservationSettings
 
-                    litellm.priority_reservation_settings = PriorityReservationSettings(**value)
+                    litellm.priority_reservation_settings = PriorityReservationSettings.model_validate(value)
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
                         value=value,
@@ -8496,97 +8653,10 @@ class ProxyConfig:
             )
 
     async def _reschedule_spend_log_cleanup_job(self):
-        """
-        Reschedule the spend log cleanup job based on current general_settings.
-        This is called when maximum_spend_logs_retention_period is updated dynamically.
-        If the retention period is None, the job will be removed.
-        """
-        global scheduler, general_settings, prisma_client
+        """Add or remove the cleanup polls when the settings that ask for them change."""
         if scheduler is None:
             return
-
-        from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
-            SpendLogCleanup,
-        )
-
-        if not _wants_retention_job(general_settings):
-            if scheduler.get_job(_SPEND_LOG_CLEANUP_JOB_ID) is not None:
-                scheduler.remove_job(_SPEND_LOG_CLEANUP_JOB_ID)
-                verbose_proxy_logger.info("Removed existing spend log cleanup job")
-        else:
-            trigger: Final = self._spend_log_cleanup_trigger()
-            if trigger is not None:
-                scheduler.add_job(
-                    SpendLogCleanup().cleanup_old_spend_logs,
-                    trigger,
-                    args=[prisma_client],
-                    id=_SPEND_LOG_CLEANUP_JOB_ID,
-                    replace_existing=True,
-                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                )
-                verbose_proxy_logger.info("Spend log cleanup rescheduled with trigger: %s", trigger)
-
-        if not _wants_size_check_job(general_settings):  # pyright: ignore[reportUnknownArgumentType]  # general_settings is an untyped module dict
-            if scheduler.get_job(_SPEND_LOG_SIZE_CHECK_JOB_ID) is not None:  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
-                scheduler.remove_job(_SPEND_LOG_SIZE_CHECK_JOB_ID)  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
-                verbose_proxy_logger.info("Removed existing spend log size check job")
-            return
-        size_trigger: Final = self._spend_log_size_check_trigger()
-        if size_trigger is None:
-            return
-        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
-            SpendLogCleanup().cleanup_spend_logs_by_size,
-            size_trigger,
-            args=[prisma_client],
-            id=_SPEND_LOG_SIZE_CHECK_JOB_ID,
-            replace_existing=True,
-            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-        )
-        verbose_proxy_logger.info("Spend log size check rescheduled with trigger: %s", size_trigger)
-
-    def _spend_log_size_check_trigger(self) -> object | None:
-        return self._staggered_interval_trigger(
-            _SPEND_LOG_SIZE_CHECK_JOB_ID,
-            "maximum_spend_logs_size_check_interval",
-            general_settings.get("maximum_spend_logs_size_check_interval", SPEND_LOG_SIZE_CHECK_INTERVAL),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # general_settings is an untyped module dict
-        )
-
-    @staticmethod
-    def _staggered_interval_trigger(job_id: str, setting_name: str, interval: object) -> object | None:
-        if not isinstance(interval, str):
-            verbose_proxy_logger.error("Invalid %s value: %r", setting_name, interval)
-            return None
-        # this runs against a started scheduler, which the startup stagger sweep
-        # cannot reach, so the offset is applied here or the job reconverges across
-        # replicas the first time an admin edits the settings
-        try:
-            interval_seconds: Final = duration_in_seconds(interval)
-            return stagger_trigger(
-                job_id=job_id,
-                trigger=IntervalTrigger(seconds=interval_seconds),
-                period_seconds=interval_seconds,
-                settings=parse_stagger_settings(general_settings),  # pyright: ignore[reportUnknownArgumentType]  # general_settings is an untyped module dict
-            )
-        except (ValueError, OverflowError):
-            verbose_proxy_logger.error("Invalid %s value: %r", setting_name, interval)
-            return None
-
-    def _spend_log_cleanup_trigger(self) -> object | None:
-        cleanup_cron: Final[object] = general_settings.get("maximum_spend_logs_cleanup_cron")
-        if cleanup_cron:
-            from apscheduler.triggers.cron import CronTrigger
-
-            try:
-                cron_trigger: Final[BaseTrigger] = CronTrigger.from_crontab(cleanup_cron)
-            except (ValueError, TypeError, AttributeError):
-                verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
-                return None
-            return cron_trigger
-        return self._staggered_interval_trigger(
-            _SPEND_LOG_CLEANUP_JOB_ID,
-            "maximum_spend_logs_retention_interval",
-            general_settings.get("maximum_spend_logs_retention_interval", "1d"),
-        )
+        _register_spend_log_cleanup_jobs(scheduler, prisma_client, general_settings)  # pyright: ignore[reportUnknownArgumentType, reportArgumentType]  # apscheduler is untyped
 
     async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | str | None) -> None:
         global general_settings
@@ -11990,6 +12060,53 @@ class ProxyStartupEvent:
             read_general_settings=_current_general_settings,
         )
 
+        from litellm.proxy.spend_tracking.performance_alerts import RUN_INTERVAL, run_performance_alerts
+        from litellm.repositories.performance_alert_repository import PerformanceAlertRepository
+
+        async def run_performance_alerts_job() -> None:
+            if _current_general_settings().get("performance_alerts_enabled", True) is True:
+                await run_performance_alerts(PerformanceAlertRepository(prisma_client, enterprise=premium_user is True))
+
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler does not provide typed job methods
+            run_performance_alerts_job,
+            "interval",
+            seconds=RUN_INTERVAL.total_seconds(),
+            id="performance_alerts",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
+        async def send_performance_alert_summaries() -> None:
+            from litellm.integrations.performance_alert_notifications import PerformanceAlertNotifier
+            from litellm.repositories.alert_repository import AlertRepository
+
+            slack: Final = proxy_logging_obj.slack_alerting_instance
+            email_connected: Final = bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_SENDER_EMAIL"))
+            if not email_connected and not slack.performance_alert_webhooks():
+                return
+            if _current_general_settings().get("performance_alerts_enabled", True) is not True:
+                return
+            if not (
+                await PerformanceAlertRepository(prisma_client, enterprise=premium_user is True).monitoring()
+            ).enabled:
+                return
+            await PerformanceAlertNotifier(
+                ConfigRepository(prisma_client, use_writer=True), AlertRepository(prisma_client)
+            ).run(slack)
+
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler does not provide typed job methods
+            send_performance_alert_summaries,
+            "interval",
+            minutes=5,
+            next_run_time=datetime.now(timezone.utc),
+            id="performance_alert_summaries",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
         ### PTU DAILY ROLLUP ###
         from litellm.proxy.spend_tracking.ptu_feature_flag import (
             is_ptu_cost_attribution_enabled,
@@ -12034,70 +12151,7 @@ class ProxyStartupEvent:
 
         ### SPEND LOG CLEANUP ###
         cleanup_settings: Final = _current_general_settings()
-        if _wants_size_check_job(cleanup_settings):
-            size_check_interval: Final = cleanup_settings.get(
-                "maximum_spend_logs_size_check_interval", SPEND_LOG_SIZE_CHECK_INTERVAL
-            )
-            try:
-                if not isinstance(size_check_interval, str):
-                    raise TypeError(size_check_interval)
-                size_check_seconds: Final = duration_in_seconds(size_check_interval)
-                scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
-                    SpendLogCleanup().cleanup_spend_logs_by_size,
-                    "interval",
-                    seconds=size_check_seconds + random.randint(0, 60),
-                    args=[prisma_client],
-                    id=_SPEND_LOG_SIZE_CHECK_JOB_ID,
-                    replace_existing=True,
-                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                )
-                verbose_proxy_logger.info("Spend log size check scheduled every %s", size_check_interval)
-            except (TypeError, ValueError, OverflowError):
-                verbose_proxy_logger.error(
-                    "Invalid maximum_spend_logs_size_check_interval value: %r", size_check_interval
-                )
-        if _wants_retention_job(cleanup_settings):
-            spend_log_cleanup: Final = SpendLogCleanup()
-            cleanup_cron: Final = cleanup_settings.get("maximum_spend_logs_cleanup_cron")
-
-            if cleanup_cron and not isinstance(cleanup_cron, str):
-                verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %r", cleanup_cron)
-            elif isinstance(cleanup_cron, str) and cleanup_cron:
-                from apscheduler.triggers.cron import CronTrigger
-
-                try:
-                    cron_trigger: Final = CronTrigger.from_crontab(cleanup_cron)
-                    scheduler.add_job(
-                        spend_log_cleanup.cleanup_old_spend_logs,
-                        cron_trigger,
-                        args=[prisma_client],
-                        id=_SPEND_LOG_CLEANUP_JOB_ID,
-                        replace_existing=True,
-                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                    )
-                    verbose_proxy_logger.info("Spend log cleanup scheduled with cron: %s", cleanup_cron)
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
-            else:
-                # Interval-based scheduling (existing behavior)
-                retention_interval: Final = cleanup_settings.get("maximum_spend_logs_retention_interval", "1d")
-                try:
-                    if not isinstance(retention_interval, str):
-                        raise ValueError(retention_interval)
-                    interval_seconds: Final = duration_in_seconds(retention_interval)
-                    scheduler.add_job(
-                        spend_log_cleanup.cleanup_old_spend_logs,
-                        "interval",
-                        seconds=interval_seconds + random.randint(0, 60),
-                        args=[prisma_client],
-                        id=_SPEND_LOG_CLEANUP_JOB_ID,
-                        replace_existing=True,
-                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                    )
-                except (ValueError, OverflowError):
-                    verbose_proxy_logger.error(
-                        "Invalid maximum_spend_logs_retention_interval value: %r", retention_interval
-                    )
+        _register_spend_log_cleanup_jobs(scheduler, prisma_client, cleanup_settings)  # pyright: ignore[reportUnknownArgumentType, reportArgumentType]  # apscheduler is untyped
         if _wants_cleanup_jobs(cleanup_settings):
             proxy_config.record_cleanup_schedule_attempt(cleanup_settings)
         ### CHECK BATCH COST ###
@@ -15294,7 +15348,7 @@ from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCoun
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.config_repository import CONFIG_PARAM_LOCK_SQL, ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
@@ -20111,6 +20165,7 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
     response: Final = await generate_key_helper_fn(
         llm_router=llm_router,
         request_type="key",
+        actor=None,
         **{
             "user_role": user_obj.user_role,
             "duration": LITELLM_UI_SESSION_DURATION,
@@ -22791,6 +22846,7 @@ app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
 app.include_router(model_deprecation_alerts_router)
+app.include_router(alerts_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)

@@ -41,11 +41,13 @@ from litellm._internal_context import internal_sub_call
 from litellm._logging import redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import (
     aload_beta_headers_config,
-    resolve_beta_provider,
     update_headers_with_filtered_beta,
 )
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.files.types import FileContentStreamingResult
+from litellm.integrations.custom_logger_v2.enums import Hook
+from litellm.integrations.custom_logger_v2.legacy import Admit, hook_subscribers
+from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_refusal import (
     called_tool_names,
@@ -82,7 +84,7 @@ from litellm.litellm_core_utils.realtime_errors import (
 )
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
+from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -563,6 +565,14 @@ def _run_responses_deployment_hook(
             "custom_llm_provider": custom_llm_provider,
         },
         CallTypes.responses.value,
+        include_v2=True,
+    )
+
+
+def _has_v2_deployment_hook() -> bool:
+    return (
+        Hook.pre_deployment_call in CustomLoggerV2.declared_hooks
+        and hook_subscribers(Hook.pre_deployment_call, litellm.callbacks, admit=Admit.every_logger).has_v2
     )
 
 
@@ -2633,17 +2643,10 @@ class BaseLLMHTTPHandler:
             litellm_params.get("additional_drop_params") or (),
             anthropic_messages_optional_request_params,
         )
-        affinity_api_base: Final = (
-            AnthropicModelInfo.get_api_base(api_base) if custom_llm_provider == "anthropic" else api_base
-        )
-        takes_another_beta_row: Final = (
-            resolve_beta_provider(custom_llm_provider, affinity_api_base) != custom_llm_provider
-        )
-        provider_filters_betas: Final = anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
-        filters_beta_headers: Final = provider_filters_betas or takes_another_beta_row
+        filters_beta_headers: Final = anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
         if request_params.get("safeguards") is not None and filters_beta_headers:
             await aload_beta_headers_config()
-        default_affinity_header: Final = get_provider_affinity_header(affinity_api_base)
+        default_affinity_header: Final = get_provider_affinity_header(api_base)
         (
             headers,
             api_base,
@@ -2666,8 +2669,6 @@ class BaseLLMHTTPHandler:
             headers = update_headers_with_filtered_beta(
                 headers=headers,
                 provider=custom_llm_provider,
-                api_base=affinity_api_base,
-                unlisted="drop" if provider_filters_betas else "forward",
                 keep=anthropic_messages_provider_config.model_specific_anthropic_betas(model, litellm_params),
             )
 
@@ -2950,7 +2951,7 @@ class BaseLLMHTTPHandler:
         dict[str, object],
         GenericLiteLLMParams,
     ]:
-        if not _has_pre_call_deployment_hook(logging_obj):
+        if not _has_pre_call_deployment_hook(logging_obj) and not _has_v2_deployment_hook():
             return (
                 model,
                 input,
@@ -6198,6 +6199,7 @@ class BaseLLMHTTPHandler:
                 **kwargs_for_followup,
             }
         )
+        logging_obj.record_served_agentic_follow_up()
 
         if callback is not None:
             try:
@@ -7891,14 +7893,16 @@ class BaseLLMHTTPHandler:
                 provider_config=image_generation_provider_config,
             )
 
-        model_response: Final[ImageResponse] = image_generation_provider_config.transform_image_generation_response(
+        model_response: Final[
+            ImageResponse
+        ] = await image_generation_provider_config.async_transform_image_generation_response(
             model=model,
             raw_response=response,
             model_response=litellm.ImageResponse(),
             logging_obj=logging_obj,
             request_data=data,
-            optional_params=image_generation_optional_request_params,
-            litellm_params=dict(litellm_params),
+            optional_params=image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+            litellm_params=dict(litellm_params),  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
             encoding=None,
         )
         set_provider_response_headers_in_hidden_params(model_response, response.headers)

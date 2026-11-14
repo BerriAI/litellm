@@ -6,14 +6,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast
 
 from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+from litellm.constants import FAILED_PROMPT_TOKEN_ESTIMATE_KEY, KUBERNETES_POD_ROUTING_KEY
 from litellm.integrations._types.open_inference import (
     OpenInferenceSpanKindValues,
 )
@@ -33,9 +33,11 @@ from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.metadata import flatten_metadata
 from litellm.integrations.otel.model.semconv import LiteLLM, Metric
+from litellm.integrations.otel.model.utils import as_str
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.integrations.otel.routing import routed_model_name, routing_decision_attributes
 from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
@@ -140,6 +142,18 @@ def _response_field(response_obj: object, key: str) -> object:
     return require_attributes(response_obj, _SupportsGet, "get").get(key)
 
 
+def _semconv_response_model(
+    response_obj: object, response_model: object, model_group: str | None, deployment_model: str | None
+) -> object:
+    hidden_params: Final = get_hidden_params(response_obj)
+    provider_model: Final = hidden_params.get("provider_response_model") if hidden_params is not None else None
+    if isinstance(provider_model, str) and provider_model:
+        return provider_model
+    if response_model and response_model == model_group and deployment_model:
+        return deployment_model
+    return response_model
+
+
 def _billed_usage(response_obj: object, call_type: str | None, litellm_params: Mapping[str, object] | None) -> object:
     if not response_obj or is_unbilled_non_inference_call_from_params(call_type, litellm_params, response_obj):
         return None
@@ -152,6 +166,7 @@ class _CacheHitView(TypedDict, total=False):
 
 
 _CACHE_HIT_VIEW: Final = TypeAdapter(_CacheHitView)
+_OPAQUE_VALUE: Final = TypeAdapter(object)
 
 # Dedicated so a slow exporter shutdown cannot starve the shared logging executor.
 _PROVIDER_SHUTDOWN_EXECUTOR: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OtelProviderShutdown")
@@ -166,6 +181,8 @@ HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE: Final = "http.response.status_code"
 HTTP_ROUTE_ATTRIBUTE: Final = "http.route"
 URL_PATH_ATTRIBUTE: Final = "url.path"
 PREPROCESSING_DURATION_MS_ATTRIBUTE: Final = "litellm.preprocessing.duration_ms"
+USAGE_PROVIDER_STATUS_ATTRIBUTE: Final = "litellm.usage.provider_status"
+ESTIMATED_INPUT_TOKENS_ATTRIBUTE: Final = "litellm.usage.estimated_input_tokens"
 TEAM_METADATA_ATTRIBUTE: Final = "litellm.team.metadata"
 MODEL_GROUP_ATTRIBUTE: Final = "litellm.model_group"
 PROVIDER_MODEL_ATTRIBUTE: Final = "litellm.provider.model"
@@ -440,6 +457,8 @@ class OpenTelemetryConfig:
 
 
 class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
+    wants_failed_prompt_token_estimate: ClassVar[bool] = True
+
     def __init__(
         self,
         config: OpenTelemetryConfig | None = None,
@@ -2225,6 +2244,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # Always create if no parent span exists (backward compatibility)
         # OR if USE_OTEL_LITELLM_REQUEST_SPAN is explicitly enabled
         should_create_primary_span: Final = parent_otel_span is None or get_secret_bool("USE_OTEL_LITELLM_REQUEST_SPAN")
+        failure_kwargs: Final = _JSON_OBJECT.validate_python(kwargs)
 
         span = None
         if should_create_primary_span:
@@ -2239,6 +2259,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 span_kwargs["kind"] = self.span_kind.CLIENT
             span = otel_tracer.start_span(**span_kwargs)
             self.set_attributes(span, kwargs, response_obj)
+            self._set_failure_usage_attributes(span, failure_kwargs)
 
             # Record exception information using OTEL standard method
             span_error_message: Final = self._record_exception_on_span(span=span, kwargs=kwargs)
@@ -2252,6 +2273,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # Note: parent_otel_span is guaranteed to be not None here
             if parent_otel_span is not None and parent_otel_span.is_recording():
                 self.set_attributes(parent_otel_span, kwargs, response_obj)
+                self._set_failure_usage_attributes(parent_otel_span, failure_kwargs)
                 parent_error_message: Final = self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
                 parent_otel_span.set_status(Status(StatusCode.ERROR, parent_error_message))
 
@@ -2270,6 +2292,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             and parent_otel_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
         ):
             parent_otel_span.end(end_time=self._to_ns(end_time))
+
+    def _set_failure_usage_attributes(self, span: Span, kwargs: Mapping[str, object]) -> None:
+        if FAILED_PROMPT_TOKEN_ESTIMATE_KEY not in kwargs:
+            return
+        self.safe_set_attribute(span=span, key=USAGE_PROVIDER_STATUS_ATTRIBUTE, value="unknown")
+        estimate: Final = kwargs[FAILED_PROMPT_TOKEN_ESTIMATE_KEY]
+        if isinstance(estimate, int):
+            self.safe_set_attribute(span=span, key=ESTIMATED_INPUT_TOKENS_ATTRIBUTE, value=estimate)
 
     def _record_exception_on_span(self, span: Span, kwargs: _FailureKwargsView) -> str | None:
         """
@@ -2521,11 +2551,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
 
             # The name of the LLM a request is being made to
-            if kwargs.get("model"):
+            request_model: Final = as_str(_OPAQUE_VALUE.validate_python(kwargs.get("model")))
+            if request_model:
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.LLM_REQUEST_MODEL.value,
-                    value=kwargs.get("model"),
+                    value=request_model,
                 )
 
             # The LLM request type
@@ -2617,10 +2648,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 )
 
             # The model used to generate the response.
-            response_model: Final = routed_model_name(
-                _response_field(response_obj, "model"),
-                standard_logging_payload.get("model_group"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # kwargs is untyped
-                decision,
+            model_group: Final = as_str(standard_logging_payload.get("model_group"))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # kwargs is untyped
+            routed_response_model: Final = routed_model_name(
+                _response_field(response_obj, "model"), model_group, decision
+            )
+            response_model: Final = (
+                _semconv_response_model(response_obj, routed_response_model, model_group, request_model)
+                if self._gen_ai_semconv_latest_experimental
+                else routed_response_model
             )
             if response_model:
                 self.safe_set_attribute(

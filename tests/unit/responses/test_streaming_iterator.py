@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 import websockets.exceptions
+from pydantic import BaseModel, TypeAdapter
 from pydantic_core import PydanticSerializationError
 
 import litellm
@@ -43,6 +44,7 @@ from litellm.types.llms.openai import (
 )
 from contextlib import suppress
 from litellm.responses import streaming_iterator as streaming_module
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import CallTypes
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from types import SimpleNamespace
@@ -86,6 +88,7 @@ def _make_iterator(
     trailing_error: Optional[Exception] = None,
     config: Mock | None = None,
     request_data: dict | None = None,
+    litellm_metadata: dict[str, object] | None = None,
 ) -> ResponsesAPIStreamingIterator:
     async def aiter_bytes():
         for evt in sse_events:
@@ -102,7 +105,7 @@ def _make_iterator(
         model="gpt-4o-mini",
         responses_api_provider_config=config or _mock_config(),
         logging_obj=logging_obj,
-        litellm_metadata={},
+        litellm_metadata=litellm_metadata or {},
         custom_llm_provider="openai",
         request_data=request_data,
     )
@@ -559,6 +562,193 @@ async def test_event_without_a_type_reaches_the_caller_instead_of_ending_the_str
     untyped: Final = await iterator.__anext__()
 
     assert untyped.model_extra == {"note": "hook output without a type"}
+
+
+_REASONING_ITEM_ID: Final = "rs_affinity"
+_MESSAGE_ITEM_ID: Final = "msg_affinity"
+_STREAMED_REASONING_ITEM: Final = {
+    "id": _REASONING_ITEM_ID,
+    "type": "reasoning",
+    "summary": [{"type": "summary_text", "text": "thinking"}],
+    "encrypted_content": "ciphertext",
+}
+_STREAMED_MESSAGE_ITEM: Final = {
+    "id": _MESSAGE_ITEM_ID,
+    "type": "message",
+    "role": "assistant",
+    "status": "completed",
+    "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+}
+_REASONING_SCOPED_EVENT_TYPES: Final = (
+    ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+    "response.reasoning_text.delta",
+    ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+)
+
+
+def _reasoning_response_body(status: str, output: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "id": "resp_affinity",
+        "object": "response",
+        "created_at": 1,
+        "status": status,
+        "model": "gpt-5-mini",
+        "output": output,
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+
+_REASONING_STREAM_EVENTS: Final = [
+    _sse_event(
+        {"type": "response.created", "sequence_number": 0, "response": _reasoning_response_body("in_progress", [])}
+    ),
+    _sse_event(
+        {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item": {"id": _REASONING_ITEM_ID, "type": "reasoning", "summary": []},
+        }
+    ),
+    _sse_event(
+        {
+            "type": "response.content_part.added",
+            "sequence_number": 2,
+            "item_id": _REASONING_ITEM_ID,
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "reasoning_text", "text": ""},
+        }
+    ),
+    _sse_event(
+        {
+            "type": "response.reasoning_text.delta",
+            "sequence_number": 3,
+            "item_id": _REASONING_ITEM_ID,
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "thinking",
+        }
+    ),
+    _sse_event(
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "sequence_number": 4,
+            "item_id": _REASONING_ITEM_ID,
+            "output_index": 0,
+            "summary_index": 0,
+            "delta": "thinking",
+        }
+    ),
+    _sse_event(
+        {"type": "response.output_item.done", "sequence_number": 5, "output_index": 0, "item": _STREAMED_REASONING_ITEM}
+    ),
+    _sse_event(
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 6,
+            "item_id": _MESSAGE_ITEM_ID,
+            "output_index": 1,
+            "content_index": 0,
+            "delta": "ok",
+        }
+    ),
+    _sse_event(
+        {"type": "response.output_item.done", "sequence_number": 7, "output_index": 1, "item": _STREAMED_MESSAGE_ITEM}
+    ),
+    _sse_event(
+        {
+            "type": "response.completed",
+            "sequence_number": 8,
+            "response": _reasoning_response_body("completed", [_STREAMED_REASONING_ITEM, _STREAMED_MESSAGE_ITEM]),
+        }
+    ),
+]
+
+
+_ITEM_RECORD: Final = TypeAdapter(dict[str, object])
+
+
+def _item_record(item: object) -> dict[str, object]:
+    return _ITEM_RECORD.validate_python(item.model_dump(exclude_none=True) if isinstance(item, BaseModel) else item)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "litellm_metadata, origin",
+    [
+        ({"encrypted_content_affinity_enabled": True, "model_info": {"id": "dep-1"}}, "dep-1"),
+        ({"encrypted_content_affinity_enabled": False, "model_info": {"id": "dep-1"}}, None),
+        ({"encrypted_content_affinity_enabled": True}, None),
+    ],
+    ids=["affinity-on", "affinity-off", "no-model-id"],
+)
+async def test_streamed_reasoning_item_keeps_one_id_and_replays_as_one_input_item(
+    litellm_metadata: dict[str, object], origin: str | None
+):
+    iterator: Final = _make_iterator(
+        sse_events=_REASONING_STREAM_EVENTS,
+        logging_obj=_logging_obj_stub(),
+        config=OpenAIResponsesAPIConfig(),
+        litellm_metadata=litellm_metadata,
+    )
+
+    events: Final = [event async for event in iterator]
+
+    item_events: Final = [
+        _item_record(event.item)
+        for event in events
+        if event.type in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    ]
+    completed: Final = next(
+        event.response for event in events if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    output_items: Final = [_item_record(item) for item in completed.output]
+    scoped_item_ids: Final = {event.type: event.item_id for event in events if getattr(event, "item_id", None)}
+    expected_reasoning_id: Final = (
+        _REASONING_ITEM_ID
+        if origin is None
+        else ResponsesAPIRequestUtils._build_encrypted_item_id(origin, _REASONING_ITEM_ID)
+    )
+    assert {item["id"] for item in [*item_events, *output_items] if item["type"] == "reasoning"} | {
+        scoped_item_ids[event_type] for event_type in _REASONING_SCOPED_EVENT_TYPES
+    } == {expected_reasoning_id}
+    assert {item["id"] for item in [*item_events, *output_items] if item["type"] == "message"} | {
+        scoped_item_ids[ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA]
+    } == {_MESSAGE_ITEM_ID}
+
+    done_reasoning: Final = next(item for item in reversed(item_events) if item["type"] == "reasoning")
+    completed_reasoning: Final = next(item for item in output_items if item["type"] == "reasoning")
+    assert done_reasoning["encrypted_content"] == completed_reasoning["encrypted_content"]
+    assert ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(
+        str(done_reasoning["encrypted_content"])
+    ) == (origin, "ciphertext")
+
+    replayed: Final = list(
+        {
+            record["id"]: {key: record[key] for key in ("id", "type", "encrypted_content")}
+            for record in (done_reasoning, completed_reasoning)
+        }.values()
+    )
+    assert ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(replayed) == [
+        {"id": _REASONING_ITEM_ID, "type": "reasoning", "encrypted_content": "ciphertext"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_output_item_added_without_an_item_streams_through_under_affinity():
+    iterator: Final = _make_iterator(
+        sse_events=[
+            _sse_event({"type": "response.output_item.added", "sequence_number": 0, "output_index": 0, "item": None})
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=OpenAIResponsesAPIConfig(),
+        litellm_metadata={"encrypted_content_affinity_enabled": True, "model_info": {"id": "dep-1"}},
+    )
+
+    added: Final = await iterator.__anext__()
+
+    assert (added.type, added.output_index, added.item) == (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, 0, None)
 
 
 @pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, Optional, TypeVar, cast
 
 import httpx
 from httpx import Response
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.constants import AWS_ERROR_TYPE_HEADER
@@ -23,7 +23,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     bedrock_invoke_guardrail_headers,
 )
 from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
-from litellm.types.utils import ModelResponseStream
+from litellm.types.utils import Embedding, EmbeddingResponse, ModelResponseStream, PromptTokensDetailsWrapper, Usage
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
@@ -31,6 +31,7 @@ from ..common_utils import (
     BedrockError,
     BedrockEventStreamDecoderBase,
     BedrockModelInfo,
+    served_service_tier,
 )
 from ..request_metadata import (
     BEDROCK_REQUEST_METADATA_HEADER,
@@ -59,7 +60,6 @@ _BEDROCK_INVOKE_ACTIONS: Final = frozenset({"invoke", "invoke-with-response-stre
 _BEDROCK_INVOKE_GUARDRAIL_HEADERS: Final = frozenset(
     {"x-amzn-bedrock-guardrailidentifier", "x-amzn-bedrock-guardrailversion", "x-amzn-bedrock-trace"}
 )
-_BEDROCK_SERVICE_TIER_HEADER: Final = "x-amzn-bedrock-service-tier"
 _NO_RESPONSE_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 _TieredResponse: Final = TypeVar("_TieredResponse", bound=BaseModel)
 
@@ -376,11 +376,51 @@ def _invoke_guardrail_trace(httpx_response: Response) -> Mapping[str, object]:
     return {BEDROCK_INVOKE_TRACE_FIELD: reply.get(BEDROCK_INVOKE_TRACE_FIELD)}
 
 
-def _served_service_tier(response_headers: Mapping[str, str]) -> str | None:
-    headers: Final = httpx.Headers(response_headers)
-    if _BEDROCK_SERVICE_TIER_HEADER not in headers:
+class _TitanEmbeddingsByType(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    binary: tuple[int, ...] | None = None
+    floats: tuple[float, ...] | None = Field(default=None, alias="float")
+
+
+class _TitanEmbeddingReply(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    embedding: tuple[float, ...] | None = None
+    embeddings_by_type: _TitanEmbeddingsByType = Field(default=_TitanEmbeddingsByType(), alias="embeddingsByType")
+    input_text_token_count: int = Field(alias="inputTextTokenCount")
+
+    @property
+    def vector(self) -> tuple[float, ...] | None:
+        if self.embedding is not None:
+            return self.embedding
+        if self.embeddings_by_type.floats is not None:
+            return self.embeddings_by_type.floats
+        return self.embeddings_by_type.binary
+
+
+def _invoke_embedding_response(model: str, httpx_response: Response, has_input_image: bool) -> EmbeddingResponse | None:
+    reply: Final = relayed_json_object(httpx_response)
+    if reply is None or reply.keys().isdisjoint(("embedding", "embeddingsByType")):
         return None
-    return headers[_BEDROCK_SERVICE_TIER_HEADER]
+    try:
+        parsed: Final = _TitanEmbeddingReply.model_validate(reply)
+    except ValidationError:
+        return None
+    if parsed.vector is None:
+        return None
+    return EmbeddingResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=parsed.input_text_token_count,
+            completion_tokens=0,
+            total_tokens=parsed.input_text_token_count,
+            prompt_tokens_details=PromptTokensDetailsWrapper(image_count=1, text_tokens=parsed.input_text_token_count)
+            if has_input_image
+            else None,
+        ),
+        data=[Embedding(embedding=list(parsed.vector), index=0, object="embedding")],
+    )
 
 
 def _with_served_service_tier(response: _TieredResponse, service_tier: str | None) -> _TieredResponse:
@@ -574,6 +614,14 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         from litellm.types.utils import LlmProviders, ModelResponse
         from litellm.utils import ProviderConfigManager
 
+        embedding_response: Final = (
+            _invoke_embedding_response(model, httpx_response, has_input_image="inputImage" in request_data)
+            if "invoke" in endpoint
+            else None
+        )
+        if embedding_response is not None:
+            return embedding_response
+
         if "invoke" in endpoint:
             chat_config_model = "invoke/" + model
         elif "converse" in endpoint:
@@ -604,7 +652,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         if "invoke" in endpoint:
             logging_obj.record_native_bedrock_guardrail(_invoke_guardrail_trace(httpx_response))
 
-        return _with_served_service_tier(litellm_model_response, _served_service_tier(httpx_response.headers))
+        return _with_served_service_tier(litellm_model_response, served_service_tier(httpx_response.headers))
 
     def create_stream_collector(
         self,
@@ -617,7 +665,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         return BedrockEventStreamCollector(
             parse_event=self._parse_message_from_event,
             decoder=self._get_event_stream_decoder(model=model, endpoint=endpoint),
-            service_tier=_served_service_tier(response_headers),
+            service_tier=served_service_tier(response_headers),
         )
 
     def _get_event_stream_decoder(self, model: str, endpoint: str) -> Optional["AWSEventStreamDecoder"]:
