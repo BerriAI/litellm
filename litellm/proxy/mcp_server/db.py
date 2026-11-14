@@ -246,6 +246,7 @@ class OAuthCredentialPayload(_OAuthCredentialAccessToken, total=False):
     connected_at: str
     scopes: list[str]
     server_id: str
+    needs_scopes: list[str]
 
 
 OAuthGrantState = Literal["valid", "refreshable", "absent"]
@@ -1922,6 +1923,26 @@ async def get_user_oauth_credential(
     if decoded is None:
         _warn_undecryptable_credential(user_id, server_id)
     return _parse_oauth_payload(decoded)
+
+
+async def record_oauth_scope_refusal(prisma_client: PrismaClient, user_id: str, server_id: str, scope: str) -> None:
+    """Note on the saved grant that the provider refused a call for ``scope``, so the connect page sends the user
+    back to the provider. The next save of the grant drops the note; a grant saved since the read is left alone."""
+    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id)
+    grant: Final = None if row is None else decode_oauth_payload(row.credential_b64)
+    if row is None or grant is None:
+        return
+    waiting: Final = grant.get("needs_scopes", [])
+    refused: Final = tuple(name for name in dict.fromkeys(scope.split() or ("",)) if name not in waiting)
+    if not refused:
+        return
+    await _user_credential_actions(prisma_client).update_many(
+        where={"user_id": user_id, "server_id": server_id, "credential_b64": row.credential_b64},
+        data={
+            "credential_b64": encrypt_value_helper(json.dumps({**grant, "needs_scopes": [*waiting, *refused]})),
+            "updated_at": row.updated_at,
+        },
+    )
 
 
 def _server_user_credential_item(

@@ -2972,7 +2972,7 @@ async def test_connect_flow_retains_step_up_scope_until_the_vendor_grants_it():
     described = await _describe_page(response, scoped_server=server, vendor=vendor)
     assert json.loads(described.body)["requested_scopes"] == ["tools.write"]
     assert json.loads(described.body)["connected"] is False
-    vendor.assert_awaited_once_with("u1", server.server_id, ("tools.write",))
+    vendor.assert_awaited_once_with("u1", server.server_id)
     premature = await _complete_page(response, scoped_server=server, vendor=vendor)
     assert premature.status_code == 400
     vendor.return_value = "present"
@@ -3052,10 +3052,7 @@ async def test_step_up_validates_every_target_before_credential_reads_and_preser
         pending = await describe_connect_flow(_request(cookies=cookies), handle, "u1", vendor, reachable)
         assert json.loads(pending.body)["server_id"] == second.server_id
         assert json.loads(pending.body)["requested_scopes"] == ["second.write"]
-        assert [call.args for call in vendor.await_args_list] == [
-            ("u1", first.server_id, ("first.write",)),
-            ("u1", second.server_id, ("second.write",)),
-        ]
+        assert [call.args for call in vendor.await_args_list] == [("u1", first.server_id), ("u1", second.server_id)]
         vendor.reset_mock()
         wrong_user = await describe_connect_flow(_request(cookies=cookies), handle, "u2", vendor, reachable)
         assert wrong_user.status_code == 403

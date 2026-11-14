@@ -1664,6 +1664,22 @@ def _upstream_failure_suffix(exc: BaseException) -> str:
     return f"\n  upstream exchange: {detail}" if detail else ""
 
 
+async def _note_scope_refusal(server_id: str, user_api_key_auth: UserAPIKeyAuth | None, scope: str) -> None:
+    """Note the provider's scope refusal on the caller's grant, so her next connect goes back to the provider."""
+    from litellm.proxy.mcp_server.db import record_oauth_scope_refusal  # noqa: PLC0415  # circular import
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # circular import
+
+    user_id: Final = user_api_key_auth.user_id if user_api_key_auth is not None else None
+    if not user_id or prisma_client is None:
+        return
+    try:
+        await record_oauth_scope_refusal(prisma_client, user_id, server_id, scope)
+    except Exception as exc:  # noqa: BLE001  # the challenge still goes out when the note cannot be written
+        verbose_logger.warning(
+            "Failed to note the MCP scope refusal for user=%s server=%s (%s)", user_id, server_id, type(exc).__name__
+        )
+
+
 def _obo_retry_applies(server: MCPServer, subject_token: str | None) -> bool:
     """Whether an upstream 401/403 should invalidate the minted credential and retry once.
 
@@ -6987,6 +7003,7 @@ class MCPServerManager:
                     except Exception as e:
                         required_scope: Final = upstream_insufficient_scope(e) if managed_per_user else None
                         if required_scope is not None:
+                            await _note_scope_refusal(mcp_server.server_id, user_api_key_auth, required_scope)
                             raise MCPUpstreamAuthError(
                                 status_code=403,
                                 www_authenticate=None,
