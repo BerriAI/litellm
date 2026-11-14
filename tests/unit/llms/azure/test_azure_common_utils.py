@@ -2213,6 +2213,21 @@ _CHAT_COMPLETION_BODY: Final = {
     [
         (f"{_FOUNDRY_PROJECT_ROOT}/openai/v1", None, f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/chat/completions"),
         (
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/v1?api-version=2025-04-01-preview",
+            None,
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/chat/completions",
+        ),
+        (
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/v1?tenant=example",
+            "2025-04-01-preview",
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/chat/completions?tenant=example",
+        ),
+        (
+            "https://apim.example.com/my-foundry/openai/v1",
+            "none",
+            "https://apim.example.com/my-foundry/openai/v1/chat/completions",
+        ),
+        (
             f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/",
             "2025-04-01-preview",
             f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/chat/completions",
@@ -2227,9 +2242,7 @@ _CHAT_COMPLETION_BODY: Final = {
 def test_chat_on_a_foundry_project_v1_base_sends_no_api_version(
     respx_mock, api_base: str, api_version: str | None, expected_url: str
 ) -> None:
-    route: Final = respx_mock.post(host="r.services.ai.azure.com").mock(
-        return_value=httpx.Response(200, json=_CHAT_COMPLETION_BODY)
-    )
+    route: Final = respx_mock.post().mock(return_value=httpx.Response(200, json=_CHAT_COMPLETION_BODY))
 
     response: Final = litellm.completion(
         model="azure/model-router",
@@ -2241,3 +2254,50 @@ def test_chat_on_a_foundry_project_v1_base_sends_no_api_version(
 
     assert route.calls.last.request.url == httpx.URL(expected_url)
     assert response.choices[0].message.content == "ok"
+
+
+_TEXT_COMPLETION_BODY: Final = {
+    "id": "cmpl-1",
+    "object": "text_completion",
+    "created": 1,
+    "model": "gpt-35-turbo-instruct",
+    "choices": [{"text": "ok", "index": 0, "logprobs": None, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    ("upstream_body", "call"),
+    [
+        (
+            {"text": "ok"},
+            lambda: litellm.transcription(
+                model="azure/whisper",
+                file=("a.wav", b"RIFF", "audio/wav"),
+                api_base=f"{_FOUNDRY_PROJECT_ROOT}/openai/v1",
+                api_key="project-key",
+                api_version="2025-04-01-preview",
+            ).text,
+        ),
+        (
+            _TEXT_COMPLETION_BODY,
+            lambda: litellm.text_completion(
+                model="azure_text/gpt-35-turbo-instruct",
+                prompt="hi",
+                api_base=f"{_FOUNDRY_PROJECT_ROOT}/openai/v1",
+                api_key="project-key",
+                api_version="2025-04-01-preview",
+            )
+            .choices[0]
+            .text,
+        ),
+    ],
+    ids=["transcription", "azure_text"],
+)
+def test_non_chat_calls_on_a_foundry_project_v1_base_reach_azure(
+    respx_mock, upstream_body: dict[str, object], call: Callable[[], str]
+) -> None:
+    respx_mock.post().mock(return_value=httpx.Response(200, json=upstream_body))
+
+    assert call() == "ok"
+
