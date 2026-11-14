@@ -1002,11 +1002,11 @@ def unpack_defs(
                         )
 
                 # Merge defs from the target to capture nested definitions
-                child_defs = {
-                    **active_defs,
-                    **target_schema.get("$defs", {}),
-                    **target_schema.get("definitions", {}),
-                }
+                child_defs = (
+                    {**active_defs, **target_schema.get("$defs", {}), **target_schema.get("definitions", {})}
+                    if "$defs" in target_schema or "definitions" in target_schema
+                    else active_defs
+                )
 
                 # Replace the reference with resolved copy
                 resolved = copy.deepcopy(target_schema)
@@ -1034,11 +1034,11 @@ def unpack_defs(
 
             # --- Case 2: regular dict – process its values ---
             # Update defs with any nested $defs/definitions present *here*.
-            current_defs = {
-                **active_defs,
-                **node.get("$defs", {}),
-                **node.get("definitions", {}),
-            }
+            current_defs = (
+                {**active_defs, **node.get("$defs", {}), **node.get("definitions", {})}
+                if "$defs" in node or "definitions" in node
+                else active_defs
+            )
 
             # Add all dict values to queue
             for k, v in node.items():
@@ -1073,8 +1073,13 @@ def defs_unpacked(json_schema: Mapping[str, object]) -> Mapping[str, object]:
     import copy
 
     unpacked: Final = copy.deepcopy(dict(json_schema))
-    defs: Final = unpacked.pop("$defs", unpacked.pop("definitions", None))
-    if isinstance(defs, dict) and defs:
+    dollar_defs: Final = unpacked.pop("$defs", None)
+    definitions: Final = unpacked.pop("definitions", None)
+    defs: Final = {
+        **(dollar_defs if isinstance(dollar_defs, dict) else {}),
+        **(definitions if isinstance(definitions, dict) else {}),
+    }
+    if defs:
         unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
     return unpacked
 

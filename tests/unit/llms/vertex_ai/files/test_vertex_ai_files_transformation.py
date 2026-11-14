@@ -2584,3 +2584,76 @@ def test_a_json_schema_row_with_defs_holds_no_key_bigquery_refuses() -> None:
     assert TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generation_config"])[
         "response_json_schema"
     ] == {"type": "object", "properties": {"capital": city, "largest": city}, "required": ["capital", "largest"]}
+
+
+_GEMINI_DEPLOYMENT: Final = MappingProxyType({"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-2.5-flash"})
+_ANNOTATED_ANSWER_SCHEMA: Final = MappingProxyType(
+    {
+        **_ANSWER_SCHEMA,
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$id": "answer",
+        "properties": {"answer": {"type": "string", "$comment": "a city name"}},
+    }
+)
+
+
+def _schema_entry(schema: Mapping[str, object], **body: object) -> Mapping[str, object]:
+    return dict(
+        _chat_entry(
+            "gemini-2.5-flash",
+            {"response_format": {"type": "json_schema", "json_schema": {"name": "a", "schema": dict(schema)}}, **body},
+        )
+    )
+
+
+def test_a_json_schema_annotation_bigquery_refuses_answers_400_without_drop_params(config, monkeypatch) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(VertexAIError, match=r"line 1 .*\$comment.*drop_params") as exc_info:
+        _uploaded_rows(config, _GEMINI_DEPLOYMENT, [_schema_entry(_ANNOTATED_ANSWER_SCHEMA)])
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("deployment", "body"),
+    [({**_GEMINI_DEPLOYMENT, "drop_params": True}, {}), (_GEMINI_DEPLOYMENT, {"drop_params": True})],
+    ids=["deployment", "request"],
+)
+def test_drop_params_drops_json_schema_annotations_bigquery_refuses(
+    config, monkeypatch, deployment: Mapping[str, object], body: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    (row,) = _uploaded_rows(config, deployment, [_schema_entry(_ANNOTATED_ANSWER_SCHEMA, **body)])
+
+    assert TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generation_config"])[
+        "response_json_schema"
+    ] == dict(_ANSWER_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    ("schema", "key"),
+    [
+        (
+            {
+                "$ref": "#/$defs/Node",
+                "$defs": {
+                    "Node": {"type": "object", "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}}}
+                },
+            },
+            r"\$ref",
+        ),
+        ({"type": "object", "properties": {"$id": {"type": "string"}}}, r"\$id"),
+    ],
+    ids=["recursive_ref", "property_name"],
+)
+def test_a_json_schema_key_bigquery_refuses_answers_400_even_with_drop_params(
+    config, schema: Mapping[str, object], key: str
+) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    with pytest.raises(VertexAIError, match=rf"line 1 .*{key}") as exc_info:
+        _uploaded_rows(config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, [_schema_entry(schema)])
+    assert exc_info.value.status_code == 400
