@@ -588,3 +588,12 @@ def import_without_redis_installed(monkeypatch: pytest.MonkeyPatch) -> Callable[
         return importlib.import_module(module_name)
 
     return _import
+
+
+@pytest.fixture(autouse=True)
+def _forget_email_in_use_checks() -> Iterator[None]:
+    from litellm.proxy.auth import auth_checks
+
+    auth_checks.email_in_use_checked_at.clear()
+    yield
+    auth_checks.email_in_use_checked_at.clear()

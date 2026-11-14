@@ -35,6 +35,7 @@ from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     delete_cache_key_objects,
+    escape_ilike,
     evict_budget_windows_absent_marker,
     forget_missing_user,
     get_jwt_key_mapping_cache_keys_for_tokens,
@@ -304,9 +305,10 @@ async def _check_duplicate_user_field(
             raise Exception("Database not connected")
 
         value: Final = field_value.strip()
-        where_clause: Final = {field_name: {"equals": value}}
-        if case_insensitive:
-            where_clause[field_name]["mode"] = "insensitive"
+        condition: Final = (
+            {"equals": escape_ilike(value), "mode": "insensitive"} if case_insensitive else {"equals": value}
+        )
+        where_clause: Final = {field_name: condition}
 
         existing_user: Final[object] = await UserRepository(prisma_client).table.find_first(where=where_clause)
 

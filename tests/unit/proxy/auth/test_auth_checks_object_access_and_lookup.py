@@ -40,6 +40,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling, CeilingResolver
 from litellm.types.agents import AgentCaller
+from litellm.proxy.auth import auth_checks
 from litellm.proxy.auth.auth_checks import (
     LITELLM_SESSION_TOKEN_PREFIX,
     ExperimentalUIJWTToken,
@@ -68,6 +69,7 @@ from litellm.proxy.auth.auth_checks import (
     common_checks,
     get_key_object,
     get_user_object,
+    read_email_verified,
     invalidate_team_member_spend_state,
     request_skips_budget_checks,
     route_skips_budget_checks,
@@ -105,7 +107,9 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.utils import get_utc_datetime
 from litellm.llms.base_llm.managed_resources.utils import encode_unified_id, generate_unified_id_string
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.auth._user_table import UserTable, prisma_over, user_row
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.redis.stores.auth_cache_double import shared_cache
@@ -1276,7 +1280,7 @@ async def test_get_user_object_upsert_includes_user_email():
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_backfills_null_email_from_cache_hit():
+async def test_get_user_object_backfills_null_email_from_cache_hit() -> None:
     """
     Regression (LIT-4710): an existing user row with a null user_email must be
     backfilled from the JWT-provided email even when served from cache, so the
@@ -1290,6 +1294,7 @@ async def test_get_user_object_backfills_null_email_from_cache_hit():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=LiteLLM_UserTable(
             user_id="jwt-user-1",
@@ -1391,7 +1396,7 @@ async def test_get_user_object_does_not_overwrite_existing_email():
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_backfill_race_prefers_db_email():
+async def test_get_user_object_backfill_race_prefers_db_email() -> None:
     """
     LIT-4710 race guard: when the null-guarded update matches 0 rows because a
     concurrent writer already backfilled an email, the cache must be refreshed
@@ -1408,6 +1413,7 @@ async def test_get_user_object_backfill_race_prefers_db_email():
     )
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=winner_row)
 
     result = await get_user_object(
@@ -1428,7 +1434,7 @@ async def test_get_user_object_backfill_race_prefers_db_email():
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_backfill_caches_persisted_email_not_proposed():
+async def test_get_user_object_backfill_caches_persisted_email_not_proposed() -> None:
     """
     LIT-4710 cache-coherence: even when the null-guarded update succeeds, the
     cache must be refreshed from the row the DB actually holds, not this
@@ -1447,6 +1453,7 @@ async def test_get_user_object_backfill_caches_persisted_email_not_proposed():
     )
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=persisted_row)
 
     result = await get_user_object(
@@ -12069,3 +12076,525 @@ async def test_baggage_mapping_still_rejects_client_metadata_tags():
     from litellm.utils import get_request_guardrails
 
     assert get_request_guardrails(data) == []
+
+
+
+@pytest.fixture
+def fresh_user_lookups() -> None:
+    auth_checks.last_db_access_time.clear()
+    auth_checks.email_in_use_checked_at.clear()
+
+
+@pytest.fixture
+def fixed_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(auth_checks, "time", SimpleNamespace(time=lambda: 1_000_000.0, strftime=time.strftime))
+
+
+async def _sign_in(
+    table: UserTable,
+    *,
+    claim_id: str,
+    email: str | None,
+    email_verified: bool | None = None,
+    upsert: bool = False,
+    cache: UserApiKeyCache | None = None,
+) -> LiteLLM_UserTable | None:
+    result: Final = await get_user_object(
+        user_id=claim_id,
+        prisma_client=prisma_over(table),
+        user_api_key_cache=cache or UserApiKeyCache(),
+        user_id_upsert=upsert,
+        sso_user_id=claim_id,
+        user_email=email,
+        email_verified=email_verified,
+    )
+    await asyncio.sleep(0)
+    return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("email_verified", [None, True, False])
+@pytest.mark.parametrize("email", ["owner@example.com", "OWNER@Example.com", "Owner@EXAMPLE.com"])
+async def test_email_never_selects_a_row_linked_to_another_sso_id(email: str, email_verified: bool | None) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id="idp-owner"))
+    claim_id: Final = "idp-new"
+
+    with pytest.raises(UserNotFoundError):
+        await _sign_in(table, claim_id=claim_id, email=email, email_verified=email_verified)
+
+    assert table.row("owner").sso_user_id == "idp-owner"
+    assert [r.user_id for r in table.rows] == ["owner"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_new_row_after_a_refused_email_carries_no_email() -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id="idp-owner"))
+    claim_id: Final = "idp-new"
+
+    user: Final = await _sign_in(table, claim_id=claim_id, email="owner@example.com", upsert=True)
+
+    assert user is not None and user.user_id == claim_id
+    assert user.user_email is None
+    assert table.with_email("owner@example.com") == ["owner"]
+    assert table.row("owner").sso_user_id == "idp-owner"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_new_row_never_fills_in_the_refused_email_on_later_sign_ins() -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id="idp-owner"))
+    claim_id: Final = "idp-new"
+    cache: Final = UserApiKeyCache()
+
+    users: Final = [
+        await _sign_in(table, claim_id=claim_id, email="owner@example.com", upsert=True, cache=cache) for _ in range(3)
+    ]
+
+    assert [getattr(user, "user_id", None) for user in users] == [claim_id] * 3
+    assert table.with_email("owner@example.com") == ["owner"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("upsert", [False, True])
+async def test_email_marked_unverified_never_selects_an_unlinked_row(upsert: bool) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"))
+    claim_id: Final = "idp-new"
+
+    if upsert:
+        user: Final = await _sign_in(table, claim_id=claim_id, email="owner@example.com", email_verified=False, upsert=True)
+        assert user is not None and user.user_id == claim_id and user.user_email is None
+    else:
+        with pytest.raises(UserNotFoundError):
+            await _sign_in(table, claim_id=claim_id, email="owner@example.com", email_verified=False)
+
+    assert table.row("owner").sso_user_id is None
+    assert table.with_email("owner@example.com") == ["owner"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("email_verified", [None, True])
+async def test_email_links_an_unlinked_row_when_not_marked_unverified(email_verified: bool | None) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"))
+    claim_id: Final = "idp-new"
+
+    user: Final = await _sign_in(table, claim_id=claim_id, email="Owner@Example.com", email_verified=email_verified)
+
+    assert user is not None and user.user_id == "owner"
+    assert table.row("owner").sso_user_id == claim_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("email_verified", [None, True, False])
+async def test_linked_owner_keeps_signing_in_by_sso_id(email_verified: bool | None) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id="idp-owner"))
+
+    user: Final = await _sign_in(table, claim_id="idp-owner", email="owner@example.com", email_verified=email_verified)
+
+    assert user is not None and user.user_id == "owner"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("email_verified", [None, True, False])
+async def test_owner_keeps_signing_in_by_user_id(email_verified: bool | None) -> None:
+    table: Final = UserTable(user_row("owner", None))
+
+    user: Final = await _sign_in(table, claim_id="owner", email="owner@example.com", email_verified=email_verified)
+
+    assert user is not None and user.user_id == "owner"
+    assert user.user_email == "owner@example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_new_row_keeps_an_email_no_other_row_holds() -> None:
+    table: Final = UserTable(user_row("someone-else", "other@example.com"))
+    claim_id: Final = "idp-new"
+
+    user: Final = await _sign_in(table, claim_id=claim_id, email="new@example.com", upsert=True)
+
+    assert user is not None and user.user_email == "new@example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_null_email_is_not_filled_with_an_email_another_row_holds() -> None:
+    table: Final = UserTable(
+        user_row("owner", "owner@example.com", sso_user_id="idp-owner"),
+        user_row("second", None),
+    )
+
+    user: Final = await _sign_in(table, claim_id="second", email="OWNER@example.com")
+
+    assert user is not None and user.user_id == "second" and user.user_email is None
+    assert table.row("second").user_email is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_cached_row_is_not_filled_with_an_email_another_row_holds() -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None))
+    cache: Final = UserApiKeyCache()
+    await _sign_in(table, claim_id="second", email=None, cache=cache)
+
+    user: Final = await _sign_in(table, claim_id="second", email="owner@example.com", cache=cache)
+
+    assert user is not None and user.user_email is None
+    assert table.row("second").user_email is None
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (True, True),
+        (False, False),
+        ("true", True),
+        ("false", False),
+        ("FALSE", False),
+        (" False ", False),
+        ("True", True),
+        ("yes", None),
+        ("", None),
+        (0, None),
+        (1, None),
+        (None, None),
+    ],
+)
+def test_read_email_verified(value: object, expected: bool | None) -> None:
+    assert read_email_verified(value) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("email_verified", [None, True])
+async def test_a_user_the_sign_in_created_stays_with_its_id(email_verified: bool | None) -> None:
+    table: Final = UserTable()
+    await _sign_in(table, claim_id="idp-first", email="owner@example.com", upsert=True)
+
+    later: Final = await _sign_in(
+        table, claim_id="idp-second", email="owner@example.com", email_verified=email_verified, upsert=True
+    )
+
+    assert later is not None and later.user_id == "idp-second"
+    assert table.row("idp-first").sso_user_id == "idp-first"
+    assert table.with_email("owner@example.com") == ["idp-first"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_a_user_created_with_an_unverified_email_never_takes_a_later_sign_in() -> None:
+    table: Final = UserTable()
+    await _sign_in(table, claim_id="idp-first", email="owner@example.com", email_verified=False, upsert=True)
+
+    later: Final = await _sign_in(
+        table, claim_id="idp-owner", email="owner@example.com", email_verified=True, upsert=True
+    )
+
+    assert later is not None and later.user_id == "idp-owner"
+    assert table.row("idp-first").sso_user_id == "idp-first"
+    assert table.with_email("owner@example.com") == ["idp-first"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_an_existing_user_its_own_id_signs_in_to_stays_with_that_id() -> None:
+    table: Final = UserTable(user_row("idp-first", "owner@example.com"))
+    await _sign_in(table, claim_id="idp-first", email="owner@example.com")
+
+    with pytest.raises(UserNotFoundError):
+        await _sign_in(table, claim_id="idp-second", email="owner@example.com")
+
+    assert table.row("idp-first").sso_user_id == "idp-first"
+    assert [r.user_id for r in table.rows] == ["idp-first"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("sso_user_id", [None, "idp-other"])
+async def test_a_user_is_linked_only_to_its_own_id(sso_user_id: str | None) -> None:
+    table: Final = UserTable(user_row("key-owner", "owner@example.com"))
+
+    await get_user_object(
+        user_id="key-owner",
+        prisma_client=prisma_over(table),
+        user_api_key_cache=UserApiKeyCache(),
+        user_id_upsert=False,
+        sso_user_id=sso_user_id,
+    )
+
+    assert table.row("key-owner").sso_user_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_opt_out_leaves_an_existing_user_unlinked(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER", "true")
+    table: Final = UserTable(user_row("idp-first", "owner@example.com"))
+
+    await _sign_in(table, claim_id="idp-first", email="owner@example.com")
+
+    assert table.row("idp-first").sso_user_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_opt_out_restores_a_created_user_joining_a_later_sign_in_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER", "true")
+    table: Final = UserTable()
+    await _sign_in(table, claim_id="idp-first", email="owner@example.com", upsert=True)
+    assert table.row("idp-first").sso_user_id is None
+
+    later: Final = await _sign_in(table, claim_id="idp-second", email="owner@example.com", upsert=True)
+
+    assert later is not None and later.user_id == "idp-first"
+    assert [r.user_id for r in table.rows] == ["idp-first"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize(
+    "owner_sso_user_id, email_verified",
+    [("idp-owner", None), (None, False), ("idp-owner", False)],
+)
+async def test_opt_out_restores_linking_any_row_by_email(
+    monkeypatch: pytest.MonkeyPatch, owner_sso_user_id: str | None, email_verified: bool | None
+) -> None:
+    monkeypatch.setenv("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER", "true")
+    table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id=owner_sso_user_id))
+    claim_id: Final = "idp-new"
+
+    user: Final = await _sign_in(table, claim_id=claim_id, email="owner@example.com", email_verified=email_verified)
+
+    assert user is not None and user.user_id == "owner"
+    assert table.row("owner").sso_user_id == claim_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize(
+    "emails", [["owner@example.com"] * 3, ["owner@example.com", "OWNER@example.com", "Owner@Example.COM"]]
+)
+async def test_email_in_use_check_runs_once_per_window_on_cached_sign_ins(emails: list[str], fixed_clock: None) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None))
+    cache: Final = UserApiKeyCache()
+    await _sign_in(table, claim_id="second", email=None, cache=cache)
+    table.first_lookups.clear()
+    users: Final = [await _sign_in(table, claim_id="second", email=email, cache=cache) for email in emails]
+
+    assert [getattr(user, "user_email", "missing") for user in users] == [None] * len(emails)
+    assert len(table.first_lookups) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_opt_out_restores_storing_an_email_another_row_holds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER", "true")
+    table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None))
+
+    user: Final = await _sign_in(table, claim_id="second", email="owner@example.com")
+
+    assert user is not None and user.user_email == "owner@example.com"
+    assert table.with_email("owner@example.com") == ["owner", "second"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_email_in_use_check_stays_once_per_window_while_other_users_load(fixed_clock: None) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None))
+    cache: Final = UserApiKeyCache()
+    await _sign_in(table, claim_id="second", email=None, cache=cache)
+    table.first_lookups.clear()
+
+    async def sign_in_after_other_users_load(round_number: int) -> LiteLLM_UserTable | None:
+        for i in range(150):
+            auth_checks.last_db_access_time[f"user_id:other-{round_number}-{i}"] = (None, 0.0)
+        return await _sign_in(table, claim_id="second", email="owner@example.com", cache=cache)
+
+    users: Final = [await sign_in_after_other_users_load(round_number) for round_number in range(3)]
+
+    assert [getattr(user, "user_email", "missing") for user in users] == [None] * 3
+    assert len(table.first_lookups) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("other_email", ["ann.lee@example.com", "ann-lee@example.com", "annXlee@example.com"])
+async def test_email_with_an_underscore_matches_only_itself(other_email: str) -> None:
+    table: Final = UserTable(user_row("other", other_email, sso_user_id="idp-other"), user_row("own", None))
+
+    linked: Final = await _sign_in(table, claim_id="idp-new", email="ann_lee@example.com", upsert=True)
+    own: Final = await _sign_in(table, claim_id="own", email="ann_lee@example.com")
+
+    assert linked is not None and linked.user_email == "ann_lee@example.com"
+    assert table.row("other").sso_user_id == "idp-other"
+    assert own is not None and own.user_email is None
+    assert sorted(table.with_email("ann_lee@example.com")) == [linked.user_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("email", ["a%b@example.com", "back\\slash@example.com"])
+async def test_email_fallback_finds_an_email_with_a_wildcard_character(email: str) -> None:
+    table: Final = UserTable(user_row("owner", email), user_row("other", "aXb@example.com"))
+    claim_id: Final = "idp-new"
+
+    user: Final = await _sign_in(table, claim_id=claim_id, email=email.upper())
+
+    assert user is not None and user.user_id == "owner"
+    assert table.row("owner").sso_user_id == claim_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_stale_cached_row_picks_up_the_email_its_own_row_already_holds() -> None:
+    table: Final = UserTable(user_row("own", None))
+    cache: Final = UserApiKeyCache()
+    await _sign_in(table, claim_id="own", email=None, cache=cache)
+    await table.update(where={"user_id": "own"}, data={"user_email": "own@example.com"})
+
+    user: Final = await _sign_in(table, claim_id="own", email="own@example.com", cache=cache)
+
+    assert user is not None and user.user_email == "own@example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("email", ["%@example.com", "own%@example.com", "_wn@example.com"])
+async def test_email_with_a_wildcard_character_links_no_other_row(email: str) -> None:
+    table: Final = UserTable(user_row("owner", "own@example.com"))
+    claim_id: Final = "idp-new"
+
+    user: Final = await _sign_in(table, claim_id=claim_id, email=email, upsert=True)
+
+    assert user is not None and user.user_id == claim_id and user.user_email == email
+    assert table.row("owner").sso_user_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_concurrent_cached_sign_ins_share_one_email_in_use_check(fixed_clock: None) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None))
+    cache: Final = UserApiKeyCache()
+    await _sign_in(table, claim_id="second", email=None, cache=cache)
+    table.first_lookups.clear()
+
+    users: Final = await asyncio.gather(
+        *(_sign_in(table, claim_id="second", email="owner@example.com", cache=cache) for _ in range(8))
+    )
+
+    assert all(user is not None and user.user_email is None for user in users)
+    assert len(table.first_lookups) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_one_rows_skipped_email_does_not_hold_back_another_rows_fill() -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"), user_row("second", None), user_row("third", None))
+    second_cache, third_cache = UserApiKeyCache(), UserApiKeyCache()
+    await _sign_in(table, claim_id="second", email=None, cache=second_cache)
+    await _sign_in(table, claim_id="third", email=None, cache=third_cache)
+    await _sign_in(table, claim_id="second", email="owner@example.com", cache=second_cache)
+    await table.update(where={"user_id": "owner"}, data={"user_email": "moved@example.com"})
+
+    third: Final = await _sign_in(table, claim_id="third", email="owner@example.com", cache=third_cache)
+
+    assert third is not None and third.user_email == "owner@example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_a_second_sign_in_id_cannot_take_a_user_the_first_one_linked() -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com"))
+
+    first: Final = await _sign_in(table, claim_id="idp-first", email="owner@example.com")
+    with pytest.raises(UserNotFoundError):
+        await _sign_in(table, claim_id="idp-second", email="owner@example.com")
+
+    assert first is not None and first.user_id == "owner"
+    assert table.row("owner").sso_user_id == "idp-first"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+async def test_email_fallback_skips_a_linked_user_to_reach_an_unlinked_one_with_the_same_email() -> None:
+    table: Final = UserTable(
+        user_row("linked", "owner@example.com", sso_user_id="idp-other"),
+        user_row("unlinked", "OWNER@example.com"),
+    )
+
+    user: Final = await _sign_in(table, claim_id="idp-new", email="owner@example.com")
+
+    assert user is not None and user.user_id == "unlinked"
+    assert table.row("unlinked").sso_user_id == "idp-new"
+    assert table.row("linked").sso_user_id == "idp-other"
+
+
+class _LinkedMidLookup(UserTable):
+    def __init__(self, winner: str, *rows: LiteLLM_UserTable) -> None:
+        super().__init__(*rows)
+        self.winner = winner
+
+    async def find_first(self, where: Mapping[str, object], include: object = None) -> LiteLLM_UserTable | None:
+        found: Final = await super().find_first(where, include)
+        if found is not None and "sso_user_id" in where:
+            await self.update(where={"user_id": found.user_id}, data={"sso_user_id": self.winner})
+        return found
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("winner, resolved", [("idp-other", None), ("idp-new", "owner")])
+async def test_a_sign_in_that_loses_the_link_race_gets_the_user_only_if_its_own_id_won(
+    winner: str, resolved: str | None
+) -> None:
+    table: Final = _LinkedMidLookup(winner, user_row("owner", "owner@example.com"))
+
+    if resolved is None:
+        with pytest.raises(UserNotFoundError):
+            await _sign_in(table, claim_id="idp-new", email="owner@example.com")
+    else:
+        user: Final = await _sign_in(table, claim_id="idp-new", email="owner@example.com")
+        assert user is not None and user.user_id == resolved
+
+    assert table.row("owner").sso_user_id == winner
+    assert [r.user_id for r in table.rows] == ["owner"]
+
+
+class _StaleFirstSsoLookup(UserTable):
+    def __init__(self, *rows: LiteLLM_UserTable) -> None:
+        super().__init__(*rows)
+        self.stale_reads = 1
+
+    async def find_unique(self, where: Mapping[str, object], include: object = None) -> LiteLLM_UserTable | None:
+        if "sso_user_id" in where and self.stale_reads:
+            self.stale_reads -= 1
+            return None
+        return await super().find_unique(where, include)
+
+    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int:
+        from prisma.errors import UniqueViolationError
+
+        if any(r.sso_user_id == data.get("sso_user_id") for r in self.rows):
+            raise UniqueViolationError({"user_facing_error": {"meta": {"target": ["sso_user_id"]}}})
+        return await super().update_many(where, data)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_user_lookups")
+@pytest.mark.parametrize("unlinked_twin", [False, True])
+async def test_a_sign_in_that_misses_its_freshly_linked_user_reads_it_again(unlinked_twin: bool) -> None:
+    rows: Final = [user_row("owner", "owner@example.com", sso_user_id="idp-new")]
+    if unlinked_twin:
+        rows.append(user_row("twin", "OWNER@example.com"))
+    table: Final = _StaleFirstSsoLookup(*rows)
+
+    user: Final = await _sign_in(table, claim_id="idp-new", email="owner@example.com", upsert=True)
+
+    assert user is not None and user.user_id == "owner"
+    assert sorted(r.user_id for r in table.rows) == sorted(r.user_id for r in rows)
+

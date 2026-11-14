@@ -11,6 +11,7 @@ Run checks for:
 
 import asyncio
 import math
+import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
@@ -185,6 +186,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.router import Router
 from litellm.router_api import RegistryReader
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
@@ -242,6 +244,7 @@ class _PrismaVectorStoreRow(Protocol):
 
 class _PrismaUserRow(Protocol):
     user_id: str
+    sso_user_id: str | None
 
     @property
     def organization_memberships(self) -> Sequence[_PrismaModelDumpRow | None] | None: ...
@@ -505,6 +508,7 @@ _safe_json_loads_obj: Final = _typed_json_loads(safe_json_loads)
 
 last_db_access_time: Final = LimitedSizeOrderedDict(max_size=100)
 db_cache_expiry: Final = DEFAULT_IN_MEMORY_TTL  # refresh every 5s
+email_in_use_checked_at: Final = LimitedSizeOrderedDict(max_size=1000)
 
 _TEAM_MEMBERSHIP_INFLIGHT_MAX: Final = 10000
 _team_membership_inflight: Final = LimitedSizeOrderedDict(max_size=_TEAM_MEMBERSHIP_INFLIGHT_MAX)
@@ -2982,20 +2986,27 @@ def get_role_based_routes(
     )
 
 
+def read_email_verified(value: object) -> bool | None:
+    """Some identity providers send `email_verified` as the string "true" or "false"."""
+    if isinstance(value, bool):
+        return value
+    return str_to_bool(value) if isinstance(value, str) else None
+
+
 async def _get_fuzzy_user_object(
     prisma_client: PrismaClient,
     sso_user_id: str | None = None,
     user_email: str | None = None,
+    email_verified: bool | None = None,
 ) -> "_PrismaUserRow | None":
     """
     Checks if sso user is in db.
 
     Called when user id match is not found in db.
 
-    - Check if sso_user_id is user_id in db
     - Check if sso_user_id is sso_user_id in db
-    - Check if user_email is user_email in db
-    - If not, create new user with user_email and sso_user_id and user_id = sso_user_id
+    - Check if user_email is user_email in db, unless the email is unverified; with an sso_user_id, only an unlinked
+      row matches, and it is linked only if no other sign-in linked it first
     """
 
     response = None
@@ -3005,15 +3016,19 @@ async def _get_fuzzy_user_object(
             include={"organization_memberships": True},
         )
 
-    if response is None and user_email is not None:
-        # Use case-insensitive query to handle emails with different casing
-        # This matches the pattern used in _check_duplicate_user_email
+    links_any_user: Final = _email_fallback_links_any_user()
+    if response is None and user_email is not None and (links_any_user or email_verified is not False):
+        unlinked_only: Final[Mapping[str, None]] = (
+            {} if links_any_user or sso_user_id is None else {"sso_user_id": None}
+        )
         response = await _user_table(UserRepository(prisma_client)).find_first(
-            where={"user_email": {"equals": user_email, "mode": "insensitive"}},
+            where={"user_email": email_equals(user_email), **unlinked_only},
             include={"organization_memberships": True},
         )
 
-        if response is not None and sso_user_id is not None:  # update sso_user_id
+        if sso_user_id is not None and not links_any_user:
+            return await _link_by_email(prisma_client, response, sso_user_id)
+        if response is not None and sso_user_id is not None:
             asyncio.create_task(  # background task to update user with sso id
                 _user_table(UserRepository(prisma_client)).update(
                     where={"user_id": response.user_id},
@@ -3024,6 +3039,53 @@ async def _get_fuzzy_user_object(
     return response
 
 
+async def _link_by_email(
+    prisma_client: PrismaClient, row: "_PrismaUserRow | None", sso_user_id: str
+) -> "_PrismaUserRow | None":
+    writer: Final = UserRepository(prisma_client, use_writer=True)
+    if row is not None and await writer.link_null_sso_user_id(row.user_id, sso_user_id):
+        return row
+    return await _user_table(writer).find_unique(
+        where={"sso_user_id": sso_user_id}, include={"organization_memberships": True}
+    )
+
+
+async def _link_own_sign_in_id(
+    prisma_client: PrismaClient, row: "_PrismaUserRow | None", sso_user_id: str | None
+) -> None:
+    if row is None or row.sso_user_id is not None or sso_user_id != row.user_id or _email_fallback_links_any_user():
+        return
+    await UserRepository(prisma_client, use_writer=True).link_null_sso_user_id(row.user_id, row.user_id)
+
+
+def escape_ilike(value: str) -> str:
+    """Prisma runs an insensitive `equals` as ILIKE, where `%` and `_` are wildcards and `\\` escapes them."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def email_equals(user_email: str) -> Mapping[str, str]:
+    return {"equals": escape_ilike(user_email), "mode": "insensitive"}
+
+
+def _email_fallback_links_any_user() -> bool:
+    return str_to_bool(os.environ.get("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER")) is True
+
+
+async def _email_free_to_store(prisma_client: PrismaClient, user_email: str | None, user_id: str) -> str | None:
+    if user_email is None or await email_belongs_to_another_user(prisma_client, user_email, user_id):
+        return None
+    return user_email
+
+
+async def email_belongs_to_another_user(prisma_client: PrismaClient, user_email: str, user_id: str) -> bool:
+    if _email_fallback_links_any_user():
+        return False
+    holder: Final = await _user_table(UserRepository(prisma_client)).find_first(
+        where={"user_email": email_equals(user_email), "user_id": {"not": user_id}},
+    )
+    return holder is not None
+
+
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _backfill_null_user_email(
     prisma_client: PrismaClient | None,
@@ -3032,6 +3094,14 @@ async def _backfill_null_user_email(
     user_email: str | None,
 ) -> LiteLLM_UserTable:
     if user_email is None or user_row.user_email is not None or prisma_client is None:
+        return user_row
+    in_use_key: Final = f"{user_row.user_id}:{user_email.casefold()}"
+    if not _should_check_db(
+        key=in_use_key, last_db_access_time=email_in_use_checked_at, db_cache_expiry=db_cache_expiry
+    ):
+        return user_row
+    _update_last_db_access_time(key=in_use_key, value=None, last_db_access_time=email_in_use_checked_at)
+    if await email_belongs_to_another_user(prisma_client, user_email, user_row.user_id):
         return user_row
 
     user_repo: Final = UserRepository(prisma_client)
@@ -3065,6 +3135,7 @@ async def get_user_object(
     sso_user_id: str | None = None,
     user_email: str | None = None,
     check_db_only: bool | None = None,
+    email_verified: bool | None = None,
 ) -> LiteLLM_UserTable | None:
     """
     - Check if user id in proxy User Table
@@ -3103,12 +3174,14 @@ async def get_user_object(
             response = await _user_table(UserRepository(prisma_client, use_writer=bool(check_db_only))).find_unique(
                 where={"user_id": user_id}, include={"organization_memberships": True}
             )
+            await _link_own_sign_in_id(prisma_client, response, sso_user_id)
 
             if response is None:
                 response = await _get_fuzzy_user_object(
                     prisma_client=prisma_client,
                     sso_user_id=sso_user_id,
                     user_email=user_email,
+                    email_verified=email_verified,
                 )
 
         else:
@@ -3126,9 +3199,15 @@ async def get_user_object(
                 scalar_default_params: Final = {
                     key: value for key, value in default_params.items() if key not in ("teams", "available_teams")
                 }
+                new_user_email: Final = await _email_free_to_store(prisma_client, user_email, user_id)
                 new_user_params: Final[dict[str, Any]] = {
                     "user_id": user_id,
-                    **({"user_email": user_email} if user_email is not None else {}),
+                    **({"user_email": new_user_email} if new_user_email is not None else {}),
+                    **(
+                        {"sso_user_id": sso_user_id}
+                        if sso_user_id is not None and not _email_fallback_links_any_user()
+                        else {}
+                    ),
                     **scalar_default_params,
                     **(
                         {"budget_limits": initial_budget_windows_json(scalar_default_params["budget_limits"])}
@@ -3153,7 +3232,7 @@ async def get_user_object(
                 if default_teams:
                     await add_new_user_to_default_team(
                         user_id=user_id,
-                        user_email=user_email,
+                        user_email=new_user_email,
                         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
                         teams=default_teams,
                         prisma_client=prisma_client,
