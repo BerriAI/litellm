@@ -51,7 +51,6 @@ from ...common_utils import (
     AnthropicModelInfo,
     context_management_betas,
     is_claude_model_target,
-    is_claude_tool_target,
     merge_anthropic_beta_headers,
     optionally_handle_anthropic_oauth,
     requires_native_compaction_beta,
@@ -219,7 +218,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return is_claude_model_target(self._resolved_provider, model)
 
     def verifies_thinking_signatures(self, model: str) -> bool:
-        return is_claude_tool_target(self._resolved_provider, model)
+        return "claude" in model.lower()
 
     def tools_for_upstream(self, tools: Sequence[object], model: str, drop_params: object) -> Sequence[object]:
         return tools_without_custom_field(

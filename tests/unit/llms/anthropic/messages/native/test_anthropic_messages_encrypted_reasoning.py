@@ -1,3 +1,6 @@
+from collections.abc import Mapping
+from typing import Final
+
 import pytest
 
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
@@ -7,12 +10,15 @@ from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
+from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
 from litellm.llms.bedrock_mantle.messages.transformation import BedrockMantleAnthropicMessagesConfig
 from litellm.llms.databricks.messages.transformation import DatabricksAnthropicMessagesConfig
 from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
+from litellm.llms.github_copilot.messages.transformation import GithubCopilotAnthropicMessagesConfig
+from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
@@ -63,7 +69,7 @@ def test_anthropic_signed_thinking_blocks_are_forwarded_untouched():
     assert _transform(messages)["messages"] == messages
 
 
-def _history_with_a_gemini_thought(signature_fields):
+def _history_with_a_gemini_thought(signature_fields: Mapping[str, str | None]) -> list[dict[str, object]]:
     return [
         {"role": "user", "content": "Read numbers.txt."},
         {
@@ -94,15 +100,15 @@ def _history_with_a_gemini_thought(signature_fields):
         (AmazonAnthropicClaudeMessagesConfig(), "us.anthropic.claude-sonnet-4-5-20250929-v1:0"),
         (BedrockMantleAnthropicMessagesConfig(), "anthropic.claude-mythos-preview"),
         (DatabricksAnthropicMessagesConfig(), "databricks-claude-sonnet-4-5"),
+        (GithubCopilotAnthropicMessagesConfig(), "claude-sonnet-4.5"),
     ],
 )
 @pytest.mark.parametrize("signature_fields", [{"signature": ""}, {"signature": None}, {}])
 def test_a_thought_another_provider_served_without_a_signature_never_reaches_claude(
-    config, model, signature_fields
+    config: BaseAnthropicMessagesConfig, model: str, signature_fields: Mapping[str, str | None]
 ):
-    """A load-balanced group's Gemini turn hands Claude Code a thought Anthropic cannot verify."""
-    messages = _history_with_a_gemini_thought(signature_fields)
-    request = config.transform_anthropic_messages_request(
+    messages: Final = _history_with_a_gemini_thought(signature_fields)
+    request: Final = config.transform_anthropic_messages_request(
         model=model,
         messages=messages,
         anthropic_messages_optional_request_params={
@@ -121,12 +127,16 @@ def test_a_thought_another_provider_served_without_a_signature_never_reaches_cla
     ("config", "model"),
     [
         (DeepSeekAnthropicMessagesConfig(), "deepseek-v4-pro"),
+        (AnthropicMessagesConfig(), "kimi-k3"),
+        (OpenAILikeAnthropicMessagesConfig(), "kimi-k3"),
         (BedrockMantleAnthropicMessagesConfig(), "openai.gpt-oss-120b"),
     ],
 )
-def test_a_backend_that_does_not_verify_claude_signatures_gets_its_unsigned_thoughts_back(config, model):
-    messages = _history_with_a_gemini_thought({"signature": ""})
-    request = config.transform_anthropic_messages_request(
+def test_a_backend_that_does_not_verify_claude_signatures_gets_its_unsigned_thoughts_back(
+    config: BaseAnthropicMessagesConfig, model: str
+):
+    messages: Final = _history_with_a_gemini_thought({"signature": ""})
+    request: Final = config.transform_anthropic_messages_request(
         model=model,
         messages=messages,
         anthropic_messages_optional_request_params={"max_tokens": 8192},

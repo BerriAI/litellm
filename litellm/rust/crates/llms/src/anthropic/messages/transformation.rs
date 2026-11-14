@@ -285,6 +285,9 @@ fn anthropic_environment(
 }
 
 fn without_unsignable_thinking(request: MessagesRequest) -> MessagesRequest {
+    if !is_claude_model(&request.model) {
+        return request;
+    }
     MessagesRequest {
         messages: map_known_runs(request.messages, strip_unsignable_thinking_blocks),
         ..request
@@ -1198,6 +1201,26 @@ mod tests {
                 {"role": "user", "content": "Now 17 * 23?"}
             ]})))
         );
+    }
+
+    #[rstest]
+    fn a_non_claude_model_behind_the_anthropic_host_keeps_its_own_unsigned_thinking(
+        unmapped: MessagesModelCapabilities,
+    ) {
+        let fields = json!({
+            "model": "kimi-k3",
+            "messages": [
+                {"role": "user", "content": "Read numbers.txt."},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "Read it first.", "signature": ""},
+                    {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "numbers.txt"}}
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "3 7 12"}
+                ]}
+            ]
+        });
+        assert_eq!(transform(fields.clone(), unmapped, false), Ok(body(fields)));
     }
 
     #[test]
