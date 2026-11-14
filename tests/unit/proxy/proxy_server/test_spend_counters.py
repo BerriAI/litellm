@@ -38,10 +38,14 @@ from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.tag import LiteLLM_TagTable
 from litellm.models.team import LiteLLM_TeamTable, LiteLLM_TeamTableCachedObj
 from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_local
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_user_cache_key, tag_cache_key
 from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
+from litellm.redis.stores.spend_counters import user_window_counter
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
+from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 
 from .conftest import normalize
 from litellm.rust_bridge._native import NativeRedisStoreError
@@ -468,6 +472,41 @@ async def test_increment_spend_counters_increments_all_buckets(monkeypatch):
     assert fake_user_cache.async_get_cache.called is True
 
 
+@pytest.mark.asyncio
+async def test_user_spend_increments_both_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    spend: Final = _spend_counters(
+        monkeypatch,
+        redis={
+            "spend:user:u": 0.0,
+            user_window_counter("u", "1h"): 0.0,
+            user_window_counter("u", "30d"): 0.0,
+        },
+    )
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="u",
+        value=LiteLLM_UserTable.model_validate(
+            {
+                "user_id": "u",
+                "budget_limits": [
+                    {"budget_duration": "1h", "max_budget": 5.0, "reset_at": "2026-08-01T01:00:00Z"},
+                    {"budget_duration": "30d", "max_budget": 100.0, "reset_at": "2026-08-31T00:00:00Z"},
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    await ps.increment_spend_counters(token=None, team_id=None, user_id="u", response_cost=2.0)
+    assert spend.redis == {
+        "spend:user:u": 2.0,
+        user_window_counter("u", "1h"): 2.0,
+        user_window_counter("u", "30d"): 2.0,
+    }
+    windows: Final = await ps.accounting_window_keys(None, None, user_id="u")
+    assert {window["window_duration"] for window in windows} == {"1h", "30d"}
+
+
 class _ConcurrencyProbe:
     """Stand-in for the per-counter warm-check read that pins concurrency.
 
@@ -679,7 +718,7 @@ async def test_increment_spend_counters_pipelines_all_scopes_in_one_redis_call(
         "spend:org:org-1",
     }
     spend = _spend_counters(monkeypatch, redis=dict.fromkeys(expected_keys, 1.0))
-    monkeypatch.setattr(ps, "user_api_key_cache", ps.DualCache())
+    monkeypatch.setattr(ps, "user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr(ps, "prisma_client", None)
 
     await ps.increment_spend_counters(
@@ -695,6 +734,97 @@ async def test_increment_spend_counters_pipelines_all_scopes_in_one_redis_call(
     assert [command.split()[0] for command in spend.commands] == ["MGET", "PIPELINE"]
     assert set(spend.commands[1].split()[1:]) == expected_keys
     assert spend.memory == dict.fromkeys(expected_keys, 1.5)
+
+
+class _VerificationTokenTable:
+    def __init__(self, spend: float) -> None:
+        self._spend: Final = spend
+        self.lookups: list[dict[str, str]] = []
+
+    async def find_unique(self, where: dict[str, str]) -> MagicMock:
+        self.lookups.append(where)
+        return MagicMock(token=where["token"], spend=self._spend)
+
+
+def _prisma_with_key_spend(spend: float) -> MagicMock:
+    prisma: Final = MagicMock()
+    prisma.db.litellm_verificationtoken = _VerificationTokenTable(spend)
+    return prisma
+
+
+@pytest.mark.asyncio
+async def test_committed_twin_takes_the_charge_but_never_a_budget_hold(monkeypatch):
+    """The key counter holds the DB spend 10.0, this request's 2.0 reservation and another request's 1.0 hold."""
+    spend: Final = _spend_counters(monkeypatch, redis=None, memory={"spend:key:hashed": 13.0})
+    monkeypatch.setattr(ps, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(ps, "prisma_client", _prisma_with_key_spend(10.0))
+    reservation: Final = {"reserved_cost": 2.0, "entries": [{"counter_key": "spend:key:hashed"}], "finalized": False}
+    scope: Final = EntitySpendCounterKeys(key="spend:key:hashed")
+
+    await ps.increment_spend_counters(
+        token="hashed",
+        team_id=None,
+        user_id=None,
+        response_cost=0.5,
+        budget_reservation=reservation,
+        committed_spend_scope=scope,
+    )
+    await ps.increment_spend_counters(
+        token="hashed", team_id=None, user_id=None, response_cost=0.25, committed_spend_scope=scope
+    )
+
+    assert spend.memory == pytest.approx({"spend:key:hashed": 11.75, committed_spend_key("spend:key:hashed"): 10.75})
+
+
+@pytest.mark.asyncio
+async def test_a_charge_outside_the_committed_scope_keeps_no_twin_and_reads_no_stored_spend(monkeypatch):
+    spend: Final = _spend_counters(monkeypatch, redis=None, memory={"spend:key:hashed": 10.0})
+    prisma: Final = _prisma_with_key_spend(10.0)
+    key_cache: Final = UserApiKeyCache()
+    key_cache.set_cache(key="hashed", value=UserAPIKeyAuth(token="hashed"))
+    monkeypatch.setattr(ps, "user_api_key_cache", key_cache)
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+
+    await ps.increment_spend_counters(token="hashed", team_id=None, user_id=None, response_cost=0.5)
+
+    assert spend.memory == pytest.approx({"spend:key:hashed": 10.5})
+    assert prisma.db.litellm_verificationtoken.lookups == []
+
+
+@pytest.mark.asyncio
+async def test_only_the_entities_in_the_committed_scope_take_the_charge_on_their_twin(monkeypatch):
+    spend: Final = _spend_counters(monkeypatch, redis=None, memory={"spend:key:hashed": 10.0, "spend:team:t1": 10.0})
+    monkeypatch.setattr(ps, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(ps, "prisma_client", _prisma_with_key_spend(10.0))
+
+    await ps.increment_spend_counters(
+        token="hashed",
+        team_id="t1",
+        user_id=None,
+        response_cost=0.5,
+        committed_spend_scope=EntitySpendCounterKeys(key="spend:key:hashed"),
+    )
+
+    assert spend.memory.get(committed_spend_key("spend:key:hashed")) == pytest.approx(10.5)
+    assert committed_spend_key("spend:team:t1") not in spend.memory
+
+
+@pytest.mark.asyncio
+async def test_a_budgeted_team_whose_id_names_a_window_keeps_its_charge_and_gets_no_twin(monkeypatch):
+    team_counter_key: Final = "spend:team:t1:window:1d"
+    spend: Final = _spend_counters(monkeypatch, redis=None, memory={team_counter_key: 1.0})
+    monkeypatch.setattr(ps, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+
+    await ps.increment_spend_counters(
+        token=None,
+        team_id="t1:window:1d",
+        user_id=None,
+        response_cost=0.5,
+        committed_spend_scope=EntitySpendCounterKeys(team=team_counter_key),
+    )
+
+    assert spend.memory == pytest.approx({team_counter_key: 1.5})
 
 
 _PENDING_SPEND_COUNTER_KEYS: tuple[str, ...] = (
@@ -717,7 +847,7 @@ def _warm_counters_behind_a_failing_pipeline(monkeypatch, failure: str) -> FakeS
         fail_pipelines=True,
         failure=failure,
     )
-    monkeypatch.setattr(ps, "user_api_key_cache", ps.DualCache())
+    monkeypatch.setattr(ps, "user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr(ps, "prisma_client", None)
     return spend
 

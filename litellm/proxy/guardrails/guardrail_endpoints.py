@@ -3,6 +3,7 @@ CRUD ENDPOINTS FOR GUARDRAILS
 """
 
 import asyncio
+import copy
 import inspect
 import json
 import os
@@ -17,9 +18,9 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, GuardrailSetupError
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import AUDIT_ACTIONS, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
 from litellm.proxy.common_utils.openai_error_payload import status_typed_proxy_exception
@@ -53,6 +54,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_api_key_has_admin_view,
 )
+from litellm.proxy.management_helpers.audit_logs import create_object_audit_log, is_audit_logging_enabled
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.types.guardrails import (
@@ -110,6 +112,84 @@ def _reject_encrypted_litellm_params(litellm_params: object) -> None:
             status_code=400,
             detail=f"litellm_params values must not start with {CALLBACK_VAR_ENCRYPTED_PREFIX!r}",
         )
+
+
+_AUDIT_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_AUDITED_GUARDRAIL_FIELDS: Final = ("guardrail_id", "guardrail_name", "guardrail_info", "status", "team_id")
+_AUDITED_LITELLM_PARAMS: Final = ("guardrail", "mode", "default_on")
+_NEW_GUARDRAIL_STATUS: Final = "active"
+
+
+def _as_audit_mapping(value: object) -> Mapping[str, object]:
+    """Rows can hold JSON columns as strings, and an audit snapshot must never fail a change that is already saved."""
+    candidate: Final = (
+        value.model_dump(exclude_none=True)
+        if isinstance(value, BaseModel)
+        else _parse_json_field(value)
+        if isinstance(value, str)
+        else value
+    )
+    try:
+        return _AUDIT_JSON_OBJECT.validate_python(candidate or {})
+    except ValidationError:
+        return {}
+
+
+def _litellm_params_of(guardrail: object) -> Mapping[str, object]:
+    return _as_audit_mapping(_as_audit_mapping(guardrail).get("litellm_params"))
+
+
+def _guardrail_audit_snapshot(guardrail: object) -> Mapping[str, object]:
+    """A guardrail as written to the audit log. Provider settings can hold credentials under any name, so only the
+    provider, mode and default_on values are kept."""
+    fields: Final = _as_audit_mapping(guardrail)
+    params: Final = _litellm_params_of(guardrail)
+    return {
+        **{key: fields[key] for key in _AUDITED_GUARDRAIL_FIELDS if fields.get(key) is not None},
+        "litellm_params": {key: params[key] for key in _AUDITED_LITELLM_PARAMS if key in params},
+    }
+
+
+def _changed_litellm_param_names(before: object, after: object) -> tuple[str, ...]:
+    """Names, never values, of the provider settings an update changed beyond the ones the snapshot shows."""
+    old: Final = _litellm_params_of(before)
+    new: Final = _litellm_params_of(after)
+    return tuple(
+        sorted(
+            key
+            for key in old.keys() | new.keys()
+            if key not in _AUDITED_LITELLM_PARAMS and old.get(key) != new.get(key)
+        )
+    )
+
+
+async def _audit_guardrail_change(
+    *,
+    guardrail_id: str,
+    action: AUDIT_ACTIONS,
+    user_api_key_dict: UserAPIKeyAuth,
+    before: object = None,
+    after: object = None,
+) -> None:
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    if not is_audit_logging_enabled():
+        return
+    changed: Final = _changed_litellm_param_names(before, after) if before is not None and after is not None else ()
+    await create_object_audit_log(
+        object_id=guardrail_id,
+        action=action,
+        litellm_changed_by=None,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+        table_name=LitellmTableNames.GUARDRAILS_TABLE_NAME,
+        before_value=None if before is None else safe_dumps(_guardrail_audit_snapshot(before)),
+        after_value=None
+        if after is None
+        else safe_dumps(
+            {**_guardrail_audit_snapshot(after), **({"changed_litellm_params": list(changed)} if changed else {})}
+        ),
+    )
 
 
 def _guardrails_table(prisma_client: "PrismaClient") -> "TableActions[LiteLLM_GuardrailsTable]":
@@ -460,7 +540,7 @@ async def create_guardrail(
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully initialized guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
-        except (ValueError, TypeError, CustomCodeCompilationError) as init_error:
+        except (ValueError, TypeError, CustomCodeCompilationError, GuardrailSetupError) as init_error:
             # Configuration error — roll back the DB write so the guardrail isn't orphaned
             if prisma_client is not None:
                 try:
@@ -479,6 +559,12 @@ async def create_guardrail(
                 init_error,
             )
 
+        await _audit_guardrail_change(
+            guardrail_id=str(guardrail_id),
+            action="created",
+            user_api_key_dict=user_api_key_dict,
+            after={**result, "status": _NEW_GUARDRAIL_STATUS},
+        )
         return result
     except HTTPException:
         raise
@@ -579,6 +665,7 @@ async def update_guardrail(
         )
 
         guardrail_name: Final = result.get("guardrail_name", "Unknown")
+        saved_guardrail: Final = copy.deepcopy(dict(result))
 
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
@@ -612,6 +699,13 @@ async def update_guardrail(
                 update_error,
             )
 
+        await _audit_guardrail_change(
+            guardrail_id=guardrail_id,
+            action="updated",
+            user_api_key_dict=user_api_key_dict,
+            before=existing_guardrail,
+            after=saved_guardrail,
+        )
         return result
     except HTTPException as e:
         raise e
@@ -687,6 +781,12 @@ async def delete_guardrail(
                 delete_error,
             )
 
+        await _audit_guardrail_change(
+            guardrail_id=guardrail_id,
+            action="deleted",
+            user_api_key_dict=user_api_key_dict,
+            before=existing_guardrail,
+        )
         return result
     except HTTPException as e:
         raise e
@@ -852,6 +952,12 @@ async def register_guardrail(
                 "created_at": now,
                 "updated_at": now,
             },
+        )
+        await _audit_guardrail_change(
+            guardrail_id=created.guardrail_id,
+            action="created",
+            user_api_key_dict=user_api_key_dict,
+            after=created,
         )
         return RegisterGuardrailResponse(
             guardrail_id=created.guardrail_id,
@@ -1095,9 +1201,16 @@ async def approve_guardrail_submission(
             )
 
         now: Final = datetime.now(timezone.utc)
-        await _guardrails_table(prisma_client).update(
+        approved: Final = await _guardrails_table(prisma_client).update(
             where={"guardrail_id": guardrail_id},
             data={"status": "active", "reviewed_at": now, "updated_at": now},
+        )
+        await _audit_guardrail_change(
+            guardrail_id=guardrail_id,
+            action="updated",
+            user_api_key_dict=user_api_key_dict,
+            before=row,
+            after=approved,
         )
 
         guardrail_info: Final = _parse_json_field(row.guardrail_info)
@@ -1174,9 +1287,16 @@ async def reject_guardrail_submission(
             )
 
         now: Final = datetime.now(timezone.utc)
-        await _guardrails_table(prisma_client).update(
+        rejected: Final = await _guardrails_table(prisma_client).update(
             where={"guardrail_id": guardrail_id},
             data={"status": "rejected", "reviewed_at": now, "updated_at": now},
+        )
+        await _audit_guardrail_change(
+            guardrail_id=guardrail_id,
+            action="updated",
+            user_api_key_dict=user_api_key_dict,
+            before=row,
+            after=rejected,
         )
         return {
             "guardrail_id": guardrail_id,
@@ -1378,6 +1498,13 @@ async def patch_guardrail(
                 update_error,
             )
 
+        await _audit_guardrail_change(
+            guardrail_id=guardrail_id,
+            action="updated",
+            user_api_key_dict=user_api_key_dict,
+            before=existing_guardrail,
+            after=result,
+        )
         return result
     except HTTPException as e:
         raise e

@@ -5,7 +5,7 @@ from typing import Final
 import psycopg
 import pytest
 
-_MIGRATIONS: Final = Path(__file__).parents[4] / "litellm-proxy-extras/litellm_proxy_extras/migrations"
+_MIGRATIONS: Final = Path(__file__).parents[4] / "litellm/proxy-extras/litellm_proxy_extras/migrations"
 _OLD_LEDGER: Final = _MIGRATIONS / "20261027000000_add_accounting_ledger_tables/migration.sql"
 _SPEND_LOG_DELIVERY: Final = _MIGRATIONS / "20261103010000_spendlogs_accounting_delivery/migration.sql"
 _DROP: Final = _MIGRATIONS / "20261104010000_drop_accounting_event_tables/migration.sql"

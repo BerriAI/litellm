@@ -10,6 +10,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import SimpleQueue
 from typing import Final
 
+from tests.integration._support.ports import allocate_port
+
 
 @dataclass(frozen=True, slots=True)
 class Tunnel:
@@ -61,7 +63,7 @@ def refusing_forward_proxy(port: int = 0) -> Generator[ForwardProxy, None, None]
         def log_message(self, format: str, *args: object) -> None:
             pass
 
-    with ThreadingHTTPServer(("127.0.0.1", port), Handler) as server:
+    with ThreadingHTTPServer(("127.0.0.1", port or allocate_port()), Handler) as server:
         thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
         thread.start()
         try:
@@ -105,7 +107,7 @@ def tunnelling_forward_proxy(destination_port: int, port: int = 0) -> Generator[
         def log_message(self, format: str, *args: object) -> None:
             pass
 
-    with ThreadingHTTPServer(("127.0.0.1", port), Handler) as server:
+    with ThreadingHTTPServer(("127.0.0.1", port or allocate_port()), Handler) as server:
         thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
         thread.start()
         try:

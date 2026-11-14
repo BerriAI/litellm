@@ -1,6 +1,7 @@
 """Utils for accessing credentials."""
 
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Final
 
 import litellm
@@ -27,7 +28,9 @@ class CredentialAccessor:
         """Safe accessor for credentials."""
 
         credential: Final = CredentialAccessor.find_credential(credential_name)
-        return {} if credential is None else dict(credential_api_key_secret_reference(credential.credential_values))
+        if credential is None:
+            return {}
+        return deepcopy(dict(credential_api_key_secret_reference(credential.credential_values)))
 
     @staticmethod
     def upsert_credentials(credentials: list[CredentialItem]):

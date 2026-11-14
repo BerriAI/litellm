@@ -27,7 +27,7 @@ from typing import (
 from collections.abc import Mapping
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm.types.integrations.newrelic import NewRelicInitParams
-from litellm.litellm_core_utils.core_helpers import drop_params_env_flag
+from litellm.litellm_core_utils.core_helpers import drop_params_env_flag, env_flag
 from litellm.types.integrations.pointfive import PointFiveInitParams
 from litellm.types.integrations.zerobus import ZerobusInitParams
 from litellm._logging import (
@@ -214,6 +214,7 @@ overwrite_user_with_key_hash: bool = (
 bedrock_request_metadata_fields: Optional[Sequence[str]] = (
     None  # allow-list of `user_api_key_*` fields (+ `spend_logs_metadata`) sent as Bedrock `requestMetadata`
 )
+vertex_request_label_fields: Optional[Sequence[str]] = None
 store_audit_logs: bool | None = None
 skip_system_message_in_guardrail: bool = False
 skip_tool_message_in_guardrail: bool = False
@@ -227,7 +228,7 @@ token: Optional[str] = (
 )
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = drop_params_env_flag(os.environ, verbose_logger)
-modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
+modify_params = env_flag(os.environ, "LITELLM_MODIFY_PARAMS", verbose_logger)
 bedrock_neutralize_orphaned_tool_blocks: bool = True
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
@@ -1457,6 +1458,7 @@ from .exceptions import (
     BadRequestError,
     ImageFetchError,
     MalformedRequestFieldError as MalformedRequestFieldError,
+    MissingMessageRoleError as MissingMessageRoleError,
     VectorStoreSearchError,
     NotFoundError,
     PermissionDeniedError,
@@ -1612,6 +1614,7 @@ from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_k
 ### PASSTHROUGH ###
 from .passthrough import allm_passthrough_route, llm_passthrough_route
 from .google_genai import agenerate_content
+from .google_genai import generate_content as generate_content  # pyright: ignore[reportUnknownVariableType]  # native request types require the optional google-genai SDK
 
 ### GLOBAL CONFIG ###
 global_bitbucket_config: Optional[Mapping[str, object]] = None
@@ -1733,6 +1736,9 @@ if TYPE_CHECKING:
     )
     from .llms.perplexity.decisions.transformation import (
         PerplexityDecisionsConfig as PerplexityDecisionsConfig,
+    )
+    from .llms.gemini.decisions.transformation import (
+        GeminiDecisionsConfig as GeminiDecisionsConfig,
     )
     from .llms.nace.decisions.transformation import (
         NaceDecisionsConfig as NaceDecisionsConfig,

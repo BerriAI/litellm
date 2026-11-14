@@ -10,8 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.host.timeouts import timeout_to_seconds
-from litellm.rust_bridge.public_call import NativeCall
+from litellm.rust_bridge.public_call import NativeCall, timeout_to_seconds
 from litellm.rust_bridge.transcription.native import (
     NATIVE_ATRANSCRIPTION,
     NATIVE_TRANSCRIPTION,

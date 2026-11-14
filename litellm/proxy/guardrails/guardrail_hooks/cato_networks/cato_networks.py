@@ -11,7 +11,7 @@ import os
 import ssl
 from collections.abc import AsyncGenerator, AsyncIterable, Iterator, Mapping, Sequence
 from ssl import SSLContext
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -23,7 +23,7 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.core_helpers import attribute_items, iter_items
+from litellm.litellm_core_utils.core_helpers import attribute_items, iter_items, require_attributes, subscript
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_calls,
@@ -58,6 +58,19 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+
+_ToolCallKind: TypeAlias = Literal["server_tool_call", "tool_call"]
+_OutputTarget: TypeAlias = tuple[Literal["content"], None] | tuple[_ToolCallKind, int]
+
+
+class _ToolCallFunction(Protocol):
+    arguments: str
+
+
+class _FunctionToolCall(Protocol):
+    @property
+    def function(self) -> _ToolCallFunction: ...
 
 
 class CatoNetworksGuardrailMissingSecrets(Exception):
@@ -522,14 +535,16 @@ class CatoNetworksGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def _output_fragments(message: Message) -> Sequence[tuple[tuple[str, int | None], str]]:
+    def _output_fragments(message: Message) -> Sequence[tuple[_OutputTarget, str]]:
         """Assistant text the proxy returns to the caller: ``content`` plus every
         tool call's ``function.arguments`` string, Claude's server tool calls first,
         each tagged with where a redaction must be written back. ``content`` is only
         included when present so a tool-call-only choice keeps its ``None`` content
         (the text-vs-tool-call signal downstream consumers rely on) while its
         arguments are still inspected."""
-        content: Final = () if message.content is None else ((("content", None), message.content),)
+        content: Final[tuple[tuple[_OutputTarget, str], ...]] = (
+            () if message.content is None else ((("content", None), message.content),)
+        )
         return (
             *content,
             *CatoNetworksGuardrail._tool_call_fragments("server_tool_call", anthropic_server_tool_calls(message)),
@@ -537,7 +552,9 @@ class CatoNetworksGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def _tool_call_fragments(kind: str, tool_calls: Sequence[object]) -> tuple[tuple[tuple[str, int | None], str], ...]:
+    def _tool_call_fragments(
+        kind: _ToolCallKind, tool_calls: Sequence[object]
+    ) -> tuple[tuple[tuple[_ToolCallKind, int], str], ...]:
         return tuple(
             ((kind, idx), arguments)
             for idx, arguments in enumerate(
@@ -547,14 +564,16 @@ class CatoNetworksGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def _apply_output_fragment(message: Any, target: tuple[str, int | None], redacted: str) -> None:
+    def _apply_output_fragment(message: Message, target: _OutputTarget, redacted: str) -> None:
         match target:
             case ("content", _):
                 message.content = redacted
             case ("server_tool_call", int() as idx):
                 write_anthropic_server_tool_call_arguments(message, idx, redacted)
             case (_, idx):
-                message.tool_calls[idx].function.arguments = redacted
+                require_attributes(
+                    subscript(message.tool_calls, idx), _FunctionToolCall, "function"
+                ).function.arguments = redacted
 
     @staticmethod
     def _responses_output_field(item: object, key: str) -> str | Sequence[object] | None:

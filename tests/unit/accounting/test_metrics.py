@@ -5,12 +5,11 @@ import pytest
 from prometheus_client.metrics import MetricWrapperBase
 
 from litellm.accounting import metrics
-from litellm.accounting.metrics import record_deliveries
-from litellm.repositories.accounting_delivery_repository import DeliveryMetrics
+from litellm.accounting.metrics import Cadence, record_backlog, record_storage
+from litellm.repositories.accounting_delivery_repository import DeliveryBacklog, DeliveryStorage
 
-_DELIVERY_METRICS = DeliveryMetrics(
-    pending_count=4, parked_count=1, oldest_pending_seconds=-3.0, batch_count=7, table_bytes=8192
-)
+_BACKLOG = DeliveryBacklog(pending_count=4, parked_count=1, oldest_pending_seconds=-3.0)
+_STORAGE = DeliveryStorage(batch_count=7, table_bytes=8192)
 
 
 def _sample(metric: MetricWrapperBase, suffix: str = "") -> float:
@@ -23,7 +22,8 @@ def test_delivery_metrics_publish_backlog_and_clamp_clock_skew() -> None:
     assert instruments is not None
     batches_before = _sample(instruments.batch_time, "_count")
 
-    record_deliveries(_DELIVERY_METRICS, 0.5)
+    record_backlog(_BACKLOG, 0.5)
+    record_storage(_STORAGE)
 
     assert (
         _sample(instruments.pending),
@@ -46,4 +46,17 @@ def test_delivery_metrics_are_skipped_when_prometheus_client_is_not_installed(
 
     spec.loader.exec_module(module)
 
-    assert module.record_deliveries(_DELIVERY_METRICS, 0.5) is None
+    assert module.record_backlog(_BACKLOG, 0.5) is None
+    assert module.record_storage(_STORAGE) is None
+
+
+def test_cadence_is_due_once_per_interval() -> None:
+    now = [100.0]
+    cadence = Cadence(lambda: now[0])
+
+    observed = []
+    for moment in (100.0, 101.0, 999.9, 1000.0, 1000.0, 1899.0, 1900.0):
+        now[0] = moment
+        observed.append(cadence.due(900))
+
+    assert observed == [True, False, False, True, False, False, True]

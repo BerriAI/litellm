@@ -1,10 +1,19 @@
 import json
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import google.auth
+import google.auth.credentials
 import httpx
 import pytest
+import respx
+from pydantic import TypeAdapter
 
-
+import litellm
+import litellm.main
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.multimodal_embeddings.transformation import (
     VertexAIMultimodalEmbeddingConfig,
 )
@@ -174,3 +183,98 @@ class TestVertexMultimodalEmbedding:
             headers={},
         )
         assert "parameters" not in request
+
+
+class _StaticGoogleCredentials(google.auth.credentials.Credentials):
+    def refresh(self, request: object) -> None:
+        self.token = "test-token"
+
+
+def test_extra_body_fields_reach_the_multimodal_predict_body(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(google.auth, "default", lambda scopes: (_StaticGoogleCredentials(), "test-project"))
+    route = respx_mock.post(host="us-central1-aiplatform.googleapis.com").mock(
+        return_value=httpx.Response(200, json={"predictions": [{"textEmbedding": [0.1, 0.2]}]})
+    )
+
+    litellm.embedding(
+        model="vertex_ai/multimodalembedding@001",
+        input="Hello world",
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        extra_body={"dimension": 128},
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "instances": [{"text": "Hello world"}],
+        "parameters": {"dimension": 128},
+    }
+
+
+LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
+IDENTITY: Final = MappingProxyType({"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"})
+PROXY_METADATA: Final = MappingProxyType({**IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})
+FORGED: Final = MappingProxyType({"user_api_key_alias": "forged", "app": "bot"})
+TODAYS_INSTANCES: Final = [{"text": "a red apple"}]
+SENT_BODY: Final = TypeAdapter(Mapping[str, object])
+SENT_LABELS: Final = TypeAdapter(Mapping[str, str])
+
+
+async def multimodal_embedding_body(
+    is_async: bool, request_labels: Mapping[str, object]
+) -> Mapping[str, object]:
+    reply: Final = MagicMock(
+        side_effect=lambda _request: httpx.Response(200, json={"predictions": [{"textEmbedding": [0.1, 0.2]}]})
+    )
+    transport: Final = httpx.MockTransport(reply)
+    embed: Final = {
+        "model": "vertex_ai/multimodalembedding@001",
+        "input": "a red apple",
+        "vertex_location": "us-central1",
+        "metadata": dict(PROXY_METADATA),
+        **request_labels,
+    }
+    with patch.object(litellm.main.vertex_multimodal_embedding, "_ensure_access_token", return_value=("token", "proj")):
+        if is_async:
+            await litellm.aembedding(**embed, client=AsyncHTTPHandler(transport=transport))
+        else:
+            litellm.embedding(**embed, client=HTTPHandler(client=httpx.Client(transport=transport)))
+
+    sent: Final[httpx.Request] = reply.call_args.args[0]
+    return SENT_BODY.validate_json(sent.content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("request_labels", [{}, {"labels": dict(FORGED)}], ids=["no-caller-labels", "caller-labels"])
+async def test_setting_off_sends_todays_multimodal_embedding_body(
+    is_async: bool, request_labels: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+
+    assert await multimodal_embedding_body(is_async, request_labels) == {"instances": TODAYS_INSTANCES}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "request_labels, expected_labels",
+    [
+        ({}, [*IDENTITY.items(), ("cost-center", "cc-1")]),
+        ({"labels": dict(FORGED)}, [*IDENTITY.items(), ("app", "bot"), ("cost-center", "cc-1")]),
+    ],
+    ids=["no-caller-labels", "forged-caller-labels"],
+)
+async def test_multimodal_embedding_sends_identity_labels_a_caller_cannot_forge(
+    is_async: bool,
+    request_labels: Mapping[str, object],
+    expected_labels: Sequence[tuple[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", LABEL_FIELDS)
+
+    body: Final = await multimodal_embedding_body(is_async, request_labels)
+
+    assert body["instances"] == TODAYS_INSTANCES
+    assert list(SENT_LABELS.validate_python(body["labels"]).items()) == list(expected_labels)
