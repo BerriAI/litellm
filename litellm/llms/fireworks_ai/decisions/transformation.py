@@ -14,6 +14,8 @@ class FireworksAIDecisionsConfig(BaseDecisionsConfig):
 
     def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
         response: Final = parse_systemone_response(self.unwrap_response(payload), request)
+        if response.usage is None:
+            return response
         cached: Final = response.usage.extra.get("cached_input_tokens")
         if isinstance(cached, bool) or not isinstance(cached, int):
             return response

@@ -8,6 +8,7 @@ from typing import Final
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from pydantic_core import ErrorDetails
 from typing_extensions import assert_never
 
 import litellm
@@ -374,12 +375,14 @@ def _ir_answer(question: DecisionsIRQuestion, answer: DecisionAnswer | None) -> 
 
 
 def systemone_response_to_ir(response: DecisionsResponse, request: DecisionsIRRequest) -> DecisionsIRResponse:
-    usage: Final = response.usage or DecisionsUsage()
+    usage: Final = response.usage
     keyed_questions: Final = zip(systemone_keys(request.questions), request.questions, strict=True)
     return DecisionsIRResponse(
         model=response.model,
         answers=tuple(_ir_answer(question, response.answers.get(key)) for key, question in keyed_questions),
-        usage=DecisionsIRUsage(
+        usage=None
+        if usage is None
+        else DecisionsIRUsage(
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             cached_tokens=usage.cached_tokens,
@@ -390,8 +393,51 @@ def systemone_response_to_ir(response: DecisionsResponse, request: DecisionsIRRe
     )
 
 
+_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_LABELS: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
+
+
+def _normalize_answer(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
+    answer: Final = _MAPPING.validate_python(value)
+    legend: Final = answer.get("legend")
+    if answer.get("type") != "score" or not isinstance(legend, list):
+        return answer
+    labels: Final = _LABELS.validate_python(legend)
+    return {**answer, "legend": {str(index): label for index, label in enumerate(labels)}}
+
+
+def _normalize_systemone_response(payload: object) -> object:
+    if not isinstance(payload, Mapping):
+        return payload
+    response: Final = _MAPPING.validate_python(payload)
+    answers: Final = response.get("answers")
+    if not isinstance(answers, Mapping):
+        return response
+    return {
+        **response,
+        "answers": {name: _normalize_answer(answer) for name, answer in _MAPPING.validate_python(answers).items()},
+    }
+
+
+def _validation_detail(detail: ErrorDetails) -> str:
+    location: Final = ".".join(str(part) for part in detail["loc"])
+    return f"{location}: {detail['msg']}" if location else detail["msg"]
+
+
+def _validation_summary(error: ValidationError) -> str:
+    return "; ".join(_validation_detail(detail) for detail in error.errors(include_url=False, include_input=False))
+
+
+class DecisionsResponseValidationError(BaseLLMException):
+    pass
+
+
 def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
-    return systemone_response_to_ir(_SYSTEMONE_RESPONSE_ADAPTER.validate_python(payload), request)
+    return systemone_response_to_ir(
+        _SYSTEMONE_RESPONSE_ADAPTER.validate_python(_normalize_systemone_response(payload)), request
+    )
 
 
 def _systemone_answer(answer: DecisionsIRAnswer) -> DecisionAnswer | None:
@@ -440,7 +486,9 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
             **response.extra,
             "model": response.model,
             "answers": {key: answer for key, answer in keyed_answers if answer is not None},
-            "usage": DecisionsUsage.model_validate(
+            "usage": None
+            if response.usage is None
+            else DecisionsUsage.model_validate(
                 {
                     **response.usage.extra,
                     "input_tokens": response.usage.input_tokens,
@@ -492,7 +540,11 @@ class BaseDecisionsConfig(ABC):
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or self._first_secret(self.api_key_env)
 
+    def validate_client_connection(self, api_base: str | None, api_key: str | None) -> None:
+        return
+
     def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
+        self.validate_client_connection(api_base, api_key)
         return self.resolve_api_base(api_base), self.resolve_api_key(api_key)
 
     def resolve_credential(
@@ -611,9 +663,10 @@ class BaseDecisionsConfig(ABC):
         try:
             return self.parse_response(payload, request)
         except ValidationError as error:
-            raise BaseLLMException(
+            raise DecisionsResponseValidationError(
                 status_code=500,
-                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: {error}",
+                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
+                f"{error.title} {_validation_summary(error)}",
             ) from error
 
     def get_error_class(

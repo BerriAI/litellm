@@ -76,6 +76,7 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
+from litellm.decisions.call import validate_router_connection
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
@@ -551,6 +552,11 @@ _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeA
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
+
+
+def _decisions_api_base_override(request: Mapping[str, object]) -> Mapping[str, object]:
+    api_base: Final = request.get("api_base") or request.get("base_url")
+    return {"api_base": api_base} if isinstance(api_base, str) and api_base else {}
 
 
 def _is_fallback_hop(request_kwargs: Mapping[str, object]) -> bool:
@@ -5764,6 +5770,18 @@ class Router:
                     return await original_generic_function(model=model, **kwargs)
                 raise e
 
+            connection_overrides: Final = (
+                _decisions_api_base_override(_FALLBACK_HOP_ADAPTER.validate_python(kwargs))
+                if handler_name in {"decisions", "adecisions", "systemone", "asystemone"}
+                else {}
+            )
+            if handler_name in {"decisions", "adecisions", "systemone", "asystemone"}:
+                connection_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+                validate_router_connection(
+                    str(connection_params.get("model")),
+                    provider_for_generic_call(connection_params),
+                    _FALLBACK_HOP_ADAPTER.validate_python(kwargs),
+                )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
 
             data: Final = deployment["litellm_params"].copy()
@@ -5784,6 +5802,7 @@ class Router:
                 ),
                 "caching": self.cache_responses,
                 **kwargs,
+                **connection_overrides,
                 "model": model_name,
                 **_with_router_resolved_session_model(kwargs.get("session"), model_name),
             }
@@ -6513,6 +6532,18 @@ class Router:
                     specific_deployment=kwargs.pop("specific_deployment", None),
                     request_kwargs=kwargs,
                 )
+            connection_overrides: Final = (
+                _decisions_api_base_override(_FALLBACK_HOP_ADAPTER.validate_python(kwargs))
+                if handler_name in {"decisions", "adecisions", "systemone", "asystemone"}
+                else {}
+            )
+            if handler_name in {"decisions", "adecisions", "systemone", "asystemone"}:
+                connection_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+                validate_router_connection(
+                    str(connection_params.get("model")),
+                    provider_for_generic_call(connection_params),
+                    _FALLBACK_HOP_ADAPTER.validate_python(kwargs),
+                )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name="generic_api_call")
 
             data: Final = deployment["litellm_params"].copy()
@@ -6541,6 +6572,7 @@ class Router:
                     "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
                     **kwargs,
+                    **connection_overrides,
                 }
             )
 

@@ -15,15 +15,18 @@ from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normal
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_convert_url_to_base64,
     async_convert_urls_to_base64,
     convert_url_to_base64,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
+    DecisionsResponseValidationError,
     image_media_type,
     image_param,
     input_images,
+    ir_to_systemone_request,
     ir_to_systemone_response,
     remote_image_urls,
     systemone_request_to_ir,
@@ -229,6 +232,18 @@ def _provider_config(model: str, custom_llm_provider: str) -> BaseDecisionsConfi
             llm_provider=custom_llm_provider,
         )
     return provider_config
+
+
+def validate_router_connection(model: str, provider: str | None, request: Mapping[str, object]) -> None:
+    api_base: Final = request.get("api_base") or request.get("base_url")
+    if provider is None or not isinstance(api_base, str) or not api_base:
+        return
+    api_key: Final = request.get("api_key")
+    provider_config: Final = _provider_config(model, provider)
+    try:
+        provider_config.validate_client_connection(api_base, api_key if isinstance(api_key, str) else None)
+    except ValueError as error:
+        raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
 
 
 def _ir_request(request: DecisionsRequestFormat, safety_identifier: str | None) -> DecisionsIRRequest:
@@ -454,10 +469,12 @@ def prepare_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
+    base_url: Final = kwargs.get("base_url")
+    requested_api_base: Final = api_base or (base_url if isinstance(base_url, str) else None)
     upstream_model, provider, dynamic_api_key, dynamic_api_base = litellm.get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
-        api_base=api_base,
+        api_base=requested_api_base,
         api_key=api_key,
     )
     provider_config: Final = _provider_config(upstream_model, provider)
@@ -486,7 +503,7 @@ def prepare_call(
 
     try:
         resolved_api_base, static_api_key = provider_config.resolve_connection(
-            dynamic_api_base or api_base, dynamic_api_key or api_key
+            dynamic_api_base or requested_api_base, dynamic_api_key or api_key
         )
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
@@ -583,10 +600,44 @@ def _with_data_urls(call: DecisionsCall, data_urls: Mapping[str, str]) -> Decisi
     )
 
 
+def _remaining_image_bytes(call: DecisionsCall) -> int | None:
+    total: Final = call.provider_config.max_total_image_bytes
+    if call.custom_llm_provider != "gemini" or total is None:
+        return None
+    _checked_image_sizes(call)
+    return total - sum(_decoded_image_bytes(image) for image in input_images(call.ir_request.input))
+
+
+def _bounded_remote_images(
+    urls: tuple[str, ...], remaining: int, timeout: float | httpx.Timeout | None
+) -> tuple[str, ...]:
+    state: tuple[int, tuple[str, ...]] = (remaining, ())  # rebind-ok: sequential budget without recursion
+    for url in urls:
+        available, images = state
+        image = convert_url_to_base64(url, timeout=timeout, max_bytes=available)
+        state = (available - _decoded_image_bytes(image), (*images, image))
+    return state[1]
+
+
+async def _async_bounded_remote_images(
+    urls: tuple[str, ...], remaining: int, timeout: float | httpx.Timeout | None
+) -> tuple[str, ...]:
+    state: tuple[int, tuple[str, ...]] = (remaining, ())  # rebind-ok: sequential budget without recursion
+    for url in urls:
+        available, images = state
+        image = await async_convert_url_to_base64(url, timeout=timeout, max_bytes=available)
+        state = (available - _decoded_image_bytes(image), (*images, image))
+    return state[1]
+
+
 def _with_remote_images_inlined(call: DecisionsCall) -> DecisionsCall:
     remote_urls: Final = _remote_image_urls(call)
     if not remote_urls:
         return call
+    remaining: Final = _remaining_image_bytes(call)
+    if remaining is not None:
+        images: Final = _bounded_remote_images(remote_urls, remaining, call.timeout)
+        return _with_data_urls(call, MappingProxyType(dict(zip(remote_urls, images, strict=True))))
     return _with_data_urls(
         call, MappingProxyType({url: convert_url_to_base64(url, timeout=call.timeout) for url in remote_urls})
     )
@@ -596,7 +647,12 @@ async def _async_with_remote_images_inlined(call: DecisionsCall) -> DecisionsCal
     remote_urls: Final = _remote_image_urls(call)
     if not remote_urls:
         return call
-    data_urls: Final = await async_convert_urls_to_base64(remote_urls, timeout=call.timeout)
+    remaining: Final = _remaining_image_bytes(call)
+    data_urls: Final = (
+        await async_convert_urls_to_base64(remote_urls, timeout=call.timeout)
+        if remaining is None
+        else await _async_bounded_remote_images(remote_urls, remaining, call.timeout)
+    )
     return _with_data_urls(call, MappingProxyType(dict(zip(remote_urls, data_urls, strict=True))))
 
 
@@ -687,6 +743,17 @@ def _request_body(call: DecisionsCall) -> Mapping[str, object]:
     return body
 
 
+def _logged_request_body(call: DecisionsCall) -> Mapping[str, object]:
+    if call.custom_llm_provider == "gemini":
+        body: Final = ir_to_systemone_request(call.model, call.ir_request, supports_audio=True, supports_video=True)
+        if isinstance(body, UnsupportedDecisionsRequest):
+            raise litellm.BadRequestError(
+                message=body.reason, model=call.requested_model, llm_provider=call.custom_llm_provider
+            )
+        return body
+    return _request_body(call)
+
+
 def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
     formatted: Final = _formatted_response(response, call)
     provider_cost: Final = call.provider_config.provider_reported_cost(response)
@@ -724,18 +791,21 @@ def _formatted_response(
 
 
 def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
-    if isinstance(error, BaseLLMException) and error.status_code_is_synthesized:
-        provider_label: Final = f"{call.custom_llm_provider[0].upper()}{call.custom_llm_provider[1:]}Exception"
-        return litellm.APIConnectionError(
-            message=f"{provider_label} - {error.message}",
-            llm_provider=call.custom_llm_provider,
-            model=f"{call.custom_llm_provider}/{call.model}",
-        )
-    return litellm.exception_type(
-        model=f"{call.custom_llm_provider}/{call.model}",
-        custom_llm_provider=call.custom_llm_provider,
-        original_exception=error,
-    )
+    provider_label: Final = f"{call.custom_llm_provider[0].upper()}{call.custom_llm_provider[1:]}Exception"
+    model: Final = f"{call.custom_llm_provider}/{call.model}"
+    match error:
+        case DecisionsResponseValidationError():
+            return litellm.InternalServerError(
+                message=f"{provider_label} - {error.message}", llm_provider=call.custom_llm_provider, model=model
+            )
+        case BaseLLMException(status_code_is_synthesized=True):
+            return litellm.APIConnectionError(
+                message=f"{provider_label} - {error.message}", llm_provider=call.custom_llm_provider, model=model
+            )
+        case _:
+            return litellm.exception_type(
+                model=model, custom_llm_provider=call.custom_llm_provider, original_exception=error
+            )
 
 
 async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
@@ -750,7 +820,7 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
-            logged_body=body if inlined is supported else _request_body(supported),
+            logged_body=body if inlined is supported else _logged_request_body(supported),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,
@@ -774,7 +844,7 @@ def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
-            logged_body=body if inlined is supported else _request_body(supported),
+            logged_body=body if inlined is supported else _logged_request_body(supported),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,
