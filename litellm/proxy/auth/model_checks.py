@@ -79,6 +79,20 @@ _FIREWORKS_ROUTER_ROUTES: Final = (
 )
 _FIREWORKS_RESOURCE_PATH_PREFIX: Final = "accounts/"
 _PROVIDER_BASE_URL_ENV_VAR_SUFFIXES: Final = ("_API_BASE", "_BASE_URL")
+_PROVIDER_BASE_URL_ENV_VARS_NOT_NAMED_AFTER_THE_PROVIDER: Final = MappingProxyType(
+    {
+        LlmProviders.FRIENDLIAI.value: ("FRIENDLI_API_BASE",),
+        LlmProviders.VOLCENGINE.value: ("ARK_API_BASE",),
+        LlmProviders.DATABRICKS.value: ("DATABRICKS_HOST",),
+        LlmProviders.DEEPSEEK.value: ("DEEPSEEK_ANTHROPIC_API_BASE",),
+        LlmProviders.TENCENT.value: ("TENCENT_ANTHROPIC_API_BASE",),
+        LlmProviders.MISTRAL.value: ("MISTRAL_AZURE_API_BASE",),
+        LlmProviders.CHATGPT.value: ("OPENAI_CHATGPT_API_BASE",),
+        LlmProviders.XAI.value: ("XAI_OAUTH_API_BASE",),
+        LlmProviders.GRADIENT_AI.value: ("GRADIENT_AI_AGENT_ENDPOINT",),
+        LlmProviders.DATAROBOT.value: ("DATAROBOT_ENDPOINT",),
+    }
+)
 _PROVIDERS_CHECKED_AGAINST_THE_CATALOG_BEHIND_AN_API_BASE: Final = frozenset(
     provider.value for provider in (LlmProviders.TOGETHER_AI, LlmProviders.AZURE_AI, LlmProviders.WATSONX)
 )
@@ -413,9 +427,14 @@ def _resolves_to_catalog_model(model: str, provider: str, provider_model_ids: fr
 def _provider_base_url_is_set_in_env(provider: str) -> bool:
     env_name: Final = provider.upper().replace("-", "_")
     env_prefixes: Final = frozenset((env_name, *env_name.split("_")))
+    named_after_the_provider: Final = (
+        f"{prefix}{suffix}" for prefix, suffix in itertools.product(env_prefixes, _PROVIDER_BASE_URL_ENV_VAR_SUFFIXES)
+    )
     return any(
-        os.environ.get(f"{prefix}{suffix}")
-        for prefix, suffix in itertools.product(env_prefixes, _PROVIDER_BASE_URL_ENV_VAR_SUFFIXES)
+        os.environ.get(env_var)
+        for env_var in itertools.chain(
+            named_after_the_provider, _PROVIDER_BASE_URL_ENV_VARS_NOT_NAMED_AFTER_THE_PROVIDER.get(provider, ())
+        )
     )
 
 

@@ -2118,6 +2118,9 @@ def test_wildcard_over_a_namespace_behind_a_custom_api_base_lists_the_bare_wildc
         ("text-completion-openai", "OPENAI_BASE_URL"),
         ("cohere_chat", "COHERE_API_BASE"),
         ("ollama_chat", "OLLAMA_API_BASE"),
+        ("friendliai", "FRIENDLI_API_BASE"),
+        ("volcengine", "ARK_API_BASE"),
+        ("databricks", "DATABRICKS_HOST"),
     ],
 )
 def test_wildcard_over_a_namespace_behind_a_gateway_set_in_the_env_lists_the_bare_wildcard_ids(
