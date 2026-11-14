@@ -6,6 +6,8 @@ Regression tests for the /v1/messages request-parse fast paths:
   while resolving the (static) type hints only once per process.
 """
 
+from typing import Final
+
 import pytest
 
 import litellm
@@ -154,6 +156,94 @@ def test_deployment_listed_param_is_dropped_before_the_unsupported_param_gate(mo
     )
 
     assert result == {"stream": True}
+
+
+CLEAR_THINKING_EDIT: Final = {"type": "clear_thinking_20251015"}
+CLEAR_TOOL_USES_EDIT: Final = {"type": "clear_tool_uses_20250919"}
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "thinking", "kept_edits"),
+    [
+        pytest.param(
+            "claude-sonnet-4-5",
+            {"type": "enabled", "budget_tokens": 1024},
+            [CLEAR_TOOL_USES_EDIT],
+            id="dropped-thinking-takes-the-edit",
+        ),
+        pytest.param(
+            "claude-sonnet-5-5",
+            {"type": "adaptive"},
+            [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT],
+            id="model-thinking-anyway-keeps-the-edit",
+        ),
+        pytest.param(
+            "claude-sonnet-4-5",
+            None,
+            [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT],
+            id="no-thinking-sent-keeps-the-edit",
+        ),
+    ],
+)
+def test_deployment_dropped_thinking_drops_the_clear_thinking_edit(
+    model: str, thinking: dict[str, object] | None, kept_edits: list[dict[str, str]]
+):
+    result: Final = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+        params={"thinking": thinking, "context_management": {"edits": [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT]}},
+        model=model,
+        custom_llm_provider="anthropic",
+        additional_drop_params=("thinking",),
+    )
+
+    assert result == {"context_management": {"edits": kept_edits}}
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "effort", "kept_edits"),
+    [
+        pytest.param(
+            "claude-sonnet-4-5",
+            {"output_config": {"effort": "high"}},
+            [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT],
+            id="effort-mapped-to-thinking-keeps-the-edit",
+        ),
+        pytest.param(
+            "claude-sonnet-4-5",
+            {"reasoning_effort": "high"},
+            [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT],
+            id="reasoning-effort-keeps-the-edit",
+        ),
+        pytest.param(
+            "claude-opus-4-5",
+            {"output_config": {"effort": "high"}},
+            [CLEAR_TOOL_USES_EDIT],
+            id="native-effort-takes-the-edit",
+        ),
+        pytest.param(
+            "claude-sonnet-4-6",
+            {"output_config": {"effort": "high"}},
+            [CLEAR_TOOL_USES_EDIT],
+            id="adaptive-model-effort-takes-the-edit",
+        ),
+    ],
+)
+def test_deployment_dropped_thinking_leaves_the_edit_to_the_effort_translation(
+    model: str, effort: dict[str, object], kept_edits: list[dict[str, str]]
+):
+    result: Final = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+        params={
+            "thinking": {"type": "adaptive"},
+            **effort,
+            "context_management": {"edits": [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT]},
+        },
+        model=model,
+        custom_llm_provider="anthropic",
+        additional_drop_params=("thinking",),
+    )
+
+    assert result == {**effort, "context_management": {"edits": kept_edits}}
 
 
 def test_param_missing_from_the_drop_list_still_raises_the_unsupported_param_400(monkeypatch):

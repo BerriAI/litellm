@@ -6,6 +6,7 @@ use litellm_core_utils::{
     get_provider_specific_headers::get_provider_specific_headers, settings::Lookup,
 };
 use litellm_http::request::with_default_headers;
+use litellm_llms::anthropic::messages::thinking::without_dropped_thinking;
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment, messages::context::MessagesTransformContext,
 };
@@ -87,12 +88,13 @@ fn prepare_provider_request(
         MessagesRequest { model, ..body },
         shaping.settings.reasoning_auto_summary,
     )?;
-    let trimmed =
-        without_additional_drop_params(sanitized, &shaping.settings.additional_drop_params)?;
-    let transformed = config.transform_anthropic_messages_request(
-        trimmed,
-        &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params),
+    let context = MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params);
+    let trimmed = without_dropped_keys(
+        sanitized,
+        &shaping.settings.additional_drop_params,
+        &context,
     )?;
+    let transformed = config.transform_anthropic_messages_request(trimmed, &context)?;
 
     let scoped =
         get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
@@ -146,9 +148,27 @@ fn without_additional_drop_params(
     })
 }
 
+fn without_dropped_keys(
+    request: MessagesRequest,
+    paths: &[String],
+    context: &MessagesTransformContext,
+) -> Result<MessagesRequest, Error> {
+    let drops_sent_thinking =
+        request.params.thinking.is_some() && paths.iter().any(|path| path == "thinking");
+    let trimmed = without_additional_drop_params(request, paths)?;
+    Ok(if drops_sent_thinking {
+        without_dropped_thinking(trimmed, &context.thinking)
+    } else {
+        trimmed
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use litellm_llms::base_llm::auth::resolve_auth;
+    use litellm_llms::base_llm::messages::context::{
+        MessagesModelCapabilities, SupportedEffortTiers,
+    };
     use litellm_llms_types::headers::ProviderSpecificHeaders;
     use rstest::{fixture, rstest};
     use serde_json::{Map, Value, json};
@@ -435,6 +455,140 @@ mod tests {
                 "messages": [{"role": "user", "content": "hi"}],
                 "max_tokens": 16
             }))
+        );
+    }
+
+    #[rstest]
+    #[case::thinking_dropped(
+        MessagesModelCapabilities::default(),
+        json!({"type": "enabled", "budget_tokens": 1024}),
+        json!([{"type": "clear_tool_uses_20250919"}])
+    )]
+    #[case::model_thinks_by_default(
+        MessagesModelCapabilities {
+            thinking_on_by_default: true,
+            ..MessagesModelCapabilities::default()
+        },
+        json!({"type": "adaptive"}),
+        json!([{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}])
+    )]
+    #[case::no_thinking_sent(
+        MessagesModelCapabilities::default(),
+        Value::Null,
+        json!([{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}])
+    )]
+    fn additional_drop_params_thinking_drops_the_clear_thinking_edit(
+        shaping: MessagesShaping,
+        #[case] capabilities: MessagesModelCapabilities,
+        #[case] thinking: Value,
+        #[case] expected_edits: Value,
+    ) {
+        let shaping = MessagesShaping {
+            capabilities,
+            settings: MessagesSettings {
+                additional_drop_params: vec!["thinking".to_string()],
+                ..shaping.settings
+            },
+        };
+        let sent = prepared_body(
+            json!({
+                "model": "claude-test",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 2048,
+                "thinking": thinking,
+                "context_management": {"edits": [{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}]}
+            }),
+            shaping,
+        )
+        .unwrap();
+        assert_eq!(
+            (sent.get("thinking"), &sent["context_management"]["edits"]),
+            (None, &expected_edits)
+        );
+    }
+
+    #[rstest]
+    #[case::reasoning_effort_turns_thinking_back_on(
+        MessagesModelCapabilities {
+            supports_reasoning: true,
+            ..MessagesModelCapabilities::default()
+        },
+        json!({"reasoning_effort": "high"}),
+        json!({"type": "enabled", "budget_tokens": 2999}),
+        json!([{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}])
+    )]
+    #[case::legacy_effort_turns_thinking_back_on(
+        MessagesModelCapabilities {
+            supports_reasoning: true,
+            ..MessagesModelCapabilities::default()
+        },
+        json!({"output_config": {"effort": "high"}}),
+        json!({"type": "enabled", "budget_tokens": 2999}),
+        json!([{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}])
+    )]
+    #[case::native_effort_leaves_thinking_off(
+        MessagesModelCapabilities {
+            supports_reasoning: true,
+            supports_output_config: true,
+            effort_tiers: SupportedEffortTiers { high: true, ..SupportedEffortTiers::default() },
+            ..MessagesModelCapabilities::default()
+        },
+        json!({"output_config": {"effort": "high"}}),
+        Value::Null,
+        json!([{"type": "clear_tool_uses_20250919"}])
+    )]
+    #[case::adaptive_model_effort_leaves_thinking_off(
+        MessagesModelCapabilities {
+            supports_reasoning: true,
+            supports_adaptive_thinking: true,
+            ..MessagesModelCapabilities::default()
+        },
+        json!({"output_config": {"effort": "high"}}),
+        Value::Null,
+        json!([{"type": "clear_tool_uses_20250919"}])
+    )]
+    fn additional_drop_params_thinking_leaves_the_edit_to_the_effort_translation(
+        shaping: MessagesShaping,
+        #[case] capabilities: MessagesModelCapabilities,
+        #[case] effort: Value,
+        #[case] expected_thinking: Value,
+        #[case] expected_edits: Value,
+    ) {
+        let shaping = MessagesShaping {
+            capabilities,
+            settings: MessagesSettings {
+                additional_drop_params: vec!["thinking".to_string()],
+                ..shaping.settings
+            },
+        };
+        let Value::Object(effort) = effort else {
+            unreachable!()
+        };
+        let sent = prepared_body(
+            Value::Object(
+                [
+                    ("model".to_string(), json!("claude-test")),
+                    ("messages".to_string(), json!([{"role": "user", "content": "hi"}])),
+                    ("max_tokens".to_string(), json!(3000)),
+                    ("thinking".to_string(), json!({"type": "adaptive"})),
+                    (
+                        "context_management".to_string(),
+                        json!({"edits": [{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}]}),
+                    ),
+                ]
+                .into_iter()
+                .chain(effort)
+                .collect(),
+            ),
+            shaping,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                sent.get("thinking").cloned().unwrap_or(Value::Null),
+                &sent["context_management"]["edits"]
+            ),
+            (expected_thinking, &expected_edits)
         );
     }
 

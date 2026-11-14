@@ -1762,12 +1762,6 @@ def _is_clear_thinking_edit(edit: object) -> bool:
 
 
 def drop_clear_thinking_edits(params: MutableMapping[str, object]) -> bool:  # mutable-ok: edits in place
-    """
-    Remove the ``clear_thinking_*`` context-management edits, which Anthropic
-    rejects without ``thinking``.  ``context_management`` itself goes only when
-    such an edit was removed and nothing else is left in it.  Returns whether an
-    edit was removed.
-    """
     raw_context_management: Final = params.get("context_management")
     if not isinstance(raw_context_management, dict):
         return False
@@ -1794,7 +1788,6 @@ def drop_clear_thinking_edits_for_model(
     model: str,
     custom_llm_provider: str,
 ) -> None:
-    """Remove the clear_thinking edits unless the model still thinks without a ``thinking`` param."""
     thinks_without_thinking_param: Final = any(
         AnthropicModelInfo.supports_model_capability(model, capability, custom_llm_provider)
         for capability in ("thinking_always_on", "thinking_on_by_default")
@@ -1806,6 +1799,35 @@ def drop_clear_thinking_edits_for_model(
             "keep the edit.",
             model,
         )
+
+
+def drop_clear_thinking_edits_for_dropped_thinking(
+    params: MutableMapping[str, object],  # mutable-ok: edits in place
+    model: str,
+    custom_llm_provider: str,
+) -> None:
+    if _thinking_stays_on(params, model, custom_llm_provider):
+        return
+    drop_clear_thinking_edits_for_model(params, model, custom_llm_provider)
+
+
+def _mapping_field(params: Mapping[str, object], key: str, field: str) -> object:
+    value: Final = params.get(key)
+    return OBJECT_MAPPING_ADAPTER.validate_python(value).get(field) if isinstance(value, dict) else None
+
+
+def _thinking_stays_on(params: Mapping[str, object], model: str, custom_llm_provider: str) -> bool:
+    if _mapping_field(params, "thinking", "type") not in (None, "disabled"):
+        return True
+    if isinstance(params.get("reasoning_effort"), str):
+        return True
+    if _mapping_field(params, "output_config", "effort") is None:
+        return False
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    return not AnthropicConfig.is_adaptive_thinking_model(
+        model, custom_llm_provider
+    ) and not AnthropicConfig.model_supports_effort_param(model, custom_llm_provider)
 
 
 def _has_clear_thinking_edit(params: Mapping[str, object]) -> bool:

@@ -155,8 +155,6 @@ fn is_clear_thinking_edit(edit: &Recognized<ContextEdit>) -> bool {
     }
 }
 
-/// Anthropic rejects `clear_thinking_*` edits without thinking. `context_management` goes
-/// only when such an edit was removed and nothing else is left in it.
 fn without_clear_thinking_edits(
     context_management: Option<Recognized<ContextManagement>>,
 ) -> Option<Recognized<ContextManagement>> {
@@ -196,6 +194,29 @@ fn without_thinking(
         context_management,
         ..params
     }
+}
+
+pub fn without_dropped_thinking(
+    request: MessagesRequest,
+    context: &ThinkingContext,
+) -> MessagesRequest {
+    if effort_decides_thinking(&request, &context.capabilities) {
+        return request;
+    }
+    MessagesRequest {
+        params: without_thinking(request.params, context),
+        ..request
+    }
+}
+
+fn effort_decides_thinking(
+    request: &MessagesRequest,
+    capabilities: &MessagesModelCapabilities,
+) -> bool {
+    matches!(request.params.reasoning_effort, Some(Recognized::Known(_)))
+        || (known_effort(request).is_some()
+            && !capabilities.supports_adaptive_thinking
+            && !supports_effort_param(capabilities))
 }
 
 fn translate_reasoning_effort(
