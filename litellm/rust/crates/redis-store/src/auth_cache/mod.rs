@@ -396,12 +396,12 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case(0, 10)]
-    #[case(4, 6)]
-    #[case(11, 0)]
+    #[case(0, Some(10))]
+    #[case(4, Some(6))]
+    #[case(11, None)]
     fn local_model_ttl_never_outlives_the_serialized_policy(
         #[case] elapsed: u64,
-        #[case] remaining: u64,
+        #[case] remaining: Option<u64>,
     ) {
         let seconds = Arc::new(AtomicU64::new(1000));
         let clock: Clock = {
@@ -419,7 +419,7 @@ mod tests {
         seconds.store(1000 + elapsed, Ordering::Relaxed);
         assert_eq!(
             cache.local_ttl("policy").unwrap(),
-            Some(Duration::from_secs(remaining))
+            remaining.map(Duration::from_secs)
         );
         cache.delete_local("policy").unwrap();
         assert_eq!(cache.local_ttl("policy").unwrap(), None);
