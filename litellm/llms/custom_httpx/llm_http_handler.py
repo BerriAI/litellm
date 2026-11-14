@@ -248,6 +248,32 @@ def _client_request_headers(
     return _merge_headers_case_insensitive(optional_headers or {}, extra_headers)
 
 
+def _validation_input_headers(
+    custom_llm_provider: str | None,
+    optional_request_params: Mapping[str, object],
+    extra_headers: Mapping[str, object] | None,
+) -> dict[str, object]:  # mutable-ok: provider validate_environment methods require a dict
+    from litellm.litellm_core_utils.core_helpers import as_str_mapping
+
+    if custom_llm_provider in _PROVIDERS_THAT_VALIDATE_CALLER_HEADERS:
+        return dict(_client_request_headers(optional_request_params, extra_headers))
+    return dict(as_str_mapping(optional_request_params.get("extra_headers")) or {})
+
+
+def _responses_request_headers(
+    custom_llm_provider: str | None,
+    validated_headers: Mapping[str, object],
+    extra_headers: Mapping[str, object] | None,
+) -> dict[str, object]:  # mutable-ok: legacy HTTP handler methods require a dict of headers
+    match custom_llm_provider:
+        case "chatgpt":
+            return dict(validated_headers)
+        case "openai":
+            return dict(_merge_headers_case_insensitive(validated_headers, extra_headers))
+        case _:
+            return {**validated_headers, **(extra_headers or {})}
+
+
 def _requested_stream(response_api_optional_request_params: Mapping[str, object]) -> object:
     return response_api_optional_request_params.get("stream", False)
 
@@ -646,6 +672,7 @@ async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) 
 
 _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
 _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_PROVIDERS_THAT_VALIDATE_CALLER_HEADERS: Final = frozenset({"openai", "chatgpt"})
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_OBJECTS: Final = TypeAdapter(list[dict[str, object]])
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -3084,13 +3111,16 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers = _merge_headers_case_insensitive(  # rebind-ok: validation replaces the method's incoming headers
+        headers = _responses_request_headers(  # rebind-ok: validation replaces the method's incoming headers
+            custom_llm_provider,
             responses_api_provider_config.validate_environment(
-                headers=_client_request_headers(response_api_optional_request_params, extra_headers),
+                headers=_validation_input_headers(
+                    custom_llm_provider, response_api_optional_request_params, extra_headers
+                ),
                 model=model,
                 litellm_params=litellm_params,
             ),
-            extra_headers if custom_llm_provider != "chatgpt" else None,
+            extra_headers,
         )
 
         # Check if streaming is requested
@@ -3288,16 +3318,19 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        validated_headers: Final = _merge_headers_case_insensitive(
+        validated_headers: Final = _responses_request_headers(
+            custom_llm_provider,
             await asyncio.to_thread(
                 responses_api_provider_config.validate_environment,
-                headers=_client_request_headers(
-                    _OPTIONAL_PARAMS.validate_python(response_api_optional_request_params), extra_headers
+                headers=_validation_input_headers(
+                    custom_llm_provider,
+                    _OPTIONAL_PARAMS.validate_python(response_api_optional_request_params),
+                    extra_headers,
                 ),
                 model=model,
                 litellm_params=litellm_params,
             ),
-            extra_headers if custom_llm_provider != "chatgpt" else None,
+            extra_headers,
         )
 
         # Check if streaming is requested
@@ -7503,8 +7536,8 @@ class BaseLLMHTTPHandler:
 
         headers: Final = image_edit_provider_config.validate_environment(
             api_key=litellm_params.api_key,
-            headers=_client_request_headers(
-                _OPTIONAL_PARAMS.validate_python(image_edit_optional_request_params), extra_headers
+            headers=_validation_input_headers(
+                custom_llm_provider, _OPTIONAL_PARAMS.validate_python(image_edit_optional_request_params), extra_headers
             ),
             model=model,
             litellm_params=dict(litellm_params),
@@ -7607,8 +7640,8 @@ class BaseLLMHTTPHandler:
         headers: Final = await asyncio.to_thread(
             image_edit_provider_config.validate_environment,
             api_key=litellm_params.api_key,
-            headers=_client_request_headers(
-                _OPTIONAL_PARAMS.validate_python(image_edit_optional_request_params), extra_headers
+            headers=_validation_input_headers(
+                custom_llm_provider, _OPTIONAL_PARAMS.validate_python(image_edit_optional_request_params), extra_headers
             ),
             model=model,
             litellm_params=dict(litellm_params),

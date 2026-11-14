@@ -7253,7 +7253,7 @@ def embedding(
                 max_retries=max_retries,
                 shared_session=shared_session,
                 litellm_params=litellm_params_dict,
-                organization=openai_client_organization(headers, organization),
+                organization=openai_client_organization(headers, organization) if client is None else None,
             )
         elif custom_llm_provider == "databricks":
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
@@ -8886,8 +8886,12 @@ def transcription(
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
             shared_session=shared_session,
-            organization=caller_or_deployment_openai_organization(
-                as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")), organization
+            organization=(
+                caller_or_deployment_openai_organization(
+                    as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")), organization
+                )
+                if client is None
+                else None
             ),
         )
     elif custom_llm_provider == "nvidia_riva":
@@ -9193,8 +9197,12 @@ def speech(
             optional_params=optional_params,
             api_key=api_key,
             api_base=api_base,
-            organization=caller_or_deployment_openai_organization(
-                as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")), organization
+            organization=(
+                caller_or_deployment_openai_organization(
+                    as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")), organization
+                )
+                if client is None
+                else None
             ),
             project=project,
             max_retries=max_retries,

@@ -2901,6 +2901,55 @@ def test_process_wide_organization_stays_off_routes_a_deployment_did_not_pin(
     assert "OpenAI-Organization" not in recording_openai.headers
 
 
+@pytest.mark.parametrize(
+    ("route", "route_kwargs"),
+    [
+        (litellm.embedding, _EMBEDDING_CALL),
+        (litellm.text_completion, _TEXT_COMPLETION_CALL),
+        (litellm.moderation, _MODERATION_CALL),
+        (litellm.speech, _SPEECH_CALL),
+        (litellm.transcription, _TRANSCRIPTION_CALL),
+    ],
+)
+def test_sync_route_leaves_the_callers_own_client_organization_alone(
+    route: Callable[..., object],
+    route_kwargs: Mapping[str, object],
+) -> None:
+    callers_client: Final = OpenAI(
+        api_key=f"sk-{uuid4()}",
+        http_client=httpx.Client(transport=httpx.MockTransport(_OpenAIThatRecordsTheHeaders())),
+    )
+
+    route(client=callers_client, organization=_DEPLOYMENT_ORGANIZATION, **route_kwargs)
+
+    assert callers_client.organization is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "route_kwargs"),
+    [
+        (litellm.aembedding, _EMBEDDING_CALL),
+        (litellm.atext_completion, _TEXT_COMPLETION_CALL),
+        (litellm.amoderation, _MODERATION_CALL),
+        (litellm.aspeech, _SPEECH_CALL),
+        (litellm.atranscription, _TRANSCRIPTION_CALL),
+    ],
+)
+async def test_async_route_leaves_the_callers_own_client_organization_alone(
+    route: Callable[..., Awaitable[object]],
+    route_kwargs: Mapping[str, object],
+) -> None:
+    callers_client: Final = AsyncOpenAI(
+        api_key=f"sk-{uuid4()}",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(_OpenAIThatRecordsTheHeaders())),
+    )
+
+    await route(client=callers_client, organization=_DEPLOYMENT_ORGANIZATION, **route_kwargs)
+
+    assert callers_client.organization is None
+
+
 @pytest.mark.asyncio
 async def test_sync_batch_list_given_an_async_client_returns_a_page_the_caller_can_await(
     http_backend: ModuleType,

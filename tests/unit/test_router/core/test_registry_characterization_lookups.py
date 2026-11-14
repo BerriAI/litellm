@@ -617,7 +617,7 @@ def test_the_credential_deployment_is_found_by_id_group_team_name_then_wildcard(
 
 @pytest.mark.parametrize(
     ("lookup", "organization"),
-    [("group-one", "org-one"), ("group-two", "org-two"), ("group-none", None)],
+    [("group-one", "org-one"), ("group-two", "org-two"), ("group-none", None), ("group-header", "org-header")],
 )
 def test_credentials_with_provider_carry_the_named_groups_organization_over_a_sibling_on_the_same_model(
     make_core: MakeCore, lookup: str, organization: str | None
@@ -628,6 +628,13 @@ def test_credentials_with_provider_carry_the_named_groups_organization_over_a_si
             deployment("group-one", "one", model=shared_model, organization="org-one"),
             deployment("group-two", "two", model=shared_model, organization="org-two"),
             deployment("group-none", "none", model=shared_model),
+            deployment(
+                "group-header",
+                "header",
+                model=shared_model,
+                organization="org-stale",
+                extra_headers={"openai-organization": "org-header"},
+            ),
         ]
     ).registry()
 
