@@ -137,6 +137,20 @@ def test_github_app_deployment_reports_the_copilot_host_it_calls_over_a_configur
 
 
 @pytest.mark.usefixtures("isolated_token_dirs")
+@pytest.mark.parametrize(
+    "app_settings",
+    [
+        {"github_copilot_auth_type": "github_app", "litellm_credential_name": "never-loaded"},
+        {"github_copilot_app_id": "left-over-client"},
+    ],
+)
+def test_incomplete_github_app_settings_report_the_configured_api_base_instead_of_raising(app_settings):
+    params: Final = {"api_base": "https://admin-set.internal/v1", **app_settings}
+
+    assert litellm.get_api_base(model="github_copilot/gpt-5.5", optional_params=params) == params["api_base"]
+
+
+@pytest.mark.usefixtures("isolated_token_dirs")
 def test_per_user_session_still_reports_the_configured_api_base():
     params: Final = {
         "api_base": "https://admin-set.internal/v1",
