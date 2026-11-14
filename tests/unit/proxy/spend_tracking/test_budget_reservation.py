@@ -111,8 +111,9 @@ async def test_token_counting_routes_are_exempt_from_budget_reservation(route):
 
 
 @pytest.mark.asyncio
-async def test_non_exempt_llm_route_still_reserves_budget():
-    reservation: Final = await _reserve("/v1/responses")
+@pytest.mark.parametrize("route", ["/v1/responses", "/queue/chat/completions"])
+async def test_non_exempt_llm_route_still_reserves_budget(route):
+    reservation: Final = await _reserve(route)
 
     assert reservation is not None
     assert reservation["reserved_cost"] > 0

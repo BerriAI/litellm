@@ -529,6 +529,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     should_return_raw_model_name,
     sse_error_payload,
     ttft_keepalive_interval,
+    withheld_provider_output,
 )
 from litellm.proxy.common_utils.anthropic_error_payload import (
     anthropic_error_json_response,
@@ -1015,6 +1016,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     BudgetCounter,
     customer_window_counters,
     get_budget_window_start,
+    release_cancelled_budget_reservation,
     release_unbound_budget_reservation,
     stamp_budget_reservation_actual_cost,
 )
@@ -11020,6 +11022,7 @@ async def async_data_generator(
     )
     stream_source: AsyncIterator[object] | None = None  # rebind-ok: bound once the keepalive policy resolves
     stream_started: bool = False  # rebind-ok: set once a ping or a hook-cleared chunk is sent, then errors go in-band
+    provider_output_started: bool = False  # rebind-ok: set on the first provider chunk, which partial billing settles
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -11083,6 +11086,7 @@ async def async_data_generator(
                 yield ": ping\n\n"
                 continue
             chunk = item
+            provider_output_started = True
             chunk_received_at = time.perf_counter()
             if needs_per_chunk_hook:
                 ### CALL HOOKS ### - modify outgoing data
@@ -11274,6 +11278,9 @@ async def async_data_generator(
             client_disconnected=client_disconnected,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
+            release_reservation_if_unbilled=client_disconnected
+            and not provider_output_started
+            and not withheld_provider_output(_UNTYPED_VALUE.validate_python(response)),
         )
 
 
@@ -19768,6 +19775,7 @@ async def async_queue_request(
 
     Now using a FastAPI background task + /chat/completions compatible endpoint
     """
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     data = {}
     try:
         data = await request.json()
@@ -19797,10 +19805,14 @@ async def async_queue_request(
             # if users are using user_api_key_auth, set `user` in `data`
             data["user"] = user_api_key_dict.user_id
 
-        if not isinstance(data.get("metadata"), dict):
-            # Covers both missing and JSON-string metadata (multipart /
-            # extra_body); see above for the same guard upstream.
-            data["metadata"] = {}
+        data["litellm_call_id"] = litellm_call_id
+
+        caller_litellm_metadata: Final = LiteLLMProxyRequestSetup.caller_metadata(data.pop("litellm_metadata", None))
+        queued_metadata: Final = {
+            **caller_litellm_metadata,
+            **LiteLLMProxyRequestSetup.caller_metadata(data.get("metadata")),
+        }
+        data["metadata"] = queued_metadata
         logged_api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         data["metadata"]["user_api_key"] = logged_api_key
         data["metadata"]["user_api_key_hash"] = logged_api_key
@@ -19816,6 +19828,22 @@ async def async_queue_request(
             user_api_key_dict, "team_object_permission_id", None
         )
         data["metadata"]["endpoint"] = str(request.url)
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=_headers, data=data, _metadata_variable_name="metadata"
+        )
+        queued_tags: Final = LiteLLMProxyRequestSetup.merged_request_tags(
+            request=request,
+            metadata_buckets=(queued_metadata, caller_litellm_metadata),
+            body_tags=data.get("tags"),
+            user_api_key_dict=user_api_key_dict,
+        )
+        if queued_tags:
+            data["metadata"]["tags"] = list(queued_tags)
+        data["metadata"]["inherited_tags"] = LiteLLMProxyRequestSetup.get_inherited_tags(user_api_key_dict)
+        data["metadata"]["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
+        LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(
+            request=request, request_data=data, metadata_key="metadata"
+        )
 
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
         # override with user settings, these are params passed via cli
@@ -19838,18 +19866,31 @@ async def async_queue_request(
             )
         )
         queued_priority, _ = router.health().split_priority(data["model"], data)
+        queued_headers: Final = {"x-litellm-priority": str(queued_priority), LITELLM_CALL_ID_HEADER: litellm_call_id}
+
+        async def schedule_queued_call() -> object:
+            try:
+                return _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
+            except asyncio.CancelledError:
+                await release_cancelled_budget_reservation(user_api_key_dict.budget_reservation)
+                raise
+
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
-            async def produce_queue_stream() -> StreamingResponse:
-                return StreamingResponse(
-                    async_data_generator(
+            async def produce_queue_stream() -> StreamingResponse | JSONResponse:
+                queued_stream: Final = await schedule_queued_call()
+                data["litellm_logging_obj"] = getattr(queued_stream, "logging_obj", None)
+                return await create_response(
+                    generator=async_data_generator(
                         user_api_key_dict=user_api_key_dict,
-                        response=_UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data)),
+                        response=queued_stream,
                         request_data=data,
                         request=request,
                     ),
                     media_type="text/event-stream",
-                    headers={"x-litellm-priority": str(queued_priority)},
+                    headers=queued_headers,
+                    request=request,
+                    general_settings=general_settings_view(),
                 )
 
             async def audit_late_failure(exc: Exception) -> HTTPException | None:
@@ -19863,20 +19904,26 @@ async def async_queue_request(
                 on_late_failure=audit_late_failure,
             )
 
-        response: Final = _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
-        fastapi_response.headers.update({"x-litellm-priority": str(queued_priority)})
+        response: Final = await schedule_queued_call()
+        fastapi_response.headers.update(queued_headers)
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        if isinstance(e, litellm.BadRequestError):
-            raise ProxyException(
-                message=e.message, type="invalid_request_error", param=getattr(e, "param", None), code=e.status_code
-            ) from e
-        if isinstance(e, ProxyException):
+        failure: Final = _queued_call_failure(e)
+        failure.headers = {**failure.headers, LITELLM_CALL_ID_HEADER: litellm_call_id}
+        if failure is e:
             raise
-        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
+        raise failure from e
+
+
+def _queued_call_failure(e: Exception) -> ProxyException:
+    if isinstance(e, litellm.BadRequestError):
+        return ProxyException(
+            message=e.message, type="invalid_request_error", param=getattr(e, "param", None), code=e.status_code
+        )
+    return proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST)
 
 
 @app.get("/fallback/login", tags=["experimental"], include_in_schema=False)

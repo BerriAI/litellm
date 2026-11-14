@@ -334,7 +334,7 @@ async def reserve_budget_for_request(
     raw_body: bytes | None = None,
     path_params: Mapping[str, object] | None = None,
 ) -> dict | None:
-    if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
+    if valid_token is None or not RouteChecks.runs_inference_checks(route=route):
         return None
     if RouteChecks.is_unbilled_route(route):
         return None
@@ -472,7 +472,7 @@ async def release_budget_reservation(budget_reservation: dict | None) -> None:
 
 
 async def release_budget_reservation_on_cancel(
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,  # mutable-ok: stamps finalized on the caller's reservation
 ) -> None:
     """Reconcile a still-open reservation when the request is cancelled mid-flight.
 
@@ -495,7 +495,8 @@ async def release_budget_reservation_on_cancel(
     """
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
-    incurred_cost: Final = float(budget_reservation.get("input_cost") or 0.0)
+    input_cost: Final = budget_reservation.get("input_cost")
+    incurred_cost: Final = float(input_cost) if isinstance(input_cost, (int, float)) else 0.0
     try:
         await asyncio.shield(
             reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
@@ -541,6 +542,15 @@ async def release_or_invalidate_budget_reservation(
             verbose_proxy_logger.exception("Failed to invalidate budget reservation counters after release failed")
         finally:
             budget_reservation["finalized"] = True
+
+
+async def release_cancelled_budget_reservation(
+    budget_reservation: dict[str, object] | None,  # mutable-ok: stamps finalized on the caller's reservation
+) -> None:
+    if budget_reservation is not None and budget_reservation.get("callback_bound") is True:
+        await release_budget_reservation_on_cancel(budget_reservation)
+        return
+    await asyncio.shield(release_or_invalidate_budget_reservation(budget_reservation))
 
 
 async def release_unbound_budget_reservation(budget_reservation: Mapping[str, object]) -> None:

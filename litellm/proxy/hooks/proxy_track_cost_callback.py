@@ -497,7 +497,7 @@ class _ProxyDBLogger(CustomLogger):
 
         route_is_trackable: Final = (
             request_route is None
-            or RouteChecks.is_llm_api_route(route=request_route)
+            or RouteChecks.runs_inference_checks(request_route)
             or RouteChecks.is_info_route(route=request_route)
             or InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(route=request_route)
         )

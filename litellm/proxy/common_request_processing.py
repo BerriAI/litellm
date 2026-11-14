@@ -189,6 +189,7 @@ from litellm.proxy.route_llm_request import (
     endpoint_unsupported_by_model,
     route_request,
 )
+from litellm.proxy.spend_tracking.budget_reservation import release_budget_reservation_on_cancel
 from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost, prepare_response_cost
 from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemetry_call_id
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
@@ -385,7 +386,7 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
 }
 
 
-def _withheld_provider_output(response: object) -> bool:
+def withheld_provider_output(response: object) -> bool:
     return getattr(response, "has_buffered_provider_output", False) is True
 
 
@@ -1331,18 +1332,18 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
 
     def __init__(
         self,
-        content: AsyncGenerator[str, None],
+        content: AsyncGenerator[str | bytes, None],
         *,
         media_type: str | None = None,
         headers: Mapping[str, str] | None = None,
         status_code: int = status.HTTP_200_OK,
-        upstream_generator: AsyncGenerator[str, None] | None = None,
+        upstream_generator: AsyncGenerator[str | bytes, None] | None = None,
     ) -> None:
         super().__init__(content, status_code=status_code, headers=headers, media_type=media_type)
         self._upstream_generator = upstream_generator
 
     @property
-    def upstream_generator(self) -> AsyncGenerator[str, None] | None:
+    def upstream_generator(self) -> AsyncGenerator[str | bytes, None] | None:
         """The upstream LLM stream, for a caller that has to run this response's cleanup itself."""
         return self._upstream_generator
 
@@ -1613,7 +1614,7 @@ _NO_GENERAL_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 async def create_response(
-    generator: AsyncGenerator[str, None] | Coroutine[object, object, AsyncGenerator[str, None]],
+    generator: AsyncGenerator[str | bytes, None] | Coroutine[object, object, AsyncGenerator[str | bytes, None]],
     media_type: str,
     headers: Mapping[str, str],
     default_status_code: int = status.HTTP_200_OK,
@@ -1631,7 +1632,7 @@ async def create_response(
     callers whose headers can only be known then. ``general_settings`` decides whether
     the first-chunk error body also carries the ``x-litellm-call-id`` header's value.
     """
-    first_chunk_value: str | None = None
+    first_chunk_value: str | bytes | None = None
     final_status_code = default_status_code
 
     try:
@@ -1724,7 +1725,7 @@ async def create_response(
             status_code=error_status,
         )
 
-    async def combined_generator() -> AsyncGenerator[str, None]:
+    async def combined_generator() -> AsyncGenerator[str | bytes, None]:
         if not _DD_STREAMING_TRACE_ENABLED:
             # Fast path: no per-chunk span object / context-manager overhead.
             if first_chunk_value is not None:
@@ -4736,7 +4737,7 @@ class ProxyBaseLLMRequestProcessing:
                     # No spend row settles a stream that returned nothing it could log, so release what the request
                     # holds, as chat completions does.
                     from litellm.proxy.spend_tracking.budget_reservation import (
-                        release_budget_reservation_on_cancel,  # pyright: ignore[reportUnknownVariableType]  # takes the untyped reservation dict
+                        release_budget_reservation_on_cancel,
                     )
 
                     await release_budget_reservation_on_cancel(getattr(user_api_key_dict, "budget_reservation", None))
@@ -5398,6 +5399,8 @@ class ProxyBaseLLMRequestProcessing:
         client_disconnected: bool = False,
         user_api_key_dict: UserAPIKeyAuth | None = None,
         proxy_logging_obj: ProxyLogging | None = None,
+        *,
+        release_reservation_if_unbilled: bool = False,
     ) -> None:
         with anyio.CancelScope(shield=True):
             if stream_completed and proxy_logging_obj is not None and user_api_key_dict is not None:
@@ -5429,6 +5432,12 @@ class ProxyBaseLLMRequestProcessing:
                     and user_api_key_dict is not None
                 ):
                     await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
+                if (
+                    release_reservation_if_unbilled
+                    and not success_event_owns_slot_release
+                    and user_api_key_dict is not None
+                ):
+                    await release_budget_reservation_on_cancel(user_api_key_dict.budget_reservation)
 
             if has_attributes(response, _ClosesAsync, "aclose"):
                 try:
@@ -5580,7 +5589,7 @@ class ProxyBaseLLMRequestProcessing:
             # only sees GeneratorExit on GC) cannot own the refund.
             client_disconnected = not stream_completed
             await close_guarded_stream(guarded_stream)
-            if not delivered_chunk and not _withheld_provider_output(response):
+            if not delivered_chunk and not withheld_provider_output(response):
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,
                 )

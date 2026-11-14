@@ -904,7 +904,7 @@ def _enforce_user_param_check(general_settings: dict, request: Request, request_
 
     http_method: Final = request.method if hasattr(request, "method") else None
     is_post_method: Final = http_method and http_method.upper() == "POST"
-    is_openai_route: Final = RouteChecks.is_llm_api_route(route=route)
+    is_openai_route: Final = RouteChecks.runs_inference_checks(route=route)
     is_mcp_route: Final = route in LiteLLMRoutes.mcp_routes.value or RouteChecks.check_route_access(
         route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
     )
@@ -931,7 +931,7 @@ def _reject_clientside_metadata_tags_check(
             and "tags" in request_body["metadata"]
         )
     )
-    if RouteChecks.is_llm_api_route(route=route) and has_client_tags:
+    if RouteChecks.runs_inference_checks(route=route) and has_client_tags:
         raise ProxyException(
             message=f"Client-side 'metadata.tags' not allowed in request. 'reject_clientside_metadata_tags'={general_settings['reject_clientside_metadata_tags']}. Tags can only be set via key or team metadata, or by configured request_tag_mappings.",
             type=ProxyErrorTypes.bad_request_error,
@@ -945,7 +945,7 @@ def _global_proxy_budget_check(global_proxy_spend: float | None, skip_budget_che
         litellm.max_budget > 0
         and not skip_budget_checks
         and global_proxy_spend is not None
-        and RouteChecks.is_llm_api_route(route=route)
+        and RouteChecks.runs_inference_checks(route=route)
         and route not in MODEL_LIST_ROUTES
     ):
         if math.isfinite(litellm.max_budget) and global_proxy_spend > litellm.max_budget:
@@ -1129,7 +1129,7 @@ def route_skips_budget_checks(route: str) -> bool:
         return False
     if route in MODEL_DISCOVERY_ROUTES:
         return True
-    if RouteChecks.is_llm_api_route(route=route):
+    if RouteChecks.runs_inference_checks(route=route):
         return False
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415  # pass-through endpoints import the auth stack
         InitPassThroughEndpointHelpers,
@@ -1230,7 +1230,7 @@ async def common_checks(
 
     unpriced_models: Final = (
         _unpriced_models_in_request(model=_model, llm_router=llm_router)
-        if litellm.block_requests_for_models_without_pricing and RouteChecks.is_llm_api_route(route=route)
+        if litellm.block_requests_for_models_without_pricing and RouteChecks.runs_inference_checks(route=route)
         else ()
     )
     if unpriced_models:
@@ -1322,7 +1322,7 @@ async def common_checks(
         team_object is not None
         and _team_metadata_requires_trace_id(team_object)
         and request.method not in ("GET", "HEAD", "OPTIONS")
-        and (RouteChecks.is_llm_api_route(route=route) or pass_through_route)
+        and (RouteChecks.runs_inference_checks(route) or pass_through_route)
         and not RouteChecks.check_route_access(
             route=route,
             allowed_routes=LiteLLMRoutes.trace_telemetry_routes.value,

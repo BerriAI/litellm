@@ -4530,7 +4530,7 @@ class ProxyLogging:
         #########################################################
         if route is None:
             return False
-        if not (RouteChecks.is_llm_api_route(route) or RouteChecks.is_info_route(route)):
+        if not (RouteChecks.runs_inference_checks(route) or RouteChecks.is_info_route(route)):
             return False
         # Dashboard session keys poll info routes in the background; their failures are not user requests.
         if RouteChecks.is_dashboard_session_info_route(route, team_id):

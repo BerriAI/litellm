@@ -11262,7 +11262,8 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         assert request_data["model"] == "gpt-4o"
 
     @pytest.mark.asyncio
-    async def test_fallback_skips_candidates_without_pricing(self, monkeypatch: pytest.MonkeyPatch):
+    @pytest.mark.parametrize("route", ["/v1/chat/completions", "/queue/chat/completions"])
+    async def test_fallback_skips_candidates_without_pricing(self, monkeypatch: pytest.MonkeyPatch, route: str):
         valid_token: Final = UserAPIKeyAuth(
             user_id="user-1",
             team_id="team-1",
@@ -11289,7 +11290,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
                 request=request,
                 llm_model_list=None,
                 llm_router=router,
-                route="/v1/chat/completions",
+                route=route,
             )
 
         _assert_budget_exceeded_values(exc_info.value)
