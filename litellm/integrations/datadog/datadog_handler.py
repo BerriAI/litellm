@@ -62,7 +62,11 @@ def get_datadog_tags(
         "POD_NAME": get_datadog_pod_name(),
     }
 
-    tags: Final[list[str]] = [f"{k}:{v}" for k, v in base_tags.items()]
+    custom_tags: Final = (tag.strip() for tag in os.getenv("DD_TAGS", "").split(","))
+    tags: Final[list[str]] = [
+        *(f"{k}:{v}" for k, v in base_tags.items()),
+        *(tag for tag in custom_tags if tag),
+    ]
 
     if standard_logging_object:
         request_tags: Final = standard_logging_object.get("request_tags", []) or []

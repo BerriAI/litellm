@@ -91,6 +91,15 @@ def build(logger: DataDogLLMObsLogger, **kwargs: Any) -> dict[str, Any]:
     return json.loads(safe_dumps(payload))
 
 
+def test_dd_tags_are_exported_on_llm_observability_spans(logger: DataDogLLMObsLogger) -> None:
+    with patch.dict(os.environ, {"DD_TAGS": "team:platform,cost_center:engineering"}):
+        payload = build(logger)
+
+    assert "cost_center:engineering" in payload["tags"]
+    assert "team:platform" in payload["tags"]
+    assert "request_tag:cost_center:engineering" not in payload["tags"]
+
+
 def test_output_tool_calls_use_the_datadog_tool_call_schema(logger: DataDogLLMObsLogger) -> None:
     """Datadog reads name/arguments/tool_id off the tool call; OpenAI nests them under `function`."""
     payload = build(
