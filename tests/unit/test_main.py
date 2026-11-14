@@ -12268,3 +12268,189 @@ def test_aleph_alpha_completion_that_is_not_text_fails_the_call(
 
     with pytest.raises(APIError):
         _aleph_alpha_completion()
+
+
+def _prompt_settings_response(stream: bool) -> httpx.Response:
+    common: Final = {"id": "chatcmpl-prompt-regression", "created": 1, "model": "prompt-regression"}
+    if not stream:
+        return httpx.Response(
+            200,
+            json={
+                **common,
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            },
+        )
+    chunks: Final = (
+        {
+            **common,
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": None}],
+        },
+        {**common, "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+    )
+    return httpx.Response(
+        200,
+        headers={"Content-Type": "text/event-stream"},
+        text="".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n",
+    )
+
+
+async def _prompt_settings_stream_text(response: litellm.CustomStreamWrapper) -> str:
+    chunks: Final = [TypeAdapter(ModelResponseStream).validate_python(chunk) async for chunk in response]
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stream", "fallback"), [(False, True), (True, False), (True, True)], ids=["json-fallback", "sse", "sse-fallback"]
+)
+async def test_prompt_settings_and_falsy_values_survive_streaming_and_dictionary_fallbacks(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, stream: bool, fallback: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            DotpromptManager(
+                prompt_data={
+                    "pinned": {
+                        "content": "System: Pinned.",
+                        "metadata": {
+                            "temperature": 0.42,
+                            "max_tokens": 31,
+                            "seed": 0,
+                            "logprobs": False,
+                        },
+                    }
+                }
+            )
+        ],
+    )
+    primary: Final = respx_mock.post("https://prompt-primary.test/v1/chat/completions").mock(
+        return_value=httpx.Response(503, json={"error": {"message": "unavailable", "type": "server_error"}})
+        if fallback
+        else _prompt_settings_response(stream)
+    )
+    backup: Final = (
+        respx_mock.post("https://prompt-backup.test/v1/chat/completions").mock(
+            return_value=_prompt_settings_response(stream)
+        )
+        if fallback
+        else None
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/prompt-primary",
+        api_base="https://prompt-primary.test/v1",
+        api_key="test-key",
+        messages=[{"role": "user", "content": "hi"}],
+        prompt_id="pinned",
+        temperature=0,
+        max_tokens=17,
+        seed=7,
+        logprobs=True,
+        top_p=0,
+        stream=stream,
+        num_retries=0,
+        **(
+            {"fallbacks": [{"model": "openai/prompt-backup", "api_base": "https://prompt-backup.test/v1"}]}
+            if fallback
+            else {}
+        ),
+    )
+    if stream:
+        assert isinstance(response, litellm.CustomStreamWrapper)
+        assert await _prompt_settings_stream_text(response) == "ok"
+    else:
+        assert isinstance(response, litellm.ModelResponse)
+        assert response.choices[0].message.content == "ok"
+    assert primary.call_count >= 1
+    if backup is not None:
+        assert backup.call_count == 1
+    for route in (primary, backup) if backup is not None else (primary,):
+        sent: Final = TypeAdapter(dict[str, object]).validate_json(route.calls.last.request.content)
+        assert sent.get("stream", False) is stream
+        assert {key: sent.get(key) for key in ("temperature", "max_tokens", "seed", "logprobs", "top_p")} == {
+            "temperature": 0.42,
+            "max_tokens": 31,
+            "seed": 0,
+            "logprobs": False,
+            "top_p": 0,
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tier", "complexity", "temperature", "limit"), [("quick", "SIMPLE", 0.42, 31), ("deep", "REASONING", 0.82, 63)]
+)
+async def test_complexity_routed_prompt_settings_reach_the_streaming_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    tier: str,
+    complexity: str,
+    temperature: float,
+    limit: int,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            DotpromptManager(
+                prompt_data={
+                    "pinned": {
+                        "content": f"System: {tier}.",
+                        "metadata": {"temperature": temperature, "max_tokens": limit},
+                    }
+                }
+            )
+        ],
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": tier,
+                "litellm_params": {
+                    "model": f"openai/{tier}-stream-test",
+                    "api_base": "https://prompt-stream.test/v1",
+                    "api_key": "test-key",
+                },
+                "model_info": {"max_output_tokens": 4096},
+            },
+            {
+                "model_name": "smart",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_default_model": tier,
+                    "complexity_router_config": {
+                        "classifier_type": "heuristic",
+                        "context_compaction": False,
+                        "keyword_tier_rules": [{"keywords": [f"marker{tier}"], "tier": complexity}],
+                        "tiers": {complexity: {"model_name": tier, "litellm_params": {"prompt_id": "pinned"}}},
+                    },
+                },
+            },
+        ],
+        num_retries=0,
+    )
+    endpoint: Final = respx_mock.post("https://prompt-stream.test/v1/chat/completions").mock(
+        return_value=_prompt_settings_response(True)
+    )
+
+    response: Final = await router.acompletion(
+        model="smart", messages=[{"role": "user", "content": f"marker{tier}"}], temperature=0, top_p=0, stream=True
+    )
+
+    assert isinstance(response, litellm.CustomStreamWrapper)
+    assert await _prompt_settings_stream_text(response) == "ok"
+    assert endpoint.call_count == 1
+    sent: Final = TypeAdapter(dict[str, object]).validate_json(endpoint.calls.last.request.content)
+    assert sent["stream"] is True
+    assert (sent["model"], sent["temperature"], sent["max_tokens"], sent["top_p"]) == (
+        f"{tier}-stream-test",
+        temperature,
+        limit,
+        0,
+    )
