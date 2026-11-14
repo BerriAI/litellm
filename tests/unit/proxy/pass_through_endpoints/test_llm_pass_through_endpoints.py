@@ -3740,9 +3740,17 @@ class TestMilvusProxyRoute:
             assert result == {"results": [{"id": 1, "distance": 0.5}]}
 
     @pytest.mark.asyncio
-    async def test_milvus_proxy_route_expands_the_stores_named_credential(self, monkeypatch: pytest.MonkeyPatch):
-        from litellm.types.utils import CredentialItem
+    async def test_milvus_proxy_route_sends_the_stores_named_credential(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock
+    ):
+        import httpx
 
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.types.utils import CredentialItem
+        from litellm.types.vector_stores import LiteLLM_ManagedVectorStoreIndex
+        from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         monkeypatch.setattr(
             litellm,
             "credential_list",
@@ -3754,50 +3762,70 @@ class TestMilvusProxyRoute:
                 )
             ],
         )
-        mock_request = MagicMock(spec=Request)
-        mock_request.method = "POST"
-        mock_request.headers = {"content-type": "application/json"}
-        mock_index_object = MagicMock()
-        mock_index_object.litellm_params.vector_store_name = "milvus-store-1"
-        mock_index_object.litellm_params.vector_store_index = "collection_123"
-
-        with (
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
-                return_value={"collectionName": "dall-e-6", "data": [[0.1, 0.2]]},
+        monkeypatch.setattr(
+            litellm,
+            "vector_store_index_registry",
+            VectorStoreIndexRegistry(
+                [
+                    LiteLLM_ManagedVectorStoreIndex(
+                        id="idx-1",
+                        index_name="dall-e-6",
+                        litellm_params={"vector_store_name": "milvus-store-1", "vector_store_index": "collection_123"},
+                    )
+                ]
             ),
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.ProviderConfigManager.get_provider_vector_stores_config"
-            ) as mock_get_config,
-            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"),
-            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.safe_set_request_parsed_body"),
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
-            ) as mock_create_route,
-            patch.object(litellm, "vector_store_index_registry") as mock_index_registry,
-            patch.object(litellm, "vector_store_registry") as mock_vector_registry,
-        ):
-            mock_provider_config = MagicMock()
-            mock_provider_config.get_auth_credentials.return_value = {"headers": {}}
-            mock_provider_config.get_complete_url.return_value = "http://milvus.internal:19530"
-            mock_get_config.return_value = mock_provider_config
-            mock_index_registry.is_vector_store_index.return_value = True
-            mock_index_registry.get_vector_store_index_by_name.return_value = mock_index_object
-            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = {
-                "litellm_params": {"litellm_credential_name": "milvus-cred"}
-            }
-            mock_create_route.return_value = AsyncMock(return_value={"results": []})
+        )
+        monkeypatch.setattr(
+            litellm,
+            "vector_store_registry",
+            VectorStoreRegistry(
+                [
+                    {
+                        "vector_store_id": "milvus-store-1",
+                        "vector_store_name": "milvus-store-1",
+                        "custom_llm_provider": "milvus",
+                        "litellm_params": {"litellm_credential_name": "milvus-cred"},
+                    }
+                ]
+            ),
+        )
+        upstream = respx_mock.post(url__startswith="http://milvus.internal:19530/").mock(
+            return_value=httpx.Response(200, json={"code": 0, "data": []})
+        )
+        body = json.dumps({"collectionName": "dall-e-6", "data": [[0.1, 0.2]]}).encode()
 
-            await milvus_proxy_route(
-                endpoint="vectors/search",
-                request=mock_request,
-                fastapi_response=MagicMock(spec=Response),
-                user_api_key_dict=MagicMock(),
-            )
+        async def receive() -> dict:
+            return {"type": "http.request", "body": body, "more_body": False}
 
-        auth_params = mock_provider_config.get_auth_credentials.call_args.kwargs["litellm_params"]
-        assert auth_params["api_key"] == "milvus-key"
-        assert auth_params["api_base"] == "http://milvus.internal:19530"
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/milvus/vectors/search",
+                "raw_path": b"/milvus/vectors/search",
+                "root_path": "",
+                "query_string": b"",
+                "headers": [(b"content-type", b"application/json")],
+                "client": ("127.0.0.1", 51234),
+                "server": ("proxy.local", 4000),
+                "state": {},
+            },
+            receive,
+        )
+
+        await milvus_proxy_route(
+            endpoint="vectors/search",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert upstream.call_count == 1
+        sent = upstream.calls[0].request
+        assert sent.headers["authorization"] == "Bearer milvus-key"
+        assert json.loads(sent.content)["collectionName"] == "collection_123"
 
     @pytest.mark.asyncio
     async def test_milvus_proxy_route_missing_collection_name(self):
