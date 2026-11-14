@@ -940,18 +940,24 @@ def _root_cannot_be_vertex_parameters(root: Mapping[str, object]) -> bool:
     ) or not _is_absent_or_object_type(root.get("type"))
 
 
-def _root_ref_target(schema: Mapping[str, JsonValue], defs: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+def _root_ref_def_name(schema: Mapping[str, JsonValue], def_names: Mapping[str, str]) -> str | None:
     match schema.get("$ref"):
         case str() as ref if ref.startswith(_ROOT_DEFS_REF_PREFIX):
-            target: Final = defs.get(ref.removeprefix(_ROOT_DEFS_REF_PREFIX))
-            return target if isinstance(target, dict) else schema
+            return def_names.get(ref.removeprefix(_ROOT_DEFS_REF_PREFIX))
         case _:
-            return schema
+            return None
 
 
 def _resolve_root_ref(schema: Mapping[str, JsonValue], defs: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
-    resolved: Final = reduce(lambda current, _: _root_ref_target(current, defs), range(len(defs)), schema)
-    return resolved if _root_ref_target(resolved, defs) is resolved else schema
+    object_defs: Final = MappingProxyType({name: value for name, value in defs.items() if isinstance(value, dict)})
+    def_names: Final = MappingProxyType({name: name for name in object_defs})
+    next_names: Final = ((name, _root_ref_def_name(value, def_names)) for name, value in object_defs.items())
+    next_def: Final = MappingProxyType({name: target for name, target in next_names if target is not None})
+    first: Final = _root_ref_def_name(schema, def_names)
+    if first is None:
+        return schema
+    last: Final = reduce(lambda name, _: next_def.get(name, name), range(len(next_def)), first)
+    return schema if last in next_def else object_defs[last]
 
 
 def needs_parameters_json_schema(parameters: Mapping[str, JsonValue]) -> bool:

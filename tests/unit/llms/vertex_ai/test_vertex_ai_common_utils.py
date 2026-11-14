@@ -1,7 +1,7 @@
 import copy
 import threading
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from enum import Enum
 from typing import Final
@@ -1724,6 +1724,37 @@ def _deep_root_ref_chain(end: Mapping[str, JsonValue]) -> Mapping[str, JsonValue
 )
 def test_needs_parameters_json_schema(parameters: Mapping[str, JsonValue], expected: bool) -> None:
     assert needs_parameters_json_schema(parameters) is expected
+
+
+def _missing_root_ref(size: int) -> Mapping[str, JsonValue]:
+    return {"$ref": "#/$defs/" + "m" * size, "$defs": {f"d{i}": {} for i in range(size // 16)}}
+
+
+def _long_named_root_ref_cycle(size: int) -> Mapping[str, JsonValue]:
+    first, second = "a" * size, "b" * size
+    fillers: Final = {f"d{i}": {"type": "string"} for i in range(size // 16)}
+    cycle: Final = {first: {"$ref": f"#/$defs/{second}"}, second: {"$ref": f"#/$defs/{first}"}}
+    return {"$ref": f"#/$defs/{first}", "$defs": {**cycle, **fillers}}
+
+
+def _root_ref_cost(parameters: Mapping[str, JsonValue]) -> float:
+    def once() -> float:
+        started: Final = time.perf_counter()
+        needs_parameters_json_schema(parameters)
+        return time.perf_counter() - started
+
+    return min(once() for _ in range(3))
+
+
+@pytest.mark.parametrize("build", [_missing_root_ref, _long_named_root_ref_cycle], ids=["missing-ref", "ref-cycle"])
+def test_needs_parameters_json_schema_stays_linear_on_long_refs_and_many_defs(
+    build: Callable[[int], Mapping[str, JsonValue]],
+) -> None:
+    """Tool parameters are caller-controlled, so 4x longer refs with 4x more $defs must not cost 16x.
+    Comparing two sizes keeps this honest on a slow box, and the quadratic walk this replaced grew 13x to 16x."""
+    growth: Final = _root_ref_cost(build(256 * 1024)) / _root_ref_cost(build(64 * 1024))
+
+    assert growth < 10.0, f"cost grew {growth:.1f}x for 4x the input"
 
 
 class _Priority(int, Enum):
