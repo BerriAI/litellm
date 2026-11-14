@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, TypeGuard, cast
+from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
 
 from fastapi import HTTPException, status
 from pydantic import ConfigDict, TypeAdapter
@@ -1601,7 +1601,7 @@ def _input_cost_for_cost_info(
     if estimated_input_tokens is None:
         return None
     tiered_pricing: Final = model_info.get("tiered_pricing")
-    if _is_tier_table(tiered_pricing) and tiered_pricing:
+    if isinstance(tiered_pricing, list) and tiered_pricing:
         tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
         if tier is not None:
             return estimated_input_tokens * tier_rate(tier, "input_cost_per_token")
@@ -1663,7 +1663,7 @@ def _max_cost_for_cost_info(
 
     output_multiplier: Final = _get_output_multiplier(request_body=request_body)
     tiered_pricing: Final = model_info.get("tiered_pricing")
-    if _is_tier_table(tiered_pricing) and tiered_pricing:
+    if isinstance(tiered_pricing, list) and tiered_pricing:
         tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
         if tier is not None:
             output_rate = max(
@@ -1937,12 +1937,6 @@ def _is_input_only_route(route: str) -> bool:
             "moderations",
         )
     )
-
-
-def _is_tier_table(
-    value: object,
-) -> TypeGuard[list[Mapping[str, object]]]:  # guard-ok: JSON tiers  # mutable-ok: cost map list
-    return isinstance(value, list)
 
 
 def _to_float(value: object) -> float | None:

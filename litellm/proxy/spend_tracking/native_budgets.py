@@ -3,19 +3,19 @@ from __future__ import annotations
 import asyncio
 import uuid
 import weakref
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeGuard
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger_v2.call import CallContext
-from litellm.integrations.custom_logger_v2.derivations import budget_reservation, write_budget_reservation
+from litellm.integrations.custom_logger_v2.derivations import budget_reservation, mapping, write_budget_reservation
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch, SetField
@@ -104,7 +104,7 @@ def pending_native_reservation(
                 **{
                     name: dict(bucket)
                     for name in ("metadata", "litellm_metadata")
-                    if _str_mapping(bucket := request_data.get(name))
+                    if (bucket := mapping(request_data.get(name))) is not None
                 },
             },
             window_resets=window_resets,
@@ -232,6 +232,7 @@ class _MessageFields(BaseModel):
 
 _SETTLEMENT: Final = TypeAdapter(NativeSettlement)
 _CHECK: Final[TypeAdapter[BudgetCheck]] = TypeAdapter(BudgetCheck)
+_HELD_ENTRIES: Final = TypeAdapter(tuple[object, ...])
 
 
 def native_budget_route(route: str) -> bool:
@@ -283,30 +284,25 @@ def _reservation_record(reservation: object) -> BudgetReservation | None:
     return budget_reservation(HookArgs(auth=_Reserved(reservation)))
 
 
-def _str_mapping(
-    value: object,
-) -> TypeGuard[Mapping[str, object]]:  # guard-ok: reservations and request metadata are str-keyed JSON objects
-    return isinstance(value, Mapping)
-
-
-def _object_sequence(value: object) -> TypeGuard[Sequence[object]]:  # guard-ok: reservation entries are a JSON array
-    return isinstance(value, list | tuple)
-
-
 def _with_window_reset(entry: object, window_resets: Mapping[str, str]) -> object:
-    if not _str_mapping(entry):
+    held: Final = mapping(entry)
+    if held is None:
         return entry
-    reset: Final = window_resets.get(str(entry.get("counter_key")))
-    return entry if reset is None else {**entry, "window_reset_at": reset}
+    reset: Final = window_resets.get(str(held.get("counter_key")))
+    return entry if reset is None else {**held, "window_reset_at": reset}
 
 
 def _with_window_resets(value: object, window_resets: Mapping[str, str]) -> object:
-    if not window_resets or not _str_mapping(value):
+    written: Final = mapping(value) if window_resets else None
+    if written is None:
         return value
-    entries: Final = value.get("entries")
-    if not _object_sequence(entries):
+    entries: Final = written.get("entries")
+    if not isinstance(entries, list | tuple):
         return value
-    return {**value, "entries": [_with_window_reset(entry, window_resets) for entry in entries]}
+    return {
+        **written,
+        "entries": [_with_window_reset(entry, window_resets) for entry in _HELD_ENTRIES.validate_python(entries)],
+    }
 
 
 def _stamped(outcome: Patch | Abort | None, window_resets: Mapping[str, str]) -> Patch | Abort | None:
@@ -443,7 +439,7 @@ def _window_reset(entry: object) -> str | None:
 
 
 async def settle_native_reservation(
-    reservation: dict[str, object],  # mutable-ok: stamps each settled entry in place
+    reservation: Mapping[str, object],
     actual_cost: float,
 ) -> None:
     budgets: Final = native_budgets()
@@ -465,15 +461,10 @@ async def settle_native_reservation(
             entry["applied_adjustment"] = target
 
 
-def _is_native_record(
-    value: object,
-) -> TypeGuard[dict[str, object]]:  # guard-ok: a str-keyed JSON reservation  # mutable-ok: settled in place
-    return isinstance(value, dict) and NATIVE_CALL_ID_KEY in value
-
-
-async def admitted_native_reservation(reservation: object) -> dict[str, object] | None:  # mutable-ok: settled in place
+async def admitted_native_reservation(reservation: object) -> Mapping[str, object] | None:
     await await_native_admission(reservation)
-    return reservation if _is_native_record(reservation) else None
+    record: Final = mapping(reservation)
+    return record if isinstance(reservation, dict) and record is not None and NATIVE_CALL_ID_KEY in record else None
 
 
 def is_native_reservation(reservation: Mapping[str, object] | None) -> bool:
