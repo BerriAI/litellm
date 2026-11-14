@@ -20,6 +20,11 @@ from litellm.llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 from litellm.types.rerank import RerankResponse
 from litellm.utils import ProviderConfigManager
 
+_GLOBAL_RANK_URL: Final = (
+    "https://discoveryengine.googleapis.com/v1/projects/test-project/"
+    "locations/global/rankingConfigs/default_ranking_config:rank"
+)
+
 
 class TestVertexAIRerankTransform:
     def setup_method(self):
@@ -109,6 +114,53 @@ class TestVertexAIRerankTransform:
                     self.config.get_complete_url(api_base=None, model=self.model)
             finally:
                 litellm.vertex_project = original_project
+
+    # Multi-region hosts per https://docs.cloud.google.com/generative-ai-app-builder/docs/locations (checked 2026-10-12)
+    @pytest.mark.parametrize(
+        ("location_params", "expected_url"),
+        [
+            pytest.param(
+                {"vertex_ai_location": "eu"},
+                "https://eu-discoveryengine.googleapis.com/v1/projects/test-project/"
+                "locations/eu/rankingConfigs/default_ranking_config:rank",
+                id="eu",
+            ),
+            pytest.param(
+                {"vertex_location": "us"},
+                "https://us-discoveryengine.googleapis.com/v1/projects/test-project/"
+                "locations/us/rankingConfigs/default_ranking_config:rank",
+                id="us",
+            ),
+            pytest.param({}, _GLOBAL_RANK_URL, id="unset"),
+            pytest.param({"vertex_ai_location": "global"}, _GLOBAL_RANK_URL, id="global"),
+            pytest.param({"vertex_ai_location": "us-central1"}, _GLOBAL_RANK_URL, id="single-region"),
+            pytest.param({"vertex_ai_location": "evil.example/x?"}, _GLOBAL_RANK_URL, id="host-injection"),
+        ],
+    )
+    def test_get_complete_url_routes_to_the_configured_location(
+        self, location_params: dict[str, str], expected_url: str
+    ):
+        self.config._ensure_access_token = MagicMock(return_value=("mock-token", "test-project"))
+
+        url: Final = self.config.get_complete_url(
+            api_base=None,
+            model=self.model,
+            optional_params={"vertex_project": "test-project", **location_params},
+        )
+
+        assert url == expected_url
+
+    def test_get_complete_url_ignores_the_location_from_the_environment(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("VERTEXAI_LOCATION", "eu")
+        self.config._ensure_access_token = MagicMock(return_value=("mock-token", "test-project"))
+
+        url: Final = self.config.get_complete_url(
+            api_base=None,
+            model=self.model,
+            optional_params={"vertex_project": "test-project"},
+        )
+
+        assert url == _GLOBAL_RANK_URL
 
     def test_validate_environment(self):
         """
