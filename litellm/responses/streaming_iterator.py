@@ -3130,6 +3130,9 @@ _MANAGED_WS_SKIP_KWARGS: Final[frozenset[str]] = frozenset(
         "aresponses",
         "_aresponses_websocket",
         "user_api_key_dict",
+        # Kept on the handler and copied into every turn, where the turn's body is
+        # overlaid; as a pass-through kwarg it would overwrite that copy (#49878).
+        "proxy_server_request",
     }
 )
 
@@ -3192,6 +3195,12 @@ class ManagedResponsesWebSocketHandler:
         self.quota_callbacks: tuple[ProjectQuotaCallback, ...] = tuple(quota_callbacks) if quota_callbacks else ()
         self.turn_admission: ResponsesWsTurnAdmission | None = turn_admission
         self._failure: Exception | None = None
+        # The handshake's request record (headers, url, arrival time); each turn gets a
+        # copy with its own body so spend logs see the turn, not the handshake.
+        handshake_request: Final = kwargs.get("proxy_server_request")
+        self.proxy_server_request: Mapping[str, object] = (
+            handshake_request if _is_json_object(handshake_request) else {}
+        )
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: dict[str, object] = {k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS}
         # In-memory session history: response_id → full accumulated message list.
@@ -3483,6 +3492,8 @@ class ManagedResponsesWebSocketHandler:
             call_kwargs["custom_llm_provider"] = self.custom_llm_provider
         if self.litellm_metadata:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
+        if self.proxy_server_request:
+            call_kwargs["proxy_server_request"] = dict(self.proxy_server_request)
 
     async def _guard_frame(self, raw_message: str) -> GuardedResponsesWsFrame | None:
         """Same per-frame pre_call guardrail walk as the native socket: a rejected frame errors and is not sent."""
@@ -3507,8 +3518,13 @@ class ManagedResponsesWebSocketHandler:
 
     @staticmethod
     def _update_proxy_request(call_kwargs: dict[str, Any], model: str) -> None:
-        """Update proxy_server_request body so spend logs record the full request."""
-        proxy_server_request = (call_kwargs.get("litellm_metadata") or {}).get("proxy_server_request") or {}
+        """Give ``proxy_server_request`` the turn's body so spend logs record the turn.
+
+        Only the top-level kwarg is written. That is the one the spend-log writer
+        redacts and sanitises into the ``proxy_server_request`` column; a copy under
+        ``litellm_metadata`` would be serialised raw into the ``metadata`` column (#49878).
+        """
+        proxy_server_request = call_kwargs.get("proxy_server_request") or {}
         if not isinstance(proxy_server_request, dict):
             return
         body: Final = dict(proxy_server_request.get("body") or {})
@@ -3518,11 +3534,7 @@ class ManagedResponsesWebSocketHandler:
         for k in ("tools", "tool_choice", "instructions", "metadata"):
             if k in call_kwargs and call_kwargs[k] is not None:
                 body[k] = call_kwargs[k]
-        proxy_server_request = {**proxy_server_request, "body": body}
-        if "litellm_metadata" not in call_kwargs:
-            call_kwargs["litellm_metadata"] = {}
-        call_kwargs["litellm_metadata"]["proxy_server_request"] = proxy_server_request
-        call_kwargs["proxy_server_request"] = proxy_server_request
+        call_kwargs["proxy_server_request"] = {**proxy_server_request, "body": body}
 
     async def _stream_and_forward(self, model: str, call_kwargs: dict[str, object]) -> _MutableJsonObject | None:
         """
