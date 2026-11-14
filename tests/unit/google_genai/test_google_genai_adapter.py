@@ -5,14 +5,29 @@ Test to verify the Google GenAI generate_content adapter functionality
 
 import json
 import unittest
+from collections.abc import AsyncIterator, Sequence
+from itertools import chain
 from typing import Final
 
 import pytest
 
 import litellm
-from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter, GoogleGenAIStreamWrapper
 from litellm.google_genai.main import agenerate_content
 from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    ChatCompletionMessageToolCall,
+    Choices,
+    Delta,
+    Function,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    Usage,
+)
 
 
 @pytest.mark.parametrize(("data_key", "mime_key"), [("inline_data", "mime_type"), ("inlineData", "mimeType")])
@@ -1820,3 +1835,328 @@ async def test_generate_content_sends_response_schema_and_tool_parameters_to_the
     }
     assert response["candidates"][0]["content"]["parts"] == [{"text": '{"park_name": "EPCOT"}'}]
     assert "text" not in response
+
+
+def _assistant_tool_call_ids(messages: Sequence[AllMessageValues]) -> tuple[tuple[str | None, ...], ...]:
+    return tuple(
+        tuple(call["id"] for call in msg.get("tool_calls") or ()) for msg in messages if msg["role"] == "assistant"
+    )
+
+
+def _tool_response_ids(messages: Sequence[AllMessageValues]) -> tuple[str, ...]:
+    return tuple(msg["tool_call_id"] for msg in messages if msg["role"] == "tool")
+
+
+def _tool_call_stream_chunk(
+    call_id: str | None,
+    name: str | None,
+    arguments: str | None,
+    index: int,
+) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="stream-1",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            id=call_id,
+                            type="function",
+                            function=Function(name=name, arguments=arguments),
+                            index=index,
+                        )
+                    ],
+                ),
+            )
+        ],
+        created=1234567890,
+        model="claude-sonnet-4-5",
+        object="chat.completion.chunk",
+    )
+
+
+@pytest.mark.parametrize(
+    ("call_key", "response_key"),
+    [("functionCall", "functionResponse"), ("function_call", "function_response")],
+)
+def test_native_function_calls_preserve_explicit_ids_and_disambiguate_duplicates_fifo(
+    call_key: str,
+    response_key: str,
+) -> None:
+    contents: Final = [
+        {"role": "user", "parts": [{"text": "Compare London, Paris, and Tokyo weather"}]},
+        {
+            "role": "model",
+            "parts": [
+                {call_key: {"name": "lookup", "args": {"city": "London"}}},
+                {call_key: {"id": None, "name": "lookup", "args": {"city": "Paris"}}},
+                {call_key: {"id": "toolu_1", "name": "forecast", "args": {"city": "London"}}},
+                {call_key: {"id": "toolu_2", "name": "forecast", "args": {"city": "Paris"}}},
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [
+                {response_key: {"name": "lookup", "response": {"temp": 15}}},
+                {response_key: {"id": None, "name": "lookup", "response": {"temp": 18}}},
+                {response_key: {"id": "toolu_2", "name": "forecast", "response": {"rain": False}}},
+                {response_key: {"id": "toolu_1", "name": "forecast", "response": {"rain": True}}},
+            ],
+        },
+        {
+            "role": "model",
+            "parts": [
+                {call_key: {"name": "lookup", "args": {"city": "Tokyo"}}},
+                {call_key: {"id": "toolu_tokyo", "name": "lookup", "args": {"city": "Tokyo"}}},
+                {call_key: {"name": "forecast", "args": {"city": "Tokyo"}}},
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [
+                {response_key: {"name": "lookup", "response": {"temp": 22}}},
+                {response_key: {"name": "lookup", "response": {"temp": 23}}},
+                {response_key: {"name": "forecast", "response": {"rain": False}}},
+            ],
+        },
+    ]
+    messages: Final = GoogleGenAIAdapter()._transform_contents_to_messages(contents)
+    assert [msg["role"] for msg in messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "tool",
+        "tool",
+        "assistant",
+        "tool",
+        "tool",
+        "tool",
+    ]
+    assert _assistant_tool_call_ids(messages) == (
+        ("call_lookup", "call_lookup_2", "toolu_1", "toolu_2"),
+        ("call_lookup_3", "toolu_tokyo", "call_forecast"),
+    )
+    assert _tool_response_ids(messages) == (
+        "call_lookup",
+        "call_lookup_2",
+        "toolu_2",
+        "toolu_1",
+        "call_lookup_3",
+        "toolu_tokyo",
+        "call_forecast",
+    )
+
+
+def test_native_function_call_ids_resolve_collisions_between_generated_and_explicit_ids() -> None:
+    contents: Final = [
+        {
+            "role": "model",
+            "parts": [
+                {"functionCall": {"id": "call_lookup", "name": "lookup", "args": {"q": "explicit_base"}}},
+                {"functionCall": {"name": "lookup", "args": {"q": "generated_first"}}},
+                {"functionCall": {"id": "call_lookup_2", "name": "lookup", "args": {"q": "collides_with_generated"}}},
+                {"functionCall": {"name": "lookup", "args": {"q": "generated_second"}}},
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [
+                {"functionResponse": {"id": "call_lookup_2", "name": "lookup", "response": {"hit": "collides"}}},
+                {"functionResponse": {"id": "call_lookup_2", "name": "lookup", "response": {"hit": "echoed_gen"}}},
+                {"functionResponse": {"name": "lookup", "response": {"hit": "omitted_for_generated_second"}}},
+                {"functionResponse": {"id": "call_lookup", "name": "lookup", "response": {"hit": "explicit_base"}}},
+            ],
+        },
+    ]
+    messages: Final = GoogleGenAIAdapter()._transform_contents_to_messages(contents)
+    assert _assistant_tool_call_ids(messages) == (("call_lookup", "call_lookup_2", "call_lookup_2_2", "call_lookup_3"),)
+    assert _tool_response_ids(messages) == (
+        "call_lookup_2_2",
+        "call_lookup_2",
+        "call_lookup_3",
+        "call_lookup",
+    )
+
+
+def test_native_duplicate_explicit_ids_and_missing_names_are_disambiguated() -> None:
+    contents: Final = [
+        {
+            "role": "model",
+            "parts": [
+                {"functionCall": {"id": "dup_id", "name": "search", "args": {"q": "first"}}},
+                {"functionCall": {"id": "dup_id", "name": "search", "args": {"q": "second"}}},
+                {"functionCall": {"args": {"q": "nameless"}}},
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [
+                {"functionResponse": {"id": "dup_id", "name": "search", "response": {"hit": "first"}}},
+                {"functionResponse": {"id": "dup_id", "name": "search", "response": {"hit": "second"}}},
+                {"functionResponse": {"response": {"hit": "nameless"}}},
+                {"functionResponse": {"id": "unmatched_explicit", "name": "search", "response": {"hit": "orphan"}}},
+            ],
+        },
+    ]
+    messages: Final = GoogleGenAIAdapter()._transform_contents_to_messages(contents)
+    assert _assistant_tool_call_ids(messages) == (("dup_id", "dup_id_2", "call_unknown"),)
+    assert _tool_response_ids(messages) == ("dup_id", "dup_id_2", "call_unknown", "unmatched_explicit")
+
+
+def test_native_abandoned_turn_reserves_ids_without_matching_later_responses() -> None:
+    contents: Final = [
+        {
+            "role": "model",
+            "parts": [
+                {"functionCall": {"id": "call_lookup_2", "name": "lookup", "args": {"q": "abandoned_explicit"}}},
+                {"functionCall": {"name": "lookup", "args": {"q": "abandoned_omitted"}}},
+            ],
+        },
+        {"role": "user", "parts": [{"text": "Cancel those lookups and run a new one"}]},
+        {
+            "role": "model",
+            "parts": [{"functionCall": {"name": "lookup", "args": {"q": "fresh"}}}],
+        },
+        {
+            "role": "user",
+            "parts": [{"functionResponse": {"name": "lookup", "response": {"hit": "fresh"}}}],
+        },
+    ]
+    messages: Final = GoogleGenAIAdapter()._transform_contents_to_messages(contents)
+    assert _assistant_tool_call_ids(messages) == (
+        ("call_lookup_2", "call_lookup"),
+        ("call_lookup_3",),
+    )
+    assert _tool_response_ids(messages) == ("call_lookup_3",)
+
+
+def test_native_function_calls_split_across_consecutive_model_contents_share_one_turn() -> None:
+    contents: Final = [
+        {
+            "role": "model",
+            "parts": [
+                {"functionCall": {"name": "lookup", "args": {"q": "answered"}}},
+                {"functionCall": {"name": "lookup", "args": {"q": "abandoned"}}},
+            ],
+        },
+        {"role": "user", "parts": [{"functionResponse": {"name": "lookup", "response": {"hit": "answered"}}}]},
+        {"role": "user", "parts": [{"text": "Never mind, compare Tokyo and Osaka instead"}]},
+        {"role": "model", "parts": [{"text": "Checking both cities."}]},
+        {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Tokyo"}}}]},
+        {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Osaka"}}}]},
+        {
+            "role": "user",
+            "parts": [
+                {"functionResponse": {"name": "get_weather", "response": {"city": "Tokyo"}}},
+                {"functionResponse": {"name": "get_weather", "response": {"city": "Osaka"}}},
+                {"functionResponse": {"name": "lookup", "response": {"hit": "late"}}},
+            ],
+        },
+    ]
+    messages: Final = GoogleGenAIAdapter()._transform_contents_to_messages(contents)
+    assert _assistant_tool_call_ids(messages) == (
+        ("call_lookup", "call_lookup_2"),
+        (),
+        ("call_get_weather",),
+        ("call_get_weather_2",),
+    )
+    tool_results: Final = [(msg["tool_call_id"], msg["content"]) for msg in messages if msg["role"] == "tool"]
+    assert tool_results == [
+        ("call_lookup", '{"hit": "answered"}'),
+        ("call_get_weather", '{"city": "Tokyo"}'),
+        ("call_get_weather_2", '{"city": "Osaka"}'),
+        ("call_lookup", '{"hit": "late"}'),
+    ]
+
+
+def test_outbound_generate_content_preserves_and_roundtrips_tool_call_ids() -> None:
+    adapter: Final = GoogleGenAIAdapter()
+    completion_response: Final = ModelResponse(
+        id="resp-1",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="toolu_01abc",
+                            type="function",
+                            function=Function(name="get_weather", arguments='{"city": "Tokyo"}'),
+                        ),
+                        ChatCompletionMessageToolCall(
+                            id="",
+                            type="function",
+                            function=Function(name="ping", arguments="{}"),
+                        ),
+                    ],
+                ),
+            )
+        ],
+        created=1234567890,
+        model="claude-sonnet-4-5",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=10, completion_tokens=12, total_tokens=22),
+    )
+    outbound: Final = adapter.translate_completion_to_generate_content(completion_response)
+    expected_content: Final = {
+        "role": "model",
+        "parts": [
+            {"functionCall": {"id": "toolu_01abc", "name": "get_weather", "args": {"city": "Tokyo"}}},
+            {"functionCall": {"name": "ping", "args": {}}},
+        ],
+    }
+    assert outbound["candidates"] == [
+        {
+            "content": expected_content,
+            "finishReason": "STOP",
+            "index": 0,
+            "safetyRatings": [],
+        }
+    ]
+
+    roundtrip_messages: Final = adapter._transform_contents_to_messages(
+        [
+            expected_content,
+            {
+                "role": "user",
+                "parts": [
+                    {"functionResponse": {"id": "toolu_01abc", "name": "get_weather", "response": {"temp": "20C"}}},
+                    {"functionResponse": {"name": "ping", "response": {"ok": True}}},
+                ],
+            },
+        ]
+    )
+    assert _assistant_tool_call_ids(roundtrip_messages) == (("toolu_01abc", "call_ping"),)
+    assert _tool_response_ids(roundtrip_messages) == ("toolu_01abc", "call_ping")
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_content_accumulates_and_flushes_tool_call_ids() -> None:
+    stream_chunks: Final = (
+        _tool_call_stream_chunk("toolu_stream_1", "read_file", '{"pa', 0),
+        _tool_call_stream_chunk(None, None, 'th": "a.py"}', 0),
+        _tool_call_stream_chunk(None, "no_id_tool", "{}", 1),
+        # Empty arguments stay buffered until stream end, exercising the __anext__ flush path.
+        _tool_call_stream_chunk("toolu_stream_2", None, "", 2),
+        _tool_call_stream_chunk(None, "list_dir", "", 2),
+    )
+
+    async def completion_stream() -> AsyncIterator[ModelResponseStream]:
+        for item in stream_chunks:
+            yield item
+
+    events: Final = [event async for event in GoogleGenAIStreamWrapper(completion_stream=completion_stream())]
+    streamed_parts: Final = chain.from_iterable(event["candidates"][0]["content"]["parts"] for event in events)
+    streamed_calls: Final = [part["functionCall"] for part in streamed_parts if "functionCall" in part]
+    assert streamed_calls == [
+        {"id": "toolu_stream_1", "name": "read_file", "args": {"path": "a.py"}},
+        {"name": "no_id_tool", "args": {}},
+        {"id": "toolu_stream_2", "name": "list_dir", "args": {}},
+    ]
