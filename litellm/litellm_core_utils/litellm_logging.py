@@ -4248,6 +4248,7 @@ class Logging(LiteLLMLoggingBaseClass):
         for_async_request: Final = run.for_async_request
         call_details_view: Final = run.call_details_view
         delivers_final_stream_log: Final = complete_streaming_response is not None or self._is_pass_through_call()
+        sends_success_log: Final = delivers_final_stream_log or not isinstance(run.result, ModelResponseStream)
         result = run.result  # rebind-ok: integrations swap in the assembled stream for later callbacks
         kwargs: Mapping[str, object] = run.kwargs  # rebind-ok: integrations leave their kwargs to later callbacks
         litellm_params = run.litellm_params  # rebind-ok: supabase leaves its params to later callbacks
@@ -4259,7 +4260,7 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             if not should_run:
                 return
-            if callback == "promptlayer" and promptLayerLogger is not None:
+            if callback == "promptlayer" and promptLayerLogger is not None and sends_success_log:
                 print_verbose("reaches promptlayer for logging!")
                 promptLayerLogger.log_event(
                     kwargs=call_details,
@@ -4305,7 +4306,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     ),
                     print_verbose=print_verbose,
                 )
-            if callback == "wandb" and weightsBiasesLogger is not None:
+            if callback == "wandb" and weightsBiasesLogger is not None and sends_success_log:
                 print_verbose("reaches wandb for logging!")
                 weightsBiasesLogger.log_event(
                     kwargs=call_details,
@@ -4456,7 +4457,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     end_time=end_time,
                     print_verbose=print_verbose,
                 )
-            if callback == "athina" and athinaLogger is not None and (not self.stream or delivers_final_stream_log):
+            if callback == "athina" and athinaLogger is not None and sends_success_log:
                 deep_copy = {}  # rebind-ok: each integration branch binds its own
                 for k, v in call_details_view.items():
                     deep_copy[k] = v
@@ -4467,7 +4468,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     end_time=end_time,
                     print_verbose=print_verbose,
                 )
-            if callback == "traceloop":
+            if callback == "traceloop" and sends_success_log:
                 deep_copy = {}  # rebind-ok: each integration branch binds its own
                 for k, v in call_details_view.items():
                     if k != "original_response":
@@ -4559,7 +4560,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         start_time=start_time,
                         end_time=end_time,
                     )
-            if callable(callback) is True and is_sync_request:  # custom logger functions
+            if callable(callback) is True and is_sync_request and sends_success_log:  # custom logger functions
                 function_logger: Final = customLogger if customLogger is not None else CustomLogger()
                 print_verbose(f"success callbacks: Running Custom Callback Function - {callback}")
 
