@@ -921,6 +921,7 @@ _build_vertex_schema = build_vertex_schema
 
 
 _JSON_SCHEMA_HOIST_BUDGET: Final = 65_536
+_MAX_JSON_SCHEMA_HOISTS_PER_PATH: Final = 6
 _JsonSchemaChild: Final = TypeVar("_JsonSchemaChild")
 
 
@@ -1026,10 +1027,10 @@ def _declared_in_order(
 
 
 def _with_subschemas_declared(
-    keyword: str, value: JsonValue, root: Mapping[str, JsonValue], budget: int, depth: int
+    keyword: str, value: JsonValue, root: Mapping[str, JsonValue], budget: int, hoists_left: int, depth: int
 ) -> _DeclaredJsonSchema:
     def declared(subschema: JsonValue, budget_left: int) -> _DeclaredJsonSchema:
-        return _with_branch_required_names_declared(subschema, root, budget_left, depth)
+        return _with_branch_required_names_declared(subschema, root, budget_left, hoists_left, depth)
 
     match keyword, value:
         case ("properties" | "$defs" | "definitions", dict()):
@@ -1043,18 +1044,20 @@ def _with_subschemas_declared(
 
 
 def _with_branch_required_names_declared(
-    schema: JsonValue, root: Mapping[str, JsonValue], budget: int, depth: int
+    schema: JsonValue, root: Mapping[str, JsonValue], budget: int, hoists_left: int, depth: int
 ) -> _DeclaredJsonSchema:
     if not isinstance(schema, dict) or depth > DEFAULT_MAX_RECURSE_DEPTH:
         return _DeclaredJsonSchema(schema, budget)
-    hoisted, cost = _hoisted_properties(schema, root, budget)
+    hoisted, cost = _hoisted_properties(schema, root, budget if hoists_left > 0 else 0)
     declared: Final = schema.get("properties")
     with_hoisted: Final = (
         {**schema, "properties": {**(declared if isinstance(declared, dict) else {}), **hoisted}} if hoisted else schema
     )
 
+    subschema_hoists_left: Final = hoists_left - 1 if hoisted else hoists_left
+
     def declared_keyword(item: tuple[str, JsonValue], budget_left: int) -> _DeclaredJsonSchema:
-        return _with_subschemas_declared(item[0], item[1], root, budget_left, depth + 1)
+        return _with_subschemas_declared(item[0], item[1], root, budget_left, subschema_hoists_left, depth + 1)
 
     return _declared_in_order(
         with_hoisted.items(), declared_keyword, budget - cost, lambda values: dict(zip(with_hoisted, values))
@@ -1077,9 +1080,11 @@ def build_json_schema(parameters: Mapping[str, JsonValue]) -> JsonValue:
     `const` as a one-value `enum` because Gemini enforces `enum` and ignores
     `const`. The branches stay as sent. A name no branch defines stays undeclared,
     and a node with `additionalProperties: false` stays as sent because no object
-    can satisfy it. Each hoist copies a subtree that can hold more hoists, so one
-    schema shares _JSON_SCHEMA_HOIST_BUDGET, spent on each branch checked per
-    missing name and each byte copied, and the nodes past it stay as sent.
+    can satisfy it. Each hoist copies a subtree that can hold more hoists, so a
+    path stops after _MAX_JSON_SCHEMA_HOISTS_PER_PATH nodes, keeping a recursive
+    schema shallow enough for Google to name its own error, and one schema shares
+    _JSON_SCHEMA_HOIST_BUDGET, spent on each branch checked per missing name and
+    each byte copied. The nodes past either limit stay as sent.
 
     Parameters:
         parameters: the JSON schema to process
@@ -1087,7 +1092,9 @@ def build_json_schema(parameters: Mapping[str, JsonValue]) -> JsonValue:
     Returns:
         a new schema in standard JSON Schema format
     """
-    return _with_branch_required_names_declared(dict(parameters), parameters, _JSON_SCHEMA_HOIST_BUDGET, 0).schema
+    return _with_branch_required_names_declared(
+        dict(parameters), parameters, _JSON_SCHEMA_HOIST_BUDGET, _MAX_JSON_SCHEMA_HOISTS_PER_PATH, 0
+    ).schema
 
 
 _build_json_schema = build_json_schema
