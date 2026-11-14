@@ -1,6 +1,7 @@
 import asyncio
 import gc
 import importlib
+import importlib.abc
 import inspect
 import json
 import logging
@@ -3157,8 +3158,72 @@ class TestRunServerDbSetup:
         assert mock_build_indexes.call_count == int(migrated and waits_for_the_build)
         assert mock_start_build.call_count == int(migrated and not waits_for_the_build)
 
+    @patch("uvicorn.run")
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database", return_value=True)
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=True)
+    def test_the_migration_job_finishes_when_psycopg_cannot_load(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+        mock_uvicorn_run,
+        monkeypatch,
+        caplog,
+    ):
+        """On a node whose psycopg cannot load libpq the migrations still apply, the request-log
+        index build logs the skip through the real build chain, and the job exits 0 instead of
+        dying on the import."""
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+        _make_psycopg_unimportable(monkeypatch)
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
+            ),
+            patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args") as mock_get_args,
+            caplog.at_level(logging.WARNING, logger="litellm_proxy_extras"),
+        ):
+            mock_get_args.return_value = {"app": "litellm.proxy.proxy_server:app", "host": "localhost", "port": 8000}
+            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+
+        mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
+        assert [record.levelname for record in caplog.records if "psycopg could not be imported" in record.message] == [
+            "WARNING"
+        ]
+
 
 # --- Module-level helpers for worker startup hook tests ---
+
+
+class _PsycopgCannotLoad(importlib.abc.MetaPathFinder):
+    """What a node without libpq sees: `import psycopg` raises a plain ImportError."""
+
+    def find_spec(self, fullname: str, path: object, target: object = None) -> None:
+        if fullname == "psycopg":
+            raise ImportError("couldn't import requested psycopg 'python' implementation: libpq library not found")
+
+
+def _make_psycopg_unimportable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(sys.modules, "psycopg", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_PsycopgCannotLoad(), *sys.meta_path])
+
 
 _dummy_hook_called = False
 

@@ -164,7 +164,15 @@ def ensure_request_log_indexes(
     replica gets in between partitions rather than waiting for the whole table. Any
     failure is logged and left for the next index build; the result says whether
     every index ended up valid. Never raises."""
-    import psycopg
+    try:
+        import psycopg
+    except ImportError as exc:
+        logger.warning(
+            "psycopg could not be imported (%s); skipping the request-log index build. "
+            "The litellm[extra_proxy] extra provides psycopg, and PSYCOPG_IMPL=python also needs a system libpq.",
+            exc,
+        )
+        return False
 
     try:
         with connect(database_url) as connection:

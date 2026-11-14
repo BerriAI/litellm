@@ -1,12 +1,16 @@
+import importlib.abc
+import logging
 import re
+import sys
 from pathlib import Path
-from typing import Final
+from typing import Final, NoReturn
 
 import pytest
 from litellm_proxy_extras.migration_recovery import is_inert_migration
 from litellm_proxy_extras.request_log_indexes import (
     REQUEST_LOG_INDEXES,
     RequestLogIndex,
+    ensure_request_log_indexes,
     filter_request_log_index_diff,
 )
 
@@ -147,3 +151,34 @@ class TestFilterRequestLogIndexDiff:
 
     def test_an_empty_script_stays_empty(self):
         assert filter_request_log_index_diff("") == ""
+
+
+class _PsycopgCannotLoad(importlib.abc.MetaPathFinder):
+    """What a node without libpq sees: `import psycopg` raises a plain ImportError."""
+
+    def find_spec(self, fullname: str, path: object, target: object = None) -> None:
+        if fullname == "psycopg":
+            raise ImportError("couldn't import requested psycopg 'python' implementation: libpq library not found")
+
+
+def _make_psycopg_unimportable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(sys.modules, "psycopg", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_PsycopgCannotLoad(), *sys.meta_path])
+
+
+def test_a_psycopg_that_cannot_load_is_reported_not_built_with_a_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _make_psycopg_unimportable(monkeypatch)
+
+    def never_connect(database_url: str) -> NoReturn:
+        raise AssertionError("connect must not be reached when psycopg cannot be imported")
+
+    with caplog.at_level(logging.WARNING, logger="litellm_proxy_extras"):
+        built: Final = ensure_request_log_indexes("postgresql://localhost/litellm", "public", connect=never_connect)
+
+    assert built is False
+    assert [record.levelname for record in caplog.records if "psycopg could not be imported" in record.message] == [
+        "WARNING"
+    ]
+    assert "libpq library not found" in caplog.text
