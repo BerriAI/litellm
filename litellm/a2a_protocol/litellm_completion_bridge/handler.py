@@ -10,7 +10,7 @@ A2A Streaming Events (in order):
 4. Status update (kind: "status-update") - Final status "completed" with final=true
 """
 
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
+from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -126,10 +126,7 @@ class A2ACompletionBridgeHandler:
 
     @staticmethod
     async def _acompletion(completion_params: Mapping[str, object]) -> ModelResponse | CustomStreamWrapper:
-        acompletion_fn: Final[Callable[..., Coroutine[object, object, ModelResponse | CustomStreamWrapper]]] = vars(
-            litellm
-        )["acompletion"]
-        return await acompletion_fn(**completion_params)
+        return await litellm.acompletion(**completion_params)
 
     @staticmethod
     async def handle_non_streaming(

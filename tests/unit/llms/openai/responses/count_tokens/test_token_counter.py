@@ -301,7 +301,14 @@ async def test_anthropic_format_counts_the_structured_output_schema(monkeypatch:
     assert sent == {
         "model": "gpt-4o",
         "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Answer in JSON."}]}],
-        "text": {"format": {"type": "json_schema", "name": "structured_output", "schema": schema, "strict": False}},
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "structured_output",
+                "schema": {**schema, "required": ["answer"], "additionalProperties": False},
+                "strict": True,
+            }
+        },
     }
 
 

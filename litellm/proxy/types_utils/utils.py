@@ -206,8 +206,8 @@ async def _download_gcs_file_wrapper(bucket_name: str, object_key: str, local_fi
 
 
 def validate_custom_validate_return_type(
-    fn: Callable[..., Any] | None,
-) -> Callable[..., Literal[True]] | None:
+    fn: Callable[..., object] | None,
+) -> Callable[..., object] | None:
     if fn is None:
         return None
 
