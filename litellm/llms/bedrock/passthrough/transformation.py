@@ -423,13 +423,6 @@ def _invoke_embedding_response(model: str, httpx_response: Response, has_input_i
     )
 
 
-def _served_service_tier(response_headers: Mapping[str, str]) -> str | None:
-    headers: Final = httpx.Headers(response_headers)
-    if _BEDROCK_SERVICE_TIER_HEADER not in headers:
-        return None
-    return headers[_BEDROCK_SERVICE_TIER_HEADER]
-
-
 def _with_served_service_tier(response: _TieredResponse, service_tier: str | None) -> _TieredResponse:
     if service_tier is None:
         return response
