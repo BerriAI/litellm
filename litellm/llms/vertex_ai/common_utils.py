@@ -6,8 +6,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from functools import lru_cache
-from itertools import accumulate, chain, groupby, islice, repeat, takewhile
+from functools import lru_cache, reduce
+from itertools import accumulate, chain, groupby, islice, pairwise, repeat, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast, get_type_hints
 
@@ -921,28 +921,105 @@ _build_vertex_schema = build_vertex_schema
 
 _JSON_SCHEMA_HOIST_BUDGET: Final = 65_536
 _MAX_JSON_SCHEMA_HOISTS_PER_PATH: Final = 6
+_GEMINI_MAX_JSON_SCHEMA_DEPTH: Final = 48
+_MAX_JSON_SCHEMA_REWRITE_DEPTH: Final = min(DEFAULT_MAX_RECURSE_DEPTH, _GEMINI_MAX_JSON_SCHEMA_DEPTH)
+_SUBSCHEMA_MAP_KEYWORDS: Final = frozenset({"properties", "$defs", "definitions"})
+_SUBSCHEMA_LIST_KEYWORDS: Final = frozenset({"anyOf", "oneOf", "allOf", "prefixItems", "items"})
+_SUBSCHEMA_KEYWORDS: Final = frozenset({"items", "additionalProperties"})
+_EMPTY_SCHEMA: Final[Mapping[str, JsonValue]] = MappingProxyType({})
+_NO_NAMES: Final[frozenset[str]] = frozenset()
 _JsonSchemaChild: Final = TypeVar("_JsonSchemaChild")
+
+
+@dataclass(frozen=True, slots=True)
+class _HoistBudget:
+    search: int
+    copies: int
 
 
 @dataclass(frozen=True, slots=True)
 class _DeclaredJsonSchema:
     schema: JsonValue
-    budget_left: int
+    budget_left: _HoistBudget
+
+
+@dataclass(frozen=True, slots=True)
+class _BranchProvenance:
+    alternatives_only: bool
+    names_defined_above: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class _JsonSchemaBranch:
+    schema: Mapping[str, JsonValue]
+    provenance: _BranchProvenance
+    parent: int
+    group: str
+    refs_on_path: frozenset[str]
 
 
 @dataclass(frozen=True, slots=True)
 class _JsonSchemaBranchLevel:
-    branches: tuple[Mapping[str, JsonValue], ...]
-    seen_refs: frozenset[str]
+    branches: tuple[_JsonSchemaBranch, ...]
+    entries_examined: int
+    entries_left: int
 
 
-def _json_schema_branches(schema: Mapping[str, JsonValue]) -> Iterator[Mapping[str, JsonValue]]:
-    branch_lists: Final = (schema.get(keyword) for keyword in ("anyOf", "oneOf", "allOf"))
-    branches: Final = chain.from_iterable(branches for branches in branch_lists if isinstance(branches, list))
-    return (branch for branch in branches if isinstance(branch, dict))
+@dataclass(frozen=True, slots=True)
+class _BranchDefinition:
+    definition: JsonValue
+    alternative: bool
 
 
-def _local_ref_target(ref: str, root: Mapping[str, JsonValue]) -> Mapping[str, JsonValue] | None:
+@dataclass(frozen=True, slots=True)
+class _MergedDefinition:
+    definition: JsonValue
+    size: int
+    wider_than_the_schema: bool
+
+
+def _names_defined_in(schema: Mapping[str, JsonValue], names: frozenset[str]) -> frozenset[str]:
+    properties: Final = schema.get("properties")
+    if not isinstance(properties, dict):
+        return frozenset()
+    return frozenset(name for name in names if isinstance(properties.get(name), dict))
+
+
+def _excludes_objects(schema: Mapping[str, JsonValue]) -> bool:
+    match schema.get("type"):
+        case str() as json_type:
+            return json_type != "object"
+        case list() as json_types:
+            return "object" not in json_types
+        case _:
+            return False
+
+
+def _branch_group_count(schema: Mapping[str, JsonValue]) -> int:
+    all_of: Final = schema.get("allOf")
+    alternative_lists: Final = sum(isinstance(schema.get(keyword), list) for keyword in ("anyOf", "oneOf"))
+    return alternative_lists + (len(all_of) if isinstance(all_of, list) else 0) + isinstance(schema.get("$ref"), str)
+
+
+def _child_provenance(branch: _JsonSchemaBranch, names: frozenset[str]) -> _BranchProvenance:
+    return _BranchProvenance(
+        branch.provenance.alternatives_only and _branch_group_count(branch.schema) == 1,
+        branch.provenance.names_defined_above | _names_defined_in(branch.schema, names),
+    )
+
+
+def _json_schema_branch_entries(schema: Mapping[str, JsonValue]) -> Iterator[tuple[str, JsonValue]]:
+    alternatives: Final = (
+        zip(repeat(keyword), entries)
+        for keyword in ("anyOf", "oneOf")
+        if isinstance(entries := schema.get(keyword), list)
+    )
+    all_of: Final = schema.get("allOf")
+    each_required: Final = enumerate(all_of if isinstance(all_of, list) else ())
+    return chain(chain.from_iterable(alternatives), ((f"allOf/{index}", entry) for index, entry in each_required))
+
+
+def _local_ref_target(ref: str, root: Mapping[str, JsonValue]) -> JsonValue:
     match ref.split("/"):
         case ["#", "$defs" | "definitions" as defs_keyword, name]:
             definitions: Final = root.get(defs_keyword)
@@ -953,36 +1030,107 @@ def _local_ref_target(ref: str, root: Mapping[str, JsonValue]) -> Mapping[str, J
             return None
 
 
+def _json_schema_branch_children(
+    branch: _JsonSchemaBranch, root: Mapping[str, JsonValue]
+) -> Iterator[tuple[str, JsonValue, frozenset[str]]]:
+    entries: Final = (
+        (group, entry, branch.refs_on_path) for group, entry in _json_schema_branch_entries(branch.schema)
+    )
+    ref: Final = branch.schema.get("$ref")
+    if not isinstance(ref, str) or ref in branch.refs_on_path:
+        return entries
+    return chain(entries, (("$ref", _local_ref_target(ref, root), branch.refs_on_path | {ref}),))
+
+
 def _next_json_schema_branch_level(
-    level: _JsonSchemaBranchLevel, root: Mapping[str, JsonValue]
+    level: _JsonSchemaBranchLevel, root: Mapping[str, JsonValue], names: frozenset[str]
 ) -> _JsonSchemaBranchLevel:
-    refs: Final = (branch.get("$ref") for branch in level.branches)
-    new_refs: Final = tuple(dict.fromkeys(ref for ref in refs if isinstance(ref, str) and ref not in level.seen_refs))
-    targets: Final = (_local_ref_target(ref, root) for ref in new_refs)
-    children: Final = chain.from_iterable(map(_json_schema_branches, level.branches))
+    children: Final = chain.from_iterable(
+        zip(repeat(parent), _json_schema_branch_children(branch, root)) for parent, branch in enumerate(level.branches)
+    )
+    entries: Final = tuple(islice(children, level.entries_left))
+    provenances: Final = tuple(_child_provenance(branch, names) for branch in level.branches)
     return _JsonSchemaBranchLevel(
-        tuple(chain(children, (target for target in targets if target is not None))),
-        level.seen_refs | frozenset(new_refs),
+        tuple(
+            _JsonSchemaBranch(
+                entry if isinstance(entry, dict) else _EMPTY_SCHEMA, provenances[parent], parent, group, refs_on_path
+            )
+            for parent, (group, entry, refs_on_path) in entries
+        ),
+        len(entries),
+        level.entries_left - len(entries),
     )
 
 
-def _reachable_json_schema_branches(
-    schema: Mapping[str, JsonValue], root: Mapping[str, JsonValue]
-) -> Iterator[Mapping[str, JsonValue]]:
+def _json_schema_branch_levels(
+    schema: Mapping[str, JsonValue], root: Mapping[str, JsonValue], names: frozenset[str], entry_limit: int
+) -> tuple[_JsonSchemaBranchLevel, ...]:
     def next_level(level: _JsonSchemaBranchLevel, _: None) -> _JsonSchemaBranchLevel:
-        return _next_json_schema_branch_level(level, root)
+        return _next_json_schema_branch_level(level, root, names)
 
-    first: Final = _JsonSchemaBranchLevel(tuple(_json_schema_branches(schema)), frozenset())
-    levels: Final = accumulate(repeat(None), next_level, initial=first)
-    return chain.from_iterable(level.branches for level in takewhile(lambda level: bool(level.branches), levels))
+    node: Final = _JsonSchemaBranchLevel(
+        (_JsonSchemaBranch(schema, _BranchProvenance(True, frozenset()), -1, "", frozenset()),), 0, entry_limit
+    )
+    deeper: Final = takewhile(
+        lambda level: level.entries_examined > 0,
+        islice(accumulate(repeat(None), next_level, initial=node), 1, DEFAULT_MAX_RECURSE_DEPTH + 1),
+    )
+    return (node, *deeper)
+
+
+def _names_covered_by(branch: _JsonSchemaBranch, names: frozenset[str]) -> frozenset[str]:
+    ref: Final = branch.schema.get("$ref")
+    if _excludes_objects(branch.schema) or (isinstance(ref, str) and ref in branch.refs_on_path):
+        return names
+    return _names_defined_in(branch.schema, names)
+
+
+def _group_key(item: tuple[_JsonSchemaBranch, frozenset[str]]) -> tuple[int, str]:
+    return item[0].parent, item[0].group
+
+
+def _names_covered_by_parent(
+    level: _JsonSchemaBranchLevel, covered: Sequence[frozenset[str]]
+) -> Mapping[int, frozenset[str]]:
+    groups: Final = groupby(sorted(zip(level.branches, covered), key=_group_key), key=_group_key)
+    covered_by_group: Final = tuple(
+        (parent, reduce(lambda left, right: left & right, (names for _, names in members)))
+        for (parent, _), members in groups
+    )
+    return {
+        parent: reduce(lambda left, right: left | right, (names for _, names in members))
+        for parent, members in groupby(covered_by_group, key=lambda item: item[0])
+    }
+
+
+def _covered_names(levels: Sequence[_JsonSchemaBranchLevel], names: frozenset[str]) -> frozenset[str]:
+    def covered_above(
+        covered: tuple[frozenset[str], ...], pair: tuple[_JsonSchemaBranchLevel, _JsonSchemaBranchLevel]
+    ) -> tuple[frozenset[str], ...]:
+        upper, lower = pair
+        by_parent: Final = _names_covered_by_parent(lower, covered)
+        return tuple(
+            _names_covered_by(branch, names) | by_parent.get(index, _NO_NAMES)
+            for index, branch in enumerate(upper.branches)
+        )
+
+    deepest: Final = tuple(_names_covered_by(branch, names) for branch in levels[-1].branches)
+    return reduce(covered_above, reversed(tuple(pairwise(levels))), deepest)[0]
+
+
+def _is_alternative(branch: _JsonSchemaBranch, name: str) -> bool:
+    return branch.provenance.alternatives_only and name not in branch.provenance.names_defined_above
 
 
 def _branch_property_definitions(
-    branches: Iterable[Mapping[str, JsonValue]], names: frozenset[str]
-) -> Iterator[tuple[str, JsonValue]]:
+    branches: Iterable[_JsonSchemaBranch], names: frozenset[str]
+) -> Iterator[tuple[str, _BranchDefinition]]:
     for branch in branches:
-        if isinstance(properties := branch.get("properties"), dict):
-            yield from ((name, properties[name]) for name in names if isinstance(properties.get(name), dict))
+        if isinstance(properties := branch.schema.get("properties"), dict):
+            yield from (
+                (name, _BranchDefinition(properties[name], _is_alternative(branch, name)))
+                for name in _names_defined_in(branch.schema, names)
+            )
 
 
 def _const_as_enum(definition: JsonValue) -> JsonValue:
@@ -992,50 +1140,65 @@ def _const_as_enum(definition: JsonValue) -> JsonValue:
     return {**other_keywords, "enum": [definition["const"]]}
 
 
-def _merged_definition(definitions: Iterable[JsonValue]) -> tuple[JsonValue, int]:
-    by_content: Final = {
-        json.dumps(definition, sort_keys=True, default=str): definition
-        for definition in map(_const_as_enum, definitions)
-    }
+def _merged_definition(definitions: Sequence[_BranchDefinition]) -> _MergedDefinition:
+    as_enums: Final = (_const_as_enum(branch_definition.definition) for branch_definition in definitions)
+    by_content: Final = {json.dumps(definition, sort_keys=True, default=str): definition for definition in as_enums}
     unique: Final = tuple(by_content.values())
-    return (unique[0] if len(unique) == 1 else {"anyOf": list(unique)}), sum(map(len, by_content))
+    return _MergedDefinition(
+        unique[0] if len(unique) == 1 else {"anyOf": list(unique)},
+        sum(map(len, by_content)),
+        len(unique) > 1 and not all(branch_definition.alternative for branch_definition in definitions),
+    )
 
 
 def _allows_any_extra_property(schema: Mapping[str, JsonValue]) -> bool:
     return schema.get("additionalProperties", True) in (True, {})
 
 
-def _hoisted_properties(
-    schema: Mapping[str, JsonValue], root: Mapping[str, JsonValue], budget: int
-) -> tuple[Mapping[str, JsonValue], int]:
+def _missing_required_names(schema: Mapping[str, JsonValue]) -> frozenset[str]:
     required: Final = schema.get("required")
-    if budget <= 0 or "$ref" in schema or not _allows_any_extra_property(schema) or not isinstance(required, list):
-        return {}, 0
+    if "$ref" in schema or _excludes_objects(schema) or not _allows_any_extra_property(schema):
+        return frozenset()
+    if not isinstance(required, list):
+        return frozenset()
     declared: Final = schema.get("properties")
-    missing: Final = frozenset(name for name in required if isinstance(name, str)) - frozenset(
+    return frozenset(name for name in required if isinstance(name, str)) - frozenset(
         declared if isinstance(declared, dict) else ()
     )
-    if not missing:
-        return {}, 0
-    branches: Final = tuple(islice(_reachable_json_schema_branches(schema, root), budget // len(missing) + 1))
-    search_cost: Final = len(branches) * len(missing)
-    if search_cost > budget:
-        return {}, budget
-    found: Final = sorted(_branch_property_definitions(branches, missing), key=lambda item: item[0])
+
+
+def _hoisted_properties(
+    schema: Mapping[str, JsonValue], root: Mapping[str, JsonValue], budget: _HoistBudget
+) -> tuple[Mapping[str, JsonValue], _HoistBudget]:
+    missing: Final = _missing_required_names(schema)
+    if not missing or budget.search <= 0 or budget.copies <= 0:
+        return _EMPTY_SCHEMA, budget
+    entry_limit: Final = budget.search // len(missing) + 1
+    levels: Final = _json_schema_branch_levels(schema, root, missing, entry_limit)
+    search_left: Final = budget.search - (entry_limit - levels[-1].entries_left) * len(missing)
+    if search_left < 0:
+        return _EMPTY_SCHEMA, _HoistBudget(0, budget.copies)
+    branches: Final = chain.from_iterable(level.branches for level in levels[1:])
+    found: Final = sorted(
+        _branch_property_definitions(branches, _covered_names(levels, missing)), key=lambda item: item[0]
+    )
     merged: Final = {
-        name: _merged_definition(definition for _, definition in group)
+        name: _merged_definition(tuple(definition for _, definition in group))
         for name, group in groupby(found, key=lambda item: item[0])
     }
-    cost: Final = search_cost + sum(size for _, size in merged.values())
-    if cost > budget:
-        return {}, budget
-    return {name: definition for name, (definition, _) in merged.items()}, cost
+    copies_left: Final = budget.copies - sum(merge.size for merge in merged.values())
+    if copies_left < 0:
+        return _EMPTY_SCHEMA, _HoistBudget(search_left, 0)
+    return (
+        {name: merge.definition for name, merge in merged.items() if not merge.wider_than_the_schema},
+        _HoistBudget(search_left, copies_left),
+    )
 
 
 def _declared_in_order(
     children: Iterable[_JsonSchemaChild],
-    declare: Callable[[_JsonSchemaChild, int], _DeclaredJsonSchema],
-    budget: int,
+    declare: Callable[[_JsonSchemaChild, _HoistBudget], _DeclaredJsonSchema],
+    budget: _HoistBudget,
     rebuild: Callable[[tuple[JsonValue, ...]], JsonValue],
 ) -> _DeclaredJsonSchema:
     def declare_next(previous: _DeclaredJsonSchema, child: _JsonSchemaChild) -> _DeclaredJsonSchema:
@@ -1045,29 +1208,41 @@ def _declared_in_order(
     return _DeclaredJsonSchema(rebuild(tuple(step.schema for step in steps[1:])), steps[-1].budget_left)
 
 
+def _subschemas(keyword: str, value: JsonValue) -> Iterable[JsonValue]:
+    match value:
+        case dict() if keyword in _SUBSCHEMA_MAP_KEYWORDS:
+            return value.values()
+        case list() if keyword in _SUBSCHEMA_LIST_KEYWORDS:
+            return value
+        case dict() if keyword in _SUBSCHEMA_KEYWORDS:
+            return (value,)
+        case _:
+            return ()
+
+
 def _with_subschemas_declared(
-    keyword: str, value: JsonValue, root: Mapping[str, JsonValue], budget: int, hoists_left: int, depth: int
+    keyword: str, value: JsonValue, root: Mapping[str, JsonValue], budget: _HoistBudget, hoists_left: int, depth: int
 ) -> _DeclaredJsonSchema:
-    def declared(subschema: JsonValue, budget_left: int) -> _DeclaredJsonSchema:
+    def declared(subschema: JsonValue, budget_left: _HoistBudget) -> _DeclaredJsonSchema:
         return _with_branch_required_names_declared(subschema, root, budget_left, hoists_left, depth)
 
-    match keyword, value:
-        case ("properties" | "$defs" | "definitions", dict()):
+    match value:
+        case dict() if keyword in _SUBSCHEMA_MAP_KEYWORDS:
             return _declared_in_order(value.values(), declared, budget, lambda subschemas: dict(zip(value, subschemas)))
-        case ("anyOf" | "oneOf" | "allOf" | "prefixItems" | "items", list()):
+        case list() if keyword in _SUBSCHEMA_LIST_KEYWORDS:
             return _declared_in_order(value, declared, budget, list)
-        case ("items" | "additionalProperties", dict()):
+        case dict() if keyword in _SUBSCHEMA_KEYWORDS:
             return declared(value, budget)
         case _:
             return _DeclaredJsonSchema(value, budget)
 
 
 def _with_branch_required_names_declared(
-    schema: JsonValue, root: Mapping[str, JsonValue], budget: int, hoists_left: int, depth: int
+    schema: JsonValue, root: Mapping[str, JsonValue], budget: _HoistBudget, hoists_left: int, depth: int
 ) -> _DeclaredJsonSchema:
-    if not isinstance(schema, dict) or depth > DEFAULT_MAX_RECURSE_DEPTH:
+    if not isinstance(schema, dict) or depth > _MAX_JSON_SCHEMA_REWRITE_DEPTH:
         return _DeclaredJsonSchema(schema, budget)
-    hoisted, cost = _hoisted_properties(schema, root, budget if hoists_left > 0 else 0)
+    hoisted, budget_left = _hoisted_properties(schema, root, budget) if hoists_left > 0 else (_EMPTY_SCHEMA, budget)
     declared: Final = schema.get("properties")
     with_hoisted: Final = (
         {**schema, "properties": {**(declared if isinstance(declared, dict) else {}), **hoisted}} if hoisted else schema
@@ -1075,11 +1250,29 @@ def _with_branch_required_names_declared(
 
     subschema_hoists_left: Final = hoists_left - 1 if hoisted else hoists_left
 
-    def declared_keyword(item: tuple[str, JsonValue], budget_left: int) -> _DeclaredJsonSchema:
+    def declared_keyword(item: tuple[str, JsonValue], budget_left: _HoistBudget) -> _DeclaredJsonSchema:
         return _with_subschemas_declared(item[0], item[1], root, budget_left, subschema_hoists_left, depth + 1)
 
     return _declared_in_order(
-        with_hoisted.items(), declared_keyword, budget - cost, lambda values: dict(zip(with_hoisted, values))
+        with_hoisted.items(), declared_keyword, budget_left, lambda values: dict(zip(with_hoisted, values))
+    )
+
+
+def _child_subschemas(schema: Mapping[str, JsonValue]) -> Iterator[JsonValue]:
+    return chain.from_iterable(_subschemas(keyword, value) for keyword, value in schema.items())
+
+
+def _has_hoist_candidate(schema: Mapping[str, JsonValue]) -> bool:
+    def next_level(level: tuple[Mapping[str, JsonValue], ...], _: None) -> tuple[Mapping[str, JsonValue], ...]:
+        children: Final = chain.from_iterable(map(_child_subschemas, level))
+        return tuple(child for child in children if isinstance(child, dict))
+
+    levels: Final = takewhile(
+        bool, islice(accumulate(repeat(None), next_level, initial=(schema,)), _MAX_JSON_SCHEMA_REWRITE_DEPTH + 1)
+    )
+    return any(
+        _branch_group_count(subschema) > 0 and bool(_missing_required_names(subschema))
+        for subschema in chain.from_iterable(levels)
     )
 
 
@@ -1093,17 +1286,16 @@ def build_json_schema(parameters: Mapping[str, JsonValue]) -> JsonValue:
     - Does NOT filter fields (allows additionalProperties)
     - Preserves $defs/$ref (Gemini 2.0+ supports JSON Schema references natively)
 
-    Gemini answers 400 on a node whose `required` names are defined only in its
-    anyOf, oneOf or allOf branches, and it fills a required name only from the
-    node's own `properties`. So those definitions are copied up to the node, with
-    `const` as a one-value `enum` because Gemini enforces `enum` and ignores
-    `const`. The branches stay as sent. A name no branch defines stays undeclared,
-    and a node whose `additionalProperties` is `false` or a non-empty schema stays
-    as sent, because a copied name would escape that constraint. Each hoist copies a subtree that can hold more hoists, so a
-    path stops after _MAX_JSON_SCHEMA_HOISTS_PER_PATH nodes, keeping a recursive
-    schema shallow enough for Google to name its own error, and one schema shares
-    _JSON_SCHEMA_HOIST_BUDGET, spent on each branch checked per missing name and
-    each byte copied. The nodes past either limit stay as sent.
+    Gemini answers 400 on a node whose `required` names are defined only in its anyOf, oneOf or allOf
+    branches, and fills a required name only from the node's own `properties`. So those definitions are
+    copied up to the node, with `const` as a one-value `enum` because Gemini ignores `const`. A name is
+    copied only when the copy allows exactly what the branches allow, since Gemini enforces just that copy:
+    every alternative that can match an object must define it, and several definitions become their `anyOf`
+    only when they are alternatives. A node whose `additionalProperties` is `false` or a non-empty schema
+    stays as sent, and so does a node deeper than _GEMINI_MAX_JSON_SCHEMA_DEPTH, past which Gemini answers
+    "Message too deep". A path stops copying after _MAX_JSON_SCHEMA_HOISTS_PER_PATH nodes. One schema
+    shares _JSON_SCHEMA_HOIST_BUDGET branch entries checked per missing name, and copies at most that many
+    bytes plus its own size.
 
     Parameters:
         parameters: the JSON schema to process
@@ -1111,9 +1303,13 @@ def build_json_schema(parameters: Mapping[str, JsonValue]) -> JsonValue:
     Returns:
         a new schema in standard JSON Schema format
     """
-    return _with_branch_required_names_declared(
-        dict(parameters), parameters, _JSON_SCHEMA_HOIST_BUDGET, _MAX_JSON_SCHEMA_HOISTS_PER_PATH, 0
-    ).schema
+    schema: Final = dict(parameters)
+    if not _has_hoist_candidate(schema):
+        return schema
+    budget: Final = _HoistBudget(
+        _JSON_SCHEMA_HOIST_BUDGET, _JSON_SCHEMA_HOIST_BUDGET + len(json.dumps(schema, default=str))
+    )
+    return _with_branch_required_names_declared(schema, parameters, budget, _MAX_JSON_SCHEMA_HOISTS_PER_PATH, 0).schema
 
 
 _build_json_schema = build_json_schema
