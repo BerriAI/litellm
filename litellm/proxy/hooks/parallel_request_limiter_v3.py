@@ -1021,7 +1021,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         native: Final = self.native_companion
         if native is None or native.identity(native_state) == call_id:
             return False
-        exported: Final = _NATIVE_STASH.validate_json(native.hand_over(native_state))
+        exported: Final = _NATIVE_STASH.validate_python(native.hand_over(native_state))
         slot: Final = exported["parallel_slot"]
         model: Final = exported["reserved_model"]
         response: Final = exported["rate_limit_response"]

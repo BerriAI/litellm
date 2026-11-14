@@ -1518,7 +1518,7 @@ async def test_auth_descriptors_are_built_in_rust_like_python(
     auth: Final = UserAPIKeyAuth(**{"api_key": _KEY, **limits, "metadata": types})  # pyright: ignore[reportArgumentType]  # pydantic fields by keyword
     request: Final = Request(auth, _CHAT)
     handle: Final = await _native_first_pass(side, request, _data(0, request))
-    native: Final = _DESCRIPTORS.validate_json(side.native.bridge.descriptors(handle))
+    native: Final = _DESCRIPTORS.validate_python(side.native.bridge.descriptors(handle))
     python: Final = await side.limiter._build_request_rate_limit_descriptors(  # pyright: ignore[reportPrivateUsage]  # the Python reference
         auth, _data(0, request), request.call_type
     )

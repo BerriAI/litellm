@@ -1,7 +1,6 @@
 import builtins
 import dataclasses
 import functools
-import json
 import math
 import os
 import time
@@ -60,6 +59,7 @@ if TYPE_CHECKING:
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         PROXY_MaxParallelRequestsHandler_v3,
         RateLimitDescriptor,
+        RateLimitResponse,
         RequestRateLimiterStash,
     )
     from litellm.proxy.utils import InternalUsageCache
@@ -422,7 +422,7 @@ class ParallelRequestLimiterNativeLogger(RustLogger):
         state: "NativeParallelRequestLimiterState",
         ceiling: PTUTeamCeiling | None,
     ) -> None:
-        descriptors: Final = _descriptors().validate_json(self.bridge.descriptors(state))
+        descriptors: Final = _descriptors().validate_python(self.bridge.descriptors(state))
         stash.tpm_limited_tags = frozenset(  # rebind-ok: the Python settlement reads the native's tag scopes here
             descriptor["value"]
             for descriptor in descriptors
@@ -528,6 +528,13 @@ def _descriptors() -> "TypeAdapter[tuple[RateLimitDescriptor, ...]]":
     from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitDescriptor
 
     return TypeAdapter(tuple[RateLimitDescriptor, ...])
+
+
+@functools.cache
+def _rate_limit_response() -> "TypeAdapter[RateLimitResponse]":
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitResponse
+
+    return TypeAdapter(RateLimitResponse)
 
 
 def _scalar_setting(raw: object) -> object:
@@ -774,7 +781,7 @@ class NativeBatchEnqueuedTokenStore(BatchEnqueuedTokenStore):
         scopes: tuple[BatchEnqueuedTokenScope, ...],
         litellm_parent_otel_span: "Span | None" = None,
     ) -> BatchEnqueuedTokenOutcome:
-        outcome: Final = _OUTCOME.validate_json(
+        outcome: Final = _OUTCOME.validate_python(
             await self.native.enqueued_reserve(tokens, _SCOPES.dump_json(scopes).decode())
         )
         if "over_limit" in outcome:
@@ -798,7 +805,7 @@ class NativeBatchEnqueuedTokenStore(BatchEnqueuedTokenStore):
         self, batch_id: str, litellm_parent_otel_span: "Span | None" = None
     ) -> BatchEnqueuedTokenReservation | None:
         popped: Final = await self.native.enqueued_pop(batch_id)
-        return None if popped is None else _RESERVATION.validate_json(popped)
+        return None if popped is None else _RESERVATION.validate_python(popped)
 
 
 def mirror_rate_limit_response(
@@ -810,7 +817,7 @@ def mirror_rate_limit_response(
     response: Final = bridge.rate_limit_response(state)
     if stash is None or response is None:
         return
-    stash.rate_limit_response = json.loads(response)
+    stash.rate_limit_response = _rate_limit_response().validate_python(response)
 
 
 def usage_facts(usage: object) -> Mapping[str, int] | None:

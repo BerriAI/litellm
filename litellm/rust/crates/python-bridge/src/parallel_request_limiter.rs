@@ -11,7 +11,7 @@ use litellm_callbacks_parallel_request_limiter::{
     Unverifiable, WindowIdentity, input_and_output_tokens, process_monotonic, tokens_for_request,
 };
 use litellm_callbacks_python::RustCallback;
-use litellm_host_python::{Pythonized, from_py, json_from_py, run_async_value};
+use litellm_host_python::{Pythonized, from_py, json_from_py, json_loads, run_async_value, to_py};
 use litellm_redis_store::{Number, rate_limits::Scope};
 use pyo3::{
     exceptions::PyValueError,
@@ -50,8 +50,16 @@ fn named<T: serde::de::DeserializeOwned>(name: &str) -> PyResult<T> {
         .map_err(|_| PyValueError::new_err(format!("{name} is not a known name")))
 }
 
-fn decoded<T: serde::de::DeserializeOwned>(text: &str) -> PyResult<T> {
-    serde_json::from_str(text).map_err(|error| PyValueError::new_err(error.to_string()))
+fn decoded<T: serde::de::DeserializeOwned>(py: Python<'_>, text: &str) -> PyResult<T> {
+    let parsed = json_loads(py, text.as_bytes())?;
+    serde_json::from_value(json_from_py(parsed.bind(py))?)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+fn encoded<T: serde::Serialize>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>> {
+    let value =
+        serde_json::to_value(value).map_err(|error| PyValueError::new_err(error.to_string()))?;
+    to_py(py, &value)
 }
 
 fn python_clock(now: Py<PyAny>) -> litellm_callbacks_parallel_request_limiter::Now {
@@ -323,6 +331,7 @@ impl NativeParallelRequestLimiter {
     #[new]
     #[pyo3(signature = (rate_limits, window_size, tpm_reservation_enabled, now = None, monotonic = None, output_cap = None))]
     fn new(
+        py: Python<'_>,
         rate_limits: PyRef<'_, NativeRateLimits>,
         window_size: i64,
         tpm_reservation_enabled: bool,
@@ -355,16 +364,14 @@ impl NativeParallelRequestLimiter {
                 responses_min_output_tokens,
             },
         ));
-        limiter
-            .manifest()
-            .validate()
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        let manifest = serde_json::to_string(limiter.manifest())
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        Ok(Self {
-            limiter: Arc::new(limiter),
-            manifest,
-        })
+        let limiter = Arc::new(limiter);
+        let manifest = Bound::new(
+            py,
+            RustCallback::new(Arc::clone(&limiter) as Arc<dyn litellm_callbacks::ErasedCallback>)?,
+        )?
+        .call_method0("manifest")?
+        .extract::<String>()?;
+        Ok(Self { limiter, manifest })
     }
 
     fn manifest(&self) -> &str {
@@ -470,8 +477,8 @@ impl NativeParallelRequestLimiter {
         policy: &str,
         request: Option<PyRef<'py, NativeRequestRedis>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let descriptors: Vec<Descriptor> = decoded(descriptors)?;
-        let policy: PolicyFacts = decoded(policy)?;
+        let descriptors: Vec<Descriptor> = decoded(py, descriptors)?;
+        let policy: PolicyFacts = decoded(py, policy)?;
         let request = request.map(|request| request.0.clone());
         let limiter = Arc::clone(&self.limiter);
         limiter_async(py, async move {
@@ -503,8 +510,8 @@ impl NativeParallelRequestLimiter {
         policy: &str,
         request: Option<PyRef<'py, NativeRequestRedis>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let descriptors: Vec<Descriptor> = decoded(descriptors)?;
-        let policy: PolicyFacts = decoded(policy)?;
+        let descriptors: Vec<Descriptor> = decoded(py, descriptors)?;
+        let policy: PolicyFacts = decoded(py, policy)?;
         let request = request.map(|request| request.0.clone());
         let limiter = Arc::clone(&self.limiter);
         limiter_async(py, async move {
@@ -548,7 +555,11 @@ impl NativeParallelRequestLimiter {
         state.0.stash().identity.clone()
     }
 
-    fn hand_over(&self, state: PyRef<'_, NativeParallelRequestLimiterState>) -> PyResult<String> {
+    fn hand_over(
+        &self,
+        py: Python<'_>,
+        state: PyRef<'_, NativeParallelRequestLimiterState>,
+    ) -> PyResult<Py<PyAny>> {
         let mut stash = state.0.stash();
         stash.owned = false;
         let exported = json!({
@@ -574,7 +585,7 @@ impl NativeParallelRequestLimiter {
             "batch_enqueued_reservation": stash.batch_enqueued.take().map(|reservation| reservation_json(&reservation)),
             "batch_tpd_refunds": std::mem::take(&mut stash.batch_tpd_refunds).iter().map(op_json).collect::<Vec<_>>(),
         });
-        serde_json::to_string(&exported).map_err(|error| PyValueError::new_err(error.to_string()))
+        to_py(py, &exported)
     }
 
     fn enqueued_reserve<'py>(
@@ -583,11 +594,12 @@ impl NativeParallelRequestLimiter {
         tokens: i64,
         scopes: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let scopes: Vec<EnqueuedScope> = decoded(scopes)?;
+        let scopes: Vec<EnqueuedScope> = decoded(py, scopes)?;
         let limiter = Arc::clone(&self.limiter);
         limiter_async(py, async move {
             let outcome = limiter.enqueued().reserve(tokens, scopes).await;
-            serde_json::to_string(&outcome)
+            serde_json::to_value(&outcome)
+                .map(Pythonized)
                 .map_err(|error| PyValueError::new_err(error.to_string()))
         })
     }
@@ -597,7 +609,7 @@ impl NativeParallelRequestLimiter {
         py: Python<'py>,
         reservation: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let reservation: EnqueuedReservation = decoded(reservation)?;
+        let reservation: EnqueuedReservation = decoded(py, reservation)?;
         let limiter = Arc::clone(&self.limiter);
         limiter_async(py, async move {
             limiter.enqueued().refund(&reservation).await;
@@ -611,7 +623,7 @@ impl NativeParallelRequestLimiter {
         batch_id: String,
         reservation: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let reservation: EnqueuedReservation = decoded(reservation)?;
+        let reservation: EnqueuedReservation = decoded(py, reservation)?;
         let limiter = Arc::clone(&self.limiter);
         limiter_async(py, async move {
             limiter.enqueued().save(&batch_id, &reservation).await;
@@ -626,7 +638,7 @@ impl NativeParallelRequestLimiter {
                 .enqueued()
                 .pop(&batch_id)
                 .await
-                .map(|reservation| reservation_json(&reservation).to_string()))
+                .map(|reservation| Pythonized(reservation_json(&reservation))))
         })
     }
 
@@ -636,18 +648,21 @@ impl NativeParallelRequestLimiter {
 
     fn rate_limit_response(
         &self,
+        py: Python<'_>,
         state: PyRef<'_, NativeParallelRequestLimiterState>,
-    ) -> PyResult<Option<String>> {
+    ) -> PyResult<Option<Py<PyAny>>> {
         let stash = state.0.stash();
         stash
             .rate_limit_response
             .as_ref()
             .map(|response| {
-                serde_json::to_string(&json!({
-                    "overall_code": response.overall,
-                    "statuses": response.statuses,
-                }))
-                .map_err(|error| PyValueError::new_err(error.to_string()))
+                to_py(
+                    py,
+                    &json!({
+                        "overall_code": response.overall,
+                        "statuses": response.statuses,
+                    }),
+                )
             })
             .transpose()
     }
@@ -688,9 +703,12 @@ impl NativeParallelRequestLimiter {
         )
     }
 
-    fn descriptors(&self, state: PyRef<'_, NativeParallelRequestLimiterState>) -> PyResult<String> {
-        serde_json::to_string(&self.limiter.descriptors(&state.0))
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+    fn descriptors(
+        &self,
+        py: Python<'_>,
+        state: PyRef<'_, NativeParallelRequestLimiterState>,
+    ) -> PyResult<Py<PyAny>> {
+        encoded(py, &self.limiter.descriptors(&state.0))
     }
 
     fn take_parallel_slot<'py>(
@@ -721,7 +739,7 @@ impl NativeParallelRequestLimiter {
         facts: &str,
         request: Option<PyRef<'py, NativeRequestRedis>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let facts: SuccessFacts = decoded(facts)?;
+        let facts: SuccessFacts = decoded(py, facts)?;
         let state = Arc::clone(&state.0);
         let request = request.map(|request| request.0.clone());
         let limiter = Arc::clone(&self.limiter);
@@ -741,7 +759,7 @@ impl NativeParallelRequestLimiter {
         facts: &str,
         request: Option<PyRef<'py, NativeRequestRedis>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let facts: SuccessFacts = decoded(facts)?;
+        let facts: SuccessFacts = decoded(py, facts)?;
         let state = Arc::clone(&state.0);
         let request = request.map(|request| request.0.clone());
         let limiter = Arc::clone(&self.limiter);
@@ -759,7 +777,7 @@ impl NativeParallelRequestLimiter {
         facts: &str,
         request: Option<PyRef<'py, NativeRequestRedis>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let facts: FailureFacts = decoded(facts)?;
+        let facts: FailureFacts = decoded(py, facts)?;
         let state = Arc::clone(&state.0);
         let request = request.map(|request| request.0.clone());
         let limiter = Arc::clone(&self.limiter);
@@ -777,7 +795,7 @@ impl NativeParallelRequestLimiter {
         state: PyRef<'py, NativeParallelRequestLimiterState>,
         facts: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let facts: PostCallFailureFacts = decoded(facts)?;
+        let facts: PostCallFailureFacts = decoded(py, facts)?;
         let state = Arc::clone(&state.0);
         let limiter = Arc::clone(&self.limiter);
         limiter_async(py, async move {
@@ -828,8 +846,8 @@ impl NativeParallelRequestLimiter {
         policy: &str,
         request: Option<PyRef<'py, NativeRequestRedis>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let descriptors: Vec<Descriptor> = decoded(descriptors)?;
-        let policy: PolicyFacts = decoded(policy)?;
+        let descriptors: Vec<Descriptor> = decoded(py, descriptors)?;
+        let policy: PolicyFacts = decoded(py, policy)?;
         let state = state.map(|state| Arc::clone(&state.0));
         let request = request.map(|request| request.0.clone());
         let limiter = Arc::clone(&self.limiter);

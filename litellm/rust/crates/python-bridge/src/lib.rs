@@ -171,6 +171,8 @@ mod tests {
                 "GuardedReply",
                 "GaugesAcquired",
                 "GaugeOverLimit",
+                "NativeParallelRequestLimiter",
+                "NativeParallelRequestLimiterState",
                 "NativePending",
                 "NativeRouterCooldowns",
                 "NativeRouterUsage",
