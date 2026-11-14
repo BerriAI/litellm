@@ -80,6 +80,8 @@ Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages
 
 When working on a PR, keep the PR description in sync with new commits being made
 
+Before editing an existing PR's body, fetch its current body with `gh pr view <n> --json body` and edit that text instead of regenerating it from the template. Keep whatever the author wrote under `## Handwritten 1-3 sentence description` word for word, and never put the placeholder back over it
+
 All GitHub comments must be human-readable and 15-25 words max
 
 Monkeypatching attributes of a class to do testing is an anti-pattern. Prefer dependency-injecting things into classes. That way, at unit test time, you can pass a mocked dependency in
