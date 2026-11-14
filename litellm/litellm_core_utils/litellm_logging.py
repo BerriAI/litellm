@@ -938,7 +938,6 @@ class Logging(LiteLLMLoggingBaseClass):
     custom_model_info: ModelInfo | None = None
     a2a_agent_cost_per_query: object = None
     a2a_agent_id: str | None = None
-    a2a_agent_price_kwargs: frozenset[str] = frozenset()
     replaced_global_callback_keys: frozenset[str] = frozenset()
     stream_options = None
     litellm_request_debug: bool = False
@@ -1497,12 +1496,9 @@ class Logging(LiteLLMLoggingBaseClass):
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
 
-    def bill_as_a2a_agent(
-        self, agent_id: str, cost_per_query: object, price_kwargs: frozenset[str] = frozenset()
-    ) -> None:
+    def bill_as_a2a_agent(self, agent_id: str, cost_per_query: object) -> None:
         self.a2a_agent_cost_per_query = cost_per_query
         self.a2a_agent_id = agent_id
-        self.a2a_agent_price_kwargs = price_kwargs
         self.model_call_details["agent_id"] = agent_id
 
     def stop_billing_as_a2a_agent(self) -> None:

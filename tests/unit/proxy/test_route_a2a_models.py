@@ -1099,6 +1099,7 @@ async def test_route_a2a_agent_that_answers_itself_is_billed_as_the_agent_when_a
 
     assert cost == pytest.approx(0.05)
     assert logging_obj.model_call_details["agent_id"] == "per-query-id"
+    assert _failure_fields_to_lift({"litellm_logging_obj": logging_obj})["agent_id"] == "per-query-id"
 
 
 @respx.mock
@@ -1166,6 +1167,65 @@ async def test_route_a2a_agent_call_answered_by_an_unpriced_fallback_is_billed_a
     assert cost == pytest.approx(0.5 * (response.usage.prompt_tokens + response.usage.completion_tokens))
     assert "agent_id" not in logging_obj.model_call_details
     assert "agent_id" not in _failure_fields_to_lift({"litellm_logging_obj": logging_obj})
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "agent",
+    [_priced_dbx_agent("per-token", PER_TOKEN_PRICE), _priced_url_agent("url-per-token", PER_TOKEN_PRICE)],
+    ids=["bridge", "url"],
+)
+async def test_route_a2a_agent_call_no_fallback_answered_stays_on_the_agents_failure_row(
+    httpx_transport: None, agent: AgentResponse
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(404, json={"error_code": "RESOURCE_DOES_NOT_EXIST", "message": "no endpoint"})
+    )
+    respx.post(AGENT_URL).mock(return_value=httpx.Response(500, json={"error": "agent down"}))
+    respx.post(f"{FALLBACK_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(400, json={"error": {"message": "fallback refused"}})
+    )
+    logging_obj: Final = _proxy_logging_obj()
+    data: Final = {
+        "model": f"a2a/{agent.agent_name}",
+        "messages": [{"role": "user", "content": "ping"}],
+        "litellm_logging_obj": logging_obj,
+        "fallbacks": [{"model": "openai/a2a-fallback-model", "api_base": FALLBACK_API_BASE, "api_key": "sk-fallback"}],
+    }
+
+    with (
+        patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)),
+        pytest.raises(Exception, match="All fallback attempts failed"),
+    ):
+        await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+
+    assert _failure_fields_to_lift({"litellm_logging_obj": logging_obj})["agent_id"] == agent.agent_id
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "agent",
+    [_priced_dbx_agent("per-query", PER_QUERY_PRICE), _priced_url_agent("url-per-query", PER_QUERY_PRICE)],
+    ids=["bridge", "url"],
+)
+async def test_route_a2a_agent_that_answers_its_own_retry_is_billed_and_attributed_as_the_agent(
+    httpx_transport: None, agent: AgentResponse
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        side_effect=[httpx.Response(500, json={"error_code": "TEMPORARILY_UNAVAILABLE"}), httpx.Response(200, json=AGENT_REPLY)]
+    )
+    respx.post(AGENT_URL).mock(
+        side_effect=[httpx.Response(500, json={"error": "agent down"}), httpx.Response(200, json=A2A_REPLY)]
+    )
+
+    cost, response, logging_obj = await _billed_chat_call(
+        _registry_with(agent), agent.agent_name, {"fallbacks": [{"timeout": 30}]}
+    )
+
+    assert response.choices[0].message.content == "pong"
+    assert cost == pytest.approx(0.05)
+    assert logging_obj.model_call_details["agent_id"] == agent.agent_id
+    assert _failure_fields_to_lift({"litellm_logging_obj": logging_obj})["agent_id"] == agent.agent_id
 
 
 @respx.mock

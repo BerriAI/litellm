@@ -226,7 +226,6 @@ def _bill_as_agent(data: Mapping[str, object], agent: AgentResponse, litellm_par
     logging_obj.bill_as_a2a_agent(
         agent_id=agent.agent_id,
         cost_per_query=None if _client_sets_price(data) else litellm_params.get("cost_per_query"),
-        price_kwargs=frozenset(_agent_prices_the_client_left_unset(litellm_params, data)),
     )
 
 
