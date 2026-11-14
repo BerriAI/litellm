@@ -1,4 +1,7 @@
 import json
+import subprocess
+import sys
+from pathlib import Path
 from typing import Final, Protocol, cast
 
 import pytest
@@ -1220,3 +1223,59 @@ def test_batch_dump_applies_exclude_none_to_provider_usage_detail_fields() -> No
     assert python_usage == json_usage
     assert python_usage["input_tokens_details"] == {"cached_tokens": 5}
     assert (python_usage["prompt_tokens"], python_usage["input_tokens"]) == (21, 21)
+
+
+def test_parallel_first_usage_construction_does_not_race_schema_build() -> None:
+    probe: Final = r"""
+import inspect
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+sys.path.insert(0, sys.argv[1])
+from pydantic import BaseModel
+from litellm.types.utils import Usage, PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper
+
+try:
+    rebuild_code = BaseModel.model_rebuild.__func__.__code__
+    source, first_line = inspect.getsourcelines(BaseModel.model_rebuild)
+    delete_line = next((first_line + i for i, line in enumerate(source) if "delattr(cls, attr)" in line), None)
+except (AttributeError, OSError, TypeError):
+    rebuild_code, delete_line = None, None
+sys.setswitchinterval(1e-6)
+
+cases = (
+    (Usage, {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8}),
+    (PromptTokensDetailsWrapper, {"cached_tokens": 2, "text_tokens": 3}),
+    (CompletionTokensDetailsWrapper, {"reasoning_tokens": 4, "text_tokens": 1}),
+)
+for model, fields in cases:
+    barrier = threading.Barrier(8, timeout=5)
+    start_barrier = threading.Barrier(8, timeout=5)
+    def trace(frame, event, arg):
+        if (event == "line" and delete_line is not None and frame.f_code is rebuild_code
+            and frame.f_lineno == delete_line and frame.f_locals.get("cls") is model
+            and frame.f_locals.get("attr") == "__pydantic_core_schema__"):
+            barrier.wait()
+        return trace
+
+    def construct(index):
+        sys.settrace(trace)
+        try:
+            start_barrier.wait()
+            return model(**fields).model_dump()
+        finally:
+            sys.settrace(None)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = tuple(pool.map(construct, range(8)))
+    assert len(results) == 8
+    for result in results:
+        assert {key: result[key] for key in fields} == fields, result
+    print(model.__name__ + ": 8 parallel constructions passed")
+"""
+    root: Final = str(Path(__file__).resolve().parents[3])
+    result: Final = subprocess.run(
+        [sys.executable, "-I", "-c", probe, root], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

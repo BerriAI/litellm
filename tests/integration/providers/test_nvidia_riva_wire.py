@@ -135,3 +135,12 @@ def test_a_stalled_offline_recognize_answers_408_at_the_deployment_timeout(gatew
         assert timed_out.status_code == 408, timed_out.text
         calls: Final = eventually(server.drain, lambda observed: len(observed) > 0, seconds=30)
         assert all(call.rpc is Rpc.RECOGNIZE and call.cancelled for call in calls), calls
+
+
+@pytest.mark.parametrize("riva_offline", (False, True), ids=("streaming", "offline"))
+def test_the_deployment_api_key_reaches_riva_as_exactly_one_bearer_token(gateway: Gateway, riva_offline: bool) -> None:
+    with riva_server(_WORDS) as server, gateway.scenario() as scenario:
+        model: Final = _riva_model(scenario, server, api_key="riva-deployment-key", riva_offline=riva_offline)
+        served: Final = _transcribe(gateway, scenario.key(), model)
+        assert served.status_code == 200, served.text
+        assert [call.authorization for call in server.drain()] == [("Bearer riva-deployment-key",)]

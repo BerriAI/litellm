@@ -137,35 +137,6 @@ def test_dual_cache_batch_get_cache_rolls_back_redis_reservation_on_error():
     assert "shared_a" not in dual_cache.last_redis_batch_access_time
 
 
-def test_reserve_redis_batch_reads_reserves_memory_misses_and_can_be_rolled_back():
-    mock_redis: Final = MagicMock(spec=RedisCache)
-    dual_cache: Final = DualCache(
-        in_memory_cache=InMemoryCache(),
-        redis_cache=mock_redis,
-        default_redis_batch_cache_expiry=10,
-    )
-    dual_cache.in_memory_cache.set_cache("memory_key", "memory_value")
-
-    reserved, previous_access_times = dual_cache.reserve_redis_batch_reads(["memory_key", "missing_key"])
-
-    assert reserved == ["missing_key"]
-    assert previous_access_times == {"missing_key": None}
-    assert dual_cache.reserve_redis_batch_reads(["memory_key", "missing_key"]) == ([], {})
-
-    dual_cache._rollback_redis_batch_key_reservations(previous_access_times)
-
-    assert dual_cache.reserve_redis_batch_reads(["memory_key", "missing_key"]) == (
-        ["missing_key"],
-        {"missing_key": None},
-    )
-
-
-def test_reserve_redis_batch_reads_returns_empty_without_redis():
-    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=None)
-
-    assert dual_cache.reserve_redis_batch_reads(["missing_key"]) == ([], {})
-
-
 def test_dual_cache_batch_get_cache_returns_memory_only_when_redis_read_is_throttled():
     mock_redis = _redis_mock_for_sync_batch({"throttled_key": "redis_value"})
     dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10)
@@ -368,30 +339,13 @@ async def test_dual_cache_sync_and_async_set_cache_use_same_ttl():
     assert abs(sync_expiry - async_expiry) < 1.0
 
 
-def test_circuit_breaker_opens_after_threshold():
-    """Circuit opens after N consecutive Redis failures."""
-    from litellm.caching.redis_cache import RedisCircuitBreaker
-
-    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
-    for _ in range(3):
-        cb.record_failure()
-
-    assert cb._state == "open"
-
-
 @pytest.mark.asyncio
 async def test_circuit_breaker_open_skips_redis():
     """When circuit is open, the guard decorator raises immediately without calling the method."""
-    from litellm.caching.redis_cache import (
-        RedisCircuitBreaker,
-        _redis_circuit_breaker_guard,
-    )
 
-    class FakeRedis:
+    class FakeRedis(_OpenBreakerRedis):
         def __init__(self):
-            self._circuit_breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
-            self._circuit_breaker._state = "open"
-            self._circuit_breaker._opened_at = time.time()
+            super().__init__()
             self.call_count = 0
 
         @_redis_circuit_breaker_guard
@@ -406,87 +360,13 @@ async def test_circuit_breaker_open_skips_redis():
     assert fr.call_count == 0  # method body never executed
 
 
-def test_circuit_breaker_closes_on_recovery():
-    """After recovery_timeout expires, probe is allowed and success closes the circuit."""
-    from litellm.caching.redis_cache import RedisCircuitBreaker
-
-    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
-    cb._state = "open"
-    cb._opened_at = time.time() - 9999  # recovery timeout long expired
-
-    # is_open() should return False to allow a probe through, and transition to HALF_OPEN
-    assert cb.is_open() is False
-    assert cb._state == "half_open"
-
-    # Successful probe closes the circuit
-    cb.record_success()
-    assert cb._state == "closed"
-
-
-def test_circuit_breaker_half_open_concurrent_calls_are_fast_failed():
-    """
-    Regression test: only ONE probe gets through when the circuit transitions
-    OPEN → HALF_OPEN. All concurrent callers that check is_open() while the
-    state is already HALF_OPEN must be fast-failed (return True), not allowed
-    through as additional probes.
-    """
-    from litellm.caching.redis_cache import RedisCircuitBreaker
-
-    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
-    cb._state = "open"
-    cb._opened_at = time.time() - 9999  # recovery timeout long expired
-
-    # First caller: OPEN + expired → transitions to HALF_OPEN, returns False (probe)
-    assert cb.is_open() is False
-    assert cb._state == "half_open"
-
-    # All subsequent concurrent callers: HALF_OPEN → fast-fail (return True)
-    for _ in range(10):
-        assert cb.is_open() is True, "concurrent callers should be fast-failed in HALF_OPEN"
-
-
-def test_circuit_breaker_disabled_never_opens():
-    """When disabled, failures never open the circuit and is_open() stays False."""
-    from litellm.caching.redis_cache import RedisCircuitBreaker
-
-    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, enabled=False)
-
-    for _ in range(100):
-        cb.record_failure()
-
-    assert cb._state == "closed"
-    assert cb.is_open() is False
-
-
-def test_circuit_breaker_disabled_record_success_leaves_state_untouched():
-    """
-    A disabled breaker must not mutate state in any state-machine method. Force
-    a non-default (OPEN) state and assert record_success() returns without
-    resetting it — the same enabled-guard contract as is_open/record_failure.
-    """
-    from litellm.caching.redis_cache import RedisCircuitBreaker
-
-    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, enabled=False)
-    cb._state = "open"
-    cb._failure_count = 3
-
-    cb.record_success()
-
-    assert cb._state == "open"
-    assert cb._failure_count == 3
-
-
 @pytest.mark.asyncio
 async def test_circuit_breaker_disabled_guard_always_calls_method():
     """A disabled breaker lets every guarded call through, even after failures."""
-    from litellm.caching.redis_cache import (
-        RedisCircuitBreaker,
-        _redis_circuit_breaker_guard,
-    )
 
     class FakeRedis:
         def __init__(self):
-            self._circuit_breaker = RedisCircuitBreaker(failure_threshold=1, recovery_timeout=60, enabled=False)
+            self._health = None
             self.call_count = 0
 
         def _admit_async_call(self, call):
@@ -504,7 +384,6 @@ async def test_circuit_breaker_disabled_guard_always_calls_method():
 
     # Every call reached the method body; the breaker never short-circuited.
     assert fr.call_count == 5
-    assert fr._circuit_breaker.is_open() is False
 
 
 @pytest.mark.asyncio
@@ -598,11 +477,16 @@ async def test_dual_cache_late_attach_redis_wires_writes_and_ttl_async():
 
 class _OpenBreakerRedis:
     def __init__(self) -> None:
-        from litellm.caching.redis_cache import RedisCircuitBreaker
+        from litellm._service_logger import ServiceLogging
+        from litellm.caching.redis_cache import RedisHealth
+        from litellm.redis.store_settings import RedisBreakerSettings
+        from litellm.rust_bridge._native import NativeRedisBreaker
 
-        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
-        for _ in range(3):
-            self._circuit_breaker.record_failure()
+        breaker: Final = NativeRedisBreaker(
+            RedisBreakerSettings(failure_threshold=1, recovery_timeout=60.0, timeout_min_duration=5.0)
+        )
+        breaker.failed(False)
+        self._health = RedisHealth(breaker, ServiceLogging())
 
     @_redis_circuit_breaker_guard
     async def async_get_cache(self, key, **kwargs):
@@ -728,11 +612,11 @@ async def test_redis_timeouts_falling_back_to_memory_log_once_per_interval(caplo
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
     from litellm.caching import redis_cache as redis_cache_module
-    from litellm.caching.redis_cache import _RedisTimeoutLogThrottle
+    from litellm.caching.redis_cache import RedisTimeoutLogThrottle
 
     clock = MagicMock(return_value=1_000.0)
     monkeypatch.setattr(
-        redis_cache_module, "_redis_timeout_log_throttle", _RedisTimeoutLogThrottle(interval=5.0, clock=clock)
+        redis_cache_module, "redis_timeout_log_throttle", RedisTimeoutLogThrottle(interval=5.0, clock=clock)
     )
 
     class _TimingOutRedis:

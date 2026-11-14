@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -17,6 +18,8 @@ from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
 )
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class OpenAICountTokensHandler(OpenAICountTokensConfig):
@@ -34,7 +37,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
         tools: Sequence[Mapping[str, object]] | None = None,
         instructions: str | None = None,
         text: Mapping[str, object] | None = None,
-    ) -> Mapping[str, object]:
+    ) -> object:
         """
         Handle a token counting request to OpenAI's Responses API.
 
@@ -67,7 +70,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
         api_key: str,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> Mapping[str, object]:
+    ) -> object:
         try:
             endpoint_url: Final = self.get_openai_count_tokens_endpoint(api_base)
 
@@ -96,7 +99,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
                     message=error_text,
                 )
 
-            openai_response: Final = response.json()
+            openai_response: Final = _DECODED_JSON.validate_python(response.json())
             verbose_logger.debug("OpenAI response: %s", openai_response)
             return openai_response
 
@@ -108,6 +111,8 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
+        except litellm.Timeout as e:
+            raise OpenAIError(status_code=e.status_code, message=str(e)) from e
         except (httpx.RequestError, json.JSONDecodeError, ValueError) as e:
             verbose_logger.error("Error in CountTokens handler: %s", e)
             raise OpenAIError(

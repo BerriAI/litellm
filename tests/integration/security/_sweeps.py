@@ -134,6 +134,9 @@ PARAMETER_ALIASES: Final = MappingProxyType(
     {
         "/models/{model_id}": {"model_id": "model"},
         "/v1/models/{model_id}": {"model_id": "model"},
+        "/management/v1/customer_budget_increase_requests/{request_id}": {
+            "request_id": "budget_increase_request_id"
+        },
     }
 )
 NOT_FOUND_EXPECTED: Final = MappingProxyType(
@@ -371,7 +374,10 @@ def get_routes() -> tuple[str, ...]:
 def _route_ids(route: str, ids: Mapping[str, str]) -> Mapping[str, str]:
     """``ids`` with the route's ``PARAMETER_ALIASES`` applied (``/v1/models/{model_id}`` takes a model name)."""
     aliases: Final = PARAMETER_ALIASES.get(route, {})
-    return {**ids, **{name: ids[source] for name, source in aliases.items() if source in ids}}
+    return {
+        **{name: value for name, value in ids.items() if name not in aliases},
+        **{name: ids[source] for name, source in aliases.items() if source in ids},
+    }
 
 
 def _filled(route: str, ids: Mapping[str, str]) -> tuple[str, bool]:

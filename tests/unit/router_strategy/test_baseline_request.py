@@ -37,7 +37,7 @@ def test_chat_projection_applies_extra_body_after_top_level_parameters() -> None
 
 
 def test_baseline_projection_keeps_caller_tools_and_request_parameter_precedence() -> None:
-    from litellm.router import Router
+    from litellm.router_rust.invoke.shaping import merge_tools_from_deployment
 
     deployment: Final = {
         "tools": [{"type": "function", "function": {"name": "configured"}}],
@@ -50,7 +50,7 @@ def test_baseline_projection_keeps_caller_tools_and_request_parameter_precedence
         "max_tokens": 128,
     }
     actual_request: Final = dict(caller)
-    Router._merge_tools_from_deployment({"litellm_params": deployment}, actual_request)
+    merge_tools_from_deployment(deployment, actual_request, {})
     snapshot: Final = capture_baseline_parameters(caller)
     assert snapshot is not None
     assert baseline_request({"tools": [{"name": "routed-only"}], "max_tokens": 4}, snapshot, deployment) == {

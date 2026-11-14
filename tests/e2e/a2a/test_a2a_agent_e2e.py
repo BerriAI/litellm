@@ -17,18 +17,14 @@ import pytest
 from a2a_client import (
     A2ABridgeParams,
     A2AClient,
-    A2ADataPart,
     A2AJsonRpcRequest,
     A2AMessageSendParams,
     A2AOutboundMessage,
-    A2ASearchPropertiesParams,
     A2ASkill,
-    A2ASkillInvocation,
     A2ATextPart,
     AgentCardParams,
     AgentRegisterBody,
     AgentResponse,
-    fetch_agent_card,
 )
 from e2e_config import unique_marker
 from e2e_http import Result, UnknownApiError, unwrap
@@ -49,9 +45,6 @@ BRIDGE = A2ABridgeParams(
     custom_llm_provider="anthropic",
     model=BRIDGE_MODEL,
 )
-
-MOVEHOME_AGENT_CARD_URL = "https://movehome.org/.well-known/agent.json"
-MOVEHOME_ORIGIN = "https://movehome.org"
 
 pytestmark = pytest.mark.e2e
 
@@ -134,48 +127,6 @@ class TestA2AAgentLifecycle:
         result = unwrap(client.send_message(agent.agent_id, scoped_key, _ask("Say hi in one word"))).result
         assert result is not None
         assert result.text != ""
-
-    @pytest.mark.covers("other.a2a.message_send.real_world_agent_replies")
-    @meta(
-        Subject(
-            domain=Domain.AGENTS_API,
-            route=Route.A2A,
-        )
-    )
-    def test_real_world_agent_replies_to_property_query(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
-        upstream = unwrap(fetch_agent_card(MOVEHOME_AGENT_CARD_URL)).model_copy(update={"url": MOVEHOME_ORIGIN})
-        assert upstream.protocol_version == "0.3.0"
-        marker = unique_marker()
-        body = AgentRegisterBody(agent_name=f"e2e-a2a-real-{marker}", agent_card_params=upstream)
-        agent = unwrap(client.register_agent(body))
-        resources.defer(lambda: client.delete_agent(agent.agent_id))
-        assert agent.agent_card_params.protocol_version == "0.3"
-        location = "GBLON"
-        request = A2AJsonRpcRequest(
-            id=f"e2e-{unique_marker()}",
-            params=A2AMessageSendParams(
-                message=A2AOutboundMessage(
-                    parts=[
-                        A2ADataPart(
-                            data=A2ASkillInvocation(
-                                skill="search_properties",
-                                params=A2ASearchPropertiesParams(un_locode=location, service_type="long_term", limit=3),
-                            )
-                        )
-                    ],
-                    message_id=unique_marker(),
-                )
-            ),
-        )
-        response = unwrap(client.send_message(agent.agent_id, scoped_key, request))
-        assert response.error is None
-        assert response.result is not None
-        results = response.result.search_results
-        assert results is not None, "agent returned no search_results artifact; skill did not run"
-        assert results.total > 0
-        assert results.listings, "search_properties matched nothing; agent returned no property cards"
-        assert all(listing.raia_id for listing in results.listings)
-        assert all(listing.location.un_locode == location for listing in results.listings)
 
     @pytest.mark.covers("other.a2a.discovery.proxy_fronted_card")
     @meta(

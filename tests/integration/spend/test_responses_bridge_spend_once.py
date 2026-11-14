@@ -1,5 +1,4 @@
 import json
-from base64 import b64decode
 from collections.abc import Callable
 from hashlib import sha256
 from typing import Final
@@ -100,8 +99,7 @@ def test_bridged_chat_completion_above_log_offload_threshold_logs_and_charges_on
         call_rows: Final = [row for row in rows if row["litellm_call_id"] == call_id]
         assert len(call_rows) == 1, rows
         assert float(str(call_rows[0]["spend"])) == pytest.approx(EXPECTED_SPEND), rows
-        logged_id: Final = b64decode(str(call_rows[0]["request_id"]).removeprefix("resp_")).decode()
-        assert logged_id.startswith("litellm:") and f";response_id:{upstream_id}" in logged_id, rows
+        assert call_rows[0]["request_id"] == upstream_id, rows
 
         key_spend: Final = eventually(
             lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)),

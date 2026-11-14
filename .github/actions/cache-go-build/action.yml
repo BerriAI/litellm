@@ -1,0 +1,39 @@
+name: "Cache the Go build"
+description: >-
+  Restore the Go module and build caches on every run and save them only from
+  main, so pull requests reuse main's cache instead of evicting it with their
+  own copies.
+
+  actions/setup-go's built-in cache saves from every ref, and a cache saved by a
+  pull request is readable only by that pull request. Callers must pass
+  `cache: false` to setup-go and run this action after it.
+
+inputs:
+  dependency-path:
+    description: "Path to the go.sum that keys the cache"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Restore and save the Go module and build caches
+      if: github.ref == 'refs/heads/main'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: ${{ runner.os }}-go-${{ hashFiles(inputs.dependency-path) }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Restore the Go module and build caches
+      if: github.ref != 'refs/heads/main'
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: ${{ runner.os }}-go-${{ hashFiles(inputs.dependency-path) }}
+        restore-keys: |
+          ${{ runner.os }}-go-

@@ -3,25 +3,36 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Optional, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Optional, TypeVar, cast
 
 import httpx
 from httpx import Response
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.constants import AWS_ERROR_TYPE_HEADER
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
+from litellm.llms.base_llm.passthrough.transformation import (
+    BasePassthroughConfig,
+    PassthroughStreamCollector,
+    relayed_json_object,
+)
 from litellm.llms.bedrock.chat.converse_to_openai import as_json_array, as_json_object
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     bedrock_invoke_guardrail_headers,
 )
 from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
-from litellm.types.utils import ModelResponseStream
+from litellm.types.utils import Embedding, EmbeddingResponse, ModelResponseStream, PromptTokensDetailsWrapper, Usage
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError, BedrockEventStreamDecoderBase, BedrockModelInfo
+from ..common_utils import (
+    BEDROCK_INVOKE_TRACE_FIELD,
+    BedrockError,
+    BedrockEventStreamDecoderBase,
+    BedrockModelInfo,
+    served_service_tier,
+)
 from ..request_metadata import (
     BEDROCK_REQUEST_METADATA_HEADER,
     BedrockRequestMetadataViolation,
@@ -32,6 +43,7 @@ from ..request_metadata import (
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
 )
+from ..web_identity_session_policy import BEDROCK_AGENT_RUNTIME_SESSION_POLICY, WebIdentitySessionPolicy
 
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
@@ -48,6 +60,8 @@ _BEDROCK_INVOKE_ACTIONS: Final = frozenset({"invoke", "invoke-with-response-stre
 _BEDROCK_INVOKE_GUARDRAIL_HEADERS: Final = frozenset(
     {"x-amzn-bedrock-guardrailidentifier", "x-amzn-bedrock-guardrailversion", "x-amzn-bedrock-trace"}
 )
+_NO_RESPONSE_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+_TieredResponse: Final = TypeVar("_TieredResponse", bound=BaseModel)
 
 
 def _bedrock_endpoint_action(endpoint: str) -> str:
@@ -110,7 +124,9 @@ def _with_request_metadata(
     litellm_params: Mapping[str, object],
 ) -> tuple[Mapping[str, str], Mapping[str, object]]:
     if action in _BEDROCK_CONVERSE_ACTIONS:
-        return headers, _with_body_request_metadata(action, body, litellm_params)
+        return _without_owned_request_metadata_header(headers), _with_body_request_metadata(
+            action, body, litellm_params
+        )
     if action in _BEDROCK_INVOKE_ACTIONS and "requestMetadata" in body:
         return _without_owned_request_metadata_header(headers), _with_body_request_metadata(
             action, body, litellm_params
@@ -136,6 +152,10 @@ def _converse_guardrail_config(action: str, guardrail_config: object) -> object:
     return {key: value for key, value in fields.items() if key != "streamProcessingMode"}
 
 
+def _without_invoke_guardrail_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return {name: value for name, value in headers.items() if name.lower() not in _BEDROCK_INVOKE_GUARDRAIL_HEADERS}
+
+
 def _with_deployment_guardrail(
     action: str,
     headers: Mapping[str, str],
@@ -145,7 +165,10 @@ def _with_deployment_guardrail(
     if guardrail_config is None:
         return headers, body
     if action in _BEDROCK_CONVERSE_ACTIONS:
-        return headers, {**body, "guardrailConfig": _converse_guardrail_config(action, guardrail_config)}
+        return _without_invoke_guardrail_headers(headers), {
+            **body,
+            "guardrailConfig": _converse_guardrail_config(action, guardrail_config),
+        }
     if action in _BEDROCK_INVOKE_ACTIONS:
         guardrail_headers: Final = tuple(bedrock_invoke_guardrail_headers(guardrail_config).items())
         return merge_bedrock_invoke_headers(
@@ -265,6 +288,19 @@ class _CoalescedChunks:
         return self._chunks
 
 
+_BEDROCK_EVENT: Final = TypeAdapter(dict[str, object])
+
+
+def _with_invoke_trace(chunk: ModelResponseStream, trace: Mapping[str, object] | None) -> ModelResponseStream:
+    if trace is None:
+        return chunk
+    return chunk.model_copy(
+        update={
+            "provider_specific_fields": {**(chunk.provider_specific_fields or {}), BEDROCK_INVOKE_TRACE_FIELD: trace}
+        }
+    )
+
+
 def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelResponseStream | None:
     from litellm.litellm_core_utils.streaming_handler import (
         convert_generic_chunk_to_model_response_stream,
@@ -272,11 +308,15 @@ def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelR
     )
     from litellm.types.utils import GenericStreamingChunk
 
-    translated_chunk: Final = decoder.chunk_parser(chunk_data=json.loads(message))
+    event: Final = _BEDROCK_EVENT.validate_json(message)
+    trace: Final = object_mapping(event.get(BEDROCK_INVOKE_TRACE_FIELD))
+    translated_chunk: Final = decoder.chunk_parser(chunk_data=event)
     if isinstance(translated_chunk, ModelResponseStream):
-        return translated_chunk
+        return _with_invoke_trace(translated_chunk, trace)
     if generic_chunk_has_all_required_fields(cast(dict, translated_chunk)):
-        return convert_generic_chunk_to_model_response_stream(cast(GenericStreamingChunk, translated_chunk))
+        return _with_invoke_trace(
+            convert_generic_chunk_to_model_response_stream(cast(GenericStreamingChunk, translated_chunk)), trace
+        )
     return None
 
 
@@ -331,15 +371,73 @@ def _count_prompt_tokens(model: str, request_body: object) -> int:
     return token_counter(model=model, messages=messages)
 
 
+def _invoke_guardrail_trace(httpx_response: Response) -> Mapping[str, object]:
+    reply: Final = relayed_json_object(httpx_response) or {}
+    return {BEDROCK_INVOKE_TRACE_FIELD: reply.get(BEDROCK_INVOKE_TRACE_FIELD)}
+
+
+class _TitanEmbeddingsByType(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    binary: tuple[int, ...] | None = None
+    floats: tuple[float, ...] | None = Field(default=None, alias="float")
+
+
+class _TitanEmbeddingReply(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    embedding: tuple[float, ...] | None = None
+    embeddings_by_type: _TitanEmbeddingsByType = Field(default=_TitanEmbeddingsByType(), alias="embeddingsByType")
+    input_text_token_count: int = Field(alias="inputTextTokenCount")
+
+    @property
+    def vector(self) -> tuple[float, ...] | None:
+        if self.embedding is not None:
+            return self.embedding
+        if self.embeddings_by_type.floats is not None:
+            return self.embeddings_by_type.floats
+        return self.embeddings_by_type.binary
+
+
+def _invoke_embedding_response(model: str, httpx_response: Response, has_input_image: bool) -> EmbeddingResponse | None:
+    reply: Final = relayed_json_object(httpx_response)
+    if reply is None or reply.keys().isdisjoint(("embedding", "embeddingsByType")):
+        return None
+    try:
+        parsed: Final = _TitanEmbeddingReply.model_validate(reply)
+    except ValidationError:
+        return None
+    if parsed.vector is None:
+        return None
+    return EmbeddingResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=parsed.input_text_token_count,
+            completion_tokens=0,
+            total_tokens=parsed.input_text_token_count,
+            prompt_tokens_details=PromptTokensDetailsWrapper(image_count=1, text_tokens=parsed.input_text_token_count)
+            if has_input_image
+            else None,
+        ),
+        data=[Embedding(embedding=list(parsed.vector), index=0, object="embedding")],
+    )
+
+
+def _with_served_service_tier(response: _TieredResponse, service_tier: str | None) -> _TieredResponse:
+    if service_tier is None:
+        return response
+    return response.model_copy(update={"service_tier": service_tier})
+
+
 def _build_logged_response(
-    chunks: Sequence[ModelResponseStream], litellm_logging_obj: "LiteLLMLoggingObj"
+    chunks: Sequence[ModelResponseStream], litellm_logging_obj: "LiteLLMLoggingObj", service_tier: str | None
 ) -> Optional["CostResponseTypes"]:
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
 
     if len(chunks) == 0:
         return None
     return stream_chunk_builder(
-        chunks=list(chunks),
+        chunks=[*chunks[:-1], _with_served_service_tier(chunks[-1], service_tier)],
         logging_obj=litellm_logging_obj,
         count_prompt_tokens=partial(
             _count_prompt_tokens, litellm_logging_obj.model, litellm_logging_obj.model_call_details.get("input")
@@ -354,11 +452,13 @@ class BedrockEventStreamCollector:
         self,
         parse_event: Callable[["EventStreamMessage"], str | None],
         decoder: Optional["AWSEventStreamDecoder"],
+        service_tier: str | None = None,
     ) -> None:
         from botocore.eventstream import EventStreamBuffer
 
         self._parse_event = parse_event
         self._decoder = decoder
+        self._service_tier: Final = service_tier
         self._event_stream_buffer: Final[EventStreamBuffer] = EventStreamBuffer()
         self._chunks: Final = _CoalescedChunks()
 
@@ -376,7 +476,11 @@ class BedrockEventStreamCollector:
             self._chunks.add(translated)
 
     def build_logged_response(self, litellm_logging_obj: "LiteLLMLoggingObj") -> Optional["CostResponseTypes"]:
-        return _build_logged_response(self._chunks.chunks(), litellm_logging_obj)
+        return _build_logged_response(self._chunks.chunks(), litellm_logging_obj, self._service_tier)
+
+
+class BedrockAgentRuntimeAWS(BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_AGENT_RUNTIME_SESSION_POLICY
 
 
 class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamDecoderBase, BasePassthroughConfig):
@@ -510,6 +614,14 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         from litellm.types.utils import LlmProviders, ModelResponse
         from litellm.utils import ProviderConfigManager
 
+        embedding_response: Final = (
+            _invoke_embedding_response(model, httpx_response, has_input_image="inputImage" in request_data)
+            if "invoke" in endpoint
+            else None
+        )
+        if embedding_response is not None:
+            return embedding_response
+
         if "invoke" in endpoint:
             chat_config_model = "invoke/" + model
         elif "converse" in endpoint:
@@ -537,15 +649,23 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
             request_data=request_data,
             encoding=encoding,
         )
+        if "invoke" in endpoint:
+            logging_obj.record_native_bedrock_guardrail(_invoke_guardrail_trace(httpx_response))
 
-        return litellm_model_response
+        return _with_served_service_tier(litellm_model_response, served_service_tier(httpx_response.headers))
 
     def create_stream_collector(
-        self, model: str, custom_llm_provider: str, endpoint: str
+        self,
+        model: str,
+        custom_llm_provider: str,
+        endpoint: str,
+        *,
+        response_headers: Mapping[str, str] = _NO_RESPONSE_HEADERS,
     ) -> PassthroughStreamCollector:
         return BedrockEventStreamCollector(
             parse_event=self._parse_message_from_event,
             decoder=self._get_event_stream_decoder(model=model, endpoint=endpoint),
+            service_tier=served_service_tier(response_headers),
         )
 
     def _get_event_stream_decoder(self, model: str, endpoint: str) -> Optional["AWSEventStreamDecoder"]:

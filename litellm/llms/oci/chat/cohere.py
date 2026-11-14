@@ -286,7 +286,7 @@ def handle_cohere_response(
 
 
 def handle_cohere_stream_chunk(
-    dict_chunk: Mapping[str, JsonValue],
+    dict_chunk: Mapping[str, object],
     prior_tool_calls_emitted: bool = False,
     prior_text_emitted: bool = False,
 ) -> ModelResponseStream:

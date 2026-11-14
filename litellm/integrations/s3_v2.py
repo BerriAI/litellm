@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, TypeAlias, cast
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -55,6 +55,7 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
+from litellm.llms.bedrock.web_identity_session_policy import S3_LOGGING_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
@@ -154,6 +155,7 @@ _in_flush: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar("s3_v2_i
 
 
 class S3Logger(CustomBatchLogger, BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = S3_LOGGING_SESSION_POLICY
     preserve_events_added_during_flush = True
     _flush_retries: int = 0
     _requeued_count: int = 0

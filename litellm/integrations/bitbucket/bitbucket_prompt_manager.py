@@ -4,12 +4,13 @@ Fetches .prompt files from BitBucket repositories and provides team-based access
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.litellm_core_utils.core_helpers import require_attributes
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -26,6 +27,10 @@ from litellm.types.utils import StandardCallbackDynamicParams
 from .bitbucket_client import BitBucketClient
 
 
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
 class BitBucketPromptTemplate:
     """
     Represents a prompt template loaded from BitBucket.
@@ -35,7 +40,7 @@ class BitBucketPromptTemplate:
         self,
         template_id: str,
         content: str,
-        metadata: dict[str, Any],
+        metadata: Mapping[str, object],
         model: str | None = None,
     ):
         self.template_id = template_id
@@ -44,7 +49,9 @@ class BitBucketPromptTemplate:
         self.model = model or metadata.get("model")
         self.temperature = metadata.get("temperature")
         self.max_tokens = metadata.get("max_tokens")
-        self.input_schema = metadata.get("input", {}).get("schema", {})
+        self.input_schema = require_attributes(metadata.get("input", {}), _SupportsGetWithDefault, "get").get(
+            "schema", {}
+        )
         self.optional_params = {k: v for k, v in metadata.items() if k not in ["model", "input", "content"]}
 
     def __repr__(self):

@@ -21,7 +21,7 @@ import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from itertools import groupby
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple
 
@@ -30,6 +30,7 @@ from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.create_views import SupportsExecuteRaw
 from litellm.proxy.db.db_span import db_span
+from litellm.proxy.db.exception_handler import db_write_never_sent
 
 if TYPE_CHECKING:
     from litellm.proxy._types import SpendLogsPayload
@@ -536,77 +537,110 @@ def _session_partition(transaction: AutoRouterTurnTransaction) -> tuple[str, str
     return (*identity, transaction.session_id, transaction.router_name)
 
 
+class UnwrittenTurns(NamedTuple):
+    """Turns the database provably never received, and the error that proved it."""
+
+    turns: tuple[AutoRouterTurnTransaction, ...]
+    error: Exception
+
+
+class _StoppedPartition(NamedTuple):
+    turns: tuple[AutoRouterTurnTransaction, ...]
+    error: Exception
+
+
 async def _drain_session_partition(
     prisma_client: PrismaClient,
     transactions: tuple[AutoRouterTurnTransaction, ...],
     n_retry_times: int,
     statement: str,
-) -> tuple[AutoRouterTurnTransaction, ...]:
+) -> _StoppedPartition | None:
     for position, transaction in enumerate(transactions):
         try:
             await _upsert_turn_with_retry(prisma_client, transaction, n_retry_times, statement)
-        except Exception as flush_err:  # noqa: BLE001  # stop dependent turns without retrying an ambiguous write
-            verbose_proxy_logger.error(
-                "Spend tracking - auto-router session rollup flush failed for router %s; "
-                "%s of %s turn writes stopped in this partition: %s",
-                transaction.router_name,
-                len(transactions) - position,
-                len(transactions),
-                flush_err,
-            )
-            return transactions[position:]
-    return ()
+        except Exception as flush_err:  # noqa: BLE001  # the caller keeps or drops the stopped turns
+            return _StoppedPartition(transactions[position:], flush_err)
+    return None
+
+
+def _log_dropped_turns(stopped: _StoppedPartition, partition_size: int) -> None:
+    verbose_proxy_logger.error(
+        "Spend tracking - auto-router session rollup flush failed for router %s; "
+        "%s of %s turn writes stopped in this partition: %s",
+        stopped.turns[0].router_name,
+        len(stopped.turns),
+        partition_size,
+        stopped.error,
+    )
 
 
 async def _flush_session_partition(
     prisma_client: PrismaClient,
     transactions: tuple[AutoRouterTurnTransaction, ...],
     n_retry_times: int,
-) -> None:
-    failed_suffix: Final = await _drain_session_partition(
+) -> UnwrittenTurns | None:
+    stopped: Final = await _drain_session_partition(
         prisma_client, transactions, n_retry_times, UPSERT_AUTOROUTER_SESSION_SQL
     )
-    if not failed_suffix or not failed_suffix[0].api_key:
-        return
-    failed_user: Final = failed_suffix[0].user_id
+    if stopped is None:
+        return None
+    if db_write_never_sent(stopped.error):
+        return UnwrittenTurns(stopped.turns, stopped.error)
+    _log_dropped_turns(stopped, len(transactions))
+    if not stopped.turns[0].api_key:
+        return None
+    failed_user: Final = stopped.turns[0].user_id
     other_users: Final = sorted(
         (
             transaction
-            for transaction in failed_suffix[1:]
+            for transaction in stopped.turns[1:]
             if transaction.user_id and transaction.user_id != failed_user
         ),
         key=lambda transaction: transaction.user_id,
     )
-    for _, user_turns in groupby(other_users, key=lambda transaction: transaction.user_id):
-        await _drain_session_partition(
-            prisma_client, tuple(user_turns), n_retry_times, UPSERT_AUTOROUTER_USER_SESSION_SQL
-        )
+    user_partitions: Final = tuple(
+        tuple(user_turns) for _, user_turns in groupby(other_users, key=lambda transaction: transaction.user_id)
+    )
+    for user_partition in user_partitions:
+        if (
+            projection_stopped := await _drain_session_partition(
+                prisma_client, user_partition, n_retry_times, UPSERT_AUTOROUTER_USER_SESSION_SQL
+            )
+        ) is not None:
+            _log_dropped_turns(projection_stopped, len(user_partition))
+    return None
 
 
 async def flush_autorouter_turn_transactions(
     prisma_client: PrismaClient,
     transactions: Sequence[AutoRouterTurnTransaction],
     n_retry_times: int = 3,
-) -> None:
+) -> UnwrittenTurns | None:
     """Drain a queue batch into the rollup, one upsert per turn.
 
     Statements run sequentially in per-session event order: a turn's classification
     depends on the turns before it, and Postgres rejects one multi-row INSERT touching
     the same key twice. Only ConnectError is retried, per statement, because it proves
-    that statement never reached the database. A failed write stops its key and user
-    histories for this batch. Other users sharing that key can still advance their
-    independent user histories, with the key projection disabled and the real key
-    identity preserved. The failed turn is never replayed. Callers must not add their
-    own retry around this function.
+    that statement never reached the database. When a failure proves the database could
+    not take the write at all, the flush stops and returns that turn, the rest of its
+    session and every session not yet attempted, so the caller can queue them again;
+    turns already written are never returned. Any other failed write stops its key and
+    user histories for this batch and is never replayed. Other users sharing that key can
+    still advance their independent user histories, with the key projection disabled and
+    the real key identity preserved. Callers must not add their own retry around this
+    function.
     """
     if not transactions:
-        return
+        return None
     ordered: Final = sorted(
         transactions,
         key=lambda transaction: (*_session_partition(transaction), transaction.turn_at),
     )
-    for _, session_group in groupby(
-        ordered,
-        key=_session_partition,
-    ):
-        await _flush_session_partition(prisma_client, tuple(session_group), n_retry_times)
+    partitions: Final = tuple(tuple(group) for _, group in groupby(ordered, key=_session_partition))
+    for position, partition in enumerate(partitions):
+        if (unwritten := await _flush_session_partition(prisma_client, partition, n_retry_times)) is not None:
+            return UnwrittenTurns(
+                (*unwritten.turns, *chain.from_iterable(partitions[position + 1 :])),
+                unwritten.error,
+            )
+    return None

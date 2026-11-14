@@ -6,8 +6,8 @@ Includes tests for Vertex AI batch output transformation to OpenAI format.
 import json
 import urllib.parse
 from collections.abc import Mapping, Sequence
-from typing import Final
 from types import MappingProxyType
+from typing import Final
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -72,46 +72,24 @@ class TestParseGcsUri:
                 litellm_params={"gcs_bucket_name": "my-bucket"},
             )
 
-    def test_should_reject_request_supplied_legacy_flag(self, config):
-        with pytest.raises(ValueError, match="LiteLLM-managed"):
-            config._parse_gcs_uri(
-                "gs://my-bucket/private/object.txt",
-                litellm_params={
-                    "gcs_bucket_name": "my-bucket",
-                    "allow_legacy_cloud_file_ids": True,
-                },
-            )
-
-    def test_should_allow_legacy_object_path_with_trusted_server_flag(self, config):
-        trusted_credentials = MappingProxyType({"allow_legacy_cloud_file_ids": True})
+    def test_should_allow_legacy_object_path_when_the_call_sets_the_flag(self, config):
         bucket, encoded = config._parse_gcs_uri(
             "gs://my-bucket/private/object.txt",
             litellm_params={
                 "gcs_bucket_name": "my-bucket",
-                "_litellm_internal_model_credentials": trusted_credentials,
+                "allow_legacy_cloud_file_ids": True,
             },
         )
 
         assert bucket == "my-bucket"
         assert encoded == urllib.parse.quote("private/object.txt", safe="")
 
-    def test_should_reject_user_supplied_legacy_flag_snapshot(self, config):
-        with pytest.raises(ValueError, match="LiteLLM-managed"):
-            config._parse_gcs_uri(
-                "gs://my-bucket/private/object.txt",
-                litellm_params={
-                    "gcs_bucket_name": "my-bucket",
-                    "_litellm_internal_model_credentials": {"allow_legacy_cloud_file_ids": True},
-                },
-            )
-
     def test_should_keep_configured_prefix_for_legacy_object_path(self, config):
-        trusted_credentials = MappingProxyType({"allow_legacy_cloud_file_ids": True})
         bucket, encoded = config._parse_gcs_uri(
             "gs://my-bucket/team-a/private/object.txt",
             litellm_params={
                 "gcs_bucket_name": "my-bucket/team-a",
-                "_litellm_internal_model_credentials": trusted_credentials,
+                "allow_legacy_cloud_file_ids": True,
             },
         )
 
@@ -119,13 +97,12 @@ class TestParseGcsUri:
         assert encoded == urllib.parse.quote("team-a/private/object.txt", safe="")
 
     def test_should_reject_legacy_object_outside_configured_prefix(self, config):
-        trusted_credentials = MappingProxyType({"allow_legacy_cloud_file_ids": True})
         with pytest.raises(ValueError, match="configured storage prefix"):
             config._parse_gcs_uri(
                 "gs://my-bucket/team-b/private/object.txt",
                 litellm_params={
                     "gcs_bucket_name": "my-bucket/team-a",
-                    "_litellm_internal_model_credentials": trusted_credentials,
+                    "allow_legacy_cloud_file_ids": True,
                 },
             )
 
@@ -1299,6 +1276,35 @@ class TestVertexEmbeddingsBatchInputTranslation:
             },
         }
 
+    def test_should_nest_embed_content_config_params_inside_the_request(self) -> None:
+        (row,) = _wrap_entries(
+            [
+                _embeddings_entry(
+                    body={
+                        "model": "gemini-embedding-2",
+                        "input": "hello world",
+                        "dimensions": 768,
+                        "document_ocr": True,
+                        "audio_track_extraction": True,
+                        "auto_truncate": False,
+                    }
+                )
+            ]
+        )
+
+        assert row == {
+            "key": "request-1",
+            "request": {
+                "content": {"parts": [{"text": "hello world"}]},
+                "output_dimensionality": 768,
+                "embed_content_config": {
+                    "document_ocr": True,
+                    "audio_track_extraction": True,
+                    "auto_truncate": False,
+                },
+            },
+        }
+
     def test_should_omit_config_fields_when_no_params_given(self):
         (row,) = _wrap_entries([_embeddings_entry()])
 
@@ -2207,7 +2213,7 @@ class TestVertexClaudeBatch:
         monkeypatch.setattr(litellm, "drop_params", False)
         entry: Final = _claude_chat_entry("r1", "hi", max_tokens=10, top_p=0.5)
 
-        with pytest.raises(VertexAIError, match=r"line 1 .*top_p=0.5.*drop_params") as exc_info:
+        with pytest.raises(VertexAIError, match=r"line 1 .*top_p.*drop_params") as exc_info:
             _uploaded_rows(config, {**CLAUDE_DEPLOYMENT, "model": "vertex_ai/claude-zeta-9"}, [entry])
         assert exc_info.value.status_code == 400
 

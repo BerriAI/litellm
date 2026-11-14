@@ -249,7 +249,8 @@ def test_a_batch_create_on_a_mixed_group_reaches_the_deployment_its_provider_all
     with wire_server(_vendor) as wire, gateway.scenario() as scenario:
         group: Final = _group(scenario, wire, (chat, batch))
         managed_file: Final = _managed_upload(gateway, group, gateway.key)
-        assert set(_keys_posted_to(wire.drain(), "/files")) == {chat.key, batch.key}
+        uploads_reach: Final = {batch.key} if creates_reach == "batch" else {chat.key, batch.key}
+        assert set(_keys_posted_to(wire.drain(), "/files")) == uploads_reach
 
         creates: Final = tuple(_create(gateway, managed_file, gateway.key) for _ in range(3))
 

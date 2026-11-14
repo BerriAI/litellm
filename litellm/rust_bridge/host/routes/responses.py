@@ -20,6 +20,12 @@ def connection_defaults(provider: str) -> tuple[str | None, str | None]:
     return litellm.api_key or provider_key, litellm.api_base
 
 
+def original_previous_response_id(previous_response_id: str) -> str:
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    return ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(previous_response_id)
+
+
 def response(value: Mapping[str, object]) -> ResponsesAPIResponse:
     return ResponsesAPIResponse.model_validate(value)
 
