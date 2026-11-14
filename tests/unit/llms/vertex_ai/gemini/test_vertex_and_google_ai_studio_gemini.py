@@ -11370,3 +11370,192 @@ def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) 
         }
         for index, start, end in expected_sources
     ]
+
+
+@pytest.mark.parametrize("config_class", [VertexGeminiConfig, GoogleAIStudioGeminiConfig])
+@pytest.mark.parametrize("empty_choices", [False, True])
+@pytest.mark.parametrize(
+    "native_finish_reason",
+    ["SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT"],
+)
+def test_gemini_content_filter_preserves_native_finish_reason(
+    config_class: type[VertexGeminiConfig], empty_choices: bool, native_finish_reason: str
+) -> None:
+    body = {
+        "candidates": [{"finishReason": native_finish_reason, "index": 0}],
+        "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2, "totalTokenCount": 7},
+    }
+
+    response = config_class().transform_response(
+        model="gemini-2.5-flash",
+        raw_response=httpx.Response(200, json=body),
+        model_response=ModelResponse(choices=[]) if empty_choices else ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert json.loads(response.model_dump_json())["choices"] == [
+        {
+            "finish_reason": "content_filter",
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": None,
+                "function_call": None,
+                "provider_specific_fields": None,
+            },
+            "provider_specific_fields": {"native_finish_reason": native_finish_reason},
+        }
+    ]
+    assert response.usage.model_dump(exclude_none=True) == {
+        "prompt_tokens": 5,
+        "completion_tokens": 2,
+        "total_tokens": 7,
+    }
+
+
+@pytest.mark.parametrize("config_class", [VertexGeminiConfig, GoogleAIStudioGeminiConfig])
+@pytest.mark.parametrize("empty_choices", [False, True])
+@pytest.mark.parametrize("include_empty_candidates", [False, True])
+@pytest.mark.parametrize("block_reason", ["SAFETY", "PROHIBITED_CONTENT"])
+def test_gemini_prompt_content_filter_preserves_block_reason(
+    config_class: type[VertexGeminiConfig], empty_choices: bool, include_empty_candidates: bool, block_reason: str
+) -> None:
+    body = {
+        "promptFeedback": {"blockReason": block_reason},
+        "usageMetadata": {"promptTokenCount": 5, "totalTokenCount": 5},
+    }
+    if include_empty_candidates:
+        body["candidates"] = []
+
+    response = config_class().transform_response(
+        model="gemini-2.5-flash",
+        raw_response=httpx.Response(200, json=body),
+        model_response=ModelResponse(choices=[]) if empty_choices else ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert json.loads(response.model_dump_json())["choices"] == [
+        {
+            "finish_reason": "content_filter",
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": None,
+                "function_call": None,
+                "provider_specific_fields": None,
+            },
+            "provider_specific_fields": {"block_reason": block_reason},
+        }
+    ]
+    assert response.usage.model_dump(exclude_none=True) == {
+        "prompt_tokens": 5,
+        "completion_tokens": 0,
+        "total_tokens": 5,
+    }
+
+
+@pytest.mark.parametrize("config_class", [VertexGeminiConfig, GoogleAIStudioGeminiConfig])
+@pytest.mark.parametrize(
+    "native_finish_reason, finish_reason", [("STOP", "stop"), ("MAX_TOKENS", "length"), (None, "stop")]
+)
+def test_gemini_unfiltered_response_preserves_content_and_finish_reason(
+    config_class: type[VertexGeminiConfig], native_finish_reason: str | None, finish_reason: str
+) -> None:
+    candidate = {"content": {"role": "model", "parts": [{"text": "Hello"}]}, "index": 0}
+    if native_finish_reason is not None:
+        candidate["finishReason"] = native_finish_reason
+    body = {
+        "candidates": [candidate],
+        "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2, "totalTokenCount": 7},
+    }
+
+    response = config_class().transform_response(
+        model="gemini-2.5-flash",
+        raw_response=httpx.Response(200, json=body),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    expected_choice = {
+        "finish_reason": finish_reason,
+        "index": 0,
+        "message": {
+            "role": "assistant",
+            "content": "Hello",
+            "tool_calls": None,
+            "function_call": None,
+            "images": [],
+            "thinking_blocks": [],
+            "provider_specific_fields": None,
+        },
+    }
+    if native_finish_reason is not None:
+        expected_choice["provider_specific_fields"] = {"native_finish_reason": native_finish_reason}
+    assert json.loads(response.model_dump_json())["choices"] == [expected_choice]
+    assert response.usage.model_dump(exclude_none=True) == {
+        "prompt_tokens": 5,
+        "completion_tokens": 2,
+        "total_tokens": 7,
+        "prompt_tokens_details": {},
+        "completion_tokens_details": {"text_tokens": 2},
+    }
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "provider_body, provider_fields",
+    [
+        ({"candidates": [{"finishReason": "RECITATION", "index": 0}]}, {"native_finish_reason": "RECITATION"}),
+        ({"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}}, {"block_reason": "PROHIBITED_CONTENT"}),
+    ],
+)
+async def test_gemini_completion_returns_content_filter_reason(
+    use_async: bool, provider_body: dict, provider_fields: dict
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={**provider_body, "usageMetadata": {"promptTokenCount": 5, "totalTokenCount": 5}},
+        )
+
+    if use_async:
+        response = await litellm.acompletion(
+            model="gemini/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Provide a brief answer."}],
+            api_key="test-api-key",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(handler)),
+        )
+    else:
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            response = completion(
+                model="gemini/gemini-2.5-flash",
+                messages=[{"role": "user", "content": "Provide a brief answer."}],
+                api_key="test-api-key",
+                client=HTTPHandler(client=client),
+            )
+
+    assert response.choices[0].finish_reason == "content_filter"
+    assert response.choices[0].provider_specific_fields == provider_fields
+    assert response.choices[0].message.content is None
+    assert response.usage.model_dump(exclude_none=True) == {
+        "prompt_tokens": 5,
+        "completion_tokens": 0,
+        "total_tokens": 5,
+    }

@@ -2382,7 +2382,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         completion_response: GenerateContentResponseBody,
     ) -> ModelResponse:
         # If set, the prompt was blocked and no candidates are returned. Rephrase your prompt
-        model_response.choices[0].finish_reason = "content_filter"
+        prompt_feedback: Final = completion_response.get("promptFeedback") or {}
+        block_reason: Final = prompt_feedback.get("blockReason")
+        provider_specific_fields: Final = {"block_reason": block_reason} if block_reason is not None else None
 
         chat_completion_message: Final[ChatCompletionResponseMessage] = {
             "role": "assistant",
@@ -2395,6 +2397,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             message=chat_completion_message,
             logprobs=None,
             enhancements=None,
+            provider_specific_fields=provider_specific_fields,
         )
 
         model_response.choices = [choice]
@@ -2416,7 +2419,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         completion_response: GenerateContentResponseBody,
     ) -> ModelResponse:
         ## CONTENT POLICY VIOLATION ERROR
-        model_response.choices[0].finish_reason = "content_filter"
+        _candidates: Final = completion_response.get("candidates") or []
+        native_finish_reason: Final = _candidates[0].get("finishReason") if len(_candidates) > 0 else None
+        provider_specific_fields: Final = (
+            {"native_finish_reason": native_finish_reason} if native_finish_reason is not None else None
+        )
 
         _chat_completion_message: Final = {
             "role": "assistant",
@@ -2429,6 +2436,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             message=_chat_completion_message,
             logprobs=None,
             enhancements=None,
+            provider_specific_fields=provider_specific_fields,
         )
 
         model_response.choices = [choice]
