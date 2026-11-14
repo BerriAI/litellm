@@ -1,6 +1,6 @@
 import io
 import json
-from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -19,6 +19,8 @@ from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG, canonical_video_id, is_video_status_call_type
 
 _DECODED_JSONL_ROW: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_UTF8_BOM: Final = b"\xef\xbb\xbf"
 _DEPLOYMENT_FIELD: Final = TypeAdapter(Mapping[str, object])
 _PAYLOAD_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _ENDPOINT_PATHS: Final = TypeAdapter(tuple[str, ...])
@@ -166,13 +168,7 @@ def should_replace_model_in_jsonl(
     return purpose == "batch" and not passthrough
 
 
-def replace_model_in_jsonl(
-    file_content: FileTypes,
-    new_model_name: str,
-    keep_line_numbers: bool = False,
-    only_rows_naming: str | None = None,
-    output_file: IO[bytes] | None = None,
-) -> FileTypes:
+def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str, keep_line_numbers: bool = False) -> FileTypes:
     try:
         ## if pathlike, return the original file content
         if isinstance(file_content, PathLike):
@@ -209,13 +205,8 @@ def replace_model_in_jsonl(
         # lines included, so a row error naming a line still points into the
         # caller's file; otherwise rows go back to back, since OpenAI rejects a
         # batch file whose first line is empty.
-        output: Final = (
-            output_file
-            if output_file is not None
-            else InMemoryFile(b"", name="modified_file.jsonl", content_type="application/jsonl")
-        )
+        output: Final = InMemoryFile(b"", name="modified_file.jsonl", content_type="application/jsonl")
         last_written_line = 0
-        rewritten_rows = 0  # rebind-ok: counted as rows stream past in the loop below
         buffer = ""
         for line_number, raw_line in enumerate(line_iter, start=1):
             buffer += (
@@ -231,24 +222,12 @@ def replace_model_in_jsonl(
                 json_object = _DECODED_JSONL_ROW.validate_python(json.loads(stripped))
             except json.JSONDecodeError:
                 continue  # object not complete yet; keep accumulating
-            if (
-                isinstance(json_object, dict)
-                and isinstance(json_object.get("body"), dict)
-                and (only_rows_naming is None or json_object["body"].get("model") == only_rows_naming)
-            ):
+            if isinstance(json_object, dict) and isinstance(json_object.get("body"), dict):
                 json_object["body"]["model"] = new_model_name
-                rewritten_rows += 1
-                row_text = (
-                    json.dumps(json_object)
-                    if only_rows_naming is None
-                    else json.dumps(json_object, ensure_ascii=False, separators=(",", ":"))
-                )
-            else:
-                row_text = json.dumps(json_object) if only_rows_naming is None else stripped
             output.write(
                 (
                     "\n" * (line_number - max(last_written_line, 1) if keep_line_numbers else min(last_written_line, 1))
-                    + row_text
+                    + json.dumps(json_object)
                 ).encode("utf-8")
             )
             last_written_line = line_number
@@ -268,15 +247,76 @@ def replace_model_in_jsonl(
             return file_content
 
         # If no valid JSON objects were found, return the original content
-        if not last_written_line or (only_rows_naming is not None and not rewritten_rows):
+        if not last_written_line:
             return file_content
 
         output.seek(0)
         return output
 
-    except (json.JSONDecodeError, UnicodeError, TypeError):
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
         # return the original file content if there is an error replacing the model name
         return file_content
+
+
+def rewrite_rows_naming_model(file_content: FileTypes, model: str, new_model: str, output_file: IO[bytes]) -> FileTypes:
+    source: Final = file_content[1] if isinstance(file_content, tuple) else file_content
+    if model == new_model or isinstance(source, PathLike) or not (isinstance(source, bytes) or source.seekable()):
+        return file_content
+    spellings: Final = _json_spellings(model)
+    renamed_rows: Final = (
+        sum(_copy_line_renaming_model(line, model, new_model, spellings, output_file) for line in _lines(source))
+        if any(_mentions(line, spellings) for line in _lines(source))
+        else 0
+    )
+    if not isinstance(source, bytes):
+        source.seek(0)
+    if not renamed_rows:
+        return file_content
+    output_file.seek(0)
+    return output_file
+
+
+def _lines(source: IO[bytes] | bytes) -> Iterator[bytes]:
+    if isinstance(source, bytes):
+        return iter(io.BytesIO(source))
+    source.seek(0)
+    return iter(source)
+
+
+def _json_spellings(value: str) -> frozenset[bytes]:
+    escaped: Final = json.dumps(value)
+    return frozenset(
+        spelling.encode("utf-8")
+        for spelling in (escaped, escaped.replace("/", "\\/"), json.dumps(value, ensure_ascii=False))
+    )
+
+
+def _mentions(line: bytes, spellings: frozenset[bytes]) -> bool:
+    return any(spelling in line for spelling in spellings)
+
+
+def _copy_line_renaming_model(
+    line: bytes, model: str, new_model: str, spellings: frozenset[bytes], output_file: IO[bytes]
+) -> bool:
+    renamed: Final = _renamed_row(line, model, new_model) if _mentions(line, spellings) else None
+    output_file.write(line if renamed is None else renamed)
+    return renamed is not None
+
+
+def _renamed_row(line: bytes, model: str, new_model: str) -> bytes | None:
+    row_text: Final = line.rstrip(b"\r\n")
+    bom: Final = _UTF8_BOM if row_text.startswith(_UTF8_BOM) else b""
+    try:
+        row: Final = _JSON_OBJECT.validate_json(row_text.removeprefix(bom))
+        body: Final = _JSON_OBJECT.validate_python(row.get("body"))
+    except ValidationError:
+        return None
+    if body.get("model") != model:
+        return None
+    renamed: Final = json.dumps(
+        {**row, "body": {**body, "model": new_model}}, ensure_ascii=False, separators=(",", ":")
+    )
+    return bom + renamed.encode("utf-8") + line[len(row_text) :]
 
 
 def get_router_metadata_variable_name(function_name: str | None) -> str:

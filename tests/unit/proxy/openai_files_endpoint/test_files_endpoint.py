@@ -1070,6 +1070,19 @@ def files_the_provider_received(batch_upload_seams: tuple[AsyncMock, AsyncMock, 
     return received
 
 
+def _compact_batch_row(custom_id: str, model: str) -> bytes:
+    return json.dumps(
+        {
+            "custom_id": custom_id,
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {"model": model, "messages": [{"role": "user", "content": "日本語"}]},
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+
+
 def _models_named_by_rows(received: ExtractedFileData) -> list[str]:
     return [json.loads(line)["body"]["model"] for line in received["content"].splitlines() if line.strip()]
 
@@ -1207,22 +1220,51 @@ def test_model_routed_passthrough_upload_keeps_the_callers_bytes(
 
 
 @pytest.mark.parametrize(
-    "model, deployment_model, second_row_line",
-    [("vertex-batch-keep", "gemini-2.5-flash", 3), ("gpt-5.4-nano-batch", "gpt-5.4-nano", 2)],
-    ids=["vertex_ai keeps the caller's line numbers", "other providers drop the blank line"],
+    "model, deployment_model",
+    [("vertex-batch-keep", "gemini-2.5-flash"), ("gpt-5.4-nano-batch", "gpt-5.4-nano")],
+    ids=["vertex_ai", "openai"],
 )
-def test_model_routed_batch_upload_keeps_line_numbers_only_for_vertex_ai(
-    files_the_provider_received: list[ExtractedFileData], model: str, deployment_model: str, second_row_line: int
+def test_model_routed_batch_upload_keeps_blank_lines_and_line_endings_around_the_rewritten_rows(
+    files_the_provider_received: list[ExtractedFileData], model: str, deployment_model: str
 ):
-    content: Final = _batch_row("first", model) + b"\n\n" + _batch_row("second", model)
+    content: Final = (
+        _compact_batch_row("first", model)
+        + b"\r\n\r\n"
+        + _batch_row("other", "another-model")
+        + b"\r\n"
+        + _compact_batch_row("second", model)
+        + b"\n"
+    )
 
     response: Final = _upload_batch_file({"x-litellm-model": model}, {}, content)
 
     assert response.status_code == 200, response.text
-    lines = files_the_provider_received[0]["content"].split(b"\n")
-    assert len(lines) == second_row_line
-    assert json.loads(lines[second_row_line - 1])["custom_id"] == "second"
-    assert _models_named_by_rows(files_the_provider_received[0]) == [deployment_model, deployment_model]
+    assert files_the_provider_received[0]["content"] == content.replace(
+        f'"model":"{model}"'.encode(), f'"model":"{deployment_model}"'.encode()
+    )
+
+
+def test_batch_upload_routed_by_a_model_named_like_its_deployment_reaches_the_provider_byte_for_byte(
+    files_the_provider_received: list[ExtractedFileData], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5.4-mini",
+                    "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-openai"},
+                    "model_info": {"id": "same-name-id"},
+                }
+            ]
+        ),
+    )
+    content: Final = _batch_row("r", "gpt-5.4-mini") + b"\n"
+
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-mini"}, {}, content)
+
+    assert response.status_code == 200, response.text
+    assert files_the_provider_received[0]["content"] == content
 
 
 def test_model_routed_batch_upload_refuses_a_key_without_the_alias_before_uploading(batch_upload_seams: tuple[AsyncMock, AsyncMock, respx.Route]):
@@ -1243,7 +1285,7 @@ def test_model_routed_batch_upload_refuses_a_key_without_the_alias_before_upload
 @pytest.mark.parametrize(
     "encoding",
     ["utf-16", "utf-16-le"],
-    ids=["rewrite raises on the byte order mark", "rewrite never parses a row"],
+    ids=["with a byte order mark", "without a byte order mark"],
 )
 def test_batch_upload_the_rewrite_cannot_read_reaches_the_provider_whole(
     files_the_provider_received: list[ExtractedFileData], encoding: str
@@ -1294,7 +1336,7 @@ async def _route_alias_upload(llm_router: Router, file: FileTypes) -> None:
 
 
 MALFORMED_TRAILING_BATCH_CONTENT: Final = (
-    _batch_row("complete", "gpt-5.4-nano-batch") + b'\n{"custom_id": "truncated", "body": {"mod'
+    _compact_batch_row("complete", "gpt-5.4-nano-batch") + b'\n{"custom_id": "truncated", "body": {"model": "gpt-5.4-nano-batch"'
 )
 
 
@@ -1308,12 +1350,14 @@ MALFORMED_TRAILING_BATCH_CONTENT: Final = (
     ids=["tuple handle", "bare handle", "tuple bytes"],
 )
 @pytest.mark.asyncio
-async def test_route_create_file_sends_malformed_trailing_content_to_the_provider_whole(
+async def test_route_create_file_rewrites_complete_alias_rows_and_keeps_malformed_trailing_content_as_written(
     mocker: MockerFixture, file: FileTypes
 ):
     received = await _route_model_upload(mocker, file)
 
-    assert received["content"] == MALFORMED_TRAILING_BATCH_CONTENT
+    assert received["content"] == MALFORMED_TRAILING_BATCH_CONTENT.replace(
+        b'"model":"gpt-5.4-nano-batch"', b'"model":"gpt-5.4-nano"', 1
+    )
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,6 @@ import tempfile
 import traceback
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from os import PathLike
 from typing import IO, Any, BinaryIO, Final, NoReturn, Protocol, TypedDict, cast, get_args
 
 import httpx
@@ -34,7 +33,7 @@ import litellm
 from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
-from litellm.litellm_core_utils.batch_utils import replace_model_in_jsonl, should_replace_model_in_jsonl
+from litellm.litellm_core_utils.batch_utils import rewrite_rows_naming_model, should_replace_model_in_jsonl
 from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
@@ -393,17 +392,13 @@ def get_model_from_json_obj(json_object: dict) -> str | None:
 def _rewrite_alias_rows_to_deployment_model(
     file: FileTypes, alias: str, deployment_model: str, provider: str, spool: IO[bytes]
 ) -> FileTypes:
-    rewritten: Final = replace_model_in_jsonl(
+    rewritten: Final = rewrite_rows_naming_model(
         file_content=file,
-        new_model_name=batch_row_model_for_deployment(deployment_model, provider),
-        keep_line_numbers=provider == LlmProviders.VERTEX_AI.value,
-        only_rows_naming=alias,
+        model=alias,
+        new_model=batch_row_model_for_deployment(deployment_model, provider),
         output_file=spool,
     )
     if rewritten is not spool:
-        source: Final = file[1] if isinstance(file, tuple) else file
-        if not isinstance(source, (bytes, PathLike)):
-            source.seek(0)
         return file
     if isinstance(file, tuple):
         return (file[0], spool, file[2] if len(file) > 2 else None)

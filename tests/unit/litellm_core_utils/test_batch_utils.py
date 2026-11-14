@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.batch_utils import (
     get_router_metadata_variable_name,
     parse_jsonl_with_embedded_newlines,
     replace_model_in_jsonl,
+    rewrite_rows_naming_model,
 )
 from litellm.types.utils import LiteLLMBatch
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG, encode_video_id_with_provider
@@ -316,6 +317,112 @@ def test_replace_model_in_jsonl_rewrites_rows_that_start_with_a_bom(content):
     assert isinstance(result, InMemoryFile)
     rows = [json.loads(line) for line in result.getvalue().decode("utf-8").split("\n")]
     assert [(row["custom_id"], row["body"]["model"]) for row in rows] == [("a", "new-model"), ("b", "new-model")]
+
+
+def _compact_row(custom_id: str, model: str) -> bytes:
+    return json.dumps(
+        {"custom_id": custom_id, "body": {"model": model, "messages": [{"role": "user", "content": "日本語"}]}},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+
+
+def test_rewrite_rows_naming_model_changes_only_the_model_of_rows_naming_it_and_keeps_every_other_byte():
+    other_row: Final = b'{"custom_id": "other",  "body": {"model": "other"}}'
+    unparseable_row: Final = b'{"custom_id":"bad","body":{"model":"alias","messages":[{"content":"\\ud800"}]}}'
+    truncated_row: Final = b'{"custom_id":"truncated","body":{"model":"alias"'
+    output: Final = BytesIO()
+
+    result: Final = rewrite_rows_naming_model(
+        _compact_row("a", "alias")
+        + b"\r\n\r\n"
+        + other_row
+        + b"\r\n\xef\xbb\xbf"
+        + _compact_row("b", "alias")
+        + b"\n"
+        + unparseable_row
+        + b"\n"
+        + truncated_row,
+        "alias",
+        "real",
+        output,
+    )
+
+    assert result is output
+    assert output.read() == (
+        _compact_row("a", "real")
+        + b"\r\n\r\n"
+        + other_row
+        + b"\r\n\xef\xbb\xbf"
+        + _compact_row("b", "real")
+        + b"\n"
+        + unparseable_row
+        + b"\n"
+        + truncated_row
+    )
+
+
+@pytest.mark.parametrize(
+    "model, row",
+    [
+        ("team/batch", b'{"body":{"model":"team\\/batch"}}\n'),
+        ("日本-batch", b'{"body":{"model":"\\u65e5\\u672c-batch"}}\n'),
+        ("日本-batch", '{"body":{"model":"日本-batch"}}\n'.encode()),
+    ],
+    ids=["escaped slash", "escaped non-ascii", "raw non-ascii"],
+)
+def test_rewrite_rows_naming_model_finds_every_json_spelling_of_the_model(model: str, row: bytes):
+    output: Final = BytesIO()
+
+    result: Final = rewrite_rows_naming_model(row, model, "real", output)
+
+    assert result is output
+    assert output.read() == b'{"body":{"model":"real"}}\n'
+
+
+@pytest.mark.parametrize(
+    "model, new_model, content",
+    [
+        ("alias", "real", b'{"body": {"model": "other", "messages": [{"content": "alias"}]}}\n'),
+        ("same", "same", b'{"body": {"model": "same"}}\n'),
+    ],
+    ids=["model named only in a message", "model already the deployment's"],
+)
+def test_rewrite_rows_naming_model_returns_the_rewound_original_when_no_row_changes(
+    model: str, new_model: str, content: bytes
+):
+    handle: Final = BytesIO(content)
+
+    result: Final = rewrite_rows_naming_model(handle, model, new_model, BytesIO())
+
+    assert result is handle
+    assert handle.read() == content
+
+
+def test_rewrite_rows_naming_model_copies_nothing_when_no_line_names_the_model():
+    content: Final = _compact_row("a", "other") + b"\n" + _compact_row("b", "other-alias") + b"\n"
+    handle: Final = BytesIO(content)
+    output: Final = BytesIO()
+
+    result: Final = rewrite_rows_naming_model(("batch.jsonl", handle, "application/jsonl"), "alias", "real", output)
+
+    assert result == ("batch.jsonl", handle, "application/jsonl")
+    assert output.getvalue() == b""
+    assert handle.read() == content
+
+
+def test_rewrite_rows_naming_model_leaves_a_stream_it_cannot_reread_untouched():
+    class Unseekable(BytesIO):
+        def seekable(self) -> bool:
+            return False
+
+    content: Final = _compact_row("a", "alias") + b"\n"
+    stream: Final = Unseekable(content)
+
+    result: Final = rewrite_rows_naming_model(stream, "alias", "real", BytesIO())
+
+    assert result is stream
+    assert stream.read() == content
 
 
 def test_replace_model_in_jsonl_with_embedded_newlines():
