@@ -105,7 +105,7 @@ from litellm.proxy.auth.model_access_denied import (
     customer_model_access_denied_client_message,
     model_access_denied_client_message,
 )
-from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.auth.route_checks import QUEUED_INFERENCE_ROUTES, RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     broadcast_evictions,
     evict_local,
@@ -1124,7 +1124,7 @@ def model_max_budget_of(holder: ModelMaxBudgetHolder) -> Mapping[str, object] | 
 
 
 def route_skips_budget_checks(route: str) -> bool:
-    if route in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES:
+    if route in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES or route in QUEUED_INFERENCE_ROUTES:
         return False
     if route in MODEL_DISCOVERY_ROUTES:
         return True

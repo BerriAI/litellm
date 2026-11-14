@@ -269,7 +269,14 @@ async def test_budgeted_mapper_admits_a_tag_with_a_max_budget_and_unbudgeted_rul
 
 @pytest.mark.parametrize(
     "route",
-    ["/v1/chat/completions", "/chat/completions", "/v1/messages", "/v1/responses", "/a2a/qa-agent/message/send"],
+    [
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/queue/chat/completions",
+        "/v1/messages",
+        "/v1/responses",
+        "/a2a/qa-agent/message/send",
+    ],
 )
 def test_inference_routes_take_baggage_mappings(route):
     assert is_baggage_mapped_route(route)

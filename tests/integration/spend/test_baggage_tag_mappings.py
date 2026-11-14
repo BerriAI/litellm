@@ -21,6 +21,7 @@ from integration._support.client import (
     gateway_from_environment,
     list_value,
     object_value,
+    string_value,
 )
 from integration._support.database import read_rows, scratch_database, write_rows
 from integration._support.database_relay import dropped_connection_relay, plaintext_database_url
@@ -562,6 +563,54 @@ def test_require_budgeted_tag_rejects_an_unbudgeted_mapped_tag_until_the_tag_has
             response.text for response in budgeted
         ]
 
+
+def _queue_chat(rig: Rig, baggage: str) -> httpx.Response:
+    return rig.proxy.request(
+        "POST",
+        "/queue/chat/completions",
+        {
+            "model": rig.chat_model,
+            "messages": [{"role": "user", "content": f"queued {uuid.uuid4().hex}"}],
+            "priority": 0,
+        },
+        headers={"baggage": baggage},
+    )
+
+
+def test_queued_chat_runs_the_baggage_mapper_like_chat_completions(mapped: Rig) -> None:
+    value: Final = uuid.uuid4().hex
+    mapped.provider.drain()
+    missing_required: Final = _queue_chat(mapped, "entrypoint=a")
+    assert missing_required.status_code == 400, missing_required.text
+    unbudgeted: Final = _queue_chat(mapped, f"budgeted={value},tenant={value}")
+    assert unbudgeted.status_code == 400, unbudgeted.text
+    assert mapped.provider.drain() == ()
+    admitted: Final = _queue_chat(mapped, f"entrypoint=a,tenant={value}")
+    assert admitted.status_code == 200, admitted.text
+    request_id: Final = string_value(JSON_OBJECT.validate_json(admitted.content)["id"])
+    rows: Final = eventually(
+        lambda: mapped.proxy.rows('SELECT request_tags FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (request_id,)),
+        lambda values: len(values) == 1,
+        seconds=70,
+    )
+    assert _caller_tags(rows[0]["request_tags"]) == {mapped.exact_tag, mapped.tenant_tag(value)}
+
+
+def test_spent_mapped_tag_budget_rejects_the_next_queued_request_before_the_provider(mapped: Rig) -> None:
+    entry: Final = uuid.uuid4().hex
+    tag: Final = mapped.usecase_tag(entry)
+    baggage: Final = f"entrypoint={entry},tenant={entry}"
+    with mapped.proxy.scenario() as scenario:
+        mapped.proxy.post("/tag/new", {"name": tag, "max_budget": 0.0001})
+        scenario.cleanups.callback(lambda: mapped.proxy.request("POST", "/tag/delete", {"name": tag}))
+        first: Final = _queue_chat(mapped, baggage)
+        assert first.status_code == 200, first.text
+        eventually(lambda: _queue_chat(mapped, baggage).status_code, lambda status: status != 200, seconds=70)
+        mapped.provider.drain()
+        blocked: Final = _queue_chat(mapped, baggage)
+        assert blocked.status_code == 422, blocked.text
+        assert "budget" in blocked.text.lower(), blocked.text
+        assert mapped.provider.drain() == ()
 
 def _routing_caller_tag(rig: Rig, caller_tag: CallerTag) -> tuple[Mapping[str, JsonValue], Mapping[str, str]]:
     json_metadata: Final[Mapping[str, JsonValue]] = {"metadata": json.dumps({"tags": [rig.exact_tag]})}
