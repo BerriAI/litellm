@@ -8,7 +8,7 @@ from litellm.caching import DualCache
 from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Field, Hook, Patch, on
 from litellm.integrations.custom_logger_v2.call import CallFacts
 from litellm.integrations.custom_logger_v2.host import reset_host_for_tests
-from litellm.integrations.custom_logger_v2.slots import HookArgs
+from litellm.integrations.custom_logger_v2.field_sources import HookArgs
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.proxy.v2_fields import limiter_request, output_cap

@@ -14,7 +14,7 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm.integrations.custom_logger_v2 import derivations
 from litellm.integrations.custom_logger_v2.derivations import RECORD_TYPES
-from litellm.integrations.custom_logger_v2.slots import HookArgs
+from litellm.integrations.custom_logger_v2.field_sources import HookArgs
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (

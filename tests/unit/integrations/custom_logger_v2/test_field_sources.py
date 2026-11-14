@@ -6,14 +6,14 @@ import pytest
 
 from litellm.integrations.custom_logger_v2 import Field, Hook, InvalidDeclarationError, InvalidPatchError, Patch
 from litellm.integrations.custom_logger_v2.hooks import Subscription
-from litellm.integrations.custom_logger_v2.slots import (
+from litellm.integrations.custom_logger_v2.sources import (
     HookArgs,
-    Slot,
-    SlotFields,
+    FieldSource,
+    SourcedFields,
     derived,
     mapped,
-    slot_table_problem,
-    with_slots,
+    source_table_problem,
+    with_sources,
 )
 
 INNER: Final = MappingProxyType({Field.model: "gpt"})
@@ -30,9 +30,9 @@ def _counting(value: object) -> tuple[list[HookArgs], Callable[[HookArgs], objec
     return calls, read
 
 
-def test_a_derived_slot_runs_only_when_read_and_then_once_for_every_reader_of_the_hook() -> None:
+def test_a_derived_source_runs_only_when_read_and_then_once_for_every_reader_of_the_hook() -> None:
     calls, read = _counting({"key_hash": "h"})
-    fields: Final = SlotFields(INNER, {Field.key_identity: derived(read)}, ARGS)
+    fields: Final = SourcedFields(INNER, {Field.key_identity: derived(read)}, ARGS)
 
     assert calls == []
     assert dict(fields) == {Field.model: "gpt"}
@@ -47,7 +47,7 @@ def test_a_derived_slot_runs_only_when_read_and_then_once_for_every_reader_of_th
 
 def test_the_derived_cache_survives_a_patch_to_another_field() -> None:
     calls, read = _counting({"key_hash": "h"})
-    fields: Final = SlotFields(INNER, {Field.key_identity: derived(read)}, ARGS)
+    fields: Final = SourcedFields(INNER, {Field.key_identity: derived(read)}, ARGS)
     _ = fields[Field.key_identity]
 
     patched: Final = fields.apply(Patch().set(Field.model, "claude"))
@@ -57,16 +57,16 @@ def test_the_derived_cache_survives_a_patch_to_another_field() -> None:
     assert len(calls) == 1
 
 
-def test_a_derived_slot_that_finds_nothing_leaves_the_field_absent() -> None:
+def test_a_derived_source_that_finds_nothing_leaves_the_field_absent() -> None:
     calls, read = _counting(None)
-    fields: Final = SlotFields(INNER, {Field.key_identity: derived(read)}, ARGS)
+    fields: Final = SourcedFields(INNER, {Field.key_identity: derived(read)}, ARGS)
 
     assert Field.key_identity not in fields
     assert Field.key_identity not in fields
     assert len(calls) == 1
 
 
-def test_a_mapped_slot_reads_its_carrier_every_time_and_writes_through_it() -> None:
+def test_a_mapped_source_reads_its_carrier_every_time_and_writes_through_it() -> None:
     carrier: Final[dict[str, object]] = {"reserved_cost": 1.0}
 
     def write(args: HookArgs, value: object) -> None:
@@ -74,7 +74,7 @@ def test_a_mapped_slot_reads_its_carrier_every_time_and_writes_through_it() -> N
         assert isinstance(value, Mapping)
         carrier.update(value)
 
-    fields: Final = SlotFields(INNER, {Field.budget_reservation: mapped(lambda args: dict(carrier), write)}, ARGS)
+    fields: Final = SourcedFields(INNER, {Field.budget_reservation: mapped(lambda args: dict(carrier), write)}, ARGS)
     before: Final = fields[Field.budget_reservation]
 
     after: Final = fields.apply(Patch().set(Field.budget_reservation, {"reserved_cost": 2.0}))
@@ -84,8 +84,8 @@ def test_a_mapped_slot_reads_its_carrier_every_time_and_writes_through_it() -> N
     assert after[Field.budget_reservation] == {"reserved_cost": 2.0}
 
 
-def test_a_patch_to_a_derived_slot_is_rejected_and_its_value_stays() -> None:
-    fields: Final = SlotFields(INNER, {Field.key_identity: derived(lambda args: {"key_hash": "h"})}, ARGS)
+def test_a_patch_to_a_derived_source_is_rejected_and_its_value_stays() -> None:
+    fields: Final = SourcedFields(INNER, {Field.key_identity: derived(lambda args: {"key_hash": "h"})}, ARGS)
 
     with pytest.raises(InvalidPatchError, match="derived from the hook's arguments"):
         fields.apply(Patch().set(Field.key_identity, {"key_hash": "forged"}))
@@ -93,16 +93,16 @@ def test_a_patch_to_a_derived_slot_is_rejected_and_its_value_stays() -> None:
     assert fields[Field.key_identity] == {"key_hash": "h"}
 
 
-def test_a_slot_table_cannot_make_a_derived_only_field_writable() -> None:
-    table: Final[Mapping[Field, Slot]] = {Field.usage: mapped(lambda args: None, lambda args, value: None)}
+def test_a_source_table_cannot_make_a_derived_only_field_writable() -> None:
+    table: Final[Mapping[Field, FieldSource]] = {Field.usage: mapped(lambda args: None, lambda args, value: None)}
 
-    assert slot_table_problem(table) == "usage are derived-only, so their slots cannot write"
+    assert source_table_problem(table) == "usage are derived-only, so their sources cannot write"
     with pytest.raises(ValueError, match="derived-only"):
-        SlotFields(INNER, table, ARGS)
+        SourcedFields(INNER, table, ARGS)
 
 
-def test_no_slots_hands_back_the_inner_fields_unwrapped() -> None:
-    assert with_slots(INNER, {}, ARGS) is INNER
+def test_no_sources_hands_back_the_inner_fields_unwrapped() -> None:
+    assert with_sources(INNER, {}, ARGS) is INNER
 
 
 @pytest.mark.parametrize(

@@ -16,6 +16,7 @@ from typing_extensions import Self
 from litellm.integrations.custom_logger_v2.call import CallContext, CallFacts
 from litellm.integrations.custom_logger_v2.enforcement import ContractViolation, Enforced, Policy, Unchecked
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
+from litellm.integrations.custom_logger_v2.field_sources import settle_reads
 from litellm.integrations.custom_logger_v2.hooks import HOOK_SPECS
 from litellm.integrations.custom_logger_v2.manifest import LegacyBinding
 from litellm.integrations.custom_logger_v2.offpath import InProcessSink, OffPathSink
@@ -24,7 +25,6 @@ from litellm.integrations.custom_logger_v2.patches import apply_patch, apply_pat
 from litellm.integrations.custom_logger_v2.planner import EMPTY_PLAN, Entry, HookPlan
 from litellm.integrations.custom_logger_v2.registry import CallbackRegistry, RegistrySnapshot
 from litellm.integrations.custom_logger_v2.selection import RequestSelection, is_selected
-from litellm.integrations.custom_logger_v2.slots import settle_reads
 
 LegacyT: Final = TypeVar("LegacyT")
 

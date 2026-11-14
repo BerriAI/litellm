@@ -8,14 +8,14 @@ from pydantic import ValidationError
 
 from litellm.integrations.custom_logger_v2.call import CallFacts, CallIds, CallKind, CallTarget, CallTiming
 from litellm.integrations.custom_logger_v2.derivations import (
-    AUTH_SLOTS,
-    POST_CALL_FAILURE_SLOTS,
-    PRE_CALL_AUTH_SLOTS,
+    DERIVED_AUTH_FIELDS,
+    DERIVED_POST_CALL_FAILURE_FIELDS,
+    PRE_CALL_AUTH_SOURCES,
     mapping,
     member,
 )
 from litellm.integrations.custom_logger_v2.enums import Field
-from litellm.integrations.custom_logger_v2.slots import HookArgs, Slot, derived, mapped
+from litellm.integrations.custom_logger_v2.field_sources import FieldSource, HookArgs, derived, mapped
 from litellm.types.integrations.custom_logger_v2 import LimiterRequest, OutputCap, RateLimitStatuses, coerce_record
 
 
@@ -119,17 +119,17 @@ def limiter_request(args: HookArgs) -> LimiterRequest | None:
     )
 
 
-PRE_CALL_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
+PRE_CALL_SOURCES: Final[Mapping[Field, FieldSource]] = MappingProxyType(
     {
-        **PRE_CALL_AUTH_SLOTS,
+        **PRE_CALL_AUTH_SOURCES,
         Field.rate_limit_statuses: mapped(rate_limit_statuses, write_rate_limit_statuses),
         Field.output_cap: derived(output_cap),
         Field.limiter_request: derived(limiter_request),
     }
 )
-POST_CALL_SUCCESS_SLOTS: Final = AUTH_SLOTS
-POST_CALL_FAILURE_PROXY_SLOTS: Final = POST_CALL_FAILURE_SLOTS
-RESPONSE_HEADERS_SLOTS: Final = AUTH_SLOTS
+DERIVED_POST_CALL_SUCCESS_FIELDS: Final = DERIVED_AUTH_FIELDS
+DERIVED_POST_CALL_FAILURE_PROXY_FIELDS: Final = DERIVED_POST_CALL_FAILURE_FIELDS
+DERIVED_RESPONSE_HEADERS_FIELDS: Final = DERIVED_AUTH_FIELDS
 
 
 def proxy_call_facts(
@@ -170,10 +170,10 @@ def post_call_facts(data: Mapping[str, object] | None, auth: object = None, logg
 
 
 __all__ = [
-    "POST_CALL_FAILURE_PROXY_SLOTS",
-    "POST_CALL_SUCCESS_SLOTS",
-    "PRE_CALL_SLOTS",
-    "RESPONSE_HEADERS_SLOTS",
+    "DERIVED_POST_CALL_FAILURE_PROXY_FIELDS",
+    "DERIVED_POST_CALL_SUCCESS_FIELDS",
+    "DERIVED_RESPONSE_HEADERS_FIELDS",
+    "PRE_CALL_SOURCES",
     "limiter_request",
     "output_cap",
     "post_call_facts",

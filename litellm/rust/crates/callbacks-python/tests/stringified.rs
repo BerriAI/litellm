@@ -60,7 +60,7 @@ from litellm.integrations.custom_logger_v2 import Field, Hook
 from litellm.integrations.custom_logger_v2.call import CallContext
 from litellm.integrations.custom_logger_v2.derivations import budget_reservation, logged_key_identity, request_tags
 from litellm.integrations.custom_logger_v2.rust import rust_logger
-from litellm.integrations.custom_logger_v2.slots import HookArgs
+from litellm.integrations.custom_logger_v2.field_sources import HookArgs
 
 
 class Marked:

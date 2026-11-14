@@ -26,7 +26,7 @@ Write: TypeAlias = Callable[[HookArgs, object], None]
 
 
 @dataclass(frozen=True, slots=True)
-class Slot:
+class FieldSource:
     read: Derive
     write: Write | None = None
 
@@ -35,12 +35,12 @@ class Slot:
         return self.write is None
 
 
-def derived(read: Derive) -> Slot:
-    return Slot(read=read)
+def derived(read: Derive) -> FieldSource:
+    return FieldSource(read=read)
 
 
-def mapped(read: Derive, write: Write) -> Slot:
-    return Slot(read=read, write=write)
+def mapped(read: Derive, write: Write) -> FieldSource:
+    return FieldSource(read=read, write=write)
 
 
 class _Cache:
@@ -50,30 +50,30 @@ class _Cache:
         self.values: Final[dict[Field, object]] = {}  # mutable-ok: one hook invocation's derived values
 
 
-def slot_table_problem(slots: Mapping[Field, Slot]) -> str | None:
+def source_table_problem(sources: Mapping[Field, FieldSource]) -> str | None:
     writable_derived: Final = sorted(
-        field.value for field, slot in slots.items() if field in DERIVED_ONLY and not slot.derived
+        field.value for field, source in sources.items() if field in DERIVED_ONLY and not source.derived
     )
     if writable_derived:
-        return f"{', '.join(writable_derived)} are derived-only, so their slots cannot write"
+        return f"{', '.join(writable_derived)} are derived-only, so their sources cannot write"
     return None
 
 
-class SlotFields(LiveFields):
-    __slots__ = ("_args", "_cache", "_inner", "_slots")
+class SourcedFields(LiveFields):
+    __slots__ = ("_args", "_cache", "_inner", "_sources")
 
     def __init__(
         self,
         inner: Mapping[Field, object],
-        slots: Mapping[Field, Slot],
+        sources: Mapping[Field, FieldSource],
         args: HookArgs,
         cache: _Cache | None = None,
     ) -> None:
-        problem: Final = slot_table_problem(slots)
+        problem: Final = source_table_problem(sources)
         if problem is not None:
             raise ValueError(problem)
         self._inner: Final = inner
-        self._slots: Final = slots
+        self._sources: Final = sources
         self._args: Final = args
         self._cache: Final = cache or _Cache()
 
@@ -81,19 +81,19 @@ class SlotFields(LiveFields):
     def inner(self) -> Mapping[Field, object]:
         return self._inner
 
-    def _value(self, field: Field, slot: Slot) -> object:
-        if not slot.derived:
-            return slot.read(self._args)
+    def _value(self, field: Field, source: FieldSource) -> object:
+        if not source.derived:
+            return source.read(self._args)
         cached: Final = self._cache.values
         if field not in cached:
-            cached[field] = slot.read(self._args)
+            cached[field] = source.read(self._args)
         return cached[field]
 
     def __getitem__(self, field: Field) -> object:
-        slot: Final = self._slots.get(field)
-        if slot is None:
+        source: Final = self._sources.get(field)
+        if source is None:
             return self._inner[field]
-        value: Final = self._value(field, slot)
+        value: Final = self._value(field, source)
         if value is None:
             raise KeyError(field)
         return value
@@ -102,8 +102,8 @@ class SlotFields(LiveFields):
         known: Final = self._cache.values
         return iter(
             (
-                *(field for field in self._inner if field not in self._slots),
-                *(field for field in self._slots if known.get(field) is not None),
+                *(field for field in self._inner if field not in self._sources),
+                *(field for field in self._sources if known.get(field) is not None),
             )
         )
 
@@ -112,16 +112,16 @@ class SlotFields(LiveFields):
 
     def apply(self, patch: Patch) -> Mapping[Field, object]:
         for op in patch.ops:
-            if op.field in self._slots:
+            if op.field in self._sources:
                 self._write(op)
-        rest: Final = Patch(tuple(op for op in patch.ops if op.field not in self._slots))
+        rest: Final = Patch(tuple(op for op in patch.ops if op.field not in self._sources))
         if not rest.ops:
             return self
         inner: Final = apply_patch(self._inner, rest)
-        return self if inner is self._inner else SlotFields(inner, self._slots, self._args, self._cache)
+        return self if inner is self._inner else SourcedFields(inner, self._sources, self._args, self._cache)
 
     def _write(self, op: PatchOp) -> None:
-        write: Final = self._slots[op.field].write
+        write: Final = self._sources[op.field].write
         if write is None:
             raise InvalidPatchError(f"{op.field.value} is derived from the hook's arguments, so it cannot be written")
         if isinstance(op, MergeField):
@@ -129,30 +129,32 @@ class SlotFields(LiveFields):
         write(self._args, op.value)
 
 
-NO_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType({})
+NO_SOURCES: Final[Mapping[Field, FieldSource]] = MappingProxyType({})
 
 
-def with_slots(inner: Mapping[Field, object], slots: Mapping[Field, Slot], args: HookArgs) -> Mapping[Field, object]:
-    return inner if not slots else SlotFields(inner, slots, args)
+def with_sources(
+    inner: Mapping[Field, object], sources: Mapping[Field, FieldSource], args: HookArgs
+) -> Mapping[Field, object]:
+    return inner if not sources else SourcedFields(inner, sources, args)
 
 
 def settle_reads(fields: Mapping[Field, object], reads: Iterable[Field]) -> None:
-    if not isinstance(fields, SlotFields):
+    if not isinstance(fields, SourcedFields):
         return
     for field in reads:
         _ = field in fields
 
 
 __all__ = [
-    "NO_SLOTS",
+    "NO_SOURCES",
     "Derive",
+    "FieldSource",
     "HookArgs",
-    "Slot",
-    "SlotFields",
+    "SourcedFields",
     "Write",
     "derived",
     "mapped",
     "settle_reads",
-    "slot_table_problem",
-    "with_slots",
+    "source_table_problem",
+    "with_sources",
 ]

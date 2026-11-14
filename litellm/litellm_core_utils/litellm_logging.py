@@ -86,6 +86,7 @@ from litellm.integrations.custom_logger_v2 import derivations as v2_derive
 from litellm.integrations.custom_logger_v2.call import CallFacts, CallIds, CallKind, CallTarget, CallTiming
 from litellm.integrations.custom_logger_v2.dispatcher import RequestScope
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
+from litellm.integrations.custom_logger_v2.field_sources import NO_SOURCES, FieldSource, HookArgs, with_sources
 from litellm.integrations.custom_logger_v2.host import get_dispatcher
 from litellm.integrations.custom_logger_v2.legacy import (
     Admit,
@@ -101,7 +102,6 @@ from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.integrations.custom_logger_v2.manifest import LegacyBinding
 from litellm.integrations.custom_logger_v2.outcomes import Patch
 from litellm.integrations.custom_logger_v2.selection import RequestSelection
-from litellm.integrations.custom_logger_v2.slots import NO_SLOTS, HookArgs, Slot, with_slots
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.langtrace import langtrace_trace_endpoint
 from litellm.integrations.mlflow import MlflowLogger
@@ -777,21 +777,17 @@ def _holds_v2(callbacks: Iterable[object]) -> bool:
     return any(isinstance(callback, CustomLoggerV2) for callback in callbacks)
 
 
-# include_v2=False runs only the legacy callbacks in the list. Sync handlers pass it when they also run for an async
-# request (the async handler delivers the same event) or for one chunk of a stream (the complete response is
-# delivered once at the end), so a V2 callback isn't sent the same event twice or once per chunk. Legacy callbacks
-# keep their old behaviour there.
-_HOOK_SLOTS: Final[Mapping[Hook, Mapping[Field, Slot]]] = MappingProxyType(
-    {Hook.log_prepare: v2_derive.LOGGING_SLOTS, Hook.attempt_ended: v2_derive.ATTEMPT_SLOTS}
+_HOOK_DERIVED_FIELDS: Final[Mapping[Hook, Mapping[Field, FieldSource]]] = MappingProxyType(
+    {Hook.log_prepare: v2_derive.DERIVED_LOGGING_FIELDS, Hook.attempt_ended: v2_derive.DERIVED_ATTEMPT_FIELDS}
 )
 
 
 def _logging_fields(
     hook: Hook, kwargs: object, args: HookArgs | None, owner: "Logging | None"
 ) -> Mapping[Field, object]:
-    return with_slots(
+    return with_sources(
         KwargsFields(kwargs, LOGGING_KEYS),
-        _HOOK_SLOTS.get(hook, NO_SLOTS),
+        _HOOK_DERIVED_FIELDS.get(hook, NO_SOURCES),
         args or HookArgs(request=kwargs, logging_obj=owner),
     )
 
@@ -800,6 +796,10 @@ def _v2_call(owner: "Logging | None", args: HookArgs | None) -> CallFacts | None
     return None if owner is None else owner.v2_call_facts(None if args is None else args.end_time)
 
 
+# include_v2=False runs only the legacy callbacks in the list. Sync handlers pass it when they also run for an async
+# request (the async handler delivers the same event) or for one chunk of a stream (the complete response is
+# delivered once at the end), so a V2 callback isn't sent the same event twice or once per chunk. Legacy callbacks
+# keep their old behaviour there.
 def _run_callbacks_sync(
     hook: Hook,
     callbacks: Sequence[object],

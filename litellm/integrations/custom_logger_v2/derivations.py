@@ -6,7 +6,7 @@ from pydantic import TypeAdapter
 
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY
 from litellm.integrations.custom_logger_v2.enums import Field
-from litellm.integrations.custom_logger_v2.slots import HookArgs, Slot, derived, mapped
+from litellm.integrations.custom_logger_v2.field_sources import FieldSource, HookArgs, derived, mapped
 from litellm.types.integrations.custom_logger_v2 import (
     AgentPolicy,
     AttemptTiming,
@@ -700,7 +700,7 @@ RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
     }
 )
 
-LOGGING_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
+DERIVED_LOGGING_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType(
     {
         Field.logged_key_identity: derived(logged_key_identity),
         Field.logged_model_group: derived(logged_model_group),
@@ -719,21 +719,21 @@ LOGGING_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
         Field.cold_storage_object_key: derived(cold_storage_object_key),
     }
 )
-ATTEMPT_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
+DERIVED_ATTEMPT_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType(
     {
-        **LOGGING_SLOTS,
+        **DERIVED_LOGGING_FIELDS,
         Field.outcome: derived(outcome),
         Field.standard_logging_payload_ref: derived(payload_copy),
         Field.input_sequence_length: derived(input_sequence_length),
     }
 )
-AUTH_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType({Field.key_identity: derived(key_identity)})
-POST_CALL_FAILURE_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
-    {**AUTH_SLOTS, Field.usage: derived(combined_usage)}
+DERIVED_AUTH_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType({Field.key_identity: derived(key_identity)})
+DERIVED_POST_CALL_FAILURE_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType(
+    {**DERIVED_AUTH_FIELDS, Field.usage: derived(combined_usage)}
 )
-PRE_CALL_AUTH_SLOTS: Final[Mapping[Field, Slot]] = MappingProxyType(
+PRE_CALL_AUTH_SOURCES: Final[Mapping[Field, FieldSource]] = MappingProxyType(
     {
-        **AUTH_SLOTS,
+        **DERIVED_AUTH_FIELDS,
         Field.key_limits: derived(key_limits),
         Field.budget_plan: derived(claim_budget_plan),
         Field.budget_reservation: mapped(budget_reservation, write_budget_reservation),
@@ -754,11 +754,11 @@ def call_connection_id(args: HookArgs) -> str | None:
 
 
 __all__ = [
-    "ATTEMPT_SLOTS",
-    "AUTH_SLOTS",
-    "LOGGING_SLOTS",
-    "POST_CALL_FAILURE_SLOTS",
-    "PRE_CALL_AUTH_SLOTS",
+    "DERIVED_ATTEMPT_FIELDS",
+    "DERIVED_AUTH_FIELDS",
+    "DERIVED_LOGGING_FIELDS",
+    "DERIVED_POST_CALL_FAILURE_FIELDS",
+    "PRE_CALL_AUTH_SOURCES",
     "RECORD_TYPES",
     "attempt_timing",
     "auth_of",
