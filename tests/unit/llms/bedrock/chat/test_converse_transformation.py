@@ -4418,7 +4418,7 @@ async def test_a_content_part_without_string_text_is_rejected_instead_of_dropped
     ],
     ids=["leading_system", "assistant", "mid_conversation_system"],
 )
-async def test_a_guarded_part_without_string_text_outside_user_turns_is_left_out_like_the_line_tip(
+async def test_a_guarded_part_without_string_text_outside_user_turns_is_left_out_and_the_question_still_sent(
     use_async: bool, conversation: tuple[Mapping[str, object], ...]
 ):
     config: Final = AmazonConverseConfig()
