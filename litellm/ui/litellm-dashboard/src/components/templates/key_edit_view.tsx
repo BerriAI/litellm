@@ -67,7 +67,11 @@ import {
   tagLimitsToRows,
   tagRowsToLimits,
 } from "../key_team_helpers/TagRateLimitEditor";
-import { excludeProxyWideSentinel, hasAllModelsSentinel } from "../key_team_helpers/fetch_available_models_team_key";
+import {
+  excludeProxyWideSentinel,
+  fetchModelAccessGroupNames,
+  hasAllModelsSentinel,
+} from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
@@ -126,6 +130,7 @@ function KeyEditSession({
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   const team = teams?.find((team) => team.team_id === keyData.team_id);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelAccessGroupNames, setModelAccessGroupNames] = useState<string[]>([]);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>(
     Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
@@ -171,6 +176,7 @@ function KeyEditSession({
     const fetchModels = async () => {
       if (!userID || !userRole || !accessToken) return;
 
+      fetchModelAccessGroupNames(userID, userRole, accessToken, keyData.team_id ?? null).then(setModelAccessGroupNames);
       try {
         if (keyData.team_id === null) {
           // Fetch user models if no team
@@ -361,7 +367,9 @@ function KeyEditSession({
     })),
   ];
 
-  const disallowedModelOptions = availableModels.map((model) => ({ value: model, label: model }));
+  const disallowedModelOptions = availableModels
+    .filter((model) => !modelAccessGroupNames.includes(model))
+    .map((model) => ({ value: model, label: model }));
 
   const visibleTeams =
     canChangeOrganization && selectedOrganizationId

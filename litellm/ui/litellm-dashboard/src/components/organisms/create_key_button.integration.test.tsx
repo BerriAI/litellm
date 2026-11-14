@@ -228,6 +228,12 @@ const createdPayload = async () => {
   return vi.mocked(keyCreateCall).mock.calls[0][2] as Record<string, unknown>;
 };
 
+const listModelsOrAccessGroups =
+  (models: string[], accessGroups: string[]) =>
+  async (...args: Parameters<typeof modelAvailableCall>) => ({
+    data: (args[6] === true ? accessGroups : models).map((id) => ({ id })),
+  });
+
 describe("CreateKey", () => {
   beforeEach(() => {
     testQueryClient.clear();
@@ -247,7 +253,7 @@ describe("CreateKey", () => {
     vi.mocked(toast.fromError).mockClear();
     vi.mocked(modelAvailableCall)
       .mockClear()
-      .mockResolvedValue({ data: [{ id: "gpt-4" }] });
+      .mockImplementation(listModelsOrAccessGroups(["gpt-4"], []));
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -969,6 +975,18 @@ describe("CreateKey", () => {
       await submit();
 
       expect((await createdPayload()).disallowed_models).toEqual(["gpt-4"]);
+    });
+
+    it("offers the models a key would get but none of the model access group names", async () => {
+      vi.mocked(modelAvailableCall).mockImplementation(
+        listModelsOrAccessGroups(["gpt-4", "beta-models"], ["beta-models"]),
+      );
+      await openModal();
+
+      await userEvent.click(await screen.findByLabelText("Disallowed Models"));
+
+      expect(await screen.findByRole("option", { name: "gpt-4" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "beta-models" })).not.toBeInTheDocument();
     });
 
     it("keeps the schema-driven Advanced Settings from rendering a second disallowed models control", async () => {

@@ -71,6 +71,7 @@ import { ModelMaxBudget, ModelMaxBudgetEditor } from "../key_team_helpers/ModelM
 import { TagRateLimitEditor, TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
 import {
   excludeProxyWideSentinel,
+  fetchModelAccessGroupNames,
   getModelDisplayName,
   hasAllModelsSentinel,
 } from "../key_team_helpers/fetch_available_models_team_key";
@@ -303,6 +304,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [apiKey, setApiKey] = useState(null);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
+  const [modelAccessGroupNames, setModelAccessGroupNames] = useState<string[]>([]);
   const [requestedKeyOwner, setKeyOwner] = useState("you");
   const [hasPrefilled, setHasPrefilled] = useState(false);
   const [pendingPrefillModels, setPendingPrefillModels] = useState<string[] | null>(null);
@@ -586,6 +588,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         );
         setModelsToPick(allModels);
       });
+      fetchModelAccessGroupNames(userID, userRole, accessToken, selectedCreateKeyTeam?.team_id ?? null).then(
+        setModelAccessGroupNames,
+      );
     }
     // Only clear models if we don't have pending prefill models
     if (!pendingPrefillModels) {
@@ -736,10 +741,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     })),
   ];
 
-  const disallowedModelOptions: MultiSelectOption[] = modelsToPick.map((model) => ({
-    value: model,
-    label: getModelDisplayName(model),
-  }));
+  const disallowedModelOptions: MultiSelectOption[] = modelsToPick
+    .filter((model) => !modelAccessGroupNames.includes(model))
+    .map((model) => ({ value: model, label: getModelDisplayName(model) }));
 
   const changeKeyType = (write: FieldWrite) => (value: string) => {
     write(value);

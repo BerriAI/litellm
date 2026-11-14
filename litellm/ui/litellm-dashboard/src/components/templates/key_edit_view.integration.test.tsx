@@ -32,9 +32,7 @@ vi.mock("../networking", async () => {
     getPromptsList: vi.fn().mockResolvedValue({
       prompts: [{ prompt_id: "prompt-1" }, { prompt_id: "prompt-2" }],
     }),
-    modelAvailableCall: vi.fn().mockResolvedValue({
-      data: [{ id: "gpt-4" }, { id: "gpt-3.5-turbo" }],
-    }),
+    modelAvailableCall: vi.fn(),
     tagListCall: vi.fn().mockResolvedValue({
       tag1: { name: "tag1", description: "Test tag 1" },
       tag2: { name: "tag2", description: "Test tag 2" },
@@ -69,6 +67,10 @@ vi.mock("../networking", async () => {
     getClaudeCodePluginsList: vi.fn().mockResolvedValue({ plugins: [], count: 0 }),
   };
 });
+
+const listModelsOrAccessGroups =
+  (models: string[], accessGroups: string[]) =>
+  async (...args: unknown[]) => ({ data: (args[6] === true ? accessGroups : models).map((id) => ({ id })) });
 
 vi.mock("../organisms/create_key_button", () => ({
   fetchTeamModels: vi.fn().mockResolvedValue(["team-model-1", "team-model-2"]),
@@ -417,6 +419,7 @@ describe("KeyEditView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     can.mockReturnValue(true);
+    vi.mocked(modelAvailableCall).mockImplementation(listModelsOrAccessGroups(["gpt-4", "gpt-3.5-turbo"], []));
     vi.mocked(getUiSettings).mockResolvedValue({ values: { enable_projects_ui: false } });
     testQueryClient.removeQueries({ queryKey: ["uiSettings"] });
   });
@@ -2201,9 +2204,7 @@ describe("KeyEditView", () => {
     });
 
     it("should not duplicate the all-proxy-models option when the teamless model list already carries the sentinel", async () => {
-      vi.mocked(modelAvailableCall).mockResolvedValueOnce({
-        data: [{ id: "all-proxy-models" }, { id: "gpt-4" }],
-      });
+      vi.mocked(modelAvailableCall).mockImplementation(listModelsOrAccessGroups(["all-proxy-models", "gpt-4"], []));
 
       renderWithProviders(
         <KeyEditView
@@ -2353,6 +2354,18 @@ describe("KeyEditView", () => {
 
       await waitFor(() => expect(onSubmitMock).toHaveBeenCalled());
       expect(onSubmitMock.mock.calls[0][0].disallowed_models).toEqual(["gpt-3.5-turbo"]);
+    });
+
+    it("offers the models a key would get but none of the model access group names", async () => {
+      vi.mocked(modelAvailableCall).mockImplementation(
+        listModelsOrAccessGroups(["gpt-4", "beta-models"], ["beta-models"]),
+      );
+      renderEditor(MOCK_KEY_DATA, vi.fn());
+
+      await userEvent.click(await screen.findByLabelText("Disallowed Models"));
+
+      await waitFor(() => expect(optionByContent("gpt-4")).toBeTruthy());
+      expect(optionByContent("beta-models")).toBeUndefined();
     });
 
     it("submits an empty list when the admin removes the last disallowed model", async () => {
