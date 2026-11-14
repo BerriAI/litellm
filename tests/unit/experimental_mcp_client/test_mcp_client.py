@@ -441,6 +441,7 @@ class TestMCPClient:
             mock_streamable_http_client.assert_called_once()
             call_kwargs = mock_streamable_http_client.call_args[1]
             assert "http_client" in call_kwargs
+            assert call_kwargs["max_sse_event_size"] == mcp_client_module.MCP_MAX_SSE_EVENT_SIZE_BYTES
             http_client = call_kwargs["http_client"]
             assert isinstance(http_client, httpx2.AsyncClient)
 
@@ -1487,7 +1488,8 @@ def test_mcp_extra_matches_proxy_extra_and_supports_streamable_http():
 
     specifier: Final = Requirement(mcp_extra["mcp"]).specifier
     assert not specifier.contains("1.28.1")
-    assert specifier.contains("2.2.0")
+    assert not specifier.contains("2.2.0")
+    assert specifier.contains("2.3.0")
     with (pyproject_path.parent / "uv.lock").open("rb") as f:
         locked = tomllib.load(f)
     mcp_versions: Final = [package["version"] for package in locked["package"] if package["name"] == "mcp"]
