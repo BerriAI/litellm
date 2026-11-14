@@ -1,9 +1,13 @@
+import datetime
 import json
 from pathlib import Path
 from typing import Final
 
 import pytest
 from pydantic import TypeAdapter
+
+from litellm.cost_calculator import default_image_cost_calculator
+from litellm.types.utils import ModelInfo
 
 REPO_ROOT: Final = Path(__file__).parents[2]
 
@@ -32,6 +36,36 @@ SERVERLESS_CHAT_MODELS: Final = (
     "together_ai/openai/gpt-oss-120b",
     "together_ai/openai/gpt-oss-20b",
     "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+)
+
+# Absent from https://api.together.ai/v1/models?serverless=true and refused by a direct call on 2026-10-30,
+# rnj-1-instruct on 2026-11-14
+LAST_PROBED: Final = datetime.date(2026, 11, 14)
+DEDICATED_ONLY_MODELS: Final = (
+    "together_ai/BAAI/bge-base-en-v1.5",
+    "together_ai/MiniMaxAI/MiniMax-M2.7",
+    "together_ai/Qwen/Qwen2-1.5B-Instruct",
+    "together_ai/Qwen/Qwen2.5-14B-Instruct",
+    "together_ai/Qwen/Qwen2.5-72B-Instruct",
+    "together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "together_ai/arcee-ai/trinity-mini",
+    "together_ai/deepseek-ai/DeepSeek-R1-0528",
+    "together_ai/deepseek-ai/DeepSeek-V3",
+    "together_ai/essentialai/rnj-1-instruct",
+    "together_ai/meta-llama/Llama-3.1-405B-Instruct",
+    "together_ai/meta-llama/Llama-3.2-1B-Instruct",
+    "together_ai/meta-llama/Llama-3.2-3B-Instruct",
+    "together_ai/meta-llama/Meta-Llama-3.1-8B",
+    "together_ai/mistralai/Ministral-3-14B-Instruct-2512",
+    "together_ai/mistralai/Mistral-7B-Instruct-v0.3",
+    "together_ai/moonshotai/Kimi-K2-Instruct",
+    "together_ai/moonshotai/Kimi-K2.5-fp4",
+    "together_ai/togethercomputer/CodeLlama-34b-Instruct",
+    "together_ai/zai-org/GLM-4.6",
+)
+
+ROUTED_MODES: Final = frozenset(
+    {"chat", "completion", "embedding", "rerank", "image_generation", "audio_transcription"}
 )
 
 DEPRECATED_MODELS: Final = {
@@ -111,3 +145,64 @@ def test_together_prompt_caching_flag_implies_cache_read_rate(cost_map: CostMap)
     for model, info in cost_map.items():
         if model.startswith("together_ai/") and info.get("supports_prompt_caching"):
             assert "cache_read_input_token_cost" in info, f"{model} flags caching without a cache read rate"
+
+
+def _together_rows(cost_map: CostMap, mode: str) -> tuple[tuple[str, dict[str, object]], ...]:
+    return tuple(
+        (model, info)
+        for model, info in cost_map.items()
+        if model.startswith("together_ai/") and info.get("mode") == mode
+    )
+
+
+def _deprecated_by(info: dict[str, object], day: datetime.date) -> bool:
+    deprecation_date: Final = info.get("deprecation_date")
+    return isinstance(deprecation_date, str) and datetime.date.fromisoformat(deprecation_date) <= day
+
+
+def test_together_dedicated_only_rows_are_deprecated_by_their_last_probe(cost_map: CostMap):
+    undated: Final = tuple(
+        model
+        for model in DEDICATED_ONLY_MODELS
+        if model in cost_map and not _deprecated_by(cost_map[model], LAST_PROBED)
+    )
+    assert undated == ()
+
+
+def _routed_mode(cost_map: CostMap, info: dict[str, object]) -> object:
+    alias_of: Final = info.get("alias_of")
+    target: Final = cost_map.get(alias_of, {}) if isinstance(alias_of, str) else info
+    return target.get("mode")
+
+
+def test_together_rows_only_use_modes_litellm_can_call(cost_map: CostMap):
+    unroutable: Final = {
+        model: mode
+        for model, info in cost_map.items()
+        if model.startswith("together_ai/") and (mode := _routed_mode(cost_map, info)) not in ROUTED_MODES
+    }
+    assert unroutable == {}
+
+
+def test_together_image_rows_price_through_the_cost_calculator(cost_map: CostMap):
+    rows: Final = _together_rows(cost_map, "image_generation")
+    assert rows
+    for model, info in rows:
+        assert (
+            default_image_cost_calculator(
+                model=model,
+                custom_llm_provider="together_ai",
+                size="1024x1024",
+                model_info=ModelInfo(**info),  # pyright: ignore[reportArgumentType]  # untyped cost map JSON
+            )
+            > 0
+        ), f"{model} has no usable image price"
+
+
+def test_together_transcription_rows_carry_a_per_second_rate(cost_map: CostMap):
+    rows: Final = _together_rows(cost_map, "audio_transcription")
+    assert rows
+    for model, info in rows:
+        assert isinstance(rate := info.get("input_cost_per_second"), float) and rate > 0, (
+            f"{model} has no usable transcription price"
+        )
