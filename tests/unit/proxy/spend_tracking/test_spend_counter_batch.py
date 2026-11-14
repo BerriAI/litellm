@@ -28,6 +28,12 @@ from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.caching.redis_batch import request_redis_batch_scope
 from tests.unit.caching.redis_batch_double import FakeNativePending, FakeNatives, fake_send
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+from tests.unit.proxy.spend_tracking.native_budgets_replica import (
+    install_native_owner,
+    reserve_budget_for_request as native_reserve_budget_for_request,
+)
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 
 TOKEN = UserAPIKeyAuth(token="hashed", team_id="team", user_id="user", org_id="org")
 TOKEN_KEYS = frozenset(
@@ -705,6 +711,33 @@ def _reservation_fixture(monkeypatch, spend: FakeSpendCounters) -> None:
     monkeypatch.setattr("litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost", lambda **_: 0.5)
 
 
+def _native_reservation_fixture(monkeypatch, spend: SpendCounterStore) -> None:
+    monkeypatch.setattr(ps, "spend_counter_store", spend)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost", lambda **_: 0.5)
+    _ = install_native_owner(spend)
+
+
+async def _reserve_native(
+    spend: SpendCounterStore, token: UserAPIKeyAuth, team_max_budget: float
+) -> dict[str, object] | None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+
+    with spend_counter_batch_scope(spend, counter_keys=admission_counter_keys(token, end_user_id=None)):
+        return await native_reserve_budget_for_request(
+            request_body={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=token,
+            team_object=LiteLLM_TeamTableCachedObj(team_id="team", max_budget=team_max_budget),
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+
 async def _reserve(spend: FakeSpendCounters, token: UserAPIKeyAuth, team_max_budget: float) -> dict[str, object] | None:
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
@@ -741,14 +774,18 @@ async def test_a_rejected_counter_is_charged_alone_so_the_counters_after_it_are_
 
 
 @pytest.mark.asyncio
-async def test_a_resized_reservation_is_carried_at_its_resized_cost_to_the_counters_charged_after_it(monkeypatch):
-    spend = FakeSpendCounters(redis={"spend:key:hashed": 9.8, "spend:team:team": 2.0})
-    _reservation_fixture(monkeypatch, spend)
+async def test_a_resized_reservation_is_carried_at_its_resized_cost_to_the_counters_charged_after_it(
+    monkeypatch, native_budgets_on
+):
+    spend = SpendCounterStore(connect(None).spend_counters())
+    spend.set_local("spend:key:hashed", 9.8)
+    spend.set_local("spend:team:team", 2.0)
+    _native_reservation_fixture(monkeypatch, spend)
     token = UserAPIKeyAuth(token="hashed", team_id="team", max_budget=10.0)
 
-    reservation = await _reserve(spend, token, team_max_budget=2.1)
+    reservation = await _reserve_native(spend, token, team_max_budget=2.1)
 
     assert reservation is not None
     assert reservation["reserved_cost"] == pytest.approx(0.1)
-    assert spend.redis["spend:key:hashed"] == pytest.approx(9.9)
-    assert spend.redis["spend:team:team"] == pytest.approx(2.1)
+    assert spend.get_local("spend:key:hashed") == pytest.approx(9.9)
+    assert spend.get_local("spend:team:team") == pytest.approx(2.1)
