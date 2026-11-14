@@ -9250,7 +9250,7 @@ def test_vertex_sends_exactly_one_authorization_header():
 
 
 @pytest.mark.asyncio
-async def test_mixpanel_vars_under_another_callback_never_reach_the_trusted_field():
+async def test_mixpanel_vars_under_another_callback_never_reach_the_trusted_field() -> None:
     key_with_langfuse_callback = UserAPIKeyAuth(
         api_key="hashed-key",
         metadata={

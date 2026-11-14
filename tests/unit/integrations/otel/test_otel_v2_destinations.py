@@ -6065,7 +6065,7 @@ class TestLangfuseRequestMetadataStaysWithLangfuse:
         ] * 2
 
 
-def test_mixpanel_destination_resolves_endpoint_and_basic_auth():
+def test_mixpanel_destination_resolves_endpoint_and_basic_auth() -> None:
     assert "mixpanel" in destination_capable_backends()
     assert destination_for("mixpanel", {"mixpanel_region": "eu"}) is None
     destination = destination_for("mixpanel", {"mixpanel_project_token": "team-tok", "mixpanel_region": "eu"})

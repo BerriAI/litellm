@@ -10253,7 +10253,7 @@ def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
         is_otel_v2_enabled.cache_clear()
 
 
-def test_mixpanel_dispatch_needs_otel_v2_and_builds_one_logger(monkeypatch):
+def test_mixpanel_dispatch_needs_otel_v2_and_builds_one_logger(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module

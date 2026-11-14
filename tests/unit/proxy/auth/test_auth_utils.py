@@ -3059,7 +3059,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
 
         assert result is None
 
-    def test_metadata_user_dot_id_is_only_a_span_label(self):
+    def test_metadata_user_dot_id_is_only_a_span_label(self) -> None:
         with patch("litellm.proxy.proxy_server.general_settings", {}):
             result = get_end_user_id_from_request_body(request_body={"metadata": {"user.id": "label"}}, request_headers={})
 

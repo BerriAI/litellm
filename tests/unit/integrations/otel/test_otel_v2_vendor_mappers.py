@@ -1114,7 +1114,7 @@ def test_langfuse_root_trace_attributes_derive_the_name_only_when_the_caller_gav
     assert LangfuseMapper.trace_attributes(trace, call_type) == expected
 
 
-def test_mixpanel_mapper_stamps_user_id_and_omits_when_absent():
+def test_mixpanel_mapper_stamps_user_id_and_omits_when_absent() -> None:
     from litellm.integrations.otel.model.payloads import MCPToolCallSpanData
 
     with_named_user = _llm_call(identity=RequestIdentity(call_id="c1", user_id="user_123"))

@@ -746,7 +746,9 @@ def test_signoz_keyless_team_endpoint_is_ignored_so_the_operator_key_never_reach
     assert owned.headers == "signoz-ingestion-key=OPERATOR"
 
 
-def test_mixpanel_dynamic_headers_and_endpoint_routing(monkeypatch, caplog):
+def test_mixpanel_dynamic_headers_and_endpoint_routing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     expected_auth = "Basic " + base64.b64encode(b"team-token:").decode()
     assert dynamic_otlp_headers("mixpanel", {"mixpanel_project_token": "team-token"}) == {
         "Authorization": expected_auth

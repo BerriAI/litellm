@@ -23,8 +23,8 @@ import pytest
 
 pytest.importorskip("opentelemetry")
 
-from opentelemetry import baggage, trace  # noqa: E402
-from opentelemetry.context import attach  # noqa: E402
+from opentelemetry import baggage, trace  # noqa: E402  # imported after the importorskip guard so the module skips without opentelemetry
+from opentelemetry.context import attach  # noqa: E402  # imported after the importorskip guard so the module skips without opentelemetry
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
 )
@@ -46,7 +46,7 @@ from litellm.integrations.otel import (  # noqa: E402
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
-from litellm.integrations.otel.model.config import CaptureMessageContent, ExporterOwner, ExporterSpec  # noqa: E402
+from litellm.integrations.otel.model.config import CaptureMessageContent, ExporterOwner, ExporterSpec  # noqa: E402  # imported after the importorskip guard so the module skips without opentelemetry
 from litellm.integrations.otel.model.destination import OtelDestination  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
@@ -167,8 +167,8 @@ def _emit_llm(logger, kwargs=None, *, ambient=None, fail=False):
     ids=["the-call-wins", "baggage-when-the-call-names-nobody", "neither"],
 )
 def test_an_sdk_call_names_its_user_in_the_call_or_in_the_baggage_around_it(
-    monkeypatch, call_metadata, in_baggage, expected
-):
+    monkeypatch: pytest.MonkeyPatch, call_metadata: dict[str, str], in_baggage: str | None, expected: str | None
+) -> None:
     exporter = InMemorySpanExporter()
     monkeypatch.setitem(providers._EXPORTER_FACTORIES, "sdk_mixpanel", lambda _spec: exporter)
     cfg = OpenTelemetryV2Config(
@@ -177,7 +177,7 @@ def test_an_sdk_call_names_its_user_in_the_call_or_in_the_baggage_around_it(
     )
     logger = OpenTelemetryV2(config=cfg, tracer_provider=providers.build_tracer_provider(cfg, use_simple_processor=True))
 
-    def emit():
+    def emit() -> None:
         if in_baggage is not None:
             attach(baggage.set_baggage("user.id", in_baggage))
         _emit_llm(logger, {**_kwargs(), "litellm_params": {"metadata": call_metadata}})

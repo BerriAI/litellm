@@ -14,6 +14,7 @@ from fastapi import FastAPI
 import litellm
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
+from litellm.proxy._types import AddTeamCallback
 from litellm.proxy.management_endpoints.callback_management_endpoints import router
 from litellm.proxy.proxy_server import app
 
@@ -484,15 +485,13 @@ class TestNewRelicKeyLoggingValidation:
 
 
 class TestMixpanelCallbackValidation:
-    def _team_data(self, callback_vars):
-        from litellm.proxy._types import AddTeamCallback
-
+    def _team_data(self, callback_vars: dict[str, str]) -> AddTeamCallback:
         return AddTeamCallback(callback_name="mixpanel", callback_type="success", callback_vars=callback_vars)
 
-    def _key_metadata(self, callback_vars):
+    def _key_metadata(self, callback_vars: dict[str, str]) -> dict[str, object]:
         return {"logging": [{"callback_name": "mixpanel", "callback_type": "success", "callback_vars": callback_vars}]}
 
-    def test_mixpanel_entry_in_callbacks_configs(self):
+    def test_mixpanel_entry_in_callbacks_configs(self) -> None:
         from litellm.proxy.common_utils.callback_utils import is_sensitive_callback_key
         from litellm.proxy.management_endpoints.team_callback_endpoints import _redact_callback_secrets
 
@@ -530,7 +529,9 @@ class TestMixpanelCallbackValidation:
         ids=["masked-logging-entry", "region-without-token", "blank-callback-settings"],
     )
     @pytest.mark.asyncio
-    async def test_team_writers_refuse_a_mixpanel_token_they_could_never_send(self, metadata, monkeypatch):
+    async def test_team_writers_refuse_a_mixpanel_token_they_could_never_send(
+        self, metadata: dict[str, object], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from fastapi import Request
 
         from litellm.integrations.otel.model.config import is_otel_v2_enabled
@@ -570,7 +571,9 @@ class TestMixpanelCallbackValidation:
         ids=["none", "empty", "not-a-list", "another-callback", "another-callback-settings"],
     )
     @pytest.mark.parametrize("otel_v2", ["true", "false"])
-    def test_the_team_check_leaves_other_callbacks_alone(self, metadata, otel_v2, monkeypatch):
+    def test_the_team_check_leaves_other_callbacks_alone(
+        self, metadata: dict[str, object] | None, otel_v2: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from litellm.integrations.otel.model.config import is_otel_v2_enabled
         from litellm.proxy.common_utils.callback_config_validation import mixpanel_logging_metadata_error
 
@@ -582,7 +585,7 @@ class TestMixpanelCallbackValidation:
             monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
             is_otel_v2_enabled.cache_clear()
 
-    def test_the_team_check_accepts_a_real_mixpanel_token(self, monkeypatch):
+    def test_the_team_check_accepts_a_real_mixpanel_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from litellm.integrations.otel.model.config import is_otel_v2_enabled
         from litellm.proxy.common_utils.callback_config_validation import mixpanel_logging_metadata_error
 
@@ -598,7 +601,7 @@ class TestMixpanelCallbackValidation:
             monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
             is_otel_v2_enabled.cache_clear()
 
-    def test_team_and_key_validation(self, monkeypatch):
+    def test_team_and_key_validation(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from fastapi import HTTPException
 
         from litellm.integrations.otel.model.config import is_otel_v2_enabled

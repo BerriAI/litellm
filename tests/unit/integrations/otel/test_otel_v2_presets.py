@@ -280,7 +280,7 @@ def test_signoz_preset_accepts_the_factory_call_shape(monkeypatch):
     assert any(e.owner == ExporterOwner.SIGNOZ for e in cfg.exporters)
 
 
-def test_mixpanel_preset_reads_token_and_defaults_to_us(monkeypatch):
+def test_mixpanel_preset_reads_token_and_defaults_to_us(monkeypatch: pytest.MonkeyPatch) -> None:
     import base64
 
     monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token-123")
@@ -303,7 +303,7 @@ def test_mixpanel_preset_reads_token_and_defaults_to_us(monkeypatch):
     assert "user.id" not in cfg.baggage_promoted_keys
 
 
-def test_mixpanel_preset_region_and_endpoint_override(monkeypatch):
+def test_mixpanel_preset_region_and_endpoint_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token-123")
     monkeypatch.setenv("MIXPANEL_REGION", "EU")
     monkeypatch.delenv("MIXPANEL_ENDPOINT", raising=False)
@@ -325,7 +325,7 @@ def test_mixpanel_preset_region_and_endpoint_override(monkeypatch):
     assert override_spec.endpoint == "http://collector.internal:4318/v1/ai/otel/traces"
 
 
-def test_mixpanel_preset_without_token_is_header_gated(monkeypatch):
+def test_mixpanel_preset_without_token_is_header_gated(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MIXPANEL_PROJECT_TOKEN", raising=False)
     from litellm.integrations.otel.model.config import ExporterOwner
     from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
@@ -336,7 +336,7 @@ def test_mixpanel_preset_without_token_is_header_gated(monkeypatch):
     assert spec.requires_headers is True
 
 
-def test_mixpanel_without_a_token_or_collector_stays_on_v2_and_exports_nowhere(monkeypatch):
+def test_mixpanel_without_a_token_or_collector_stays_on_v2_and_exports_nowhere(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.litellm_core_utils.litellm_logging import _exports_nowhere, _maybe_construct_otel_v2
@@ -355,7 +355,9 @@ def test_mixpanel_without_a_token_or_collector_stays_on_v2_and_exports_nowhere(m
     assert _exports_nowhere(logger.config)
 
 
-def test_mixpanel_with_a_token_keeps_the_operators_collector_beside_its_own_exporter(monkeypatch):
+def test_mixpanel_with_a_token_keeps_the_operators_collector_beside_its_own_exporter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec, OpenTelemetryV2Config
     from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
 
