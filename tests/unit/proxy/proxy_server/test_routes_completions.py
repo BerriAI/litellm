@@ -9,6 +9,7 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -126,6 +127,18 @@ def test_completion_pipeline_error(client, auth_as, completion_pipeline_raises, 
         response = client.post(path, json=payload)
     assert response.status_code == 500
     assert response.headers.get("content-type", "").startswith("application/json")
+
+
+def test_an_azure_text_stream_cut_answers_the_client_with_the_error_line_alone(client, auth_as, azure_stream_cut):
+    payload = {"model": "gpt-3.5-turbo-instruct", "prompt": "hi", "stream": True}
+    with auth_as():
+        response = client.post("/v1/completions", json=payload)
+    _, error_frame, done = response.text.removesuffix("\n\n").split("\n\n")
+    assert response.status_code == 200
+    assert json.loads(error_frame.removeprefix("data: "))["error"]["message"].endswith(
+        "litellm.APIConnectionError: Azure_textException APIConnectionError - Response payload is not completed"
+    )
+    assert done == "data: [DONE]"
 
 
 @pytest.mark.parametrize(
