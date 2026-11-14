@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
+from litellm.llms.fireworks_ai.common_utils import FIREROUTER
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.proxy.common_utils.model_listing_utils import CallerAliases, alias_map, dispatched_model
 from litellm.proxy.common_utils.token_count_settings import cost_map_entry
@@ -56,6 +57,12 @@ _PROVIDERS_WITH_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = frozenset(
         LlmProviders.STABILITY,
         LlmProviders.TRANSCRIBE,
     )
+)
+_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = (
+    f"{LlmProviders.FIREWORKS_AI.value}/routers/",
+    f"{LlmProviders.FIREWORKS_AI.value}/{FIREROUTER}/",
+    f"{LlmProviders.AZURE_AI.value}/model_router/",
+    f"{LlmProviders.AZURE_AI.value}/model-router/",
 )
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
@@ -385,6 +392,12 @@ def _resolves_to_catalog_model(model: str, provider: str, provider_model_ids: fr
     )
 
 
+def _catalog_lookup_parses_route(provider: str, routing_prefix: str) -> bool:
+    return provider not in _PROVIDERS_WITH_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE and not (
+        f"{provider}/{routing_prefix}".startswith(_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE)
+    )
+
+
 def _routes_to_catalog_model(
     routes_to_model: Callable[[str, str], bool], provider: str, provider_model_ids: frozenset[str]
 ) -> Callable[[str, str], bool]:
@@ -417,7 +430,7 @@ def _ids_routing_to_catalog_models(
     routing_prefix: Final = deployment_model_pattern_without_provider.removesuffix(catalog_pattern)
     reaches_catalog_model: Final = (
         _routes_to_catalog_model(routes_to_model, provider, frozenset(provider_model_ids))
-        if routing_prefix and provider not in _PROVIDERS_WITH_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE
+        if routing_prefix and _catalog_lookup_parses_route(provider, routing_prefix)
         else routes_to_model
     )
     deployment_model_pattern: Final = f"{provider_id_prefix}{catalog_pattern}"
