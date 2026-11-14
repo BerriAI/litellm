@@ -328,11 +328,12 @@ def _inherited_service_tier_pricing(
     }
 
 
-def _inherited_off_peak_base_rates(
+def _inherited_scoped_pricing_base_rates(
     host: "PythonHost", model_info: Mapping[str, object], backend_model: str, provider: str | None
 ) -> Mapping[str, object]:
-    """The whole backend entry an off-peak-only entry copies (``_inherit_builtin_base_rates_for_off_peak``)."""
-    if not model_info.get("off_peak_pricing"):
+    """The whole backend entry an entry setting only off-peak pricing or an input minimum copies
+    (``_inherit_builtin_base_rates_for_off_peak``)."""
+    if not model_info.get("off_peak_pricing") and model_info.get("min_billed_input_tokens") is None:
         return {}
     if any(model_info.get(field) is not None for field in _OFF_PEAK_BASE_RATE_FIELDS):
         return {}
@@ -442,14 +443,30 @@ def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) ->
         else {}
     )
     with_profile: Final = {**priced, **profile_pricing}
-    off_peak: Final = {**with_profile, **_inherited_off_peak_base_rates(host, with_profile, backend_model, provider)}
+    scoped: Final = {
+        **with_profile,
+        **_inherited_scoped_pricing_base_rates(host, with_profile, backend_model, provider),
+    }
     cached: Final = (
-        {**off_peak, **_inherited_cache_pricing(host, off_peak, backend_model, provider)}
-        if off_peak.get("input_cost_per_token") is not None
-        else off_peak
+        {**scoped, **_inherited_cache_pricing(host, scoped, backend_model, provider)}
+        if scoped.get("input_cost_per_token") is not None
+        else scoped
     )
     tiers: Final = {**cached, **_inherited_service_tier_pricing(host, cached, backend_model, provider)}
-    return {**tiers, **_inherited_tiered_output_rate(host, tiers, backend_model, provider)}
+    tiered: Final = {**tiers, **_inherited_tiered_output_rate(host, tiers, backend_model, provider)}
+    return {**_inherited_billing_minimum(tiered, backend_model, provider), **tiered}
+
+
+def _inherited_billing_minimum(
+    model_info: Mapping[str, object], backend_model: str, provider: str | None
+) -> Mapping[str, object]:
+    if model_info.get("input_cost_per_token") is None and model_info.get("tiered_pricing") is None:
+        return {}
+    backend_info: Final = lookup_model_info_for_registration(model=backend_model, custom_llm_provider=provider)
+    if isinstance(backend_info, ModelInfoLookupMiss):
+        return {}
+    minimum: Final = backend_info.get("min_billed_input_tokens")
+    return {} if minimum is None else {"min_billed_input_tokens": minimum}
 
 
 def _bedrock_profile_pricing(backend_model: str, priced: Mapping[str, object]) -> Mapping[str, object]:

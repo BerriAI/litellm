@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import TypeAdapter
+from pydantic import NonNegativeInt, TypeAdapter, ValidationError
 from typing_extensions import Buffer, ReadOnly
 
 import litellm
@@ -53,6 +53,7 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
 _IMAGE_REQUEST_PARAMS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_BILLED_INPUT_TOKEN_MINIMUM: Final[TypeAdapter[NonNegativeInt]] = TypeAdapter(NonNegativeInt)
 
 _BASE_CACHE_WRITE_RATE_KEY: Final = "cache_creation_input_token_cost"
 
@@ -670,6 +671,22 @@ def _open_off_peak_block(model_info: ModelInfo, current_time: datetime | None) -
     if not isinstance(off_peak, Mapping) or not _is_off_peak(off_peak, current_time):
         return None
     return off_peak
+
+
+def billed_input_token_minimum(info: Mapping[str, object]) -> int:
+    minimum: Final = info.get("min_billed_input_tokens")
+    if minimum is None:
+        return 0
+    try:
+        return _BILLED_INPUT_TOKEN_MINIMUM.validate_python(minimum)
+    except ValidationError:
+        return 0
+
+
+def unbilled_minimum_input_tokens(model_info: ModelInfo, prompt_tokens: int) -> int:
+    if prompt_tokens <= 0:
+        return 0
+    return max(billed_input_token_minimum(model_info) - prompt_tokens, 0)
 
 
 def apply_off_peak_pricing(model_info: ModelInfo, current_time: datetime | None, rates: TokenRates) -> TokenRates:
@@ -1683,16 +1700,19 @@ def generic_cost_per_token(
         base_costs.cache_read_rate if resolved_cache_read_cost is None else resolved_cache_read_cost
     )
 
-    prompt_cost = _calculate_input_cost(
-        prompt_tokens_details=prompt_tokens_details,
-        model_info=resolved_model_info,
-        prompt_base_cost=base_costs.input_rate,
-        cache_read_cost=effective_cache_read_cost,
-        cache_creation_cost=base_costs.cache_creation_rate,
-        cache_creation_cost_by_ttl=base_costs.cache_creation_rates_by_ttl,
-        service_tier=service_tier,
-        prompt_tokens=usage.prompt_tokens,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    prompt_cost = (
+        _calculate_input_cost(
+            prompt_tokens_details=prompt_tokens_details,
+            model_info=resolved_model_info,
+            prompt_base_cost=base_costs.input_rate,
+            cache_read_cost=effective_cache_read_cost,
+            cache_creation_cost=base_costs.cache_creation_rate,
+            cache_creation_cost_by_ttl=base_costs.cache_creation_rates_by_ttl,
+            service_tier=service_tier,
+            prompt_tokens=usage.prompt_tokens,
+            threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+        )
+        + unbilled_minimum_input_tokens(resolved_model_info, usage.prompt_tokens) * base_costs.input_rate
     )
 
     ## CALCULATE OUTPUT COST
