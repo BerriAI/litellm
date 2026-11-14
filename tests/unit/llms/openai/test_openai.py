@@ -2811,6 +2811,78 @@ def test_sync_moderation_sends_the_deployment_organization() -> None:
     assert moderations.calls.last.request.headers["OpenAI-Organization"] == _DEPLOYMENT_ORGANIZATION
 
 
+
+_LOWERCASE_ORGANIZATION_HEADER: Final[Mapping[str, str]] = {"openai-organization": "org-header"}
+
+
+@pytest.mark.parametrize(
+    ("route", "route_kwargs"),
+    [
+        (litellm.embedding, _EMBEDDING_CALL),
+        (litellm.text_completion, _TEXT_COMPLETION_CALL),
+        (litellm.speech, _SPEECH_CALL),
+        (litellm.transcription, _TRANSCRIPTION_CALL),
+    ],
+)
+def test_sync_route_sends_one_organization_when_a_header_names_it(
+    recording_openai: _OpenAIThatRecordsTheHeaders,
+    route: Callable[..., object],
+    route_kwargs: Mapping[str, object],
+) -> None:
+    route(
+        api_key=f"sk-{uuid4()}",
+        organization=_DEPLOYMENT_ORGANIZATION,
+        extra_headers=_LOWERCASE_ORGANIZATION_HEADER,
+        **route_kwargs,
+    )
+
+    assert recording_openai.headers is not None
+    assert recording_openai.headers.get_list("OpenAI-Organization") == ["org-header"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "route_kwargs"),
+    [
+        (litellm.aembedding, _EMBEDDING_CALL),
+        (litellm.atext_completion, _TEXT_COMPLETION_CALL),
+        (litellm.amoderation, _MODERATION_CALL),
+        (litellm.aspeech, _SPEECH_CALL),
+        (litellm.atranscription, _TRANSCRIPTION_CALL),
+    ],
+)
+async def test_async_route_sends_one_organization_when_a_header_names_it(
+    recording_openai: _OpenAIThatRecordsTheHeaders,
+    route: Callable[..., Awaitable[object]],
+    route_kwargs: Mapping[str, object],
+) -> None:
+    await route(
+        api_key=f"sk-{uuid4()}",
+        organization=_DEPLOYMENT_ORGANIZATION,
+        extra_headers=_LOWERCASE_ORGANIZATION_HEADER,
+        **route_kwargs,
+    )
+
+    assert recording_openai.headers is not None
+    assert recording_openai.headers.get_list("OpenAI-Organization") == ["org-header"]
+
+
+@respx.mock
+def test_sync_moderation_sends_one_organization_when_a_header_names_it() -> None:
+    moderations: Final = respx.post("https://api.openai.com/v1/moderations").mock(
+        return_value=httpx.Response(200, json=_ORGANIZATION_WIRE_BODIES["/v1/moderations"])
+    )
+
+    litellm.moderation(
+        api_key=f"sk-{uuid4()}",
+        organization=_DEPLOYMENT_ORGANIZATION,
+        extra_headers=_LOWERCASE_ORGANIZATION_HEADER,
+        **_MODERATION_CALL,
+    )
+
+    assert moderations.calls.last.request.headers.get_list("OpenAI-Organization") == ["org-header"]
+
+
 @pytest.mark.parametrize(
     ("route", "route_kwargs"),
     [(litellm.embedding, _EMBEDDING_CALL), (litellm.speech, _SPEECH_CALL)],

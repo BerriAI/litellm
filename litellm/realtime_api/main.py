@@ -60,7 +60,11 @@ from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, realtime_ssl_for_url
-from ..llms.openai.common_utils import is_openai_backed_api_base, openai_organization_header
+from ..llms.openai.common_utils import (
+    caller_or_deployment_openai_organization,
+    is_openai_backed_api_base,
+    openai_organization_header,
+)
 from ..llms.openai.live.handler import OpenAILiveSessions
 from ..llms.openai.realtime.handler import (
     OpenAIRealtime,
@@ -917,7 +921,9 @@ async def _arealtime(
             api_key=dynamic_api_key,
             litellm_metadata=session_litellm_metadata,
             litellm_params=deployment_params,
-            organization=litellm_params.organization,
+            organization=caller_or_deployment_openai_organization(
+                as_str_mapping(deployment_params.get("extra_headers")), litellm_params.organization
+            ),
         )
         return
 
@@ -1010,7 +1016,9 @@ async def _arealtime(
             user_api_key_dict=kwargs.get("user_api_key_dict"),
             litellm_metadata=session_litellm_metadata,
             drop_params=drop_params,
-            organization=litellm_params.organization,
+            organization=caller_or_deployment_openai_organization(
+                as_str_mapping(deployment_params.get("extra_headers")), litellm_params.organization
+            ),
         )
     elif _custom_llm_provider == "bedrock":
         # Extract AWS parameters from kwargs
@@ -1190,7 +1198,20 @@ async def _realtime_health_check_auth_headers(
         )
     if api_key is None:
         return _EMPTY_AUTH_HEADERS
-    return MappingProxyType({"Authorization": f"Bearer {api_key}"})
+    organization: Final = model_params.get("organization")
+    return MappingProxyType(
+        {
+            "Authorization": f"Bearer {api_key}",
+            **_realtime_organization_header(
+                custom_llm_provider,
+                None,
+                caller_or_deployment_openai_organization(
+                    as_str_mapping(model_params.get("extra_headers")),
+                    organization if isinstance(organization, str) else None,
+                ),
+            ),
+        }
+    )
 
 
 async def realtime_health_check(

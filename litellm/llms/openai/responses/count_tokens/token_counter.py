@@ -23,7 +23,12 @@ from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_timeout
-from litellm.llms.openai.common_utils import OpenAIError, decoded_json_object, get_openai_credentials
+from litellm.llms.openai.common_utils import (
+    OpenAIError,
+    caller_or_deployment_openai_organization,
+    decoded_json_object,
+    get_openai_credentials,
+)
 from litellm.llms.openai.responses.count_tokens.handler import (
     OpenAICountTokensHandler,
 )
@@ -90,7 +95,9 @@ def _count_credential(deployment: Mapping[str, object] | None, model_label: str)
         api_base=credentials.api_base,
         credential=credential,
         timeout=deployment_timeout(litellm_params),
-        organization=organization if isinstance(organization, str) else None,
+        organization=caller_or_deployment_openai_organization(
+            as_str_mapping(litellm_params.get("extra_headers")), organization if isinstance(organization, str) else None
+        ),
     )
 
 

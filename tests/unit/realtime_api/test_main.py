@@ -504,6 +504,60 @@ async def test_arealtime_without_live_start_preserves_openai_realtime_dispatch(
     assert captured.values["api_base"] == "https://realtime-gateway.example/v1"
 
 
+
+class _OpenAIWebSocketHandlers:
+    def __init__(self) -> None:
+        self.organization: object = None
+
+    async def async_realtime(self, **kwargs: object) -> None:
+        self.organization = kwargs["organization"]
+
+    async def async_live_session(self, **kwargs: object) -> None:
+        self.organization = kwargs["organization"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "live_session_start",
+    [
+        pytest.param(None, id="realtime"),
+        pytest.param({"type": "session.start", "session": {"model": "gpt-live-1"}}, id="live"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("extra_headers", "expected_organization"),
+    [
+        pytest.param(None, "org-deployment", id="deployment-organization"),
+        pytest.param({"OpenAI-Organization": "org-caller"}, "org-caller", id="caller-header-wins"),
+    ],
+)
+async def test_openai_websockets_keep_the_caller_organization_header(
+    monkeypatch: pytest.MonkeyPatch,
+    live_session_start: Mapping[str, object] | None,
+    extra_headers: Mapping[str, str] | None,
+    expected_organization: str,
+) -> None:
+    handlers: Final = _OpenAIWebSocketHandlers()
+    monkeypatch.setattr(
+        realtime_main,
+        "get_llm_provider",
+        lambda model, api_base, api_key, custom_llm_provider=None: (model, "openai", "resolved-key", None),
+    )
+    monkeypatch.setattr(realtime_main, "openai_realtime", handlers)
+    monkeypatch.setattr(realtime_main, "openai_live_sessions", handlers)
+
+    await realtime_main._arealtime.__wrapped__(
+        model="gpt-live-1" if live_session_start else "gpt-realtime",
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        live_session_start=live_session_start,
+        organization="org-deployment",
+        extra_headers=extra_headers,
+    )
+
+    assert handlers.organization == expected_organization
+
+
 class _ServerEvents(Protocol):
     async def recv(self) -> str: ...
 
@@ -668,6 +722,39 @@ async def test_bearer_health_check_sends_stored_credential_as_bearer_token(
         )
     assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer sk-from-credential"}
     assert connect.url == expected_url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model_params", "expected_headers"),
+    [
+        pytest.param(
+            "openai",
+            {"organization": "org-deployment"},
+            {"Authorization": "Bearer sk-test", "OpenAI-Organization": "org-deployment"},
+            id="openai-organization",
+        ),
+        pytest.param(
+            "openai",
+            {"organization": "org-deployment", "extra_headers": {"openai-organization": "org-header"}},
+            {"Authorization": "Bearer sk-test", "OpenAI-Organization": "org-header"},
+            id="organization-header-wins",
+        ),
+        pytest.param("xai", {"organization": "org-deployment"}, {"Authorization": "Bearer sk-test"}, id="xai"),
+    ],
+)
+async def test_bearer_health_check_sends_the_deployment_organization_to_openai(
+    custom_llm_provider: str, model_params: Mapping[str, object], expected_headers: Mapping[str, str]
+):
+    connect = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-realtime",
+            custom_llm_provider=custom_llm_provider,
+            api_key="sk-test",
+            model_params={"model": f"{custom_llm_provider}/gpt-realtime", **model_params},
+        )
+    assert connect.kwargs["additional_headers"] == expected_headers
 
 
 @pytest.mark.asyncio

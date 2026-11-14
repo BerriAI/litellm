@@ -501,6 +501,21 @@ def openai_organization_header(headers: Mapping[str, object], organization: str 
     return {"OpenAI-Organization": organization}
 
 
+def openai_client_organization(headers: Mapping[str, object] | None, organization: str | None) -> str | None:
+    return organization if openai_organization_header(headers or {}, organization) else None
+
+
+def caller_or_deployment_openai_organization(
+    headers: Mapping[str, object] | None, organization: str | None
+) -> str | None:
+    caller_organization: Final = next(
+        (value for name, value in (headers or {}).items() if name.lower() == "openai-organization"), None
+    )
+    if isinstance(caller_organization, str) and caller_organization:
+        return caller_organization
+    return organization or None
+
+
 class OpenAICredentials(NamedTuple):
     api_base: str
     api_key: str | None

@@ -160,7 +160,11 @@ from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     DeferredReasoningDropWarnings,
     OpenAIGPT5Config,
 )
-from litellm.llms.openai.common_utils import get_openai_credentials
+from litellm.llms.openai.common_utils import (
+    caller_or_deployment_openai_organization,
+    get_openai_credentials,
+    openai_client_organization,
+)
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -1976,7 +1980,9 @@ def _complete_text_completion_openai(
         litellm_params=litellm_params,
         logger_fn=logger_fn,
         timeout=timeout,
-        organization=ctx.organization,
+        organization=openai_client_organization(
+            _REQUEST_KWARGS_ADAPTER.validate_python(headers or {}), ctx.organization
+        ),
     )
 
     if optional_params.get("stream", False) is False and acompletion is False and text_completion is False:
@@ -7247,7 +7253,7 @@ def embedding(
                 max_retries=max_retries,
                 shared_session=shared_session,
                 litellm_params=litellm_params_dict,
-                organization=organization,
+                organization=openai_client_organization(headers, organization),
             )
         elif custom_llm_provider == "databricks":
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
@@ -8474,7 +8480,9 @@ def moderation(
     openai_client: Final = kwargs.get("client", None) or build_openai_client(
         api_key=static_api_key,
         api_base=api_base,
-        organization=organization,
+        organization=caller_or_deployment_openai_organization(
+            as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")), organization
+        ),
         litellm_params=kwargs,
     )
 
@@ -8527,7 +8535,10 @@ async def amoderation(
             is_async=True,
             api_key=static_api_key,
             api_base=optional_params.api_base or _dynamic_api_base,
-            organization=optional_params.organization,
+            organization=caller_or_deployment_openai_organization(
+                as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")),
+                optional_params.organization,
+            ),
             litellm_params=optional_params.model_dump(exclude_none=True),
         )
     else:
@@ -8875,7 +8886,9 @@ def transcription(
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
             shared_session=shared_session,
-            organization=organization,
+            organization=caller_or_deployment_openai_organization(
+                as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")), organization
+            ),
         )
     elif custom_llm_provider == "nvidia_riva":
         # NVIDIA Riva is gRPC-based, not HTTP. It has its own dedicated handler
@@ -9180,7 +9193,9 @@ def speech(
             optional_params=optional_params,
             api_key=api_key,
             api_base=api_base,
-            organization=organization,
+            organization=caller_or_deployment_openai_organization(
+                as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")), organization
+            ),
             project=project,
             max_retries=max_retries,
             timeout=http_timeout,
