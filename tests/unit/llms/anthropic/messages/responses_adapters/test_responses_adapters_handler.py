@@ -2,7 +2,7 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import AsyncIterable, AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterator, Mapping
 from contextlib import nullcontext
 from itertools import chain
 from typing import Final, Literal, Protocol, cast, runtime_checkable
@@ -2008,11 +2008,23 @@ def _refuse_a_summary(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json=TEXT_RESPONSE)
 
 
-def _upstream_refusing_every_summary(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> respx.Route:
+def _refuse_a_summary_then_replayed_reasoning(request: httpx.Request) -> httpx.Response:
+    body: Final = json.loads(request.content)
+    replays_reasoning: Final = any(item.get("type") == "reasoning" for item in body["input"])
+    if replays_reasoning and "summary" not in body.get("reasoning", {}):
+        return httpx.Response(400, json=REJECTED_REPLAYED_REASONING)
+    return _refuse_a_summary(request)
+
+
+def _upstream_refusing_every_summary(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    answer: Callable[[httpx.Request], httpx.Response] = _refuse_a_summary,
+) -> respx.Route:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-replay-test")
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
-    return respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=_refuse_a_summary)
+    return respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=answer)
 
 
 @pytest.mark.asyncio
@@ -2077,4 +2089,40 @@ async def test_a_summarized_turn_sent_again_without_replayed_reasoning_logs_only
             drop_params=True,
         )
 
+    assert failure_log.rejections == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_a_summary_refused_while_replayed_reasoning_is_resent_is_not_logged_as_the_turn_failing(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    upstream: Final = _upstream_refusing_every_summary(
+        respx_mock, monkeypatch, answer=_refuse_a_summary_then_replayed_reasoning
+    )
+
+    if sync:
+        litellm.anthropic.messages.create(
+            max_tokens=1024,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            thinking={"type": "adaptive", "display": "summarized"},
+            drop_params=True,
+        )
+    else:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=1024,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            thinking={"type": "adaptive", "display": "summarized"},
+            drop_params=True,
+        )
+
+    answered: Final = json.loads(upstream.calls[-1].request.content)
+    assert "summary" not in answered.get("reasoning", {})
+    assert _replayed_reasoning_counts(upstream)[-1] == 0
     assert failure_log.rejections == ()
