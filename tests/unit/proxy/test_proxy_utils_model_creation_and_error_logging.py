@@ -823,8 +823,9 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
         assert payload["endTime"] - payload["startTime"] >= real_datetime.timedelta(seconds=2)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("fallback_also_failed", [False, True], ids=["agent-failed", "agent-and-fallback-failed"])
     async def test_failed_agent_call_spend_row_names_the_agent_it_was_billed_to(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, fallback_also_failed: bool
     ):
         from types import SimpleNamespace
 
@@ -841,6 +842,8 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
             function_id="a2a-chat",
         )
         logging_obj.bill_as_a2a_agent(agent_id="my-agent-id", cost_per_query=0.05)
+        if fallback_also_failed:
+            logging_obj.stop_billing_as_a2a_agent()
         agent_down: Final = InternalServerError(
             message="agent endpoint returned 500", model="a2a/my-agent", llm_provider="databricks"
         )

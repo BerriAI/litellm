@@ -1025,12 +1025,8 @@ async def test_route_a2a_bridge_per_query_agent_streamed_call_bills_the_same_as_
 )
 @pytest.mark.parametrize(
     "agent",
-    [
-        _priced_dbx_agent("per-query", PER_QUERY_PRICE),
-        _priced_url_agent("url-per-query", PER_QUERY_PRICE),
-        _priced_url_agent("url-per-token", PER_TOKEN_PRICE),
-    ],
-    ids=["bridge-per-query", "url-per-query", "url-per-token"],
+    [_priced_dbx_agent("per-query", PER_QUERY_PRICE), _priced_url_agent("url-per-query", PER_QUERY_PRICE)],
+    ids=["bridge-per-query", "url-per-query"],
 )
 async def test_route_a2a_agents_bill_the_callers_allowed_base_model(
     httpx_transport: None, monkeypatch: pytest.MonkeyPatch, agent: AgentResponse, client_price: Mapping[str, object]
@@ -1049,6 +1045,59 @@ async def test_route_a2a_agents_bill_the_callers_allowed_base_model(
 
     assert response.usage.prompt_tokens > 0
     assert cost == pytest.approx(0.5 * (response.usage.prompt_tokens + response.usage.completion_tokens))
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("client_price", "billed_output_price"),
+    [({"base_model": "a2a-client-base-model"}, 0.0002), ({"output_cost_per_token": 1.0}, 1.0)],
+    ids=["base-model", "output-price-only"],
+)
+@pytest.mark.parametrize(
+    "agent",
+    [_priced_dbx_agent("per-token", PER_TOKEN_PRICE), _priced_url_agent("url-per-token", PER_TOKEN_PRICE)],
+    ids=["bridge", "url"],
+)
+async def test_route_a2a_agents_bill_their_own_token_price_for_every_side_the_caller_did_not_price(
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+    agent: AgentResponse,
+    client_price: Mapping[str, object],
+    billed_output_price: float,
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    respx.post(AGENT_URL).mock(return_value=httpx.Response(200, json=A2A_REPLY))
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "a2a-client-base-model",
+        {"input_cost_per_token": 0.5, "output_cost_per_token": 0.5, "litellm_provider": "openai", "mode": "chat"},
+    )
+
+    cost, response, _ = await _billed_chat_call(_registry_with(agent), agent.agent_name, client_price)
+
+    usage: Final = response.usage
+    assert usage.prompt_tokens > 0
+    assert cost == pytest.approx(usage.prompt_tokens * 0.0001 + usage.completion_tokens * billed_output_price)
+
+
+@respx.mock
+async def test_route_a2a_agent_that_answers_itself_is_billed_as_the_agent_when_a_fallback_is_set(
+    httpx_transport: None,
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+
+    cost, _, logging_obj = await _billed_chat_call(
+        _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE)),
+        "per-query",
+        {"fallbacks": ["databricks_agent/backup-agent"]},
+    )
+
+    assert cost == pytest.approx(0.05)
+    assert logging_obj.model_call_details["agent_id"] == "per-query-id"
 
 
 @respx.mock
@@ -1073,6 +1122,47 @@ async def test_route_a2a_agent_call_answered_by_a_fallback_model_bills_the_fallb
 
     assert response.choices[0].message.content == "pong"
     assert cost == pytest.approx(response.usage.prompt_tokens + response.usage.completion_tokens)
+    assert "agent_id" not in logging_obj.model_call_details
+
+
+FALLBACK_API_BASE: Final = "https://fallback.example.com/v1"
+FALLBACK_REPLY: Final = {
+    "id": "chatcmpl-fallback",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "a2a-fallback-model",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+}
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "agent",
+    [_priced_dbx_agent("per-token", PER_TOKEN_PRICE), _priced_url_agent("url-per-token", PER_TOKEN_PRICE)],
+    ids=["bridge", "url"],
+)
+async def test_route_a2a_agent_call_answered_by_an_unpriced_fallback_bills_the_fallback_at_its_own_price(
+    httpx_transport: None, monkeypatch: pytest.MonkeyPatch, agent: AgentResponse
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(404, json={"error_code": "RESOURCE_DOES_NOT_EXIST", "message": "no endpoint"})
+    )
+    respx.post(AGENT_URL).mock(return_value=httpx.Response(500, json={"error": "agent down"}))
+    respx.post(f"{FALLBACK_API_BASE}/chat/completions").mock(return_value=httpx.Response(200, json=FALLBACK_REPLY))
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "a2a-fallback-model",
+        {"input_cost_per_token": 0.5, "output_cost_per_token": 0.5, "litellm_provider": "openai", "mode": "chat"},
+    )
+    fallback: Final = {"model": "openai/a2a-fallback-model", "api_base": FALLBACK_API_BASE, "api_key": "sk-fallback"}
+
+    cost, response, logging_obj = await _billed_chat_call(
+        _registry_with(agent), agent.agent_name, {"fallbacks": [fallback]}
+    )
+
+    assert response.choices[0].message.content == "pong"
+    assert cost == pytest.approx(0.5 * (response.usage.prompt_tokens + response.usage.completion_tokens))
     assert "agent_id" not in logging_obj.model_call_details
 
 

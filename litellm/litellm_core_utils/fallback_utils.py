@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
@@ -9,6 +10,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 from litellm.litellm_core_utils.core_helpers import (
     filter_internal_params,
     safe_deep_copy,
+    without,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -33,16 +35,18 @@ async def async_completion_with_fallbacks(**kwargs):
     """
     # Extract and prepare parameters
     nested_kwargs: Final = kwargs.pop("kwargs", {})
-    original_model: Final = kwargs["model"]
+    original_model: Final[str] = kwargs["model"]
     model = original_model
     fallbacks: Final = [original_model] + nested_kwargs.pop("fallbacks", [])
     kwargs.pop("acompletion", None)  # Remove to prevent keyword conflicts
     litellm_call_id: Final = str(uuid.uuid4())
-    base_kwargs: Final = {**kwargs, **nested_kwargs, "litellm_call_id": litellm_call_id}
-
-    # fields to remove
-    base_kwargs.pop("model", None)  # Remove model as it will be set per fallback
-    litellm_logging_obj: Final = base_kwargs.pop("litellm_logging_obj", None)
+    request_kwargs: Final[Mapping[str, object]] = {**kwargs, **nested_kwargs, "litellm_call_id": litellm_call_id}
+    litellm_logging_obj: Final = request_kwargs.get("litellm_logging_obj")
+    base_kwargs: Final[Mapping[str, object]] = without(request_kwargs, "model", "litellm_logging_obj")
+    agent_price_kwargs: Final[frozenset[str]] = (
+        litellm_logging_obj.a2a_agent_price_kwargs if isinstance(litellm_logging_obj, Logging) else frozenset()
+    )
+    fallback_kwargs: Final[Mapping[str, object]] = without(base_kwargs, *agent_price_kwargs)
 
     # Try each fallback model
     most_recent_exception_str: str | None = None
@@ -50,7 +54,7 @@ async def async_completion_with_fallbacks(**kwargs):
         if attempted_fallbacks > 0 and isinstance(litellm_logging_obj, Logging):
             litellm_logging_obj.stop_billing_as_a2a_agent()
         try:
-            completion_kwargs = safe_deep_copy(base_kwargs)
+            completion_kwargs = safe_deep_copy(fallback_kwargs if attempted_fallbacks > 0 else base_kwargs)
             # Handle dictionary fallback configurations
             if isinstance(fallback, dict):
                 fallback_config = safe_deep_copy(dict(fallback))

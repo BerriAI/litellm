@@ -193,7 +193,7 @@ async def route_a2a_agent_request(
         raise ProxyModelNotFoundError(route=route_name, model_name=model_name, retryable_with_model_read_through=False)
 
     _bill_as_agent(data, agent, litellm_params)
-    data.update(_agent_prices_unless_the_client_set_one(litellm_params, data))
+    data.update(_agent_prices_the_client_left_unset(litellm_params, data))
     # Inject API base and route to litellm
     data["api_base"] = card_params["url"]
     verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
@@ -226,15 +226,16 @@ def _bill_as_agent(data: Mapping[str, object], agent: AgentResponse, litellm_par
     logging_obj.bill_as_a2a_agent(
         agent_id=agent.agent_id,
         cost_per_query=None if _client_sets_price(data) else litellm_params.get("cost_per_query"),
+        price_kwargs=frozenset(_agent_prices_the_client_left_unset(litellm_params, data)),
     )
 
 
-def _agent_prices_unless_the_client_set_one(
+def _agent_prices_the_client_left_unset(
     litellm_params: Mapping[str, object], data: Mapping[str, object]
 ) -> Mapping[str, object]:
-    if _client_sets_price(data):
-        return {}
-    return {key: value for key, value in litellm_params.items() if key in _CUSTOM_PRICING_PARAMS}
+    return {
+        key: value for key, value in litellm_params.items() if key in _CUSTOM_PRICING_PARAMS and data.get(key) is None
+    }
 
 
 def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:
