@@ -392,3 +392,14 @@ async def test_async_increment_pipeline_keeps_each_key_for_its_own_ttl() -> None
 
     assert cache.get_cache("minute") is None
     assert cache.get_cache("day") == 1
+
+
+@pytest.mark.parametrize("character", ("Ā", "界", "😀"))
+def test_cache_rejects_unicode_strings_exceeding_the_byte_limit(character: str) -> None:
+    cache: Final = InMemoryCache(max_size_per_item=1, clock=lambda: 100.0)
+    oversized: Final = character * 700
+    assert sys.getsizeof(oversized) > 1024
+    cache.set_cache("large", oversized)
+    assert cache.get_cache("large") is None
+    cache.set_cache("small", character * 10)
+    assert cache.get_cache("small") == character * 10
