@@ -49,8 +49,7 @@ impl Callback for Keeper {
     }
 }
 
-const SCRIPT: &str = r#"
-import asyncio
+const STUB: &str = r#"
 import sys
 import types
 from pathlib import Path
@@ -60,6 +59,11 @@ if "litellm" not in sys.modules:
     stub = types.ModuleType("litellm")
     stub.__path__ = [str(repo / "litellm")]
     sys.modules["litellm"] = stub
+"#;
+
+const SCRIPT: &str = r#"
+import asyncio
+from pathlib import Path
 
 from pydantic import BaseModel
 
@@ -123,6 +127,16 @@ fn keeper() -> Arc<Keeper> {
     })
 }
 
+fn stub_litellm(py: Python<'_>) {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+    let locals = PyDict::new(py);
+    locals.set_item("repo", repo.to_str().unwrap()).unwrap();
+    if let Err(error) = py.run(&CString::new(STUB).unwrap(), Some(&locals), Some(&locals)) {
+        error.display(py);
+        panic!("the litellm stub script failed");
+    }
+}
+
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
@@ -136,9 +150,9 @@ fn a_payload_handed_by_reference_renders_as_safe_dumps_does_and_frees_on_release
     keeper: Arc<Keeper>,
 ) {
     let kept = Arc::clone(&keeper.kept);
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
     Python::initialize();
     let locals = Python::attach(|py| {
+        stub_litellm(py);
         let locals = PyDict::new(py);
         locals
             .set_item(
@@ -146,7 +160,6 @@ fn a_payload_handed_by_reference_renders_as_safe_dumps_does_and_frees_on_release
                 Bound::new(py, RustCallback::new(keeper).unwrap()).unwrap(),
             )
             .unwrap();
-        locals.set_item("repo", repo.to_str().unwrap()).unwrap();
         if let Err(error) = py.run(&CString::new(SCRIPT).unwrap(), Some(&locals), Some(&locals)) {
             error.display(py);
             panic!("the payload script failed");
@@ -202,6 +215,7 @@ fn a_payload_handed_by_reference_renders_as_safe_dumps_does_and_frees_on_release
 fn an_explicit_release_frees_the_handle_even_while_another_handle_is_held() {
     Python::initialize();
     let (first, second) = Python::attach(|py| {
+        stub_litellm(py);
         (
             payload::stash(PyDict::new(py).into_any().unbind()),
             payload::stash(py.None()),
