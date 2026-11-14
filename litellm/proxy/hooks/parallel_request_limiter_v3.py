@@ -45,7 +45,7 @@ from litellm.constants import (
     RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY,
 )
 from litellm.cost_calculator import get_usage_object
-from litellm.exceptions import ServiceUnavailableError
+from litellm.exceptions import RateLimitType, ServiceUnavailableError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
@@ -67,7 +67,7 @@ from litellm.litellm_core_utils.token_counter import (
     offload_token_count,
     split_embedding_input_tokens,
 )
-from litellm.litellm_core_utils.total_deadline import total_timeout_held
+from litellm.litellm_core_utils.total_deadline import current_total_deadline, total_timeout_held
 from litellm.llms.azure.ptu_capacity import normalized_tokens
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -91,6 +91,18 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     BatchEnqueuedTokenStore,
     batch_response_view,
     canonical_provider_batch_id,
+)
+from litellm.proxy.hooks.model_concurrency_metrics import (
+    DEFAULT_MODEL_CONCURRENCY_QUEUE_OBSERVER,
+    ModelConcurrencyQueueObserver,
+)
+from litellm.proxy.hooks.model_concurrency_queue import (
+    MODEL_CONCURRENCY_DESCRIPTOR_KEY,
+    MODEL_CONCURRENCY_QUEUE_POLL_INTERVAL_SECONDS,
+    ModelConcurrencyLimit,
+    ModelConcurrencyQueueAdmission,
+    ModelConcurrencySlot,
+    model_concurrency_limits_from_general_settings,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit, socket_session_usage
 from litellm.proxy.spend_tracking.input_tokens import (
@@ -614,6 +626,7 @@ class RequestRateLimiterStash:
     call_type: str | None = None
     rate_limit_response: RateLimitResponse | None = None
     parallel_slot: ParallelSlotAcquisition | None = None
+    model_concurrency_slot: ModelConcurrencySlot | None = None
     parallel_slot_reused_at: datetime | None = None
     parallel_slot_release_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
     reserved_tokens: int = 0
@@ -869,6 +882,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         fail_closed_resolver: Callable[[], bool] = _fail_closed_rate_limit_enforcement_from_general_settings,
         force_hash_tag_grouping_resolver: Callable[[], bool] = _force_redis_hash_tag_grouping_from_litellm_settings,
         rate_limit_store: RateLimitStore | None = None,
+        model_concurrency_limit_resolver: Callable[
+            [], Mapping[str, ModelConcurrencyLimit]
+        ] = model_concurrency_limits_from_general_settings,
+        model_concurrency_queue_observer: ModelConcurrencyQueueObserver = DEFAULT_MODEL_CONCURRENCY_QUEUE_OBSERVER,
+        model_concurrency_queue_admission: ModelConcurrencyQueueAdmission | None = None,
     ):
         self.internal_usage_cache = internal_usage_cache
         self._time_provider = time_provider or datetime.now
@@ -879,6 +897,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self._ptu_team_ceiling_resolver = ptu_team_ceiling_resolver
         self._fail_closed_resolver = fail_closed_resolver
         self._force_hash_tag_grouping_resolver = force_hash_tag_grouping_resolver
+        self._model_concurrency_limit_resolver = model_concurrency_limit_resolver
+        self._model_concurrency_queue_observer = model_concurrency_queue_observer
+        self._model_concurrency_queue_admission = model_concurrency_queue_admission or ModelConcurrencyQueueAdmission()
         self.rate_limits: Final = rate_limit_store or RateLimitStore(
             connect(internal_usage_cache.dual_cache.redis_cache).rate_limits(
                 internal_usage_cache.dual_cache.default_in_memory_ttl
@@ -1840,6 +1861,206 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             statuses.append(self._gauge_status(gauge, in_flight + 1, "OK"))
         return RateLimitResponse(overall_code="OK", statuses=statuses)
 
+    async def _await_model_concurrency_slot(
+        self,
+        requested_model: str | None,
+    ) -> ModelConcurrencySlot | None:
+        if requested_model is None:
+            return None
+        limits: Final = self._model_concurrency_limit_resolver()
+        if not limits:
+            return None
+        if "," in requested_model:
+            # The router dispatches these sub-calls itself, so they never reach
+            # this hook and one slot cannot cover them.
+            limited_groups: Final = self._limited_batch_model_groups(requested_model, limits)
+            if limited_groups:
+                raise self._model_concurrency_batch_error(limited_groups, requested_model)
+            return None
+        model_group: Final = self._model_group_resolver(requested_model) or requested_model
+        configured: Final = limits.get(model_group)
+        if configured is None:
+            return None
+        return await self._acquire_model_concurrency_slot(model_group, configured, requested_model)
+
+    def _limited_batch_model_groups(
+        self,
+        requested_model: str,
+        limits: Mapping[str, ModelConcurrencyLimit],
+    ) -> tuple[str, ...]:
+        groups: set[str] = set()
+        for name in requested_model.split(","):
+            stripped = name.strip()
+            if not stripped:
+                continue
+            group = self._model_group_resolver(stripped) or stripped
+            if group in limits:
+                groups.add(group)
+        return tuple(sorted(groups))
+
+    async def _acquire_model_concurrency_slot(
+        self,
+        model_group: str,
+        configured: ModelConcurrencyLimit,
+        requested_model: str | None,
+    ) -> ModelConcurrencySlot:
+        scope: Final = RateLimitScope(MODEL_CONCURRENCY_DESCRIPTOR_KEY, model_group)
+        slot_id: Final = uuid.uuid4().hex
+        if await self._try_acquire_model_concurrency_slot(scope, configured.limit, slot_id):
+            return ModelConcurrencySlot(scope=scope, slot_id=slot_id)
+        if not self._model_concurrency_queue_admission.try_enter(model_group, configured.max_queue_size):
+            raise self._model_concurrency_queue_full_error(model_group, configured, requested_model)
+        self._model_concurrency_queue_observer.request_queued(model_group)
+        try:
+            await self._wait_for_model_concurrency_slot(scope, configured, requested_model, slot_id)
+        finally:
+            self._model_concurrency_queue_observer.request_dequeued(model_group)
+            self._model_concurrency_queue_admission.leave(model_group)
+        return ModelConcurrencySlot(scope=scope, slot_id=slot_id)
+
+    async def _wait_for_model_concurrency_slot(
+        self,
+        scope: RateLimitScope,
+        configured: ModelConcurrencyLimit,
+        requested_model: str | None,
+        slot_id: str,
+    ) -> None:
+        loop: Final = asyncio.get_running_loop()
+        budget: Final = self._model_concurrency_wait_budget(configured)
+        deadline: Final = loop.time() + budget
+        while not await self._try_acquire_model_concurrency_slot(scope, configured.limit, slot_id):
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise self._model_concurrency_timeout_error(scope.descriptor_value, configured, requested_model, budget)
+            await asyncio.sleep(min(MODEL_CONCURRENCY_QUEUE_POLL_INTERVAL_SECONDS, remaining))
+
+    @staticmethod
+    def _model_concurrency_wait_budget(configured: ModelConcurrencyLimit) -> float:
+        """``total_timeout_held`` disarms the deadline for the whole pre-call hook, so clamp the
+        wait to what the request has left. Otherwise a ten-second request can queue for a minute,
+        take a slot, and be killed right after the hook."""
+        total_deadline: Final = current_total_deadline()
+        if total_deadline is None:
+            return configured.queue_timeout_seconds
+        remaining: Final = total_deadline.remaining_seconds()
+        if remaining is None:
+            return configured.queue_timeout_seconds
+        return min(configured.queue_timeout_seconds, remaining)
+
+    async def _try_acquire_model_concurrency_slot(
+        self,
+        scope: RateLimitScope,
+        limit: int,
+        slot_id: str,
+    ) -> bool:
+        gauge: Final = ParallelRequestGauge(scope=scope, limit=limit, descriptor_key=MODEL_CONCURRENCY_DESCRIPTOR_KEY)
+        if self.rate_limits.has_redis:
+            try:
+                reply: Final = await self.rate_limits.parallel_acquire(
+                    ((scope, limit),), PARALLEL_REQUEST_SLOT_TTL_SECONDS, slot_id, batch=Batch.NONE
+                )
+            except Exception as e:  # noqa: BLE001 - a Redis failure degrades to the in-memory registry, never a 500
+                self._reject_if_rate_limit_unverifiable("model_concurrency_acquire_script", e)
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "model_concurrency_acquire_script failed, using the in-memory registry",
+                    e,
+                )
+            else:
+                if isinstance(reply, GaugeOverLimit):
+                    return False
+                self.rate_limits.set_local(scope.gauge, reply.in_flight[0], PARALLEL_REQUEST_SLOT_TTL_SECONDS)
+                return True
+        async with self._check_and_increment_lock:
+            return self._acquire_parallel_slots_in_memory([gauge], slot_id)["overall_code"] == "OK"
+
+    async def _release_stashed_model_concurrency_slot(self, stash: RequestRateLimiterStash) -> None:
+        slot: Final = stash.model_concurrency_slot
+        if slot is None:
+            return
+        stash.model_concurrency_slot = None  # rebind-ok: marks this request's slot as released
+        if self.rate_limits.has_redis:
+            try:
+                remaining: Final = await self.rate_limits.parallel_release(
+                    (slot.scope,), slot.slot_id, batch=Batch.NONE
+                )
+            except Exception as e:  # noqa: BLE001 - any Redis failure degrades to the in-memory release, never a 500
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "model_concurrency_release_script failed, releasing in memory",
+                    e,
+                )
+            else:
+                self._mirror_released_parallel_slots((slot.scope,), remaining)
+                return
+        await self._release_parallel_request_slots_in_memory((slot.scope,), slot.slot_id)
+
+    def _model_concurrency_timeout_error(
+        self,
+        model_group: str,
+        configured: ModelConcurrencyLimit,
+        requested_model: str | None,
+        waited_seconds: float,
+    ) -> ProxyRateLimitError:
+        resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(requested_model)
+        detail: Final = (
+            f"Model {model_group} is at its concurrency limit of {configured.limit} requests. "
+            f"No slot freed up within {waited_seconds:g} seconds."
+            + (
+                " That is all the request's total_timeout left for waiting."
+                if waited_seconds < configured.queue_timeout_seconds
+                else ""
+            )
+        )
+        return ProxyRateLimitError(
+            detail=detail,
+            headers={"retry-after": "1", "rate_limit_type": RateLimitType.CONCURRENT_REQUESTS.value},
+            rate_limit_type=RateLimitType.CONCURRENT_REQUESTS,
+            model=resolved_model,
+            llm_provider=llm_provider,
+            descriptor_key=MODEL_CONCURRENCY_DESCRIPTOR_KEY,
+        )
+
+    def _model_concurrency_queue_full_error(
+        self,
+        model_group: str,
+        configured: ModelConcurrencyLimit,
+        requested_model: str | None,
+    ) -> ProxyRateLimitError:
+        resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(requested_model)
+        return ProxyRateLimitError(
+            detail=(
+                f"Model {model_group} is at its concurrency limit of {configured.limit} requests and "
+                f"{configured.max_queue_size} requests are already waiting for a slot. Retry later."
+            ),
+            headers={"retry-after": "1", "rate_limit_type": RateLimitType.CONCURRENT_REQUESTS.value},
+            rate_limit_type=RateLimitType.CONCURRENT_REQUESTS,
+            model=resolved_model,
+            llm_provider=llm_provider,
+            descriptor_key=MODEL_CONCURRENCY_DESCRIPTOR_KEY,
+        )
+
+    def _model_concurrency_batch_error(
+        self,
+        model_groups: Sequence[str],
+        requested_model: str,
+    ) -> ProxyRateLimitError:
+        resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(requested_model)
+        return ProxyRateLimitError(
+            detail=(
+                "A comma-separated model request cannot be admitted because "
+                f"{', '.join(model_groups)} has model_concurrency configured, and one proxy request "
+                "cannot hold one slot per dispatched model. Send one request per model instead."
+            ),
+            headers={"retry-after": "1", "rate_limit_type": RateLimitType.CONCURRENT_REQUESTS.value},
+            rate_limit_type=RateLimitType.CONCURRENT_REQUESTS,
+            model=resolved_model,
+            llm_provider=llm_provider,
+            descriptor_key=MODEL_CONCURRENCY_DESCRIPTOR_KEY,
+        )
+
     async def _release_stashed_parallel_slot(
         self,
         stash: RequestRateLimiterStash | None,
@@ -1851,6 +2072,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if stash is None:
             return
         async with stash.parallel_slot_release_lock:
+            if not _ended_before_slot_reuse(round_ended_at, stash.parallel_slot_reused_at):
+                await self._release_stashed_model_concurrency_slot(stash)
             acquisition: Final = stash.parallel_slot
             if acquisition is None or _ended_before_slot_reuse(round_ended_at, stash.parallel_slot_reused_at):
                 return
@@ -4220,6 +4443,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         gauges=parallel_gauges,
                     )
 
+        # After the key/team checks above so a tenant's own limits bound how many
+        # of its requests wait, and outside the descriptors block so deployments
+        # without key/team limits still get the model cap.
+        if not reuses_request_slot and stash.model_concurrency_slot is None:
+            stash.model_concurrency_slot = await self._await_model_concurrency_slot(requested_model)
+
+        if descriptors:
             # ----------------------------------------------------------------
             # TPM token reservation
             # Atomically reserve estimated tokens upfront so concurrent

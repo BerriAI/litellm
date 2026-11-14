@@ -123,6 +123,12 @@ class TotalDeadline:
     def allows_wait(self, seconds: float) -> bool:
         return self._released or self._clock() + seconds < self._at
 
+    def remaining_seconds(self) -> float | None:
+        """Seconds left before the deadline fires, or None when nothing bounds the request."""
+        if self._released:
+            return None
+        return max(0.0, self._at - self._clock())
+
     @contextlib.contextmanager
     def held(self) -> Generator[None, None, None]:
         """Run the block without interrupting it; a deadline that passed meanwhile fires right after it."""
