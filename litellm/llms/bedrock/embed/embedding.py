@@ -3,11 +3,12 @@ Handles embedding calls to Bedrock's `/invoke` endpoint
 """
 
 import copy
+import functools
 import json
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Final, get_args, overload
+from typing import TYPE_CHECKING, ClassVar, Final, TypeAlias, get_args, overload
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -159,17 +160,34 @@ def _nova_model_input_with_options(
     }
 
 
-def _combined_field(extra_value: object, body_value: object) -> object:
+_FieldCombiner: TypeAlias = Callable[[object, object], object]
+_COMBINED_OBJECT_DEPTH: Final = 6
+
+
+def _combiner_over(combine_nested: _FieldCombiner) -> _FieldCombiner:
     """A generated object with the caller's settings for the same object added. The generated fields win, and the
     caller cannot add a field that carries content to embed."""
-    extra: Final = _fields(extra_value)
-    body: Final = _fields(body_value)
-    if not extra or not body:
-        return body_value
-    return {
-        **{k: v for k, v in extra.items() if k not in _NESTED_CONTENT_KEYS},
-        **{k: _combined_field(extra.get(k), v) for k, v in body.items()},
-    }
+
+    def combined_field(extra_value: object, body_value: object) -> object:
+        extra: Final = _fields(extra_value)
+        body: Final = _fields(body_value)
+        if not extra or not body:
+            return body_value
+        return {
+            **{k: v for k, v in extra.items() if k not in _NESTED_CONTENT_KEYS},
+            **{k: combine_nested(extra.get(k), v) for k, v in body.items()},
+        }
+
+    return combined_field
+
+
+def _generated_value(_extra_value: object, body_value: object) -> object:
+    return body_value
+
+
+_COMBINED_FIELD: Final = functools.reduce(
+    lambda nested, _: _combiner_over(nested), range(_COMBINED_OBJECT_DEPTH), _generated_value
+)
 
 
 def _with_extra_body(
@@ -178,7 +196,7 @@ def _with_extra_body(
     """The provider body over the ``extra_body`` fields. An object on both sides is combined field by field, and the
     generated fields win. On Nova the caller's embedding params are combined with the generated ones the same way."""
     if provider != "nova":
-        return {**extra_body, **{k: _combined_field(extra_body.get(k), v) for k, v in body.items()}}
+        return {**extra_body, **{k: _COMBINED_FIELD(extra_body.get(k), v) for k, v in body.items()}}
     merged: Final = {**extra_body, **body}
     caller: Final = _nova_model_input(extra_body)
     if "modelInput" in body:
