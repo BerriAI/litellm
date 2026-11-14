@@ -187,22 +187,23 @@ async def async_completion_with_fallbacks(**kwargs: object) -> object:
         raise _all_attempts_failed(last_error) from last_error
 
 
-def _without_cache_writes(request: Mapping[str, object]) -> Mapping[str, object]:
-    return {**request, "cache": {**_REQUEST_KWARGS.validate_python(request.get("cache") or {}), "no-store": True}}
+def checked_fallback_attempt(request_kwargs: Mapping[str, object], call_type: str, response: object) -> object:
+    if call_type != CallTypes.completion.value or request_kwargs.get(FALLBACK_ATTEMPT_KWARG) is not True:
+        return response
+    from litellm.utils import async_post_call_success_deployment_hook
+
+    return run_async_function(
+        async_post_call_success_deployment_hook, request_kwargs, response, CallTypes.completion, include_v2=True
+    )
 
 
-def _completion_with_deployment_hooks(request_kwargs: Mapping[str, object]) -> object:
-    from litellm.utils import async_post_call_success_deployment_hook, async_pre_call_deployment_hook
+def _completion_with_pre_call_hooks(request_kwargs: Mapping[str, object]) -> object:
+    from litellm.utils import async_pre_call_deployment_hook
 
     request: Final = _REQUEST_KWARGS.validate_python(
         run_async_function(async_pre_call_deployment_hook, request_kwargs, CallTypes.completion.value, include_v2=True)
     )
-    if request.get("stream"):
-        return litellm.completion(**request)
-    response: Final = litellm.completion(**_without_cache_writes(request))
-    return run_async_function(
-        async_post_call_success_deployment_hook, request, response, CallTypes.completion, include_v2=True
-    )
+    return litellm.completion(**request)
 
 
 def completion_with_fallbacks(**kwargs: object) -> object:
@@ -210,7 +211,7 @@ def completion_with_fallbacks(**kwargs: object) -> object:
     primary: Final = _fallback_attempt(plan, plan.original_model)
     try:
         return add_fallback_headers_to_response(
-            response=_completion_with_deployment_hooks(primary.kwargs), attempted_fallbacks=0
+            response=_completion_with_pre_call_hooks(primary.kwargs), attempted_fallbacks=0
         )
     except Exception as primary_error:  # noqa: BLE001  # every failed attempt moves on to the next fallback
         verbose_logger.exception("Fallback attempt failed for model %s: %s", primary.model, primary_error)
@@ -218,7 +219,7 @@ def completion_with_fallbacks(**kwargs: object) -> object:
         for attempted_fallbacks, attempt in enumerate(_fallback_attempts(plan), start=1):
             try:
                 return add_fallback_headers_to_response(
-                    response=_completion_with_deployment_hooks(attempt.kwargs), attempted_fallbacks=attempted_fallbacks
+                    response=_completion_with_pre_call_hooks(attempt.kwargs), attempted_fallbacks=attempted_fallbacks
                 )
             except Exception as fallback_error:  # noqa: BLE001  # any failed attempt moves on to the next fallback
                 verbose_logger.exception("Fallback attempt failed for model %s: %s", attempt.model, fallback_error)

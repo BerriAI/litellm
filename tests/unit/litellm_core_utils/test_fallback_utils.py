@@ -1081,7 +1081,9 @@ class _ConcurrentSyncSuccessRecorder(CustomLogger):
         self.models: list[object] = []
         self._pair_concurrent_logs: Final = threading.Barrier(2, timeout=0.5)
 
-    def logging_hook(self, kwargs: dict[str, object], result: object, call_type: str) -> tuple[dict[str, object], object]:
+    def logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
         with contextlib.suppress(threading.BrokenBarrierError):
             _ = self._pair_concurrent_logs.wait()
         return kwargs, result
@@ -1190,6 +1192,52 @@ def test_completion_with_fallbacks_never_caches_an_answer_its_guardrail_rejected
         _ = _completion_checked_by_the_rejecting_guardrail()
 
     assert _requested_models(route) == ("first", "second", "first", "second")
+
+
+class _SyncAnswerRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.answers: list[object] = []
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.answers.append(
+            response_obj.choices[0].message.content if isinstance(response_obj, ModelResponse) else None
+        )
+
+
+@pytest.mark.parametrize(
+    ("guardrail_class", "logged_answers"),
+    [(_RedactingGuardrail, ["[CHECKED]"]), (_RejectingGuardrail, [])],
+    ids=["rewritten", "rejected"],
+)
+@pytest.mark.timeout(30, method="thread")
+def test_completion_with_fallbacks_logs_only_the_answer_its_guardrail_returned(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    guardrail_class: type[CustomGuardrail],
+    logged_answers: list[str],
+) -> None:
+    guardrail: Final = guardrail_class()
+    recorder: Final = _SyncAnswerRecorder()
+    logging_executor: Final = ThreadPoolExecutor(max_workers=2)
+    monkeypatch.setattr(litellm.utils, "executor", logging_executor)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail, recorder])
+    _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_replies((None, "raw answer")))
+
+    with contextlib.suppress(Exception):
+        _ = python_completion(
+            model="openai/first",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="test-key",
+            fallbacks=["openai/second"],
+            guardrails=[guardrail.guardrail_name],
+        )
+    logging_executor.shutdown(wait=True)
+
+    assert recorder.answers == logged_answers
 
 
 @pytest.mark.timeout(30, method="thread")

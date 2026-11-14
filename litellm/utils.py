@@ -105,7 +105,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
-from litellm.litellm_core_utils.fallback_utils import uses_fallbacks
+from litellm.litellm_core_utils.fallback_utils import checked_fallback_attempt, uses_fallbacks
 from litellm.litellm_core_utils.get_model_cost_map import (
     GetModelCostMap,
     fetch_registration_document,
@@ -2414,17 +2414,18 @@ def client(original_function):
                 original_function=original_function,
                 rules_obj=rules_obj,
             )
+            checked_result: Final = checked_fallback_attempt(kwargs, call_type, result)
 
             # [OPTIONAL] ADD TO CACHE
             _llm_caching_handler.sync_set_cache(
-                result=result,
+                result=checked_result,
                 args=args,
                 kwargs=kwargs,
             )
 
             _update_response_metadata: Final[_ResponseMetadataUpdater] = litellm_utils.update_response_metadata
             _update_response_metadata(
-                result=result,
+                result=checked_result,
                 logging_obj=logging_obj,
                 model=model,
                 kwargs=kwargs,
@@ -2443,12 +2444,12 @@ def client(original_function):
                 executor.submit(
                     ctx.run,
                     logging_obj.success_handler,
-                    result,
+                    checked_result,
                     start_time,
                     end_time,
                 )
             # RETURN RESULT
-            return result
+            return checked_result
         except Exception as e:
             if call_type == CallTypes.completion.value:
                 num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
