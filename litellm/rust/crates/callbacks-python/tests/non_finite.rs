@@ -5,7 +5,7 @@ use litellm_callbacks::{
     Callback, CallbackError, Field, FieldSet, Hook, HookInput, HookOutput, Manifest, Patch,
     Selection, Subscription, Verdict, typed,
 };
-use litellm_callbacks_python::NativeCallback;
+use litellm_callbacks_python::RustCallback;
 use pyo3::{prelude::*, types::PyDict};
 use rstest::rstest;
 
@@ -40,7 +40,7 @@ import math
 
 
 async def handle():
-    return await native.handle(
+    return await rust.handle(
         "pre_call",
         {"budget_reservation": {"reserved_cost": float("inf"), "entries": [{"applied_adjustment": float("nan")}]}},
         None,
@@ -72,8 +72,8 @@ fn a_non_finite_reservation_cost_reads_and_writes_back_as_a_python_float() {
         let locals = PyDict::new(py);
         locals
             .set_item(
-                "native",
-                Bound::new(py, NativeCallback::new(std::sync::Arc::new(echo)).unwrap()).unwrap(),
+                "rust",
+                Bound::new(py, RustCallback::new(std::sync::Arc::new(echo)).unwrap()).unwrap(),
             )
             .unwrap();
         if let Err(error) = py.run(&CString::new(SCRIPT).unwrap(), Some(&locals), Some(&locals)) {

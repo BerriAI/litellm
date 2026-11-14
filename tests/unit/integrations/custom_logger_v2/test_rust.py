@@ -46,12 +46,12 @@ from litellm.integrations.custom_logger_v2.legacy import (
     run_subscribers,
 )
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
-from litellm.integrations.custom_logger_v2.native import (
+from litellm.integrations.custom_logger_v2.rust import (
     ABORT_ERRORS,
-    NativeLogger,
+    RustLogger,
     WireAbort,
     contract_table,
-    native_logger,
+    rust_logger,
     register_abort_error,
     verdict,
 )
@@ -115,12 +115,10 @@ class Handle:
         if hook != "pre_call":
             return None
         if model == "blocked":
-            return {
-                "abort": {"status": 403, "message": "blocked", "code": "native_block", "headers": {}, "error": None}
-            }
+            return {"abort": {"status": 403, "message": "blocked", "code": "rust_block", "headers": {}, "error": None}}
         if isinstance(state, dict):
             state["model"] = model
-        return {"patch": {"ops": [{"op": "set", "field": "model", "value": f"native/{model}"}]}}
+        return {"patch": {"ops": [{"op": "set", "field": "model", "value": f"rust/{model}"}]}}
 
 
 class Recorder(CustomLogger):
@@ -150,13 +148,13 @@ def test_the_python_enums_match_the_contract_rust_also_checks() -> None:
     assert contract_table() == json.loads(CONTRACT.read_text())
 
 
-def test_a_native_logger_takes_its_declarations_from_the_rust_manifest() -> None:
-    logger: Final = native_logger(Handle())
+def test_a_rust_logger_takes_its_declarations_from_the_rust_manifest() -> None:
+    logger: Final = rust_logger(Handle())
     manifest: Final = build_manifest(logger)
 
-    assert isinstance(logger, NativeLogger)
+    assert isinstance(logger, RustLogger)
     assert isinstance(logger, CustomLoggerV2)
-    assert manifest.selection.name == "native_example"
+    assert manifest.selection.name == "rust_example"
     assert manifest.selection.activation is Activation.required
     assert set(manifest.subscriptions) == {Hook.pre_call, Hook.attempt_ended}
     pre_call: Final = manifest.subscriptions[Hook.pre_call]
@@ -168,20 +166,20 @@ def test_a_native_logger_takes_its_declarations_from_the_rust_manifest() -> None
     assert manifest.request_state is not None
 
 
-def test_a_native_built_twice_lands_in_an_event_list_once(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_rust_built_twice_lands_in_an_event_list_once(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "_async_success_callback", [])
-    first: Final = native_logger(Handle())
+    first: Final = rust_logger(Handle())
 
-    for logger in (first, native_logger(Handle())):
+    for logger in (first, rust_logger(Handle())):
         litellm.logging_callback_manager.add_litellm_async_success_callback(logger)
 
     assert litellm._async_success_callback == [first]
 
 
-async def test_a_native_logger_runs_at_its_position_between_two_legacy_loggers() -> None:
+async def test_a_rust_logger_runs_at_its_position_between_two_legacy_loggers() -> None:
     seen: Final[list[str]] = []
     handle: Final = Handle()
-    callbacks: Final[list[object]] = [Recorder("first", seen), native_logger(handle), Recorder("last", seen)]
+    callbacks: Final[list[object]] = [Recorder("first", seen), rust_logger(handle), Recorder("last", seen)]
     data: Final[dict[str, object]] = {"model": "gpt"}
 
     result: Final = await run_subscribers(
@@ -189,7 +187,7 @@ async def test_a_native_logger_runs_at_its_position_between_two_legacy_loggers()
     )
 
     assert kwargs_after(result) is data
-    assert seen == ["first gpt", "last native/gpt"]
+    assert seen == ["first gpt", "last rust/gpt"]
     assert handle.calls[0][1] == {"model": "gpt"}
     assert handle.calls[0][2] is not None
     assert handle.calls[0][2]["ids"] == {
@@ -201,9 +199,9 @@ async def test_a_native_logger_runs_at_its_position_between_two_legacy_loggers()
     }
 
 
-async def test_a_native_abort_stops_the_line_and_becomes_the_proxy_http_error() -> None:
+async def test_a_rust_abort_stops_the_line_and_becomes_the_proxy_http_error() -> None:
     seen: Final[list[str]] = []
-    callbacks: Final[list[object]] = [native_logger(Handle()), Recorder("last", seen)]
+    callbacks: Final[list[object]] = [rust_logger(Handle()), Recorder("last", seen)]
 
     result: Final = await run_subscribers(
         hook_subscribers(Hook.pre_call, callbacks),
@@ -220,7 +218,7 @@ async def test_a_native_abort_stops_the_line_and_becomes_the_proxy_http_error() 
 
 async def test_a_projection_hands_rust_a_port_chosen_view_of_a_field() -> None:
     handle: Final = Handle()
-    callbacks: Final[list[object]] = [native_logger(handle, MappingProxyType({Field.model: lambda value: f"{value}!"}))]
+    callbacks: Final[list[object]] = [rust_logger(handle, MappingProxyType({Field.model: lambda value: f"{value}!"}))]
 
     _ = await run_subscribers(
         hook_subscribers(Hook.pre_call, callbacks), KwargsFields({"model": "gpt"}, PROXY_REQUEST_KEYS), _binding([])
@@ -294,9 +292,9 @@ def test_a_wire_verdict_becomes_the_step_0_outcome(wire: object, expected: Patch
     assert verdict(wire) == expected
 
 
-async def test_an_off_path_native_hook_sees_the_state_its_pre_call_wrote_in_the_same_scope() -> None:
+async def test_an_off_path_rust_hook_sees_the_state_its_pre_call_wrote_in_the_same_scope() -> None:
     handle: Final = Handle()
-    callbacks: Final[list[object]] = [Recorder("first", []), native_logger(handle)]
+    callbacks: Final[list[object]] = [Recorder("first", []), rust_logger(handle)]
     sink: Final = get_dispatcher().sink
 
     with request_scope():
@@ -305,7 +303,7 @@ async def test_an_off_path_native_hook_sees_the_state_its_pre_call_wrote_in_the_
         )
         _ = await run_subscribers(
             hook_subscribers(Hook.attempt_ended, callbacks, admit=Admit.every_entry),
-            KwargsFields({"model": "native/gpt"}, LOGGING_KEYS),
+            KwargsFields({"model": "rust/gpt"}, LOGGING_KEYS),
             _binding([]),
         )
     assert isinstance(sink, InProcessSink)
@@ -357,10 +355,10 @@ def test_the_proxy_scope_is_bound_for_the_request_and_reaches_its_logging_object
     assert (facts.ids.call_id, facts.kind.call_type, facts.target.model) == ("call-1", "acompletion", "gpt")
 
 
-async def test_typed_records_reach_the_native_with_the_python_values_json_mode_would_lose() -> None:
+async def test_typed_records_reach_the_rust_with_the_python_values_json_mode_would_lose() -> None:
     handle: Final = Handle()
-    logger: Final = native_logger(handle)
-    assert isinstance(logger, NativeLogger)
+    logger: Final = rust_logger(handle)
+    assert isinstance(logger, RustLogger)
     view: Final = SimpleNamespace(
         cost=Cost(response_cost=float("nan")),
         key_identity=KeyIdentity(team_id=10**20, end_user_id=float("inf"), rejected=("agent_id",)),
@@ -368,7 +366,7 @@ async def test_typed_records_reach_the_native_with_the_python_values_json_mode_w
         outcome=Outcome.success,
     )
 
-    _ = await logger.run_native(
+    _ = await logger.run_rust(
         Hook.attempt_ended,
         frozenset({Field.cost, Field.key_identity, Field.guardrail_info, Field.outcome}),
         view,
@@ -388,10 +386,10 @@ async def test_typed_records_reach_the_native_with_the_python_values_json_mode_w
     assert fields["outcome"] == "success"
 
 
-async def test_a_value_carried_as_its_text_reaches_the_native_as_text_and_truthiness() -> None:
+async def test_a_value_carried_as_its_text_reaches_the_rust_as_text_and_truthiness() -> None:
     handle: Final = Handle()
-    logger: Final = native_logger(handle)
-    assert isinstance(logger, NativeLogger)
+    logger: Final = rust_logger(handle)
+    assert isinstance(logger, RustLogger)
     view: Final = SimpleNamespace(
         key_identity=KeyIdentity(team_id=["t1"], team_priority={}),
         request_tags=(
@@ -408,7 +406,7 @@ async def test_a_value_carried_as_its_text_reaches_the_native_as_text_and_truthi
         budget_reservation=BudgetReservation(entries=(), entries_is_list=False),
     )
 
-    _ = await logger.run_native(
+    _ = await logger.run_rust(
         Hook.pre_call,
         frozenset({Field.key_identity, Field.request_tags, Field.budget_reservation}),
         view,
@@ -450,10 +448,10 @@ async def test_a_value_carried_as_its_text_reaches_the_native_as_text_and_truthi
     assert (reservation["entries"], reservation["entries_is_list"]) == ((), False)
 
 
-async def test_an_infinite_budget_reservation_reaches_the_native_as_a_python_float() -> None:
+async def test_an_infinite_budget_reservation_reaches_the_rust_as_a_python_float() -> None:
     handle: Final = Handle()
-    logger: Final = native_logger(handle)
-    assert isinstance(logger, NativeLogger)
+    logger: Final = rust_logger(handle)
+    assert isinstance(logger, RustLogger)
     view: Final = SimpleNamespace(
         budget_reservation=BudgetReservation(
             reserved_cost=float("inf"),
@@ -462,7 +460,7 @@ async def test_an_infinite_budget_reservation_reaches_the_native_as_a_python_flo
         )
     )
 
-    _ = await logger.run_native(
+    _ = await logger.run_rust(
         Hook.pre_call,
         frozenset({Field.budget_reservation}),
         view,

@@ -9,7 +9,7 @@ use litellm_callbacks::{
     Callback, Field, FieldSet, Hook, HookInput, HookOutput, Manifest, PayloadRef, RenderOptions,
     Selection, Subscription,
 };
-use litellm_callbacks_python::{NativeCallback, payload};
+use litellm_callbacks_python::{RustCallback, payload};
 use pyo3::{prelude::*, types::PyDict};
 use rstest::{fixture, rstest};
 
@@ -90,7 +90,7 @@ copy = dict(payload)
 
 
 async def handle():
-    return await native.handle("attempt_ended", {"standard_logging_payload_ref": copy}, None, None)
+    return await rust.handle("attempt_ended", {"standard_logging_payload_ref": copy}, None, None)
 
 
 asyncio.run(handle())
@@ -136,8 +136,8 @@ fn a_payload_handed_by_reference_renders_as_safe_dumps_does_and_frees_on_release
         let locals = PyDict::new(py);
         locals
             .set_item(
-                "native",
-                Bound::new(py, NativeCallback::new(keeper).unwrap()).unwrap(),
+                "rust",
+                Bound::new(py, RustCallback::new(keeper).unwrap()).unwrap(),
             )
             .unwrap();
         locals.set_item("repo", repo.to_str().unwrap()).unwrap();

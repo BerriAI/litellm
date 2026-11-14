@@ -37,7 +37,7 @@ struct Slot {
 
 enum Waiting {
     Nothing,
-    Native(AbortHandle),
+    Rust(AbortHandle),
     Host(Reply<HostReply>),
 }
 
@@ -53,7 +53,7 @@ pub(crate) struct HostedExecution {
 }
 
 fn out_of_order() -> PyErr {
-    PyRuntimeError::new_err("the native callback execution was resumed out of order")
+    PyRuntimeError::new_err("the rust callback execution was resumed out of order")
 }
 
 pub(crate) fn callback_error(error: CallbackError) -> PyErr {
@@ -119,7 +119,7 @@ impl HostedExecution {
     }
 
     fn cancel(&mut self) {
-        if let Waiting::Native(abort) = mem::replace(&mut self.waiting, Waiting::Nothing) {
+        if let Waiting::Rust(abort) = mem::replace(&mut self.waiting, Waiting::Nothing) {
             abort.abort();
         }
         let body = self.slot().body.take();
@@ -143,9 +143,9 @@ impl HostedExecution {
         let awaitable = run_async_value(py, async move {
             Abortable::new(resumed, registration)
                 .await
-                .map_err(|_| PyRuntimeError::new_err("the native callback execution was closed"))?
+                .map_err(|_| PyRuntimeError::new_err("the rust callback execution was closed"))?
         })?;
-        self.waiting = Waiting::Native(abort);
+        self.waiting = Waiting::Rust(abort);
         Ok(Some(ExecutionStep::Suspended(Suspension::Await(
             awaitable.unbind(),
         ))))
@@ -227,12 +227,12 @@ impl ExecutionBody for HostedExecution {
                     self.answer(py, reply, answer)?;
                     self.run(py, None)
                 }
-                (Waiting::Native(_), Some(Ok(_))) => {
+                (Waiting::Rust(_), Some(Ok(_))) => {
                     let outcome = self.landed()?;
                     self.run(py, Some(outcome))
                 }
-                (Waiting::Native(abort), Some(Err(error))) => {
-                    self.waiting = Waiting::Native(abort);
+                (Waiting::Rust(abort), Some(Err(error))) => {
+                    self.waiting = Waiting::Rust(abort);
                     self.cancel();
                     Err(error)
                 }

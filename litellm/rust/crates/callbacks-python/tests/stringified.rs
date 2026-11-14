@@ -9,7 +9,7 @@ use litellm_callbacks::{
     BudgetReservation, Callback, Field, FieldSet, Hook, HookInput, HookOutput, LoggedKeyIdentity,
     Manifest, ReservationEntry, Scalar, Selection, Subscription, typed,
 };
-use litellm_callbacks_python::NativeCallback;
+use litellm_callbacks_python::RustCallback;
 use pyo3::{prelude::*, types::PyDict};
 use rstest::rstest;
 
@@ -59,7 +59,7 @@ for name, path in (("litellm", repo / "litellm"), ("litellm.integrations", repo 
 from litellm.integrations.custom_logger_v2 import Field, Hook
 from litellm.integrations.custom_logger_v2.call import CallContext
 from litellm.integrations.custom_logger_v2.derivations import budget_reservation, logged_key_identity, request_tags
-from litellm.integrations.custom_logger_v2.native import native_logger
+from litellm.integrations.custom_logger_v2.rust import rust_logger
 from litellm.integrations.custom_logger_v2.slots import HookArgs
 
 
@@ -84,7 +84,7 @@ view = types.SimpleNamespace(
     budget_reservation=budget_reservation(HookArgs(auth=auth)),
 )
 asyncio.run(
-    native_logger(globals()["native"]).run_native(
+    rust_logger(globals()["rust"]).run_rust(
         Hook.attempt_ended,
         frozenset({Field.logged_key_identity, Field.request_tags, Field.budget_reservation}),
         view,
@@ -132,8 +132,8 @@ fn values_python_derives_reach_rust_as_their_str_text_truthiness_and_iteration()
         let locals = PyDict::new(py);
         locals
             .set_item(
-                "native",
-                Bound::new(py, NativeCallback::new(Arc::clone(&recorder) as _).unwrap()).unwrap(),
+                "rust",
+                Bound::new(py, RustCallback::new(Arc::clone(&recorder) as _).unwrap()).unwrap(),
             )
             .unwrap();
         locals.set_item("repo", repo.to_str().unwrap()).unwrap();
@@ -148,7 +148,7 @@ fn values_python_derives_reach_rust_as_their_str_text_truthiness_and_iteration()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .take()
-        .expect("the native ran");
+        .expect("the rust ran");
     let identity = identity.unwrap();
     assert_eq!(identity.rejected, None);
     assert_eq!(

@@ -8,14 +8,14 @@ import pytest
 
 from litellm.integrations.custom_logger_v2 import Field, Hook, Patch
 from litellm.integrations.custom_logger_v2.call import CallContext
-from litellm.integrations.custom_logger_v2.native import HostedNative, NativeLogger, native_logger
+from litellm.integrations.custom_logger_v2.rust import HostedRust, RustLogger, rust_logger
 from litellm.rust_bridge.execution import Await, Complete, Step
 
 EXAMPLE_MANIFEST: Final = (
     Path(__file__).parents[4] / "litellm/rust/crates/callbacks-python/tests/round_trip/manifest.json"
 )
-_SEEN: Final[contextvars.ContextVar[str]] = contextvars.ContextVar("native_host_calls_seen", default="unset")
-_WRITTEN: Final[contextvars.ContextVar[str]] = contextvars.ContextVar("native_host_calls_written", default="unset")
+_SEEN: Final[contextvars.ContextVar[str]] = contextvars.ContextVar("rust_host_calls_seen", default="unset")
+_WRITTEN: Final[contextvars.ContextVar[str]] = contextvars.ContextVar("rust_host_calls_written", default="unset")
 
 
 def _patched(model: object) -> Complete:
@@ -51,7 +51,7 @@ class Execution:
         self.closed = True
 
 
-class Native:
+class Rust:
     def __init__(self) -> None:
         self.handled: list[str] = []
         self.started: list[tuple[str, object]] = []
@@ -95,8 +95,8 @@ class Unhosted:
         return asyncio.sleep(0, result=None)
 
 
-async def _pre_call(logger: NativeLogger) -> object:
-    return await logger.run_native(
+async def _pre_call(logger: RustLogger) -> object:
+    return await logger.run_rust(
         Hook.pre_call,
         frozenset({Field.model}),
         object(),
@@ -105,32 +105,32 @@ async def _pre_call(logger: NativeLogger) -> object:
 
 
 async def test_a_logger_without_a_host_awaits_handle_as_before() -> None:
-    native: Final = Native()
+    rust: Final = Rust()
 
-    outcome: Final = await _pre_call(native_logger(native))
+    outcome: Final = await _pre_call(rust_logger(rust))
 
     assert outcome == Patch().set(Field.model, "unhosted")
-    assert (native.handled, native.started) == (["pre_call"], [])
+    assert (rust.handled, rust.started) == (["pre_call"], [])
 
 
 async def test_a_logger_with_a_host_drives_the_execution_in_the_callers_task_and_context() -> None:
-    native: Final = Native()
+    rust: Final = Rust()
     host: Final = Host()
     _ = _SEEN.set("set by the caller")
 
-    outcome: Final = await _pre_call(native_logger(native, host=host))
+    outcome: Final = await _pre_call(rust_logger(rust, host=host))
 
     assert outcome == Patch().set(Field.model, "set by the caller")
-    assert native.handled == []
-    assert native.started == [("pre_call", host)]
+    assert rust.handled == []
+    assert rust.started == [("pre_call", host)]
     assert host.tasks == [asyncio.current_task()]
     assert _WRITTEN.get() == "written by the host"
-    assert native.executions[0].closed
+    assert rust.executions[0].closed
 
 
-async def test_a_host_on_a_native_that_cannot_serve_host_calls_is_a_type_error() -> None:
-    logger: Final = native_logger(Unhosted(), host=Host())
+async def test_a_host_on_a_rust_that_cannot_serve_host_calls_is_a_type_error() -> None:
+    logger: Final = rust_logger(Unhosted(), host=Host())
 
-    assert not isinstance(Unhosted(), HostedNative)
+    assert not isinstance(Unhosted(), HostedRust)
     with pytest.raises(TypeError, match="Unhosted cannot serve host calls"):
         _ = await _pre_call(logger)

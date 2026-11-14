@@ -1,6 +1,6 @@
 {
   "selection": {
-    "name": "native_example",
+    "name": "rust_example",
     "aliases": [],
     "activation": "required",
     "opt_out_by": ["admin"],

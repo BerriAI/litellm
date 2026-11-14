@@ -7,7 +7,7 @@ import types
 from pathlib import Path
 
 repo = Path(globals()["repo"])
-native = globals()["native"]
+rust = globals()["rust"]
 dropped = globals()["dropped"]
 
 for name, path in (("litellm", repo / "litellm"), ("litellm.integrations", repo / "litellm" / "integrations")):
@@ -27,7 +27,7 @@ from litellm.integrations.custom_logger_v2 import (
     plan_hook,
 )
 from litellm.integrations.custom_logger_v2.host import bind_scope, current_scope
-from litellm.integrations.custom_logger_v2.native import native_logger
+from litellm.integrations.custom_logger_v2.rust import rust_logger
 from litellm.integrations.custom_logger_v2.planner import Entry
 from litellm.rust_bridge.execution import Complete, run
 
@@ -133,7 +133,7 @@ def fresh_scope():
 
 async def pre_call(model, host, scope=None):
     scope = scope or fresh_scope()
-    logger = native_logger(native, host=host)
+    logger = rust_logger(rust, host=host)
     result = await scope.run_plan(Hook.pre_call, plan(logger), {Field.model: model}, None, ignore)
     return result.fields[Field.model]
 
@@ -226,7 +226,7 @@ def panic_contained():
     try:
         asyncio.run(pre_call("panic", Host()))
     except RuntimeError as error:
-        assert str(error) == "the native callback panicked: host calls panicked", str(error)
+        assert str(error) == "the rust callback panicked: host calls panicked", str(error)
     else:
         raise AssertionError("the panic did not raise")
 
@@ -274,18 +274,18 @@ def no_host_call():
     async def main():
         hosted = await pre_call("none", Host())
         unhosted = await pre_call("none", None)
-        step = native.start("pre_call", {"model": "none"}, None, None, Host()).send(None)
+        step = rust.start("pre_call", {"model": "none"}, None, None, Host()).send(None)
         return hosted, unhosted, step
 
     hosted, unhosted, step = asyncio.run(main())
-    assert hosted == unhosted == "native/none"
+    assert hosted == unhosted == "rust/none"
     assert isinstance(step, Complete)
-    assert model_of(step.value) == "native/none"
+    assert model_of(step.value) == "rust/none"
 
 
 def detached():
     async def main():
-        return await native.handle("pre_call", {"model": "plain"}, None, None)
+        return await rust.handle("pre_call", {"model": "plain"}, None, None)
 
     try:
         asyncio.run(main())
@@ -298,7 +298,7 @@ def detached():
 def sync_line():
     host = Host()
     VAR.set("set before the sync line")
-    logger = native_logger(native, host=host)
+    logger = rust_logger(rust, host=host)
     for scenario, expected in (("coroutine", "coroutine"), ("reads", "set before the sync line"), ("writes", "wrote")):
         fields = fresh_scope().run_plan_sync(Hook.pre_call, plan(logger), {Field.model: scenario}, None, ignore)
         assert fields[Field.model] == expected, scenario
@@ -308,7 +308,7 @@ def sync_line():
 def off_path_without_a_loop():
     host = Host()
     VAR.set("set before the off-path line")
-    logger = native_logger(native, host=host)
+    logger = rust_logger(rust, host=host)
     scope = fresh_scope()
     scope.run_plan_sync(Hook.attempt_ended, plan(logger, Hook.attempt_ended), {Field.model: "attempt"}, None, ignore)
     for _ in range(400):
@@ -322,10 +322,10 @@ def sync_driver():
     def streamless(execution, head):
         raise AssertionError("no stream")
 
-    assert model_of(run(native.start("pre_call", {"model": "plain"}, None, None, Host()), streamless)) == "plain"
+    assert model_of(run(rust.start("pre_call", {"model": "plain"}, None, None, Host()), streamless)) == "plain"
     host = AwaitingHost()
     try:
-        run(native.start("pre_call", {"model": "plain"}, None, None, host), streamless)
+        run(rust.start("pre_call", {"model": "plain"}, None, None, host), streamless)
     except RuntimeError as error:
         assert str(error) == "sync call suspended"
     else:

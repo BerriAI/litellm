@@ -4,7 +4,7 @@ import types
 from pathlib import Path
 
 repo = Path(globals()["repo"])
-native = globals()["native"]
+rust = globals()["rust"]
 
 for name, path in (("litellm", repo / "litellm"), ("litellm.integrations", repo / "litellm" / "integrations")):
     if name not in sys.modules:
@@ -33,11 +33,11 @@ from litellm.integrations.custom_logger_v2 import (
     build_manifest,
     plan_hook,
 )
-from litellm.integrations.custom_logger_v2.native import native_logger
+from litellm.integrations.custom_logger_v2.rust import rust_logger
 from litellm.integrations.custom_logger_v2.planner import Entry
 
 seen = []
-example = build_manifest(native_logger(native))
+example = build_manifest(rust_logger(rust))
 
 
 class Legacy:

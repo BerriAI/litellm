@@ -16,14 +16,14 @@ mod hosted;
 pub mod payload;
 mod pyjson;
 
-#[pyclass(frozen, name = "NativeCallback")]
-pub struct NativeCallback {
+#[pyclass(frozen, name = "RustCallback")]
+pub struct RustCallback {
     callback: Arc<dyn Callback>,
     manifest: String,
 }
 
-#[pyclass(frozen, name = "NativeRequestState")]
-pub struct NativeRequestState(RequestState);
+#[pyclass(frozen, name = "RustRequestState")]
+pub struct RustRequestState(RequestState);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RegisterError {
@@ -39,7 +39,7 @@ impl From<RegisterError> for PyErr {
     }
 }
 
-impl NativeCallback {
+impl RustCallback {
     pub fn new(callback: Arc<dyn Callback>) -> Result<Self, RegisterError> {
         let manifest = callback.manifest();
         manifest.validate()?;
@@ -80,7 +80,7 @@ fn panic_error(payload: Box<dyn Any + Send>) -> PyErr {
         .map(String::as_str)
         .or_else(|| payload.downcast_ref::<&str>().copied())
         .unwrap_or("panic from Rust code");
-    PyRuntimeError::new_err(format!("the native callback panicked: {message}"))
+    PyRuntimeError::new_err(format!("the rust callback panicked: {message}"))
 }
 
 fn contained<T>(run: impl FnOnce() -> PyResult<T>) -> PyResult<T> {
@@ -94,13 +94,13 @@ fn named<T: serde::de::DeserializeOwned>(name: &str) -> PyResult<T> {
 }
 
 #[pymethods]
-impl NativeCallback {
+impl RustCallback {
     fn manifest(&self) -> &str {
         &self.manifest
     }
 
-    fn request_state(&self) -> PyResult<Option<NativeRequestState>> {
-        contained(|| Ok(self.callback.request_state().map(NativeRequestState)))
+    fn request_state(&self) -> PyResult<Option<RustRequestState>> {
+        contained(|| Ok(self.callback.request_state().map(RustRequestState)))
     }
 
     #[pyo3(signature = (hook, fields, call, state, /))]
@@ -110,7 +110,7 @@ impl NativeCallback {
         hook: &str,
         fields: &Bound<'py, PyDict>,
         call: Option<&Bound<'py, PyAny>>,
-        state: Option<PyRef<'py, NativeRequestState>>,
+        state: Option<PyRef<'py, RustRequestState>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let input = contained(|| self.input(hook, fields, call, state))?;
         let render_loop = matches!(input.fields.payload(), Ok(Some(_)))
@@ -138,7 +138,7 @@ impl NativeCallback {
         hook: &str,
         fields: &Bound<'py, PyDict>,
         call: Option<&Bound<'py, PyAny>>,
-        state: Option<PyRef<'py, NativeRequestState>>,
+        state: Option<PyRef<'py, RustRequestState>>,
         host: Py<PyAny>,
     ) -> PyResult<Execution> {
         let input = contained(|| self.input(hook, fields, call, state))?;
@@ -152,13 +152,13 @@ impl NativeCallback {
     }
 }
 
-impl NativeCallback {
+impl RustCallback {
     fn input<'py>(
         &self,
         hook: &str,
         fields: &Bound<'py, PyDict>,
         call: Option<&Bound<'py, PyAny>>,
-        state: Option<PyRef<'py, NativeRequestState>>,
+        state: Option<PyRef<'py, RustRequestState>>,
     ) -> PyResult<HookInput> {
         let hook: Hook = named(hook)?;
         let subscription = self

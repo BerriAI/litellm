@@ -9,7 +9,7 @@ use litellm_callbacks::{
     Abort, Activation, Callback, Field, FieldSet, Hook, HookInput, HookOutput, Manifest, Patch,
     RequestState, Selection, Subscription, Verdict, typed,
 };
-use litellm_callbacks_python::NativeCallback;
+use litellm_callbacks_python::RustCallback;
 use pyo3::{prelude::*, types::PyDict};
 use serde_json::json;
 
@@ -27,7 +27,7 @@ impl Example {
             manifest: Manifest {
                 selection: Selection {
                     activation: Activation::Required,
-                    ..Selection::named("native_example")
+                    ..Selection::named("rust_example")
                 },
                 subscriptions: vec![
                     Subscription {
@@ -50,16 +50,16 @@ impl Example {
     fn pre_call(&self, input: &HookInput) -> HookOutput {
         let model = input.fields.get::<typed::Model>()?.unwrap_or_default();
         if model == "blocked" {
-            let mut abort = Abort::new(403, "blocked by the native example");
-            abort.code = Some("native_block".into());
-            abort.headers.insert("x-native".into(), "blocked".into());
+            let mut abort = Abort::new(403, "blocked by the rust example");
+            abort.code = Some("rust_block".into());
+            abort.headers.insert("x-rust".into(), "blocked".into());
             return Ok(Some(Verdict::Abort(abort)));
         }
         if let Some(seen) = input.state::<Seen>() {
             *seen.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(model.clone());
         }
         Ok(Some(Verdict::Patch(
-            Patch::default().set(Field::Model, json!(format!("native/{model}"))),
+            Patch::default().set(Field::Model, json!(format!("rust/{model}"))),
         )))
     }
 
@@ -103,7 +103,7 @@ impl Callback for Example {
 }
 
 #[rstest::rstest]
-fn a_native_callback_runs_at_its_list_position_between_two_legacy_entries() {
+fn a_rust_callback_runs_at_its_list_position_between_two_legacy_entries() {
     let example = Arc::new(Example::new());
     let log = Arc::clone(&example.log);
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
@@ -116,8 +116,8 @@ fn a_native_callback_runs_at_its_list_position_between_two_legacy_entries() {
         let locals = PyDict::new(py);
         locals
             .set_item(
-                "native",
-                Bound::new(py, NativeCallback::new(example).unwrap()).unwrap(),
+                "rust",
+                Bound::new(py, RustCallback::new(example).unwrap()).unwrap(),
             )
             .unwrap();
         locals.set_item("repo", repo.to_str().unwrap()).unwrap();
@@ -144,25 +144,25 @@ fn a_native_callback_runs_at_its_list_position_between_two_legacy_entries() {
         seen,
         [
             "first pre_call client",
-            "last pre_call native/gpt",
-            "first attempt_ended native/gpt",
-            "last attempt_ended native/gpt",
+            "last pre_call rust/gpt",
+            "first attempt_ended rust/gpt",
+            "last attempt_ended rust/gpt",
             "first pre_call client",
         ]
     );
-    assert_eq!(served_model, "native/gpt");
+    assert_eq!(served_model, "rust/gpt");
     assert_eq!(
         blocked,
         (
             403,
-            "blocked by the native example".to_owned(),
-            Some("native_block".to_owned()),
-            [("x-native".to_owned(), "blocked".to_owned())].into(),
+            "blocked by the rust example".to_owned(),
+            Some("rust_block".to_owned()),
+            [("x-rust".to_owned(), "blocked".to_owned())].into(),
         )
     );
     assert_eq!(
         *log.lock().unwrap_or_else(PoisonError::into_inner),
-        [r#"attempt_ended Some("gpt") Some("native/gpt") Some("call-1")"#]
+        [r#"attempt_ended Some("gpt") Some("rust/gpt") Some("call-1")"#]
     );
 }
 
@@ -186,9 +186,9 @@ impl Callback for Panicking {
 }
 
 #[rstest::rstest]
-fn a_panicking_native_callback_raises_a_runtime_error_python_can_contain() {
+fn a_panicking_rust_callback_raises_a_runtime_error_python_can_contain() {
     let panicking = Arc::new(Panicking(Manifest {
-        selection: Selection::named("native_panicking"),
+        selection: Selection::named("rust_panicking"),
         subscriptions: vec![Subscription {
             reads: FieldSet::of(&[Field::Usage]),
             ..Subscription::on(Hook::AttemptEnded)
@@ -207,10 +207,10 @@ def raised(run):
     return None
 
 async def handle():
-    return await native.handle("attempt_ended", {}, None, None)
+    return await rust.handle("attempt_ended", {}, None, None)
 
 handled = raised(lambda: asyncio.run(handle()))
-state = raised(native.request_state)
+state = raised(rust.request_state)
 "#,
     )
     .unwrap();
@@ -219,8 +219,8 @@ state = raised(native.request_state)
         let locals = PyDict::new(py);
         locals
             .set_item(
-                "native",
-                Bound::new(py, NativeCallback::new(panicking).unwrap()).unwrap(),
+                "rust",
+                Bound::new(py, RustCallback::new(panicking).unwrap()).unwrap(),
             )
             .unwrap();
         if let Err(error) = py.run(&script, Some(&locals), Some(&locals)) {
@@ -243,7 +243,7 @@ state = raised(native.request_state)
         (
             "RuntimeError".to_owned(),
             true,
-            "the native callback panicked: usage was None".to_owned()
+            "the rust callback panicked: usage was None".to_owned()
         )
     );
     assert_eq!(
@@ -251,7 +251,7 @@ state = raised(native.request_state)
         (
             "RuntimeError".to_owned(),
             true,
-            "the native callback panicked: no state for this request".to_owned()
+            "the rust callback panicked: no state for this request".to_owned()
         )
     );
 }

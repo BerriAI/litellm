@@ -24,7 +24,7 @@ from litellm.rust_bridge.execution import Execution, drive
 from litellm.types.integrations.custom_logger_v2 import Strict
 
 
-class NativeHandle(Protocol):
+class RustHandle(Protocol):
     def manifest(self) -> str: ...
 
     def request_state(self) -> object: ...
@@ -35,14 +35,14 @@ class NativeHandle(Protocol):
 
 
 @runtime_checkable
-class HostedNative(Protocol):
+class HostedRust(Protocol):
     def start(
         self, hook: str, fields: Mapping[str, object], call: Mapping[str, object] | None, state: object, host: object, /
     ) -> Execution: ...
 
 
 def _streamless(execution: Execution, head: object) -> object:
-    raise RuntimeError("a native callback cannot open a stream")
+    raise RuntimeError("a rust callback cannot open a stream")
 
 
 class _Wire(BaseModel):
@@ -165,12 +165,12 @@ def _plain(value: object) -> object:
 _ABSENT: Final = object()
 
 
-class NativeState:
+class RustState:
     __slots__ = ("handle",)
-    native: ClassVar[NativeHandle]
+    rust: ClassVar[RustHandle]
 
     def __init__(self) -> None:
-        self.handle: Final = type(self).native.request_state()
+        self.handle: Final = type(self).rust.request_state()
 
 
 Projection: TypeAlias = Callable[[object], object]
@@ -178,15 +178,15 @@ Projection: TypeAlias = Callable[[object], object]
 NO_PROJECTIONS: Final[Mapping[Field, Projection]] = MappingProxyType({})
 
 
-class NativeLogger(CustomLoggerV2):
+class RustLogger(CustomLoggerV2):
     def __init__(
-        self, native: NativeHandle, projections: Mapping[Field, Projection] = NO_PROJECTIONS, host: object = None
+        self, rust: RustHandle, projections: Mapping[Field, Projection] = NO_PROJECTIONS, host: object = None
     ) -> None:
-        self.native: Final = native
+        self.rust: Final = rust
         self.projections: Final = projections
         self.host: Final = host
 
-    async def run_native(
+    async def run_rust(
         self, hook: Hook, reads: frozenset[Field], view: object, ctx: CallContext[object]
     ) -> Patch | Abort | None:
         fields: Final = {
@@ -195,29 +195,29 @@ class NativeLogger(CustomLoggerV2):
             if (value := getattr(view, field.value, _ABSENT)) is not _ABSENT
         }
         call: Final = None if ctx.call is None else asdict(ctx.call)
-        state: Final = ctx.state.handle if isinstance(ctx.state, NativeState) else None
+        state: Final = ctx.state.handle if isinstance(ctx.state, RustState) else None
         return verdict(await self._handled(hook, fields, call, state))
 
     def _handled(
         self, hook: Hook, fields: Mapping[str, object], call: Mapping[str, object] | None, state: object
     ) -> Awaitable[object]:
         if self.host is None:
-            return self.native.handle(hook.value, fields, call, state)
-        if not isinstance(self.native, HostedNative):
-            raise TypeError(f"{type(self.native).__name__} cannot serve host calls")
-        return drive(self.native.start(hook.value, fields, call, state, self.host), _streamless)
+            return self.rust.handle(hook.value, fields, call, state)
+        if not isinstance(self.rust, HostedRust):
+            raise TypeError(f"{type(self.rust).__name__} cannot serve host calls")
+        return drive(self.rust.start(hook.value, fields, call, state, self.host), _streamless)
 
 
 def _handler(
     hook: Hook, reads: frozenset[Field]
-) -> Callable[[NativeLogger, object, CallContext[object]], Awaitable[Patch | Abort | None]]:
-    async def handle(self: NativeLogger, view: object, ctx: CallContext[object]) -> Patch | Abort | None:
-        return await self.run_native(hook, reads, view, ctx)
+) -> Callable[[RustLogger, object, CallContext[object]], Awaitable[Patch | Abort | None]]:
+    async def handle(self: RustLogger, view: object, ctx: CallContext[object]) -> Patch | Abort | None:
+        return await self.run_rust(hook, reads, view, ctx)
 
     return handle
 
 
-def _namespace(native: NativeHandle, manifest: WireManifest) -> dict[str, object]:  # mutable-ok: class namespace
+def _namespace(rust: RustHandle, manifest: WireManifest) -> dict[str, object]:  # mutable-ok: class namespace
     subscriptions: Final = manifest.subscriptions
     handlers: Final[dict[str, object]] = {  # mutable-ok: class namespace
         f"on_{subscription.hook.value}": on(
@@ -244,19 +244,19 @@ def _namespace(native: NativeHandle, manifest: WireManifest) -> dict[str, object
             {s.hook: s.activation for s in subscriptions if s.activation is not None}
         ),
         "request_state": (
-            type(f"{selection.name}_state", (NativeState,), {"native": native, "__slots__": ()})
+            type(f"{selection.name}_state", (RustState,), {"rust": rust, "__slots__": ()})
             if manifest.has_request_state
             else None
         ),
     }
 
 
-def native_logger(
-    native: NativeHandle, projections: Mapping[Field, Projection] = NO_PROJECTIONS, host: object = None
-) -> NativeLogger:
-    manifest: Final = WireManifest.model_validate_json(native.manifest())
-    cls: Final = type(manifest.selection.name, (NativeLogger,), _namespace(native, manifest))
-    return cls(native, projections, host)
+def rust_logger(
+    rust: RustHandle, projections: Mapping[Field, Projection] = NO_PROJECTIONS, host: object = None
+) -> RustLogger:
+    manifest: Final = WireManifest.model_validate_json(rust.manifest())
+    cls: Final = type(manifest.selection.name, (RustLogger,), _namespace(rust, manifest))
+    return cls(rust, projections, host)
 
 
 def contract_table() -> Mapping[str, object]:
@@ -283,14 +283,14 @@ def contract_table() -> Mapping[str, object]:
 
 __all__ = [
     "ABORT_ERRORS",
-    "HostedNative",
-    "NativeHandle",
-    "NativeLogger",
-    "NativeState",
+    "HostedRust",
     "Projection",
+    "RustHandle",
+    "RustLogger",
+    "RustState",
     "WireAbort",
     "contract_table",
-    "native_logger",
     "register_abort_error",
+    "rust_logger",
     "verdict",
 ]

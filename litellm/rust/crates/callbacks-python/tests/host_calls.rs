@@ -10,7 +10,7 @@ use litellm_callbacks::{
     Activation, Callback, CallbackError, Field, FieldSet, Hook, HookInput, HookOutput, Host,
     HostCall, HostCallError, Manifest, Patch, Selection, Subscription, Verdict, typed,
 };
-use litellm_callbacks_python::NativeCallback;
+use litellm_callbacks_python::RustCallback;
 use pyo3::{prelude::*, types::PyDict};
 use rstest::rstest;
 use serde::Serialize;
@@ -70,7 +70,7 @@ impl Scripted {
         Self(Manifest {
             selection: Selection {
                 activation: Activation::Required,
-                ..Selection::named("native_host_calls")
+                ..Selection::named("rust_host_calls")
             },
             subscriptions: vec![
                 Subscription {
@@ -91,7 +91,7 @@ impl Scripted {
     async fn run(&self, input: &HookInput, host: Host) -> HookOutput {
         let scenario = input.fields.get::<typed::Model>()?.unwrap_or_default();
         match scenario.as_str() {
-            "none" => patched("native/none".to_owned()),
+            "none" => patched("rust/none".to_owned()),
             "sequential" => {
                 let first = lookup(&host, &scenario, 1).await?;
                 tokio::time::sleep(Duration::from_millis(30)).await;
@@ -154,7 +154,7 @@ impl Callback for Scripted {
 #[case::a_sync_line("sync_line")]
 #[case::off_path_without_a_loop("off_path_without_a_loop")]
 #[case::a_sync_driver("sync_driver")]
-fn a_native_handler_awaits_python_host_calls(#[case] case: &str) {
+fn a_rust_handler_awaits_python_host_calls(#[case] case: &str) {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
     let script = CString::new(include_str!("host_calls/script.py")).unwrap();
     Python::initialize();
@@ -162,10 +162,10 @@ fn a_native_handler_awaits_python_host_calls(#[case] case: &str) {
         let locals = PyDict::new(py);
         locals
             .set_item(
-                "native",
+                "rust",
                 Bound::new(
                     py,
-                    NativeCallback::new(std::sync::Arc::new(Scripted::new())).unwrap(),
+                    RustCallback::new(std::sync::Arc::new(Scripted::new())).unwrap(),
                 )
                 .unwrap(),
             )

@@ -560,7 +560,7 @@ def _built_reservation() -> dict[str, object]:  # mutable-ok: budget_reservation
         "callback_bound": False,
         "input_cost": 0.25,
         "input_tokens": 40,
-        "native_call_id": "call-1",
+        "rust_call_id": "call-1",
     }
 
 
@@ -736,7 +736,7 @@ def test_an_infinite_reservation_write_lands_in_the_shared_dict_as_floats_with_e
         None,
     ]
     assert "rejected" not in reservation
-    assert reservation["native_call_id"] == "call-1"
+    assert reservation["rust_call_id"] == "call-1"
 
 
 def test_a_wire_reservation_write_drops_nulls_inside_entries_and_the_rejected_names() -> None:
