@@ -1,23 +1,40 @@
+import asyncio
 import json
 import sqlite3
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import reduce
-from typing import Final
+from itertools import chain
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, cast
 
 import pytest
 from prisma import Json
+from prisma.errors import DataError, RawQueryError
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.models.budget import BudgetLimit, LiteLLM_BudgetTable
 from litellm.proxy._types import BudgetWriteRequest
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    CustomerHierarchy,
+    ErrorCode,
+    Failure,
     budget_row_values,
     effective_member_budget,
     related_budget,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
+from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    Budget,
+    CustomerMember,
+    MemberCreate,
+    OrganizationCreate,
+    Team,
+    TeamCreate,
+)
+
+if TYPE_CHECKING:
+    from prisma import Prisma
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -72,9 +89,10 @@ def matches_where(row: Mapping[str, object], where: Mapping[str, object]) -> boo
 
 
 class Table:
-    def __init__(self, id_field: str, database: "Database") -> None:
+    def __init__(self, id_field: str, database: "Database", *, create_error: DataError | None = None) -> None:
         self.id_field = id_field
         self.database = database
+        self.create_error = create_error
         self.rows: Mapping[str, Record] = {}
 
     async def include(self, row: Record, include: Mapping[str, object] | None) -> Record:
@@ -97,6 +115,8 @@ class Table:
     async def create(self, data: Mapping[str, object], include: Mapping[str, object] | None = None) -> Record:
         from prisma.errors import UniqueViolationError
 
+        if self.create_error is not None:
+            raise self.create_error
         if str(data[self.id_field]) in self.rows:
             raise UniqueViolationError({})
         row: Final = Record.model_validate(
@@ -225,15 +245,63 @@ class DeleteConflictTable(Table):
         raise ForeignKeyViolationError({})
 
 
-class Database:
+class AdvisoryLocks:
     def __init__(self) -> None:
-        self.litellm_customerorganizationtable = Table("customer_org_id", self)
-        self.litellm_customerteamtable = Table("customer_team_id", self)
-        self.litellm_customermembertable = Table("customer_member_id", self)
-        self.litellm_budgettable = Table("budget_id", self)
-        self.litellm_verificationtoken = Table("token", self)
-        self.litellm_projecttable = Table("project_id", self)
-        self.litellm_customerbudgetincreaserequest = Table("request_id", self)
+        self.locks: Mapping[tuple[str, ...], asyncio.Lock] = MappingProxyType({})
+
+    def lock_for(self, query: str, args: Sequence[object]) -> asyncio.Lock:
+        key: Final = (query, *(str(arg) for arg in args))
+        existing: Final = self.locks.get(key)
+        if existing is not None:
+            return existing
+        lock: Final = asyncio.Lock()
+        self.locks = MappingProxyType({**self.locks, key: lock})
+        return lock
+
+
+class PausedCreateTable(Table):
+    def __init__(self, id_field: str, database: "Database", entered: asyncio.Event, release: asyncio.Event) -> None:
+        super().__init__(id_field, database)
+        self.entered = entered
+        self.release = release
+
+    async def create(self, data: Mapping[str, object], include: Mapping[str, object] | None = None) -> Record:
+        if data.get(self.id_field) == "blocked":
+            self.entered.set()
+            await self.release.wait()
+        return await super().create(data, include)
+
+
+class Database:
+    def __init__(
+        self,
+        advisory_locks: AdvisoryLocks | None = None,
+        source: "Database | None" = None,
+        *,
+        team_create_error: DataError | None = None,
+    ) -> None:
+        self.litellm_customerorganizationtable = (
+            Table("customer_org_id", self) if source is None else source.litellm_customerorganizationtable
+        )
+        self.litellm_customerteamtable = (
+            Table("customer_team_id", self, create_error=team_create_error)
+            if source is None
+            else source.litellm_customerteamtable
+        )
+        self.litellm_customermembertable = (
+            Table("customer_member_id", self) if source is None else source.litellm_customermembertable
+        )
+        self.litellm_budgettable = Table("budget_id", self) if source is None else source.litellm_budgettable
+        self.litellm_budgetwindowspend = (
+            Table("entity_id", self) if source is None else source.litellm_budgetwindowspend
+        )
+        self.litellm_verificationtoken = Table("token", self) if source is None else source.litellm_verificationtoken
+        self.litellm_projecttable = Table("project_id", self) if source is None else source.litellm_projecttable
+        self.litellm_customerbudgetincreaserequest = (
+            Table("request_id", self) if source is None else source.litellm_customerbudgetincreaserequest
+        )
+        self.advisory_locks = advisory_locks
+        self.held_locks: tuple[asyncio.Lock, ...] = ()
         self.locked_organization_ids: tuple[str, ...] = ()
 
     def has_budget_reference(self, budget_id: str, relation: str) -> bool:
@@ -252,9 +320,21 @@ class Database:
         table, field = reference
         return any(row.model_dump().get(field) == budget_id for row in table.rows.values())
 
-    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
-        if "pg_advisory_xact_lock" in query:
+    async def acquire_advisory_lock(self, query: str, args: Sequence[object]) -> tuple[Mapping[str, object], ...]:
+        if self.advisory_locks is None:
             return ()
+        lock: Final = self.advisory_locks.lock_for(query, args)
+        if lock in self.held_locks:
+            return ()
+        await lock.acquire()
+        self.held_locks = (*self.held_locks, lock)
+        return ()
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if "set_config('lock_timeout'" in query:
+            return ()
+        if "pg_advisory_xact_lock" in query:
+            return await self.acquire_advisory_lock(query, args)
         if "SELECT EXISTS" in query:
             return ({"referenced": False},)
         if "FOR UPDATE" in query:
@@ -265,12 +345,23 @@ class Database:
             connection.executescript(
                 'CREATE TABLE "LiteLLM_CustomerTeamTable" (customer_team_id TEXT, parent_org_id TEXT);'
                 'CREATE TABLE "LiteLLM_CustomerMemberTable" (customer_member_id TEXT, parent_org_id TEXT);'
+                "CREATE TABLE member_teams (team_id TEXT);"
             )
             connection.executemany(
                 'INSERT INTO "LiteLLM_CustomerTeamTable" VALUES (?, ?)',
                 tuple(
                     (row.model_dump()["customer_team_id"], row.model_dump()["parent_org_id"])
                     for row in self.litellm_customerteamtable.rows.values()
+                ),
+            )
+            connection.executemany(
+                "INSERT INTO member_teams VALUES (?)",
+                tuple(
+                    (team_id,)
+                    for team_id in chain.from_iterable(
+                        TypeAdapter(tuple[str, ...]).validate_python(row.model_dump()["parent_team_ids"])
+                        for row in self.litellm_customermembertable.rows.values()
+                    )
                 ),
             )
             connection.executemany(
@@ -283,8 +374,13 @@ class Database:
             return tuple(
                 dict(row)
                 for row in connection.execute(
-                    query.replace("= ANY($1::text[])", "IN (SELECT value FROM json_each($1))"),
-                    tuple(json.dumps(arg) for arg in args),
+                    query.replace("= ANY($1::text[])", "IN (SELECT value FROM json_each($1))").replace(
+                        '"LiteLLM_CustomerMemberTable", unnest(parent_team_ids) AS team_id', "member_teams"
+                    ),
+                    {
+                        str(index): json.dumps(arg) if not isinstance(arg, int) else arg
+                        for index, arg in enumerate(args, 1)
+                    },
                 )
             )
 
@@ -305,6 +401,128 @@ class Database:
             for table, rows in zip(tables, snapshots):
                 table.rows = rows
             raise
+        finally:
+            for lock in self.held_locks:
+                lock.release()
+            self.held_locks = ()
+
+
+class CapacityErrorDatabase(Database):
+    def __init__(self, error_code: str, scope: str) -> None:
+        super().__init__()
+        self.error_code = error_code
+        self.scope = scope
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if "pg_advisory_xact_lock" in query and args and args[0] == self.scope:
+            raise RawQueryError(
+                {"user_facing_error": {"meta": {"code": self.error_code, "message": "advisory lock failed"}}}
+            )
+        return await super().query_raw(query, *args)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("team", "member"))
+@pytest.mark.parametrize("same_parent", (False, True))
+async def test_capacity_contention_is_isolated_to_each_parent(kind: str, same_parent: bool) -> None:
+    locks: Final = AdvisoryLocks()
+    database: Final = Database(locks)
+    hierarchy: Final = CustomerHierarchy(
+        cast("Prisma", database), premium_user=False, clock=lambda: NOW
+    )  # cast-ok: in-memory Prisma edge
+    for org_id in ("a", "b"):
+        assert not isinstance(
+            await hierarchy.create_organization(OrganizationCreate(customer_org_id=org_id), "admin"), Failure
+        )
+        if kind == "member":
+            assert not isinstance(
+                await hierarchy.create_team(TeamCreate(customer_team_id=org_id, parent_org_id=org_id), "admin"), Failure
+            )
+    entered: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    if kind == "team":
+        database.litellm_customerteamtable = PausedCreateTable("customer_team_id", database, entered, release)
+    else:
+        database.litellm_customermembertable = PausedCreateTable("customer_member_id", database, entered, release)
+    other: Final = CustomerHierarchy(
+        cast("Prisma", Database(locks, source=database)), premium_user=False, clock=lambda: NOW
+    )  # cast-ok: independent connection to the shared in-memory tables
+
+    async def create(store: CustomerHierarchy, parent: str, identity: str) -> Team | CustomerMember | Failure:
+        if kind == "team":
+            return await store.create_team(TeamCreate(customer_team_id=identity, parent_org_id=parent), "admin")
+        return await store.create_member(
+            MemberCreate(customer_member_id=identity, parent_team_ids=(parent,), budget_override=Budget(max_budget=10)),
+            "admin",
+        )
+
+    for index in range(4):
+        assert not isinstance(await create(hierarchy, "a", f"seed-{index}"), Failure)
+    blocked: Final = asyncio.create_task(create(hierarchy, "a", "blocked"))
+    await entered.wait()
+    independent: Final = asyncio.create_task(create(other, "a" if same_parent else "b", "independent"))
+    try:
+        if same_parent:
+            await asyncio.sleep(0)
+            release.set()
+        result: Final = await asyncio.wait_for(independent, timeout=10)
+        if same_parent:
+            assert result == Failure(ErrorCode.FREE_TIER_LIMIT)
+        else:
+            assert not isinstance(result, Failure)
+            assert result == (
+                await other.get_team("independent") if kind == "team" else await other.get_member("independent")
+            )
+    finally:
+        release.set()
+        assert not isinstance(await blocked, Failure)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("premium", (False, True))
+async def test_customer_portal_capacity_caps_every_parent(premium: bool) -> None:
+    database: Final = Database()
+    hierarchy: Final = CustomerHierarchy(
+        cast("Prisma", database), premium_user=premium, clock=lambda: NOW
+    )  # cast-ok: in-memory Prisma edge
+    for index in range(5):
+        assert not isinstance(
+            await hierarchy.create_organization(OrganizationCreate(customer_org_id=f"org-{index}"), "admin"), Failure
+        )
+    sixth_org: Final = await hierarchy.create_organization(OrganizationCreate(customer_org_id="sixth"), "admin")
+    assert isinstance(sixth_org, Failure) is not premium
+    if not premium:
+        assert sixth_org == Failure(ErrorCode.FREE_TIER_LIMIT)
+    for index in range(5):
+        assert not isinstance(
+            await hierarchy.create_team(TeamCreate(customer_team_id=f"team-{index}", parent_org_id="org-0"), "admin"),
+            Failure,
+        )
+    sixth_team: Final = await hierarchy.create_team(
+        TeamCreate(customer_team_id="sixth", parent_org_id="org-0"), "admin"
+    )
+    assert isinstance(sixth_team, Failure) is not premium
+    if not premium:
+        assert sixth_team == Failure(ErrorCode.FREE_TIER_LIMIT)
+    for index in range(5):
+        assert not isinstance(
+            await hierarchy.create_member(
+                MemberCreate(
+                    customer_member_id=f"member-{index}",
+                    parent_team_ids=("team-0", "team-1"),
+                    budget_override=Budget(max_budget=10),
+                ),
+                "admin",
+            ),
+            Failure,
+        )
+    sixth_member: Final = await hierarchy.create_member(
+        MemberCreate(customer_member_id="sixth", parent_team_ids=("team-1",), budget_override=Budget(max_budget=10)),
+        "admin",
+    )
+    assert isinstance(sixth_member, Failure) is not premium
+    if not premium:
+        assert sixth_member == Failure(ErrorCode.FREE_TIER_LIMIT)
 
 
 @pytest.mark.parametrize("expires_at", (None, datetime(2027, 1, 1, tzinfo=timezone.utc)))

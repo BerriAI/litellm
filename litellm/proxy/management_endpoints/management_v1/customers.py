@@ -16,12 +16,19 @@ from litellm.proxy.list_api.common import (
     reject_unknown_query_params,
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
-from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy, ErrorCode, Failure, Page
+from litellm.proxy.management_helpers.customer_hierarchy import (
+    CustomerHierarchy,
+    CustomerPortalLimits,
+    ErrorCode,
+    Failure,
+    Page,
+)
 from litellm.proxy.management_helpers.customer_upsert import CustomerUpsert
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    BudgetGroupsUpdate,
     BudgetTemplate,
     CustomerMember,
     MemberCreate,
@@ -45,6 +52,18 @@ T: Final = TypeVar("T")
 
 _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyType(
     {
+        ErrorCode.CAPACITY_BUSY: (
+            503,
+            "Customer portal busy",
+            "Customer portal capacity is being updated. Retry the request.",
+        ),
+        ErrorCode.FREE_TIER_LIMIT: (
+            403,
+            "Free customer portal limit reached",
+            "Free customer portal limit reached: up to 5 customer organizations, 5 teams per organization and "
+            "5 members per team without a LiteLLM Enterprise license. Upgrade to Enterprise to remove the limits: "
+            "https://www.litellm.ai/enterprise",
+        ),
         ErrorCode.NOT_FOUND: (404, "Not found", "Customer entity not found."),
         ErrorCode.PARENT_NOT_FOUND: (404, "Parent not found", "Customer parent not found."),
         ErrorCode.ALREADY_EXISTS: (409, "Already exists", "Customer entity ID already exists."),
@@ -89,6 +108,11 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
         ),
         ErrorCode.FORBIDDEN: (403, "Forbidden", "Only proxy admins can manage customer hierarchies."),
         ErrorCode.DATABASE_UNAVAILABLE: (503, "Database not connected", "Database not connected."),
+        ErrorCode.CONFIGURATION_CONFLICT: (
+            409,
+            "Budget groups changed",
+            "Budget groups changed since you started editing. Reload before saving.",
+        ),
         ErrorCode.ALIAS_ALREADY_EXISTS: (
             409,
             "Customer org alias already exists",
@@ -131,11 +155,11 @@ def customer_actor(auth: Annotated[UserAPIKeyAuth, Depends(require_customer_admi
 
 
 def get_customer_hierarchy() -> CustomerHierarchy:
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import premium_user, prisma_client
 
     if prisma_client is None:
         raise_public(Failure(ErrorCode.DATABASE_UNAVAILABLE))
-    return CustomerHierarchy(prisma_client)
+    return CustomerHierarchy(prisma_client, premium_user=premium_user)
 
 
 def resolve(result: T | Failure) -> T:
@@ -184,6 +208,18 @@ def get_user_api_key_cache() -> UserApiKeyCache:
 
 
 AuthCache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
+
+
+@router.get(
+    "/customer_portal/limits",
+    response_model=CustomerPortalLimits,
+    description="Get customer portal free-tier limits and current capacity. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def get_customer_portal_limits(
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> CustomerPortalLimits:
+    return resolve(await hierarchy.portal_limits())
 
 
 @router.post(
@@ -499,6 +535,26 @@ async def add_customer_budget_template(
     hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
 ) -> Organization:
     return resolve(await hierarchy.add_template(customer_org_id, data, actor))
+
+
+@router.patch(
+    "/customer_organizations/{customer_org_id}/default_budgets",
+    response_model=Organization,
+    description="Atomically configure budget groups and their default. Requires the current budget_groups_revision. "
+    "Existing groups retain omitted settings and window reset dates. Stale revisions and referenced deletions "
+    "return 409 without applying changes. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def configure_customer_budget_groups(
+    customer_org_id: str,
+    data: BudgetGroupsUpdate,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
+) -> Organization:
+    organization: Final = resolve(await hierarchy.configure_templates(customer_org_id, data, actor))
+    await forget_customer_hierarchies(resolve(await hierarchy.member_ids_in_organization(customer_org_id)), cache)
+    return organization
 
 
 @router.patch(

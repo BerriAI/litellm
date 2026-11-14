@@ -1,7 +1,8 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 
-use indexmap::IndexMap;
+use encoding_rs::Encoding;
+use indexmap::{IndexMap, IndexSet};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -69,6 +70,8 @@ pub struct Catalog {
 struct CatalogRows {
     entries: IndexMap<String, ModelEntry>,
     aliases: IndexMap<String, String>,
+    /// The aliases an `alias_of` row declared, whose own row can be rejected
+    pointers: IndexSet<String>,
 }
 
 impl CatalogRows {
@@ -141,8 +144,11 @@ impl ModelEntry {
 
 impl Catalog {
     pub fn parse(body: &[u8]) -> Result<Loaded<Self>, Error> {
-        let document = serde_json::from_slice::<Fields>(body)
-            .map_err(|error| Error::new("", Repr::Json(error)))?;
+        let document = match text_after_byte_order_mark(body) {
+            Some(text) => serde_json::from_str::<Fields>(&text),
+            None => serde_json::from_slice::<Fields>(body),
+        }
+        .map_err(|error| Error::new("", Repr::Json(error)))?;
 
         let mut problems = Vec::new();
         let mut sections = Vec::new();
@@ -165,16 +171,13 @@ impl Catalog {
                 }
             };
             let row = read_row(&fields);
-            let readable = row.problems.is_empty();
             problems.extend(
                 row.problems
                     .into_iter()
                     .map(|problem| problem.prepend(&name)),
             );
             if let Some(target) = row.alias_of {
-                if readable {
-                    pointer_rows.push((name.clone(), target));
-                }
+                pointer_rows.push((name.clone(), target));
                 sections.push(Section {
                     index,
                     key: name,
@@ -215,6 +218,7 @@ impl Catalog {
                 }
             }
         }
+        let mut pointers = IndexSet::new();
         for (alias, target) in pointer_rows {
             if !entries.contains_key(&target) {
                 problems.push(Error::from_key(&alias, Repr::AliasTargetMissing { target }));
@@ -227,6 +231,7 @@ impl Catalog {
                     },
                 ));
             } else {
+                pointers.insert(alias.clone());
                 aliases.insert(alias, target);
             }
         }
@@ -243,7 +248,11 @@ impl Catalog {
             });
         Ok(Loaded {
             value: Self {
-                store: Store::new(CatalogRows { entries, aliases }),
+                store: Store::new(CatalogRows {
+                    entries,
+                    aliases,
+                    pointers,
+                }),
                 sections,
                 fallback_generalizations,
             },
@@ -378,8 +387,16 @@ impl Catalog {
             .collect();
         let mut catalog = self;
         catalog.store.edit(|rows| {
-            rows.entries.retain(|name, _| !rejected.contains(name));
-            rows.aliases.retain(|_, owner| !rejected.contains(owner));
+            let CatalogRows {
+                entries,
+                aliases,
+                pointers,
+            } = rows;
+            entries.retain(|name, _| !rejected.contains(name));
+            aliases.retain(|alias, owner| {
+                !rejected.contains(owner) && !(pointers.contains(alias) && rejected.contains(alias))
+            });
+            pointers.retain(|alias| aliases.contains_key(alias));
         });
         catalog
             .sections
@@ -502,6 +519,11 @@ fn read_row(fields: &Fields) -> RowRead {
         alias_of: None,
         problems,
     }
+}
+
+fn text_after_byte_order_mark(body: &[u8]) -> Option<Cow<'_, str>> {
+    let (encoding, mark) = Encoding::for_bom(body)?;
+    encoding.decode_without_bom_handling_and_without_replacement(&body[mark..])
 }
 
 fn is_section(key: &str) -> bool {

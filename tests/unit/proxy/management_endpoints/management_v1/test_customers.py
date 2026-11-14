@@ -1,10 +1,12 @@
 import asyncio
+from collections.abc import Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING, Final, cast
 
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from prisma.errors import DataError, RawQueryError
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key, customer_org_alias_cache_key
@@ -18,9 +20,11 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import Customer
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import (
     NOW,
     BoundedChildrenTable,
+    CapacityErrorDatabase,
     Database,
     DeleteConflictTable,
     Record,
+    Table,
 )
 
 if TYPE_CHECKING:
@@ -31,6 +35,7 @@ def client(
     role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN,
     cache: UserApiKeyCache | None = None,
     database: Database | None = None,
+    premium_user: bool = True,
     actor: str = "admin",
 ) -> TestClient:
     app: Final = FastAPI()
@@ -42,12 +47,162 @@ def client(
 
     auth: Final = UserAPIKeyAuth(user_id=actor, user_role=role)
     hierarchy: Final = CustomerHierarchy(
-        cast("Prisma", database if database is not None else Database()), clock=lambda: NOW
+        cast("Prisma", database if database is not None else Database()), premium_user=premium_user, clock=lambda: NOW
     )  # cast-ok: in-memory Prisma edge
     app.dependency_overrides[user_api_key_auth] = lambda: auth
     app.dependency_overrides[get_customer_hierarchy] = lambda: hierarchy
     app.dependency_overrides[get_user_api_key_cache] = lambda: cache if cache is not None else UserApiKeyCache()
     return TestClient(app)
+
+
+@pytest.mark.parametrize("premium", (False, True))
+def test_customer_portal_limits_and_free_tier_problem(premium: bool) -> None:
+    http: Final = client(premium_user=premium)
+    empty: Final = http.get("/management/v1/customer_portal/limits")
+    assert empty.status_code == 200, empty.text
+    assert empty.json() == {
+        "limits_apply": not premium,
+        "organization_limit": 5,
+        "teams_per_organization_limit": 5,
+        "members_per_team_limit": 5,
+        "organization_count": 0,
+        "any_limit_reached": False,
+    }
+    for index in range(5):
+        response: Final = http.post("/management/v1/customer_organizations", json={"customer_org_id": f"org-{index}"})
+        assert response.status_code == 201, response.text
+    full: Final = http.get("/management/v1/customer_portal/limits")
+    assert full.status_code == 200, full.text
+    assert full.json() == {**empty.json(), "organization_count": 5, "any_limit_reached": not premium}
+    sixth: Final = http.post("/management/v1/customer_organizations", json={"customer_org_id": "sixth"})
+    assert sixth.status_code == (201 if premium else 403), sixth.text
+    if not premium:
+        assert sixth.json()["detail"] == (
+            "Free customer portal limit reached: up to 5 customer organizations, 5 teams per organization and "
+            "5 members per team without a LiteLLM Enterprise license. Upgrade to Enterprise to remove the limits: "
+            "https://www.litellm.ai/enterprise"
+        )
+
+
+@pytest.mark.parametrize("level", ("teams", "members"))
+def test_customer_portal_limits_detect_full_children_before_organization_cap(level: str) -> None:
+    http: Final = client(premium_user=False)
+    family(http)
+    for index in range(5):
+        if level == "teams":
+            response: Final = http.post(
+                "/management/v1/customer_teams", json={"parent_org_id": "org", "customer_team_id": f"extra-{index}"}
+            )
+            assert response.status_code == (201 if index < 4 else 403), response.text
+        else:
+            member: Final = http.post(
+                "/management/v1/customer_members",
+                json={"customer_member_id": f"member-{index}", "parent_team_ids": ["team"]},
+            )
+            assert member.status_code == 201, member.text
+    limits: Final = http.get("/management/v1/customer_portal/limits")
+    assert limits.status_code == 200, limits.text
+    assert limits.json()["organization_count"] == 1
+    assert limits.json()["any_limit_reached"] is True
+
+
+@pytest.mark.parametrize("premium", (False, True))
+def test_member_upsert_respects_capacity_for_default_team_creation_and_added_membership(premium: bool) -> None:
+    http: Final = client(premium_user=premium)
+    family(http)
+    for index in range(4):
+        created: Final = http.post(
+            "/management/v1/customer_teams", json={"parent_org_id": "org", "customer_team_id": f"extra-{index}"}
+        )
+        assert created.status_code == 201, created.text
+    default_team: Final = http.post(
+        "/management/v1/customer_members/upsert", json={"customer_org_id": "org", "customer_member_id": "defaulted"}
+    )
+    assert default_team.status_code == (200 if premium else 403), default_team.text
+    for index in range(5):
+        member: Final = http.post(
+            "/management/v1/customer_members",
+            json={"customer_member_id": f"full-{index}", "parent_team_ids": ["team"]},
+        )
+        assert member.status_code == 201, member.text
+    original: Final = http.post(
+        "/management/v1/customer_members", json={"customer_member_id": "moving", "parent_team_ids": ["extra-0"]}
+    )
+    assert original.status_code == 201, original.text
+    for patch in ({}, {"alias": "renamed"}):
+        kept: Final = http.post(
+            "/management/v1/customer_members/upsert",
+            json={"customer_org_id": "org", "customer_member_id": "moving", **patch},
+        )
+        assert kept.status_code == 200, kept.text
+        assert kept.json()["created"] is False
+        assert kept.json()["parent_team_ids"] == ["extra-0"]
+        assert kept.json()["alias"] == patch.get("alias")
+    moved: Final = http.post(
+        "/management/v1/customer_members/upsert",
+        json={"customer_org_id": "org", "customer_member_id": "moving", "parent_team_id": "team"},
+    )
+    assert moved.status_code == (200 if premium else 403), moved.text
+    if not premium:
+        assert http.get("/management/v1/customer_members/moving").json()["parent_team_ids"] == ["extra-0"]
+        assert http.get("/management/v1/customer_teams/org:default").status_code == 404
+
+
+@pytest.mark.parametrize("error_code", ("55P03", "XX000"))
+def test_capacity_contention_is_retryable_without_hiding_other_database_errors(error_code: str) -> None:
+    http: Final = client(database=CapacityErrorDatabase(error_code, "members:team"), premium_user=False)
+    family(http)
+    payload: Final = {"customer_member_id": "blocked", "parent_team_ids": ["team"]}
+    if error_code != "55P03":
+        with pytest.raises(RawQueryError, match="advisory lock failed"):
+            http.post("/management/v1/customer_members", json=payload)
+        return
+    response: Final = http.post("/management/v1/customer_members", json=payload)
+    assert response.status_code == 503, response.text
+    assert response.json() == {
+        "type": "urn:litellm:error:customer-hierarchy-capacity-busy",
+        "title": "Customer portal busy",
+        "status": 503,
+        "detail": "Customer portal capacity is being updated. Retry the request.",
+    }
+    assert http.get("/management/v1/customer_members/blocked").status_code == 404
+
+
+def test_customer_portal_limits_require_admin() -> None:
+    response: Final = client(role=LitellmUserRoles.INTERNAL_USER).get("/management/v1/customer_portal/limits")
+    assert response.status_code == 403, response.text
+
+
+@pytest.mark.parametrize(
+    ("error", "retryable"),
+    (
+        (DataError({"user_facing_error": {"meta": {"code": "55P03", "message": "lock unavailable"}}}), True),
+        (DataError({"user_facing_error": {"message": "canceling statement due to lock timeout"}}), True),
+        (DataError({"user_facing_error": {"message": "other database error", "meta": {"code": "XX000"}}}), False),
+    ),
+    ids=("sqlstate", "message-only", "other-error"),
+)
+def test_team_model_write_contention_is_retryable_and_rolls_back(error: DataError, retryable: bool) -> None:
+    database: Final = Database(team_create_error=error)
+    http: Final = client(database=database, premium_user=False)
+    created: Final = http.post("/management/v1/customer_organizations", json={"customer_org_id": "org"})
+    assert created.status_code == 201, created.text
+    payload: Final = {"customer_team_id": "blocked", "parent_org_id": "org", "budget": {"max_budget": 10}}
+    if not retryable:
+        with pytest.raises(DataError, match="other database error") as raised:
+            http.post("/management/v1/customer_teams", json=payload)
+        assert raised.value is error
+    else:
+        response: Final = http.post("/management/v1/customer_teams", json=payload)
+        assert response.status_code == 503, response.text
+        assert response.json() == {
+            "type": "urn:litellm:error:customer-hierarchy-capacity-busy",
+            "title": "Customer portal busy",
+            "status": 503,
+            "detail": "Customer portal capacity is being updated. Retry the request.",
+        }
+    assert http.get("/management/v1/customer_teams/blocked").status_code == 404
+    assert not database.litellm_budgettable.rows
 
 
 def family(http: TestClient) -> dict[str, object]:
@@ -1473,6 +1628,30 @@ def test_team_override_caps_the_team_until_it_expires_and_is_released_when_clear
     }
 
 
+@pytest.mark.parametrize("budget", ({"max_budget": 50}, None))
+def test_deleting_a_team_removes_its_override_budget_with_or_without_an_overall_budget(
+    budget: dict[str, object] | None,
+) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    family(http)
+    before_budgets: Final = frozenset(database.litellm_budgettable.rows)
+    created: Final = http.post(
+        "/management/v1/customer_teams",
+        json={
+            "customer_team_id": "boosted",
+            "parent_org_id": "org",
+            "budget": budget,
+            "budget_override": {"max_budget": 500},
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["budget_override_id"] in database.litellm_budgettable.rows
+    deleted: Final = http.delete("/management/v1/customer_teams/boosted")
+    assert deleted.status_code == 204, deleted.text
+    assert frozenset(database.litellm_budgettable.rows) == before_budgets
+
+
 def test_member_carries_its_teams_organization_and_another_organization_is_refused() -> None:
     http: Final = client()
     family(http)
@@ -1532,3 +1711,223 @@ def test_member_in_two_teams_is_listed_under_each_and_teams_from_another_organiz
     assert mixed.status_code == 404, mixed.text
     fetched: Final = http.get("/management/v1/customer_organizations/org")
     assert fetched.json()["member_count"] == 1
+
+
+def test_grouped_configuration_preserves_settings_swaps_names_and_selects_a_new_default() -> None:
+    http: Final = client()
+    org: Final = family(http)
+    first, second = org["default_budgets"]
+    response: Final = http.patch(
+        "/management/v1/customer_organizations/org/default_budgets",
+        json={
+            "expected_revision": org["budget_groups_revision"],
+            "default_budgets": [
+                {"budget_id": first["budget_id"], "name": second["name"], "cap_policy": "pause_allow_increase"},
+                {"budget_id": second["budget_id"], "name": first["name"]},
+                {"name": "new", "budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]},
+            ],
+            "default_budget_template": "new",
+        },
+    )
+    assert response.status_code == 200, response.text
+    saved: Final = response.json()
+    assert saved["default_budgets"][0] == {**first, "name": second["name"], "cap_policy": "pause_allow_increase"}
+    assert saved["default_budgets"][1] == {**second, "name": first["name"]}
+    assert saved["default_budget_template_id"] == saved["default_budgets"][2]["budget_id"]
+    assert saved["budget_groups_revision"] != org["budget_groups_revision"]
+    assert http.get("/management/v1/customer_organizations/org").json() == saved
+
+
+def test_grouped_configuration_rejects_stale_edits_without_losing_external_groups() -> None:
+    http: Final = client()
+    org: Final = family(http)
+    external: Final = http.post("/management/v1/customer_organizations/org/default_budgets", json={"name": "external"})
+    assert external.status_code == 201, external.text
+    response: Final = http.patch(
+        "/management/v1/customer_organizations/org/default_budgets",
+        json={
+            "expected_revision": org["budget_groups_revision"],
+            "default_budgets": [{"budget_id": row["budget_id"], "name": row["name"]} for row in org["default_budgets"]],
+            "default_budget_template": "standard",
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["type"].endswith("configuration-conflict")
+    assert http.get("/management/v1/customer_organizations/org").json() == external.json()
+
+
+def test_grouped_configuration_referenced_deletion_rejects_the_whole_save() -> None:
+    http: Final = client()
+    org: Final = family(http)
+    member: Final = http.post(
+        "/management/v1/customer_members", json={"customer_member_id": "m", "parent_team_ids": ["team"]}
+    )
+    assert member.status_code == 201, member.text
+    before: Final = http.get("/management/v1/customer_organizations/org").json()
+    response: Final = http.patch(
+        "/management/v1/customer_organizations/org/default_budgets",
+        json={
+            "expected_revision": org["budget_groups_revision"],
+            "default_budgets": [
+                {"budget_id": org["default_budgets"][1]["budget_id"], "name": "changed", "max_budget": 999},
+                {"name": "new", "max_budget": 1},
+            ],
+            "default_budget_template": "new",
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["type"].endswith("template-in-use")
+    assert http.get("/management/v1/customer_organizations/org").json() == before
+
+
+def test_grouped_configuration_keeps_window_clocks_and_invalidates_member_cache() -> None:
+    cache: Final = UserApiKeyCache()
+    http: Final = client(cache=cache)
+    org: Final = family(http)
+    member: Final = http.post(
+        "/management/v1/customer_members", json={"customer_member_id": "m", "parent_team_ids": ["team"]}
+    )
+    assert member.status_code == 201, member.text
+    first: Final = org["default_budgets"][0]
+    windows: Final = http.patch(
+        f"/management/v1/customer_organizations/org/default_budgets/{first['budget_id']}",
+        json={
+            "budget_limits": [
+                {"budget_duration": "1mo", "max_budget": 10, "reset_at": "2027-01-15T00:00:00Z"},
+                {"budget_duration": "12mo", "max_budget": 100, "reset_at": "2027-11-15T00:00:00Z"},
+            ]
+        },
+    )
+    assert windows.status_code == 200, windows.text
+    advanced: Final = http.patch(
+        f'/management/v1/customer_organizations/org/default_budgets/{first["budget_id"]}',
+        json={
+            "budget_limits": [
+                {**row, "reset_at": "2028-01-15T00:00:00Z"}
+                for row in windows.json()["default_budgets"][0]["budget_limits"]
+            ]
+        },
+    )
+    assert advanced.status_code == 200, advanced.text
+    assert advanced.json()["budget_groups_revision"] == windows.json()["budget_groups_revision"]
+    cache.set_cache(customer_member_cache_key("m"), "old-budget")
+    saved: Final = http.patch(
+        "/management/v1/customer_organizations/org/default_budgets",
+        json={
+            "expected_revision": windows.json()["budget_groups_revision"],
+            "default_budgets": [
+                {
+                    "budget_id": first["budget_id"],
+                    "name": "standard",
+                    "budget_limits": [
+                        {"budget_duration": "1mo", "max_budget": 15},
+                        {"budget_duration": "12mo", "max_budget": 100},
+                    ],
+                }
+            ],
+            "default_budget_template": "standard",
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    previous: Final = advanced.json()["default_budgets"][0]
+    assert saved.json()["default_budgets"] == [
+        {
+            **previous,
+            "budget_limits": [
+                {**previous["budget_limits"][0], "max_budget": 15},
+                previous["budget_limits"][1],
+            ],
+        }
+    ]
+    assert cache.get_cache(customer_member_cache_key("m")) is None
+    assert (
+        http.get("/management/v1/customer_members/m").json()["effective_budget"]["budget_limits"][0]["max_budget"] == 15
+    )
+
+
+@pytest.mark.parametrize("case", ("duplicate_id", "foreign_id", "duplicate_name", "missing_default"))
+def test_invalid_grouped_configuration_leaves_existing_groups_untouched(case: str) -> None:
+    http: Final = client()
+    org: Final = family(http)
+    first, second = org["default_budgets"]
+    groups: Final = [
+        {"budget_id": first["budget_id"], "name": "changed", "max_budget": 999},
+        {
+            "budget_id": first["budget_id"]
+            if case == "duplicate_id"
+            else "foreign"
+            if case == "foreign_id"
+            else second["budget_id"],
+            "name": "changed" if case == "duplicate_name" else "second",
+        },
+    ]
+    response: Final = http.patch(
+        "/management/v1/customer_organizations/org/default_budgets",
+        json={
+            "expected_revision": org["budget_groups_revision"],
+            "default_budgets": groups,
+            "default_budget_template": "missing" if case == "missing_default" else "changed",
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert http.get("/management/v1/customer_organizations/org").json() == org
+
+
+class FailingBudgetInsertTable(Table):
+    async def create(self, data: Mapping[str, object], include: Mapping[str, object] | None = None) -> Record:
+        from prisma.errors import UniqueViolationError
+
+        if data.get("name") == "failed-insert":
+            raise UniqueViolationError({})
+        return await super().create(data, include)
+
+
+def test_grouped_configuration_rolls_back_earlier_writes_when_a_later_database_write_fails() -> None:
+    database: Final = Database()
+    database.litellm_budgettable = FailingBudgetInsertTable("budget_id", database)
+    http: Final = client(database=database)
+    org: Final = family(http)
+    before_budgets: Final = dict(database.litellm_budgettable.rows)
+    response: Final = http.patch(
+        "/management/v1/customer_organizations/org/default_budgets",
+        json={
+            "expected_revision": org["budget_groups_revision"],
+            "default_budgets": [
+                {"budget_id": org["default_budget_template_id"], "name": "changed", "max_budget": 999},
+                {"name": "created-first", "max_budget": 1},
+                {"name": "failed-insert", "max_budget": 2},
+            ],
+            "default_budget_template": "created-first",
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert http.get("/management/v1/customer_organizations/org").json() == org
+    assert database.litellm_budgettable.rows == before_budgets
+
+
+def test_list_and_detail_expose_each_effective_budget_with_its_own_recorded_spend() -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    family(http)
+    created: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": "window-member", "parent_team_ids": ["team"],
+            "budget_override": {
+                "max_budget": 50, "budget_duration": "1mo",
+                "budget_limits": [{"budget_duration": "1mo", "max_budget": 10}],
+            },
+        },
+    )
+    assert created.status_code == 201, created.text
+    database.litellm_budgetwindowspend.rows = {
+        "window-member": Record(
+            entity_type="customer_member", entity_id="window-member", window_duration="1mo",
+            window_start=NOW, spend=8,
+        ),
+    }
+    detail: Final = http.get("/management/v1/customer_members/window-member")
+    listing: Final = http.get("/management/v1/customer_members?parent_team_id=team")
+    assert detail.status_code == listing.status_code == 200
+    assert listing.json()["data"][0]["budget_usage"] == detail.json()["budget_usage"]
+    assert [(item["spend"], item["max_budget"]) for item in detail.json()["budget_usage"]] == [(0, 50), (8, 10)]

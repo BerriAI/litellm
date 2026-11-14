@@ -1,10 +1,10 @@
 use std::{
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use litellm_cache::Error;
-use litellm_cache_memory::InMemoryCache;
+use litellm_cache_memory::{Expiry, InMemoryCache};
 
 use crate::Number;
 
@@ -18,11 +18,9 @@ pub fn system_clock() -> Clock {
     })
 }
 
-/// A store's memory tier: Python's `InMemoryCache`, with its 200 entries and 600 s TTL unless the
-/// store names others, plus one lock for every read-modify-write on it.
+/// A store's memory tier: 200 entries and a 600 s TTL unless the store names others.
 pub struct Memory<V: Clone> {
     cache: InMemoryCache<V>,
-    updates: Mutex<()>,
 }
 
 impl<V: Clone> Memory<V> {
@@ -30,7 +28,6 @@ impl<V: Clone> Memory<V> {
         let now = now.clone();
         Self {
             cache: InMemoryCache::with_clock(entries, None, move || now()),
-            updates: Mutex::new(()),
         }
     }
 
@@ -38,8 +35,30 @@ impl<V: Clone> Memory<V> {
         self.cache.get_cache(key)
     }
 
+    /// A key memory already holds keeps its deadline, as a counter keeps its window.
     pub fn set(&self, key: &str, value: V, ttl: Option<Duration>) -> Result<(), Error> {
-        self.cache.set_cache(key, value, ttl).map(drop)
+        self.cache
+            .set_cache(key, value, Expiry::KeepExisting(ttl))
+            .map(drop)
+    }
+
+    pub fn refresh(&self, key: &str, value: V, ttl: Duration) -> Result<(), Error> {
+        self.cache
+            .set_cache(key, value, Expiry::Refresh(Some(ttl)))
+            .map(drop)
+    }
+
+    /// Writes `value` when memory holds nothing for `key` or `replaces` what it holds.
+    pub fn set_if(
+        &self,
+        key: &str,
+        value: V,
+        ttl: Option<Duration>,
+        replaces: impl FnOnce(&V) -> bool,
+    ) -> Result<(), Error> {
+        self.cache.update(key, Expiry::KeepExisting(ttl), |held| {
+            Ok((held.is_none_or(replaces).then_some(value), ()))
+        })
     }
 
     pub fn delete(&self, key: &str) -> Result<(), Error> {
@@ -67,26 +86,21 @@ impl<V: Clone> Memory<V> {
         self.cache.update_max_size_in_memory(entries);
     }
 
-    /// Read-modify-write of one entry, atomic against every other update of this tier.
+    /// Read-modify-write of one entry, atomic against every other read and write of this tier.
     pub fn update(
         &self,
         key: &str,
         ttl: Option<Duration>,
         update: impl FnOnce(Option<V>) -> Result<V, Error>,
     ) -> Result<V, Error> {
-        let _guard = self.guard();
-        let value = update(self.get(key)?)?;
-        self.set(key, value.clone(), ttl)?;
-        Ok(value)
-    }
-
-    /// Held across a read and a conditional write that `update` cannot express.
-    pub fn guard(&self) -> MutexGuard<'_, ()> {
-        lock(&self.updates)
+        self.cache.update(key, Expiry::KeepExisting(ttl), |held| {
+            let value = update(held.cloned())?;
+            Ok((Some(value.clone()), value))
+        })
     }
 }
 
-/// A value `InMemoryCache.increment_cache` can add to.
+/// A value `Memory::increment` can add to.
 pub(crate) trait Counter: Clone + From<Number> {
     fn as_number(&self) -> Option<Number>;
 }
@@ -98,25 +112,130 @@ impl Counter for Number {
 }
 
 impl<V: Counter> Memory<V> {
-    /// `InMemoryCache.increment_cache`: `(current or 0) + amount`, refusing an entry that is not a
-    /// number and leaving it in place.
+    /// `(current or 0) + amount`, refusing an entry that is not a number and leaving it in place.
     pub(crate) fn increment(
         &self,
         key: &str,
         amount: Number,
         ttl: Option<Duration>,
     ) -> Result<Number, Error> {
-        let _guard = self.guard();
-        let current = match self.get(key)? {
-            None => Number::Int(0),
-            Some(value) => value.as_number().ok_or(Error::InvalidEntry(None))?,
-        };
-        let total = current + amount;
-        self.set(key, V::from(total), ttl)?;
-        Ok(total)
+        self.cache.update(key, Expiry::KeepExisting(ttl), |held| {
+            let current = match held {
+                None => Number::Int(0),
+                Some(value) => value.as_number().ok_or(Error::InvalidEntry(None))?,
+            };
+            let total = current + amount;
+            Ok((Some(V::from(total)), total))
+        })
     }
 }
 
-pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+#[cfg(test)]
+mod tests {
+    use std::{sync::atomic::Ordering, time::Duration};
+
+    use rstest::rstest;
+
+    use super::Memory;
+    use crate::{
+        Number,
+        test_support::{START, clock},
+    };
+
+    type Write = fn(&Memory<Number>);
+
+    fn secs(seconds: u64) -> Duration {
+        Duration::from_secs(seconds)
+    }
+
+    fn ttl(seconds: u64) -> Option<Duration> {
+        Some(secs(seconds))
+    }
+
+    fn after(seconds: u64) -> Option<Duration> {
+        ttl(START + seconds)
+    }
+
+    fn set(memory: &Memory<Number>) {
+        memory.set("key", Number::Int(2), ttl(50)).unwrap();
+    }
+
+    fn set_if(memory: &Memory<Number>) {
+        memory
+            .set_if("key", Number::Int(2), ttl(50), |_| true)
+            .unwrap();
+    }
+
+    fn update(memory: &Memory<Number>) {
+        memory
+            .update("key", ttl(50), |_| Ok(Number::Int(2)))
+            .unwrap();
+    }
+
+    fn increment(memory: &Memory<Number>) {
+        memory.increment("key", Number::Int(2), ttl(50)).unwrap();
+    }
+
+    fn refresh(memory: &Memory<Number>) {
+        memory.refresh("key", Number::Int(2), secs(50)).unwrap();
+    }
+
+    #[rstest]
+    #[case::set(set, 10)]
+    #[case::set_if(set_if, 10)]
+    #[case::update(update, 10)]
+    #[case::increment(increment, 10)]
+    #[case::refresh(refresh, 55)]
+    fn a_write_to_a_held_key_keeps_its_deadline_unless_it_refreshes(
+        #[case] write: Write,
+        #[case] expires_after: u64,
+    ) {
+        let (now, seconds) = clock();
+        let memory = Memory::new(None, &now);
+        memory.set("key", Number::Int(0), ttl(10)).unwrap();
+        seconds.fetch_add(5, Ordering::SeqCst);
+
+        write(&memory);
+
+        assert_eq!(memory.get("key").unwrap(), Some(Number::Int(2)));
+        assert_eq!(memory.expires_at("key").unwrap(), after(expires_after));
+    }
+
+    #[rstest]
+    #[case::set(set)]
+    #[case::set_if(set_if)]
+    #[case::update(update)]
+    #[case::increment(increment)]
+    #[case::refresh(refresh)]
+    fn a_write_to_a_new_key_takes_its_ttl(#[case] write: Write) {
+        let (now, _) = clock();
+        let memory = Memory::new(None, &now);
+
+        write(&memory);
+
+        assert_eq!(memory.get("key").unwrap(), Some(Number::Int(2)));
+        assert_eq!(memory.expires_at("key").unwrap(), after(50));
+    }
+
+    #[rstest]
+    #[case::nothing_held(None, false, 2)]
+    #[case::a_value_it_replaces(Some(Number::Int(1)), true, 2)]
+    #[case::a_value_it_does_not_replace(Some(Number::Int(1)), false, 1)]
+    fn set_if_writes_over(
+        #[case] held: Option<Number>,
+        #[case] replaces: bool,
+        #[case] expected: i64,
+    ) {
+        let (now, _) = clock();
+        let memory = Memory::new(None, &now);
+        if let Some(held) = held {
+            memory.set("key", held, None).unwrap();
+        }
+
+        memory
+            .set_if("key", Number::Int(2), None, |_| replaces)
+            .unwrap();
+
+        assert_eq!(memory.get("key").unwrap(), Some(Number::Int(expected)));
+    }
 }
