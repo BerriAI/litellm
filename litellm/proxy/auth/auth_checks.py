@@ -1128,6 +1128,8 @@ def route_skips_budget_checks(route: str) -> bool:
         return False
     if route in MODEL_DISCOVERY_ROUTES:
         return True
+    if route in LiteLLMRoutes.apply_guardrail_routes.value:
+        return True
     if RouteChecks.is_llm_api_route(route=route):
         return False
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415  # pass-through endpoints import the auth stack
