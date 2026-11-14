@@ -7,10 +7,13 @@ contents[].parts[]: text parts, plain-string parts, executableCode code, toolCal
 args, and the tool results (codeExecutionResult output, functionResponse and
 toolResponse response), which are left out when the guardrail skips tool messages.
 Structured values are scanned as one JSON text, the way chat scans a tool message,
-and a changed text is decoded back into the part, or blocked with a 400 when it no
-longer decodes. Request functionCall parts reach the guardrail as chat-shaped
+with control characters left raw so patterns still see line starts and numbers
+quoted so a mask can replace them. A changed text is decoded back into the part,
+numbers the guardrail left alone keep their type, and a text that no longer
+decodes is blocked with a 400. Request functionCall parts reach the guardrail as chat-shaped
 tool_calls under the call's own id (or a per-position one), and arguments the
-guardrail changed are written back into args when it returns every call.
+guardrail changed are written back into args when it returns every call, or
+blocked with a 400 when they are no longer a JSON object.
 Response text comes from candidates[].content.parts[].text. Guardrailed text is
 written back in place, so the provider gets the caller's wire shape. Requests and
 responses may be dicts (wire format) or google-genai SDK objects; streaming
@@ -19,6 +22,7 @@ blocking guardrail raises) without rewriting the frames.
 """
 
 import json
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
@@ -49,6 +53,9 @@ _EMPTY_REQUEST_DATA: Final[Mapping[str, object]] = MappingProxyType({})
 _DECODED_JSON: Final = TypeAdapter(object)
 _SYSTEM_INSTRUCTION_KEYS: Final = ("systemInstruction", "system_instruction")
 _FUNCTION_CALL_KEYS: Final = ("functionCall", "function_call")
+_JSON_SCALAR: Final = re.compile(r'"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?')
+_JSON_STRING_ESCAPE: Final = re.compile(r'\\(["\\]|[bfnrt]|u[0-9a-fA-F]{4})')
+_CONTROL_CHARACTER_ESCAPES: Final = MappingProxyType({"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +81,7 @@ class _TextSlot:
     container: object
     key: str | int
     text: str
-    is_json: bool = False
+    json_value: object = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,11 +132,44 @@ def _string_slot(container: object, key: str | int, value: object) -> tuple[_Tex
     return (_TextSlot(container=container, key=key, text=value),) if isinstance(value, str) and value else ()
 
 
+def _json_text(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _raw_control_character(escape: re.Match[str]) -> str:
+    code: Final = escape.group(1)
+    if code in ('"', "\\"):
+        return escape.group(0)
+    return _CONTROL_CHARACTER_ESCAPES.get(code) or chr(int(code[1:], 16))
+
+
+def _scan_scalar(scalar: re.Match[str]) -> str:
+    text: Final = scalar.group(0)
+    if not text.startswith('"'):
+        return f'"{text}"'
+    return _JSON_STRING_ESCAPE.sub(_raw_control_character, text)
+
+
+def _json_scan_text(value: object) -> str:
+    return _JSON_SCALAR.sub(_scan_scalar, _json_text(value))
+
+
+def _original_number_or(scalar: str, original: str) -> str:
+    return original if not original.startswith('"') and scalar == f'"{original}"' else scalar
+
+
+def _with_original_numbers(original_value: object, guardrailed_text: str) -> str:
+    original_scalars: Final = tuple(scalar.group(0) for scalar in _JSON_SCALAR.finditer(_json_text(original_value)))
+    if len(original_scalars) != sum(1 for _ in _JSON_SCALAR.finditer(guardrailed_text)):
+        return guardrailed_text
+    originals: Final = iter(original_scalars)
+    return _JSON_SCALAR.sub(lambda scalar: _original_number_or(scalar.group(0), next(originals)), guardrailed_text)
+
+
 def _json_slot(container: object, key: str | int, value: object) -> tuple[_TextSlot, ...]:
     if not value:
         return ()
-    text: Final = json.dumps(value, ensure_ascii=False, default=str)
-    return (_TextSlot(container=container, key=key, text=text, is_json=True),)
+    return (_TextSlot(container=container, key=key, text=_json_scan_text(value), json_value=value),)
 
 
 def _part_field_slots(part: object, part_field: _PartField) -> tuple[_TextSlot, ...]:
@@ -247,22 +287,19 @@ def _guardrail_inputs(
     return {**with_model, "tool_calls": [_tool_call_chunk(index, slot) for index, slot in enumerate(function_calls)]}
 
 
-def _unwritable_guardrail_change(key: str | int) -> "HTTPException":
+def _unwritable_guardrail_change(rewrite: str) -> "HTTPException":
     from fastapi import HTTPException
 
-    return HTTPException(
-        status_code=400,
-        detail={"error": f"Content blocked: the guardrail rewrote a part's {key} into text that is not valid JSON"},
-    )
+    return HTTPException(status_code=400, detail={"error": f"Content blocked: the guardrail rewrote {rewrite}"})
 
 
 def _written_value(slot: _TextSlot, text: str) -> object:
-    if not slot.is_json:
+    if slot.json_value is None:
         return text
     try:
-        return _DECODED_JSON.validate_python(json.loads(text))
+        return _DECODED_JSON.validate_python(json.loads(_with_original_numbers(slot.json_value, text), strict=False))
     except json.JSONDecodeError:
-        raise _unwritable_guardrail_change(slot.key) from None
+        raise _unwritable_guardrail_change(f"a part's {slot.key} into text that is not valid JSON") from None
 
 
 def _write_back_texts(text_slots: Sequence[_TextSlot], guardrailed_texts: Sequence[str] | None) -> None:
@@ -279,7 +316,10 @@ def _guardrailed_args(slot: _FunctionCallSlot, tool_call: object) -> Mapping[str
     arguments: Final = _field(_field(tool_call, "function"), "arguments")
     if not isinstance(arguments, str) or arguments == slot.arguments:
         return None
-    return _parse_json_dict_or_none(arguments)
+    args: Final = _parse_json_dict_or_none(arguments)
+    if args is None:
+        raise _unwritable_guardrail_change("a functionCall's args into a value that is not a JSON object")
+    return args
 
 
 def _write_back_function_calls(

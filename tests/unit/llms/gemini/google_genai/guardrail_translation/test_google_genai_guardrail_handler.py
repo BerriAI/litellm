@@ -261,24 +261,45 @@ async def test_a_masked_word_deep_in_a_function_response_is_masked_where_it_sits
     )
 
 
-@pytest.mark.asyncio
-async def test_a_card_number_sent_as_a_json_number_in_a_function_response_is_blocked() -> None:
-    card_filter: Final = ContentFilterGuardrail(
+def _card_filter(action: ContentFilterAction) -> ContentFilterGuardrail:
+    return ContentFilterGuardrail(
         guardrail_name="card-filter",
-        patterns=[
-            ContentFilterPattern(
-                pattern_type="regex", pattern=r"\b4\d{15}\b", name="card", action=ContentFilterAction.BLOCK
-            )
-        ],
+        patterns=[ContentFilterPattern(pattern_type="regex", pattern=r"\b4\d{15}\b", name="card", action=action)],
     )
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rows",
+    [[{"card": 4111111111111111}], ["first line\n4111111111111111"], ["first line\r\n\t4111111111111111"]],
+    ids=["json-number", "line-start", "after-tab"],
+)
+async def test_a_card_number_in_a_function_response_is_blocked(rows: list[object]) -> None:
     with pytest.raises(HTTPException) as blocked:
         await GoogleGenAIGenerateContentHandler().process_input_messages(
-            data=_function_response_with_rows([{"card": 4111111111111111}]),
-            guardrail_to_apply=card_filter,
+            data=_function_response_with_rows(rows),
+            guardrail_to_apply=_card_filter(ContentFilterAction.BLOCK),
         )
 
     assert blocked.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_a_masked_card_number_replaces_the_json_number_and_other_values_keep_their_type() -> None:
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=_function_response_with_rows(
+            [{"card": 4111111111111111, "count": 3, "rate": 2.5, "ok": True, "id": "7", "note": 'C:\\new "x"\nok'}]
+        ),
+        guardrail_to_apply=_card_filter(ContentFilterAction.MASK),
+    )
+
+    sent_rows: Final = guardrailed["contents"][0]["parts"][0]["functionResponse"]["response"]["rows"]
+    assert sent_rows == [
+        {"card": sent_rows[0]["card"], "count": 3, "rate": 2.5, "ok": True, "id": "7", "note": 'C:\\new "x"\nok'}
+    ]
+    assert isinstance(sent_rows[0]["card"], str)
+    assert "4111111111111111" not in sent_rows[0]["card"]
+    assert type(sent_rows[0]["count"]) is int
 
 
 @pytest.mark.asyncio
@@ -370,6 +391,17 @@ async def test_a_guardrail_returning_fewer_tool_calls_than_it_got_changes_no_fun
     )
 
     assert _sent_request(guardrailed) == sent
+
+
+@pytest.mark.asyncio
+async def test_a_masked_function_call_whose_args_are_not_an_object_blocks_the_request_instead_of_sending_it() -> None:
+    with pytest.raises(HTTPException) as blocked:
+        await GoogleGenAIGenerateContentHandler().process_input_messages(
+            data=_lookup_calls({"args": "zebrafruit"}),
+            guardrail_to_apply=_zebrafruit_filter(ContentFilterAction.MASK),
+        )
+
+    assert blocked.value.status_code == 400
 
 
 @pytest.mark.asyncio
