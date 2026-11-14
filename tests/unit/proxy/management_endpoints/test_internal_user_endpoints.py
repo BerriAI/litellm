@@ -5,6 +5,7 @@ import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timezone
+from itertools import chain
 from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -2651,7 +2652,9 @@ async def test_user_window_edit_keeps_running_and_owed_resets(mocker: MockerFixt
 
 
 @pytest.mark.asyncio
-async def test_bulk_user_windows_count_spend_and_keep_each_users_resets(mocker: MockerFixture) -> None:
+async def test_bulk_user_windows_keep_each_users_resets_inside_the_all_users_transaction(
+    mocker: MockerFixture,
+) -> None:
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, budget_windows_absent_cache_key
     from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
     from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
@@ -2659,16 +2662,11 @@ async def test_bulk_user_windows_count_spend_and_keep_each_users_resets(mocker: 
     saved_users: Final = MappingProxyType(
         {user_id: _user_with_windows(user_id) for user_id in ("user-spruce", "user-fir")}
     )
+    transaction_writes: Final = mocker.AsyncMock(return_value=len(saved_users))
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=list(saved_users.values()))
-    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
-        side_effect=lambda where: saved_users[where["user_id"]]
-    )
-    prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=len(saved_users))
-    prisma_client.tx = lambda: _transaction_over(prisma_client.db)
-    prisma_client.update_data = mocker.AsyncMock(
-        side_effect=lambda user_id, data, table_name: {"user_id": user_id, "data": saved_users[user_id]}
-    )
+    transaction_db: Final = SimpleNamespace(litellm_usertable=SimpleNamespace(update_many=transaction_writes))
+    prisma_client.tx = lambda: _transaction_over(transaction_db)
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
     cache: Final = UserApiKeyCache()
     markers: Final = tuple(
@@ -2683,18 +2681,20 @@ async def test_bulk_user_windows_count_spend_and_keep_each_users_resets(mocker: 
     )
 
     response: Final = await bulk_user_update(
-        data=BulkUpdateUserRequest(all_users=True, user_updates={"budget_limits": list(_RESENT_WINDOWS)}),
+        data=BulkUpdateUserRequest(
+            all_users=True, user_updates={"budget_limits": list(_RESENT_WINDOWS), "max_budget": 50.0}
+        ),
         user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
         litellm_changed_by=None,
     )
 
     assert response.successful_updates == len(saved_users)
-    written: Final = {
-        call.kwargs["user_id"]: call.kwargs["data"]["budget_limits"] for call in prisma_client.update_data.call_args_list
-    }
-    assert written.keys() == saved_users.keys()
-    for windows in written.values():
-        _assert_resent_windows_keep_their_resets(windows)
+    writes: Final = tuple(call.kwargs for call in transaction_writes.call_args_list)
+    assert {"where": {}, "data": {"max_budget": 50.0}} in writes
+    window_writes: Final = tuple(write for write in writes if "budget_limits" in write["data"])
+    assert sorted(chain.from_iterable(write["where"]["user_id"]["in"] for write in window_writes)) == sorted(saved_users)
+    for write in window_writes:
+        _assert_resent_windows_keep_their_resets(write["data"]["budget_limits"])
     assert all(cache.budget_windows_absent_cache.get_cache(key=marker) is None for marker in markers)
 
 
@@ -5201,7 +5201,14 @@ class _RecordingPrisma:
 
 
 @pytest.mark.asyncio
-async def test_user_new_puts_budget_windows_on_the_user_and_not_on_its_key(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("team_id", "key_keeps_windows"),
+    [(None, False), ("team-1", True)],
+    ids=["personal_key", "team_key_skips_user_budgets"],
+)
+async def test_user_new_puts_budget_windows_on_the_user_and_only_on_a_team_auto_key(
+    monkeypatch: pytest.MonkeyPatch, team_id: str | None, key_keeps_windows: bool
+) -> None:
     from litellm.proxy.management_endpoints import key_management_endpoints
 
     prisma: Final = _RecordingPrisma()
@@ -5210,6 +5217,7 @@ async def test_user_new_puts_budget_windows_on_the_user_and_not_on_its_key(monke
     await key_management_endpoints.generate_key_helper_fn(
         request_type="user",
         user_id="u-1",
+        team_id=team_id,
         budget_limits=[{"budget_duration": "1h", "max_budget": 5.0}, {"budget_duration": "30d", "max_budget": 100.0}],
     )
 
@@ -5219,7 +5227,10 @@ async def test_user_new_puts_budget_windows_on_the_user_and_not_on_its_key(monke
         ("1h", 5.0),
         ("30d", 100.0),
     ]
-    assert written["key"]["budget_limits"] is None
+    key_windows: Final = written["key"]["budget_limits"]
+    assert (json.loads(str(key_windows)) if key_windows is not None else None) == (
+        user_windows if key_keeps_windows else None
+    )
 
 
 @pytest.fixture

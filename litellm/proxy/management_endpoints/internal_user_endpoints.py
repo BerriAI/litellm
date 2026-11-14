@@ -136,6 +136,7 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
+_STORED_BUDGET_WINDOWS_ADAPTER: Final = TypeAdapter(tuple[BudgetLimitEntry, ...])
 _USER_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
 
 
@@ -2089,14 +2090,26 @@ async def bulk_user_update(
         non_default_values.pop("user_id", None)
         non_default_values.pop("user_email", None)
 
-        if "budget_limits" in non_default_values:
-            return await bulk_update_processed_users(
-                users_to_update=[
-                    UpdateUserRequest.model_validate({**data_json, "user_id": user.user_id}) for user in all_users_in_db
-                ],
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=litellm_changed_by,
-            )
+        windows_by_user: Final = MappingProxyType(
+            {
+                user.user_id: _budget_windows_json(
+                    data.user_updates.budget_limits,
+                    stored=None
+                    if user.budget_limits is None
+                    else _STORED_BUDGET_WINDOWS_ADAPTER.validate_python(user.budget_limits),
+                )
+                for user in all_users_in_db
+            }
+            if "budget_limits" in non_default_values
+            else {}
+        )
+        users_by_windows: Final = MappingProxyType(
+            {
+                windows_json: [uid for uid, user_windows in windows_by_user.items() if user_windows == windows_json]
+                for windows_json in frozenset(windows_by_user.values())
+            }
+        )
+        shared_values: Final = MappingProxyType({k: v for k, v in non_default_values.items() if k != "budget_limits"})
 
         successful_updates = 0
         failed_updates: Final = 0
@@ -2106,21 +2119,35 @@ async def bulk_user_update(
             # Perform bulk database update
             async with prisma_client.tx() as transaction:
                 _ = await transaction.query_raw(_LOCK_ALL_USERS_SQL)
-                _ = await user_tx_db(transaction).update_many(
-                    where={},
-                    data=(
-                        {**non_default_values, "model_max_budget": json.dumps(non_default_values["model_max_budget"])}
-                        if "model_max_budget" in non_default_values
-                        else non_default_values
-                    ),
-                )
+                if shared_values:
+                    _ = await user_tx_db(transaction).update_many(
+                        where={},
+                        data=(
+                            {**shared_values, "model_max_budget": json.dumps(shared_values["model_max_budget"])}
+                            if "model_max_budget" in shared_values
+                            else dict(shared_values)
+                        ),
+                    )
+                for windows_json, user_ids in users_by_windows.items():
+                    _ = await user_tx_db(transaction).update_many(
+                        where={"user_id": {"in": user_ids}}, data={"budget_limits": windows_json}
+                    )
 
             for start in range(0, len(all_users_in_db), _USER_CACHE_INVALIDATION_BATCH_SIZE):
                 await asyncio.gather(
                     *(
                         evict_and_broadcast(cache_keys=(user.user_id,), user_api_key_cache=user_api_key_cache)
                         for user in all_users_in_db[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
-                    )
+                    ),
+                    *(
+                        evict_budget_windows_absent_marker(
+                            entity_type=Litellm_EntityType.USER,
+                            entity_id=user.user_id,
+                            user_api_key_cache=user_api_key_cache,
+                        )
+                        for user in all_users_in_db[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
+                        if user.user_id in windows_by_user
+                    ),
                 )
 
             # Create individual success results
@@ -2130,7 +2157,11 @@ async def bulk_user_update(
                         user_id=user.user_id,
                         user_email=user.user_email,
                         success=True,
-                        updated_user={"user_id": user.user_id, **non_default_values},
+                        updated_user={
+                            "user_id": user.user_id,
+                            **non_default_values,
+                            **({"budget_limits": windows_by_user[user.user_id]} if windows_by_user else {}),
+                        },
                     )
                 )
                 successful_updates += 1
