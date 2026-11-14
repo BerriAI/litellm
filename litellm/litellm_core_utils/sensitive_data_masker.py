@@ -117,7 +117,9 @@ class SensitiveDataMasker:
             elif key_is_sensitive and isinstance(item, str):
                 masked_items.append(self.mask_value(item))
             else:
-                masked_items.append(item if isinstance(item, (int, float, bool, str, list)) else str(item))
+                masked_items.append(
+                    item if item is None or isinstance(item, (int, float, bool, str, list)) else str(item)
+                )
         return masked_items
 
     def mask_dict(
@@ -144,7 +146,7 @@ class SensitiveDataMasker:
                     str_value = str(v) if v is not None else ""
                     masked_data[k] = self.mask_value(str_value)
                 else:
-                    masked_data[k] = v if isinstance(v, (int, float, bool, str, list)) else str(v)
+                    masked_data[k] = v if v is None or isinstance(v, (int, float, bool, str, list)) else str(v)
             except Exception:
                 masked_data[k] = "<unable to serialize>"
 

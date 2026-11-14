@@ -1,4 +1,8 @@
 import json
+from functools import partial
+from itertools import count
+from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -16,6 +20,7 @@ from litellm.mcp_client.tools import (
     _normalize_mcp_input_schema,
     call_mcp_tool,
     call_openai_tool,
+    list_tools_result_with_pagination,
     list_tools_with_pagination,
     load_mcp_tools,
     transform_mcp_tool_to_anthropic_tool,
@@ -167,6 +172,25 @@ async def test_pagination_walk_stops_on_repeated_cursor(mock_session):
     result = await list_tools_with_pagination(mock_session)
     assert [tool.name for tool in result] == ["tool_0", "tool_1"]
     assert mock_session.list_tools.call_count == 2
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("last_cursor", [None, "page-1"])
+async def test_pagination_walk_keeps_the_shortest_ttl_only_for_a_complete_walk(
+    mock_session: MagicMock, last_cursor: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("litellm.mcp_client.tools.time", SimpleNamespace(monotonic=partial(next, count(100.0, 0.5))))
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(tools=[MCPTool(name="tool_0", inputSchema={})], nextCursor="page-1", ttl_ms=30000),
+        ListToolsResult(tools=[MCPTool(name="tool_1", inputSchema={})], nextCursor=last_cursor, ttl_ms=20000),
+    ]
+    result: Final = await list_tools_result_with_pagination(mock_session)
+
+    assert [tool.name for tool in result.tools] == ["tool_0", "tool_1"]
+    if last_cursor is None:
+        assert result.ttl_ms == 19500
+    else:
+        assert result.ttl_ms == 0
 
 
 @pytest.mark.asyncio()
