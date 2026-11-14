@@ -59,7 +59,7 @@ async def _run_line(
             stream=kwargs.get("stream") is True,
             call_type="acompletion",
             start_time=start,
-            litellm_call_id=str(kwargs.get("litellm_call_id", "native")),
+            litellm_call_id=str(kwargs.get("litellm_call_id")),
             function_id="native",
         )
         owner.model_call_details = kwargs

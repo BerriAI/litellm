@@ -468,5 +468,29 @@
     "fallback_on_saturation": true,
     "fallback_on_saturation_invalid": "text",
     "fallback_walk_armed": true
+  },
+  "prometheus_settings": {
+    "emit_stream_label": true,
+    "custom_tags": [
+      "text"
+    ],
+    "disable_end_user_cost_tracking": true,
+    "end_user_prometheus_only": true,
+    "end_user_max_series": 7,
+    "end_user_ttl_seconds": 1.5,
+    "end_user_cleanup_interval_seconds": 1.5
+  },
+  "logged_deployment_labels": {
+    "x-ratelimit-key-remaining-requests": "text"
+  },
+  "logged_wall_clock": {
+    "year": 2026,
+    "month": 11,
+    "day": 13,
+    "hour": 9,
+    "minute": 30,
+    "second": 15,
+    "microsecond": 250,
+    "utc_offset_seconds": -18000
   }
 }

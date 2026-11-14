@@ -26,6 +26,9 @@ I64: TypeAlias = Annotated[int, Member(ge=-(2**63), le=2**63 - 1)]
 U16: TypeAlias = Annotated[int, Member(ge=0, le=2**16 - 1)]
 F64: TypeAlias = Annotated[float, Member(allow_inf_nan=True)]
 Flag: TypeAlias = Annotated[bool, Member(strict=True)]
+StrictText: TypeAlias = Annotated[str, Member(strict=True)]
+StrictI64: TypeAlias = Annotated[int, Member(strict=True, ge=-(2**63), le=2**63 - 1)]
+StrictF64: TypeAlias = Annotated[float, Member(strict=True, allow_inf_nan=True)]
 
 
 def _float_or_zero(value: object) -> float:
@@ -401,6 +404,16 @@ class LoggedRequest(Record):
     stream: Scalar | None = None
 
 
+class PrometheusSettings(Strict):
+    emit_stream_label: Flag
+    custom_tags: tuple[StrictText, ...]
+    disable_end_user_cost_tracking: Flag
+    end_user_prometheus_only: Flag
+    end_user_max_series: StrictI64 | None
+    end_user_ttl_seconds: StrictF64 | None
+    end_user_cleanup_interval_seconds: StrictF64 | None
+
+
 class MetadataLabel(Strict):
     name: str
     value: str
@@ -493,8 +506,10 @@ __all__ = [
     "MetadataLabel",
     "ModelInfo",
     "Moment",
+    "MomentInput",
     "Outcome",
     "OutputCap",
+    "PrometheusSettings",
     "RateLimitState",
     "RateLimitStatus",
     "RateLimitStatuses",

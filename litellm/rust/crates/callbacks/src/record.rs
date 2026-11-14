@@ -383,6 +383,18 @@ pub struct McpToolCall {
     pub server_name: Option<Scalar>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrometheusSettings {
+    pub emit_stream_label: bool,
+    pub custom_tags: Vec<String>,
+    pub disable_end_user_cost_tracking: bool,
+    pub end_user_prometheus_only: bool,
+    pub end_user_max_series: Option<i64>,
+    pub end_user_ttl_seconds: Option<f64>,
+    pub end_user_cleanup_interval_seconds: Option<f64>,
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -427,6 +439,9 @@ mod tests {
             Field::MetadataLabels => round_trip::<typed::MetadataLabels>(sample),
             Field::InputSequenceLength => round_trip::<typed::InputSequenceLength>(sample),
             Field::LimiterRequest => round_trip::<typed::LimiterRequest>(sample),
+            Field::PrometheusSettings => round_trip::<typed::PrometheusSettings>(sample),
+            Field::LoggedDeploymentLabels => round_trip::<typed::LoggedDeploymentLabels>(sample),
+            Field::LoggedWallClock => round_trip::<typed::LoggedWallClock>(sample),
             other => panic!("{other:?} has no typed record sample"),
         }
     }
@@ -440,7 +455,7 @@ mod tests {
             assert_eq!(&decoded(field, sample), sample, "{name}");
         }
         let typed: Vec<&str> = samples.keys().map(String::as_str).collect();
-        assert_eq!(typed.len(), 23);
+        assert_eq!(typed.len(), 26);
     }
 
     #[rstest]

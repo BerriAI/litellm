@@ -92,7 +92,10 @@ class Field(str, Enum):
     metadata_labels = ("metadata_labels", 44, FieldTier.small_record)
     input_sequence_length = ("input_sequence_length", 45, FieldTier.small_record)
     limiter_request = ("limiter_request", 46, FieldTier.small_record)
+    prometheus_settings = ("prometheus_settings", 48, FieldTier.small_record)
+    logged_deployment_labels = ("logged_deployment_labels", 49, FieldTier.small_record)
     router_ref = ("router_ref", 50, FieldTier.compatibility)
+    logged_wall_clock = ("logged_wall_clock", 51, FieldTier.small_record)
 
 
 class Activation(str, Enum):
@@ -129,7 +132,10 @@ DERIVED_ONLY: Final = frozenset(
         Field.metadata_labels,
         Field.input_sequence_length,
         Field.limiter_request,
+        Field.prometheus_settings,
+        Field.logged_deployment_labels,
         Field.router_ref,
+        Field.logged_wall_clock,
     }
 )
 BY_REFERENCE: Final = frozenset({Field.standard_logging_payload_ref, Field.router_ref})

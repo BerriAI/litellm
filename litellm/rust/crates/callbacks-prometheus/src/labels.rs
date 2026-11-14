@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use litellm_callbacks::PrometheusSettings;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -24,6 +25,20 @@ pub struct Settings {
     pub end_user_ttl_seconds: Option<f64>,
     #[serde(default)]
     pub end_user_cleanup_interval_seconds: Option<f64>,
+}
+
+impl From<&PrometheusSettings> for Settings {
+    fn from(settings: &PrometheusSettings) -> Self {
+        Self {
+            emit_stream_label: settings.emit_stream_label,
+            custom_tags: settings.custom_tags.clone(),
+            disable_end_user_cost_tracking: settings.disable_end_user_cost_tracking,
+            end_user_prometheus_only: settings.end_user_prometheus_only,
+            end_user_max_series: settings.end_user_max_series,
+            end_user_ttl_seconds: settings.end_user_ttl_seconds,
+            end_user_cleanup_interval_seconds: settings.end_user_cleanup_interval_seconds,
+        }
+    }
 }
 
 impl Settings {

@@ -24,9 +24,9 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.custom_logger_v2.call import CallContext
-from litellm.integrations.custom_logger_v2.derivations import DERIVED_ATTEMPT_FIELDS
-from litellm.integrations.custom_logger_v2.enums import Field, Hook
+from litellm.integrations.custom_logger_v2.call import CallContext, CallFacts
+from litellm.integrations.custom_logger_v2.derivations import DERIVED_ATTEMPT_FIELDS, current_prometheus_settings
+from litellm.integrations.custom_logger_v2.enums import Hook
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs, with_sources
 from litellm.integrations.custom_logger_v2.legacy import Admit, KwargsFields, hook_subscribers, run_subscribers
 from litellm.integrations.custom_logger_v2.rust import RustLogger, rust_logger
@@ -71,13 +71,11 @@ NativeOp: TypeAlias = Literal[
 
 NativePrometheusMetric: Final = _native.NativePrometheusMetric
 
-_PAYLOAD_LABEL_KEYS: Final = ("model_group", "model_id", "api_base", "custom_llm_provider")
 _EPOCH_NAIVE: Final = datetime(1970, 1, 1)  # noqa: DTZ001  # callback timestamps use the legacy naive contract
 _EPOCH_AWARE: Final = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _ONE_MICROSECOND: Final = timedelta(microseconds=1)
 _JSON_INTS: Final = (-(2**63), 2**64 - 1)
 NUMBER_KEY: Final = "$num"
-_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _MOST_RECENT_MODES: Final = frozenset(("mostrecent", "livemostrecent"))
 _STRICT: Final = ConfigDict(strict=True)
 _DICT: Final[TypeAdapter[dict[object, object]]] = TypeAdapter(  # mutable-ok: pydantic hands back a fresh dict per call
@@ -153,37 +151,6 @@ def moment(value: object) -> Mapping[str, object] | None:
 
 def wall_moment(value: datetime | None) -> Mapping[str, object] | None:
     return None if value is None else moment(value.replace(tzinfo=None))
-
-
-def _settings() -> Mapping[str, object]:
-    return {
-        "emit_stream_label": litellm.prometheus_emit_stream_label is True,
-        "custom_tags": list(litellm.custom_prometheus_tags or ()),
-        "disable_end_user_cost_tracking": bool(litellm.disable_end_user_cost_tracking),
-        "end_user_prometheus_only": litellm.enable_end_user_cost_tracking_prometheus_only is True,
-        "end_user_max_series": litellm.prometheus_end_user_metrics_max_series_per_metric,
-        "end_user_ttl_seconds": litellm.prometheus_end_user_metrics_ttl_seconds,
-        "end_user_cleanup_interval_seconds": litellm.prometheus_end_user_metrics_cleanup_interval_seconds,
-    }
-
-
-def _mapping_or_empty(value: object) -> Mapping[str, object]:
-    try:
-        return _MAPPING.validate_python(value)
-    except ValidationError:
-        return {}
-
-
-def residual(
-    kwargs: Mapping[str, object], input_sequence_length_label: bool, now: datetime | None
-) -> Mapping[str, object]:
-    payload: Final = _mapping_or_empty(kwargs.get("standard_logging_object"))
-    return {
-        "settings": _settings(),
-        "emit_input_sequence_length_label": input_sequence_length_label,
-        "payload_labels": {key: json_safe(payload[key]) for key in _PAYLOAD_LABEL_KEYS if key in payload},
-        "now": moment(now),
-    }
 
 
 def _labelnames(kwargs: Mapping[str, object]) -> tuple[str, ...]:
@@ -334,7 +301,10 @@ class NativeStore:
 
     def op(self, name: NativeOp, facts: Mapping[str, object]) -> None:
         self.store.op(
-            name, json.dumps({**{key: json_safe(value) for key, value in facts.items()}, "settings": _settings()})
+            name,
+            json.dumps(
+                {**{key: json_safe(value) for key, value in facts.items()}, "settings": current_prometheus_settings()}
+            ),
         )
 
     def track_end_user(
@@ -388,18 +358,18 @@ class Stopped:
 @dataclass(frozen=True, slots=True, eq=False)
 class NativeTicket:
     companion: RustLogger
-    call_id: object
+    call_id: str
     event: NativeEvent
-    wire: Mapping[str, object]
     after: Callable[[], Awaitable[object]]
     budget: Callable[[], Awaitable[object]] | None
     view: object = None
     claims: Iterator[int] = field(default_factory=count)
 
-    def claim(self, companion: RustLogger, kwargs: object) -> bool:
+    def claim(self, companion: RustLogger, call: CallFacts | None) -> bool:
         return (
             companion is self.companion
-            and _mapping_or_empty(kwargs).get("litellm_call_id") == self.call_id
+            and call is not None
+            and call.ids.call_id == self.call_id
             and next(self.claims) == 0
         )
 
@@ -414,17 +384,6 @@ class NativeTicket:
 
 
 _TICKET: Final[ContextVar[NativeTicket | None]] = ContextVar("prometheus_native_ticket", default=None)
-
-
-class _AttemptView:
-    __slots__ = ("_view", "deprecated_kwargs")
-
-    def __init__(self, view: object, wire: Mapping[str, object]) -> None:
-        self._view: Final = view
-        self.deprecated_kwargs: Final = wire
-
-    def __getattr__(self, name: str) -> object:
-        return getattr(self._view, name)
 
 
 def disarm() -> None:
@@ -442,17 +401,14 @@ def arm(
     event: NativeEvent,
     after: Callable[[], Awaitable[object]],
     budget: Callable[[], Awaitable[object]] | None = None,
-    input_sequence_length_label: bool = False,
-    now: datetime | None = None,
 ) -> None:
     if not isinstance(companion, RustLogger):
         return
     _ = _TICKET.set(
         NativeTicket(
             companion=companion,
-            call_id=kwargs.get("litellm_call_id"),
+            call_id=str(kwargs.get("litellm_call_id")),
             event=event,
-            wire=residual(kwargs, input_sequence_length_label, now),
             after=after,
             budget=budget,
         )
@@ -481,7 +437,7 @@ async def run_alone(
         stream=kwargs.get("stream") is True,
         call_type=str(kwargs.get("call_type") or "acompletion"),
         start_time=start_time if isinstance(start_time, datetime) else datetime.now(timezone.utc),
-        litellm_call_id=str(kwargs.get("litellm_call_id", "")),
+        litellm_call_id=str(kwargs.get("litellm_call_id")),
         function_id="prometheus",
     )
     owner.model_call_details = dict(kwargs)
@@ -563,10 +519,9 @@ class PrometheusCompanion(RustLogger):
 
     async def on_attempt_ended(self, view: object, ctx: CallContext[object]) -> None:
         ticket: Final = _TICKET.get()
-        kwargs: Final = getattr(view, Field.deprecated_kwargs.value, None)
-        if ticket is None or not ticket.claim(self, kwargs):
+        if ticket is None or not ticket.claim(self, ctx.call):
             return
-        stopped: Final = await self._recorded(replace(ticket, view=_AttemptView(view, ticket.wire)), ctx)
+        stopped: Final = await self._recorded(replace(ticket, view=view), ctx)
         if ticket.event == "failure":
             await _settle_failure(ticket, stopped)
         else:
@@ -584,7 +539,10 @@ class PrometheusCompanion(RustLogger):
 
 
 def companion(logger: PrometheusLogger, store: NativeStore) -> PrometheusCompanion:
-    handle: Final = store.store.callback(replay_log)
+    handle: Final = store.store.callback(
+        replay_log,
+        logger._emit_input_sequence_length_label,  # pyright: ignore[reportPrivateUsage]  # read once when the logger is built
+    )
     generated: Final = type(rust_logger(handle))
     built: Final = type(generated.__name__, (PrometheusCompanion, generated), {})
     return built(handle, logger, store.flush)

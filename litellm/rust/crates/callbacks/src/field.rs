@@ -108,7 +108,10 @@ fields! {
     MetadataLabels = 44, SmallRecord, std::vec::Vec<crate::record::MetadataLabel>;
     InputSequenceLength = 45, SmallRecord, crate::record::InputSequenceLength;
     LimiterRequest = 46, SmallRecord, crate::record::LimiterRequest;
+    PrometheusSettings = 48, SmallRecord, crate::record::PrometheusSettings;
+    LoggedDeploymentLabels = 49, SmallRecord, serde_json::Map<std::string::String, serde_json::Value>;
     RouterRef = 50, Compatibility, u64;
+    LoggedWallClock = 51, SmallRecord, crate::record::Moment;
 }
 
 impl Field {
@@ -147,7 +150,10 @@ pub const DERIVED_ONLY: FieldSet = FieldSet::of(&[
     Field::MetadataLabels,
     Field::InputSequenceLength,
     Field::LimiterRequest,
+    Field::PrometheusSettings,
+    Field::LoggedDeploymentLabels,
     Field::RouterRef,
+    Field::LoggedWallClock,
 ]);
 
 pub const BY_REFERENCE: FieldSet =
@@ -241,7 +247,8 @@ mod tests {
     #[case::compatibility(Field::DeprecatedResponseObj, 29, "deprecated_response_obj")]
     #[case::typed(Field::KeyLimits, 30, "key_limits")]
     #[case::limiter(Field::LimiterRequest, 46, "limiter_request")]
-    #[case::last(Field::RouterRef, 50, "router_ref")]
+    #[case::router(Field::RouterRef, 50, "router_ref")]
+    #[case::last(Field::LoggedWallClock, 51, "logged_wall_clock")]
     fn a_field_keeps_its_bit_and_its_snake_case_name(
         #[case] field: Field,
         #[case] bit: u8,

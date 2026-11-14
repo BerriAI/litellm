@@ -29,8 +29,8 @@ pub use record::{
     AgentPolicy, AttemptTiming, BudgetPlan, BudgetPlanCounter, BudgetReservation, Cost, Deployment,
     EstimatedOutputTokens, GuardrailEntry, InputSequenceLength, KeyIdentity, KeyLimits,
     LimiterRequest, LoggedKeyIdentity, LoggedModelGroup, LoggedRequest, McpToolCall, MetadataKind,
-    MetadataLabel, ModelInfo, Moment, Outcome, OutputCap, RateLimitState, RateLimitStatus,
-    RateLimitStatuses, ReservationEntry, Usage, UsageRecord, ZeroCost,
+    MetadataLabel, ModelInfo, Moment, Outcome, OutputCap, PrometheusSettings, RateLimitState,
+    RateLimitStatus, RateLimitStatuses, ReservationEntry, Usage, UsageRecord, ZeroCost,
 };
 pub use router::{RemainingUsage, RouterReadError, RouterRef, RouterUsage, UsageAmount};
 pub use scalar::Scalar;

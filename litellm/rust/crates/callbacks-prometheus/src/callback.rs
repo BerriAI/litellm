@@ -93,8 +93,7 @@ const SUCCESS_STEPS: [Step; 4] = [
     Step::SuccessTail,
 ];
 const FAILURE_STEPS: [Step; 1] = [Step::Failure];
-const READS: [Field; 16] = [
-    Field::DeprecatedKwargs,
+const READS: [Field; 18] = [
     Field::Model,
     Field::Outcome,
     Field::LoggedKeyIdentity,
@@ -110,19 +109,28 @@ const READS: [Field; 16] = [
     Field::LoggedModelGroup,
     Field::MetadataLabels,
     Field::InputSequenceLength,
+    Field::PrometheusSettings,
+    Field::LoggedDeploymentLabels,
+    Field::LoggedWallClock,
 ];
 
 pub struct Prometheus {
     store: Arc<Store>,
     sink: Arc<dyn LogSink>,
+    emit_input_sequence_length_label: bool,
     manifest: Manifest,
 }
 
 impl Prometheus {
-    pub fn new(store: Arc<Store>, sink: Arc<dyn LogSink>) -> Self {
+    pub fn new(
+        store: Arc<Store>,
+        sink: Arc<dyn LogSink>,
+        emit_input_sequence_length_label: bool,
+    ) -> Self {
         Self {
             store,
             sink,
+            emit_input_sequence_length_label,
             manifest: Self::declared(),
         }
     }
@@ -152,15 +160,14 @@ impl Prometheus {
         };
         let facts = &attempt.facts;
         for &step in steps {
-            let input_sequence_length = if step == Step::SuccessLatency
-                && facts.residual.emit_input_sequence_length_label
-            {
-                facts
-                    .input_sequence_length()
-                    .map_err(|error| Stop::raised(step, error))?
-            } else {
-                None
-            };
+            let input_sequence_length =
+                if step == Step::SuccessLatency && self.emit_input_sequence_length_label {
+                    facts
+                        .input_sequence_length()
+                        .map_err(|error| Stop::raised(step, error))?
+                } else {
+                    None
+                };
             let recorded = record(&self.store, &attempt.facts, step, input_sequence_length);
             for line in &recorded.logs {
                 self.sink.log(line);
@@ -245,6 +252,10 @@ mod tests {
 
     #[fixture]
     fn prometheus() -> Prometheus {
+        built(false)
+    }
+
+    fn built(emit_input_sequence_length_label: bool) -> Prometheus {
         let store = Store::new(SeriesLimits::default(), Box::new(ManualClock::default()));
         for (name, kind) in FAMILIES {
             store
@@ -261,23 +272,24 @@ mod tests {
                 })
                 .unwrap_or_else(|error| panic!("{error}"));
         }
-        Prometheus::new(Arc::new(store), Arc::new(Lines::default()))
+        Prometheus::new(
+            Arc::new(store),
+            Arc::new(Lines::default()),
+            emit_input_sequence_length_label,
+        )
     }
 
     fn attempt(event: &str, completion_tokens: Value, failed: bool) -> Vec<(Field, Value)> {
         let mut values = vec![
             (Field::Outcome, json!(event)),
+            (Field::PrometheusSettings, json!({})),
             (
-                Field::DeprecatedKwargs,
+                Field::LoggedDeploymentLabels,
                 json!({
-                    "settings": {},
-                    "emit_input_sequence_length_label": failed,
-                    "payload_labels": {
-                        "model_group": "group",
-                        "model_id": "id",
-                        "api_base": "base",
-                        "custom_llm_provider": "openai",
-                    },
+                    "model_group": "group",
+                    "model_id": "id",
+                    "api_base": "base",
+                    "custom_llm_provider": "openai",
                 }),
             ),
             (
@@ -367,7 +379,7 @@ mod tests {
                     subscription.reads.contains(Field::DeprecatedKwargs)
                 ))
                 .collect::<Vec<_>>(),
-            vec![(Hook::AttemptEnded, true, true)]
+            vec![(Hook::AttemptEnded, true, false)]
         );
     }
 
@@ -425,7 +437,8 @@ mod tests {
     }
 
     #[rstest]
-    fn the_input_sequence_error_stops_before_latency_with_its_python_class(prometheus: Prometheus) {
+    fn the_input_sequence_error_stops_before_latency_with_its_python_class() {
+        let prometheus = built(true);
         let output = handled(
             &prometheus,
             Hook::AttemptEnded,
@@ -462,14 +475,16 @@ mod tests {
     }
 
     #[rstest]
-    fn a_malformed_attempt_is_an_error(prometheus: Prometheus) {
+    #[case::malformed_settings(vec![(Field::PrometheusSettings, json!({"event": "nope"}))])]
+    #[case::no_settings(Vec::new())]
+    fn a_malformed_attempt_is_an_error(
+        prometheus: Prometheus,
+        #[case] settings: Vec<(Field, Value)>,
+    ) {
         let output = handled(
             &prometheus,
             Hook::AttemptEnded,
-            vec![
-                (Field::Outcome, json!("success")),
-                (Field::DeprecatedKwargs, json!({"event": "nope"})),
-            ],
+            [vec![(Field::Outcome, json!("success"))], settings].concat(),
         );
         assert!(
             matches!(output, Err(CallbackError::Failed(text)) if text.starts_with("prometheus attempt: "))

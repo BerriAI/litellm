@@ -19,17 +19,6 @@ pub struct Moment {
     pub aware: bool,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub struct Residual {
-    pub settings: Settings,
-    #[serde(default)]
-    pub emit_input_sequence_length_label: bool,
-    #[serde(default)]
-    pub payload_labels: Map<String, Value>,
-    #[serde(default)]
-    pub now: Option<Moment>,
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct KeyFacts {
     pub hashed: Value,
@@ -56,7 +45,9 @@ pub struct AttemptFacts {
     pub input_sequence_length: Option<InputSequenceLength>,
     pub stream: bool,
     pub cache_hit: Option<bool>,
-    pub residual: Residual,
+    pub settings: Settings,
+    pub deployment_labels: Map<String, Value>,
+    pub now: Option<Moment>,
 }
 
 fn tagged(text: String) -> Value {
@@ -131,19 +122,11 @@ fn read<F: TypedField>(input: &HookInput) -> Result<Option<F::Value>, CallbackEr
 
 impl AttemptFacts {
     pub fn read(input: &HookInput) -> Result<Option<(Outcome, Self)>, CallbackError> {
-        let (Some(outcome), Some(residual)) = (
-            read::<typed::Outcome>(input)?,
-            input
-                .fields
-                .raw(litellm_callbacks::Field::DeprecatedKwargs)?,
-        ) else {
+        let Some(outcome) = read::<typed::Outcome>(input)? else {
             return Ok(None);
         };
-        if residual.is_null() {
-            return Ok(None);
-        }
-        let residual = Residual::deserialize(residual)
-            .map_err(|error| failed(format!("prometheus attempt: {error}")))?;
+        let settings = read::<typed::PrometheusSettings>(input)?
+            .ok_or_else(|| failed("prometheus attempt: PrometheusSettings carries no value"))?;
         let call = input.call.as_ref();
         let facts = Self {
             model: input
@@ -168,13 +151,15 @@ impl AttemptFacts {
             input_sequence_length: read::<typed::InputSequenceLength>(input)?,
             stream: call.is_some_and(|call| call.kind.stream),
             cache_hit: call.and_then(|call| call.cache_hit),
-            residual,
+            settings: Settings::from(&settings),
+            deployment_labels: read::<typed::LoggedDeploymentLabels>(input)?.unwrap_or_default(),
+            now: moment(read::<typed::LoggedWallClock>(input)?.as_ref()),
         };
         Ok(Some((outcome, facts)))
     }
 
     pub const fn settings(&self) -> &Settings {
-        &self.residual.settings
+        &self.settings
     }
 
     pub fn completion_tokens(&self) -> Value {
@@ -208,7 +193,7 @@ impl AttemptFacts {
         let end = if rejected(timing.rejected.as_ref(), "logged_end") {
             None
         } else {
-            moment(timing.logged_end.as_ref()).or(self.residual.now)
+            moment(timing.logged_end.as_ref()).or(self.now)
         };
         (moment(timing.logged_start.as_ref()), end)
     }
@@ -332,5 +317,39 @@ mod tests {
             utc_offset_seconds: offset,
         };
         assert_eq!(moment(Some(&stamp)), Some(Moment { us, aware }));
+    }
+
+    const NOW: Moment = Moment {
+        us: 42,
+        aware: false,
+    };
+
+    fn ended(logged_end: Option<Stamp>, rejected: &[&str]) -> AttemptFacts {
+        AttemptFacts {
+            timing: AttemptTiming {
+                logged_end,
+                rejected: (!rejected.is_empty())
+                    .then(|| rejected.iter().map(|name| (*name).to_owned()).collect()),
+                ..AttemptTiming::default()
+            },
+            now: Some(NOW),
+            ..AttemptFacts::default()
+        }
+    }
+
+    #[rstest]
+    #[case::logged_end(
+        Some(Stamp { year: 2026, month: 11, day: 13, hour: 9, minute: 0, second: 0, microsecond: 0, utc_offset_seconds: None }),
+        &[],
+        Some(Moment { us: 1_794_560_400_000_000, aware: false }),
+    )]
+    #[case::clock_when_no_logged_end(None, &[], Some(NOW))]
+    #[case::nothing_when_logged_end_was_rejected(None, &["logged_end"], None)]
+    fn the_latency_window_ends_at_the_logged_end_or_the_clock(
+        #[case] logged_end: Option<Stamp>,
+        #[case] rejected: &[&str],
+        #[case] end: Option<Moment>,
+    ) {
+        assert_eq!(ended(logged_end, rejected).latency_window().1, end);
     }
 }

@@ -1675,8 +1675,6 @@ class PrometheusLogger(CustomLogger):
                 user_api_key_org_id=user_api_key_org_id,
                 end_user_id=end_user_id,
             ),
-            input_sequence_length_label=self._emit_input_sequence_length_label,
-            now=datetime.now(timezone.utc).astimezone().replace(tzinfo=None),
         )
         if not native_store.companion_in_line(self, litellm.logging_callback_manager.async_event_callbacks("success")):
             await native_store.run_alone(self.v2_companion, kwargs, "success", response_obj, start_time, end_time)
@@ -3808,6 +3806,10 @@ class PrometheusLogger(CustomLogger):
         # Mount the metrics app to the app
         app.mount("/metrics", metrics_app)
         verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics (no authentication)")
+
+
+def wall_clock() -> datetime:
+    return datetime.now(timezone.utc).astimezone().replace(tzinfo=None)
 
 
 def get_custom_labels_from_metadata(metadata: dict) -> dict[str, str]:
