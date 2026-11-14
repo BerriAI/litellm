@@ -1,6 +1,7 @@
 import asyncio
 import sys
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
@@ -21,6 +22,11 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.budget_throttle import throttled_limit
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    claim_request_stash_for_data,
+    get_request_stash,
+    get_request_stash_for_call,
+)
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit, socket_session_usage
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET
@@ -59,11 +65,46 @@ def _is_websocket_passthrough_row(kwargs: Mapping[str, object]) -> bool:
     return passthrough_payload is not None and passthrough_payload.get("request_method") == "WEBSOCKET"
 
 
-def _slots_released(kwargs: Mapping[str, object]) -> int:
-    """A websocket turn callback releases nothing; the socket's slot is released once at disconnect."""
-    if kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES or _is_websocket_passthrough_row(kwargs):
+def _holds_admitted_slot() -> bool:
+    stash: Final = get_request_stash()
+    return stash is not None and stash.v1_parallel_slot_minute is not None
+
+
+@dataclass(frozen=True, slots=True)
+class _SlotRelease:
+    """What one callback frees: ``slots`` is 0 or 1, ``admission_minute`` is the bucket the slot was taken in, when known."""
+
+    slots: int
+    admission_minute: str | None
+
+
+_RELEASES_NOTHING: Final = _SlotRelease(slots=0, admission_minute=None)
+_RELEASES_AN_UNRECORDED_SLOT: Final = _SlotRelease(slots=1, admission_minute=None)
+
+
+def _slots_released_this_minute(release: _SlotRelease, precise_minute: str) -> int:
+    """A slot taken in an earlier minute is given back to that minute's buckets, not this one's."""
+    if release.admission_minute is not None and release.admission_minute != precise_minute:
         return 0
-    return 1
+    return release.slots
+
+
+def _settle_admitted_slot(kwargs: Mapping[str, object]) -> _SlotRelease:
+    """A websocket turn callback releases nothing, the socket's slot is released once at disconnect. Within a request
+    whose admission is on the stash, only the first callback of that request releases the slot ``async_pre_call_hook``
+    took, into the minute bucket that admission counted it in, and a nested call's callbacks (a guardrail's own model
+    call) release nothing."""
+    if kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES or _is_websocket_passthrough_row(kwargs):
+        return _RELEASES_NOTHING
+    if get_request_stash() is None:
+        return _RELEASES_AN_UNRECORDED_SLOT
+    call_id: Final = kwargs.get("litellm_call_id")
+    stash: Final = get_request_stash_for_call(call_id if isinstance(call_id, str) else None)
+    if stash is None or stash.v1_parallel_slot_minute is None:
+        return _RELEASES_NOTHING
+    admission_minute: Final = stash.v1_parallel_slot_minute
+    stash.v1_parallel_slot_minute = None
+    return _SlotRelease(slots=1, admission_minute=admission_minute)
 
 
 class CacheObject(TypedDict):
@@ -517,6 +558,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             )  # don't block execution for cache updates
         )
+        claim_request_stash_for_data(data).v1_parallel_slot_minute = precise_minute
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time) -> None:
@@ -527,7 +569,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs=kwargs)
         try:
             self.print_verbose("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
-            released: Final = _slots_released(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
+            release: Final = _settle_admitted_slot(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
 
             global_max_parallel_requests: Final = kwargs["litellm_params"]["metadata"].get(
                 "global_max_parallel_requests", None
@@ -559,12 +601,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 # decrement
                 await self.internal_usage_cache.async_increment_cache(
                     key=_key,
-                    value=-released,
+                    value=-release.slots,
                     local_only=True,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )
 
             precise_minute: Final = _precise_minute(self._clock())
+            released: Final = _slots_released_this_minute(release, precise_minute)
 
             total_tokens: Final = _response_total_tokens(
                 kwargs,  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
@@ -584,7 +627,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
@@ -625,7 +668,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
@@ -649,7 +692,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": 0,
                     "current_rpm": 1,
                 }
@@ -673,7 +716,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": 0,
                     "current_rpm": 1,
                 }
@@ -697,7 +740,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": 0,
                     "current_rpm": 1,
                 }
@@ -716,8 +759,44 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 ttl=60,
                 litellm_parent_otel_span=litellm_parent_otel_span,
             )
+            if release.admission_minute is not None and release.admission_minute != precise_minute:
+                await self._release_slot_in_admission_minute(
+                    scopes=(
+                        user_api_key,
+                        f"{user_api_key}::{model_group}" if model_group is not None else None,
+                        user_api_key_user_id,
+                        user_api_key_team_id,
+                        user_api_key_end_user_id,
+                    ),
+                    admission_minute=release.admission_minute,
+                    litellm_parent_otel_span=litellm_parent_otel_span,
+                )
         except Exception as e:
             self.print_verbose(e)
+
+    async def _release_slot_in_admission_minute(
+        self,
+        scopes: tuple[str | None, ...],
+        admission_minute: str,
+        litellm_parent_otel_span: "Span | None",
+    ) -> None:
+        """Give back the slot a request took in an earlier minute's buckets, leaving that minute's tokens and request
+        counts as they were; the minute the request ended in keeps its own token accounting."""
+        for scope in scopes:
+            if scope is None:
+                continue
+            bucket: Final = f"{scope}::{admission_minute}::request_count"
+            current: Final = await self.internal_usage_cache.async_get_cache(
+                key=bucket, litellm_parent_otel_span=litellm_parent_otel_span
+            )
+            if current is None:
+                continue
+            await self.internal_usage_cache.async_set_cache(
+                bucket,
+                {**current, "current_requests": max(current["current_requests"] - 1, 0)},
+                ttl=60,
+                litellm_parent_otel_span=litellm_parent_otel_span,
+            )
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
@@ -725,7 +804,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             self.print_verbose("Inside Max Parallel Request Failure Hook")
             litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs=kwargs)
             _metadata: Final = kwargs["litellm_params"].get("metadata", {}) or {}
-            released: Final = _slots_released(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
             global_max_parallel_requests: Final = _metadata.get("global_max_parallel_requests", None)
             user_api_key: Final = _metadata.get("user_api_key", None)
             self.print_verbose(f"user_api_key: [set={user_api_key is not None}]")
@@ -739,6 +817,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 # ------------
                 # Setup values
                 # ------------
+                release: Final = _settle_admitted_slot(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
 
                 if global_max_parallel_requests is not None:
                     # get value from cache
@@ -753,12 +832,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     # decrement
                     await self.internal_usage_cache.async_increment_cache(
                         key=_key,
-                        value=-released,
+                        value=-release.slots,
                         local_only=True,
                         litellm_parent_otel_span=litellm_parent_otel_span,
                     )
 
                 precise_minute: Final = _precise_minute(self._clock())
+                released: Final = _slots_released_this_minute(release, precise_minute)
 
                 request_count_api_key: Final = f"{user_api_key}::{precise_minute}::request_count"
 
@@ -769,7 +849,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": released,
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
@@ -787,12 +867,20 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     ttl=60,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )  # save in cache for up to 1 min.
+                if release.admission_minute is not None and release.admission_minute != precise_minute:
+                    await self._release_slot_in_admission_minute(
+                        scopes=(user_api_key,),
+                        admission_minute=release.admission_minute,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    )
         except Exception as e:
             verbose_proxy_logger.exception("Inside Parallel Request Limiter: An exception occurred - %s", e)
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_release_max_parallel_requests_on_disconnect(self, user_api_key_dict: UserAPIKeyAuth) -> None:
-        """Release the slot ``async_pre_call_hook`` took for a connection whose per-turn callbacks released none."""
+        """Release the slot ``async_pre_call_hook`` took for a request that ended without a callback releasing it."""
+        if not _holds_admitted_slot():
+            return
         from litellm.proxy.proxy_server import (
             general_settings,  # pyright: ignore[reportUnknownVariableType]  # module-level settings dict is untyped
         )

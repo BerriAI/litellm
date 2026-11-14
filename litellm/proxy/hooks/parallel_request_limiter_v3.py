@@ -616,6 +616,7 @@ class RequestRateLimiterStash:
     parallel_slot: ParallelSlotAcquisition | None = None
     parallel_slot_reused_at: datetime | None = None
     parallel_slot_release_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
+    v1_parallel_slot_minute: str | None = None
     reserved_tokens: int = 0
     reserved_model: RateLimitedModel | None = None
     reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
