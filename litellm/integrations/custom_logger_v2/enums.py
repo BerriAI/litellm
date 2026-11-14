@@ -75,6 +75,23 @@ class Field(str, Enum):
     standard_logging_payload = ("standard_logging_payload", 27, FieldTier.compatibility)
     deprecated_kwargs = ("deprecated_kwargs", 28, FieldTier.compatibility)
     deprecated_response_obj = ("deprecated_response_obj", 29, FieldTier.compatibility)
+    key_limits = ("key_limits", 30, FieldTier.small_record)
+    budget_plan = ("budget_plan", 31, FieldTier.small_record)
+    budget_reservation = ("budget_reservation", 32, FieldTier.small_record)
+    rate_limit_statuses = ("rate_limit_statuses", 33, FieldTier.small_record)
+    output_cap = ("output_cap", 34, FieldTier.small_record)
+    attempt_timing = ("attempt_timing", 35, FieldTier.small_record)
+    rate_limit_state = ("rate_limit_state", 36, FieldTier.small_record)
+    logged_request = ("logged_request", 37, FieldTier.small_record)
+    mcp_tool_call = ("mcp_tool_call", 38, FieldTier.small_record)
+    log_id = ("log_id", 39, FieldTier.small_record)
+    cold_storage_object_key = ("cold_storage_object_key", 40, FieldTier.small_record)
+    standard_logging_payload_ref = ("standard_logging_payload_ref", 41, FieldTier.compatibility)
+    logged_key_identity = ("logged_key_identity", 42, FieldTier.small_record)
+    logged_model_group = ("logged_model_group", 43, FieldTier.small_record)
+    metadata_labels = ("metadata_labels", 44, FieldTier.small_record)
+    input_sequence_length = ("input_sequence_length", 45, FieldTier.small_record)
+    limiter_request = ("limiter_request", 46, FieldTier.small_record)
 
 
 class Activation(str, Enum):
@@ -87,6 +104,33 @@ class OptOutBy(str, Enum):
     admin = "admin"
     caller = "caller"
 
+
+DERIVED_ONLY: Final = frozenset(
+    {
+        Field.key_identity,
+        Field.deployment,
+        Field.request_tags,
+        Field.outcome,
+        Field.usage,
+        Field.cost,
+        Field.key_limits,
+        Field.budget_plan,
+        Field.output_cap,
+        Field.attempt_timing,
+        Field.rate_limit_state,
+        Field.logged_request,
+        Field.mcp_tool_call,
+        Field.log_id,
+        Field.cold_storage_object_key,
+        Field.standard_logging_payload_ref,
+        Field.logged_key_identity,
+        Field.logged_model_group,
+        Field.metadata_labels,
+        Field.input_sequence_length,
+        Field.limiter_request,
+    }
+)
+BY_REFERENCE: Final = frozenset({Field.standard_logging_payload_ref})
 
 ALL_FIELDS_MASK: Final = sum(1 << field.bit for field in Field)
 

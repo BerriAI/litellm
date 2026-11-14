@@ -1,5 +1,7 @@
+import base64
 import datetime
 import json
+from collections.abc import Mapping
 from unittest.mock import MagicMock, patch
 from typing import Final
 
@@ -1240,3 +1242,53 @@ def test_imagen_image_generation_validation_uses_supplied_vertex_token() -> None
         config._credentials_project_mapping.pop(cache_key, None)
 
     assert headers == {"Content-Type": "application/json", "Authorization": "Bearer test-access-token"}
+
+
+_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias")
+_FORGED_LABELS_HEADER: Final = base64.b64encode(json.dumps({"user_api_key_team_alias": "forged"}).encode()).decode()
+
+
+_GEMINI_IMAGE_REPLY: Final = {
+    "candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}]
+}
+_IMAGEN_REPLY: Final = {"predictions": [{"bytesBase64Encoded": "aW1n", "mimeType": "image/png"}]}
+
+
+def _sent_generation_headers(model: str, reply_json: Mapping[str, object]) -> httpx.Headers:
+    sent: Final[list[httpx.Request]] = []  # mutable-ok: MockTransport hands each request to a callback
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json=reply_json)
+
+    litellm.image_generation(
+        model=model,
+        prompt="a lighthouse",
+        api_base="https://vertex.invalid/generate",
+        metadata={"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"},
+        extra_headers={"X-Vertex-AI-Labels": _FORGED_LABELS_HEADER, "x-trace-id": "t-1"},
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(reply))),
+    )
+    return sent[0].headers
+
+
+@pytest.mark.parametrize(
+    ("model", "reply_json"),
+    [
+        ("vertex_ai/gemini-3.1-flash-image", _GEMINI_IMAGE_REPLY),
+        ("vertex_ai/imagen-4.0-fast-generate-001", _IMAGEN_REPLY),
+    ],
+)
+def test_vertex_image_generation_drops_a_caller_labels_header_only_while_the_setting_is_on(
+    model: str,
+    reply_json: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _sent_generation_headers(model, reply_json)
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _sent_generation_headers(model, reply_json)
+
+    assert setting_off["x-vertex-ai-labels"] == _FORGED_LABELS_HEADER
+    assert "x-vertex-ai-labels" not in setting_on
+    assert setting_on["x-trace-id"] == "t-1"

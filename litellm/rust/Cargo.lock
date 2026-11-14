@@ -3682,6 +3682,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-coroutine",
+ "litellm-host",
+ "rstest",
+ "serde",
+ "serde_json",
+ "strum",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
@@ -3696,6 +3710,23 @@ dependencies = [
  "serde_json",
  "strum",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "litellm-callbacks-python"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-callbacks",
+ "litellm-coroutine",
+ "litellm-host-python",
+ "litellm-python-compat",
+ "pyo3",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]

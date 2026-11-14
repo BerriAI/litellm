@@ -4168,6 +4168,7 @@ async def run_centralized_common_checks(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             spend=user_object.spend if user_object is not None else 0.0,
             max_budget=budget_row.max_budget if budget_row is not None else None,
+            budget_limits=budget_row.budget_limits if budget_row is not None else None,
             user_email=budget_row.user_email if budget_row is not None else None,
             object_permission_id=(
                 user_object.object_permission_id if isinstance(user_object, LiteLLM_UserTable) else None

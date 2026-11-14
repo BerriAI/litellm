@@ -12211,6 +12211,90 @@ def test_gateway_connect_rechecks_session_after_authorize(
         assert parse_qs(urlparse(response.headers["location"]).query)["code"]
 
 
+@pytest.mark.parametrize(
+    ("resource", "sealed_ids", "selectable"),
+    [
+        (None, ("alpha-id", "beta-id"), "absent"),
+        ("http://testserver", ("alpha-id", "beta-id"), "absent"),
+        ("http://testserver/mcp", ("alpha-id", "beta-id"), "absent"),
+        ("http://testserver/mcp/alpha,beta", None, False),
+    ],
+)
+def test_gateway_connect_complete_reads_each_picked_server(
+    monkeypatch: pytest.MonkeyPatch,
+    browser_session_database: _BrowserSessionDatabase,
+    resource: str | None,
+    sealed_ids: tuple[str, ...] | None,
+    selectable: Literal["absent", False],
+) -> None:
+    import json
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+    from litellm.proxy.mcp_server.gateway_dcr_flow import GATEWAY_AUTH_CODE_PREFIX
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    monkeypatch.setattr(global_mcp_server_manager, "registry", global_mcp_server_manager.registry.copy())
+    client, _, _ = _native_client_app(monkeypatch)
+    user_api_key_cache.set_cache(
+        "u1",
+        LiteLLM_UserTable(
+            user_id="u1",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="u1-mcp", mcp_servers=["alpha-id", "beta-id"]
+            ),
+        ),
+    )
+    for name in ("alpha", "beta"):
+        server = _create_oauth2_server(server_id=f"{name}-id", name=name, server_name=name, alias=name)
+        monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+    client.cookies.set("token", _browser_session_cookie(monkeypatch, "u1", session_key="sk-browser-session"))
+    registered: Final = client.post("/register", json={"redirect_uris": ["http://127.0.0.1/callback"]})
+    client_id: Final = registered.json()["client_id"]
+    resource_param: Final = {"resource": resource} if resource else {}
+    authorized: Final = client.get(
+        "/authorize/mcp-session",
+        params={
+            "client_id": client_id,
+            "redirect_uri": "http://127.0.0.1/callback",
+            "response_type": "code",
+            "code_challenge": _s256("v" * 43),
+            "code_challenge_method": "S256",
+            **resource_param,
+        },
+        follow_redirects=False,
+    )
+    flow: Final = parse_qs(urlparse(authorized.headers["location"]).query)["connect_flow"][0]
+    described: Final = client.get("/authorize/flow", params={"flow": flow})
+    assert described.json().get("selectable", "absent") == selectable
+    response: Final = client.post(
+        "/authorize/complete", data={"flow": flow, "server": ["alpha-id", "beta-id"]}, follow_redirects=False
+    )
+    assert response.status_code == 303, response.text
+    code: Final = parse_qs(urlparse(response.headers["location"]).query)["code"][0]
+    sealed: Final = decrypt_value_helper(
+        code.removeprefix(GATEWAY_AUTH_CODE_PREFIX), "gateway_authorization_code", return_original_value=False
+    )
+    assert isinstance(sealed, str)
+    granted: Final = json.loads(sealed).get("resource_server_ids")
+    assert (None if granted is None else tuple(granted)) == sealed_ids
+    token: Final = client.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code",
+            "client_id": client_id,
+            "code": code,
+            "redirect_uri": "http://127.0.0.1/callback",
+            "code_verifier": "v" * 43,
+            **resource_param,
+        },
+    )
+    assert token.status_code == 200, token.text
+
+
 @pytest.mark.parametrize("authorize_path", ["/authorize/mcp-session", "/authorize"])
 def test_gateway_authorize_routes_forward_server_scope(monkeypatch: pytest.MonkeyPatch, authorize_path: str) -> None:
     from http.cookies import SimpleCookie

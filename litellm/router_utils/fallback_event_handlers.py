@@ -41,6 +41,7 @@ from litellm.router_utils.cooldown_handlers import (
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
 )
+from litellm.types.integrations.custom_logger_v2 import Outcome
 from litellm.types.router import (
     FallbackSkipReason,
     LiteLLMParamsTypedDict,
@@ -1021,7 +1022,7 @@ async def _log_fallback_event(
             Field.deprecated_kwargs: kwargs,
             Field.model: original_model_group,
             Field.error: original_exception,
-            Field.outcome: "fallback_success" if succeeded else "fallback_failure",
+            Field.outcome: Outcome.fallback_success if succeeded else Outcome.fallback_failure,
         }
     )
     subscribers: Final = hook_subscribers(Hook.router_event, callbacks, admit=Admit.every_logger)

@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.core_helpers import decoded_json_object, drops_u
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
     OBJECT_LIST_ADAPTER,
+    AnthropicModelInfo,
     context_management_betas,
     count_tokens_feature_betas,
     is_claude_model_target,
@@ -64,7 +65,10 @@ def count_tokens_headers(access_token: str, request_data: Mapping[str, object]) 
             "vertex_ai", request_data, _REQUEST_MESSAGES.validate_python(request_data["messages"])
         ),
         *filter_and_transform_beta_headers(
-            list(context_management_betas(_CONTEXT_MANAGEMENT.validate_python(request_data.get("context_management")))),
+            [
+                *context_management_betas(_CONTEXT_MANAGEMENT.validate_python(request_data.get("context_management"))),
+                *AnthropicModelInfo().thinking_betas(request_data.get("thinking")),
+            ],
             "vertex_ai",
         ),
     )

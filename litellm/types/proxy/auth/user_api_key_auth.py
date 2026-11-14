@@ -13,6 +13,7 @@ from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import Member
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.types.agents import AgentCaller, AgentResponse
+from litellm.types.integrations.custom_logger_v2 import BudgetPlan
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
@@ -265,6 +266,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         ),
     )
     budget_reservation: dict[str, object] | None = Field(default=None, exclude=True)
+    budget_plan: BudgetPlan | None = Field(default=None, exclude=True)
     team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
     user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
     org_budget_snapshot: OrgBudgetSnapshot | None = Field(default=None, exclude=True)

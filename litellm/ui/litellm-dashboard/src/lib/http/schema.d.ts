@@ -1408,6 +1408,7 @@ export interface paths {
          *     (``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an
          *     anonymous or bad-flow request just 400s. The native-client consent page adds
          *     ``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.
+         *     Each ``server`` field is the id of a server the connect page shows as on.
          */
         post: operations["authorize_complete_authorize_complete_post"];
         delete?: never;
@@ -20188,7 +20189,7 @@ export interface paths {
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
          *     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *     - organizations: List[str] - List of organization id's the user is a member of
-         *     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - budget_limits: Optional[list] - Budget windows the user carries at the same time. Each window has a budget_duration and a max_budget, and whichever window runs out first blocks the user. Example - [{"budget_duration": "1h", "max_budget": 1.0}, {"budget_duration": "1mo", "max_budget": 100.0}].
          *     - password: Optional[str] - Not supported; any value is rejected with a 422. Users set their own password through an invitation link (POST /invitation/new).
          *     Returns:
          *     - key: (str) The generated api key for the user
@@ -20325,7 +20326,7 @@ export interface paths {
          *         - key_alias: Optional[str] - [NOT IMPLEMENTED].
          *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
          *         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
-         *         - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *         - budget_limits: Optional[list] - Budget windows the user carries at the same time. Each window has a budget_duration and a max_budget, and whichever window runs out first blocks the user. Example - [{"budget_duration": "1h", "max_budget": 1.0}, {"budget_duration": "1mo", "max_budget": 100.0}].
          */
         post: operations["user_update_user_update_post"];
         delete?: never;
@@ -29236,6 +29237,11 @@ export interface components {
             delivery?: string | null;
             /** Flow */
             flow: string;
+            /**
+             * Server
+             * @default []
+             */
+            server: string[];
             /** Team Id */
             team_id?: string | null;
         };
@@ -31896,7 +31902,7 @@ export interface components {
             allow_unmanaged_response_ids?: boolean | null;
             /**
              * Allowed Client Side S3 Buckets
-             * @description S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches. Any other bucket is rejected unless client-side credentials are allowed
+             * @description S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches, and the buckets of the s3:// image and file URLs a non-admin key sends. Any other bucket is rejected unless client-side credentials are allowed
              */
             allowed_client_side_s3_buckets?: string[] | null;
             /**
@@ -38645,6 +38651,8 @@ export interface components {
             allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -38737,6 +38745,8 @@ export interface components {
             allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -50854,6 +50864,7 @@ export interface components {
         };
         /** TokenCountRequest */
         TokenCountRequest: {
+            additional_drop_params?: components["schemas"]["JsonValue"];
             /** Contents */
             contents?: {
                 [key: string]: unknown;
@@ -50864,14 +50875,20 @@ export interface components {
             }[] | null;
             /** Model */
             model: string;
+            parallel_tool_calls?: components["schemas"]["JsonValue"];
             /** Prompt */
             prompt?: string | null;
+            reasoning_effort?: components["schemas"]["JsonValue"];
+            response_format?: components["schemas"]["JsonValue"];
             /** System */
             system?: unknown | null;
+            thinking?: components["schemas"]["JsonValue"];
+            tool_choice?: components["schemas"]["JsonValue"];
             /** Tools */
             tools?: {
                 [key: string]: unknown;
             }[] | null;
+            web_search_options?: components["schemas"]["JsonValue"];
         };
         /** TokenCountResponse */
         TokenCountResponse: {
@@ -53593,6 +53610,8 @@ export interface components {
         UserInfoV2Response: {
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */

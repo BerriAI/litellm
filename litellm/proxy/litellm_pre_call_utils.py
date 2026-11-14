@@ -51,6 +51,10 @@ from litellm.constants import (
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import merged_guardrail_entries, without_server_streaming_classification
+from litellm.integrations.custom_logger_v2.dispatcher import RequestScope
+from litellm.integrations.custom_logger_v2.host import enter_request_scope
+from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
+from litellm.integrations.custom_logger_v2.selection import RequestSelection
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
@@ -1501,6 +1505,26 @@ def _dynamically_disabled_backends(
     return frozenset(name.lower() for name in disabled if isinstance(name, str))
 
 
+def bind_v2_request_scope(
+    data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, request_headers: Mapping[str, str]
+) -> RequestScope | None:
+    if not CustomLoggerV2.declared_hooks:
+        return None
+    scope: Final = enter_request_scope(
+        RequestSelection(
+            caller_opt_outs=_dynamically_disabled_backends(user_api_key_dict, request_headers),
+            no_log=data.get("no-log") is True and not litellm.global_disable_no_log_param,
+        )
+    )
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj: Final = data.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging):
+        logging_obj.v2_scope = scope
+        logging_obj.v2_auth = user_api_key_dict
+    return scope
+
+
 def resolve_tenant_otel_destinations(
     user_api_key_dict: UserAPIKeyAuth,
     request_headers: Mapping[str, str] | None = None,
@@ -1820,7 +1844,7 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
-    def _get_spend_logs_metadata_from_request_headers(headers: dict) -> dict | None:
+    def get_spend_logs_metadata_from_request_headers(headers: Mapping[str, str]) -> object:
         """
         Get the `spend_logs_metadata` from the request headers.
         """
@@ -2062,12 +2086,14 @@ class LiteLLMProxyRequestSetup:
         """
         from litellm.proxy._types import LitellmMetadataFromRequestHeaders
 
-        metadata_from_headers: Final = LitellmMetadataFromRequestHeaders()
         request_body: Final = cast(Mapping[str, object], data)  # cast-ok: request body is a str-keyed JSON object
         _drop_client_session_metadata(request_body)
-        spend_logs_metadata: Final = LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(headers)
-        if spend_logs_metadata is not None:
-            metadata_from_headers["spend_logs_metadata"] = spend_logs_metadata
+        spend_logs_metadata: Final = LiteLLMProxyRequestSetup.get_spend_logs_metadata_from_request_headers(headers)
+        metadata_from_headers: Final = (
+            LitellmMetadataFromRequestHeaders(spend_logs_metadata=spend_logs_metadata)
+            if spend_logs_metadata is not None
+            else LitellmMetadataFromRequestHeaders()
+        )
 
         #########################################################################################
         # Finally update the requests metadata with the `metadata_from_headers`

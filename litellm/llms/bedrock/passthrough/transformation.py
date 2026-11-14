@@ -31,6 +31,7 @@ from ..common_utils import (
     BedrockError,
     BedrockEventStreamDecoderBase,
     BedrockModelInfo,
+    served_service_tier,
 )
 from ..request_metadata import (
     BEDROCK_REQUEST_METADATA_HEADER,
@@ -59,7 +60,6 @@ _BEDROCK_INVOKE_ACTIONS: Final = frozenset({"invoke", "invoke-with-response-stre
 _BEDROCK_INVOKE_GUARDRAIL_HEADERS: Final = frozenset(
     {"x-amzn-bedrock-guardrailidentifier", "x-amzn-bedrock-guardrailversion", "x-amzn-bedrock-trace"}
 )
-_BEDROCK_SERVICE_TIER_HEADER: Final = "x-amzn-bedrock-service-tier"
 _NO_RESPONSE_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 _TieredResponse: Final = TypeVar("_TieredResponse", bound=BaseModel)
 
@@ -423,13 +423,6 @@ def _invoke_embedding_response(model: str, httpx_response: Response, has_input_i
     )
 
 
-def _served_service_tier(response_headers: Mapping[str, str]) -> str | None:
-    headers: Final = httpx.Headers(response_headers)
-    if _BEDROCK_SERVICE_TIER_HEADER not in headers:
-        return None
-    return headers[_BEDROCK_SERVICE_TIER_HEADER]
-
-
 def _with_served_service_tier(response: _TieredResponse, service_tier: str | None) -> _TieredResponse:
     if service_tier is None:
         return response
@@ -659,7 +652,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         if "invoke" in endpoint:
             logging_obj.record_native_bedrock_guardrail(_invoke_guardrail_trace(httpx_response))
 
-        return _with_served_service_tier(litellm_model_response, _served_service_tier(httpx_response.headers))
+        return _with_served_service_tier(litellm_model_response, served_service_tier(httpx_response.headers))
 
     def create_stream_collector(
         self,
@@ -672,7 +665,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         return BedrockEventStreamCollector(
             parse_event=self._parse_message_from_event,
             decoder=self._get_event_stream_decoder(model=model, endpoint=endpoint),
-            service_tier=_served_service_tier(response_headers),
+            service_tier=served_service_tier(response_headers),
         )
 
     def _get_event_stream_decoder(self, model: str, endpoint: str) -> Optional["AWSEventStreamDecoder"]:

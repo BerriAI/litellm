@@ -28,6 +28,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
+    _get_budget_counters,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
@@ -38,7 +39,7 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.redis.stores.connection import connect
-from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.redis.stores.spend_counters import SpendCounterStore, user_window_counter
 
 TOKEN_COUNTING_ROUTES: Final = (
     "/responses/input_tokens",
@@ -57,6 +58,36 @@ TOKEN_COUNTING_ROUTES: Final = (
 
 def _budgeted_token() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key="sk-test", token="hashed-token", max_budget=100.0, spend=0.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team, apply, expected", [(False, False, 2), (True, False, 0), (True, True, 2)])
+async def test_user_reservation_includes_each_window_only_when_user_budget_applies(
+    team: bool, apply: bool, expected: int
+) -> None:
+    cache: Final = UserApiKeyCache()
+    counters: Final = await _get_budget_counters(
+        request_body={},
+        valid_token=UserAPIKeyAuth(),
+        team_object=LiteLLM_TeamTable(team_id="t") if team else None,
+        user_object=LiteLLM_UserTable.model_validate(
+            {
+                "user_id": "u",
+                "budget_limits": [
+                    {"budget_duration": "1h", "max_budget": 5.0, "reset_at": "2026-08-01T01:00:00Z"},
+                    {"budget_duration": "30d", "max_budget": 100.0, "reset_at": "2026-08-31T00:00:00Z"},
+                ],
+            }
+        ),
+        prisma_client=None,
+        user_api_key_cache=cache,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        apply_user_budget_to_team_keys=apply,
+    )
+    assert len(counters) == expected
+    assert {counter.counter_key for counter in counters} == (
+        {user_window_counter("u", "1h"), user_window_counter("u", "30d")} if expected else set()
+    )
 
 
 async def _reserve(route: str) -> dict | None:

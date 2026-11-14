@@ -1124,12 +1124,8 @@ class CustomerHierarchyStore:
         for team in teams:
             await self._delete_team_members(team.customer_team_id)
         team_ids: Final = tuple(team.customer_team_id for team in teams)
-        budget_ids: Final = tuple(
-            budget_id
-            for team in teams
-            for budget_id in (team.budget_id, team.budget_override_id)
-            if budget_id is not None
-        )  # comprehension-ok: two bounded sources per team
+        team_budget_ids: Final = chain.from_iterable((team.budget_id, team.budget_override_id) for team in teams)
+        budget_ids: Final = tuple(budget_id for budget_id in team_budget_ids if budget_id is not None)
         await delete_many_in(self.teams, "customer_team_id", team_ids, atomicity="caller_transaction")
         await self._delete_unused_budgets(budget_ids)
         return True
