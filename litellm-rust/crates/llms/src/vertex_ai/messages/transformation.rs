@@ -15,7 +15,9 @@ use serde_json::{Value, json};
 use crate::{
     Error,
     anthropic::{
-        common_utils::{merge_beta_headers, supports_effort_param},
+        common_utils::{
+            merge_beta_headers, strip_unsignable_thinking_blocks, supports_effort_param,
+        },
         messages::{
             handler::shape_anthropic_messages_request,
             transformation::{provider_feature_betas, transform_messages_request},
@@ -133,6 +135,13 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         merge_beta_headers(headers, vertex_feature_betas(request))
+    }
+
+    fn request_for_url(&self, request: MessagesRequest, _url: &str) -> MessagesRequest {
+        MessagesRequest {
+            messages: strip_unsignable_thinking_blocks(request.messages),
+            ..request
+        }
     }
 
     /// Vertex addresses the model in the URL and rejects it in the body.
