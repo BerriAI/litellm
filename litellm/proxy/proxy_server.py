@@ -6771,7 +6771,11 @@ class ProxyConfig:
             litellm.default_in_memory_ttl = cache_params["default_in_memory_ttl"]
 
         if "default_redis_ttl" in cache_params:
-            litellm.default_redis_ttl = cache_params["default_redis_ttl"]
+            # default_redis_ttl is a DualCache/global setting, not a redis-py
+            # Redis() constructor kwarg. Promote it to the global and drop it
+            # from cache_params before constructing Cache, otherwise redis-py
+            # raises TypeError on an unexpected keyword argument.
+            litellm.default_redis_ttl = cache_params.pop("default_redis_ttl")
 
         litellm.cache = Cache(**cache_params)
 
