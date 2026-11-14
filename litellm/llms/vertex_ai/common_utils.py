@@ -7,7 +7,7 @@ from enum import Enum
 from functools import lru_cache
 from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
-from typing import Final, Literal, TypeVar, cast, get_type_hints
+from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast, get_type_hints
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -32,6 +32,9 @@ from litellm.types.llms.vertex_ai import (
 )
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
+
+if TYPE_CHECKING:
+    from litellm.llms.anthropic.count_tokens.transformation import AnthropicCountFields
 
 GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
     {"fps": "fps", "start_offset": "startOffset", "end_offset": "endOffset"}
@@ -97,6 +100,7 @@ class VertexAILyriaModelInfo(TypedDict):
 
 
 _VERTEX_AI_LYRIA_MODEL_INFO_ADAPTER: Final = TypeAdapter(VertexAILyriaModelInfo)
+_JSON_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
 def _validate_vertex_ai_lyria_model_info(raw_model_info: object) -> VertexAILyriaModelInfo | None:
@@ -1402,21 +1406,17 @@ class VertexAITokenCounter(BaseTokenCounter):
 
         return custom_llm_provider == LlmProviders.VERTEX_AI.value
 
-    async def _count_translated_claude_request(
+    async def _translated_claude_request(
         self,
         model_to_use: str,
         messages: Sequence[Mapping[str, object]] | None,
-        deployment: Mapping[str, object],
         request_model: str,
         tools: Sequence[Mapping[str, object]] | None,
         system: object | None,
         messages_format: TokenCountMessagesFormat,
-        output_format: JsonValue,
-        context_management: CountContextManagement | None,
         chat_params: Mapping[str, JsonValue],
-    ) -> TokenCountResponse | None:
+    ) -> "TokenCountResponse | AnthropicCountFields | None":
         from litellm.llms.anthropic.count_tokens.transformation import (
-            AnthropicCountFields,
             ChatCountTranslationError,
             anthropic_count_fields,
         )
@@ -1426,27 +1426,43 @@ class VertexAITokenCounter(BaseTokenCounter):
             return None
         from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
 
-        match translated := await anthropic_count_fields(
+        translated: Final = await anthropic_count_fields(
             model_to_use, messages or [], system, tools, messages_format, VertexAIAnthropicConfig(), chat_params
-        ):
-            case ChatCountTranslationError():
-                return translated.response(request_model, model_to_use, "vertex_ai_partner_models")
-            case AnthropicCountFields():
-                return await self.count_tokens(
-                    model_to_use=model_to_use,
-                    messages=[dict(message) for message in translated.messages],
-                    contents=None,
-                    deployment=dict(deployment),
-                    request_model=request_model,
-                    tools=[dict(tool) for tool in translated.tools] if translated.tools is not None else None,
-                    system=translated.system,
-                    messages_format="anthropic",
-                    output_format=output_format,
-                    context_management=context_management,
-                    count_options=translated.options,
-                )
-            case None:
-                return None
+        )
+        if isinstance(translated, ChatCountTranslationError):
+            return translated.response(request_model, model_to_use, "vertex_ai_partner_models")
+        return translated
+
+    async def _claude_count_options(
+        self,
+        model_to_use: str,
+        messages: Sequence[Mapping[str, object]],
+        request_model: str,
+        count_options: Mapping[str, JsonValue],
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, JsonValue] | TokenCountResponse:
+        from litellm.litellm_core_utils.asyncify import asyncify
+        from litellm.llms.anthropic.count_tokens.transformation import (
+            ChatCountTranslationError,
+            messages_count_options,
+        )
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
+            VertexAIPartnerModelsAnthropicMessagesConfig,
+        )
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_publisher
+
+        if count_tokens_publisher(model_to_use) != "anthropic":
+            return count_options
+        options: Final = await asyncify(messages_count_options)(
+            VertexAIPartnerModelsAnthropicMessagesConfig(),
+            model_to_use,
+            _JSON_MESSAGES.validate_python(messages),
+            count_options,
+            litellm_params,
+        )
+        if isinstance(options, ChatCountTranslationError):
+            return options.response(request_model, model_to_use, "vertex_ai_partner_models")
+        return options
 
     async def count_tokens(
         self,
@@ -1502,26 +1518,32 @@ class VertexAITokenCounter(BaseTokenCounter):
 
         # Check if this is a partner model (Claude, Mistral, etc.)
         if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):
-            translated_count: Final = await self._count_translated_claude_request(
+            translated: Final = await self._translated_claude_request(
                 model_to_use=model_to_use,
                 messages=messages,
-                deployment=resolved_deployment,
                 request_model=request_model,
                 tools=tools,
                 system=system,
                 messages_format=messages_format,
-                output_format=output_format,
-                context_management=context_management,
                 chat_params=chat_params,
             )
-            if translated_count is not None:
-                return translated_count
+            if isinstance(translated, TokenCountResponse):
+                return translated
+            partner_litellm_params: Final = dict(decoded_json_object(raw_litellm_params))
+            partner_count_options: Final = (
+                translated.options
+                if translated is not None
+                else await self._claude_count_options(
+                    model_to_use, messages or [], request_model, count_options, partner_litellm_params
+                )
+            )
+            if isinstance(partner_count_options, TokenCountResponse):
+                return partner_count_options
 
             # Use partner models token counter
             partner_models_handler: Final = VertexAIPartnerModels()
 
             # Extract vertex-specific params from litellm_params
-            partner_litellm_params: Final = dict(decoded_json_object(raw_litellm_params))
             vertex_project = partner_litellm_params.get("vertex_project") or partner_litellm_params.get(
                 "vertex_ai_project"
             )
@@ -1540,14 +1562,22 @@ class VertexAITokenCounter(BaseTokenCounter):
             try:
                 result = await partner_models_handler.count_tokens(
                     model=model_to_use,
-                    messages=messages or [],
+                    messages=(
+                        (messages or []) if translated is None else [dict(message) for message in translated.messages]
+                    ),
                     litellm_params=partner_litellm_params,
                     vertex_project=vertex_project,
                     vertex_location=vertex_location,
                     vertex_credentials=vertex_credentials,
-                    system=system,
-                    tools=tools,
-                    count_options=count_options,
+                    system=system if translated is None else translated.system,
+                    tools=(
+                        tools
+                        if translated is None
+                        else None
+                        if translated.tools is None
+                        else [dict(tool) for tool in translated.tools]
+                    ),
+                    count_options=partner_count_options,
                     context_management=(
                         None if context_management is None else context_management_with_edits(context_management.spec)
                     ),
