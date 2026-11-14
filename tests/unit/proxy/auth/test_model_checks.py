@@ -2086,6 +2086,44 @@ def test_wildcard_over_an_org_the_catalog_lacks_lists_no_catalog_id(provider: st
     assert listed_under_unknown_org == []
 
 
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "gemini", "fireworks_ai", "deepseek"])
+def test_wildcard_over_a_namespace_behind_a_custom_api_base_lists_the_bare_wildcard_ids(provider: str) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    with _registered_chat_models({f"{provider}/gateway-namespace-model-g": provider}):
+        bare_listing: Final = get_known_models_from_wildcard(f"{provider}/*", LiteLLM_Params(model=f"{provider}/*"))
+        behind_a_gateway: Final = get_known_models_from_wildcard(
+            f"{provider}/*",
+            LiteLLM_Params(model=f"{provider}/gateway-namespace/*", api_base="https://gateway.example.test/v1"),
+        )
+        straight_to_the_provider: Final = get_known_models_from_wildcard(
+            f"{provider}/*", LiteLLM_Params(model=f"{provider}/gateway-namespace/*")
+        )
+
+    assert f"{provider}/gateway-namespace-model-g" in bare_listing
+    assert sorted(behind_a_gateway) == sorted(bare_listing)
+    assert straight_to_the_provider == []
+
+
+@pytest.mark.parametrize("provider", ["together_ai", "azure_ai", "watsonx"])
+def test_wildcard_over_an_unknown_org_behind_the_providers_own_api_base_lists_no_catalog_id(provider: str) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    api_base: Final = "https://tenant-resource.example.test"
+    with _registered_chat_models({f"{provider}/tenant-org/model-t": provider}):
+        listed_under_known_org: Final = get_known_models_from_wildcard(
+            f"{provider}/*", LiteLLM_Params(model=f"{provider}/tenant-org/*", api_base=api_base)
+        )
+        listed_under_unknown_org: Final = get_known_models_from_wildcard(
+            f"{provider}/*", LiteLLM_Params(model=f"{provider}/tenant-missing-org/*", api_base=api_base)
+        )
+
+    assert listed_under_known_org == [f"{provider}/model-t"]
+    assert listed_under_unknown_org == []
+
+
 @pytest.mark.parametrize(
     ("provider", "route"),
     [

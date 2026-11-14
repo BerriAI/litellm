@@ -77,6 +77,9 @@ _FIREWORKS_ROUTER_ROUTES: Final = (
     f"{LlmProviders.FIREWORKS_AI.value}/{FIREROUTER}/",
 )
 _FIREWORKS_RESOURCE_PATH_PREFIX: Final = "accounts/"
+_PROVIDERS_CHECKED_AGAINST_THE_CATALOG_BEHIND_AN_API_BASE: Final = frozenset(
+    provider.value for provider in (LlmProviders.TOGETHER_AI, LlmProviders.AZURE_AI, LlmProviders.WATSONX)
+)
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
@@ -405,6 +408,14 @@ def _resolves_to_catalog_model(model: str, provider: str, provider_model_ids: fr
     )
 
 
+def _endpoint_serves_the_provider_catalog(provider: str, litellm_params: LiteLLM_Params | None) -> bool:
+    return (
+        litellm_params is None
+        or not litellm_params.api_base
+        or provider in _PROVIDERS_CHECKED_AGAINST_THE_CATALOG_BEHIND_AN_API_BASE
+    )
+
+
 def _catalog_lookup_parses_route(provider: str, routing_prefix: str) -> bool:
     route: Final = f"{provider}/{routing_prefix}"
     return (
@@ -438,10 +449,11 @@ def _ids_routing_to_catalog_models(
     provider: str,
     catalog_ids: Sequence[str],
     routes_to_model: Callable[[str, str], bool],
+    endpoint_serves_the_catalog: bool,
 ) -> tuple[str, ...]:
     if name_pattern.count("*") > deployment_pattern.count("*"):
         return _catalog_ids_a_wider_name_matches(
-            name_pattern, deployment_pattern, provider, catalog_ids, routes_to_model
+            name_pattern, deployment_pattern, provider, catalog_ids, routes_to_model, endpoint_serves_the_catalog
         )
     if name_pattern.count("*") != deployment_pattern.count("*") or _lists_name_fragments(
         name_pattern, deployment_pattern
@@ -456,7 +468,7 @@ def _ids_routing_to_catalog_models(
     routing_prefix: Final = deployment_model_pattern_without_provider.removesuffix(catalog_pattern)
     reaches_catalog_model: Final = (
         _routes_to_catalog_model(routes_to_model, provider, frozenset(provider_model_ids))
-        if routing_prefix and _catalog_lookup_parses_route(provider, routing_prefix)
+        if routing_prefix and endpoint_serves_the_catalog and _catalog_lookup_parses_route(provider, routing_prefix)
         else routes_to_model
     )
     deployment_model_pattern: Final = f"{provider_id_prefix}{catalog_pattern}"
@@ -559,12 +571,13 @@ def _catalog_ids_a_wider_name_matches(
     provider: str,
     catalog_ids: Sequence[str],
     routes_to_model: Callable[[str, str], bool],
+    endpoint_serves_the_catalog: bool,
 ) -> tuple[str, ...]:
     name_regex: Final = _wildcard_name_regex(name_pattern)
     return tuple(
         catalog_id
         for catalog_id in _ids_routing_to_catalog_models(
-            deployment_pattern, deployment_pattern, provider, catalog_ids, routes_to_model
+            deployment_pattern, deployment_pattern, provider, catalog_ids, routes_to_model, endpoint_serves_the_catalog
         )
         if name_regex.fullmatch(catalog_id)
     )
@@ -775,6 +788,7 @@ def _known_models_from_wildcard(
             provider=provider,
             catalog_ids=wildcard_models if has_provider_prefix else _without_azure_placeholder(wildcard_models),
             routes_to_model=routes_to_model,
+            endpoint_serves_the_catalog=_endpoint_serves_the_provider_catalog(provider, litellm_params),
         )
     if wildcard_suffix != "*":
         model_prefix: Final = wildcard_suffix.replace("*", "")
