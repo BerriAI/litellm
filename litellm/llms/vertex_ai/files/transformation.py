@@ -66,6 +66,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
+    embed_content_config_fields,
     transform_openai_input_gemini_embed_content,
 )
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
@@ -103,6 +104,11 @@ _EMBED_REQUEST_FIELD_BY_GEMINI_PARAM: Final = (
     ("outputDimensionality", "output_dimensionality"),
     ("taskType", "task_type"),
     ("title", "title"),
+)
+_EMBED_CONTENT_CONFIG_REQUEST_FIELD_BY_GEMINI_PARAM: Final = (
+    ("documentOcr", "document_ocr"),
+    ("audioTrackExtraction", "audio_track_extraction"),
+    ("autoTruncate", "auto_truncate"),
 )
 _VERTEX_BATCH_FANNED_OUT_KEY_PATTERN: Final = re.compile(r"(?P<custom_id>[^#]*)#(?P<index>\d+)/(?P<total>\d+)")
 _JSONL_NEWLINE: Final = b"\n"
@@ -659,6 +665,16 @@ def _vertex_batch_embeddings_key(custom_id: str, index: int, total: int) -> str:
     return encoded_custom_id if total < 2 else f"{encoded_custom_id}#{index}/{total}"
 
 
+def _vertex_embed_content_config(embed_content_request: Mapping[str, object]) -> Mapping[str, object]:
+    embed_content_config: Final = embed_content_config_fields(embed_content_request)
+    config_fields: Final = {
+        request_field: embed_content_config[gemini_param]
+        for gemini_param, request_field in _EMBED_CONTENT_CONFIG_REQUEST_FIELD_BY_GEMINI_PARAM
+        if gemini_param in embed_content_config
+    }
+    return {"embed_content_config": config_fields} if config_fields else {}
+
+
 def _vertex_embeddings_row(key: str | None, embed_content_request: Mapping[str, object]) -> Mapping[str, object]:
     """
     One Vertex Gemini Embedding batch input row.
@@ -674,6 +690,7 @@ def _vertex_embeddings_row(key: str | None, embed_content_request: Mapping[str, 
             for gemini_param, request_field in _EMBED_REQUEST_FIELD_BY_GEMINI_PARAM
             if gemini_param in embed_content_request
         },
+        **_vertex_embed_content_config(embed_content_request),
     }
     if key is None:
         return {"request": request}
@@ -694,9 +711,10 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
     `GenerateContentRequest`) and that the `custom_id` round-trips through the top-level
     `key`. An `EmbedContentRequest` returns exactly one vector, so an entry whose `input`
     is an array fans out into one row per element and is reassembled on the way back.
-    The docs put the per-row config in an `embed_content_config` sibling of `request`,
-    but the API rejects that key outright and fails the whole batch job, so the config
-    fields go inside the `EmbedContentRequest` itself.
+    An `embed_content_config` sibling of `request` is rejected outright and fails the whole
+    batch job, so the config fields go inside the `EmbedContentRequest` itself. The fields
+    that only exist on its `embed_content_config` (`document_ocr`, `audio_track_extraction`)
+    go in an `embed_content_config` inside `request`, alongside `auto_truncate`.
 
     API Ref: https://cloud.google.com/vertex-ai/generative-ai/docs/embeddings/batch-prediction-genai-embeddings
     """

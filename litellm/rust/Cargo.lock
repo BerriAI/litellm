@@ -3610,6 +3610,7 @@ version = "0.1.0"
 dependencies = [
  "litellm-cache",
  "litellm-cache-testing",
+ "parking_lot",
  "rstest",
  "tokio",
 ]
@@ -4347,6 +4348,7 @@ dependencies = [
 name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
  "indexmap 2.14.0",
  "jiff",
  "jsonschema",
@@ -4552,12 +4554,14 @@ dependencies = [
  "litellm-redis-testing",
  "litellm-secret-value",
  "litellm-tracing",
+ "parking_lot",
  "rstest",
  "sha2 0.10.9",
  "strum",
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

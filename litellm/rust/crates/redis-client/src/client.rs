@@ -163,6 +163,10 @@ impl RedisClient {
         &self.0.namespace
     }
 
+    pub fn sibling_key(&self, key: &str, label: &str) -> Option<String> {
+        self.0.namespace.sibling(key, label)
+    }
+
     pub fn is_cluster(&self) -> bool {
         matches!(self.0.connection, Connection::Cluster(_))
     }

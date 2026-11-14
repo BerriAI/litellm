@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
 import httpx
+import psycopg
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
@@ -184,8 +185,33 @@ def test_concurrent_admin_resets_leave_one_winner_and_a_lifetime_floor_at_the_ol
         legacy: Final = _member_with_budget(gateway, scenario, team_id, max_budget=10_000)
         _seed_membership(legacy, team_id, spend=_LEGACY_SPEND, total_spend=_LEGACY_TOTAL)
 
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            higher, lower = pool.map(lambda value: _reset_spend(gateway, team_id, legacy, value), (600.0, 500.0))
+        with psycopg.connect(os.environ["DATABASE_URL"]) as blocker:
+            blocker.execute(
+                'SELECT 1 FROM "LiteLLM_TeamMembership" WHERE user_id=%s AND team_id=%s FOR UPDATE',
+                (legacy, team_id),
+            )
+            blocker_pid: Final = str(blocker.info.backend_pid)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                resets: Final = tuple(
+                    pool.submit(_reset_spend, gateway, team_id, legacy, value) for value in (600.0, 500.0)
+                )
+                try:
+                    eventually(
+                        lambda: read_rows(
+                            """WITH RECURSIVE blocked AS (
+                                   SELECT %s::integer AS pid
+                                   UNION
+                                   SELECT a.pid FROM pg_stat_activity a
+                                   JOIN blocked b ON b.pid = ANY(pg_blocking_pids(a.pid))
+                               ) SELECT pid FROM blocked WHERE pid<>%s::integer""",
+                            (blocker_pid, blocker_pid),
+                        ),
+                        lambda rows: len(rows) == 2,
+                        seconds=10,
+                    )
+                finally:
+                    blocker.rollback()
+                higher, lower = tuple(reset.result() for reset in resets)
 
         assert lower.status_code == 200, lower.text
         assert higher.status_code in (200, 409), higher.text
