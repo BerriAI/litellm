@@ -184,7 +184,8 @@ export const customerChildSpendCall = async ({
 }) => {
   const ids = entities.map((item) => item.id);
   if (ids.length === 0) return { monthly: [], yearly: [], organizationSpend: 0 };
-  assertIdentifiers([organizationId, ...ids]);
+  if (!organizationId) throw new Error(i18n.t("customerPortal.analytics.invalidIdentifier"));
+  assertIdentifiers(ids);
   const resource = kind === "teams" ? "customer_teams" : "customer_members";
   const monthRequest = { ...request, startDate: request.monthStartDate, endDate: request.monthEndDate };
   const yearRequest = { ...request, startDate: request.yearStartDate, endDate: request.yearEndDate };

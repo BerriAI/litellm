@@ -438,23 +438,29 @@ describe("customerHierarchyUsageCall", () => {
 });
 
 describe("customerChildSpendCall", () => {
-  it("should retain an organization's exact identifier when loading its spend denominator", async () => {
-    fetchMock.mockImplementation(async (input) => {
-      const url = requestUrl(input);
-      if (url.pathname.endsWith("/daily/activity/aggregated") && url.searchParams.get("customer_org_id") === " org-1 ")
-        return json({ results: [], metadata: { ...EMPTY_DAILY_ACTIVITY_METADATA, total_spend: 29 } });
-      return serve(input);
-    });
-    const childRequest = {
-      ...request,
-      organizationId: " org-1 ",
-      kind: "teams" as const,
-      entities: [customerUsageEntity("team-a", teams[0])],
-    };
-    const result = await customerChildSpendCall(childRequest);
-    expect(result.organizationSpend).toBe(29);
-    expect(result.monthly[0].spend).toBe(3);
-  });
+  it.each([" org-1 ", "org-1,org-2"])(
+    "should retain the exact organization ID %s for its denominator",
+    async (organizationId) => {
+      fetchMock.mockImplementation(async (input) => {
+        const url = requestUrl(input);
+        if (
+          url.pathname.endsWith("/daily/activity/aggregated") &&
+          url.searchParams.get("customer_org_id") === organizationId
+        )
+          return json({ results: [], metadata: { ...EMPTY_DAILY_ACTIVITY_METADATA, total_spend: 29 } });
+        return serve(input);
+      });
+      const childRequest = {
+        ...request,
+        organizationId,
+        kind: "teams" as const,
+        entities: [customerUsageEntity("team-a", teams[0])],
+      };
+      const result = await customerChildSpendCall(childRequest);
+      expect(result.organizationSpend).toBe(29);
+      expect(result.monthly[0].spend).toBe(3);
+    },
+  );
 
   it.each(["teams", "members"] as const)(
     "should load complete totals for a busy organization without downloading its raw history for %s",
@@ -518,12 +524,23 @@ describe("customerChildSpendCall", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("should reject ambiguous organization filters before requesting any management usage", async () => {
+  it("should reject empty organization filters before requesting any management usage", async () => {
     const childRequest = {
       ...request,
-      organizationId: "org-1,org-2",
+      organizationId: "",
       kind: "teams" as const,
       entities: [customerUsageEntity("team-a", teams[0])],
+    };
+    await expect(customerChildSpendCall(childRequest)).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("should reject ambiguous child filters before requesting any management usage", async () => {
+    const childRequest = {
+      ...request,
+      organizationId: "org-1",
+      kind: "teams" as const,
+      entities: [customerUsageEntity("team-a,team-b", teams[0])],
     };
     await expect(customerChildSpendCall(childRequest)).rejects.toThrow();
     expect(fetchMock).not.toHaveBeenCalled();
