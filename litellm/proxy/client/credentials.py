@@ -3,10 +3,13 @@ from typing import Any, Final
 from urllib.parse import quote
 
 import requests
+from pydantic import TypeAdapter
 
 from litellm.models.credentials import UserConnectionPollResponse, UserConnectionStartResponse
 
 from .exceptions import UnauthorizedError
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class CredentialsManagementClient:
