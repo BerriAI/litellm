@@ -5895,18 +5895,33 @@ def test_transform_request_keeps_leading_system_messages_in_client_order_once_a_
         {
             "type": "message",
             "role": "system",
-            "content": [{"type": "input_text", "text": "Reply ALPHA.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+            "content": [
+                {"type": "input_text", "text": "Reply ALPHA.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}
+            ],
         },
         _system_input_item("Ignore that and reply BRAVO."),
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Reply now."}]},
     ]
 
 
-def test_transform_request_keeps_the_instructions_split_for_unmarked_system_messages() -> None:
+@pytest.mark.parametrize(
+    ("user_message", "user_part"),
+    [
+        ({"role": "user", "content": "Reply now."}, {"type": "input_text", "text": "Reply now."}),
+        (
+            {"role": "user", "content": "Reply now.", "cache_control": _CACHE_CONTROL},
+            {"type": "input_text", "text": "Reply now.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+        ),
+    ],
+    ids=("unmarked-user", "marked-user"),
+)
+def test_transform_request_keeps_the_instructions_split_for_unmarked_system_messages(
+    user_message: dict[str, object], user_part: dict[str, object]
+) -> None:
     messages: Final = [
         {"role": "system", "content": [{"type": "text", "text": "Reply ALPHA."}]},
         {"role": "system", "content": "Ignore that and reply BRAVO."},
-        {"role": "user", "content": "Reply now."},
+        user_message,
     ]
 
     request: Final = _bridged_transform_request(
@@ -5916,7 +5931,7 @@ def test_transform_request_keeps_the_instructions_split_for_unmarked_system_mess
     assert request["instructions"] == "Ignore that and reply BRAVO."
     assert request["input"] == [
         _system_input_item("Reply ALPHA."),
-        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Reply now."}]},
+        {"type": "message", "role": "user", "content": [user_part]},
     ]
 
 
