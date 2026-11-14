@@ -29,7 +29,7 @@ from litellm.router_strategy.least_busy import (
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
-from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+from litellm.router_strategy.lowest_tpm_rpm_v2 import GroupDeployments, LowestTPMLoggingHandler_v2
 from litellm.types.router import RoutingGroup, RoutingStrategy
 
 if TYPE_CHECKING:
@@ -71,6 +71,8 @@ def build_selector(
     cache: "DualCache",
     usage: "RouterUsage",
     reservations: "InMemoryCache | None" = None,
+    *,
+    group_deployments: GroupDeployments,
 ) -> Selector | None:
     """``_build_strategy_selector`` without registering: ``None`` for simple-shuffle and every
     strategy without a selector. Every least-busy selector of a router keeps its pick
@@ -82,7 +84,9 @@ def build_selector(
         case "usage-based-routing":
             return LowestTPMLoggingHandler(router_cache=cache, routing_args=routing_args)
         case "usage-based-routing-v2":
-            return LowestTPMLoggingHandler_v2(usage=usage, routing_args=routing_args)
+            return LowestTPMLoggingHandler_v2(
+                usage=usage, routing_args=routing_args, group_deployments=group_deployments
+            )
         case "latency-based-routing":
             return LowestLatencyLoggingHandler(router_cache=cache, routing_args=routing_args)
         case "cost-based-routing":
@@ -100,12 +104,15 @@ class StrategySelectors:
     """The selectors of one router: the default group's, each routing group's, and the lazily
     built per-request override ones."""
 
-    def __init__(self, host: "PythonHost", cache: "DualCache", usage: "RouterUsage") -> None:
+    def __init__(
+        self, host: "PythonHost", cache: "DualCache", usage: "RouterUsage", group_deployments: GroupDeployments
+    ) -> None:
         from litellm.caching.in_memory_cache import InMemoryCache
 
         self._host: Final = host
         self._cache: Final = cache
         self._usage: Final = usage
+        self._group_deployments: Final = group_deployments
         # `_core_least_busy_reservations`: the picks least-busy reserved, shared by its selectors.
         self.reservations: Final = InMemoryCache(max_size_in_memory=SELECTION_RESERVATION_MAX_KEYS)
         self._strategy: str | None = None
@@ -147,7 +154,9 @@ class StrategySelectors:
         self._strategy = normalize_strategy(strategy)
         if configured:
             self._configured = self._strategy
-        self._default = build_selector(self._strategy, args, self._cache, self._usage, self.reservations)
+        self._default = build_selector(
+            self._strategy, args, self._cache, self._usage, self.reservations, group_deployments=self._group_deployments
+        )
         if self._default is not None:
             self._register(self._default)
 
@@ -161,7 +170,14 @@ class StrategySelectors:
         if self._default is None or self._strategy != self._configured:
             return
         try:
-            rebuilt: Final = build_selector(self._strategy, args, self._cache, self._usage, self.reservations)
+            rebuilt: Final = build_selector(
+                self._strategy,
+                args,
+                self._cache,
+                self._usage,
+                self.reservations,
+                group_deployments=self._group_deployments,
+            )
         except (TypeError, ValidationError):
             verbose_router_logger.exception(
                 "Invalid routing_strategy_args %s for '%s'; keeping the previous ones", dict(args), self._strategy
@@ -180,7 +196,12 @@ class StrategySelectors:
             for name, strategy, args in groups
             if (
                 selector := build_selector(
-                    None if strategy == "priority" else strategy, args, self._cache, self._usage, self.reservations
+                    None if strategy == "priority" else strategy,
+                    args,
+                    self._cache,
+                    self._usage,
+                    self.reservations,
+                    group_deployments=self._group_deployments,
                 )
             )
             is not None
@@ -242,7 +263,9 @@ class StrategySelectors:
             return self.default
         with self._lock:
             if strategy not in self._overrides:
-                self._overrides[strategy] = build_selector(strategy, {}, self._cache, self._usage, self.reservations)
+                self._overrides[strategy] = build_selector(
+                    strategy, {}, self._cache, self._usage, self.reservations, group_deployments=self._group_deployments
+                )
             selector: Final = self._overrides[strategy]
         if selector is not None and request is not None and strategy not in self._registered_strategies():
             from litellm.litellm_core_utils.litellm_logging import Logging

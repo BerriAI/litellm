@@ -1,12 +1,12 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 import httpx
 from pydantic import TypeAdapter
@@ -56,13 +56,23 @@ _SUCCESS_KWARGS_ADAPTER: Final = TypeAdapter(_SuccessKwargs)
 _active_prefetched_usage: Final[ContextVar["PrefetchedUsage | None"]] = ContextVar("prefetched_usage", default=None)
 
 
-def _deployment_tpm_limit(deployment: Mapping[str, Any]) -> float:
-    configured_limits: Final[tuple[float | None, ...]] = (
-        deployment.get("tpm"),
-        deployment.get("litellm_params", {}).get("tpm"),
-        deployment.get("model_info", {}).get("tpm"),
-    )
-    return next((limit for limit in configured_limits if limit is not None), float("inf"))
+GroupDeployments: TypeAlias = Callable[[str], Sequence[Mapping[str, object]] | None]
+
+
+def _no_group_deployments(_model_group: str) -> None:
+    return None
+
+
+def _deployment_tpm_limit(deployment: Mapping[str, object]) -> float:
+    match deployment:
+        case {"tpm": int() | float() as limit}:
+            return limit
+        case {"litellm_params": {"tpm": int() | float() as limit}}:
+            return limit
+        case {"model_info": {"tpm": int() | float() as limit}}:
+            return limit
+        case _:
+            return float("inf")
 
 
 @dataclass(frozen=True)
@@ -116,8 +126,14 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     logged_failure: int = 0
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
-    def __init__(self, usage: RouterUsage, routing_args: dict = {}):
+    def __init__(
+        self,
+        usage: RouterUsage,
+        routing_args: dict = {},
+        group_deployments: GroupDeployments = _no_group_deployments,
+    ):
         self.routing_args = RoutingArgs(**routing_args)
+        self._group_deployments: Final = group_deployments
         BaseRoutingStrategy.__init__(
             self,
             usage=usage,
@@ -463,21 +479,26 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         if len(potential_deployments) > 0:
             return random.choice(potential_deployments)
 
-        largest_tpm_limit: Final = max(map(_deployment_tpm_limit, healthy_deployments), default=float("inf"))
-        if input_tokens > largest_tpm_limit:
-            raise RequestOverDeploymentTpmError(
-                message=(
-                    f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. "
-                    f"This request alone is estimated at {input_tokens} input tokens, over the largest tpm limit "
-                    f"of {largest_tpm_limit} in this model group, so retrying cannot help. "
-                    "Send a smaller request or raise the deployment's tpm"
-                ),
-                llm_provider="",
-                model=model_group,
-                category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
-                rate_limit_type=RateLimitType.TOKENS,
-            )
-        return None
+        largest_healthy_tpm_limit: Final = max(map(_deployment_tpm_limit, healthy_deployments), default=float("inf"))
+        if input_tokens <= largest_healthy_tpm_limit:
+            return None
+        largest_tpm_limit: Final = max(
+            (largest_healthy_tpm_limit, *map(_deployment_tpm_limit, self._group_deployments(model_group) or ()))
+        )
+        if input_tokens <= largest_tpm_limit:
+            return None
+        raise RequestOverDeploymentTpmError(
+            message=(
+                f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. "
+                f"This request alone is estimated at {input_tokens} input tokens, over the largest tpm limit "
+                f"of {largest_tpm_limit} in this model group, so retrying cannot help. "
+                "Send a smaller request or raise the deployment's tpm"
+            ),
+            llm_provider="",
+            model=model_group,
+            category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+            rate_limit_type=RateLimitType.TOKENS,
+        )
 
     def usage_counters(
         self, healthy_deployments: Sequence[object]

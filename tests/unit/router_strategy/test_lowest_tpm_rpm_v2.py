@@ -23,6 +23,7 @@ from PIL import Image
 import litellm
 from litellm import Router
 from litellm._logging import verbose_logger
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_usage import RouterUsageStore, UsageCounter
 from litellm.router_strategy.lowest_tpm_rpm_v2 import (
@@ -822,6 +823,13 @@ def _assert_names_size_and_largest_limit(refused: litellm.RequestOverDeploymentT
     assert refused.category == "litellm_rate_limit"
     assert refused.rate_limit_type == "tokens"
     assert "retry-after" not in refused.response.headers
+    assert PrometheusLogger._get_exception_class_name(refused) == "RateLimitError"
+
+
+def _cool_down(router: Router, deployment_id: str) -> None:
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id=deployment_id, original_exception=RuntimeError("unavailable"), exception_status=500, cooldown_time=60
+    )
 
 
 @pytest.mark.asyncio
@@ -841,11 +849,12 @@ async def test_async_request_over_every_tpm_limit_names_its_size_and_is_not_retr
     assert metadata["attempted_retries"] == 0
 
 
-def test_sync_request_over_every_tpm_limit_names_its_size():
+def test_sync_request_over_every_tpm_limit_names_its_size_and_the_largest_limit_while_it_cools():
     router: Final = Router(
         model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm("smaller", 200)],
         routing_strategy="usage-based-routing-v2",
     )
+    _cool_down(router, "smaller")
 
     with pytest.raises(litellm.RequestOverDeploymentTpmError) as refused:
         router.get_available_deployment(model="limited", messages=_OVER_TPM_MESSAGES)
@@ -893,3 +902,20 @@ async def test_request_within_the_largest_tpm_limit_refused_on_usage_stays_retry
 
     assert not isinstance(refused.value, litellm.RequestOverDeploymentTpmError)
     assert refused.value.response.headers["retry-after"] == "60"
+
+
+@pytest.mark.asyncio
+async def test_request_within_a_cooling_deployments_tpm_limit_stays_retryable():
+    router: Final = Router(
+        model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm("big", 200_000)],
+        routing_strategy="usage-based-routing-v2",
+    )
+    _cool_down(router, "big")
+
+    with pytest.raises(litellm.RateLimitError) as refused:
+        await router.async_get_available_deployment(
+            model="limited", messages=_OVER_TPM_MESSAGES, request_kwargs={"metadata": {}}
+        )
+
+    assert not isinstance(refused.value, litellm.RequestOverDeploymentTpmError)
+    assert "retry-after" in refused.value.response.headers

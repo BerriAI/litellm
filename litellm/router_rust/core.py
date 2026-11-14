@@ -1509,10 +1509,10 @@ class RustCore(
         # document router-core last received for them.
         self._index_written: frozenset[str] = frozenset()
         self._index_sent: Mapping[str, object] | None = None
-        self._selectors: Final = StrategySelectors(host, self._cache, self._usage)
+        self._port: Final = _EndpointPort(self)
+        self._selectors: Final = StrategySelectors(host, self._cache, self._usage, self._port.group_deployments)
         self._selectors.init_default(resolved.routing_strategy, resolved.routing_strategy_args)
         self._selectors.init_groups(_group_selectors(resolved.routing_groups))
-        self._port: Final = _EndpointPort(self)
         self._endpoints: Final = RustEndpoints(self._port, config)
         # The resolver every picked deployment with `kubernetes_pod_discovery` goes through.
         self._pod_discovery: KubernetesPodDiscovery = KubernetesPodDiscovery()

@@ -611,7 +611,10 @@ class CallerCredentialRateLimitError(RateLimitError):
 
 class RequestOverDeploymentTpmError(RateLimitError):
     """429 raised when one request alone is estimated over the tpm limit of every
-    deployment the router can pick, so a retry can never clear it."""
+    deployment in its model group, cooling ones included, so a retry can never clear it.
+    Prometheus keeps labeling it ``RateLimitError``, as it labeled this refusal before."""
+
+    prometheus_exception_class_name: Final = "RateLimitError"
 
 
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
