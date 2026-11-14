@@ -24,13 +24,12 @@ from typing import (
     Literal,
     Protocol,
     TypeAlias,
-    TypedDict,
 )
 
 from fastapi import HTTPException
 from pydantic import Field, TypeAdapter, ValidationError
 from starlette.status import HTTP_400_BAD_REQUEST, HTTP_503_SERVICE_UNAVAILABLE
-from typing_extensions import NotRequired, ReadOnly
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm import DualCache
