@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, ParamSpec, TypeAlias, TypeVar
 
 from pydantic import TypeAdapter
 
@@ -39,6 +39,8 @@ _PROVIDER_BOUND_PARAMS: Final = UPSTREAM_BOUND_PARAMS | {
 }
 _MODEL_BOUND_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
 _GLOBAL_FALLBACKS_OFF: Final[ContextVar[bool]] = ContextVar("litellm_global_model_fallbacks_off", default=False)
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 @contextmanager
@@ -54,23 +56,23 @@ async def _awaited(pending: Awaitable[object]) -> object:
     return await pending
 
 
-def without_global_fallbacks_around(endpoint: Callable[..., object]) -> Callable[..., object]:
+def without_global_fallbacks_around(endpoint: Callable[_P, _R]) -> Callable[_P, _R]:
     if not inspect.iscoroutinefunction(endpoint):
 
         @functools.wraps(endpoint)
-        def call(*args: object, **kwargs: object) -> object:  # kwargs-ok: endpoint payload
+        def call(*args: _P.args, **kwargs: _P.kwargs) -> _R:  # kwargs-ok: endpoint payload
             with without_global_fallbacks():
                 return endpoint(*args, **kwargs)
 
         return call
 
     @functools.wraps(endpoint)
-    async def acall(*args: object, **kwargs: object) -> object:  # kwargs-ok: endpoint payload
+    async def acall(*args: _P.args, **kwargs: _P.kwargs) -> object:  # kwargs-ok: endpoint payload
         with without_global_fallbacks():
             result: Final = endpoint(*args, **kwargs)
             return await _awaited(result) if inspect.isawaitable(result) else result
 
-    return acall
+    return acall  # pyright: ignore[reportReturnType]  # a coroutine endpoint's _R is the coroutine acall returns
 
 
 def _configured_fallbacks(request_kwargs: Mapping[str, object]) -> object:
