@@ -49,6 +49,7 @@ from litellm.types.proxy.public_endpoints.public_endpoints import (
     ProviderCreateInfo,
     PublicModelHubInfo,
     SupportedEndpointsResponse,
+    VersionResponse,
 )
 from litellm.types.utils import LlmProviders
 
@@ -440,6 +441,13 @@ async def public_skill_hub(uploads: PluginUploadRepositoryDep):
     except Exception as e:
         verbose_logger.exception("Error listing public skills: %s", e)
         raise HTTPException(status_code=500, detail="Failed to list skills")
+
+
+@router.get("/version", tags=["public", "version"], response_model=VersionResponse)
+async def version_info() -> VersionResponse:
+    from litellm._version import version
+
+    return VersionResponse(version=version)
 
 
 @router.get(

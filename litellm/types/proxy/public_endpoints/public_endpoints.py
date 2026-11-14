@@ -123,3 +123,7 @@ class ComplexityScorerDefaults(LiteLLMBaseModel):
     tier_boundaries: Mapping[str, float]
     token_thresholds: Mapping[str, int]
     dimension_weights: Mapping[str, float]
+
+class VersionResponse(LiteLLMBaseModel):
+    version: str
+
