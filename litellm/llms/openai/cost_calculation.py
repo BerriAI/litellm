@@ -6,6 +6,7 @@ Helper util for handling openai-specific cost calculation
 from collections.abc import Mapping
 from typing import Final, Literal, SupportsFloat, SupportsIndex
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import Buffer
 
 from litellm._logging import verbose_logger
@@ -136,6 +137,28 @@ def video_output_cost_per_second(
 _video_output_cost_per_second = video_output_cost_per_second
 
 
+_VIDEO_CLIP_PRICES: Final = TypeAdapter(Mapping[str, Mapping[str, float]])
+
+
+def video_clip_cost(model_info: Mapping[str, object], duration: object, resolution: object) -> float | None:
+    if not isinstance(resolution, str):
+        return None
+    try:
+        prices: Final = _VIDEO_CLIP_PRICES.validate_python(model_info.get("output_cost_per_video_clip"))
+    except ValidationError:
+        return None
+    if isinstance(duration, bool) or not isinstance(duration, (str, int, float)):
+        return None
+    try:
+        duration_seconds: Final = float(duration)
+        if duration_seconds <= 0:
+            return None
+        requested_key: Final = f"{round(duration_seconds)}s"
+    except (ValueError, OverflowError):
+        return None
+    return prices.get(requested_key, {}).get(resolution.strip().lower())
+
+
 def video_generation_cost(
     model: str,
     duration_seconds: float,
@@ -161,6 +184,14 @@ def video_generation_cost(
     ## GET MODEL INFO
     if model_info is None:
         model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider or "openai")
+
+    clip_cost: Final = video_clip_cost(model_info, duration_seconds, video_resolution)
+    if clip_cost is not None:
+        return clip_cost
+
+    video_cost: Final = model_info.get("output_cost_per_video")
+    if video_cost is not None:
+        return video_cost
 
     # Check for video-specific cost per second
     video_cost_per_second: Final = model_info.get("output_cost_per_video_per_second")

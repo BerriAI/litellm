@@ -41,6 +41,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 )
 from litellm.proxy.proxy_server import app
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
 from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
@@ -48,6 +49,30 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
 )
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("binding", ["customer_org_id", "customer_team_id", "customer_member_id"])
+async def test_new_user_cannot_mint_customer_bound_keys_without_proxy_admin(binding: str) -> None:
+    with pytest.raises(HTTPException) as caught:
+        await new_user(
+            data=NewUserRequest(metadata={binding: "another-customer"}),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+    assert caught.value.status_code == 403
+    assert caught.value.detail == "Only proxy admins can change a key's customer organization, team, or member binding."
+
+
+@pytest.mark.asyncio
+async def test_new_user_reports_missing_database_after_customer_binding_validation(mocker: MockerFixture) -> None:
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    with pytest.raises(ProxyException) as caught:
+        await new_user(
+            data=NewUserRequest(metadata={"customer_org_id": "org-1"}),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert str(caught.value.code) == "400"
+    assert caught.value.message == CommonProxyErrors.db_not_connected_error.value
 
 
 @pytest.mark.parametrize("user_id", ["", " \t\n", "user\x00id", 123, True, [], {}])
