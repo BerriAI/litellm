@@ -121,8 +121,10 @@ def rust_s3_logger(monkeypatch: pytest.MonkeyPatch, **params: object) -> S3Logge
     return logger
 
 
-async def log_attempt(logger: S3LoggerV3, kwargs: Mapping[str, object], start_time: datetime) -> None:
-    args: Final = HookArgs(request=kwargs, start_time=start_time, end_time=start_time, outcome=Outcome.success)
+async def log_attempt(
+    logger: S3LoggerV3, kwargs: Mapping[str, object], start_time: datetime, outcome: Outcome = Outcome.success
+) -> None:
+    args: Final = HookArgs(request=kwargs, start_time=start_time, end_time=start_time, outcome=outcome)
     view: Final = FieldView(with_sources(KwargsFields(kwargs, LOGGING_KEYS), DERIVED_ATTEMPT_FIELDS, args))
     manifest: Final = WireManifest.model_validate_json(logger.rust.manifest())
     reads: Final = next(s.reads for s in manifest.subscriptions if s.hook is Hook.attempt_ended)
