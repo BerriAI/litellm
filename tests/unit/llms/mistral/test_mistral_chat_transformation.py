@@ -1928,7 +1928,10 @@ def _chat_completion_reply() -> httpx.Response:
     )
 
 
-def test_allowlisted_prompt_cache_key_reaches_a_gateway_in_front_of_mistral(respx_mock: respx.MockRouter) -> None:
+@pytest.mark.parametrize("allowlist", [["prompt_cache_key"], "prompt_cache_key"], ids=["list", "bare-string"])
+def test_allowlisted_prompt_cache_key_reaches_a_gateway_in_front_of_mistral(
+    respx_mock: respx.MockRouter, allowlist: list[str] | str
+) -> None:
     import litellm
 
     gateway_route: Final = respx_mock.post("https://gateway.example.com/mistral/v1/chat/completions").mock(
@@ -1941,7 +1944,7 @@ def test_allowlisted_prompt_cache_key_reaches_a_gateway_in_front_of_mistral(resp
         api_base="https://gateway.example.com/mistral/v1",
         api_key="gateway-key",
         prompt_cache_key="session-1",
-        allowed_openai_params=["prompt_cache_key"],
+        allowed_openai_params=allowlist,
         max_retries=0,
     )
 
@@ -2053,6 +2056,7 @@ def test_prompt_cache_key_rejection_for_a_sync_codestral_call_is_an_unsupported_
 
     assert not azure_route.called
     assert rejection.value.response.status_code == rejection.value.status_code == 400
+    assert rejection.value.args == (rejection.value.message,)
 
 
 def test_prompt_cache_key_for_another_host_is_dropped_under_drop_params() -> None:

@@ -581,13 +581,14 @@ def test_when_no_deployment_supports_the_param_sync_completion_raises_without_ca
 
 REQUEST_ESCAPES: Final = [
     {"allowed_openai_params": ["response_format"]},
+    {"allowed_openai_params": "response_format"},
     {"drop_params": True},
     {"additional_drop_params": ["response_format"]},
 ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("escape", REQUEST_ESCAPES, ids=["allowlist", "drop", "additional-drop"])
+@pytest.mark.parametrize("escape", REQUEST_ESCAPES, ids=["allowlist", "allowlist-string", "drop", "additional-drop"])
 async def test_a_request_that_allows_or_drops_the_param_keeps_the_only_deployment(
     make_core: MakeCore, host: ScriptedHost, escape: dict[str, object]
 ) -> None:
@@ -597,7 +598,7 @@ async def test_a_request_that_allows_or_drops_the_param_keeps_the_only_deploymen
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("escape", REQUEST_ESCAPES, ids=["allowlist", "drop", "additional-drop"])
+@pytest.mark.parametrize("escape", REQUEST_ESCAPES, ids=["allowlist", "allowlist-string", "drop", "additional-drop"])
 async def test_a_deployment_that_takes_the_param_is_preferred_over_dropping_it(
     make_core: MakeCore, host: ScriptedHost, escape: dict[str, object]
 ) -> None:
@@ -609,8 +610,12 @@ async def test_a_deployment_that_takes_the_param_is_preferred_over_dropping_it(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "deployment_escape",
-    [{"drop_params": True}, {"allowed_openai_params": ["response_format"]}],
-    ids=["drop", "allowlist"],
+    [
+        {"drop_params": True},
+        {"allowed_openai_params": ["response_format"]},
+        {"allowed_openai_params": "response_format"},
+    ],
+    ids=["drop", "allowlist", "allowlist-string"],
 )
 async def test_a_deployment_that_allows_or_drops_the_param_is_kept(
     make_core: MakeCore, host: ScriptedHost, deployment_escape: dict[str, object]

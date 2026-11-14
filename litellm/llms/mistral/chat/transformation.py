@@ -19,7 +19,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing on
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -360,8 +360,7 @@ class MistralConfig(OpenAIGPTConfig):
     def _prompt_cache_key_withheld(self, model: str, prompt_cache_key: object, routing: MistralRequestRouting) -> bool:
         requested_api_base: Final = routing.get("api_base")
         api_base: Final = requested_api_base if isinstance(requested_api_base, str) else None
-        allowed_openai_params: Final = routing.get("allowed_openai_params")
-        if isinstance(allowed_openai_params, (list, tuple)) and "prompt_cache_key" in allowed_openai_params:
+        if "prompt_cache_key" in allowed_openai_param_names(routing.get("allowed_openai_params")):
             return False
         rejection: Final = self._prompt_cache_key_rejection(prompt_cache_key, api_base)
         if rejection is None:
