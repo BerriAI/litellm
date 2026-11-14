@@ -42,7 +42,10 @@ where
         .import("litellm.redis.stores.rate_limits.types")?
         .getattr("RATE_LIMITS_TARGET")?;
     let call = targeted_call(py, &target, "eval")?;
-    run_async_value(py, call.scope(operation))
+    run_async_value(
+        py,
+        crate::logger::capture(py).instrument(Box::pin(call.scope(operation))),
+    )
 }
 
 fn named<T: serde::de::DeserializeOwned>(name: &str) -> PyResult<T> {
@@ -163,6 +166,7 @@ struct Hosted {
     call: Mutex<Option<crate::redis::events::RedisCall>>,
     state: Arc<LimiterState>,
     run: Mutex<Option<(Value, Option<Value>)>>,
+    logger: litellm_tracing::Logger,
 }
 
 impl Callback for Hosted {
@@ -198,7 +202,8 @@ impl Callback for Hosted {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
-        Box::pin(async move {
+        let logger = self.logger.clone();
+        Box::pin(logger.instrument(async move {
             let handled = self
                 .limiter
                 .handle_hosted_with(input, Some(state), inputs, body, host);
@@ -206,7 +211,7 @@ impl Callback for Hosted {
                 Some(call) => call.scope(handled).await,
                 None => handled.await,
             }
-        })
+        }))
     }
 }
 
@@ -477,6 +482,7 @@ impl NativeParallelRequestLimiter {
             call: Mutex::new(Some(targeted_call(py, &target, "eval")?)),
             state,
             run: Mutex::new(Some((inputs, body))),
+            logger: crate::logger::capture(py),
         }))?;
         Bound::new(py, callback)?.call_method1("start", (hook, fields, call, py.None(), host))
     }

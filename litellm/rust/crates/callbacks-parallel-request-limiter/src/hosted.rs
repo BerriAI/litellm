@@ -273,6 +273,14 @@ impl ParallelRequestLimiter {
                     Ok(total) => saturated(total),
                     Err(Tokens(total)) => total,
                 };
+                if let Some(declared) = configured
+                    && estimated_tokens > min
+                {
+                    tracing::debug!(
+                        "Reserving {estimated_tokens} tokens for model {} (declared default_estimated_output_tokens={declared} plus the input estimate) exceeds the smallest TPM limit this request is charged against ({min}), so it cannot be admitted even against an empty window. Lower the declared estimate or raise the TPM limit.",
+                        facts.requested_model.as_deref().unwrap_or("None"),
+                    );
+                }
                 let (ptu_estimate, ptu_exact) = if plan.ptu {
                     let split = reservation
                         .request(Some(min), configured, true)
