@@ -5,9 +5,11 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol, cast
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -48,17 +50,55 @@ async def forward_messages(client_ws: _RealtimeTextSink, backend_ws: _RealtimeTe
         pass
 
 
+def azure_realtime_requires_ga(model: str) -> bool:
+    try:
+        azure_model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="azure")
+    except Exception:  # noqa: BLE001  # unmapped deployments can select a protocol explicitly
+        try:
+            openai_model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="openai")
+        except Exception:  # noqa: BLE001  # unmapped deployments can select a protocol explicitly
+            return False
+        openai_entry: Final = openai_model_info.get("provider_specific_entry")
+        return openai_entry is not None and openai_entry.get("realtime_ga_only") == 1
+    azure_entry: Final = azure_model_info.get("provider_specific_entry")
+    return azure_entry is not None and azure_entry.get("realtime_ga_only") == 1
+
+
+def _is_ga_protocol(protocol: str | None) -> bool:
+    return protocol is not None and protocol.upper() in ("GA", "V1")
+
+
+@dataclass(frozen=True, slots=True)
+class AzureRealtimeProtocol:
+    name: str
+    bridges_beta_client_to_ga: bool = False
+
+
 def azure_realtime_protocol_for_client(
     configured_protocol: object,
     *,
+    model: str,
+    base_model: str | None = None,
+    realtime_mode: str,
     query_params: RealtimeQueryParams | None,
     websocket: ScopedWebSocket,
-) -> str:
+) -> AzureRealtimeProtocol:
+    serves_a_ga_only_session: Final = (
+        realtime_mode == "translation" or (query_params or {}).get("intent") == "transcription"
+    )
+    client_wants_beta: Final = client_sent_openai_beta_realtime_header(websocket)
     if isinstance(configured_protocol, str) and configured_protocol:
-        return configured_protocol
-    if (query_params or {}).get("intent") == "transcription":
-        return "GA"
-    return "beta" if client_sent_openai_beta_realtime_header(websocket) else "GA"
+        return AzureRealtimeProtocol(
+            name=configured_protocol,
+            bridges_beta_client_to_ga=client_wants_beta
+            and not serves_a_ga_only_session
+            and _is_ga_protocol(configured_protocol),
+        )
+    if serves_a_ga_only_session:
+        return AzureRealtimeProtocol(name="GA")
+    if azure_realtime_requires_ga(base_model or model):
+        return AzureRealtimeProtocol(name="GA", bridges_beta_client_to_ga=client_wants_beta)
+    return AzureRealtimeProtocol(name="beta" if client_wants_beta else "GA")
 
 
 class _ProxyClientWebSocket(Protocol):
@@ -92,6 +132,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         api_version: str | None,
         realtime_protocol: str | None = None,
         query_params: RealtimeQueryParams | None = None,
+        realtime_mode: str = "realtime",
     ) -> str:
         """
         Construct Azure realtime WebSocket URL.
@@ -104,6 +145,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                 - "GA" or "v1": Uses /openai/v1/realtime (GA path)
                 - "beta" or None: Uses /openai/realtime (beta path, default)
             query_params: Extra query params to forward (e.g. intent=transcription).
+            realtime_mode: Realtime surface to target, "realtime" or "translation".
 
         Returns:
             WebSocket URL string
@@ -117,24 +159,29 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         api_base = api_base.replace("https://", "wss://")
 
         # Determine path based on realtime_protocol (case-insensitive)
-        _is_ga: Final = realtime_protocol is not None and realtime_protocol.upper() in (
-            "GA",
-            "V1",
-        )
+        _is_ga: Final = _is_ga_protocol(realtime_protocol)
         intent: Final = (query_params or {}).get("intent")
 
-        if _is_ga:
-            path = "/openai/v1/realtime"
-            query_parts = []
-            if intent != "transcription" and (query_params is None or "model" in query_params):
-                query_parts.append(urlencode({"model": model}))
-        else:
-            # Default to beta path for backwards compatibility
-            path = "/openai/realtime"
-            query_parts = [urlencode({"api-version": api_version, "deployment": model})]
+        path: Final = (
+            "/openai/v1/realtime/translations"
+            if realtime_mode == "translation"
+            else "/openai/v1/realtime"
+            if _is_ga
+            else "/openai/realtime"
+        )
+        base_query_parts: Final = (
+            (urlencode((("model", model),)),)
+            if realtime_mode == "translation"
+            else (
+                (urlencode((("model", model),)),)
+                if intent != "transcription" and (query_params is None or "model" in query_params)
+                else ()
+            )
+            if _is_ga
+            else (urlencode((("api-version", api_version), ("deployment", model))),)
+        )
 
-        if intent:
-            query_parts.append(urlencode({"intent": intent}))
+        query_parts: Final = (*base_query_parts, urlencode((("intent", intent),))) if intent else base_query_parts
 
         qs: Final = "&".join(query_parts)
         endpoint_url: Final = join_api_base(api_base, path)
@@ -165,13 +212,16 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         query_params: RealtimeQueryParams | None = None,
         user_api_key_dict: object | None = None,
         litellm_metadata: dict | None = None,
+        realtime_mode: str = "realtime",
+        bridges_beta_client_to_ga: bool = False,
+        drop_params: bool = False,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
 
         if api_base is None:
             raise ValueError("api_base is required for Azure OpenAI calls")
-        backend_uses_beta_protocol: Final = realtime_protocol is None or realtime_protocol.upper() not in ("GA", "V1")
+        backend_uses_beta_protocol: Final = not _is_ga_protocol(realtime_protocol)
         if api_version is None and backend_uses_beta_protocol:
             raise ValueError("api_version is required for Azure OpenAI calls")
 
@@ -181,6 +231,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             api_version,
             realtime_protocol=realtime_protocol,
             query_params=query_params,
+            realtime_mode=realtime_mode,
         )
 
         auth_headers: Final = self.get_auth_headers(api_key=api_key, azure_ad_token=azure_ad_token)
@@ -204,6 +255,9 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                     force_transcription_model=(
                         model if (query_params or {}).get("intent") == "transcription" else None
                     ),
+                    translation_session=realtime_mode == "translation",
+                    bridges_beta_client_to_ga=bridges_beta_client_to_ga,
+                    drop_params=drop_params,
                 )
                 await realtime_streaming.bidirectional_forward()
 

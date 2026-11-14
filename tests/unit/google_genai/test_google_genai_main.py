@@ -4,15 +4,18 @@ Test to verify the Google GenAI generate_content adapter functionality
 """
 
 import json
-from collections.abc import Iterator
-from typing import Final
+from collections.abc import Iterator, Mapping
+from types import MappingProxyType
+from typing import Final, Literal
 
 import pytest
-
-
-
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
+from litellm.llms.vertex_ai.google_genai.transformation import VertexAIGoogleGenAIConfig
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+from litellm.types.router import GenericLiteLLMParams
 
 
 @pytest.mark.asyncio
@@ -382,3 +385,168 @@ async def test_vertex_generate_content_spend_follows_the_deployment_location(
     recorded: Final = await _logged_vertex_generate_content_cost(location, stream=stream)
 
     assert recorded == pytest.approx(expected), (location, stream)
+
+
+_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
+_IDENTITY: Final = MappingProxyType({"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"})
+_PROXY_METADATA: Final = MappingProxyType(
+    {**_IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}, "requester_metadata": {"team": "search"}}
+)
+_FORGED: Final = MappingProxyType({"user_api_key_alias": "forged", "app": "bot"})
+_HANDLER_CALLS: Final = pytest.mark.parametrize(
+    ("is_async", "stream"),
+    [(False, False), (True, False), (False, True), (True, True)],
+    ids=["sync", "async", "sync-stream", "async-stream"],
+)
+_GEMINI_REPLY: Final = {
+    "candidates": [{"content": {"role": "model", "parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+    "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 3},
+}
+_SENT_BODY: Final = TypeAdapter(Mapping[str, object])
+_SENT_LABELS: Final = TypeAdapter(Mapping[str, str])
+
+
+class _SignedInVertexGoogleGenAIConfig(VertexAIGoogleGenAIConfig):
+    def _ensure_access_token(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    ) -> tuple[str, str]:
+        return "token", "proj"
+
+    async def _ensure_access_token_async(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    ) -> tuple[str, str]:
+        return "token", "proj"
+
+
+async def _generate_content_body(
+    config: GoogleGenAIConfig,
+    litellm_params: GenericLiteLLMParams,
+    extra_body: Mapping[str, object],
+    *,
+    is_async: bool,
+    stream: bool,
+) -> Mapping[str, object]:
+    import datetime
+    from unittest.mock import MagicMock
+
+    import httpx
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    reply: Final = MagicMock(side_effect=lambda _request: httpx.Response(200, json=_GEMINI_REPLY))
+    transport: Final = httpx.MockTransport(reply)
+    client: Final = (
+        AsyncHTTPHandler(transport=transport) if is_async else HTTPHandler(client=httpx.Client(transport=transport))
+    )
+    call: Final = BaseLLMHTTPHandler().generate_content_handler(
+        model="gemini-3.8-flash",
+        contents=[{"role": "user", "parts": [{"text": "Say hi"}]}],
+        generate_content_provider_config=config,
+        generate_content_config_dict={},
+        tools=None,
+        custom_llm_provider=config.custom_llm_provider,
+        litellm_params=litellm_params,
+        logging_obj=Logging(
+            model="gemini-3.8-flash",
+            messages=[],
+            stream=stream,
+            call_type="agenerate_content" if is_async else "generate_content",
+            start_time=datetime.datetime(2026, 1, 1),
+            litellm_call_id="labels-test",
+            function_id="labels-test",
+        ),
+        extra_body=dict(extra_body),
+        _is_async=is_async,
+        client=client,
+        stream=stream,
+    )
+    if is_async:
+        await call
+
+    sent: Final[httpx.Request] = reply.call_args.args[0]
+    return _SENT_BODY.validate_json(sent.content)
+
+
+async def _vertex_generate_content_body(
+    extra_body: Mapping[str, object], *, is_async: bool, stream: bool
+) -> Mapping[str, object]:
+    return await _generate_content_body(
+        _SignedInVertexGoogleGenAIConfig(),
+        GenericLiteLLMParams(metadata=dict(_PROXY_METADATA), vertex_location="us-central1"),
+        extra_body,
+        is_async=is_async,
+        stream=stream,
+    )
+
+
+@pytest.mark.asyncio
+@_HANDLER_CALLS
+async def test_vertex_generate_content_sends_identity_labels_a_caller_cannot_forge(
+    is_async: bool, stream: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+
+    body: Final = await _vertex_generate_content_body({"labels": dict(_FORGED)}, is_async=is_async, stream=stream)
+
+    labels: Final = _SENT_LABELS.validate_python(body["labels"])
+    assert list(labels.items()) == [*_IDENTITY.items(), ("app", "bot"), ("cost-center", "cc-1")]
+
+
+@pytest.mark.asyncio
+@_HANDLER_CALLS
+async def test_vertex_generate_content_without_caller_labels_still_carries_identity(
+    is_async: bool, stream: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+
+    body: Final = await _vertex_generate_content_body({}, is_async=is_async, stream=stream)
+
+    labels: Final = _SENT_LABELS.validate_python(body["labels"])
+    assert list(labels.items()) == [*_IDENTITY.items(), ("team", "search"), ("cost-center", "cc-1")]
+
+
+@pytest.mark.asyncio
+@_HANDLER_CALLS
+@pytest.mark.parametrize(
+    "extra_body, expected_labels",
+    [({}, "absent"), ({"labels": dict(_FORGED)}, _FORGED), ({"labels": "not-a-mapping"}, "not-a-mapping")],
+    ids=["no-labels", "labels", "non-mapping-labels"],
+)
+async def test_vertex_generate_content_with_the_setting_off_sends_only_the_callers_labels(
+    is_async: bool,
+    stream: bool,
+    extra_body: Mapping[str, object],
+    expected_labels: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+
+    body: Final = await _vertex_generate_content_body(extra_body, is_async=is_async, stream=stream)
+
+    assert body.get("labels", "absent") == expected_labels
+
+
+@pytest.mark.asyncio
+@_HANDLER_CALLS
+async def test_ai_studio_generate_content_keeps_the_callers_labels_with_the_setting_on(
+    is_async: bool, stream: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+
+    body: Final = await _generate_content_body(
+        GoogleGenAIConfig(),
+        GenericLiteLLMParams(metadata=dict(_PROXY_METADATA), api_key="test-key"),
+        {"labels": dict(_FORGED)},
+        is_async=is_async,
+        stream=stream,
+    )
+
+    assert body["labels"] == _FORGED
