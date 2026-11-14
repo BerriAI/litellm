@@ -9,7 +9,7 @@ import logging
 from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from typing import Final
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -47,8 +47,38 @@ class LoggingTask(TypedDict):
     the original task's context.
     """
 
-    coroutine: Coroutine
-    context: contextvars.Context
+    coroutine: ReadOnly[Coroutine[object, object, object]]
+    context: ReadOnly[contextvars.Context]
+
+
+class _LoggingTaskCompletion:
+    __slots__ = ("_discard", "_queue", "_sem", "_settle", "_started", "_task")
+
+    def __init__(
+        self,
+        settle: Callable[[LoggingTask, asyncio.Queue[LoggingTask], asyncio.Semaphore | None, bool], None],
+        discard: Callable[[asyncio.Task[None]], None],
+        task: LoggingTask,
+        queue: asyncio.Queue[LoggingTask],
+        sem: asyncio.Semaphore | None,
+    ) -> None:
+        self._settle = settle
+        self._discard = discard
+        self._task = task
+        self._queue = queue
+        self._sem = sem
+        self._started = False
+
+    def start(self) -> None:
+        self._started = True
+
+    def finish(self) -> None:
+        self._settle(self._task, self._queue, self._sem, False)
+
+    def done(self, processor: asyncio.Task[None]) -> None:
+        self._discard(processor)
+        if not self._started:
+            self._settle(self._task, self._queue, self._sem, True)
 
 
 class LoggingWorker:
@@ -80,6 +110,7 @@ class LoggingWorker:
         self._pending_enqueues: dict[int, LoggingTask] = {}  # mutable-ok: retries and shutdown share callback ownership
         self._retry_sleep = retry_sleep
         self._dequeued_tasks: dict[int, LoggingTask] = {}  # mutable-ok: refs so flush can rescue never-started tasks
+        self._interrupted_tasks: dict[int, LoggingTask] = {}  # mutable-ok: pending processor recovery
         self._sem: asyncio.Semaphore | None = None
         self._bound_loop: asyncio.AbstractEventLoop | None = None
         self._last_aggressive_clear_time: float = 0.0
@@ -170,6 +201,7 @@ class LoggingWorker:
                 )
             else:
                 verbose_logger.debug("LoggingWorker: Event loop changed, reinitializing queue and worker")
+            self._interrupted_tasks.clear()
             self._sem = None
             self._worker_task = None
             self._running_tasks.clear()
@@ -196,29 +228,53 @@ class LoggingWorker:
             for pending in tuple(self._pending_enqueues.values()):
                 self._schedule_delayed_enqueue_retry(pending)
 
-    async def _process_log_task(
-        self, task: LoggingTask, sem: asyncio.Semaphore, queue: "asyncio.Queue[LoggingTask]"
-    ) -> None:
-        """Runs the logging task and handles cleanup. Releases semaphore when done."""
+    async def _process_log_task(self, task: LoggingTask, completion: _LoggingTaskCompletion) -> None:
+        completion.start()
         try:
-            if self._queue is not None:
-                # Run the coroutine in its original context
-                callback_task: Final = self._create_callback_task(task)
-                try:
-                    await asyncio.wait_for(callback_task, timeout=self.timeout)
-                except asyncio.TimeoutError as e:
-                    if callback_task.cancelled():
-                        self._record_callback_timeout(task["coroutine"])
-                    else:
-                        verbose_logger.exception("LoggingWorker error: %s", e)
-                except Exception as e:
+            callback_task: Final = self._create_callback_task(task)
+            try:
+                await asyncio.wait_for(callback_task, timeout=self.timeout)
+            except asyncio.TimeoutError as e:
+                if callback_task.cancelled():
+                    self._record_callback_timeout(task["coroutine"])
+                else:
                     verbose_logger.exception("LoggingWorker error: %s", e)
-                finally:
-                    self._untrack_dequeued(task)
-                    queue.task_done()
+            except Exception as e:
+                verbose_logger.exception("LoggingWorker error: %s", e)
         finally:
-            # Always release semaphore, even if queue is None
+            completion.finish()
+
+    def _finish_log_task(
+        self,
+        task: LoggingTask,
+        queue: asyncio.Queue[LoggingTask],
+        sem: asyncio.Semaphore | None,
+        retry_unstarted: bool,
+    ) -> None:
+        if sem is not None:
             sem.release()
+        if queue is self._queue and id(task) in self._dequeued_tasks:
+            if retry_unstarted and inspect.getcoroutinestate(task["coroutine"]) == inspect.CORO_CREATED:
+                try:
+                    queue.put_nowait(task)
+                except asyncio.QueueFull:
+                    self._interrupted_tasks[id(task)] = task
+                    return
+            self._untrack_dequeued(task)
+        queue.task_done()
+
+    def _start_log_task(
+        self, task: LoggingTask, queue: asyncio.Queue[LoggingTask], sem: asyncio.Semaphore | None
+    ) -> asyncio.Task[None]:
+        completion: Final = _LoggingTaskCompletion(self._finish_log_task, self._running_tasks.discard, task, queue, sem)
+        coroutine: Final = (
+            self._process_single_task(task, completion) if sem is None else self._process_log_task(task, completion)
+        )
+        processor: Final = asyncio.create_task(coroutine)
+        processor.add_done_callback(completion.done)
+        if sem is not None:
+            self._running_tasks.add(processor)
+        return processor
 
     def _record_callback_timeout(self, coroutine: Coroutine) -> None:
         """Count a callback timeout and arm a debounced summary, so a burst of timeouts
@@ -253,23 +309,21 @@ class LoggingWorker:
         """Main worker loop that gets tasks and schedules them to run concurrently."""
         try:
             queue: Final = self._queue
-            if queue is None or self._sem is None:
+            sem: Final = self._sem
+            if queue is None or sem is None:
                 return
 
             while True:
                 # Acquire semaphore before removing task from queue to prevent
                 # unbounded growth of waiting tasks
-                await self._sem.acquire()
+                await sem.acquire()
                 try:
-                    task = await queue.get()
+                    task = self._interrupted_tasks.popitem()[1] if self._interrupted_tasks else await queue.get()
                     self._track_dequeued(task)
                     # Track each spawned coroutine so we can cancel on shutdown.
-                    processing_task = asyncio.create_task(self._process_log_task(task, self._sem, queue))
-                    self._running_tasks.add(processing_task)
-                    processing_task.add_done_callback(self._running_tasks.discard)
-                except Exception:
-                    # If task creation fails, release semaphore to prevent deadlock
-                    self._sem.release()
+                    self._start_log_task(task, queue, sem)
+                except (Exception, asyncio.CancelledError):
+                    sem.release()
                     raise
 
         except asyncio.CancelledError:
@@ -435,33 +489,27 @@ class LoggingWorker:
             if self._queue is None:
                 return
 
+            queue: Final = self._queue
             extracted_tasks: Final = self._extract_tasks_from_queue()
             if new_task is not None:
                 self._enqueue_task(new_task)
             if extracted_tasks:
-                await asyncio.gather(*(self._process_single_task(task) for task in extracted_tasks))
+                processors: Final = tuple(self._start_log_task(task, queue, None) for task in extracted_tasks)
+                await asyncio.gather(*processors)
         except Exception as e:
             verbose_logger.exception("LoggingWorker error during aggressive clear: %s", e)
         finally:
             # Always reset the flag even if an error occurs
             self._aggressive_clear_in_progress = False
 
-    async def _process_single_task(self, task: LoggingTask) -> None:
-        """Process a task extracted from the queue and mark it done."""
-        if self._queue is None:
-            return
-
+    async def _process_single_task(self, task: LoggingTask, completion: _LoggingTaskCompletion) -> None:
+        completion.start()
         try:
-            await asyncio.wait_for(
-                self._create_callback_task(task),
-                timeout=self.timeout,
-            )
+            await asyncio.wait_for(self._create_callback_task(task), timeout=self.timeout)
         except Exception:
-            # Suppress errors during processing to ensure we keep going
             pass
         finally:
-            self._untrack_dequeued(task)
-            self._queue.task_done()
+            completion.finish()
 
     def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, None, None]) -> None:
         """
@@ -493,6 +541,13 @@ class LoggingWorker:
         self._emit_timeout_summary()
 
         if discard_pending:
+            for task in self._unstarted_dequeued_tasks():
+                task["coroutine"].close()
+            for task in tuple(self._interrupted_tasks.values()):
+                self._untrack_dequeued(task)
+                if self._queue is not None:
+                    self._queue.task_done()
+            self._interrupted_tasks.clear()
             rejected: Final = tuple(self._pending_enqueues.values())
             self._pending_enqueues.clear()
             for task in rejected:
@@ -518,11 +573,6 @@ class LoggingWorker:
         if pending:
             verbose_logger.warning("LoggingWorker shutdown: %d tasks still alive after cancellation", len(pending))
 
-        if discard_pending and self._queue is not None:
-            for task in self._unstarted_dequeued_tasks():
-                task["coroutine"].close()
-                self._untrack_dequeued(task)
-                self._queue.task_done()
         if self._worker_task is not None and self._worker_task.done():
             self._worker_task = None
         # Drop references to completed tasks so we can restart cleanly.
