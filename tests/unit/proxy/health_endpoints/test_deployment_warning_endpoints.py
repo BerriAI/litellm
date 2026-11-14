@@ -32,7 +32,7 @@ from litellm.proxy.proxy_server import (
 )
 from litellm.repositories.database import Database
 from litellm.repositories.deployment_warning_ignore_repository import DEPLOYMENT_WARNING_IGNORES_ROW_ID
-from litellm.rust_bridge._native import NativeDatabase
+from tests._support.native_database import connect_native_database
 
 T0: Final = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
 THIRTY_DAYS: Final = 30 * 24 * 60 * 60
@@ -254,7 +254,7 @@ class TestDeploymentWarningIgnoreStore:
             db=ui_settings_table(None), writer_db=ui_settings_table(SimpleNamespace(ui_settings=fresh))
         )
         store: Final = await get_deployment_warning_ignore_repository(
-            Database(prisma=prisma, native=await NativeDatabase.connect())
+            Database(prisma=prisma, native=await connect_native_database())
         )
         assert store is not None
         assert await store.get_ignores() == {

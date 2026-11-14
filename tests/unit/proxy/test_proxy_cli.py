@@ -16,6 +16,7 @@ import click
 import fastapi
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 
 import builtins
@@ -3518,6 +3519,68 @@ def _run_server_and_capture_urls(
         return {k: os.environ[k] for k in _CAPTURED_DB_ENV_VARS if k in os.environ}
 
 
+_CAPTURED_URLS: Final = TypeAdapter(dict[str, str])
+
+
+@pytest.mark.parametrize(
+    "general_settings, database_url, expected_limit, expected_name",
+    [
+        pytest.param({}, "postgresql://t:t@localhost:5432/t", "10", None, id="default_limit"),
+        pytest.param(
+            {"database_connection_pool_limit": 30},
+            "postgresql://t:t@localhost:5432/t?application_name=ops",
+            "30",
+            "ops",
+            id="configured_limit_and_operator_name",
+        ),
+        pytest.param(
+            {"database_extra_connection_params": {"connection_limit": 5}},
+            "postgresql://t:t@localhost:5432/t",
+            "5",
+            None,
+            id="extra_params_limit",
+        ),
+        pytest.param(
+            {"database_connection_pool_limit": 0},
+            "postgresql://t:t@localhost:5432/t",
+            "0",
+            None,
+            id="zero_limit_prisma_accepts",
+        ),
+        pytest.param(
+            {"database_extra_connection_params": {"connection_limit": "abc"}},
+            "postgresql://t:t@localhost:5432/t",
+            "abc",
+            None,
+            id="non_integer_limit_left_to_prisma",
+        ),
+    ],
+)
+def test_prisma_keeps_the_whole_connection_limit_and_its_name(
+    tmp_path: Path,
+    general_settings: dict[str, object],
+    database_url: str,
+    expected_limit: str,
+    expected_name: str | None,
+) -> None:
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+
+    captured: Final = _CAPTURED_URLS.validate_python(
+        _run_server_and_capture_urls(
+            str(config_path), database_url=database_url, direct_url="postgresql://t:t@localhost:5432/t"
+        )
+    )
+
+    writer: Final = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+    direct: Final = urlparse.parse_qs(urlparse.urlparse(captured["DIRECT_URL"]).query)
+    assert (writer["connection_limit"], writer.get("application_name")) == (
+        [expected_limit],
+        None if expected_name is None else [expected_name],
+    )
+    assert direct["connection_limit"] == [expected_limit]
+
+
 class TestReadReplicaConnectionParams:
     """The reader is a second Prisma client with its own pool. Without the
     configured params on DATABASE_URL_READ_REPLICA it sizes itself from Prisma's
@@ -3552,6 +3615,7 @@ class TestReadReplicaConnectionParams:
 
         query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
         assert query["connection_limit"] == ["3"]
+        assert "application_name" not in query
         assert query["pool_timeout"] == ["20"]
         assert query["connect_timeout"] == ["15"]
         assert query["socket_timeout"] == ["120"]
