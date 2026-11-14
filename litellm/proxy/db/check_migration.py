@@ -44,6 +44,37 @@ def extract_sql_commands(diff_output: str) -> list[str]:
     return sql_commands
 
 
+def _drift_commands(diff_output: str, db_url: str) -> tuple[str, ...]:
+    """The SQL commands of a `prisma migrate diff` script, without the drift that
+    boot's migration resolver deliberately leaves in place: the indexes the
+    migration job builds and, once litellm/scripts/db/partition_spend_logs.sql
+    has run, LiteLLM_SpendLogs' partitioned primary key and runbook artifacts.
+    Reporting those would tell operators to rewrite the primary key, which
+    Postgres rejects on a partitioned table, or to drop LiteLLM_SpendLogs_legacy."""
+    try:
+        from litellm_proxy_extras.utils import (
+            ProxyExtrasDBManager,  # pyright: ignore[reportUnknownVariableType]  # litellm-proxy-extras is an optional install
+        )
+    except ImportError:
+        return tuple(extract_sql_commands(diff_output))
+
+    partitioned: Final[object] = ProxyExtrasDBManager.spend_logs_is_partitioned(db_url)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm-proxy-extras is an optional install
+    filtered: Final[object] = ProxyExtrasDBManager._filter_migration_job_owned_drift(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm-proxy-extras is an optional install
+        diff_output, partitioned=partitioned is True
+    )
+    if not isinstance(filtered, str):
+        return tuple(extract_sql_commands(diff_output))
+    # The partition filter drops the "-- " headers extract_sql_commands keys on,
+    # so split on statements instead.
+    return tuple(f"{text};" for text in map(_statement_text, filtered.split(";")) if text)
+
+
+def _statement_text(statement: str) -> str:
+    """One statement on a single line, without its comment lines."""
+    lines: Final = (line.strip() for line in statement.splitlines())
+    return " ".join(line for line in lines if line and not line.startswith("--"))
+
+
 def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
     """Checks for differences between current database and Prisma schema.
 
@@ -86,7 +117,7 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
             env=os.environ.copy(),
         )
 
-        sql_commands: Final = extract_sql_commands(result.stdout)
+        sql_commands: Final = list(_drift_commands(result.stdout, db_url))
 
         if sql_commands:
             print_startup_message(

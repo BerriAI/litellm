@@ -701,15 +701,15 @@ class ProxyExtrasDBManager:
             )
 
     @staticmethod
-    def spend_logs_is_partitioned() -> bool:
-        """True when the connected database's LiteLLM_SpendLogs is a
-        partitioned table in Prisma's target schema (the `schema` URL param,
-        falling back to Prisma's default target, public), i.e. the operator
-        ran litellm/scripts/db/partition_spend_logs.sql. Returns False when psycopg is
-        unavailable or the database cannot be reached, preserving the
-        pre-existing behavior in those cases."""
-        database_url = os.getenv("DATABASE_URL")
-        if not database_url:
+    def spend_logs_is_partitioned(database_url: str | None = None) -> bool:
+        """True when LiteLLM_SpendLogs at `database_url` (default: the
+        DATABASE_URL env var) is a partitioned table in Prisma's target schema
+        (the `schema` URL param, falling back to Prisma's default target,
+        public), i.e. the operator ran litellm/scripts/db/partition_spend_logs.sql.
+        Returns False when psycopg is unavailable or the database cannot be
+        reached, preserving the pre-existing behavior in those cases."""
+        url: Final = database_url or os.getenv("DATABASE_URL")
+        if not url:
             return False
 
         try:
@@ -724,7 +724,7 @@ class ProxyExtrasDBManager:
             )
             return False
 
-        cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
+        cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(url)
         try:
             with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
                 row = conn.execute(
@@ -734,7 +734,7 @@ class ProxyExtrasDBManager:
                     "JOIN pg_namespace n ON n.oid = c.relnamespace "
                     "WHERE c.relname = 'LiteLLM_SpendLogs' "
                     "  AND n.nspname = %s",
-                    (ProxyExtrasDBManager._prisma_schema_param(database_url) or "public",),
+                    (ProxyExtrasDBManager._prisma_schema_param(url) or "public",),
                 ).fetchone()
         except (psycopg.OperationalError, psycopg.DatabaseError):
             return False
