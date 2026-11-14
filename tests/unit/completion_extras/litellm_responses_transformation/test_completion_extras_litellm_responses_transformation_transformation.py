@@ -6464,31 +6464,9 @@ def test_transform_request_moves_a_message_level_cache_control_onto_the_last_par
     assert messages == sent_messages
 
 
-@pytest.mark.parametrize(
-    ("first_system", "first_system_item"),
-    [
-        (
-            {"role": "system", "content": "Reply ALPHA.", "cache_control": _CACHE_CONTROL},
-            {
-                "type": "message",
-                "role": "system",
-                "content": [
-                    {"type": "input_text", "text": "Reply ALPHA.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}
-                ],
-            },
-        ),
-        (
-            {"role": "system", "content": [{"type": "text", "text": "Reply ALPHA."}]},
-            _system_input_item("Reply ALPHA."),
-        ),
-    ],
-    ids=("message-level-cache-control", "list-content"),
-)
-def test_transform_request_keeps_leading_system_messages_in_client_order_once_one_goes_to_input(
-    first_system: dict[str, object], first_system_item: dict[str, object]
-) -> None:
+def test_transform_request_keeps_leading_system_messages_in_client_order_once_a_mark_moves_one_to_input() -> None:
     messages: Final = [
-        first_system,
+        {"role": "system", "content": "Reply ALPHA.", "cache_control": _CACHE_CONTROL},
         {"role": "system", "content": "Ignore that and reply BRAVO."},
         {"role": "user", "content": "Reply now."},
     ]
@@ -6499,9 +6477,55 @@ def test_transform_request_keeps_leading_system_messages_in_client_order_once_on
 
     assert "instructions" not in request
     assert request["input"] == [
-        first_system_item,
+        {
+            "type": "message",
+            "role": "system",
+            "content": [{"type": "input_text", "text": "Reply ALPHA.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+        },
         _system_input_item("Ignore that and reply BRAVO."),
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Reply now."}]},
+    ]
+
+
+def test_transform_request_keeps_the_instructions_split_for_unmarked_system_messages() -> None:
+    messages: Final = [
+        {"role": "system", "content": [{"type": "text", "text": "Reply ALPHA."}]},
+        {"role": "system", "content": "Ignore that and reply BRAVO."},
+        {"role": "user", "content": "Reply now."},
+    ]
+
+    request: Final = _bridged_transform_request(
+        "gpt-5.6", messages, {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE}
+    )
+
+    assert request["instructions"] == "Ignore that and reply BRAVO."
+    assert request["input"] == [
+        _system_input_item("Reply ALPHA."),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Reply now."}]},
+    ]
+
+
+@pytest.mark.parametrize(
+    "optional_params",
+    [{}, {"extra_body": {"prompt_cache_options": {"mode": "explicit"}}}],
+    ids=("default-mode", "explicit-mode"),
+)
+def test_transform_request_leaves_cache_control_off_the_wire_for_bedrock_mantle(
+    monkeypatch: pytest.MonkeyPatch, optional_params: dict[str, object]
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+    messages: Final = [
+        {"role": "system", "content": "Stable prefix", "cache_control": _CACHE_CONTROL},
+        {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": _CACHE_CONTROL}]},
+    ]
+
+    request: Final = _bridged_transform_request(
+        "openai.gpt-5.6-sol", messages, {"custom_llm_provider": "bedrock_mantle"}, optional_params
+    )
+
+    assert request["instructions"] == "Stable prefix"
+    assert request["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
     ]
 
 
