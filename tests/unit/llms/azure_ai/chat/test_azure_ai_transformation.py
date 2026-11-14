@@ -335,6 +335,149 @@ def test_foundry_gpt_6_astra_refuses_reasoning_effort_none_before_the_call(_loca
         )
 
 
+_FOUNDRY_HOST: Final = "qa-reasoning.services.ai.azure.com"
+_FOUNDRY_MESSAGES: Final = ({"role": "user", "content": "Say hi."},)
+
+
+def _register_foundry_model(name: str, **capabilities: object) -> None:
+    litellm.register_model(
+        {
+            f"azure_ai/{name}": {
+                "litellm_provider": "azure_ai",
+                "mode": "chat",
+                "input_cost_per_token": 0,
+                "output_cost_per_token": 0,
+                **capabilities,
+            }
+        }
+    )
+
+
+def _mock_foundry_chat(respx_mock: respx.MockRouter, model: str) -> respx.Route:
+    return respx_mock.post(host=_FOUNDRY_HOST, path="/models/chat/completions").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-foundry",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+            },
+        )
+    )
+
+
+def _foundry_request_body(respx_mock: respx.MockRouter, model: str, **params: object) -> dict[str, object]:
+    route: Final = _mock_foundry_chat(respx_mock, model)
+    litellm.completion(
+        model=f"azure_ai/{model}",
+        api_base=f"https://{_FOUNDRY_HOST}",
+        api_key="azure-ai-test-key",
+        messages=list(_FOUNDRY_MESSAGES),
+        **params,
+    )
+    return json.loads(route.calls.last.request.content)
+
+
+@pytest.mark.parametrize(
+    ("requested", "sent"),
+    [
+        pytest.param("max", "max", id="level"),
+        pytest.param({"effort": "high", "summary": "auto"}, "high", id="effort-with-summary"),
+    ],
+)
+def test_azure_ai_sends_reasoning_effort_to_a_foundry_reasoning_model(
+    respx_mock: respx.MockRouter, requested: object, sent: str
+) -> None:
+    _register_foundry_model("qa-reasoner", supports_reasoning=True)
+
+    body: Final = _foundry_request_body(respx_mock, "qa-reasoner", reasoning_effort=requested)
+
+    assert body == {"model": "qa-reasoner", "messages": list(_FOUNDRY_MESSAGES), "reasoning_effort": sent}
+
+
+def test_azure_ai_sends_a_level_the_deployment_declares_over_the_catalog_levels(respx_mock: respx.MockRouter) -> None:
+    _register_foundry_model("qa-leveled", supports_reasoning=True, reasoning_effort_levels=["none", "high", "max"])
+
+    body: Final = _foundry_request_body(
+        respx_mock, "qa-leveled", reasoning_effort="low", model_info={"reasoning_effort_levels": ["low", "high"]}
+    )
+
+    assert body["reasoning_effort"] == "low"
+
+
+def test_azure_ai_refuses_reasoning_effort_for_a_foundry_model_without_reasoning(respx_mock: respx.MockRouter) -> None:
+    _register_foundry_model("qa-chat-only", supports_reasoning=False)
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        _foundry_request_body(respx_mock, "qa-chat-only", reasoning_effort="high")
+
+
+def test_azure_ai_sends_a_level_the_foundry_model_declares(respx_mock: respx.MockRouter) -> None:
+    _register_foundry_model("qa-leveled", supports_reasoning=True, reasoning_effort_levels=["none", "high", "max"])
+
+    body: Final = _foundry_request_body(respx_mock, "qa-leveled", reasoning_effort="none", drop_params=True)
+
+    assert body["reasoning_effort"] == "none"
+
+
+@pytest.mark.parametrize(
+    ("capabilities", "requested"),
+    [
+        pytest.param(
+            {"supports_reasoning": True, "reasoning_effort_levels": ["none", "high", "max"]}, "low", id="undeclared"
+        ),
+        pytest.param({"supports_reasoning": True}, {"summary": "auto"}, id="no-level"),
+    ],
+)
+@pytest.mark.parametrize("drop_params_global", [False, True], ids=["per-request", "global"])
+def test_azure_ai_drops_a_reasoning_effort_the_foundry_model_cannot_take_under_drop_params(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capabilities: dict[str, object],
+    requested: object,
+    drop_params_global: bool,
+) -> None:
+    _register_foundry_model("qa-picky", **capabilities)
+    monkeypatch.setattr(litellm, "drop_params", drop_params_global)
+    drop_params: Final = {} if drop_params_global else {"drop_params": True}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        body: Final = _foundry_request_body(respx_mock, "qa-picky", reasoning_effort=requested, **drop_params)
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert "reasoning_effort" not in body
+    assert len(drop_warnings) == 1
+    assert "reasoning_effort=" in drop_warnings[0]
+
+
+@pytest.mark.parametrize(
+    ("capabilities", "requested", "named"),
+    [
+        pytest.param(
+            {"supports_reasoning": True, "reasoning_effort_levels": ["none", "high", "max"]},
+            "low",
+            "['none', 'high', 'max']",
+            id="undeclared",
+        ),
+        pytest.param({"supports_reasoning": True}, {"summary": "auto"}, "no level", id="no-level"),
+    ],
+)
+def test_azure_ai_refuses_a_reasoning_effort_the_foundry_model_cannot_take_without_drop_params(
+    respx_mock: respx.MockRouter, capabilities: dict[str, object], requested: object, named: str
+) -> None:
+    _register_foundry_model("qa-picky", **capabilities)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as refused:
+        _foundry_request_body(respx_mock, "qa-picky", reasoning_effort=requested)
+
+    assert refused.value.status_code == 400
+    assert named in str(refused.value)
+
+
 
 
 def test_azure_ai_grok_stop_parameter_handling():
