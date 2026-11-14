@@ -3,7 +3,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any, Final, Literal
 
-from pydantic import AfterValidator, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+from pydantic import AfterValidator, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 from typing_extensions import Self
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -93,6 +93,7 @@ class PinnedMCPTool(LiteLLMBaseModel):
 
 
 _PINNED_TOOLS: Final[TypeAdapter[dict[str, PinnedMCPTool] | None]] = TypeAdapter(dict[str, PinnedMCPTool] | None)
+_ALLOWED_ERROR_FIELDS: Final[TypeAdapter[list[str]]] = TypeAdapter(list[str])
 
 
 def parse_pinned_tools(value: object) -> dict[str, PinnedMCPTool] | None:
@@ -271,6 +272,23 @@ class MCPServer(LiteLLMBaseModel):
     short_prefix: str | None = None
     allow_sampling: bool = False
     allow_elicitation: bool = False
+    allowed_error_fields: list[str] | None = None
+
+    @field_validator("allowed_error_fields", mode="before")
+    @classmethod
+    def _validate_allowed_error_fields(cls, value: object) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            str_fields: Final = [f.strip() for f in value.split(",") if f.strip()]
+            return str_fields if str_fields else None
+        try:
+            validated: Final = _ALLOWED_ERROR_FIELDS.validate_python(value)
+            validated_fields: Final = [f.strip() for f in validated if f.strip()]
+            return validated_fields if validated_fields else None
+        except ValidationError:
+            return None
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __repr__(self) -> str:

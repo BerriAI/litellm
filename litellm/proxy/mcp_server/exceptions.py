@@ -137,9 +137,15 @@ class MCPOpenApiUpstreamError(Exception):
     deliberately does not produce a challenge.
     """
 
-    def __init__(self, status_code: int, server_name: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        server_name: str,
+        details: dict[str, object] | None = None,
+    ) -> None:
         self.status_code = status_code
         self.server_name = server_name
+        self.details = details
         super().__init__(f"upstream returned HTTP {status_code}")
 
 
