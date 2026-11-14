@@ -463,10 +463,16 @@ def _per_second_pricing_cost_from_info(
     return resolved_cost_per_second * seconds, 0.0
 
 
+def _normalize_token_count(count: int | str | None) -> int:
+    if count is None:
+        return 0
+    return int(count) if isinstance(count, str) else count
+
+
 def cost_per_token(
     model: str = "",
-    prompt_tokens: int = 0,
-    completion_tokens: int = 0,
+    prompt_tokens: int | str | None = 0,
+    completion_tokens: int | str | None = 0,
     response_time_ms: float | None = 0.0,
     custom_llm_provider: str | None = None,
     region_name=None,
@@ -504,10 +510,14 @@ def cost_per_token(
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
+    When reconstructing usage from scalar counts, None contributes zero tokens
+    and integer strings are parsed before pricing. A missing count priced as zero
+    leaves the actual provider usage and charge unknown.
+
     Parameters:
         model (str): The name of the model to use. Default is ""
-        prompt_tokens (int): The number of tokens in the prompt.
-        completion_tokens (int): The number of tokens in the completion.
+        prompt_tokens (int | str | None): The number of tokens in the prompt.
+        completion_tokens (int | str | None): The number of tokens in the completion.
         response_time (float): The amount of time, in milliseconds, it took the call to complete.
         prompt_characters (float): The number of characters in the prompt. Used for vertex ai cost calculation.
         completion_characters (float): The number of characters in the completion response. Used for vertex ai cost calculation.
@@ -523,14 +533,18 @@ def cost_per_token(
     if model is None:
         raise Exception("Invalid arg. Model cannot be none.")
 
+    uses_scalar_counts: Final = usage_object is None or custom_cost_per_token is not None
+    prompt_token_count: Final = _normalize_token_count(prompt_tokens) if uses_scalar_counts else 0
+    completion_token_count: Final = _normalize_token_count(completion_tokens) if uses_scalar_counts else 0
+
     ## RECONSTRUCT USAGE BLOCK ##
     if usage_object is not None:
         usage_block = usage_object
     else:
         usage_block = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens=prompt_token_count,
+            completion_tokens=completion_token_count,
+            total_tokens=prompt_token_count + completion_token_count,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
         )
@@ -574,13 +588,13 @@ def cost_per_token(
 
     # Anthropic reports prompt_tokens as input_tokens (excluding cache tokens).
     # Adjust so the helper's "prompt_tokens includes cache tokens" invariant holds.
-    _normalized_prompt_tokens = float(prompt_tokens)
+    _normalized_prompt_tokens = float(prompt_token_count)
     if _is_anthropic_style:
         _normalized_prompt_tokens += _cache_read_tokens + _cache_creation_tokens
 
     response_cost: Final = _cost_per_token_custom_pricing_helper(
         prompt_tokens=_normalized_prompt_tokens,
-        completion_tokens=completion_tokens,
+        completion_tokens=completion_token_count,
         response_time_ms=response_time_ms,
         cached_tokens=_cache_read_tokens,
         cache_creation_tokens=_cache_creation_tokens,
