@@ -1053,32 +1053,30 @@ async def test_executor_failure_is_not_tagged():
 
 
 def _router_with_advisor_deployment(
-    recorder, advisor_model="claude-opus-4-8", deployment_model=None, model_group_alias=None
+    advisor_model="claude-opus-4-8", deployment_model=None, model_group_alias=None
 ):
     """Build a Router whose only deployment is the advisor model on Foundry.
 
-    The recorder replaces ``litellm.anthropic_messages`` before construction
-    because Router binds it at init time, so the returned Router exercises the
-    real deployment-resolution path and records what it dispatched.
+    The Router resolves ``litellm.anthropic_messages`` per call, so each test
+    patches it with a recorder around the handler call; the Router then
+    exercises the real deployment-resolution path and records what it dispatched.
     """
-    import litellm
     from litellm.router import Router
 
-    with patch("litellm.anthropic_messages", new=recorder):
-        return Router(
-            model_list=[
-                {
-                    "model_name": advisor_model,
-                    "litellm_params": {
-                        "model": deployment_model or f"azure_ai/{advisor_model}",
-                        "api_base": "http://127.0.0.1:1/foundry",
-                        "api_key": "fake-foundry-key",
-                    },
-                }
-            ],
-            model_group_alias=model_group_alias,
-            num_retries=0,
-        )
+    return Router(
+        model_list=[
+            {
+                "model_name": advisor_model,
+                "litellm_params": {
+                    "model": deployment_model or f"azure_ai/{advisor_model}",
+                    "api_base": "http://127.0.0.1:1/foundry",
+                    "api_key": "fake-foundry-key",
+                },
+            }
+        ],
+        model_group_alias=model_group_alias,
+        num_retries=0,
+    )
 
 
 @pytest.mark.asyncio
@@ -1094,7 +1092,7 @@ async def test_advisor_sub_call_routes_through_proxy_router():
         router_calls.append(kwargs)
         return _make_text_response("Use trial division.", model="claude-opus-4-8")
 
-    router = _router_with_advisor_deployment(recorder)
+    router = _router_with_advisor_deployment()
 
     call_count = 0
 
@@ -1111,6 +1109,7 @@ async def test_advisor_sub_call_routes_through_proxy_router():
             side_effect=mock_call,
         ),
         patch.object(proxy_server, "llm_router", router),
+        patch("litellm.anthropic_messages", new=recorder),
     ):
         h = AdvisorOrchestrationHandler()
         result = await h.handle(
@@ -1155,7 +1154,7 @@ async def test_advisor_sub_call_routes_through_router_for_alias_and_wildcard(rou
         router_calls.append(kwargs)
         return _make_text_response("Use trial division.", model="claude-opus-4-8")
 
-    router = _router_with_advisor_deployment(recorder, **router_kwargs)
+    router = _router_with_advisor_deployment(**router_kwargs)
 
     call_count = 0
 
@@ -1172,6 +1171,7 @@ async def test_advisor_sub_call_routes_through_router_for_alias_and_wildcard(rou
             side_effect=mock_call,
         ),
         patch.object(proxy_server, "llm_router", router),
+        patch("litellm.anthropic_messages", new=recorder),
     ):
         h = AdvisorOrchestrationHandler()
         await h.handle(
@@ -1204,7 +1204,7 @@ async def test_advisor_sub_call_bypasses_router_for_unconfigured_model():
         router_calls.append(kwargs)
         return _make_text_response("should not be used")
 
-    router = _router_with_advisor_deployment(recorder, advisor_model="some-other-model")
+    router = _router_with_advisor_deployment(advisor_model="some-other-model")
 
     call_count = 0
 
@@ -1223,6 +1223,7 @@ async def test_advisor_sub_call_bypasses_router_for_unconfigured_model():
             side_effect=mock_call,
         ),
         patch.object(proxy_server, "llm_router", router),
+        patch("litellm.anthropic_messages", new=recorder),
     ):
         h = AdvisorOrchestrationHandler()
         await h.handle(
@@ -1253,7 +1254,7 @@ async def test_advisor_sub_call_client_override_bypasses_router():
         router_calls.append(kwargs)
         return _make_text_response("should not be used")
 
-    router = _router_with_advisor_deployment(recorder)
+    router = _router_with_advisor_deployment()
 
     sub_calls = []
 
@@ -1278,6 +1279,7 @@ async def test_advisor_sub_call_client_override_bypasses_router():
             side_effect=mock_call,
         ),
         patch.object(proxy_server, "llm_router", router),
+        patch("litellm.anthropic_messages", new=recorder),
         patch.dict(proxy_server.general_settings, {"allow_client_side_credentials": True}),
         patch.object(litellm, "user_url_validation", False),
     ):

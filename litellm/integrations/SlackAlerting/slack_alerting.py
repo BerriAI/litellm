@@ -2,10 +2,12 @@
 #    Class for sending Slack Alerts #
 import asyncio
 import datetime
+import html
+import json
 import os
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -38,6 +40,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -79,10 +82,11 @@ else:
 
 
 def _budget_alert_email_html(webhook_event: WebhookEvent, email_logo_url: str, email_support_contact: str) -> str:
+    user_id: Final = html.escape(webhook_event.user_id or "")
     if webhook_event.event == "budget_crossed":
         return f"""
             <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
-            <p> Hi {webhook_event.user_id}, <br/>
+            <p> Hi {user_id}, <br/>
             Your LLM API usage this month has reached your account's <b> monthly budget of ${webhook_event.max_budget} </b> <br /> <br />
             API requests will be rejected until either (a) you increase your monthly budget or (b) your monthly usage resets at the beginning of the next calendar month. <br /> <br />
             If you have any questions, please send an email to {email_support_contact} <br /> <br />
@@ -97,7 +101,7 @@ def _budget_alert_email_html(webhook_event: WebhookEvent, email_logo_url: str, e
         )
         return f"""
             <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
-            <p> Hi {webhook_event.user_id}, <br/>
+            <p> Hi {user_id}, <br/>
             Your LLM API spend of <b> ${webhook_event.spend} </b> has reached your <b> soft budget of ${webhook_event.soft_budget} </b>. <br /> <br />
             This is a warning only. API requests keep going through{hard_limit}. <br /> <br />
             If you have any questions, please send an email to {email_support_contact} <br /> <br />
@@ -116,6 +120,12 @@ def _proxy_llm_router() -> Router | None:
 _DAILY_REPORT_TARGET: Final = "daily_report_schedule"
 
 
+async def _model_deprecations_enabled() -> bool:
+    from litellm.proxy.proxy_server import prisma_client
+
+    return prisma_client is None or await ConfigRepository(prisma_client, use_writer=True).model_deprecations_enabled()
+
+
 class SlackAlerting(CustomBatchLogger):
     """
     Class for sending Slack Alerts
@@ -126,12 +136,13 @@ class SlackAlerting(CustomBatchLogger):
         self,
         internal_usage_cache: DualCache | None = None,
         alerting_threshold: float | None = None,  # threshold for slow / hanging llm responses (in seconds)
-        alerting: list | None = [],
+        alerting: list[str] | None = [],
         alert_types: list[AlertType] = DEFAULT_ALERT_TYPES,
         alert_to_webhook_url: dict[AlertType, list[str] | str]
         | None = None,  # if user wants to separate alerts to diff channels
         alerting_args={},
         default_webhook_url: str | None = None,
+        model_deprecations_enabled: Callable[[], Awaitable[bool]] = _model_deprecations_enabled,
         alert_type_config: dict[str, dict] | None = None,
         async_http_handler: AsyncHTTPHandler | None = None,
         **kwargs,
@@ -149,6 +160,7 @@ class SlackAlerting(CustomBatchLogger):
         self.is_running = False
         self.alerting_args = SlackAlertingArgs(**alerting_args)
         self.default_webhook_url = default_webhook_url
+        self.model_deprecations_enabled: Final = model_deprecations_enabled
         self.flush_lock = asyncio.Lock()
         self.periodic_started = False
         self._periodic_flush_task: asyncio.Task[None] | None = None
@@ -171,7 +183,7 @@ class SlackAlerting(CustomBatchLogger):
 
     def update_values(
         self,
-        alerting: list | None = None,
+        alerting: list[str] | None = None,
         alerting_threshold: float | None = None,
         alert_types: list[AlertType] | None = None,
         alert_to_webhook_url: dict[AlertType, list[str] | str] | None = None,
@@ -1143,7 +1155,7 @@ Model Info:
         The daily lock is claimed only once there is something to say, so an empty pass never blocks a
         later real one, and a sent alert is stamped in the shared cache for a day so sibling pods stop asking
         """
-        if not self._deprecation_alerts_enabled():
+        if not self._deprecation_alerts_enabled() or not await self.model_deprecations_enabled():
             return False
 
         from litellm.proxy.common_utils.model_deprecation import (
@@ -1222,6 +1234,26 @@ Model Info:
                 await asyncio.sleep(DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS)
                 continue
             await asyncio.sleep(DEPRECATION_IDLE_POLL_SECONDS)
+
+    def performance_alert_webhooks(self) -> tuple[str, ...]:
+        if not self.alerting or "slack" not in self.alerting or AlertType.performance_alerts not in self.alert_types:
+            return ()
+        configured: Final = (self.alert_to_webhook_url or {}).get(AlertType.performance_alerts)
+        destination: Final = (
+            configured
+            or self.default_webhook_url
+            or os.getenv("SLACK_WEBHOOK_URL")
+            or os.getenv("ALERTING_WEBHOOK_URL")
+        )
+        if isinstance(destination, list):
+            return tuple(dict.fromkeys(destination))
+        return (destination,) if destination else ()
+
+    async def send_performance_alert_summary(self, webhook: str, message: str) -> bool:
+        response: Final = await self.async_http_handler.post(
+            url=webhook, headers={"Content-Type": "application/json"}, data=json.dumps({"text": message})
+        )
+        return response.status_code == 200
 
     async def send_webhook_alert(self, webhook_event: WebhookEvent) -> bool:
         """

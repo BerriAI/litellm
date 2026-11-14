@@ -341,7 +341,7 @@ async def _run_audio_input_pipeline(
                 "When asked about the weather, always call the get_weather tool. "
                 "Never guess temperatures."
             ),
-            session_properties=SERVER_VAD_SETTINGS,
+            session_properties=SERVER_VAD_SETTINGS.model_copy(update={"tools": WEATHER_TOOL}),
         ),
     )
 

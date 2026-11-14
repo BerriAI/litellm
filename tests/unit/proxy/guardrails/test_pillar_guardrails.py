@@ -7,7 +7,7 @@ and following LiteLLM testing patterns and best practices.
 
 # Standard library imports
 import importlib
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import Mock, patch
 
 # Add parent directory to path for imports
@@ -18,7 +18,7 @@ from urllib.parse import unquote
 
 import pytest
 from fastapi.exceptions import HTTPException
-from httpx import Request, Response
+from httpx import Request, Response, Timeout
 
 # LiteLLM imports
 import litellm
@@ -34,6 +34,7 @@ from litellm.proxy.guardrails.guardrail_hooks.pillar.pillar import (
     build_pillar_response_headers,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.types.utils import Choices, Message, ModelResponse
 
 # ============================================================================
 # FIXTURES
@@ -667,6 +668,63 @@ async def test_post_call_hook_with_tool_calls(
         )
 
     assert result == mock_llm_response_with_tools
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_blocks_a_flagged_claude_server_tool_call(
+    env_setup: None,
+    sample_request_data: dict[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    pillar_clean_response: Response,
+    pillar_flagged_response: Response,
+) -> None:
+    server_call: Final = {
+        "id": "srvtoolu_01",
+        "type": "function",
+        "function": {"name": "web_fetch", "arguments": '{"url": "https://example.com/"}'},
+    }
+    response: Final = ModelResponse(
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content="Fetched it",
+                    provider_specific_fields={"server_tool_calls": [server_call]},
+                )
+            )
+        ]
+    )
+
+    class _PillarFlagsTheServerCall:
+        async def post(
+            self,
+            *,
+            url: str,
+            headers: dict[str, str],
+            json: dict[str, object],
+            timeout: float | Timeout | None,
+        ) -> Response:
+            messages: Final = json["messages"]
+            assert isinstance(messages, list)
+            scanned_tool_calls: Final = messages[-1].get("tool_calls") or []
+            return pillar_flagged_response if server_call in scanned_tool_calls else pillar_clean_response
+
+    guardrail: Final = PillarGuardrail(
+        guardrail_name="pillar-test",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        on_flagged_action="block",
+        async_handler=_PillarFlagsTheServerCall(),
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await guardrail.async_post_call_success_hook(
+            data=sample_request_data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+        )
+
+    assert excinfo.value.status_code == 400
 
 
 # =========================================================================
@@ -1513,3 +1571,35 @@ async def test_mcp_call_masking(
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])
+
+
+class _RecordingPillarClient:
+    def __init__(self) -> None:
+        self.posted: list[dict[str, object]] = []
+
+    async def post(self, **kwargs: object) -> Response:
+        self.posted.append(kwargs)
+        return Response(200, json={"flagged": False}, request=Request("POST", "https://api.pillar.security"))
+
+
+@pytest.mark.asyncio
+async def test_messages_that_are_not_a_list_take_the_api_error_fallback_without_calling_pillar(env_setup):
+    guardrail = PillarGuardrail(
+        guardrail_name="pillar-fallback-block",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        fallback_on_error="block",
+    )
+    pillar_client = _RecordingPillarClient()
+    guardrail.async_handler = pillar_client
+
+    with pytest.raises(HTTPException) as excinfo:
+        await guardrail.async_pre_call_hook(
+            data={"model": "gpt-4", "messages": 5},
+            cache=DualCache(),
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="completion",
+        )
+
+    assert excinfo.value.status_code == 503
+    assert pillar_client.posted == []

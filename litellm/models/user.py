@@ -13,6 +13,7 @@ from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization_membership import (
     LiteLLM_OrganizationMembershipTable,
 )
+from litellm.models.team import BudgetLimitEntry
 from litellm.types.llms.base import LiteLLMBaseModel, LiteLLMPydanticObjectBase
 
 
@@ -30,6 +31,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     user_role: str | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
+    budget_limits: tuple[BudgetLimitEntry, ...] | None = None
     spend: float = 0.0
     user_email: str | None = None
     models: list = []

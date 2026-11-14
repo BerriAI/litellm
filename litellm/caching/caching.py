@@ -13,10 +13,10 @@ import json
 import logging
 import time
 import traceback
-from collections.abc import Generator, Mapping
+from collections.abc import Awaitable, Callable, Generator, Mapping
 from contextlib import contextmanager
 from enum import Enum
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
@@ -25,6 +25,7 @@ from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.integrations.otel.runtime import phase_span
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.model_param_helper import (
     ModelParamHelper,
     embeds_thought_signature_in_tool_call_id,
@@ -50,6 +51,16 @@ _DECODED_LITERAL: Final = TypeAdapter(object)
 _REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
     list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
+
+
+class _SupportsAsyncPing(Protocol):
+    @property
+    def ping(self) -> Callable[[], Awaitable[object]] | None: ...
+
+
+class _SupportsAsyncDeleteCacheKeys(Protocol):
+    @property
+    def delete_cache_keys(self) -> Callable[[object], Awaitable[object]] | None: ...
 
 
 def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
@@ -1032,14 +1043,16 @@ class Cache:
         cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
         await self.cache.batch_cache_write(cache_key, cached_data, **kwargs)
 
-    async def ping(self):
-        cache_ping: Final = getattr(self.cache, "ping")
+    async def ping(self) -> object:
+        cache_ping: Final = require_attributes(self.cache, _SupportsAsyncPing, "ping").ping
         if cache_ping:
             return await cache_ping()
         return None
 
-    async def delete_cache_keys(self, keys):
-        cache_delete_cache_keys: Final = getattr(self.cache, "delete_cache_keys")
+    async def delete_cache_keys(self, keys: object) -> object:
+        cache_delete_cache_keys: Final = require_attributes(
+            self.cache, _SupportsAsyncDeleteCacheKeys, "delete_cache_keys"
+        ).delete_cache_keys
         if cache_delete_cache_keys:
             return await cache_delete_cache_keys(keys)
         return None
