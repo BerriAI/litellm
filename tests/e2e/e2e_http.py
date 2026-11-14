@@ -932,6 +932,7 @@ def download(url: URL, *, headers: BaseModel, timeout: float = 60.0) -> Streamin
         status_code=resp.status_code,
         call_id=_hdr(resp, "x-litellm-call-id"),
         content_type=_hdr(resp, "content-type"),
+        headers={name.lower(): value for name, value in resp.headers.items()},
         body=resp.text,
     )
 

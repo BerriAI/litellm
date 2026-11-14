@@ -2614,6 +2614,7 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
         raise exc
     response: Final = await _unhandled_exception_response(request, exc)
+    response.headers["Cache-Control"] = "no-store"
     response.headers.update(trace_response_headers(getattr(request.state, "parent_otel_span", None)))
     litellm_call_id: Final = attribute_of(request.state, "litellm_call_id")
     if isinstance(litellm_call_id, str):
@@ -3079,7 +3080,6 @@ app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_b
 app.add_middleware(RedisRequestBatchMiddleware)
 app.add_middleware(LensInternalMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
-app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
 
 
@@ -23119,6 +23119,7 @@ app.add_middleware(
     get_settings=lambda: get_admission_control_settings(general_settings),
     state=admission_control_state,
 )
+app.add_middleware(SecurityHeadersMiddleware)
 # Added last on purpose - last-added is outermost, and the client-visible URL
 # prefix must be resolved into scope["root_path"] before any inner middleware
 # or the router inspects the path. Only added when SERVER_ROOT_PATHS is

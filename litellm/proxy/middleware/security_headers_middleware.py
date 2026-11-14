@@ -16,6 +16,7 @@ import os
 from typing import Final
 
 from starlette.datastructures import MutableHeaders
+from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 STATIC_SECURITY_HEADERS: Final = (
@@ -45,6 +46,13 @@ class SecurityHeadersMiddleware:
                 applied: Final = (*STATIC_SECURITY_HEADERS, HSTS_HEADER) if _hsts_enabled() else STATIC_SECURITY_HEADERS
                 for name, value in applied:
                     headers.setdefault(name, value)
+                static_asset: Final = (
+                    isinstance(scope.get("endpoint"), StaticFiles)
+                    and 200 <= message["status"] < 300
+                    and "text/html" not in headers.get("content-type", "").lower()
+                )
+                if not static_asset:
+                    headers["Cache-Control"] = "no-store"
             await send(message)
 
         await self.app(scope, receive, send_with_security_headers)

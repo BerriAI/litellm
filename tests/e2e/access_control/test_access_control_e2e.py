@@ -228,3 +228,87 @@ class TestVirtualKeyAuth:
                 pytest.fail("forged bearer must not reach a successful completion")
             case _:
                 pytest.fail(f"forged bearer must be auth-denied, got {bad}")
+
+
+class TestSensitiveResponseCaching:
+    @pytest.mark.parametrize(
+        ("path", "expected_status"),
+        [
+            ("/ui/", 200),
+            ("/ui/index.html", 200),
+            ("/key/list", 200),
+            ("/v1/models", 200),
+            ("/not-a-real-route", 404),
+            ("/ui/_next/static/not-a-real-asset.js", 404),
+        ],
+    )
+    @meta(Subject(domain=Domain.PROXY_AUTH))
+    def test_dynamic_responses_and_errors_are_not_stored(
+        self, proxy: ProxyClient, path: str, expected_status: int
+    ) -> None:
+        from typing import Final
+
+        response: Final = proxy.transport.download(path, headers=proxy.transport.master)
+        assert response.status_code == expected_status, response.body
+        assert response.headers.get("cache-control") == "no-store", response.headers
+
+    @meta(Subject(domain=Domain.PROXY_AUTH))
+    def test_conditional_ui_html_is_not_stored(self, proxy: ProxyClient) -> None:
+        from typing import Final
+
+        from e2e_http import AuthHeaders
+        from pydantic import ConfigDict, Field
+
+        class ConditionalHeaders(AuthHeaders):
+            model_config = ConfigDict(frozen=True)
+            if_none_match: str = Field(alias="If-None-Match")
+
+        page: Final = proxy.transport.download("/ui/", headers=proxy.transport.master)
+        assert page.status_code == 200, page.body
+        conditional: Final = proxy.transport.download(
+            "/ui/",
+            headers=ConditionalHeaders.model_validate(
+                {"authorization": proxy.transport.master.authorization, "If-None-Match": page.headers["etag"]}
+            ),
+        )
+        assert conditional.status_code == 304, conditional.body
+        assert conditional.headers.get("cache-control") == "no-store", conditional.headers
+
+    @meta(Subject(domain=Domain.PROXY_AUTH))
+    def test_invalid_key_response_is_not_stored(self, proxy: ProxyClient) -> None:
+        from typing import Final
+
+        response: Final = proxy.transport.download(
+            "/key/list", headers=proxy.transport.bearer(f"sk-invalid-{unique_marker()}")
+        )
+        assert response.status_code == 401, response.body
+        assert response.headers.get("cache-control") == "no-store", response.headers
+
+    @meta(Subject(domain=Domain.PROXY_AUTH))
+    def test_early_upload_size_rejection_is_not_stored(self, proxy: ProxyClient) -> None:
+        from typing import Final
+
+        from pydantic import RootModel
+
+        response: Final = proxy.transport.send(
+            "/claude-code/plugins/upload",
+            headers=proxy.transport.master,
+            json=RootModel[str]("x" * (12 * 1024 * 1024)),
+        )
+        assert response.status_code == 413, response.body
+        assert response.headers.get("cache-control") == "no-store", response.headers
+
+    @meta(Subject(domain=Domain.PROXY_AUTH))
+    def test_successful_ui_build_assets_keep_their_cache_policy(self, proxy: ProxyClient) -> None:
+        import re
+        from typing import Final
+
+        page: Final = proxy.transport.download("/ui/", headers=proxy.transport.master)
+        assert page.status_code == 200, page.body
+        script: Final = re.search(r'<script[^>]+src="([^"]*/_next/static/[^"?]+\.js)', page.body)
+        assert script is not None, "UI HTML contains no Next.js build asset"
+        asset_path: Final = script.group(1)
+        asset: Final = proxy.transport.download(asset_path, headers=proxy.transport.master)
+        assert asset.status_code == 200, asset.body[:200]
+        assert asset.body
+        assert "no-store" not in asset.headers.get("cache-control", "")
