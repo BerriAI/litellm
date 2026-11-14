@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Final
 import httpx
 from httpx._types import RequestFiles
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.minimax.chat.transformation import MinimaxChatConfig
 from litellm.llms.minimax.common_utils import image_params_without_stream, with_minimax_images
@@ -16,6 +17,12 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _REQUEST_FIELDS: Final = frozenset({"model", "prompt", "image", "images"})
+
+
+def _image_contents(image: FileTypes | list[FileTypes] | None) -> list[bytes] | None:  # pyright: ignore[reportUnknownParameterType]  # mutable-ok: the parent uploads each image of a list, FileTypes holds a bare PathLike
+    if image is None:
+        return None
+    return [file["content"] for file in map(extract_file_data, image if isinstance(image, list) else (image,))]  # pyright: ignore[reportUnknownArgumentType]  # FileTypes holds a bare PathLike
 
 
 class MinimaxImageEditConfig(OpenAIImageEditConfig):
@@ -60,7 +67,7 @@ class MinimaxImageEditConfig(OpenAIImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,  # pyright: ignore[reportUnknownParameterType]  # FileTypes holds a bare PathLike
+        image: FileTypes | list[FileTypes] | None,  # pyright: ignore[reportUnknownParameterType]  # mutable-ok: mirrors image_edit's image param, FileTypes holds a bare PathLike
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, str],
@@ -69,7 +76,7 @@ class MinimaxImageEditConfig(OpenAIImageEditConfig):
         return super().transform_image_edit_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # parent declares bare dict and PathLike types
             model=model,
             prompt=prompt,
-            image=image,
+            image=_image_contents(image),  # pyright: ignore[reportArgumentType]  # the parent uploads each image of a list
             image_edit_optional_request_params={
                 key: value for key, value in body_params.items() if key not in _REQUEST_FIELDS
             },
