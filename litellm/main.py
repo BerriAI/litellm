@@ -8850,6 +8850,7 @@ def transcription(
             or get_secret("OPENAI_ORGANIZATION")
             or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
         )
+        _require_provider_scoped_audio_key(api_key, custom_llm_provider, model)
         static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
         response = openai_audio_transcriptions.audio_transcriptions(
             model=model,
@@ -9027,6 +9028,20 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         )
 
 
+# Providers whose audio requests must never fall back to OpenAI's credentials: without a key of
+# their own, the OpenAI key would be sent to the provider's host.
+_AUDIO_PROVIDERS_WITHOUT_OPENAI_KEY_FALLBACK: Final = frozenset({"lokutor"})
+
+
+def _require_provider_scoped_audio_key(api_key: str | None, custom_llm_provider: str, model: str) -> None:
+    if custom_llm_provider in _AUDIO_PROVIDERS_WITHOUT_OPENAI_KEY_FALLBACK and not api_key:
+        raise litellm.AuthenticationError(
+            message=f"{custom_llm_provider}: no API key. Pass api_key or set {custom_llm_provider.upper()}_API_KEY.",
+            llm_provider=custom_llm_provider,
+            model=model,
+        )
+
+
 @client
 def speech(
     model: str,
@@ -9146,10 +9161,12 @@ def speech(
             or get_secret("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
+        _require_provider_scoped_audio_key(api_key or dynamic_api_key, custom_llm_provider, model)
         # set API KEY
         api_key = (
             api_key
-            or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+            or dynamic_api_key  # key resolved by get_llm_provider for openai-compatible providers (e.g. LOKUTOR_API_KEY)
+            or litellm.api_key
             or litellm.openai_key
             or get_secret("OPENAI_API_KEY")
         )

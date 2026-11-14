@@ -4574,11 +4574,13 @@ def get_optional_params_transcription(
     **kwargs,
 ):
     from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
     # retrieve all parameters passed to the function
     passed_params: Final = locals().copy()
 
     passed_params.pop("OPENAI_TRANSCRIPTION_PARAMS")
+    passed_params.pop("JSONProviderRegistry")
     passed_params.pop("model")
     passed_params.pop("custom_llm_provider")
     passed_params.pop("drop_params")
@@ -4661,6 +4663,11 @@ def get_optional_params_transcription(
                 raise UnsupportedParamsError(message=message, llm_provider="bedrock")
             case mapped_params:
                 optional_params = dict(mapped_params)
+    elif provider_config is None and JSONProviderRegistry.serves_endpoint(
+        custom_llm_provider, model, "/v1/audio/transcriptions"
+    ):
+        # JSON-configured OpenAI-compatible provider that serves /audio/transcriptions: it takes the OpenAI form fields as-is
+        optional_params = non_default_params
     elif provider_config is not None:  # custom audio transcription config
         supported_params = provider_config.get_supported_openai_params(model=model)
         _check_valid_arg(supported_params=supported_params)
