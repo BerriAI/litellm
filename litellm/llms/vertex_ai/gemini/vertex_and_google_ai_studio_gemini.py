@@ -93,9 +93,11 @@ from litellm.utils import (
 
 from ....utils import remove_additional_properties, remove_strict_from_schema
 from ..common_utils import (
+    VERTEX_SCHEMAS_MAX_INLINED_BYTES,
     VertexAIError,
     build_json_schema,
     build_vertex_schema,
+    build_vertex_schema_within_budget,
     supports_response_json_schema,
 )
 from ..vertex_llm_base import VertexBase
@@ -719,6 +721,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
         remove_strict_from_schema(schema_value)
+        inlined_bytes = 0  # rebind-ok: every tool schema in the request shares one inlining budget
 
         for tool in value:
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
@@ -730,7 +733,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     and _openai_function_object["parameters"] is not None
                     and isinstance(_openai_function_object["parameters"], dict)
                 ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
-                    _openai_function_object["parameters"] = build_vertex_schema(_openai_function_object["parameters"])
+                    _openai_function_object["parameters"], tool_inlined_bytes = build_vertex_schema_within_budget(
+                        deepcopy(
+                            cast(dict[str, object], _openai_function_object["parameters"])  # cast-ok: JSON schema
+                        ),
+                        max_inlined_bytes=VERTEX_SCHEMAS_MAX_INLINED_BYTES - inlined_bytes,
+                        schema_name=f"tool '{_openai_function_object.get('name', '')}'",
+                    )
+                    inlined_bytes += tool_inlined_bytes
 
                 openai_function_object = _openai_function_object
 
