@@ -763,6 +763,42 @@ class TestLangfuseOtelKeyDynamicConfig:
             else {}
         )
 
+    @pytest.mark.parametrize(
+        ("otel_v2", "langfuse_host", "expected_endpoint"),
+        [
+            ("true", "https://[invalid", None),
+            ("true", "http://[::1", None),
+            ("invalid", None, "https://us.cloud.langfuse.com/api/public/otel"),
+            ("invalid", "https://langfuse.example.com", "https://langfuse.example.com/api/public/otel"),
+        ],
+        ids=["v2-unparseable-host", "v2-unclosed-ipv6-host", "invalid-flag-no-host", "invalid-flag-key-host"],
+    )
+    def test_unparseable_otel_v2_inputs_do_not_raise(
+        self, monkeypatch: pytest.MonkeyPatch, otel_v2: str, langfuse_host: str | None, expected_endpoint: str | None
+    ) -> None:
+        import base64
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        params: Final = self._dynamic_params(langfuse_host=langfuse_host)
+        monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", [])
+        with self._clean_env(), patch.dict(os.environ, {"LITELLM_OTEL_V2": otel_v2}):
+            is_otel_v2_enabled.cache_clear()
+            try:
+                logger: Final = LangfuseOtelLogger()
+                config: Final = logger.construct_dynamic_otel_config(params)
+                headers: Final = logger.construct_dynamic_otel_headers(params)
+            finally:
+                is_otel_v2_enabled.cache_clear()
+
+        expected_auth: Final = base64.b64encode(b"key_public:key_secret").decode()
+        assert (config.endpoint if config else None) == expected_endpoint
+        assert headers == (
+            {"Authorization": f"Basic {expected_auth}", "x-langfuse-ingestion-version": "4"}
+            if expected_endpoint
+            else {}
+        )
+
     def test_key_dynamic_params_reuse_cached_provider(self):
         with self._clean_env():
             logger = LangfuseOtelLogger()

@@ -155,10 +155,9 @@ def _a_destination_carries_the_trace() -> bool:
 
 
 def _refused_on_otel_v2(params: StandardCallbackDynamicParams) -> bool:
-    from litellm.integrations.otel.model.config import is_otel_v2_enabled
-    from litellm.integrations.otel.presets.destinations import langfuse_tenant_host_is_refused
+    from litellm.integrations.otel.presets.destinations import langfuse_tenant_host_refused_by_otel_v2
 
-    return is_otel_v2_enabled() and langfuse_tenant_host_is_refused(params)
+    return langfuse_tenant_host_refused_by_otel_v2(params)
 
 
 class LangfuseOtelLogger(OpenTelemetry):

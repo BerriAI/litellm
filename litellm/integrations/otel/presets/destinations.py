@@ -11,8 +11,11 @@ from functools import lru_cache
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import ValidationError
+
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
 from litellm.types.utils import OtelSpanScope, StandardCallbackDynamicParams
@@ -54,14 +57,28 @@ def _langfuse_destination(params: StandardCallbackDynamicParams) -> "_Destinatio
     endpoint: Final = f"{normalized.rstrip('/')}/api/public/otel"
     if tenant_host is None:
         return (endpoint, None)
-    if not is_url_destination_allowed_by_host(endpoint, litellm.provider_url_destination_allowed_hosts):
+    if not _tenant_endpoint_is_allowlisted(endpoint):
         _warn_host_not_allowlisted(host)
         return None
     return (endpoint, None)
 
 
-def langfuse_tenant_host_is_refused(params: StandardCallbackDynamicParams) -> bool:
-    return bool(params.get("langfuse_host")) and _langfuse_destination(params) is None
+def _tenant_endpoint_is_allowlisted(endpoint: str) -> bool:
+    try:
+        return is_url_destination_allowed_by_host(endpoint, litellm.provider_url_destination_allowed_hosts)
+    except ValueError:
+        return False
+
+
+def _otel_v2_enabled_or_off() -> bool:
+    try:
+        return is_otel_v2_enabled()
+    except ValidationError:
+        return False
+
+
+def langfuse_tenant_host_refused_by_otel_v2(params: StandardCallbackDynamicParams) -> bool:
+    return bool(params.get("langfuse_host")) and _otel_v2_enabled_or_off() and _langfuse_destination(params) is None
 
 
 def _arize_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":
