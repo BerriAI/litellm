@@ -30,7 +30,7 @@ def test_collects_and_runs_native_tests_and_propagates_failure(
 
 @pytest.mark.skipif(shutil.which("cargo") is None, reason="Cargo is required for compiled inventory tests")
 def test_discovers_compiled_fully_qualified_tests(tmp_path: Path) -> None:
-    workspace: Final = tmp_path / "litellm-rust"
+    workspace: Final = tmp_path / "litellm/rust"
     source: Final = workspace / "src"
     external: Final = source / "ocr" / "external.rs"
     external.parent.mkdir(parents=True)

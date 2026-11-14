@@ -109,6 +109,25 @@ def as_object_list(value: object) -> Sequence[object] | None:
     return value if isinstance(value, list) else None
 
 
+_OBJECT_ENTRIES: Final = TypeAdapter(list[object])
+_OBJECT_KEYS: Final = TypeAdapter(dict[object, object])
+_PARAM_NAME: Final = re.compile(r"\w+")
+
+
+def allowed_openai_param_names(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return tuple(_PARAM_NAME.findall(value))
+    if isinstance(value, Mapping):
+        return tuple(key for key in _OBJECT_KEYS.validate_python(value) if isinstance(key, str))
+    try:
+        entries: Final = _OBJECT_ENTRIES.validate_python(value)
+    except ValidationError:
+        return ()
+    return tuple(entry for entry in entries if isinstance(entry, str))
+
+
 _Key = TypeVar("_Key")  # rebind-ok: a TypeVar cannot be Final
 _Value = TypeVar("_Value")  # rebind-ok: a TypeVar cannot be Final
 
@@ -139,6 +158,13 @@ def without(
 ) -> dict[_Key, _Value]:  # mutable-ok: a fresh copy the caller owns
     """``mapping`` without ``keys``, as a new dict in the same order; ``mapping`` is unchanged."""
     return {key: value for key, value in mapping.items() if key not in keys}
+
+
+def only(
+    mapping: Mapping[_Key, _Value], *keys: object
+) -> dict[_Key, _Value]:  # mutable-ok: a fresh copy the caller owns
+    """``mapping`` with only ``keys``, as a new dict in the same order; ``mapping`` is unchanged."""
+    return {key: value for key, value in mapping.items() if key in keys}
 
 
 def decoded_json_object(value: object) -> Mapping[str, object]:

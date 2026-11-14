@@ -9,6 +9,7 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 ```
 """
 
+import hashlib
 import json
 import os
 import sys
@@ -51,6 +52,9 @@ from litellm.rust_bridge._native import (
 
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
+FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
+RESERVED_TOP_LEVEL_KEYS: Final = frozenset({"sample_spec", FALLBACK_GENERALIZATIONS_KEY})
+RETRYABLE_FETCH_STATUS_CODES: Final = frozenset({429, 500, 502, 503, 504})
 MODEL_COST_MAP_FETCH_MAX_ATTEMPTS: Final = 3
 MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS: Final = 30.0
 MODEL_COST_MAP_FETCH_MIN_DELAY_SECONDS: Final = 2.0
@@ -74,6 +78,7 @@ def _uses_bundled_map_only() -> bool:
 class _LoadedSnapshot:
     rows: Mapping[str, Mapping[str, object]]
     fields: frozenset[str]
+    keys_by_casefold: Mapping[str, str]
 
 
 @lru_cache(maxsize=1)
@@ -82,6 +87,7 @@ def _loaded_snapshot(revision: str) -> _LoadedSnapshot:
     return _LoadedSnapshot(
         rows=MappingProxyType({key: MappingProxyType(entry) for key, entry in raw.items()}),
         fields=frozenset(chain.from_iterable(entry.keys() for entry in raw.values())),
+        keys_by_casefold=MappingProxyType({key.casefold(): key for key in raw}),
     )
 
 
@@ -105,6 +111,13 @@ class GetModelCostMap:
     def loaded_model_cost_map() -> Mapping[str, Mapping[str, object]]:
         """The catalog as last loaded (bundled or remote), untouched by ``register_model`` or router registrations."""
         return _loaded_snapshot(model_cost_inputs.provenance.revision).rows
+
+    @staticmethod
+    def loaded_model_cost_map_entry(key: str) -> Mapping[str, object] | None:
+        """The loaded catalog's entry for ``key``, else for the key that differs from it only in case."""
+        snapshot: Final = _loaded_snapshot(model_cost_inputs.provenance.revision)
+        exact: Final = snapshot.rows.get(key)
+        return exact if exact is not None else snapshot.rows.get(snapshot.keys_by_casefold.get(key.casefold(), key))
 
     @staticmethod
     def loaded_model_cost_map_fields() -> frozenset[str]:
@@ -456,18 +469,28 @@ def get_model_cost_map(
     return _rows_with_rules_set(installed)
 
 
+def registration_rows(body: bytes) -> dict[str, dict[str, object]]:  # mutable-ok: register_model merges these rows
+    """The rows of a fetched ``register_model`` document, without its fallback rules block. Raises ``ValueError`` on
+    a body that is not a JSON object of rows."""
+    document: Final = _CATALOG_ADAPTER.validate_python(json.loads(body))
+    return {key: entry for key, entry in document.items() if key != FALLBACK_GENERALIZATIONS_KEY}
+
+
 def fetch_registration_document(url: str) -> dict[str, dict[str, object]] | None:
-    """The document behind ``register_model(url)``, fetched in one attempt, or ``None`` when the fetch failed."""
+    """The document behind ``register_model(url)``, fetched in one attempt. ``None`` when offline mode forbids the
+    fetch or it failed."""
+    if is_offline_mode():
+        verbose_logger.warning("LiteLLM: register_model did not fetch %s because LITELLM_OFFLINE_MODE is set", url)
+        return None
     fetched: Final = cost_map_source(url, use_http_settings=False).fetch_blocking(fetch_policy(5, 1))
     if isinstance(fetched, NativeFetchFailed):
         verbose_logger.warning("LiteLLM: register_model could not fetch %s: %s", url, fetched.reason)
         return None
     try:
-        document: Final = _CATALOG_ADAPTER.validate_json(fetched.body)
+        return registration_rows(fetched.body)
     except ValueError as e:
         verbose_logger.warning("LiteLLM: register_model got an invalid cost map from %s: %s", url, e)
         return None
-    return {key: entry for key, entry in document.items() if key != "fallback_generalizations"}
 
 
 def _finalize_model_cost_map(  # pyright: ignore[reportUnusedFunction]  # main's private name, downstream code calls it
@@ -478,15 +501,17 @@ def _finalize_model_cost_map(  # pyright: ignore[reportUnusedFunction]  # main's
         case NativeRejected(reason=reason):
             raise ValueError(reason)
         case installed:
-            model_cost.pop("fallback_generalizations", None)
+            model_cost.pop(FALLBACK_GENERALIZATIONS_KEY, None)
             return _rows_with_rules_set(installed)
 
 
-_RESERVED_TOP_LEVEL_KEYS: Final = frozenset({"sample_spec", "fallback_generalizations"})
+def git_blob_id(body: bytes) -> str:
+    """Compat for main's callers. ``git hash-object`` of the bytes, which ``source_revision`` reports."""
+    return hashlib.sha1(b"blob %d\0" % len(body) + body, usedforsecurity=False).hexdigest()
 
 
 def _count_model_entries(model_cost: Mapping[str, object]) -> int:
-    return sum(1 for key in model_cost if key not in _RESERVED_TOP_LEVEL_KEYS)
+    return sum(1 for key in model_cost if key not in RESERVED_TOP_LEVEL_KEYS)
 
 
 @lru_cache(maxsize=1)
