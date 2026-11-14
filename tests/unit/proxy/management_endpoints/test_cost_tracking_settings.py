@@ -4,6 +4,7 @@ Tests for cost tracking settings management endpoints.
 Tests the GET and PATCH endpoints for managing cost discount configuration.
 """
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,7 +16,11 @@ from pydantic import ValidationError
 import litellm
 from litellm._internal_context import pinned_billing_time
 from litellm.proxy._types import CostEstimateRequest
-from litellm.proxy.management_endpoints.cost_tracking_settings import router
+from litellm.proxy.management_endpoints.cost_tracking_settings import (
+    router,
+    update_cost_discount_config,
+    update_cost_margin_config,
+)
 from litellm.proxy.proxy_server import app
 
 client = TestClient(app)
@@ -760,6 +765,55 @@ class TestEstimateCostOnPremProvider:
         assert response.output_cost_per_token == pytest.approx(0.000002)
 
 
+
+
+class TestCostSettingsPatchAgainstConfigReload:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("setting", "update", "stale", "fresh"),
+        [
+            (
+                "cost_margin_config",
+                update_cost_margin_config,
+                {"openai": {"percentage": 0.1, "fixed_amount": 0.001}},
+                {"global": 1},
+            ),
+            ("cost_discount_config", update_cost_discount_config, {"openai": 0.05}, {}),
+        ],
+    )
+    async def test_patch_is_not_undone_by_a_reload_that_read_the_previous_row(self, setting, update, stale, fresh):
+        from litellm.proxy import proxy_server
+
+        reload_has_read_the_row = asyncio.Event()
+        release_reload = asyncio.Event()
+
+        async def reload_holding_the_previous_row() -> None:
+            async with proxy_server.DB_RECONCILE_LOCK:
+                reload_has_read_the_row.set()
+                await release_reload.wait()
+                proxy_server.ProxyConfig()._apply_litellm_settings_db_values({setting: stale})
+
+        mock_proxy_config = AsyncMock()
+        mock_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {setting: stale}})
+        mock_proxy_config.save_config = AsyncMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.DB_RECONCILE_LOCK", asyncio.Lock()),
+            patch.object(litellm, setting, stale),
+        ):
+            reload = asyncio.create_task(reload_holding_the_previous_row())
+            await reload_has_read_the_row.wait()
+            patched = asyncio.create_task(update(fresh, user_api_key_dict=MagicMock()))
+            for _ in range(20):
+                await asyncio.sleep(0)
+            release_reload.set()
+            await asyncio.gather(reload, patched)
+
+            assert patched.result()["values"] == fresh
+            assert getattr(litellm, setting) == fresh
 
 
 class TestBlockRequestsForModelsWithoutPricing:

@@ -24,6 +24,10 @@ logger: Final = logging.getLogger(__name__)
 BASE_URL: Final = "https://router.huggingface.co"
 
 
+def _api_base_from_env() -> str | None:
+    return os.getenv("HF_API_BASE") or os.getenv("HUGGINGFACE_API_BASE")
+
+
 def _build_chat_completion_url(model_url: str) -> str:
     # Strip trailing /
     model_url = model_url.rstrip("/")
@@ -96,8 +100,8 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         if api_base is not None:
             complete_url = api_base
             complete_url = _build_chat_completion_url(complete_url)
-        elif os.getenv("HF_API_BASE") or os.getenv("HUGGINGFACE_API_BASE"):
-            complete_url = str(os.getenv("HF_API_BASE")) or str(os.getenv("HUGGINGFACE_API_BASE"))
+        elif env_api_base := _api_base_from_env():
+            complete_url = env_api_base
         elif model.startswith(("http://", "https://")):
             complete_url = model
             complete_url = _build_chat_completion_url(complete_url)
@@ -129,8 +133,12 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        if litellm_params.get("api_base"):
-            return dict(ChatCompletionRequest(model=model, messages=messages, **optional_params))
+        lacks_explicit_api_base: Final = not litellm_params.get("api_base")
+        if not lacks_explicit_api_base or _api_base_from_env():
+            endpoint_messages: Final = (
+                self._transform_messages(messages=messages, model=model) if lacks_explicit_api_base else messages
+            )
+            return dict(ChatCompletionRequest(model=model, messages=endpoint_messages, **optional_params))
         if "max_retries" in optional_params:
             logger.warning("`max_retries` is not supported. It will be ignored.")
             optional_params.pop("max_retries", None)

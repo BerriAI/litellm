@@ -35,7 +35,7 @@ from litellm.constants import (
 )
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.integrations.otel.runtime import phase_attributes
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, without
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, get_or_create_metadata_bucket, without
 from litellm.litellm_core_utils.credential_accessor import reject_api_key_secret_reference
 from litellm.router_api import deployment_id
 from litellm.router_host import router_host
@@ -66,6 +66,7 @@ from litellm.utils import provider_rejectable_params
 
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
+    from litellm.redis.stores.router_session_pins import RouterSessionPinStore
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.surface.registry import HostRegistry
     from litellm.router_strategy.auto_router.auto_router import PreRoutingHookResponse
@@ -133,9 +134,13 @@ def _routing_definition_fingerprint(deployment: Deployment) -> str | None:
     return deployment_id(deployment.model_name, {"routing_definition": definition})
 
 
-def _unregister(registry: StrategyRegistry, model_name: str, tags: tuple[str, ...]) -> bool:
+def _unregister(
+    registry: StrategyRegistry, model_name: str, tags: tuple[str, ...], previous: Deployment | None = None
+) -> bool:
     existing: Final = registry.get(model_name, [])
-    remaining: Final = [entry for entry in existing if entry.tags != tags]
+    remaining: Final = [
+        entry for entry in existing if entry.tags != tags or (previous is not None and entry.deployment != previous)
+    ]
     if len(remaining) == len(existing):
         return False
     if remaining:
@@ -168,13 +173,18 @@ class PreRoutingStrategies:
     reads ``_core_auto_routers`` and its siblings there)."""
 
     def __init__(
-        self, hosted: "HostRegistry", host: "PythonHost", ctx: object, capability_limit: object, cache: DualCache
+        self,
+        hosted: "HostRegistry",
+        host: "PythonHost",
+        ctx: object,
+        capability_limit: object,
+        pins: "RouterSessionPinStore",
     ) -> None:
         self._hosted: Final = hosted
         self._host: Final = host
         self._ctx: Final = ctx
         self._capability_limit: object = capability_limit
-        self._cache: Final = cache
+        self._pins: Final = pins
         self._affinity: object = None
         # The router's own `_ensure_deployment_affinity_callback` (its optional checks), when set.
         self.ensure_affinity: Callable[[], None] | None = None
@@ -217,30 +227,31 @@ class PreRoutingStrategies:
         self._hosted._core_auto_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
         self._hosted._core_switchyard_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
 
-    def register(self, deployment: Deployment) -> None:
+    def register(self, deployment: Deployment, *, replace_existing: bool = False) -> None:
         """The end of ``_add_deployment``: an auto, complexity or quality marker registers its router
         (adaptive ones wait for ``finalize``)."""
         match classify_strategy_router_model(deployment.litellm_params.model):
             case "semantic":
-                self._init_auto_router(deployment)
+                self._init_auto_router(deployment, replace_existing=replace_existing)
             case "complexity":
-                self._init_complexity_router(deployment)
+                self._init_complexity_router(deployment, replace_existing=replace_existing)
             case "quality":
-                self._init_quality_router(deployment)
+                self._init_quality_router(deployment, replace_existing=replace_existing)
             case "switchyard":
-                self._init_switchyard_router(deployment)
+                self._init_switchyard_router(deployment, replace_existing=replace_existing)
             case _:
                 pass
 
-    def release(self, deployment: Deployment) -> None:
+    def release(self, deployment: Deployment, *, replaced: bool = False) -> None:
         """``_unregister_pre_routing_strategy_for_deployment``."""
         if not deployment.litellm_params.model.startswith("auto_router/"):
             return
         model_name: Final = deployment.model_name
         tags: Final = _deployment_tags(deployment)
+        previous: Final = deployment if replaced else None
         for registry in (self.auto, self.complexity, self.quality, self.switchyard):
-            _ = _unregister(registry, model_name, tags)
-        if _unregister(self.adaptive, model_name, tags):
+            _ = _unregister(registry, model_name, tags, previous)
+        if _unregister(self.adaptive, model_name, tags, previous):
             self._sync_adaptive_router_hooks()
 
     def release_entry(self, entry: Mapping[str, object]) -> None:
@@ -260,15 +271,6 @@ class PreRoutingStrategies:
             previous is not None and _participates_in_adaptive_routing(previous.litellm_params)
         ):
             self.finalize()
-
-    def without_capability_limit(self, action: Callable[[], object]) -> None:
-        """Run ``action`` without judging the capability ceiling: a rollback re-admits a serving router."""
-        resolver: Final = self._capability_limit
-        self._capability_limit = None
-        try:
-            _ = action()
-        finally:
-            self._capability_limit = resolver
 
     def finalize(self) -> None:
         """``_finalize_adaptive_router_if_configured``: an adaptive router for every adaptive marker,
@@ -328,16 +330,30 @@ class PreRoutingStrategies:
     # -- building --------------------------------------------------------------------------------
 
     def _register(
-        self, registry: StrategyRegistry, deployment: Deployment, strategy: object, strategy_label: str
+        self,
+        registry: StrategyRegistry,
+        deployment: Deployment,
+        strategy: object,
+        strategy_label: str,
+        *,
+        replace_existing: bool = False,
     ) -> None:
         tags: Final = _deployment_tags(deployment)
-        if _has_registered_strategy(registry, deployment.model_name, tags):
+        existing: Final = registry.get(deployment.model_name, [])
+        remaining: Final = [
+            entry
+            for entry in existing
+            if not replace_existing
+            or entry.deployment is None
+            or entry.deployment.model_info.id != deployment.model_info.id
+        ]
+        if any(entry.tags == tags for entry in remaining):
             raise ValueError(
                 f"{strategy_label} deployment {deployment.model_name} with tags {list(tags)} already exists. "
                 "Please use a different model name or set different tags."
             )
         registry[deployment.model_name] = [  # rebind-ok: the live registry, edited in place as the Python router does
-            *registry.get(deployment.model_name, []),
+            *remaining,
             TaggedPreRoutingStrategy(
                 tags=tags,
                 strategy=strategy,
@@ -346,17 +362,22 @@ class PreRoutingStrategies:
             ),
         ]
 
-    def _capability_violation(self, capability: GatedAutoRouterCapability) -> str | None:
+    def _capability_violation(self, capability: GatedAutoRouterCapability, deployment: Deployment) -> str | None:
         resolver: Final = self._capability_limit
         # `self.auto_router_capability_limit() if ... is not None`: a value that cannot be called raises.
         limit: Final = resolver() if resolver is not None else None  # pyright: ignore[reportCallIssue]  # called as given, as Python calls it
         others: Final = count_capability_routers(
-            (entry for entry in self._hosted._core_model_list if isinstance(entry, Mapping)),  # pyright: ignore[reportPrivateUsage, reportUnnecessaryIsInstance]  # the live list
+            (
+                entry
+                for entry in self._hosted._core_model_list  # pyright: ignore[reportPrivateUsage]  # the live list
+                if isinstance(entry, Mapping)  # pyright: ignore[reportUnnecessaryIsInstance]  # stored entries are mappings
+                and as_dict(entry.get("model_info")).get("id") != deployment.model_info.id
+            ),
             capability=capability,
         )
         return capability_limit_violation(capability=capability, held=others + 1, limit=limit)  # pyright: ignore[reportArgumentType]  # the resolver's limit
 
-    def _init_auto_router(self, deployment: Deployment) -> None:
+    def _init_auto_router(self, deployment: Deployment, *, replace_existing: bool = False) -> None:
         from litellm.router_strategy.auto_router.auto_router import AutoRouter
 
         params: Final = deployment.litellm_params
@@ -382,15 +403,15 @@ class PreRoutingStrategies:
             ctx=self._ctx,  # pyright: ignore[reportArgumentType]  # the core's RoutingContext
             max_input_chars=max_input_chars if max_input_chars is not None else DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
         )
-        self._register(self.auto, deployment, router, "Auto-router")
+        self._register(self.auto, deployment, router, "Auto-router", replace_existing=replace_existing)
 
-    def _init_complexity_router(self, deployment: Deployment) -> None:
+    def _init_complexity_router(self, deployment: Deployment, *, replace_existing: bool = False) -> None:
         from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
         from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 
         config: Final = deployment.litellm_params.complexity_router_config
         for capability in claimed_capabilities(config):
-            if (violation := self._capability_violation(capability)) is not None:
+            if (violation := self._capability_violation(capability, deployment)) is not None:
                 raise ValueError(violation)
         default_model: Final = (
             ComplexityRouterConfig.model_validate(config).resolve_default_model(
@@ -410,7 +431,7 @@ class PreRoutingStrategies:
             ctx=self._ctx,  # pyright: ignore[reportArgumentType]  # the core's RoutingContext
             complexity_router_config=config,
         )
-        self._register(self.complexity, deployment, router, "Complexity-router")
+        self._register(self.complexity, deployment, router, "Complexity-router", replace_existing=replace_existing)
         if router._uses_deployment_pin:  # pyright: ignore[reportPrivateUsage]  # the Python router reads the same flag
             self._ensure_deployment_affinity_callback()
 
@@ -439,7 +460,7 @@ class PreRoutingStrategies:
             return group is not None and group.routing_strategy == "priority"
 
         affinity: Final = DeploymentAffinityCheck(
-            cache=self._cache,
+            pins=self._pins,
             ttl_seconds=3600,
             enable_user_key_affinity=False,
             enable_responses_api_affinity=False,
@@ -451,7 +472,7 @@ class PreRoutingStrategies:
         self._affinity = affinity
         self._host.callbacks.add_litellm_callback(affinity)
 
-    def _init_quality_router(self, deployment: Deployment) -> None:
+    def _init_quality_router(self, deployment: Deployment, *, replace_existing: bool = False) -> None:
         from litellm.router_strategy.quality_router.quality_router import QualityRouter
 
         config: Final = deployment.litellm_params.quality_router_config
@@ -468,9 +489,9 @@ class PreRoutingStrategies:
             ctx=self._ctx,  # pyright: ignore[reportArgumentType]  # the core's RoutingContext
             quality_router_config=config,
         )
-        self._register(self.quality, deployment, router, "Quality-router")
+        self._register(self.quality, deployment, router, "Quality-router", replace_existing=replace_existing)
 
-    def _init_switchyard_router(self, deployment: Deployment) -> None:
+    def _init_switchyard_router(self, deployment: Deployment, *, replace_existing: bool = False) -> None:
         from litellm.router_strategy.switchyard_router.config import SwitchyardRouterConfig, build_algorithm
         from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardRouter
         from litellm.types.decisions import OpenAIDecisionResponse
@@ -494,7 +515,7 @@ class PreRoutingStrategies:
             return result
 
         router: Final = SwitchyardRouter(deployment.model_name, config, build_algorithm(config), complete_judge, decide)
-        self._register(self.switchyard, deployment, router, "Switchyard")
+        self._register(self.switchyard, deployment, router, "Switchyard", replace_existing=replace_existing)
 
     def _init_adaptive_router(self, deployment: Deployment) -> None:
         from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
@@ -1150,10 +1171,7 @@ def _tags_of(params: Mapping[str, object]) -> Sequence[object]:
 
 
 def _allowlist(params: Mapping[str, object]) -> frozenset[str]:
-    declared: Final = params.get("allowed_openai_params")
-    if not isinstance(declared, list | tuple | set | frozenset):
-        return frozenset()
-    return frozenset(entry for entry in declared if isinstance(entry, str))
+    return frozenset(allowed_openai_param_names(params.get("allowed_openai_params")))
 
 
 __all__ = ["PreRouter", "PreRoutingStrategies", "as_output_cap", "is_strategy_marker", "stamped_client_ceiling"]

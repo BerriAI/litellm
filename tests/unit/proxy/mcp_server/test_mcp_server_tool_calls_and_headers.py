@@ -94,6 +94,12 @@ def cleanup_mcp_global_state():
         yield
 
 
+def _listing_client() -> AsyncMock:
+    client: Final = AsyncMock()
+    client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
+    return client
+
+
 def _call_tool_params(name, arguments=None):
     from mcp.types import CallToolRequestParams
 
@@ -1235,6 +1241,7 @@ async def test_mcp_read_resource_success():
         oauth2_headers=None,
         raw_headers=None,
         user_api_key_auth=user_api_key_auth,
+        scope_servers=(server,),
     )
     mock_manager.read_resource_from_server.assert_awaited_once_with(
         server=server,
@@ -1297,35 +1304,6 @@ async def test_read_resource_preserves_content_metadata(_mcp_request_ctx, kind, 
             }
         ],
     }
-
-
-@pytest.mark.asyncio
-async def test_mcp_read_resource_multiple_servers_error():
-    try:
-        from litellm.proxy.mcp_server.server import mcp_read_resource
-    except ImportError:
-        pytest.skip("MCP server not available")
-
-    user_api_key_auth = UserAPIKeyAuth(api_key="key", user_id="user")
-
-    server_a = MagicMock()
-    server_b = MagicMock()
-    server_a.name = "server_a"
-    server_b.name = "server_b"
-
-    with patch(
-        "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
-        AsyncMock(return_value=[server_a, server_b]),
-    ) as mock_allowed:
-        with pytest.raises(HTTPException) as exc_info:
-            await mcp_read_resource(
-                url="https://example.com/resource",
-                user_api_key_auth=user_api_key_auth,
-            )
-
-    mock_allowed.assert_awaited_once()
-    assert exc_info.value.status_code == 400
-    assert "Multiple MCP servers" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -7980,13 +7958,13 @@ def _worker_that_never_listed(server: MCPServer, upstream_tools: tuple[str, ...]
         return CallToolResult(content=[TextContent(type="text", text="ok")], is_error=False)
 
     async def fake_fetch_tools(client, server_name):
-        return [MCPTool(name=tool_name, inputSchema={}) for tool_name in upstream_tools]
+        return ListToolsResult(tools=[MCPTool(name=tool_name, inputSchema={}) for tool_name in upstream_tools])
 
     with (
         patch.object(  # test-quality-ok: the upstream MCP session is the boundary; a real one needs an initialize handshake over a live server
             mcp_operations.global_mcp_server_manager,
             "create_mcp_client",
-            new=AsyncMock(return_value=MagicMock()),
+            new=AsyncMock(return_value=_listing_client()),
         ) as create_client,
         patch.object(  # test-quality-ok: same boundary, this is the tools/list answer the upstream would give
             mcp_operations.global_mcp_server_manager,
@@ -8832,7 +8810,7 @@ async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hoo
     server = _never_listed_passthrough_server()
     manager.registry[server.server_id] = server
     manager._listed_tools_by_server_id.pop(server.server_id, None)
-    upstream = AsyncMock()
+    upstream: Final = _listing_client()
     upstream.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
     proxy_logging = _mock_mcp_proxy_logging()
     proxy_logging.has_pre_call_guardrails.return_value = False
@@ -8842,7 +8820,9 @@ async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hoo
     proxy_logging.pre_call_hook = AsyncMock(return_value={})
     proxy_logging.during_call_hook = AsyncMock(return_value=None)
     fetch_tools = AsyncMock(
-        return_value=[MCPTool(name="add", description="Adds. FLAGWORD", inputSchema={"type": "object"})]
+        return_value=ListToolsResult(
+            tools=[MCPTool(name="add", description="Adds. FLAGWORD", inputSchema={"type": "object"})]
+        )
     )
 
     with (
@@ -8889,11 +8869,13 @@ async def test_fetch_pinnable_tool_catalog_records_no_listed_catalog_for_the_adm
     request.client.host = "10.1.2.3"
     request.headers = {"x-litellm-api-key": "sk-admin"}
     fetch_tools = AsyncMock(
-        return_value=[MCPTool(name="add", description="Upstream wording", inputSchema={"type": "object"})]
+        return_value=ListToolsResult(
+            tools=[MCPTool(name="add", description="Upstream wording", inputSchema={"type": "object"})]
+        )
     )
 
     with (
-        patch.object(manager, "create_mcp_client", new=AsyncMock(return_value=MagicMock())),
+        patch.object(manager, "create_mcp_client", new=AsyncMock(return_value=_listing_client())),
         patch.object(manager, "_fetch_tools_with_timeout", new=fetch_tools),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())),
     ):

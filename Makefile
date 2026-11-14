@@ -54,20 +54,24 @@ help:
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
 	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
-	@echo "  make rust-sqlx-prepare  - Refresh litellm-rust/crates/db/.sqlx against a migrated Postgres container"
+	@echo "  make rust-sqlx-prepare  - Refresh litellm/rust/crates/db/.sqlx against a migrated Postgres container"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
 
 UV := uv
+export RUSTUP_TOOLCHAIN ?= $(shell sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' litellm/rust/rust-toolchain.toml)
+export CARGO_NET_RETRY ?= 5
+export CARGO_HTTP_MULTIPLEXING ?= false
+export SQLX_OFFLINE ?= true
 UV_RUN := $(UV) run --no-sync
 BASE_REF ?=
 export BASE_REF
-RESOLVE_BASE = python3 scripts/default_branch.py --base "$(BASE_REF)"
+RESOLVE_BASE = python3 litellm/scripts/default_branch.py --base "$(BASE_REF)"
 
 # Machine-wide slot queue for the heavy targets below; python3 + stdlib only, so
-# it runs before any venv exists. See scripts/gate_slot_lock.py.
-GATE_SLOT_LOCK := python3 scripts/gate_slot_lock.py
+# it runs before any venv exists. See litellm/scripts/gate_slot_lock.py.
+GATE_SLOT_LOCK := python3 litellm/scripts/gate_slot_lock.py
 
 LINT_DEP_INSTALL ?= install-dev
 LINT_E2E_DEP_INSTALL ?= lint-install
@@ -90,8 +94,8 @@ install-dev:
 # machine-wide slots the CPU-bound gates below share.
 bootstrap:
 	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
-	$(UV_RUN) python scripts/prisma_generate_if_needed.py
-	cd ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
+	$(UV_RUN) python litellm/scripts/prisma_generate_if_needed.py
+	cd litellm/ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
 	@main_root=$$(git worktree list --porcelain | head -1 | sed 's/^worktree //'); \
 	if [ "$$main_root" != "$$(git rev-parse --show-toplevel)" ] && [ -f "$$main_root/.env" ] && [ ! -f .env ]; then \
 		cp "$$main_root/.env" .env && echo "bootstrap: copied .env from $$main_root"; \
@@ -123,10 +127,10 @@ install-helm-unittest:
 # Install git hooks that enforce Conventional Commits.
 # Opt-in: not chained into install-dev.
 install-hooks:
-	./scripts/install_git_hooks.sh
+	./litellm/scripts/install_git_hooks.sh
 
 # Formatting
-# Wrap width is ruff.toml's single source of truth (line-length = 120), shared by the
+# Wrap width is pyproject.toml's single source of truth (line-length = 120), shared by the
 # formatter and the import sorter so there's no 88-vs-120 split to reconcile.
 format: install-dev
 	cd litellm && $(UV_RUN) ruff format --exclude '/enterprise/' . && cd ..
@@ -139,12 +143,12 @@ lint-fetch-base:
 
 # Mirror test-linting.yml's python job environment: the proxy-dev group plus a generated
 # Prisma client, so `basedpyright tests/e2e` resolves the same modules CI does. The
-# basedpyright gate itself no longer measures here (scripts/type_check_gate.py provisions its
+# basedpyright gate itself no longer measures here (litellm/scripts/type_check_gate.py provisions its
 # own .venv-typecheck). --inexact tops up the venv instead of pruning the proxy extras
 # gen:api and the running proxy need.
 lint-install:
 	$(UV) sync --inexact --frozen --group proxy-dev --group e2e-dev
-	$(UV_RUN) python scripts/prisma_generate_if_needed.py
+	$(UV_RUN) python litellm/scripts/prisma_generate_if_needed.py
 
 # Diff-scoped format check, mirroring test-linting.yml's "Check ruff format" step:
 # only the litellm Python files changed vs the base are checked, so a pre-existing
@@ -163,9 +167,9 @@ lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 
 # Linting targets
 lint-ruff: $(LINT_DEP_INSTALL)
-	$(UV_RUN) python scripts/check_mcp_operation_boundary.py
+	$(UV_RUN) python litellm/scripts/check_mcp_operation_boundary.py
 	cd litellm && $(UV_RUN) ruff check . && cd ..
-	$(UV_RUN) ruff check --config ruff-tests.toml tests
+	$(UV_RUN) ruff check --config .github/linters/ruff-tests.toml tests
 
 # faster linter for developing ...
 # inspiration from:
@@ -204,7 +208,7 @@ lint-ruff-FULL-dev: install-dev
 	else echo "No changed .py files to check."; fi
 
 lint-basedpyright: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	$(UV_RUN) python scripts/type_check_gate.py --base "$(BASE_REF)"
+	$(UV_RUN) python litellm/scripts/type_check_gate.py --base "$(BASE_REF)"
 
 lint-e2e-basedpyright: $(LINT_E2E_DEP_INSTALL)
 	$(UV_RUN) basedpyright tests/e2e tests/e2e_harness
@@ -212,29 +216,29 @@ lint-e2e-basedpyright: $(LINT_E2E_DEP_INSTALL)
 # Type-discipline gate (mutable collections / casts / type guards / kwargs /
 # unexplained suppressions), the test-linting.yml step `make lint` used to omit.
 lint-type-discipline: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	$(UV_RUN) python scripts/type_discipline_gate.py --base "$(BASE_REF)"
+	$(UV_RUN) python litellm/scripts/type_discipline_gate.py --base "$(BASE_REF)"
 
 # Test-quality gate (zero-assert / mock-echo tests, sys.path.insert, raw env writes,
 # litellm module-global mutation, credential-gated skips, conftest snapshot
 # inventory), counted across tests/ the same delta-vs-base way.
 lint-test-quality: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	$(UV_RUN) python scripts/test_quality_gate.py --base "$(BASE_REF)"
+	$(UV_RUN) python litellm/scripts/test_quality_gate.py --base "$(BASE_REF)"
 
 # OpenAPI docs gate (POST routes without a request body schema, a description or a
 # 200 schema in app.openapi()), counted the same delta-vs-base way so a new endpoint
 # has to show up documented in Swagger UI.
 lint-openapi-docs: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	$(UV_RUN) python scripts/openapi_docs_gate.py --base "$(BASE_REF)"
+	$(UV_RUN) python litellm/scripts/openapi_docs_gate.py --base "$(BASE_REF)"
 
 lint-format: format-check
 
 lint-ruff-strict: install-dev
-	$(UV_RUN) python scripts/ruff_strict_gate.py --base "$(BASE_REF)"
+	$(UV_RUN) python litellm/scripts/ruff_strict_gate.py --base "$(BASE_REF)"
 
 # Strict gate, invoked the same way CI does in test-linting.yml so a local pass
 # means the CI check will pass too.
 lint-gate: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	$(UV_RUN) python scripts/ruff_strict_gate.py --base "$(BASE_REF)"
+	$(UV_RUN) python litellm/scripts/ruff_strict_gate.py --base "$(BASE_REF)"
 
 check-circular-imports: $(LINT_DEP_INSTALL)
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
@@ -272,7 +276,7 @@ check:
 	@$(GATE_SLOT_LOCK) $(MAKE) check-inner
 
 check-inner: bootstrap
-	./scripts/pre_commit_lint.sh
+	./litellm/scripts/pre_commit_lint.sh
 
 pre-commit:
 	@echo "make pre-commit is a legacy alias; use make check" >&2
@@ -294,7 +298,7 @@ test-rust-extension:
 	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
 
 rust-sqlx-prepare:
-	cd litellm-rust && cargo run -p litellm-db-testing --bin sqlx-prepare
+	cd litellm/rust && cargo run -p litellm-db-testing --bin sqlx-prepare
 
 test: install-test-deps
 	$(UV_RUN) pytest tests/
@@ -341,7 +345,7 @@ test-integration: install-test-deps
 	$(UV_RUN) pytest tests/
 
 test-unit-helm: install-helm-unittest
-	helm unittest -f 'tests/*.yaml' helm/litellm
+	helm unittest -f 'tests/*.yaml' litellm/deploy/helm/litellm
 
 # LLM Translation testing targets
 test-llm-translation: install-test-deps

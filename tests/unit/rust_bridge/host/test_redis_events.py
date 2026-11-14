@@ -2,6 +2,7 @@ import asyncio
 import queue
 import threading
 from collections.abc import Iterator
+from dataclasses import asdict
 from typing import Final
 
 import pytest
@@ -15,6 +16,7 @@ from prometheus_client import REGISTRY
 from redis import exceptions as redis_exceptions
 
 import litellm
+from litellm import Router
 from litellm._internal_context import service_target, set_request_parent_otel_span
 from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
@@ -24,7 +26,15 @@ from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.plumbing import providers
 from litellm.redis.stores.auth_cache import AUTH_CACHE_TARGET, AuthCacheSettings, AuthCacheStore
 from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_usage import RouterUsageStore, UsageCounter
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+    ITPM_COUNTER_KEY,
+    ITPM_RESERVED_KEY,
+    OTPM_COUNTER_KEY,
+    OTPM_RESERVED_KEY,
+)
+from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 from litellm.rust_bridge.host import redis_events
 
 
@@ -221,6 +231,86 @@ async def test_a_native_read_in_a_legacy_otel_request_reports_its_redis_span_und
     reported_by_redis_cache: Final = await _spans_under(exporter, python_request)
     assert reported_by_redis_cache
     assert await _spans_under(exporter, native_request) == reported_by_redis_cache
+
+
+async def _redis_calls_under(exporter: InMemorySpanExporter, parent: Span, polls: int = 100) -> frozenset[str]:
+    calls: Final = frozenset(
+        str(span.attributes["call_type"])
+        for span in _children(exporter, parent)
+        if span.attributes is not None and span.attributes.get("service") == "redis"
+    )
+    if calls or polls == 0:
+        return calls
+    await asyncio.sleep(0.05)
+    return await _redis_calls_under(exporter, parent, polls - 1)
+
+
+async def test_a_deadline_flush_reports_under_the_request_span_auth_set_after_the_scope_opened(
+    fake_redis_port: int, legacy_otel: tuple[TracerProvider, InMemorySpanExporter]
+):
+    provider, exporter = legacy_otel
+    store: Final = SpendCounterStore(connect(RedisCache(host="127.0.0.1", port=fake_redis_port)).spend_counters())
+    request: Final = provider.get_tracer(__name__).start_span("request")
+
+    async def proxy_request() -> frozenset[str]:
+        with request_redis_batch_scope(post_call_deadline=0.05):
+            set_request_parent_otel_span(request)
+            assert store.increment_many_post_call((("spend:key:k", 1.0),))
+        return await _redis_calls_under(exporter, request)
+
+    assert await asyncio.create_task(proxy_request()) == {"post_call_redis_batch"}
+
+
+async def test_a_failed_sdk_calls_io_token_refund_reports_its_redis_span_under_the_span_its_caller_passed(
+    fake_redis_port: int, legacy_otel: tuple[TracerProvider, InMemorySpanExporter], monkeypatch: pytest.MonkeyPatch
+):
+    provider, exporter = legacy_otel
+    usage: Final = RouterUsageStore(connect(RedisCache(host="127.0.0.1", port=fake_redis_port)).router_usage())
+    monkeypatch.setattr(litellm, "callbacks", [ModelRateLimitingCheck(usage)])
+    caller: Final = provider.get_tracer(__name__).start_span("sdk caller")
+    itpm: Final = UsageCounter("global_router", "d1", "openai/gpt-x", "12-00", "itpm")
+    otpm: Final = UsageCounter("global_router", "d1", "openai/gpt-x", "12-00", "otpm")
+
+    with pytest.raises(Exception, match="provider down"):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=Exception("provider down"),
+            metadata={
+                "litellm_parent_otel_span": caller,
+                ITPM_RESERVED_KEY: 5,
+                OTPM_RESERVED_KEY: 7,
+                ITPM_COUNTER_KEY: asdict(itpm),
+                OTPM_COUNTER_KEY: asdict(otpm),
+            },
+        )
+
+    assert await _redis_calls_under(exporter, caller) == {"async_increment"}
+
+
+async def test_an_sdk_router_call_reports_its_usage_read_under_the_span_its_caller_passed(
+    fake_redis_port: int, legacy_otel: tuple[TracerProvider, InMemorySpanExporter]
+):
+    provider, exporter = legacy_otel
+    caller: Final = provider.get_tracer(__name__).start_span("sdk caller")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {"model": "openai/gpt-x", "api_key": "sk-fake", "mock_response": "hi", "tpm": 1000},
+                "model_info": {"id": "d1"},
+            }
+        ],
+        routing_strategy="usage-based-routing-v2",
+        redis_host="127.0.0.1",
+        redis_port=fake_redis_port,
+    )
+
+    await router.acompletion(
+        model="m", messages=[{"role": "user", "content": "hi"}], metadata={"litellm_parent_otel_span": caller}
+    )
+
+    assert "async_batch_get_cache" in await _redis_calls_under(exporter, caller)
 
 
 class _EndedSpans(SpanProcessor):

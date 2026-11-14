@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     budget_reservation_from_metadata,
     drop_params_env_flag,
+    env_flag,
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
     get_or_create_metadata_bucket,
@@ -25,6 +26,7 @@ from litellm.litellm_core_utils.core_helpers import (
     json_contains,
     map_finish_reason,
     normalize_drop_params,
+    only,
     preserve_upstream_non_openai_attributes,
     process_response_headers,
     provider_reported_usage_cost,
@@ -497,6 +499,32 @@ def test_drop_params_env_flag_keeps_a_non_flag_value_on_with_a_warning(configure
     )
 
 
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [("", False), ("false", False), ("False", False), ("0", False), ("no", False), ("true", True), (" 1 ", True)],
+)
+def test_env_flag_parses_modify_params_as_a_bool(configured: str, expected: bool, caplog: pytest.LogCaptureFixture):
+    with caplog.at_level(logging.WARNING, logger="env-flag-test"):
+        assert (
+            env_flag({"LITELLM_MODIFY_PARAMS": configured}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test"))
+            is expected
+        )
+    assert caplog.text == ""
+
+
+def test_env_flag_treats_a_non_flag_value_as_on_with_a_warning(caplog: pytest.LogCaptureFixture):
+    with caplog.at_level(logging.WARNING, logger="env-flag-test"):
+        assert (
+            env_flag({"LITELLM_MODIFY_PARAMS": "enabled"}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test"))
+            is True
+        )
+    assert "LITELLM_MODIFY_PARAMS='enabled' is not a flag value, treating it as on" in caplog.text
+
+
+def test_env_flag_is_off_when_unset():
+    assert env_flag({}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test")) is False
+
+
 class TestIsExpectedClientError:
     def test_status_ranges(self):
         from litellm.litellm_core_utils.core_helpers import is_expected_client_error
@@ -907,3 +935,14 @@ def test_without_returns_a_new_dict_and_leaves_the_source_unchanged() -> None:
 
     assert source == {"a": 1, "b": 2}
     assert result == {"b": 2, "c": 3}
+
+
+def test_only_keeps_the_named_keys_in_order_and_leaves_the_source_unchanged() -> None:
+    source: Final = {"a": 1, "b": 2, "c": 3, "d": 4}
+
+    result: Final = only(source, "d", "b", "missing")
+    result["e"] = 5
+
+    assert list(result.items()) == [("b", 2), ("d", 4), ("e", 5)]
+    assert only(source) == {}
+    assert source == {"a": 1, "b": 2, "c": 3, "d": 4}

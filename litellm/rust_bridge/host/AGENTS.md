@@ -25,7 +25,7 @@ Python behavior Rust needs but does not own, behind one module per question. Rus
   - `logger`: where native diagnostics are emitted
   - `preflight`: the SDK globals the native preflight borrows
   - `secret_manager`: the configured secret manager, its native config and the error text Python's managers produce
-  - `http_transport`: which async transport is in use
+  - `http_transport`: which async transport is in use, and whether a call must send through Python's `AsyncHTTPHandler`
   - `timeouts`: timeout to seconds
   - `tokenizers`: bundled tiktoken files and Hugging Face tokenizer downloads
   - `randomness`: the process `random` generator the Python router draws from

@@ -2,12 +2,14 @@ from collections.abc import AsyncIterator, Iterator, Sequence
 from itertools import chain
 from typing import Final
 
+import httpx
 import pytest
 from openai.types.completion import Completion
 
 from litellm.exceptions import APIConnectionError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.main import _async_streaming
 from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
 from litellm.types.utils import Choices, Delta, ModelResponseStream, StreamingChoices, TextCompletionResponse, Usage
 
@@ -286,6 +288,33 @@ def test_sync_text_completion_stream_maps_upstream_failure_after_content() -> No
         next(wrapper)
 
     assert (error.value.model, error.value.llm_provider) == ("test-model", "openai")
+
+
+_DEPLOYMENT_PARAMS: Final = {
+    "api_base": "https://relay.example/v1",
+    "metadata": {"model_group": "instruct-alias", "deployment": "text-completion-openai/gpt-instruct"},
+}
+
+
+@pytest.mark.asyncio
+async def test_async_text_completion_upstream_cut_names_the_deployment() -> None:
+    async def cut_stream() -> AsyncIterator[ModelResponseStream]:
+        raise httpx.ReadError("Response payload is not completed")
+        yield
+
+    wrapper: Final = TextCompletionStreamWrapper(
+        completion_stream=_async_streaming(cut_stream(), "test-model", None, _DEPLOYMENT_PARAMS),
+        model="test-model",
+    )
+
+    with pytest.raises(APIConnectionError, match="OpenAIException") as error:
+        await anext(wrapper)
+
+    debug_info: Final = error.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/v1`" in debug_info
+    assert "model_group: `instruct-alias`" in debug_info
+    assert "deployment: `text-completion-openai/gpt-instruct`" in debug_info
 
 
 def _stream_with_trailing_usage_chunk() -> tuple[ModelResponseStream, ...]:

@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.exception_mapping_utils import mapped_stream_exception
 from litellm.litellm_core_utils.get_litellm_params import (
     AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
     AGENTIC_LOOP_TOOL_CHOICE_KEY,
@@ -232,10 +233,12 @@ from litellm.utils import (
 from ._logging import WarningLogger, verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
     normalize_drop_params,
     safe_deep_copy,
+    without,
 )
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
@@ -806,27 +809,29 @@ async def acompletion(
         prompt_management_logger, AnthropicCacheControlHook
     )
 
-    if (
-        isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+    prompt_hook_result: Final = (
+        cast(  # cast-ok: the hook returns a bare dict of request params
+            "tuple[str, list[AllMessageValues], Mapping[str, object]]",
+            await litellm_logging_obj.async_get_chat_completion_prompt(
+                model=model,
+                messages=messages,
+                non_default_params=kwargs,
+                prompt_id=prompt_id,
+                prompt_variables=kwargs.get("prompt_variables", None),
+                prompt_management_logger=prompt_management_logger,
+                tools=tools,
+                prompt_label=kwargs.get("prompt_label", None),
+                prompt_version=kwargs.get("prompt_version", None),
+                request_kwargs=kwargs,
+            ),
+        )
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj)
         and prompt_management_logger is not None
         and not each_fallback_writes_its_own_cache_dialect
-    ):
-        (
-            model,
-            messages,
-            _,
-        ) = await litellm_logging_obj.async_get_chat_completion_prompt(
-            model=model,
-            messages=messages,
-            non_default_params=kwargs,
-            prompt_id=prompt_id,
-            prompt_variables=kwargs.get("prompt_variables", None),
-            prompt_management_logger=prompt_management_logger,
-            tools=tools,
-            prompt_label=kwargs.get("prompt_label", None),
-            prompt_version=kwargs.get("prompt_version", None),
-            request_kwargs=kwargs,
-        )
+        else None
+    )
+    if prompt_hook_result is not None:
+        model, messages, _ = prompt_hook_result
         #########################################################
         # if the chat completion logging hook removed all tools,
         # set tools to None
@@ -895,8 +900,14 @@ async def acompletion(
         "shared_session": shared_session,
         "enable_json_schema_validation": enable_json_schema_validation,
     }
+    request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
+    prompt_params: Final[Mapping[str, object]] = prompt_hook_result[2] if prompt_hook_result is not None else {}
+    prompt_overrides: Final = {
+        key: value
+        for key, value in prompt_params.items()
+        if key not in request_kwargs or request_kwargs[key] is not value
+    }
     if custom_llm_provider is None:
-        request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -935,7 +946,9 @@ async def acompletion(
     try:
         # Use a partial function to pass your keyword arguments
         kwargs.pop("acompletion", None)
-        func: Final = partial(completion, **completion_kwargs, **kwargs)
+        func: Final = partial(
+            completion, **{**completion_kwargs, **prompt_overrides}, **without(request_kwargs, *prompt_overrides)
+        )
 
         # Add the context to the function
         ctx: Final = contextvars.copy_context()
@@ -976,7 +989,7 @@ async def acompletion(
                     messages=messages,
                     optional_params={
                         k: v
-                        for k, v in completion_kwargs.items()
+                        for k, v in {**completion_kwargs, **prompt_overrides}.items()
                         if v is not None
                         and k
                         not in (
@@ -1009,7 +1022,7 @@ async def acompletion(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
-            completion_kwargs=completion_kwargs,
+            completion_kwargs={**completion_kwargs, **prompt_overrides},
             extra_kwargs=kwargs,
         )
 
@@ -1033,7 +1046,7 @@ def _text_completion_response_from_cached_dict(cached_response_dict: Mapping[str
     return TextCompletionResponse(stream=bool(cached_response_dict.get("stream", False)), **fields)
 
 
-async def _async_streaming(response, model, custom_llm_provider, args):
+async def _async_streaming(response, model, custom_llm_provider, litellm_params: Mapping[str, object]):
     try:
         print_verbose(f"received response in _async_streaming: {response}")
         if asyncio.iscoroutine(response):
@@ -1042,11 +1055,11 @@ async def _async_streaming(response, model, custom_llm_provider, args):
             print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e:
-        custom_llm_provider = custom_llm_provider or "openai"
-        raise exception_type(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            original_exception=e,
+        raise mapped_stream_exception(
+            e,
+            model if isinstance(model, str) else "",
+            custom_llm_provider if isinstance(custom_llm_provider, str) and custom_llm_provider else "openai",
+            litellm_params,
         )
 
 
@@ -3657,8 +3670,10 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
         or get_secret_str("OR_API_KEY")
     )
 
-    openrouter_site_url: Final = get_secret("OR_SITE_URL") or "https://litellm.ai"
-    openrouter_app_name: Final = get_secret("OR_APP_NAME") or "liteLLM"
+    openrouter_site_url: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+        get_secret("OR_SITE_URL") or "https://litellm.ai"
+    )
+    openrouter_app_name: Final = _OPAQUE_VALUE_ADAPTER.validate_python(get_secret("OR_APP_NAME") or "liteLLM")
 
     openrouter_headers: Final = {
         "HTTP-Referer": openrouter_site_url,
@@ -3762,8 +3777,10 @@ def _complete_vercel_ai_gateway(
 
     api_key = api_key or litellm.api_key or get_secret("VERCEL_AI_GATEWAY_API_KEY")
 
-    vercel_site_url: Final = get_secret("VERCEL_SITE_URL") or "https://litellm.ai"
-    vercel_app_name: Final = get_secret("VERCEL_APP_NAME") or "liteLLM"
+    vercel_site_url: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+        get_secret("VERCEL_SITE_URL") or "https://litellm.ai"
+    )
+    vercel_app_name: Final = _OPAQUE_VALUE_ADAPTER.validate_python(get_secret("VERCEL_APP_NAME") or "liteLLM")
 
     vercel_headers: Final = {
         "http-referer": vercel_site_url,
@@ -5660,7 +5677,9 @@ def completion(
     if model is None:
         raise ValueError("model param not passed in.")
     # validate messages
-    messages = validate_and_fix_openai_messages(messages=messages)
+    messages = validate_and_fix_openai_messages(
+        messages=messages, model=model, request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+    )
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
     requested_tool_choice: Final = cast(  # cast-ok: widening an untyped dict to object is always sound
@@ -6067,7 +6086,7 @@ def completion(
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
         )
         allowed_openai_params: Final[list[str] | None] = (
-            [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
+            [*allowed_openai_param_names(kwargs.get("allowed_openai_params")), "reasoning_effort"]
             if bridges_to_responses_api
             or reasoning_effort_needs_allowing(
                 chat_reasoning.effort,
@@ -6710,6 +6729,16 @@ def _is_not_resent_failure(error: BaseException) -> bool:
     return isinstance(error, Exception) and not is_resent_failure(error)
 
 
+class _RetryCallState(Protocol):
+    kwargs: Mapping[str, object]
+
+
+def _carry_failed_attempt(retry_state: _RetryCallState) -> None:
+    logging_obj: Final = retry_state.kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.carry_failed_attempt_usage()
+
+
 def completion_with_retries(*args, **kwargs):
     """
     Executes a litellm.completion() with 3 retries
@@ -6729,12 +6758,14 @@ def completion_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.Retrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -6760,12 +6791,14 @@ async def acompletion_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.AsyncRetrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -6793,12 +6826,14 @@ def responses_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.Retrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -6825,12 +6860,14 @@ async def aresponses_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.AsyncRetrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -7347,8 +7384,10 @@ def embedding(
                 or get_secret_str("OR_API_KEY")
             )
 
-            openrouter_site_url: Final = get_secret("OR_SITE_URL") or "https://litellm.ai"
-            openrouter_app_name: Final = get_secret("OR_APP_NAME") or "liteLLM"
+            openrouter_site_url: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+                get_secret("OR_SITE_URL") or "https://litellm.ai"
+            )
+            openrouter_app_name: Final = _OPAQUE_VALUE_ADAPTER.validate_python(get_secret("OR_APP_NAME") or "liteLLM")
 
             openrouter_headers: Final = {
                 "HTTP-Referer": openrouter_site_url,
@@ -8082,7 +8121,7 @@ async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextComp
                     response=response,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
-                    args=args,
+                    litellm_params=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
                 ),
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -8391,7 +8430,7 @@ async def aadapter_generate_content(
 
     coro: Final = cast(
         Coroutine[object, object, dict[str, object] | AsyncIterator[bytes]],
-        GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True),
+        GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True, custom_logging_obj=None),
     )
     return await coro
 
@@ -9074,7 +9113,7 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider in ("edenai", "dashscope") and text_to_speech_provider_config is not None:
+    if custom_llm_provider in ("edenai", "dashscope", "replicate") and text_to_speech_provider_config is not None:
         litellm_params_dict["api_base"] = caller_api_base if custom_llm_provider == "dashscope" else api_base
         response = base_llm_http_handler.text_to_speech_handler(
             model=model,
@@ -9503,6 +9542,7 @@ async def ahealth_check(
     from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
     from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers, default_health_check_mode
     from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
+    from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
     # Use cached import helper to lazy-load Logging class (only loads when function is called)
     Logging: Final = get_litellm_logging_class()
@@ -9547,6 +9587,24 @@ async def ahealth_check(
         mode = mode or default_health_check_mode(
             requested_model=requested_model, model=model, custom_llm_provider=custom_llm_provider
         )
+        litellm_logging_obj.model = requested_model
+        litellm_logging_obj.call_type = {
+            "completion": "atext_completion",
+            "embedding": "aembedding",
+            "audio_speech": "aspeech",
+            "audio_transcription": "atranscription",
+            "image_generation": "aimage_generation",
+            "image_edit": "aimage_edit",
+            "video_generation": "avideo_generation",
+            "rerank": "arerank",
+            "realtime": "arealtime",
+            "responses": "aresponses",
+            "anthropic_messages": "anthropic_messages",
+            "ocr": "aocr",
+            "decisions": "asystemone",
+            "extraction": "aextraction",
+            "batch": ("alist_batches" if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS else "acompletion"),
+        }.get("decisions" if is_decisions_model_mode(mode) else mode, "acompletion")
         if "*" in model:
             return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,

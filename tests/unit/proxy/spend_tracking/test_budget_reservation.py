@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 
@@ -23,8 +25,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     project_cache_key,
     team_membership_reservation_cache_key,
 )
+from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
+    _get_budget_counters,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
@@ -35,7 +39,7 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.redis.stores.connection import connect
-from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.redis.stores.spend_counters import SpendCounterStore, user_window_counter
 
 TOKEN_COUNTING_ROUTES: Final = (
     "/responses/input_tokens",
@@ -54,6 +58,36 @@ TOKEN_COUNTING_ROUTES: Final = (
 
 def _budgeted_token() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key="sk-test", token="hashed-token", max_budget=100.0, spend=0.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team, apply, expected", [(False, False, 2), (True, False, 0), (True, True, 2)])
+async def test_user_reservation_includes_each_window_only_when_user_budget_applies(
+    team: bool, apply: bool, expected: int
+) -> None:
+    cache: Final = UserApiKeyCache()
+    counters: Final = await _get_budget_counters(
+        request_body={},
+        valid_token=UserAPIKeyAuth(),
+        team_object=LiteLLM_TeamTable(team_id="t") if team else None,
+        user_object=LiteLLM_UserTable.model_validate(
+            {
+                "user_id": "u",
+                "budget_limits": [
+                    {"budget_duration": "1h", "max_budget": 5.0, "reset_at": "2026-08-01T01:00:00Z"},
+                    {"budget_duration": "30d", "max_budget": 100.0, "reset_at": "2026-08-31T00:00:00Z"},
+                ],
+            }
+        ),
+        prisma_client=None,
+        user_api_key_cache=cache,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        apply_user_budget_to_team_keys=apply,
+    )
+    assert len(counters) == expected
+    assert {counter.counter_key for counter in counters} == (
+        {user_window_counter("u", "1h"), user_window_counter("u", "30d")} if expected else set()
+    )
 
 
 async def _reserve(route: str) -> dict | None:
@@ -221,6 +255,40 @@ def test_deployment_pricing_update_invalidates_cached_estimate() -> None:
     after: Final = estimate_request_max_cost(request_body=TIERED_BODY, route="/chat/completions", llm_router=router)
     assert after is not None
     assert math.isclose(after, before * 1000)
+
+
+def _priced_group(model_name: str, cost_per_token: float) -> dict[str, object]:
+    return Deployment(
+        model_name=model_name,
+        litellm_params=LiteLLM_Params(model="dashscope/qwen3-max", api_key="sk-fake"),
+        model_info=ModelInfo(
+            id=model_name,
+            max_output_tokens=1000,
+            tiered_pricing=[
+                {"input_cost_per_token": cost_per_token, "output_cost_per_token": cost_per_token, "range": [0, 128000]}
+            ],
+        ),
+    ).model_dump()
+
+
+def test_google_route_reserves_on_the_model_its_path_param_selects(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    router: Final = Router(model_list=[_priced_group("cheap-group", 1e-06), _priced_group("premium-group", 1e-03)])
+    route: Final = "/v1beta/models/premium-group:generateContent"
+    body: Final = {"model": "cheap-group", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10}
+
+    url_model_cost: Final = estimate_request_max_cost(request_body=body, route=route, llm_router=router)
+    path_param_cost: Final = estimate_request_max_cost(
+        request_body=body, route=route, llm_router=router, path_params={"model_name": "cheap-group"}
+    )
+    cheap_cost: Final = estimate_request_max_cost(
+        request_body=body, route="/v1beta/models/cheap-group:generateContent", llm_router=router
+    )
+
+    assert url_model_cost is not None and cheap_cost is not None
+    assert path_param_cost == cheap_cost
+    assert math.isclose(url_model_cost, cheap_cost * 1000)
 
 
 @pytest.mark.asyncio
@@ -429,6 +497,88 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
 )
 def test_budget_window_start_reads_json_encoded_windows(window: str, expected: datetime | None) -> None:
     assert get_budget_window_start(window) == expected
+
+
+@pytest.mark.parametrize("today", ["2028-03-01", "2029-03-01"])
+@pytest.mark.parametrize(
+    ("duration", "reset_at", "expected"),
+    [
+        ("12mo", "2029-01-01T00:00:00Z", datetime(2028, 1, 1, tzinfo=timezone.utc)),
+        ("12mo", "2028-01-01T00:00:00", datetime(2027, 1, 1, tzinfo=timezone.utc)),
+    ],
+)
+def test_annual_window_keeps_all_spend_from_its_reset_boundary(
+    today: str, duration: str, reset_at: str, expected: datetime
+) -> None:
+    with patch("time.time", return_value=datetime.fromisoformat(today).replace(tzinfo=timezone.utc).timestamp()):
+        assert get_budget_window_start({"budget_duration": duration, "reset_at": reset_at}) == expected
+
+
+class _AnnualWindowDatabase:
+    def __init__(self) -> None:
+        self.db = self
+        self.litellm_budgetwindowspend = self
+        self.litellm_spendlogs = self
+        self.start: datetime | None = None
+        self.spend = 0.0
+        self.scans = 0
+
+    async def execute_raw(self, sql: str, *parameters: object) -> int:
+        start: Final = parameters[3]
+        assert isinstance(start, datetime)
+        self.start = start
+        self.spend = 0.0
+        return 1
+
+    async def find_unique(self, **query: object) -> SimpleNamespace:
+        return SimpleNamespace(window_start=self.start, spend=self.spend)
+
+    async def group_by(self, **query: object) -> list[dict[str, object]]:
+        self.scans += 1
+        return [{"api_key": "calendar-key", "_sum": {"spend": 0.0}}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "duration,zone,reset_at",
+    (
+        ("12mo", "UTC", "2029-01-01T00:00:00Z"),
+        ("12mo", "America/New_York", "2029-01-01T00:00:00-05:00"),
+        ("12mo", "Pacific/Apia", "2012-01-01T00:00:00+14:00"),
+    ),
+)
+async def test_cold_annual_counter_preserves_reset_writer_spend(
+    monkeypatch: pytest.MonkeyPatch, duration: str, zone: str, reset_at: str
+) -> None:
+    from litellm.proxy.auth.auth_checks import _virtual_key_multi_budget_check
+    from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+    from litellm.types.integrations.slack_alerting import Litellm_EntityType
+
+    database: Final = _AnnualWindowDatabase()
+    store: Final = SpendCounterStore(connect(None).spend_counters())
+    monkeypatch.setattr(litellm, "timezone", zone, raising=False)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "spend_counter_store", store)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
+    await ResetBudgetJob._roll_window_spend_row(
+        prisma_client=database,  # pyright: ignore[reportArgumentType]  # in-memory external database boundary
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="calendar-key",
+        budget_duration=duration,
+        next_reset_at=datetime.fromisoformat(reset_at.replace("Z", "+00:00")),
+        reset_settings=BudgetResetSettings(timezone=zone),
+    )
+    database.spend = 10.0
+    token: Final = UserAPIKeyAuth(
+        token="calendar-key",
+        budget_limits=[{"budget_duration": duration, "reset_at": reset_at, "max_budget": 10.0}],
+    )
+
+    with pytest.raises(litellm.BudgetExceededError) as failure:
+        await _virtual_key_multi_budget_check(token)
+    assert failure.value.current_cost == 10.0
+    assert store.get_local(f"spend:key:calendar-key:window:{duration}") == 10.0
+    assert database.scans == 0
 
 
 @pytest.mark.asyncio

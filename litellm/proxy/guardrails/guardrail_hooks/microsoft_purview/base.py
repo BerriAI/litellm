@@ -9,7 +9,7 @@ import httpx
 from typing_extensions import NotRequired, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, json_contains
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, decoded_json_object, iter_items, json_contains
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -445,10 +445,10 @@ class PurviewGuardrailBase:
         tool_calls: Final = tool_calls_with_server_tool_calls(message)
         if tool_calls:
             for tc in tool_calls:
-                fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+                fn = tc.get("function") if isinstance(tc, dict) else attribute_or_none(tc, "function")
                 if fn is None:
                     continue
-                arguments = fn.get("arguments") if isinstance(fn, dict) else getattr(fn, "arguments", None)
+                arguments = fn.get("arguments") if isinstance(fn, dict) else attribute_or_none(fn, "arguments")
                 if isinstance(arguments, str) and arguments.strip():
                     args.append(arguments)
 

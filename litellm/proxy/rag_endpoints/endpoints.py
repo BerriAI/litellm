@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse, StreamingResponse
 from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -33,6 +34,7 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_au
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     open_sse_before_first_byte,
+    refuse_s3_media_the_key_may_not_read,
     ttft_keepalive_interval,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -66,7 +68,7 @@ from litellm.proxy.rag_endpoints.upload_security import (
 from litellm.proxy.vector_store_endpoints.endpoints import (
     build_request_data_from_managed_vector_store,
     reject_caller_embedding_selection_params,
-    reject_caller_opensearch_index_name,
+    reject_caller_opensearch_store_params,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
@@ -89,6 +91,10 @@ router: Final = APIRouter()
 _TEAM_PROVIDER_CREDENTIALS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _EMPTY_TEAM_PROVIDER_CREDENTIALS: Final[Mapping[str, object]] = MappingProxyType({})
 _TEAM_CREDENTIAL_PROVIDER: Final = "openai"
+
+
+class _ForwardedRequestFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _as_string_keyed_mapping(value: object) -> Mapping[str, object] | None:
@@ -904,7 +910,7 @@ async def rag_ingest(
         vertex_target_error: Final = _vertex_target_error(base) if vertex_target_checked else None
         if vertex_target_error is not None:
             raise HTTPException(status_code=400, detail={"error": vertex_target_error})
-        request_data: Final[dict[str, Any]] = await add_litellm_data_to_request(
+        request_data: Final[dict[str, object]] = await add_litellm_data_to_request(
             data={},
             request=request,
             general_settings=general_settings,
@@ -955,7 +961,7 @@ async def rag_ingest(
             file_url=file_url,
             file_id=ingest_file_id,
             router=llm_router,
-            **request_data,
+            **_ForwardedRequestFields(**request_data),
         )
         if ingest_response.get("status") == "failed":
             raise HTTPException(
@@ -1148,7 +1154,7 @@ async def rag_query(
             **retrieval_config,
             **store_data,
         }
-        reject_caller_opensearch_index_name(
+        reject_caller_opensearch_store_params(
             caller_body=retrieval_config,
             request_fields=merged_retrieval_config,
             source="retrieval_config",
@@ -1159,6 +1165,9 @@ async def rag_query(
             else MappingProxyType(
                 {key: value for key, value in retrieval_config.items() if key not in EXPLICIT_CREDENTIAL_KEYS}
             )
+        )
+        await refuse_s3_media_the_key_may_not_read(
+            data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
         )
         request_data: Final[dict[str, object]] = await add_litellm_data_to_request(
             data={},

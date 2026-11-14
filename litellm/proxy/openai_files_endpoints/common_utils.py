@@ -3,7 +3,7 @@ import itertools
 import logging
 import mimetypes
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -17,6 +17,7 @@ from typing import (
     get_args,
     runtime_checkable,
 )
+from urllib.parse import unquote, urlparse
 
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -25,7 +26,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
 from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.proxy._types import ProxyException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -437,6 +438,50 @@ def get_original_file_id(encoded_id: str) -> str:
         return encoded_id
     except Exception:
         return encoded_id
+
+
+_GEMINI_FILES_HOST: Final = "generativelanguage.googleapis.com"
+
+
+def canonical_provider_file_id(file_id: str) -> str:
+    """The one spelling of a provider file id that ownership rows store and look up, so ``files/abc``,
+    ``files%2Fabc``, ``abc/`` and the Gemini file URL all resolve to the bare ``abc``. Every other URL or URI
+    (``s3://``, ``gs://``, a storage blob URL) is returned unchanged, so an upload whose name happens to contain
+    ``files/<id>`` never indexes someone else's ``<id>``."""
+    decoded: Final = unquote(file_id).strip()
+    is_url: Final = "://" in decoded
+    if is_url and urlparse(decoded).hostname != _GEMINI_FILES_HOST:
+        return file_id
+    path: Final = urlparse(decoded).path if is_url else decoded
+    files_index: Final = path.find("files/")
+    bare: Final = (path[files_index:] if files_index != -1 else path).strip("/").removeprefix("files/").strip("/")
+    return bare or decoded
+
+
+_GEMINI_FILES_URL: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+
+
+def _gemini_files_tail(file_id: str) -> str:
+    """The id Gemini resolves ``file_id`` to, whatever scheme or case wraps it: the text after its ``files/``."""
+    files_index: Final = file_id.find("files/")
+    return file_id[files_index:].strip("/").removeprefix("files/").strip("/") if files_index != -1 else ""
+
+
+def _iter_stored_forms(bare_ids: Sequence[str]) -> Iterator[str]:
+    for bare_id in bare_ids:
+        yield bare_id
+        yield f"files/{bare_id}"
+        yield f"{_GEMINI_FILES_URL}{bare_id}"
+
+
+def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:
+    """Every spelling an ownership row may hold for ``file_id``: as sent, unwrapped from a model-encoded id and
+    canonicalized, reduced the way Gemini reduces it, plus the ``files/`` and Gemini URL forms that upload rows
+    stored before ids were canonicalized."""
+    original: Final = get_original_file_id(file_id)
+    reductions: Final = (canonical_provider_file_id(original), _gemini_files_tail(unquote(original)))
+    bare_ids: Final = tuple(dict.fromkeys(bare for bare in reductions if bare))
+    return tuple(dict.fromkeys((file_id, *_iter_stored_forms(bare_ids))))
 
 
 def is_model_embedded_id(file_id: str) -> bool:
@@ -972,6 +1017,7 @@ async def handle_model_based_routing(
     data: dict,
     user_api_key_dict: "UserAPIKeyAuth",
     check_file_id_encoding: bool = True,
+    resolves_managed_file_ids: bool = False,
 ) -> tuple[bool, str | None, str | None, dict | None]:
     """
     Orchestrate model-based credential routing for file operations.
@@ -980,6 +1026,11 @@ async def handle_model_based_routing(
     param or body field), so it is authorized against the caller's key, team, org and
     project grants before any deployment credentials are resolved.
 
+    A LiteLLM managed file id is not model-routed when this proxy resolves managed file ids
+    itself, since its managed files hook maps it to the provider file id of each deployment
+    it lives on. A proxy without that hook, like one with no database chained to another
+    LiteLLM proxy, still forwards the id to the named model, which may own it.
+
     Args:
         file_id: File ID (may contain embedded model info)
         request: FastAPI request object
@@ -987,6 +1038,7 @@ async def handle_model_based_routing(
         data: Request data dictionary
         user_api_key_dict: The authenticated caller
         check_file_id_encoding: Whether to check for embedded model in file_id
+        resolves_managed_file_ids: Whether this proxy's managed files hook is loaded
 
     Returns:
         Tuple of (should_use_model_routing, model_used, original_file_id, credentials)
@@ -999,6 +1051,9 @@ async def handle_model_based_routing(
         HTTPException: If router unavailable or model not found
         ProxyException: If the caller is not allowed to use the model
     """
+    if resolves_managed_file_ids and is_base64_encoded_unified_file_id(file_id):
+        return False, None, None, None
+
     model_from_id, model_from_param = extract_model_from_sources(
         file_id=file_id,
         request=request,
@@ -1567,7 +1622,7 @@ async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
     if not prisma_client:
         return
     for attr in ("output_file_id", "error_file_id"):
-        raw_id = getattr(response, attr, None)
+        raw_id = attribute_or_none(response, attr)
         if not raw_id or is_base64_encoded_unified_file_id(raw_id):
             continue
         try:

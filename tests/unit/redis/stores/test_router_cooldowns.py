@@ -22,7 +22,7 @@ from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSetting
 from litellm.rust_bridge._native import NativeRedisClient, NativeRouterCooldowns
 from litellm.rust_bridge.host import settings
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
-from tests.unit.caching.test_redis_batch import (
+from tests.unit.caching.redis_batch_double import (
     FakeNativePending,
     FakeNatives,
     ReadyPending,
@@ -34,7 +34,7 @@ from tests.unit.caching.test_redis_batch import (
 @dataclass(frozen=True, slots=True)
 class _WireCooldown:
     """One cooldown as main's ``RedisCache`` writes it (``str(value)``) and reads it (``json.loads`` then
-    ``ast.literal_eval``). The same literals sit in ``litellm-rust/crates/redis-store/tests/support/mod.rs``,
+    ``ast.literal_eval``). The same literals sit in ``litellm/rust/crates/redis-store/tests/support/mod.rs``,
     where real Redis is checked to hold them after the Rust store writes."""
 
     cooldown: CooldownCacheValue

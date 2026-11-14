@@ -6,13 +6,36 @@ background poll that has no request to read them from.
 """
 
 import asyncio
-from collections.abc import Mapping, Sequence
-from typing import Final
+import base64
+from collections.abc import Coroutine, Mapping, Sequence
+from functools import partial
+from typing import TYPE_CHECKING, Final, Literal, Protocol, runtime_checkable
 
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import strip_null_bytes
+from litellm.types.utils import LiteLLMBatch, SpecialEnums
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+
+@runtime_checkable
+class BatchRegistry(Protocol):
+    """The managed-files hook's write path, the one method passthrough batch attribution needs from it."""
+
+    def store_unified_object_id(
+        self,
+        unified_object_id: str,
+        file_object: LiteLLMBatch,
+        litellm_parent_otel_span: None,
+        model_object_id: str,
+        file_purpose: Literal["batch"],
+        user_api_key_dict: "UserAPIKeyAuth",
+        request_tags: Sequence[str] | None,
+        persist_attribution: bool,
+    ) -> Coroutine[object, object, None]: ...
 
 
 def optional_str(value: object) -> str | None:
@@ -87,4 +110,63 @@ def log_batch_registration_result(
         provider,
         unified_object_id,
         model_object_id,
+    )
+
+
+def unified_batch_object_id(model_id: str, batch_id: str) -> str:
+    """The managed object id CheckBatchCost decodes back into the deployment and the provider batch id."""
+    unified: Final = SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format(model_id, batch_id)
+    return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
+
+
+def register_passthrough_batch(
+    provider: str,
+    unified_object_id: str,
+    batch_object: LiteLLMBatch,
+    model_object_id: str,
+    request_metadata: Mapping[str, object],
+) -> None:
+    """Record a batch created through a passthrough create for the calling key, team and tags, so
+    CheckBatchCost prices it on completion. Fire and forget, the passthrough response is already on its way."""
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    managed_files_hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+    if not isinstance(managed_files_hook, BatchRegistry):
+        verbose_proxy_logger.warning(
+            "Managed files hook not available, cannot store %s batch %s for cost tracking", provider, model_object_id
+        )
+        return
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        user_id=optional_str(request_metadata.get("user_api_key_user_id")),
+        api_key=optional_str(request_metadata.get("user_api_key")),
+        team_id=optional_str(request_metadata.get("user_api_key_team_id")),
+        user_role=LitellmUserRoles.CUSTOMER,
+        spend=0.0,
+        models=[],
+        metadata={},
+        permissions={},
+        model_max_budget={},
+        model_spend={},
+    )
+    task: Final[asyncio.Task[None]] = asyncio.create_task(
+        managed_files_hook.store_unified_object_id(
+            unified_object_id=unified_object_id,
+            file_object=batch_object,
+            litellm_parent_otel_span=None,
+            model_object_id=model_object_id,
+            file_purpose="batch",
+            user_api_key_dict=user_api_key_dict,
+            request_tags=request_tags_from_metadata(request_metadata),
+            persist_attribution=True,
+        )
+    )
+    task.add_done_callback(
+        partial(
+            log_batch_registration_result,
+            provider=provider,
+            unified_object_id=unified_object_id,
+            model_object_id=model_object_id,
+            is_batch_create=True,
+        )
     )

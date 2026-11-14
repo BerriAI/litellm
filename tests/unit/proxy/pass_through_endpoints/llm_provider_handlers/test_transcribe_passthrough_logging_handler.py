@@ -1,7 +1,9 @@
 import asyncio
+import importlib
 import io
 import json
 import struct
+import sys
 import wave
 from datetime import datetime
 from pathlib import Path
@@ -469,6 +471,21 @@ class TestMediaFileSeconds:
         _ = media.write_bytes(b"not audio at all")
 
         assert media_file_seconds(media) is None
+
+
+def test_passthrough_logging_imports_without_soundfile_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "soundfile", None)
+    for name in (
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.transcribe_passthrough_logging_handler",
+        "litellm.proxy.pass_through_endpoints.success_handler",
+    ):
+        package, _, attribute = name.rpartition(".")
+        monkeypatch.setattr(sys.modules[package], attribute, sys.modules[name])
+        monkeypatch.delitem(sys.modules, name)
+
+    success_handler: Final = importlib.import_module("litellm.proxy.pass_through_endpoints.success_handler")
+
+    assert success_handler.PassThroughEndpointLogging is not PassThroughEndpointLogging
 
 
 class TestStartedTranscriptionJob:

@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -46,6 +47,9 @@ class MemoryConfig:
     def __init__(self):
         self.rows = {"general_settings": {"email_settings": {"Model Deprecations": True}}}
 
+    async def model_deprecations_enabled(self):
+        return self.rows.get("model_deprecation_alerts_enabled", True)
+
     async def get_param(self, key):
         return ConfigParam(key, self.rows[key]) if key in self.rows else None
 
@@ -63,6 +67,8 @@ class MemoryConfig:
 @pytest.fixture()
 def sender(monkeypatch):
     monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example")
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "alerts@example.com")
     instance = module.ModelDeprecationEmailSender(MagicMock())
     instance.config = MemoryConfig()
     instance._impacts = AsyncMock(
@@ -296,3 +302,32 @@ async def test_should_keep_the_email_loop_running_after_a_delivery_error(monkeyp
         await module.run_scheduled_model_deprecation_emails()
     assert runner.run.await_count == 2
     assert all(call.args == (router,) for call in runner.run.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_gateway_opt_out_stops_owner_usage_scans_and_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "alerts@example.com")
+    client: Final = MagicMock()
+    client.writer_db.litellm_config.find_unique = AsyncMock(return_value=MagicMock(param_value=False))
+    client.db.litellm_dailyuserspend.group_by = AsyncMock()
+    instance: Final = module.ModelDeprecationEmailSender(client)
+    assert await instance.run(MagicMock(), now=NOW) == 0
+    client.db.litellm_dailyuserspend.group_by.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", ("SMTP_HOST", "SMTP_SENDER_EMAIL"))
+async def test_missing_email_connection_does_not_scan_owner_usage(
+    monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "alerts@example.com")
+    monkeypatch.delenv(missing)
+    client: Final = MagicMock()
+    client.writer_db.litellm_config.find_unique = AsyncMock()
+    client.db.litellm_dailyuserspend.group_by = AsyncMock()
+    instance: Final = module.ModelDeprecationEmailSender(client)
+    assert await instance.run(MagicMock(), now=NOW) == 0
+    client.writer_db.litellm_config.find_unique.assert_not_awaited()
+    client.db.litellm_dailyuserspend.group_by.assert_not_awaited()

@@ -46,6 +46,10 @@ def _get_stop_reason(response: AnthropicMessagesResponse) -> str | None:
     return stop_reason if isinstance(stop_reason, str) else None
 
 
+def _requests_stream(kwargs: Mapping[str, object]) -> bool:
+    return bool(kwargs.get("stream", False))
+
+
 def _build_tool_result_message(tool_results: Sequence[Mapping[str, object]]) -> AnthropicMessagesUserMessageParam:
     """Turn executed tool results into the user message Anthropic expects."""
     return AnthropicMessagesUserMessageParam(
@@ -120,7 +124,8 @@ async def anthropic_messages_with_mcp(
     should_auto_execute: Final = LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(
         mcp_tools_with_litellm_proxy=mcp_references
     )
-    stream: Final = bool(kwargs.pop("stream", False))
+    stream: Final = _requests_stream(kwargs)
+    kwargs.pop("stream", None)
 
     base_call_args: Final[Mapping[str, object]] = {
         "max_tokens": max_tokens,

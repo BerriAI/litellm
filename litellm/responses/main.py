@@ -35,7 +35,12 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
+    drops_unsupported_params,
+    normalize_drop_params,
+    require_attributes,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
     get_provider_affinity_header,
@@ -664,7 +669,7 @@ def _chat_completion_request_fields(allowed_openai_params: Sequence[str] | None)
             *DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
             *all_litellm_params,
             *GenericLiteLLMParams.model_fields,
-            *(allowed_openai_params or ()),
+            *allowed_openai_param_names(allowed_openai_params),
         )
     ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
 

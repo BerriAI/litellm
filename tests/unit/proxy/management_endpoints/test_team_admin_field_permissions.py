@@ -344,6 +344,7 @@ _PROXY_READ_TEAM_METADATA_KEYS: Final = (
     "phoenix_project_name_override",
     "phoenix_project_name",
     "opik",
+    "team_model_limit_max_borrow_multiple",
 )
 
 _STORED_METADATA: Final = {"cost_center": "eng", "region": "eu", "priority": "high", "guardrails": ["pii"]}

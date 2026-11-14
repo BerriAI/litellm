@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Final, Literal, cast
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -63,6 +64,10 @@ _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str)
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _FunctionFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _map_reasoning_effort(value: object) -> object:
@@ -718,7 +723,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         """
         if tool_calls is not None and message.content is not None and message.tool_calls is None:
             try:
-                function: Final = Function(**json.loads(message.content))
+                function: Final = Function(**_FunctionFields(**_JSON_DICT.validate_python(json.loads(message.content))))
                 if function.name != RESPONSE_FORMAT_TOOL_NAME and function.name in [
                     tool["function"]["name"] for tool in tool_calls
                 ]:

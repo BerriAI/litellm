@@ -1113,7 +1113,7 @@ class TestClearCache:
     @pytest.mark.asyncio
     async def test_clear_cache_preserve_config_models(self):
         """
-        clear_cache resets DB-backed auto-router entries and delegates every deployment
+        clear_cache preserves DB-backed auto-router entries and delegates every deployment
         change to the reload, leaving config models untouched. It must not wipe
         deployments itself -- see the delete_deployment assertion below.
         """
@@ -1122,8 +1122,7 @@ class TestClearCache:
         )
 
         # Create mock router with mixed DB and config router deployments. The two DB
-        # entries are auto_router/* deployments (so their router-map entries should be
-        # cleared for reload); the config-defined router is preserved.
+        # entries and the config-defined router must remain available during reload.
         mock_router = MagicMock()
         plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "switchyard": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
@@ -1165,20 +1164,9 @@ class TestClearCache:
         ):
             await clear_cache()
 
-            # clear_cache must wipe ONLY the db auto-router deployments -- the ones whose
-            # strategy entries are popped below and can only be rebuilt via the add path.
-            # Ordinary db models are left alone: wiping them un-served every db model for
-            # the width of the reload, and the reconcile converges without it.
-            assert mock_router.apply.call_count == 2
-            mock_router.apply.assert_any_call(ChangeSet(delete=["db-model-1"]))
-            mock_router.apply.assert_any_call(ChangeSet(delete=["db-model-2"]))
-
-            # DB-backed router entries are cleared so they can be re-populated by the
-            # reload below; the config-backed router must survive, since add_deployment()
-            # only reloads DB models and would otherwise leave it permanently unroutable
-            # (see TestClearCachePreservesConfigRouters).
-            assert "db-auto-router" not in plugins["auto"]
-            assert "db-complexity-router" not in plugins["complexity"]
+            mock_router.apply.assert_not_called()
+            assert "db-auto-router" in plugins["auto"]
+            assert "db-complexity-router" in plugins["complexity"]
             assert "config-router" in plugins["auto"]
             assert "config-router" in plugins["complexity"]
 
@@ -1188,22 +1176,8 @@ class TestClearCache:
             )
 
     @pytest.mark.asyncio
-    async def test_clear_cache_wipes_auto_routers_but_leaves_ordinary_db_models(self):
-        """An ordinary db model must survive clear_cache; a db auto-router must not.
-
-        Two separate hazards meet here, and fixing one naively breaks the other:
-
-        - Wiping ordinary db models un-serves EVERY db model for the width of the
-          reload. The reconcile converges without that, so the wipe is a pure
-          data-plane hole.
-        - NOT wiping a db auto-router strands it. Its strategy registries are keyed by
-          model_name and are popped here, but Router.upsert_deployment returns early
-          for an unchanged deployment and never reaches the add path that rebuilds
-          them. Any unrelated model write would then leave every db-backed auto,
-          complexity, adaptive and quality router unroutable until a restart.
-
-        So the wipe is scoped to exactly the auto-router deployments.
-        """
+    async def test_clear_cache_preserves_auto_routers_and_ordinary_db_models(self):
+        """Deployments and their strategies remain available while the reload runs."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             clear_cache,
         )
@@ -1242,10 +1216,8 @@ class TestClearCache:
         ):
             await clear_cache()
 
-        # The auto-router deployment is wiped so the reload takes the add path and
-        # rebuilds its strategy entry; the ordinary db model is never touched.
-        mock_router.apply.assert_called_once_with(ChangeSet(delete=["db-auto-1"]))
-        assert "db-auto-router" not in plugins["auto"]
+        mock_router.apply.assert_not_called()
+        assert "db-auto-router" in plugins["auto"]
 
 
 class TestClearCachePreservesConfigRouters:
@@ -1299,9 +1271,7 @@ class TestClearCachePreservesConfigRouters:
         ):
             await clear_cache()
 
-        # The DB-backed router for the model that was actually updated is cleared
-        # so the reload below can re-populate it.
-        assert "team-a-db-router" not in plugins["complexity"]
+        assert "team-a-db-router" in plugins["complexity"]
         # Config-defined routers for unrelated tenants must survive untouched.
         assert "config-defined-complexity-router" in plugins["complexity"]
         assert "config-semantic-router" in plugins["auto"]
@@ -1346,11 +1316,8 @@ class TestClearCachePreservesConfigRouters:
         assert "shared-name" in plugins["complexity"]
 
     @pytest.mark.asyncio
-    async def test_db_quality_adaptive_and_switchyard_routers_are_evicted(self):
-        """The auto_router/ prefix also covers quality_router/, adaptive_router/ and switchyard. Their
-        registry entries must be popped too, or reload's init raises 'already exists'
-        (quality) or leaves a stale entry (adaptive).
-        """
+    async def test_db_quality_adaptive_and_switchyard_routers_are_preserved(self):
+        """Every strategy remains available until the deployment reconcile replaces it."""
         from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
 
         mock_router = MagicMock()
@@ -1393,9 +1360,9 @@ class TestClearCachePreservesConfigRouters:
         ):
             await clear_cache()
 
-        assert "q1" not in plugins["quality"]
-        assert "a1" not in plugins["adaptive"]
-        assert "s1" not in plugins["switchyard"]
+        assert "q1" in plugins["quality"]
+        assert "a1" in plugins["adaptive"]
+        assert "s1" in plugins["switchyard"]
 
 
 class TestDeleteModelClearsRouterRegistry:
@@ -6136,8 +6103,7 @@ class TestConcurrentModelWritesDoNotEvictEachOther:
 
     @pytest.mark.asyncio
     async def test_clear_cache_reloads_under_the_lock_without_deadlocking(self, monkeypatch):
-        """clear_cache un-serves every db model before reloading, so it has to hold the
-        lock across the pair -- and therefore must call the already-locked reload.
+        """clear_cache holds the reconcile lock and must call the already-locked reload.
 
         asyncio.Lock is not reentrant: routing this back through the public
         add_deployment would block forever on a lock this coroutine already owns, taking

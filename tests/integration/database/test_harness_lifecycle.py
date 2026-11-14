@@ -79,8 +79,7 @@ def _nested_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]
             "INTEGRATION_COVERAGE_FILE",
             "INTEGRATION_CASE_SHARDS",
             "INTEGRATION_CASE_SHARD_INDEX",
-            "CIRCLE_NODE_TOTAL",
-            "CIRCLE_NODE_INDEX",
+            "INTEGRATION_SHARD_FILES",
             "PYTEST_XDIST_WORKER",
             "PYTEST_XDIST_WORKER_COUNT",
             "PYTEST_XDIST_TESTRUNUID",
@@ -750,8 +749,6 @@ def test_direct_and_dependent_consumers_reuse_the_same_module_parameter(tmp_path
                 **os.environ,
                 "INTEGRATION_CASE_SHARDS": "2",
                 "INTEGRATION_CASE_SHARD_INDEX": "1",
-                "CIRCLE_NODE_TOTAL": "2",
-                "CIRCLE_NODE_INDEX": "1",
             }
         ),
         capture_output=True,

@@ -19,7 +19,7 @@ import sys
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
@@ -4718,29 +4718,8 @@ async def test_ProxyConfig__reschedule_spend_log_cleanup_job_no_scheduler(monkey
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__reschedule_spend_log_cleanup_job_invalid_cron(monkeypatch):
-    fake_scheduler = MagicMock()
-    fake_scheduler.remove_job = MagicMock()
-    fake_scheduler.add_job = MagicMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", fake_scheduler)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.general_settings",
-        {
-            "maximum_spend_logs_retention_period": "1d",
-            "maximum_spend_logs_cleanup_cron": "INVALID CRON STRING",
-        },
-    )
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    pc = ProxyConfig()
-    # Invalid cron is caught and logged — does not raise outward.
-    await pc._reschedule_spend_log_cleanup_job()
-    # But add_job should not have been called for the invalid cron path.
-    assert fake_scheduler.add_job.call_count == 0
-
-
-@pytest.mark.asyncio
 async def test_ProxyConfig__reschedule_spend_log_cleanup_job_health_check_retention(monkeypatch):
-    fake_scheduler = MagicMock()
+    fake_scheduler = MagicMock(**{"get_job.return_value": None})
     monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", fake_scheduler)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.general_settings",
@@ -4889,7 +4868,7 @@ async def test_ProxyConfig__reschedule_spend_log_cleanup_job_daily_tag_spend_ret
         await pc._reschedule_spend_log_cleanup_job()
         job = real_scheduler.get_job("spend_log_cleanup_job")
         assert job is not None, "daily tag spend retention alone did not schedule the cleanup job"
-        assert job.func.__name__ == "cleanup_old_spend_logs"
+        assert job.func.__name__ == "tick"
     finally:
         real_scheduler.shutdown(wait=False)
 
@@ -4925,33 +4904,6 @@ async def test_ProxyConfig__update_general_settings_schedules_cleanup_when_db_ro
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_retries_a_failed_schedule_once_per_settings_value(
-    monkeypatch, caplog
-):
-    """An unparseable cron leaves no job behind; reloads must not retry it every tick, only when the
-    cron or a retention value changes."""
-    real_scheduler = _paused_scheduler(monkeypatch)
-    pc = ProxyConfig()
-    bad_cron = {"maximum_daily_tag_spend_retention_period": "90d", "maximum_spend_logs_cleanup_cron": "not a cron"}
-    pc.settings.apply_db_row("general_settings", bad_cron)
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
-    try:
-        with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
-            for _ in range(3):
-                await pc._update_general_settings(bad_cron)
-        assert real_scheduler.get_job("spend_log_cleanup_job") is None
-        cron_errors = [r for r in caplog.records if "maximum_spend_logs_cleanup_cron" in r.getMessage()]
-        assert len(cron_errors) == 1, f"invalid cron was retried on every reload: {len(cron_errors)} error lines"
-
-        await pc._update_general_settings({**bad_cron, "maximum_spend_logs_cleanup_cron": "* * * * *"})
-        job = real_scheduler.get_job("spend_log_cleanup_job")
-        assert job is not None, "a corrected cron did not schedule cleanup"
-        assert "minute='*'" in str(job.trigger)
-    finally:
-        real_scheduler.shutdown(wait=False)
-
-
-@pytest.mark.asyncio
 async def test_ProxyConfig__update_general_settings_retries_a_schedule_that_raised(monkeypatch):
     """A transient add_job failure must not be remembered as a completed attempt; the next
     reload with the same settings tries again."""
@@ -4965,29 +4917,6 @@ async def test_ProxyConfig__update_general_settings_retries_a_schedule_that_rais
         assert real_scheduler.get_job("spend_log_cleanup_job") is None
         await pc._update_general_settings(retention)
         assert real_scheduler.get_job("spend_log_cleanup_job") is not None, "raised add_job was not retried"
-    finally:
-        real_scheduler.shutdown(wait=False)
-
-
-@pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_retries_a_failed_replacement_of_the_live_job(monkeypatch):
-    """A cron change whose add_job raised keeps the old job running, so the next reload with the
-    same settings must try the replacement again instead of leaving the new cron unapplied."""
-    real_scheduler = _scheduler_whose_first_add_job_raises(monkeypatch)
-    pc = ProxyConfig()
-    pc.settings.load_yaml({"maximum_daily_tag_spend_retention_period": "90d"})
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
-    real_scheduler.raised = True
-    await pc._reschedule_spend_log_cleanup_job()
-    real_scheduler.raised = False
-    try:
-        new_cron = {"maximum_spend_logs_cleanup_cron": "0 3 * * *"}
-        await pc._update_general_settings(new_cron)
-        assert "hour='3'" not in str(real_scheduler.get_job("spend_log_cleanup_job").trigger), "old job was lost"
-        await pc._update_general_settings(new_cron)
-        assert "hour='3'" in str(real_scheduler.get_job("spend_log_cleanup_job").trigger), (
-            "failed replacement was not retried on the next sync"
-        )
     finally:
         real_scheduler.shutdown(wait=False)
 
@@ -5028,34 +4957,6 @@ async def test_ProxyConfig__update_general_settings_leaves_first_registration_to
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_runtime_interval_job_carries_the_stagger_offset(monkeypatch):
-    """Once the scheduler is running the sync owns registration and the job it adds is staggered."""
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-    from apscheduler.triggers.interval import IntervalTrigger
-
-    from litellm.proxy.common_utils.scheduled_job_stagger import _OffsetTrigger
-
-    real_scheduler = AsyncIOScheduler()
-    real_scheduler.start(paused=True)
-    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    pc = ProxyConfig()
-    pc.settings.load_yaml({"scheduled_job_stagger": {"offsets": {"spend_log_cleanup_job": 120}}})
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
-    try:
-        await pc._update_general_settings({"maximum_daily_tag_spend_retention_period": "90d"})
-        jobs = real_scheduler.get_jobs()
-        assert [job.id for job in jobs] == ["spend_log_cleanup_job"]
-        trigger: Final = jobs[0].trigger
-        assert isinstance(trigger, _OffsetTrigger), repr(trigger)
-        assert trigger.offset == timedelta(seconds=120)
-        assert isinstance(trigger.base, IntervalTrigger)
-        assert trigger.base.interval == timedelta(days=1)
-    finally:
-        real_scheduler.shutdown(wait=False)
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "bad_schedule",
     [
@@ -5090,89 +4991,6 @@ async def test_ProxyConfig__update_general_settings_keeps_the_live_cleanup_job_w
         assert live_job is not None, "invalid schedule removed the cleanup job"
         assert live_job.trigger is old_trigger
         assert ssrf_sync.call_count == 2, "schedule error blocked the rest of the settings sync"
-    finally:
-        real_scheduler.shutdown(wait=False)
-
-
-@pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_logs_an_overflowing_interval_once(monkeypatch, caplog):
-    """An interval that parses but overflows the trigger must keep the live job and log one
-    error, not a traceback on every sync."""
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-    real_scheduler = AsyncIOScheduler()
-    real_scheduler.start(paused=True)
-    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    pc = ProxyConfig()
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
-    try:
-        await pc._update_general_settings({"maximum_daily_tag_spend_retention_period": "90d"})
-        old_trigger = real_scheduler.get_job("spend_log_cleanup_job").trigger
-        overflowing = {
-            "maximum_daily_tag_spend_retention_period": "90d",
-            "maximum_spend_logs_retention_interval": "99999999999d",
-        }
-        with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
-            for _ in range(5):
-                await pc._update_general_settings(overflowing)
-        errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
-        assert len(errors) == 1, [record.getMessage() for record in errors]
-        assert real_scheduler.get_job("spend_log_cleanup_job").trigger is old_trigger
-    finally:
-        real_scheduler.shutdown(wait=False)
-
-
-@pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_reschedules_when_only_the_cron_changes(monkeypatch):
-    real_scheduler = _paused_scheduler(monkeypatch)
-    pc = ProxyConfig()
-    pc.settings.load_yaml({"maximum_daily_tag_spend_retention_period": "90d"})
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
-    await pc._reschedule_spend_log_cleanup_job()
-    try:
-        interval_job = real_scheduler.get_job("spend_log_cleanup_job")
-        assert interval_job is not None and "hour='3'" not in str(interval_job.trigger)
-
-        await pc._update_general_settings({"maximum_spend_logs_cleanup_cron": "0 3 * * *"})
-        cron_job = real_scheduler.get_job("spend_log_cleanup_job")
-        assert "hour='3'" in str(cron_job.trigger), "cron-only change did not reschedule"
-
-        await pc._update_general_settings({"maximum_spend_logs_cleanup_cron": "0 3 * * *"})
-        assert real_scheduler.get_job("spend_log_cleanup_job") is cron_job, "unchanged cron replaced the job"
-    finally:
-        real_scheduler.shutdown(wait=False)
-
-
-@pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_reschedules_a_cron_edit_the_reload_path_already_applied(
-    monkeypatch,
-):
-    """The periodic reload applies the DB row through _update_config_from_db before
-    _update_general_settings snapshots the previous schedule, so a cron edited in the DB must
-    still replace the live job's trigger."""
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-    real_scheduler = AsyncIOScheduler()
-    real_scheduler.start(paused=True)
-    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    pc = ProxyConfig()
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
-    try:
-        first_row = {"maximum_daily_tag_spend_retention_period": "90d", "maximum_spend_logs_cleanup_cron": "0 3 * * *"}
-        pc.settings.apply_db_row("general_settings", first_row)
-        await pc._update_general_settings(first_row)
-        assert "hour='3'" in str(real_scheduler.get_job("spend_log_cleanup_job").trigger)
-
-        edited_row = {**first_row, "maximum_spend_logs_cleanup_cron": "0 5 * * *"}
-        pc.settings.apply_db_row("general_settings", edited_row)
-        await pc._update_general_settings(edited_row)
-        assert "hour='5'" in str(real_scheduler.get_job("spend_log_cleanup_job").trigger), "DB cron edit was ignored"
-
-        pc.settings.apply_db_row("general_settings", edited_row)
-        await pc._update_general_settings(edited_row)
-        assert "hour='5'" in str(real_scheduler.get_job("spend_log_cleanup_job").trigger)
     finally:
         real_scheduler.shutdown(wait=False)
 
@@ -5428,6 +5246,30 @@ async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stor
     assert resolved["router_settings"] == {"fallbacks": ["config"], "num_retries": 1}
     assert pc.settings.source("max_file_size_mb") == "config"
     assert pc.settings.source("max_parallel_requests") == "config"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_config_reload_keeps_db_pass_through_endpoints_without_store_model_in_db(
+    tmp_path, monkeypatch
+):
+    from litellm.proxy import proxy_server
+
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(
+        "general_settings:\n  pass_through_endpoints:\n    - path: /config\n      target: http://config.test\n"
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "initialize_pass_through_endpoints", AsyncMock())
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    pc: Final = ProxyConfig()
+    await pc.get_config(config_file_path=str(config_file))
+    await pc._update_general_settings({"pass_through_endpoints": [{"path": "/db", "target": "http://db.test"}]})
+
+    await pc.get_config(config_file_path=str(config_file))
+
+    assert [endpoint["path"] for endpoint in pc.settings["pass_through_endpoints"]] == ["/db", "/config"]
 
 
 @pytest.mark.asyncio

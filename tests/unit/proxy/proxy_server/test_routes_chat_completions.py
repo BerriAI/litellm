@@ -9,6 +9,7 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -111,6 +112,18 @@ def test_chat_completion_happy_path(client, auth_as, patched_chat, path):
         ],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
+
+
+def test_an_azure_chat_stream_cut_answers_the_client_with_the_error_line_alone(client, auth_as, azure_stream_cut):
+    payload = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "hi"}], "stream": True}
+    with auth_as():
+        response = client.post("/v1/chat/completions", json=payload)
+    _, error_frame, done = response.text.removesuffix("\n\n").split("\n\n")
+    assert response.status_code == 200
+    assert json.loads(error_frame.removeprefix("data: "))["error"]["message"] == (
+        "litellm.APIConnectionError: AzureException APIConnectionError - Response payload is not completed"
+    )
+    assert done == "data: [DONE]"
 
 
 @pytest.mark.parametrize("path", _CHAT_PATHS)
