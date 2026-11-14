@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +14,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from litellm.types.llms.openai import AllMessageValues
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import ModelResponse
 
@@ -397,13 +399,13 @@ def test_hosted_vllm_assistant_tool_use_does_not_duplicate_existing_tool_calls()
     ]
 
 
-def _transform_request_sync(config, messages):
+def _transform_request_sync(config: HostedVLLMChatConfig, messages: list[AllMessageValues]) -> dict[str, object]:
     return config.transform_request(
         model="hosted_vllm/qwen3-vl", messages=messages, optional_params={}, litellm_params={}, headers={}
     )
 
 
-def _transform_request_async(config, messages):
+def _transform_request_async(config: HostedVLLMChatConfig, messages: list[AllMessageValues]) -> dict[str, object]:
     return asyncio.run(
         config.async_transform_request(
             model="hosted_vllm/qwen3-vl", messages=messages, optional_params={}, litellm_params={}, headers={}
@@ -412,9 +414,11 @@ def _transform_request_async(config, messages):
 
 
 @pytest.mark.parametrize("transform_request", [_transform_request_sync, _transform_request_async], ids=["sync", "async"])
-def test_hosted_vllm_transform_request_leaves_the_caller_messages_untouched(transform_request):
-    video_url = "https://example.com/clip.mp4"
-    messages = [
+def test_hosted_vllm_transform_request_leaves_the_caller_messages_untouched(
+    transform_request: Callable[[HostedVLLMChatConfig, list[AllMessageValues]], dict[str, object]],
+) -> None:
+    video_url: Final = "https://example.com/clip.mp4"
+    messages: Final[list[AllMessageValues]] = [
         {
             "role": "user",
             "content": [
@@ -433,9 +437,9 @@ def test_hosted_vllm_transform_request_leaves_the_caller_messages_untouched(tran
         },
         {"role": "tool", "tool_call_id": "toolu_1", "content": "Sunny, 21C"},
     ]
-    snapshot = copy.deepcopy(messages)
+    snapshot: Final = copy.deepcopy(messages)
 
-    transformed = transform_request(HostedVLLMChatConfig(), messages)
+    transformed: Final = transform_request(HostedVLLMChatConfig(), messages)
 
     assert transformed["messages"] == [
         {

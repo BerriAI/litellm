@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT
 from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from litellm.router import Router
+from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_optional_params
 from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -195,9 +196,9 @@ def test_transform_request_drops_tool_reference_parts():
     assert request["messages"][2]["content"] == ""
 
 
-def test_transform_request_leaves_the_caller_messages_untouched():
-    city_arguments = json.dumps({"city": "Copenhagen"})
-    messages = [
+def test_transform_request_leaves_the_caller_messages_untouched() -> None:
+    city_arguments: Final = json.dumps({"city": "Copenhagen"})
+    messages: Final[list[AllMessageValues]] = [
         {"role": "user", "content": "What is the weather where I am?"},
         {"role": "assistant", "content": None, "function_call": {"name": "get_current_city", "arguments": None}},
         {"role": "function", "name": "get_current_city", "content": "Copenhagen"},
@@ -213,9 +214,9 @@ def test_transform_request_leaves_the_caller_messages_untouched():
             ],
         },
     ]
-    snapshot = copy.deepcopy(messages)
+    snapshot: Final = copy.deepcopy(messages)
 
-    request = AzureOpenAIConfig().transform_request(
+    request: Final = AzureOpenAIConfig().transform_request(
         model="gpt-4o",
         messages=messages,
         optional_params={},
