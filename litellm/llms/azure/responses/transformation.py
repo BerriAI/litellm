@@ -87,9 +87,11 @@ def _with_responses_api_version(api_base: str | None, litellm_params: Mapping[st
     return MappingProxyType({**litellm_params, "api_version": _resolve_responses_api_version(api_base, litellm_params)})
 
 
-def _without_api_version_on_foundry_project_v1(url: str) -> str:
+def _without_rejected_api_version(url: str, api_version: str | None) -> str:
     parsed_url: Final = httpx.URL(url)
-    if not _FOUNDRY_PROJECT_V1_RESPONSES_PATH.search(parsed_url.path):
+    if not (
+        BaseAzureLLM.is_api_version_opt_out(api_version) or _FOUNDRY_PROJECT_V1_RESPONSES_PATH.search(parsed_url.path)
+    ):
         return url
     return str(parsed_url.copy_with(params=parsed_url.params.remove("api-version")))
 
@@ -245,24 +247,27 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         responses_params: Final = _with_responses_api_version(resolved_api_base, litellm_params)
         parsed_base: Final = urlsplit(resolved_api_base or "")
         path: Final = parsed_base.path.rstrip("/")
-        if path.endswith(("/openai/v1", "/openai/v1/responses")):
+        api_version: Final = _str_param(responses_params, "api_version")
+        if path.endswith(("/openai/v1", "/openai/v1/responses")) or BaseAzureLLM.is_api_version_opt_out(api_version):
             responses_path: Final = f"{path}/responses" if path.endswith("/openai/v1") else path
-            return _without_api_version_on_foundry_project_v1(
+            return _without_rejected_api_version(
                 BaseAzureLLM.get_base_azure_url(
                     api_base=parsed_base._replace(path=responses_path).geturl(),
                     litellm_params=responses_params,
                     route="/openai/v1/responses",
                     default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
-                )
+                ),
+                api_version,
             )
 
-        return _without_api_version_on_foundry_project_v1(
+        return _without_rejected_api_version(
             BaseAzureLLM.get_base_azure_url(
                 api_base=resolved_api_base,
                 litellm_params=responses_params,
                 route="/openai/responses",
                 default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
-            )
+            ),
+            api_version,
         )
 
     def supports_native_websocket(self) -> bool:

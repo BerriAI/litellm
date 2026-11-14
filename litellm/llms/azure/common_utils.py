@@ -799,7 +799,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         # For Azure v1 API, use standard OpenAI client instead of AzureOpenAI
         # See: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#api-specs
-        if self.is_azure_v1_api_version(api_version) or self.is_foundry_project_v1_base(api_base):
+        if self.is_azure_v1_api_version(api_version):
             # Extract only params that OpenAI client accepts
             # Always use /openai/v1/ regardless of whether user passed "v1", "latest", or "preview"
             # The OpenAI client accepts a callable for `api_key` and re-invokes it
@@ -820,9 +820,12 @@ class BaseAzureLLM(BaseOpenAILLM):
                 else v1_token_provider
             )
 
+            v1_base: Final = httpx.URL(api_base or "")
+            v1_query: Final = v1_base.params.remove("api-version")
             v1_params: Final[_AzureV1ClientParams] = {
                 "api_key": v1_api_key,
-                "base_url": f"{ensure_api_route(api_base or '', 'openai/v1')}/",
+                "base_url": f"{ensure_api_route(str(v1_base.copy_with(query=None)), 'openai/v1')}/",
+                "default_query": dict(v1_query),
             }
             if "timeout" in azure_client_params:
                 v1_params["timeout"] = azure_client_params["timeout"]
@@ -1156,6 +1159,16 @@ class BaseAzureLLM(BaseOpenAILLM):
     @staticmethod
     def is_foundry_project_v1_base(api_base: str | None) -> bool:
         return api_base is not None and _FOUNDRY_PROJECT_V1_BASE_PATH.search(httpx.URL(api_base).path) is not None
+
+    @staticmethod
+    def is_api_version_opt_out(api_version: str | None) -> bool:
+        return api_version is not None and api_version.lower() == "none"
+
+    @classmethod
+    def chat_client_api_version(cls, api_base: str | None, api_version: str | None) -> str | None:
+        if cls.is_foundry_project_v1_base(api_base) or cls.is_api_version_opt_out(api_version):
+            return "v1"
+        return api_version
 
     def _resolve_env_var(
         self, litellm_params: Mapping[str, str | None], param_key: str, env_var_key: str
