@@ -16,6 +16,7 @@ from typing import Final, TypeAlias
 
 import httpx
 import pytest
+import responses
 import respx
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
@@ -1579,6 +1580,46 @@ async def test_databricks_router_deployment_sends_its_own_key_to_its_own_base(
     assert route.called
     assert respx_mock.calls[0].request.headers["authorization"] == "Bearer deployment-key"
     assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+
+
+@responses.activate
+@pytest.mark.asyncio
+async def test_databricks_decisions_router_deployment_oauth_m2m(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+
+    token: Final = responses.post(
+        "https://workspace.example/oidc/v1/token",
+        json={"access_token": "deploy-dec-token", "expires_in": 3600},
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "decider-oauth",
+                "litellm_params": {
+                    "model": "databricks/ai_decide",
+                    "api_base": "https://workspace.example/serving-endpoints",
+                    "client_id": "router-dec-client",
+                    "client_secret": "router-dec-secret",
+                },
+            }
+        ]
+    )
+    route: Final = respx_mock.post(_DATABRICKS_ROUTE).respond(json=_DATABRICKS_RESPONSE)
+
+    response: Final = await router.adecisions(
+        model="decider-oauth",
+        input="review",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    )
+
+    assert route.called
+    assert respx_mock.calls[0].request.headers["authorization"] == "Bearer deploy-dec-token"
+    assert token.call_count == 1
 
 
 _PROVIDERS_WHOSE_CHAT_MODELS_ALSO_DECIDE: Final = frozenset(

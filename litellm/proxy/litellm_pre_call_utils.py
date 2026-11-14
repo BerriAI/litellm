@@ -918,6 +918,65 @@ def _strip_client_callback_credentials(
         )
 
 
+_CLIENT_OAUTH_PAIR_FIELDS: Final = ("client_id", "client_secret")
+
+
+def _drop_blank_client_oauth_pair(
+    target: dict[str, object],  # mutable-ok: strips in place on the request body or one of its fallback entries
+) -> None:
+    sent: Final = tuple(field for field in _CLIENT_OAUTH_PAIR_FIELDS if field in target)
+    if not sent or any(target[field] for field in sent):
+        return
+    for field in sent:
+        target.pop(field)
+    verbose_proxy_logger.debug(
+        "Stripped blank client-supplied %s so the deployment's own OAuth credentials apply", ", ".join(sent)
+    )
+
+
+def _drop_blank_client_oauth_pair_in_fallbacks(target: Mapping[str, object]) -> None:
+    for key in _REQUEST_FALLBACK_KEYS:
+        entries: object = target.get(key)
+        if isinstance(entries, list):
+            _drop_blank_client_oauth_pair_in_entries(
+                cast("Sequence[object]", entries)  # cast-ok: request fallback lists hold mixed entry shapes
+            )
+
+
+def _drop_blank_client_oauth_pair_in_entries(entries: Sequence[object]) -> None:
+    for entry in entries:
+        if isinstance(entry, dict):
+            _drop_blank_client_oauth_pair_in_entry(
+                cast("dict[str, object]", entry)  # cast-ok: a fallback entry dict is a str-keyed JSON object
+            )
+
+
+def _drop_blank_client_oauth_pair_in_entry(
+    entry: dict[str, object],  # mutable-ok: strips in place on a fallback target or a model group's fallback chain
+) -> None:
+    _drop_blank_client_oauth_pair(entry)
+    if isinstance(entry.get("model"), str):
+        _drop_blank_client_oauth_pair_in_fallbacks(entry)
+        return
+    for chain in entry.values():
+        if isinstance(chain, list):
+            _drop_blank_client_oauth_pair_in_entries(
+                cast("Sequence[object]", chain)  # cast-ok: a model group's fallback chain holds mixed entry shapes
+            )
+
+
+def _strip_blank_client_oauth_pair(
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+) -> None:
+    _drop_blank_client_oauth_pair(data)
+    _drop_blank_client_oauth_pair_in_fallbacks(data)
+    router_settings_override: Final = data.get("router_settings_override")
+    if isinstance(router_settings_override, dict):
+        _drop_blank_client_oauth_pair_in_fallbacks(
+            cast("Mapping[str, object]", router_settings_override)  # cast-ok: the override is a str-keyed JSON object
+        )
+
+
 def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
     """Drop pricing overrides from the request body and any metadata variant.
 
@@ -3048,6 +3107,9 @@ async def add_litellm_data_to_request(
     # Same reason as the strips above: runs after the metadata string-to-dict parse
     # so JSON-string metadata cannot smuggle callback credentials past the dict guard.
     _strip_client_callback_credentials(data)
+    _strip_blank_client_oauth_pair(
+        cast(dict[str, object], data)  # cast-ok: the request body is a str-keyed JSON object
+    )
 
     if not _allow_client_message_redaction_opt_out and litellm.turn_off_message_logging is True:
         _strip_client_message_redaction_opt_out(data)

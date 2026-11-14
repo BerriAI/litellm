@@ -5,8 +5,8 @@ This module provides authentication, telemetry, and security utilities
 for the Databricks LLM provider integration.
 
 Authentication priority:
-1. OAuth M2M (DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET) - Recommended for production
-2. PAT (DATABRICKS_API_KEY) - Supported for development
+1. PAT (api_key, else DATABRICKS_API_KEY when the deployment sets no OAuth credentials)
+2. OAuth M2M (client_id + client_secret on the deployment, else DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET)
 3. Databricks SDK automatic auth - Fallback (uses unified auth)
 """
 
@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.credential_rejection import credential_rejection_in
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -41,6 +42,20 @@ _OAUTH_TOKENS: Final[_TokenCache] = InMemoryCache(max_size_in_memory=64)
 
 class DatabricksException(BaseLLMException):
     pass
+
+
+class DatabricksOAuthRejectionError(DatabricksException):
+    pass
+
+
+def caused_by_databricks_oauth_rejection(error: BaseException) -> bool:
+    return credential_rejection_in(error, DatabricksOAuthRejectionError) is not None
+
+
+def databricks_oauth_environment_defaults() -> Mapping[str, object]:
+    return MappingProxyType(
+        {"client_id": os.getenv("DATABRICKS_CLIENT_ID"), "client_secret": os.getenv("DATABRICKS_CLIENT_SECRET")}
+    )
 
 
 DATABRICKS_ANTHROPIC_MESSAGES_PATH: Final = "/anthropic/v1/messages"
@@ -64,6 +79,28 @@ DATABRICKS_ENDPOINT_PATHS: Final = MappingProxyType(
         "anthropic_messages": DATABRICKS_ANTHROPIC_MESSAGES_PATH,
     }
 )
+
+
+def deployment_oauth_credentials(client_id: object, client_secret: object) -> tuple[str, str] | None:
+    if not client_id and not client_secret:
+        return None
+    if isinstance(client_id, str) and client_id and isinstance(client_secret, str) and client_secret:
+        return client_id, client_secret
+    missing: Final = "client_secret" if isinstance(client_id, str) and client_id else "client_id"
+    raise DatabricksException(
+        status_code=400,
+        message=(
+            f"Incomplete Databricks OAuth credentials: missing {missing}. "
+            "Set both client_id and client_secret, or neither"
+        ),
+    )
+
+
+class DeploymentOAuthParams(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    client_id: object = None
+    client_secret: object = None
 
 
 class OAuthM2MToken(BaseModel):
@@ -185,8 +222,10 @@ class DatabricksBase:
         return redacted
 
     @staticmethod
-    def resolve_api_key(api_key: str | None) -> str | None:
-        return api_key or litellm.api_key or litellm.databricks_key or get_secret_str("DATABRICKS_API_KEY")
+    def resolve_api_key(api_key: str | None, client_id: object = None, client_secret: object = None) -> str | None:
+        if api_key or deployment_oauth_credentials(client_id, client_secret):
+            return api_key or None
+        return litellm.api_key or litellm.databricks_key or get_secret_str("DATABRICKS_API_KEY")
 
     @staticmethod
     def resolve_api_base(api_base: str | None) -> str | None:
@@ -373,7 +412,7 @@ class DatabricksBase:
             )
 
         if response.status_code != 200:
-            raise DatabricksException(
+            raise DatabricksOAuthRejectionError(
                 status_code=response.status_code,
                 message=f"OAuth M2M token request failed: {response.text}",
             )
@@ -424,6 +463,15 @@ class DatabricksBase:
                 ),
             )
 
+    @staticmethod
+    def _oauth_credentials(client_id: object, client_secret: object) -> tuple[str, str] | None:
+        deployment_credentials: Final = deployment_oauth_credentials(client_id, client_secret)
+        if deployment_credentials:
+            return deployment_credentials
+        env_client_id: Final = os.getenv("DATABRICKS_CLIENT_ID")
+        env_client_secret: Final = os.getenv("DATABRICKS_CLIENT_SECRET")
+        return (env_client_id, env_client_secret) if env_client_id and env_client_secret else None
+
     def databricks_validate_environment(
         self,
         api_key: str | None,
@@ -432,13 +480,15 @@ class DatabricksBase:
         custom_endpoint: bool | None,
         headers: dict | None,
         custom_user_agent: str | None = None,
+        client_id: object = None,
+        client_secret: object = None,
     ) -> tuple[str, dict[str, str]]:  # mutable-ok: becomes the outbound headers
         """
         Validate and configure the Databricks environment.
 
         Authentication priority:
-        1. OAuth M2M (DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET) - Recommended
-        2. PAT (DATABRICKS_API_KEY) - Supported for development
+        1. PAT (api_key)
+        2. OAuth M2M (client_id + client_secret, else DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET)
         3. Databricks SDK automatic auth - Fallback (uses unified auth)
 
         Args:
@@ -448,24 +498,33 @@ class DatabricksBase:
             custom_endpoint: Whether using a custom endpoint URL
             headers: Existing headers dict
             custom_user_agent: Optional custom user agent to prefix
+            client_id: The deployment's OAuth M2M client ID
+            client_secret: The deployment's OAuth M2M client secret
 
         Returns:
             Tuple of (api_base, headers) with authentication configured
         """
         from litellm._logging import verbose_logger
 
-        # Check for OAuth M2M credentials (recommended for production)
-        client_id: Final = os.getenv("DATABRICKS_CLIENT_ID")
-        client_secret: Final = os.getenv("DATABRICKS_CLIENT_SECRET")
+        oauth_credentials: Final = None if api_key is not None else self._oauth_credentials(client_id, client_secret)
 
         # Determine api_base first
         if api_base is None:
             api_base = os.getenv("DATABRICKS_API_BASE")
 
-        if client_id and client_secret and api_base:
+        if api_base is None and api_key is None and deployment_oauth_credentials(client_id, client_secret):
+            raise DatabricksException(
+                status_code=400,
+                message=(
+                    "Missing api_base for a deployment that sets client_id and client_secret, "
+                    "so set api_base or DATABRICKS_API_BASE to the workspace's /serving-endpoints URL"
+                ),
+            )
+
+        if oauth_credentials and api_base:
             # Use OAuth M2M flow (preferred for production)
             verbose_logger.debug("Using OAuth M2M authentication for Databricks")
-            access_token: Final = self.get_oauth_m2m_token(api_base, client_id, client_secret)
+            access_token: Final = self.get_oauth_m2m_token(api_base, *oauth_credentials)
             headers = headers or {}
             headers["Authorization"] = f"Bearer {access_token}"
             headers["Content-Type"] = "application/json"

@@ -71,7 +71,7 @@ from ...anthropic.chat.transformation import (
     tools_without_unsupported_tool_search,
 )
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
-from ..common_utils import DATABRICKS_HOSTED_MODEL_PREFIXES, DatabricksBase, DatabricksException
+from ..common_utils import DATABRICKS_HOSTED_MODEL_PREFIXES, DatabricksBase, DatabricksException, DeploymentOAuthParams
 
 _RESPONSE_FORMAT_ADAPTER: (  # mutable-ok: mirrors the dict return contract of get_json_schema_from_pydantic_object
     Final[TypeAdapter[dict[str, object] | None]]
@@ -447,6 +447,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             or os.getenv("DATABRICKS_USER_AGENT")
         )
 
+        oauth_params: Final = DeploymentOAuthParams.model_validate(litellm_params)
         api_base, headers = self.databricks_validate_environment(
             api_base=api_base,
             api_key=api_key,
@@ -454,6 +455,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             custom_endpoint=False,
             headers=headers,
             custom_user_agent=custom_user_agent,
+            client_id=oauth_params.client_id,
+            client_secret=oauth_params.client_secret,
         )
         # Ensure Content-Type header is set
         headers["Content-Type"] = "application/json"

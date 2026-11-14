@@ -8304,6 +8304,121 @@ async def test_add_litellm_data_to_request_strips_caller_supplied_callback_crede
     assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {"dd_api_key": "team-dd-key"}
 
 
+async def _pre_call_body(body_fields: dict[str, object]) -> dict[str, object]:
+    return await add_litellm_data_to_request(
+        data={"model": "databricks-model", "messages": [{"role": "user", "content": "hello"}], **body_fields},
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "oauth_fields",
+    [
+        {"client_id": "", "client_secret": ""},
+        {"client_id": None, "client_secret": None},
+        {"client_secret": None},
+        {"client_id": ""},
+    ],
+)
+async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair(oauth_fields: dict[str, object]):
+    """A blank caller pair would blank the deployment's own and fall back to the proxy's ambient identity."""
+    updated: Final = await _pre_call_body(oauth_fields)
+
+    assert "client_id" not in updated
+    assert "client_secret" not in updated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "oauth_fields",
+    [
+        {"client_id": "caller-id", "client_secret": "caller-secret"},
+        {"client_id": "caller-id", "client_secret": ""},
+        {"client_id": None, "client_secret": "caller-secret"},
+    ],
+)
+async def test_add_litellm_data_to_request_keeps_caller_oauth_pair_with_a_value(oauth_fields: dict[str, object]):
+    updated: Final = await _pre_call_body(oauth_fields)
+
+    assert {field: updated[field] for field in oauth_fields} == oauth_fields
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_key", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair_in_fallback_entries(fallback_key: str):
+    updated: Final = await _pre_call_body(
+        {
+            fallback_key: [
+                "plain-model",
+                {"model": "blank-pair-model", "client_id": "", "client_secret": None},
+                {"model": "caller-pair-model", "client_id": "caller-id", "client_secret": "caller-secret"},
+            ]
+        }
+    )
+
+    assert updated[fallback_key] == [
+        "plain-model",
+        {"model": "blank-pair-model"},
+        {"model": "caller-pair-model", "client_id": "caller-id", "client_secret": "caller-secret"},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_key", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+@pytest.mark.parametrize("group", ["primary-model", "model"])
+async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair_in_grouped_fallbacks(
+    fallback_key: str, group: str
+):
+    updated: Final = await _pre_call_body(
+        {
+            fallback_key: [
+                {
+                    group: [
+                        "plain-model",
+                        {"model": "blank-pair-model", "client_id": "", "client_secret": None},
+                        {"model": "caller-pair-model", "client_id": "caller-id", "client_secret": "caller-secret"},
+                    ]
+                }
+            ]
+        }
+    )
+
+    assert updated[fallback_key] == [
+        {
+            group: [
+                "plain-model",
+                {"model": "blank-pair-model"},
+                {"model": "caller-pair-model", "client_id": "caller-id", "client_secret": "caller-secret"},
+            ]
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair_in_nested_and_override_fallbacks():
+    updated: Final = await _pre_call_body(
+        {
+            "fallbacks": [
+                {
+                    "model": "outer-model",
+                    "fallbacks": [{"model": "nested-blank-model", "client_id": "", "client_secret": ""}],
+                }
+            ],
+            "router_settings_override": {
+                "fallbacks": [{"primary-model": [{"model": "override-blank-model", "client_id": None}]}]
+            },
+        }
+    )
+
+    assert updated["fallbacks"] == [{"model": "outer-model", "fallbacks": [{"model": "nested-blank-model"}]}]
+    assert updated["router_settings_override"] == {"fallbacks": [{"primary-model": [{"model": "override-blank-model"}]}]}
+
+
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_omits_trusted_callback_vars_without_team_callbacks():
     """Without team/key callback settings the trusted field must not exist for a callback to read."""

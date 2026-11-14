@@ -1,16 +1,15 @@
 import asyncio
 import hashlib
-import itertools
 import json
 import os
 import re
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import closing
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, NoReturn, cast
 
 import httpx
-from openai import APIError, AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly, TypedDict
 
@@ -18,6 +17,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.litellm_core_utils.credential_rejection import credential_rejection_in
 from litellm.litellm_core_utils.single_flight import SingleFlight, single_flight_lru_cache
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -185,38 +185,8 @@ def entra_rejection_types() -> tuple[type[Exception], ...]:
     return (ClientAuthenticationError,)
 
 
-_EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
-
-
-def _exception_chain(error: BaseException) -> Iterator[BaseException]:
-    link: BaseException | None = error  # rebind-ok: advances one link of the cause chain per iteration
-    for _ in range(_EXCEPTION_CHAIN_MAX_DEPTH):
-        if link is None:
-            return
-        yield link
-        link = link.__cause__ or link.__context__
-
-
-_REQUEST_FAILURE_TYPES: Final = (APIError, httpx.HTTPError)
-
-
-def _ends_the_failed_attempt(link: BaseException, failed_attempt: BaseException) -> bool:
-    return not isinstance(link, EntraRejectionError) and (
-        isinstance(link, _REQUEST_FAILURE_TYPES) or type(link) is type(failed_attempt)
-    )
-
-
-def _links_within_the_failed_attempt(error: BaseException) -> Iterator[BaseException]:
-    yield error
-    yield from itertools.takewhile(
-        lambda link: not _ends_the_failed_attempt(link, error), itertools.islice(_exception_chain(error), 1, None)
-    )
-
-
 def entra_rejection_in(error: BaseException) -> EntraRejectionError | None:
-    return next(
-        (link for link in _links_within_the_failed_attempt(error) if isinstance(link, EntraRejectionError)), None
-    )
+    return credential_rejection_in(error, EntraRejectionError)
 
 
 def caused_by_entra_rejection(error: BaseException) -> bool:
