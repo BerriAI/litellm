@@ -27,6 +27,7 @@ struct Recorder {
     payloads: Mutex<HashMap<u64, Option<String>>>,
     region: Mutex<Option<Result<Option<String>, String>>>,
     region_panics: AtomicBool,
+    batch_failures: Mutex<Vec<(usize, usize, usize)>>,
 }
 
 const PANICS: &str = "panics while rendering";
@@ -92,6 +93,13 @@ impl PayloadHost for Recorder {
 impl Host for Recorder {
     fn callback_failed(&self) {
         self.failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn batch_upload_failed(&self, queued: usize, failed: usize, total: usize) {
+        self.batch_failures
+            .lock()
+            .unwrap()
+            .push((queued, failed, total));
     }
 
     fn cold_storage_is_s3_v2(&self) -> bool {
@@ -270,6 +278,7 @@ async fn a_flush_puts_one_object_per_event_with_the_python_headers() {
     );
     assert!(sink.queued_keys().is_empty());
     assert_eq!(host.failures.load(Ordering::Relaxed), 0);
+    assert!(host.batch_failures.lock().unwrap().is_empty());
 }
 
 #[rstest]
@@ -288,6 +297,7 @@ async fn a_bucket_that_fails_every_upload_keeps_the_queue() {
     assert_eq!(server.received_requests().await.unwrap().len(), 6);
     assert_eq!(sink.queued_keys().len(), 2);
     assert_eq!(host.failures.load(Ordering::Relaxed), 2);
+    assert_eq!(*host.batch_failures.lock().unwrap(), vec![(2, 2, 2)]);
 }
 
 #[rstest]

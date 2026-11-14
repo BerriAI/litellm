@@ -4,6 +4,7 @@ import contextlib
 import copy
 import hashlib
 import json
+import logging
 import re
 import time
 from collections.abc import Iterator, Mapping
@@ -2850,3 +2851,43 @@ async def test_the_s3_v2_callback_name_resolves_to_the_rust_logger_class(
 
     assert CustomLoggerRegistry.get_class_type_for_custom_logger_name("s3_v2") is S3Logger
     assert CustomLoggerRegistry.get_callback_str_from_class_type(type(logger)) == "s3_v2"
+
+
+class _Records(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(logging.DEBUG)
+        self.records: Final[list[logging.LogRecord]] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@pytest.mark.asyncio
+async def test_a_partially_failed_flush_logs_s3_batch_upload_error_like_main(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    from litellm._logging import verbose_logger
+    from litellm.integrations.s3_v2 import S3BatchUploadError
+
+    logger: Final = _logger(monkeypatch, bucket)
+    bucket.reply("_elem-1.json", _SLOW_DOWN)
+    await _log_all(logger, [_payload(f"elem-{i}") for i in range(3)])
+    records: Final = _Records()
+    verbose_logger.addHandler(records)
+    try:
+        await logger.flush_queue()
+    finally:
+        verbose_logger.removeHandler(records)
+
+    failures: Final = [record for record in records.records if record.exc_info is not None]
+    assert len(failures) == 1
+    record: Final = failures[0]
+    assert record.name == "LiteLLM"
+    assert record.levelno == logging.ERROR
+    assert record.getMessage() == "CustomLogger: async_send_batch raised; preserving 3 events in queue for retry"
+    assert record.exc_info is not None
+    error: Final = record.exc_info[1]
+    assert isinstance(error, S3BatchUploadError)
+    assert (error.failed, error.total) == (1, 3)
+    assert str(error) == "1 of 3 S3 uploads failed; transient failures kept in queue for the next flush"
+    assert "S3BatchUploadError: 1 of 3 S3 uploads failed" in logging.Formatter().formatException(record.exc_info)

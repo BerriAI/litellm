@@ -52,6 +52,17 @@ impl Host for PythonHost {
         }
     }
 
+    fn batch_upload_failed(&self, queued: usize, failed: usize, total: usize) {
+        Python::attach(|py| {
+            if let Err(error) =
+                self.host
+                    .call_method1(py, "batch_upload_failed", (queued, failed, total))
+            {
+                error.print(py);
+            }
+        });
+    }
+
     fn cold_storage_is_s3_v2(&self) -> bool {
         Python::attach(|py| {
             self.host

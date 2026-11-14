@@ -37,6 +37,7 @@ const PROMPTS_ONLY_NULL_KEYS: [&str; 1] = ["response"];
 
 pub trait Host: Send + Sync {
     fn callback_failed(&self);
+    fn batch_upload_failed(&self, queued: usize, failed: usize, total: usize);
     fn cold_storage_is_s3_v2(&self) -> bool;
     fn region_from_environment(&self) -> Result<Option<String>, String>;
     fn web_identity_token(&self, reference: &str) -> Result<String, String>;
@@ -603,11 +604,8 @@ impl S3Log {
             .skip(overflow)
             .collect();
         queue.requeued = requeued_length.saturating_sub(overflow);
-        tracing::error!(
-            "{} of {} S3 uploads failed; transient failures kept in queue for the next flush",
-            failed.len(),
-            uploads.len()
-        );
+        self.host
+            .batch_upload_failed(batch.len(), failed.len(), uploads.len());
         false
     }
 }

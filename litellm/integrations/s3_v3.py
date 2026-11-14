@@ -48,12 +48,31 @@ _WEB_IDENTITY_TOKEN_MIN_LENGTH: Final = 4
 _DEFAULT_MAX_RETRY_AGE_SECONDS: Final = 3600
 
 
+class S3BatchUploadError(Exception):
+    def __init__(self, failed: int, total: int) -> None:
+        self.failed: Final = failed
+        self.total: Final = total
+        super().__init__(f"{failed} of {total} S3 uploads failed; transient failures kept in queue for the next flush")
+
+
+def _raise_batch_upload_error(failed: int, total: int) -> None:
+    raise S3BatchUploadError(failed=failed, total=total)
+
+
 class _Host:
     def __init__(self) -> None:
         self.failures: Final = CustomLogger()
 
     def callback_failed(self) -> None:
         self.failures.handle_callback_failure(callback_name="S3Logger")
+
+    def batch_upload_failed(self, queued: int, failed: int, total: int) -> None:
+        try:
+            _raise_batch_upload_error(failed, total)
+        except S3BatchUploadError:
+            verbose_logger.exception(
+                "CustomLogger: async_send_batch raised; preserving %s events in queue for retry", queued
+            )
 
     def cold_storage_is_s3_v2(self) -> bool:
         return litellm.cold_storage_custom_logger == "s3_v2"
@@ -393,6 +412,7 @@ class S3Logger(RustLogger):
 
 
 __all__ = [
+    "S3BatchUploadError",
     "S3Logger",
     "legacy_should_log",
 ]
