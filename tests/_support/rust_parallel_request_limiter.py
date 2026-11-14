@@ -1,4 +1,5 @@
 import copy
+import dataclasses
 import uuid
 from collections.abc import Mapping
 from types import SimpleNamespace
@@ -15,9 +16,19 @@ from litellm.integrations.custom_logger_v2.legacy import PROXY_REQUEST_KEYS, Kwa
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 from litellm.integrations.custom_logger_v2.patches import apply_patch
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import CallTypes
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    _NATIVE_STASH,  # pyright: ignore[reportPrivateUsage]  # the replicas read the native's stash in the limiter's own shape
+    ParallelSlotAcquisition,
+    RateLimitedModel,
+    RateLimitResponse,
+    RequestRateLimiterStash,
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # the replicas subclass the limiter the glue wraps
+    _reservation_operation,  # pyright: ignore[reportPrivateUsage]  # the replicas read the native's stash in the limiter's own shape
+    _window_identities,  # pyright: ignore[reportPrivateUsage]  # the replicas read the native's stash in the limiter's own shape
 )
+from litellm.proxy.hooks.parallel_request_limiter_v3 import get_request_stash as _live_request_stash
+from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.proxy.hooks.parallel_request_limiter_v3_native import (
     NATIVE_PARALLEL_REQUEST_LIMITER_ENV,
     ParallelRequestLimiterNativeLogger,
@@ -25,6 +36,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3_native import (
     native_parallel_request_limiter,
 )
 from litellm.proxy.v2_proxy_fields import DERIVED_POST_CALL_FAILURE_PROXY_FIELDS, PRE_CALL_SOURCES, proxy_call_facts
+from litellm.rust_bridge._native import NativeParallelRequestLimiter
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
 _READS: Final = frozenset({Field.deprecated_kwargs})
@@ -53,18 +65,67 @@ def _raise(outcome: object) -> None:
         raise outcome.exception
 
 
+_NATIVES: Final[list[NativeParallelRequestLimiter]] = []
+
+
+def get_request_stash() -> RequestRateLimiterStash | None:
+    live: Final = _live_request_stash()
+    if live is None or live.native_state is None or not _NATIVES:
+        return live
+    native: Final = _NATIVES[-1]
+    if not native.owned(live.native_state):
+        return live
+    exported: Final = _NATIVE_STASH.validate_python(native.view(live.native_state))
+    slot: Final = exported["parallel_slot"]
+    model: Final = exported["reserved_model"]
+    response: Final = exported["rate_limit_response"]
+    itpm: Final = exported["itpm"]
+    otpm: Final = exported["otpm"]
+    return dataclasses.replace(
+        live,
+        rate_limit_response=None
+        if response is None
+        else RateLimitResponse(overall_code=response["overall_code"], statuses=list(response["statuses"])),
+        parallel_slot=None
+        if slot is None
+        else ParallelSlotAcquisition(
+            slot_id=slot["slot_id"], gauges=tuple(RateLimitScope(key, value) for key, value in slot["gauges"])
+        ),
+        reserved_tokens=exported["reserved_tokens"],
+        reserved_model=None if model is None else RateLimitedModel(requested=model[0], group=model[1]),
+        reserved_scopes=frozenset(exported["reserved_scopes"]),
+        fallback_models=frozenset(exported["fallback_models"]),
+        reservation_released=exported["reservation_released"],
+        io_reservation_released=exported["io_reservation_released"],
+        tpm_limited_tags=frozenset(exported["tpm_limited_tags"]),
+        ptu_reserved_tokens=exported["ptu_reserved_tokens"],
+        ptu_reserved_window_identities=_window_identities(exported["ptu_windows"]),
+        itpm_reserved_tokens=itpm["tokens"],
+        itpm_reserved_scopes=frozenset(itpm["scopes"]),
+        itpm_reserved_window_identities=_window_identities(itpm["windows"]),
+        otpm_reserved_tokens=otpm["tokens"],
+        otpm_reserved_scopes=frozenset(otpm["scopes"]),
+        otpm_reserved_window_identities=_window_identities(otpm["windows"]),
+        batch_enqueued_reservation=exported["batch_enqueued_reservation"],
+        batch_tpd_refund_ops=tuple(_reservation_operation(op) for op in exported["batch_tpd_refunds"]),
+    )
+
+
 class RustParallelRequestLimiter(_PROXY_MaxParallelRequestsHandler_v3):
     def __init__(self, *args: object, **kwargs: object) -> None:
         with pytest.MonkeyPatch.context() as flag:
             flag.setenv(NATIVE_PARALLEL_REQUEST_LIMITER_ENV, "true")
             super().__init__(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # the replicas pass the limiter's own arguments
         assert self.native_companion is not None
+        _NATIVES.append(self.native_companion)
         self.native_logger: Final[ParallelRequestLimiterNativeLogger] = native_parallel_request_limiter(self)
         self.minted_call_ids: Final[set[str]] = set()
 
-    def _proxy_call_id(self, data: dict[str, object]) -> None:  # mutable-ok: the proxy stamps the call id into the body
+    def _proxy_call_id(
+        self, data: dict[str, object], call_type: str
+    ) -> None:  # mutable-ok: the proxy stamps the call id into the body
         current: Final = data.get("litellm_call_id")
-        if current is not None and current not in self.minted_call_ids:
+        if (current is not None and current not in self.minted_call_ids) or call_type == CallTypes.call_mcp_tool.value:
             return
         minted: Final = str(uuid.uuid4())
         self.minted_call_ids.add(minted)
@@ -78,7 +139,7 @@ class RustParallelRequestLimiter(_PROXY_MaxParallelRequestsHandler_v3):
         call_type: str,
         endpoint_type: EndpointType = EndpointType.GENERIC,
     ) -> Exception | str | dict[str, object] | None:
-        self._proxy_call_id(data)
+        self._proxy_call_id(data, call_type)
         with PreCallAuthScope(user_api_key_dict):
             outcome: Final = await self.native_logger.run_rust(
                 Hook.pre_call,
@@ -137,10 +198,20 @@ def estimate_tokens_for_request(
     call_type: str | None = None,
     min_configured_tpm_limit: int | None = None,
     configured_output_tokens: int | None = None,
-) -> int | None:
+) -> int:
     native: Final = handler.native_companion
     assert native is not None
-    return native.estimate_tokens_for_request(data, call_type or "", min_configured_tpm_limit, configured_output_tokens)
+    estimated: Final = native.estimate_tokens_for_request(
+        data, call_type or "", min_configured_tpm_limit, configured_output_tokens
+    )
+    if estimated is not None:
+        return estimated
+    return handler._estimate_tokens_for_request(  # pyright: ignore[reportPrivateUsage]  # the estimate the native hands back to the host
+        data,
+        min_configured_tpm_limit=min_configured_tpm_limit,
+        call_type=call_type,
+        configured_output_tokens=configured_output_tokens,
+    )
 
 
 def estimate_input_and_output_tokens(
@@ -150,11 +221,20 @@ def estimate_input_and_output_tokens(
     min_configured_tpm_limit: int | None = None,
     configured_output_tokens: int | None = None,
     include_media: bool = True,
-) -> tuple[int, int] | None:
+) -> tuple[int, int]:
     native: Final = handler.native_companion
     assert native is not None
-    return native.estimate_input_and_output_tokens(
+    estimated: Final = native.estimate_input_and_output_tokens(
         data, call_type or "", min_configured_tpm_limit, configured_output_tokens, include_media
+    )
+    if estimated is not None:
+        return estimated
+    return handler._estimate_input_and_output_tokens(  # pyright: ignore[reportPrivateUsage]  # the estimate the native hands back to the host
+        data,
+        min_configured_tpm_limit=min_configured_tpm_limit,
+        call_type=call_type,
+        configured_output_tokens=configured_output_tokens,
+        include_media=include_media,
     )
 
 
@@ -165,4 +245,5 @@ __all__ = [
     "RustParallelRequestLimiter",
     "estimate_input_and_output_tokens",
     "estimate_tokens_for_request",
+    "get_request_stash",
 ]

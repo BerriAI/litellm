@@ -40,7 +40,6 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_ITPM_DESCRIPTOR_KEY,
     _request_stash,
     get_or_create_request_stash,
-    get_request_stash,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.redis.stores.rate_limits import CounterIncrement
@@ -52,6 +51,7 @@ from tests._support.rust_parallel_request_limiter import (
 from tests._support.rust_parallel_request_limiter import (
     estimate_input_and_output_tokens,
     estimate_tokens_for_request,
+    get_request_stash,
 )
 
 

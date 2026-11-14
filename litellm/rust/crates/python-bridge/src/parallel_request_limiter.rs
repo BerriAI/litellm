@@ -7,7 +7,7 @@ use litellm_callbacks::{
 use litellm_callbacks_parallel_request_limiter::{
     Backend, CapSettings, Ctx, Descriptor, Engine, EnqueuedReservation, EnqueuedScope,
     EstimateRequest, FailureFacts, IoReservation, LimiterState, Op, ParallelRequestLimiter,
-    PolicyFacts, PostCallFailureFacts, Response, Settings, SlotAcquisition, SuccessFacts,
+    PolicyFacts, PostCallFailureFacts, Response, Settings, SlotAcquisition, Stash, SuccessFacts,
     Unverifiable, WindowIdentity, input_and_output_tokens, process_monotonic, tokens_for_request,
 };
 use litellm_callbacks_python::RustCallback;
@@ -208,6 +208,32 @@ impl Callback for Hosted {
             }
         })
     }
+}
+
+fn exported(stash: &mut Stash) -> Value {
+    json!({
+        "rate_limit_response": stash.rate_limit_response.as_ref().map(|response| json!({
+            "overall_code": response.overall,
+            "statuses": response.statuses,
+        })),
+        "parallel_slot": stash.parallel_slot.as_ref().map(|slot| json!({
+            "slot_id": slot.slot_id,
+            "gauges": slot.gauges.iter().map(|scope| (&scope.descriptor, &scope.value)).collect::<Vec<_>>(),
+        })),
+        "reserved_tokens": stash.reserved_tokens,
+        "reserved_model": stash.reserved_model.as_ref().map(|model| (&model.requested, &model.group)),
+        "reserved_scopes": stash.reserved_scopes,
+        "fallback_models": stash.fallback_models,
+        "reservation_released": stash.reservation_released,
+        "io_reservation_released": stash.io_reservation_released,
+        "tpm_limited_tags": stash.tpm_limited_tags,
+        "ptu_reserved_tokens": stash.ptu_reserved_tokens,
+        "ptu_windows": windows_json(&stash.ptu_windows),
+        "itpm": io_json(&stash.itpm),
+        "otpm": io_json(&stash.otpm),
+        "batch_enqueued_reservation": stash.batch_enqueued.take().map(|reservation| reservation_json(&reservation)),
+        "batch_tpd_refunds": std::mem::take(&mut stash.batch_tpd_refunds).iter().map(op_json).collect::<Vec<_>>(),
+    })
 }
 
 fn estimable(value: &Bound<'_, PyAny>) -> PyResult<Option<Value>> {
@@ -562,30 +588,15 @@ impl NativeParallelRequestLimiter {
     ) -> PyResult<Py<PyAny>> {
         let mut stash = state.0.stash();
         stash.owned = false;
-        let exported = json!({
-            "rate_limit_response": stash.rate_limit_response.as_ref().map(|response| json!({
-                "overall_code": response.overall,
-                "statuses": response.statuses,
-            })),
-            "parallel_slot": stash.parallel_slot.as_ref().map(|slot| json!({
-                "slot_id": slot.slot_id,
-                "gauges": slot.gauges.iter().map(|scope| (&scope.descriptor, &scope.value)).collect::<Vec<_>>(),
-            })),
-            "reserved_tokens": stash.reserved_tokens,
-            "reserved_model": stash.reserved_model.as_ref().map(|model| (&model.requested, &model.group)),
-            "reserved_scopes": stash.reserved_scopes,
-            "fallback_models": stash.fallback_models,
-            "reservation_released": stash.reservation_released,
-            "io_reservation_released": stash.io_reservation_released,
-            "tpm_limited_tags": stash.tpm_limited_tags,
-            "ptu_reserved_tokens": stash.ptu_reserved_tokens,
-            "ptu_windows": windows_json(&stash.ptu_windows),
-            "itpm": io_json(&stash.itpm),
-            "otpm": io_json(&stash.otpm),
-            "batch_enqueued_reservation": stash.batch_enqueued.take().map(|reservation| reservation_json(&reservation)),
-            "batch_tpd_refunds": std::mem::take(&mut stash.batch_tpd_refunds).iter().map(op_json).collect::<Vec<_>>(),
-        });
-        to_py(py, &exported)
+        to_py(py, &exported(&mut stash))
+    }
+
+    fn view(
+        &self,
+        py: Python<'_>,
+        state: PyRef<'_, NativeParallelRequestLimiterState>,
+    ) -> PyResult<Py<PyAny>> {
+        to_py(py, &exported(&mut state.0.snapshot()))
     }
 
     fn enqueued_reserve<'py>(
