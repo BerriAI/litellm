@@ -17242,6 +17242,7 @@
         "source": "https://cohere.com/pricing"
     },
     "cohere/embed-v5.0-pro": {
+        "input_cost_per_image_token": 4e-07,
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "cohere",
         "max_input_tokens": 128000,
@@ -17249,9 +17250,10 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 2048,
         "supports_embedding_image_input": true,
-        "source": "https://cohere.com/pricing"
+        "source": "https://cohere.com/blog/embed-5"
     },
     "cohere/embed-v5.0-fast": {
+        "input_cost_per_image_token": 4e-07,
         "input_cost_per_token": 8e-08,
         "litellm_provider": "cohere",
         "max_input_tokens": 128000,
@@ -17259,7 +17261,7 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 2048,
         "supports_embedding_image_input": true,
-        "source": "https://cohere.com/pricing"
+        "source": "https://cohere.com/blog/embed-5"
     },
     "cohere/parse-v5.0": {
         "litellm_provider": "cohere",

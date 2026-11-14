@@ -197,10 +197,10 @@ def _cohere_v2_embed_response(vectors: list[list[float]], texts: list[str]) -> d
     }
 
 
-async def _embed(sync_mode: bool, **kwargs: object) -> EmbeddingResponse:
+async def _embed(sync_mode: bool, model: str = "cohere/embed-v4.0", **kwargs: object) -> EmbeddingResponse:
     if sync_mode:
-        return litellm.embedding(model="cohere/embed-v4.0", api_key="cohere-test-key", **kwargs)
-    return await litellm.aembedding(model="cohere/embed-v4.0", api_key="cohere-test-key", **kwargs)
+        return litellm.embedding(model=model, api_key="cohere-test-key", **kwargs)
+    return await litellm.aembedding(model=model, api_key="cohere-test-key", **kwargs)
 
 
 def _cohere_embedding_logging_obj() -> Logging:
@@ -386,9 +386,10 @@ async def test_cohere_embed_v4_with_optional_params(respx_mock: respx.MockRouter
 
 @pytest.mark.usefixtures("_cohere_httpx_transport")
 @pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("model", ["cohere/embed-v4.0", "cohere/embed-v5.0-pro", "cohere/embed-v5.0-fast"])
 @pytest.mark.parametrize(("input_tokens", "image_tokens"), [(0, 6), (3, 6)])
-async def test_cohere_embed_v4_image_tokens_are_billed_apart_from_input_tokens(
-    respx_mock: respx.MockRouter, input_tokens: int, image_tokens: int
+async def test_cohere_embed_image_tokens_are_billed_apart_from_input_tokens(
+    respx_mock: respx.MockRouter, model: str, input_tokens: int, image_tokens: int
 ) -> None:
     respx_mock.post(COHERE_V2_EMBED_URL).mock(
         return_value=httpx.Response(
@@ -406,9 +407,9 @@ async def test_cohere_embed_v4_image_tokens_are_billed_apart_from_input_tokens(
             },
         )
     )
-    model_info: Final = litellm.get_model_info("cohere/embed-v4.0")
+    model_info: Final = litellm.get_model_info(model)
 
-    response: Final = await _embed(True, input=[ONE_PIXEL_PNG], input_type="image")
+    response: Final = await _embed(True, model=model, input=[ONE_PIXEL_PNG], input_type="image")
 
     assert model_info["input_cost_per_image_token"] > 0
     assert response._hidden_params["response_cost"] == pytest.approx(
