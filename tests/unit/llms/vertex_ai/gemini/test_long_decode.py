@@ -170,7 +170,7 @@ async def test_unary_long_decode_answers_under_the_first_requests_response_id(is
 
 
 @pytest.mark.parametrize("stream", [True, False])
-@pytest.mark.parametrize("sent_as_a_string", [{"n": "1"}, {"max_tokens": "100000"}])
+@pytest.mark.parametrize("sent_as_a_string", [{"n": "1"}, {"n": ""}, {"max_tokens": "100000"}])
 @pytest.mark.asyncio
 async def test_request_whose_n_or_max_tokens_is_a_string_is_sent_once_and_never_continued(
     stream: bool, sent_as_a_string: Mapping[str, str]
