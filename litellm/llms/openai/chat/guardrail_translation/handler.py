@@ -1225,20 +1225,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def _function_tool_call_fragments(
         responses_so_far: Sequence["ModelResponseStream"],
     ) -> tuple[tuple[ChatCompletionDeltaToolCall, ...], ...]:
-        """Group the stream's function tool-call fragments by their tool-call index, in
-        the index order ``stream_chunk_builder`` lists the rebuilt tool calls, keeping
-        only the indices the builder keeps (an id and a name somewhere in the stream)."""
-        fragments: Final = tuple(
-            tool_call
-            for response in responses_so_far
-            for choice in response.choices
-            for tool_call in choice.delta.tool_calls or ()
-            if isinstance(tool_call, ChatCompletionDeltaToolCall)
-        )
-        identified: Final = frozenset(fragment.index for fragment in fragments if fragment.id)
-        named: Final = frozenset(fragment.index for fragment in fragments if fragment.function.name)
+        """Group the stream's function tool-call fragments by (choice index, tool-call index), in
+        the order the per-choice rebuild lists the tool calls, keeping only the calls
+        ``stream_chunk_builder`` keeps (an id and a name somewhere in the stream)."""
+        fragments: Final = tuple(_keyed_function_tool_call_fragments(responses_so_far))
+        identified: Final = frozenset(key for key, fragment in fragments if fragment.id)
+        named: Final = frozenset(key for key, fragment in fragments if fragment.function.name)
         return tuple(
-            tuple(fragment for fragment in fragments if fragment.index == index) for index in sorted(identified & named)
+            tuple(fragment for key, fragment in fragments if key == kept) for kept in sorted(identified & named)
         )
 
     def _write_ended_stream_tool_call_rewrites(
@@ -1251,25 +1245,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         """Write ended-stream guardrail tool-call rewrites back across the buffered
         chunks: the rewritten name and full arguments land in the tool call's first
         fragment and the arguments of its later fragments are blanked, mirroring the
-        text write-back. A rewrite on a stream carrying more than one distinct choice
-        index, or whose fragments do not line up with the rebuilt tool calls, is
-        reported as undeliverable, so the pipeline executor discards it and releases
-        the original chunks."""
+        text write-back. A rewrite whose fragments do not line up with the rebuilt tool
+        calls is reported as undeliverable, so the pipeline executor discards it and
+        releases the original chunks."""
         post_guardrail_tool_calls: Final = self._function_tool_call_shapes(guardrailed_response)
         if post_guardrail_tool_calls == pre_guardrail_tool_calls:
             return
-        stream_choice_indices: Final = frozenset(
-            choice.index for response in responses_so_far for choice in response.choices
-        )
         fragments_by_tool_call: Final = self._function_tool_call_fragments(responses_so_far)
-        if len(stream_choice_indices) != 1:
-            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
-            raise UndeliverableStreamRewrite(
-                guardrail_name,
-                f"the stream carries {len(stream_choice_indices)} choices and tool-call rewrites are only written "
-                "back on single-choice streams",
-            )
         if len(fragments_by_tool_call) != len(post_guardrail_tool_calls):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
@@ -1553,6 +1535,16 @@ def _streamed_server_tool_calls(
         for choice in response.choices:
             for server_tool_call in anthropic_server_tool_call_params(choice.delta):
                 yield (choice.index, server_tool_call["id"]), server_tool_call
+
+
+def _keyed_function_tool_call_fragments(
+    responses: Sequence["ModelResponseStream"],
+) -> Iterator[tuple[tuple[int, int], ChatCompletionDeltaToolCall]]:
+    for response in responses:
+        for choice in response.choices:
+            for tool_call in choice.delta.tool_calls or ():
+                if isinstance(tool_call, ChatCompletionDeltaToolCall):
+                    yield (choice.index, tool_call.index), tool_call
 
 
 def _choice_server_tool_calls(
