@@ -254,7 +254,7 @@ class DualCache(BaseCache):
             if self.in_memory_cache is not None:
                 in_memory_result: Final = await self.in_memory_cache.async_get_cache(key, **kwargs)
 
-                verbose_logger.debug("in_memory_result: %s", in_memory_result)
+                print_verbose("in_memory_result: %s", in_memory_result)
                 if in_memory_result is not None:
                     result = in_memory_result
 
@@ -268,7 +268,7 @@ class DualCache(BaseCache):
 
                 result = redis_result
 
-            verbose_logger.debug("get cache: cache result: %s", result)
+            print_verbose("get cache: cache result: %s", result)
             return result
         except Exception as e:
             log_redis_failure(
