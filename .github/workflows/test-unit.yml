@@ -740,6 +740,7 @@ jobs:
               tests/unit/enterprise/proxy/test_audit_logging_endpoints.py
               tests/unit/enterprise/proxy/test_liteadmin.py
               tests/unit/enterprise/enterprise_callbacks/test_prometheus_logging_callbacks.py
+              tests/unit/enterprise/enterprise_callbacks/test_prometheus_logging_callbacks_rust.py
             python-version: "3.12"
             workers: 4
             reruns: 0
