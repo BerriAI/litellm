@@ -854,14 +854,23 @@ def test_speed_fast_asks_for_the_priority_tier_unless_a_service_tier_is_forwarde
     assert responses_kwargs["service_tier"] == service_tier
 
 
-def test_speed_mcp_servers_and_container_never_reach_the_responses_call_raw() -> None:
+CONTAINERS: Final = (
+    pytest.param("container_abc", id="container-id"),
+    pytest.param({"id": "container_abc"}, id="container-params"),
+)
+
+
+@pytest.mark.parametrize("container", CONTAINERS)
+def test_speed_mcp_servers_and_container_never_reach_the_responses_call_raw(
+    container: str | dict[str, object],
+) -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         model="openai/gpt-5.6",
         max_tokens=1024,
         messages=MESSAGES,
         speed="fast",
         mcp_servers=[DOCS_SERVER],
-        container={"id": "container_abc"},
+        container=container,
         extra_kwargs={**OPENAI_API, "drop_params": True},
     )
     assert {"speed", "mcp_servers", "container"}.isdisjoint(responses_kwargs)
@@ -875,13 +884,14 @@ def test_speed_mcp_servers_and_container_never_reach_the_responses_call_raw() ->
     ]
 
 
-def test_container_answers_400_without_drop_params() -> None:
+@pytest.mark.parametrize("container", CONTAINERS)
+def test_container_answers_400_without_drop_params(container: str | dict[str, object]) -> None:
     with pytest.raises(litellm.UnsupportedParamsError) as rejected:
         _build_responses_kwargs(
             model="openai/gpt-5.6",
             max_tokens=1024,
             messages=MESSAGES,
-            container={"id": "container_abc"},
+            container=container,
             extra_kwargs=OPENAI_API,
         )
 

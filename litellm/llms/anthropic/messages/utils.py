@@ -1,6 +1,7 @@
+import copy
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
@@ -35,6 +36,61 @@ def json_copy_or_original(value: _JsonValue) -> _JsonValue:
         return json.loads(json.dumps(value, default=dict))
     except (TypeError, ValueError, RecursionError):
         return value
+
+
+_SUBSCHEMA_LIST_KEYWORDS: Final = ("anyOf", "oneOf", "allOf")
+_SUBSCHEMA_MAP_KEYWORDS: Final = ("$defs", "definitions")
+
+
+_JSON_ARRAY: Final = TypeAdapter(list[object])
+
+
+def _json_array(value: object) -> Sequence[object] | None:
+    try:
+        return _JSON_ARRAY.validate_python(value, strict=True)
+    except ValidationError:
+        return None
+
+
+def openai_strict_json_schema(schema: object) -> object:
+    """New copy of a JSON schema where every object with properties forbids extra keys and requires all of them.
+
+    OpenAI strict structured outputs rejects any schema that leaves an object open or a property optional.
+    """
+    source: Final = object_mapping(schema)
+    if source is None:
+        return copy.deepcopy(schema)
+    properties: Final = object_mapping(source.get("properties"))
+    closing: Final[Mapping[str, object]] = (
+        {"required": list(properties), "additionalProperties": False}
+        if properties is not None and _is_object_type(source.get("type"))
+        else {}
+    )
+    return {**{key: _strict_subschema(key, value) for key, value in source.items()}, **closing}
+
+
+def _is_object_type(schema_type: object) -> bool:
+    """Whether a ``type`` keyword names an object, alone or in a union such as ``["object", "null"]``."""
+    types: Final = _json_array(schema_type)
+    return schema_type == "object" if types is None else "object" in types
+
+
+def _strict_subschema(key: str, value: object) -> object:
+    if key == "items":
+        return openai_strict_json_schema(value)
+    if key == "properties" or key in _SUBSCHEMA_MAP_KEYWORDS:
+        named: Final = object_mapping(value)
+        return (
+            copy.deepcopy(value)
+            if named is None
+            else {name: openai_strict_json_schema(subschema) for name, subschema in named.items()}
+        )
+    if key in _SUBSCHEMA_LIST_KEYWORDS:
+        variants: Final = _json_array(value)
+        return (
+            copy.deepcopy(value) if variants is None else [openai_strict_json_schema(variant) for variant in variants]
+        )
+    return copy.deepcopy(value)
 
 
 class _ClaudeCodeUserId(LiteLLMBaseModel):

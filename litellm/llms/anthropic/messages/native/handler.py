@@ -724,7 +724,7 @@ def anthropic_messages_handler(
     tools: list[dict] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
-    container: dict[str, object] | None = None,
+    container: str | dict[str, object] | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     client: AsyncHTTPHandler | None = None,

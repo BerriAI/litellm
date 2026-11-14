@@ -20,9 +20,9 @@ from litellm.llms.anthropic.messages.utils import (
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
     object_mapping,
+    openai_strict_json_schema,
     prompt_cache_key_from_user_id,
 )
-from litellm.llms.base_llm.base_utils import as_json_object, strict_json_schema
 from litellm.responses.utils import auto_reasoning_summary
 
 # OpenAI has a 64-character limit for function/tool names
@@ -1022,7 +1022,7 @@ class LiteLLMAnthropicMessagesAdapter:
         if output_format_object is None or output_format_object.get("type") != "json_schema":
             return None
 
-        schema: Final = as_json_object(json_copy_or_original(output_format_object.get("schema")))
+        schema: Final = output_format_object.get("schema")
         if not schema:
             return None
 
@@ -1030,7 +1030,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "type": "json_schema",
             "json_schema": {
                 "name": "structured_output",
-                "schema": strict_json_schema(dict(schema)),
+                "schema": openai_strict_json_schema(schema),
                 "strict": True,
             },
         }
