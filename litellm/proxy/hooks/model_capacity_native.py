@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import datetime
 from itertools import count
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
@@ -700,6 +701,29 @@ class NativeDynamicRateLimiter(RustLogger):
     delegate: CapacityDelegate
     capacity: "NativeModelCapacity"
 
+    def __new__(
+        cls, internal_usage_cache: DualCache, time_provider: Callable[[], datetime] | None = None
+    ) -> "NativeDynamicRateLimiter":
+        from litellm.rust_bridge._native import NativeModelCapacity
+
+        register_abort_error(RATE_LIMIT_KIND, _rate_limit_error)
+        register_abort_error(RERAISE_KIND, _reraise)
+        v3_limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+            InternalUsageCache(dual_cache=internal_usage_cache), time_provider=time_provider
+        )
+        delegate: Final = CapacityDelegate(internal_usage_cache, v3_limiter)
+        capacity: Final = NativeModelCapacity(delegate)
+        native: Final = _StashedNative(capacity, capacity.callback())
+        manifest: Final = WireManifest.model_validate_json(native.manifest())
+        logger: Final = object.__new__(type(manifest.selection.name, (cls,), _namespace(native, manifest)))
+        RustLogger.__init__(logger, native, PROJECTIONS)
+        logger.delegate = delegate
+        logger.capacity = capacity
+        return logger
+
+    def __init__(self, internal_usage_cache: DualCache, time_provider: Callable[[], datetime] | None = None) -> None:
+        pass
+
     @property
     def v3_limiter(self) -> PROXY_MaxParallelRequestsHandler_v3:
         return self.delegate.v3_limiter
@@ -812,25 +836,9 @@ class NativeDynamicRateLimiter(RustLogger):
 
 
 def build_native_dynamic_rate_limiter(
-    internal_usage_cache: DualCache, time_provider: Callable[[], object] | None = None
+    internal_usage_cache: DualCache, time_provider: Callable[[], datetime] | None = None
 ) -> NativeDynamicRateLimiter:
-    from litellm.rust_bridge._native import NativeModelCapacity
-
-    register_abort_error(RATE_LIMIT_KIND, _rate_limit_error)
-    register_abort_error(RERAISE_KIND, _reraise)
-    v3_limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
-        InternalUsageCache(dual_cache=internal_usage_cache),
-        time_provider=time_provider,  # pyright: ignore[reportArgumentType]  # the handler's clock
-    )
-    delegate: Final = CapacityDelegate(internal_usage_cache, v3_limiter)
-    capacity: Final = NativeModelCapacity(delegate)
-    native: Final = _StashedNative(capacity, capacity.callback())
-    manifest: Final = WireManifest.model_validate_json(native.manifest())
-    cls: Final = type(manifest.selection.name, (NativeDynamicRateLimiter,), _namespace(native, manifest))
-    logger: Final = cls(native, PROJECTIONS)
-    logger.delegate = delegate
-    logger.capacity = capacity
-    return logger
+    return NativeDynamicRateLimiter(internal_usage_cache, time_provider)
 
 
 @dataclass(slots=True)

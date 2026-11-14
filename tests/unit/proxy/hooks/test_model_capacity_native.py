@@ -41,11 +41,12 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
     arm_saturation_fallback_walk,
     mark_saturation_fallbacks_exhausted,
 )
-from litellm.proxy.hooks import parallel_request_limiter_v3
+from litellm.proxy.hooks import dynamic_rate_limiter_v3, parallel_request_limiter_v3
 from litellm.proxy.hooks.model_capacity_native import (
     UNLICENSED_PRIORITY_MESSAGE,
     NativeDynamicRateLimiter,
     build_native_dynamic_rate_limiter,
+    native_dynamic_rate_limiter,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
@@ -184,9 +185,9 @@ async def _no_legacy(_logger: object, _data: object) -> None:
 
 
 class NativeSide:
-    def __init__(self, router: Router, clock: Clock) -> None:
-        self.logger: Final[NativeDynamicRateLimiter] = build_native_dynamic_rate_limiter(
-            DualCache(), time_provider=clock.now
+    def __init__(self, router: Router, clock: Clock, logger: NativeDynamicRateLimiter | None = None) -> None:
+        self.logger: Final[NativeDynamicRateLimiter] = (
+            build_native_dynamic_rate_limiter(DualCache(), time_provider=clock.now) if logger is None else logger
         )
         self.logger.update_variables(router)
         self.limiter = self.logger.v3_limiter
@@ -2180,3 +2181,44 @@ async def test_a_messages_request_that_fails_settles_through_attempt_ended_like_
         side, [("model_saturation_check", "claude"), ("model_per_team_saturated", "team-m:claude")]
     )
     assert (outcome, [entry[3] for entry in counters], tap.calls) == expected
+
+
+async def _admit_then_refuse(side: NativeSide) -> list[Outcome]:
+    key: Final = _key("a")
+    return [await side.pre_call(Request(key, "capped", f"k{i}").data(), "acompletion") for i in range(2)]
+
+
+async def test_the_limiter_is_constructed_as_on_main_and_admits_and_refuses_like_the_registered_native(
+    monkeypatch: pytest.MonkeyPatch, isolated: Clock
+) -> None:
+    router: Final = _router(("capped", None, 1))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr("litellm.proxy.hooks.model_capacity_native._REGISTERED.logger", None)
+    by_keyword: Final = dynamic_rate_limiter_v3.PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=DualCache())
+    by_keyword.update_variables(llm_router=router)
+    by_position: Final = dynamic_rate_limiter_v3._PROXY_DynamicRateLimitHandlerV3(DualCache(), isolated.now)
+    registered: Final = native_dynamic_rate_limiter(DualCache(), router)
+    kinds: Final = tuple(
+        (
+            dynamic_rate_limiter_v3.PROXY_DynamicRateLimitHandlerV3 in type(logger).__mro__,
+            dynamic_rate_limiter_v3._PROXY_DynamicRateLimitHandlerV3 in type(logger).__mro__,
+            type(logger.v3_limiter) is PROXY_MaxParallelRequestsHandler_v3,
+        )
+        for logger in (by_keyword, by_position, registered)
+    )
+    assert kinds == ((True, True, True),) * 3, kinds
+    outcomes: Final = [
+        await _admit_then_refuse(NativeSide(router, isolated, logger))
+        for logger in (by_keyword, by_position, registered)
+    ]
+    assert outcomes[0][0].raised is None, outcomes[0]
+    assert outcomes[0][1].raised is not None and outcomes[0][1].raised[0] == "ProxyRateLimitError", outcomes[0]
+    assert outcomes[0] == outcomes[1] == outcomes[2], outcomes
+
+
+async def test_the_constructed_limiter_needs_its_router_like_main(isolated: Clock) -> None:
+    limiter: Final = dynamic_rate_limiter_v3.PROXY_DynamicRateLimitHandlerV3(DualCache(), time_provider=isolated.now)
+    assert limiter.delegate.llm_router is None
+    router: Final = _router(("capped", None, 1))
+    limiter.update_variables(llm_router=router)
+    assert limiter.delegate.llm_router is router
