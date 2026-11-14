@@ -13,7 +13,7 @@ import httpcore
 import httpx
 
 HTTP2_STREAMS_PER_CONNECTION: Final = 100
-_CONNECTIONS_WHILE_PROTOCOL_UNKNOWN: Final = 2
+HTTP2_CONNECTIONS_PER_LANE: Final = 2
 _REMOTE_SETTINGS_RECEIVED: Final = "http2.receive_remote_settings.complete"
 _HTTP1_REQUEST_STARTED: Final = "http11.send_request_headers.started"
 
@@ -36,12 +36,19 @@ _HTTP1: Final = _OneRequestPerConnection()
 
 
 class _Lane:
-    __slots__ = ("in_flight", "most_connections", "transport")
+    __slots__ = ("in_flight", "most_connections", "streams", "transport")
 
     def __init__(self, transport: httpx.AsyncBaseTransport, most_connections: int | None) -> None:
         self.transport: Final = transport
         self.most_connections: Final = most_connections
         self.in_flight = 0
+        self.streams: int | None = None
+
+    def learn_streams(self, settings: h2.events.RemoteSettingsChanged, most_streams_per_connection: int) -> int:
+        advertised: Final = settings.changed_settings.get(h2.settings.SettingCodes.MAX_CONCURRENT_STREAMS)
+        allowed: Final = 0 if advertised is None else min(advertised.new_value, most_streams_per_connection)
+        self.streams = allowed or self.streams or 1
+        return self.streams
 
     def acquire(self) -> None:
         self.in_flight += 1
@@ -59,6 +66,10 @@ def _least_busy(lanes: tuple[_Lane, ...]) -> _Lane:
     return min(lanes, key=lambda lane: lane.in_flight)
 
 
+def _most_spare(lanes: tuple[_Lane, ...]) -> _Lane:
+    return max(lanes, key=lambda lane: (lane.most_connections or 0) - lane.in_flight)
+
+
 class _OriginLanes:
     def __init__(self, most_streams_per_connection: int, may_speak_http2: bool) -> None:
         self._most_streams_per_connection: Final = most_streams_per_connection
@@ -70,7 +81,7 @@ class _OriginLanes:
     def requests_on(self, lane: _Lane) -> int:
         match self.protocol:
             case _Multiplexed(streams=streams):
-                return streams
+                return lane.streams or streams
             case _OneRequestPerConnection():
                 return lane.most_connections or self._most_streams_per_connection
             case None:
@@ -78,12 +89,10 @@ class _OriginLanes:
 
     def connections_for_a_new_lane(self) -> int:
         match self.protocol:
-            case _Multiplexed(streams=streams):
-                return streams
             case _OneRequestPerConnection():
                 return self._most_streams_per_connection
-            case None:
-                return _CONNECTIONS_WHILE_PROTOCOL_UNKNOWN
+            case _Multiplexed() | None:
+                return HTTP2_CONNECTIONS_PER_LANE
 
     def open_lane(self, transport: httpx.AsyncBaseTransport, most_connections: int | None) -> _Lane:
         lane: Final = _Lane(transport, most_connections)
@@ -91,7 +100,7 @@ class _OriginLanes:
         return lane
 
     def reserved(self) -> int:
-        return sum(max(lane.most_connections or 0, self.requests_on(lane)) for lane in self.lanes)
+        return sum(lane.most_connections or 0 for lane in self.lanes)
 
     def free_lane(self) -> _Lane | None:
         return next((lane for lane in self.lanes if lane.in_flight < self.requests_on(lane)), None)
@@ -108,21 +117,15 @@ class _OriginLanes:
         self._probing = False
         self._wake_waiters()
 
-    def observe(self, event: str, info: Mapping[str, object]) -> None:
+    def observe(self, event: str, info: Mapping[str, object], lane: _Lane) -> None:
         settings: Final = info.get("return_value") if event == _REMOTE_SETTINGS_RECEIVED else None
         if isinstance(settings, h2.events.RemoteSettingsChanged):
-            self.protocol = _Multiplexed(self._streams_allowed_by(settings))
+            self.protocol = _Multiplexed(lane.learn_streams(settings, self._most_streams_per_connection))
             self._wake_waiters()
             return
         if event == _HTTP1_REQUEST_STARTED and self.protocol is None and not _is_tunnel_setup(info):
             self.protocol = _HTTP1
             self._wake_waiters()
-
-    def _streams_allowed_by(self, settings: h2.events.RemoteSettingsChanged) -> int:
-        advertised: Final = settings.changed_settings.get(h2.settings.SettingCodes.MAX_CONCURRENT_STREAMS)
-        allowed: Final = 0 if advertised is None else min(advertised.new_value, self._most_streams_per_connection)
-        known: Final = self.protocol.streams if isinstance(self.protocol, _Multiplexed) else 1
-        return allowed or known
 
     def _wake_waiters(self) -> None:
         self._probe_settled.set()
@@ -156,7 +159,7 @@ class _Lanes:
         return tuple(itertools.chain.from_iterable(origin.lanes for origin in self._origins.values()))
 
     def acquire(self, origin: _OriginLanes | None) -> _Lane:
-        lane: Final = _least_busy(self.all_lanes()) if origin is None else self._free_open_or_shared(origin)
+        lane: Final = _most_spare(self.all_lanes()) if origin is None else self._free_open_or_shared(origin)
         lane.acquire()
         return lane
 
@@ -166,7 +169,7 @@ class _Lanes:
             return free
         room: Final = self._room()
         if room is not None and room <= 0:
-            return _least_busy(origin.lanes or self.all_lanes())
+            return _least_busy(origin.lanes) if origin.lanes else _most_spare(self.all_lanes())
         return self._open(origin, room)
 
     def _room(self) -> int | None:
@@ -217,9 +220,9 @@ def _headers_for_lane(request: httpx.Request) -> tuple[tuple[bytes, bytes], ...]
     return tuple((name, value) for name, value in request.headers.raw if _allowed_over_http2(name, value))
 
 
-def _tracer(origin: _OriginLanes, caller_trace: object) -> _Trace:
+def _tracer(origin: _OriginLanes, lane: _Lane, caller_trace: object) -> _Trace:
     async def trace(event: str, info: Mapping[str, object]) -> None:
-        origin.observe(event, info)
+        origin.observe(event, info, lane)
         if not callable(caller_trace):
             return
         outcome: Final = caller_trace(event, info)
@@ -229,7 +232,7 @@ def _tracer(origin: _OriginLanes, caller_trace: object) -> _Trace:
     return trace
 
 
-def _for_lane(request: httpx.Request, origin: _OriginLanes | None) -> httpx.Request:
+def _for_lane(request: httpx.Request, origin: _OriginLanes | None, lane: _Lane) -> httpx.Request:
     caller_trace: Final[object] = request.extensions.get("trace")
     return httpx.Request(
         request.method,
@@ -238,7 +241,7 @@ def _for_lane(request: httpx.Request, origin: _OriginLanes | None) -> httpx.Requ
         stream=request.stream,
         extensions=request.extensions
         if origin is None
-        else {**request.extensions, "trace": _tracer(origin, caller_trace)},
+        else {**request.extensions, "trace": _tracer(origin, lane, caller_trace)},
     )
 
 
@@ -273,7 +276,7 @@ class AsyncHTTP2ConnectionSpread(httpx.AsyncBaseTransport):
     async def _send_on_a_lane(self, request: httpx.Request, origin: _OriginLanes | None) -> httpx.Response:
         lane: Final = self._lanes.acquire(origin)
         try:
-            response: Final = await lane.transport.handle_async_request(_for_lane(request, origin))
+            response: Final = await lane.transport.handle_async_request(_for_lane(request, origin, lane))
         except BaseException:
             lane.release()
             raise
