@@ -512,6 +512,14 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "extraction",
             "ocr",
             "realtime",
+            "rerank",
+            "moderation",
+            "image_edit",
+            "video_generation",
+            "search",
+            "vector_store",
+            "guardrail",
+            "container",
         ]
     ]
     supported_endpoints: list[str] | None
