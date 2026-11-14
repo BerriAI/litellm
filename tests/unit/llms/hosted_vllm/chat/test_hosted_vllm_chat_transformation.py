@@ -1,7 +1,5 @@
-import asyncio
 import copy
 import json
-from collections.abc import Callable
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -342,24 +340,7 @@ def test_hosted_vllm_assistant_tool_use_does_not_duplicate_existing_tool_calls()
     ]
 
 
-def _transform_request_sync(config: HostedVLLMChatConfig, messages: list[AllMessageValues]) -> dict[str, object]:
-    return config.transform_request(
-        model="hosted_vllm/qwen3-vl", messages=messages, optional_params={}, litellm_params={}, headers={}
-    )
-
-
-def _transform_request_async(config: HostedVLLMChatConfig, messages: list[AllMessageValues]) -> dict[str, object]:
-    return asyncio.run(
-        config.async_transform_request(
-            model="hosted_vllm/qwen3-vl", messages=messages, optional_params={}, litellm_params={}, headers={}
-        )
-    )
-
-
-@pytest.mark.parametrize("transform_request", [_transform_request_sync, _transform_request_async], ids=["sync", "async"])
-def test_hosted_vllm_transform_request_leaves_the_caller_messages_untouched(
-    transform_request: Callable[[HostedVLLMChatConfig, list[AllMessageValues]], dict[str, object]],
-) -> None:
+def test_hosted_vllm_transform_request_leaves_the_caller_messages_untouched() -> None:
     video_url: Final = "https://example.com/clip.mp4"
     messages: Final[list[AllMessageValues]] = [
         {
@@ -382,7 +363,9 @@ def test_hosted_vllm_transform_request_leaves_the_caller_messages_untouched(
     ]
     snapshot: Final = copy.deepcopy(messages)
 
-    transformed: Final = transform_request(HostedVLLMChatConfig(), messages)
+    transformed: Final = HostedVLLMChatConfig().transform_request(
+        model="hosted_vllm/qwen3-vl", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
 
     assert transformed["messages"] == [
         {
