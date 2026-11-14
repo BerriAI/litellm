@@ -2581,6 +2581,10 @@ class CustomStreamWrapper:
                 return processed_chunk
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
+            # Mirror async: recover partial usage from chunks already delivered so
+            # failure_handler does not zero spend when the provider never sent a
+            # final usage chunk (client disconnect / mid-stream error). See #14457.
+            self._record_partial_usage_for_failure()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
             self.close()
@@ -2833,16 +2837,20 @@ class CustomStreamWrapper:
         self._earlier_rounds_spend = earlier
 
     def partial_response(self) -> "ModelResponse | TextCompletionResponse | None":
-        partial: Final = (
-            litellm.stream_chunk_builder(
+        if not self.chunks:
+            return None
+        # Prefer stream_chunk_builder (may estimate prompt tokens from messages).
+        # If it raises, reuse the end-of-stream builder fallback so interrupted
+        # streams still stash raw-chunk usage instead of losing spend (#14457).
+        try:
+            partial: ModelResponse | TextCompletionResponse | ModelResponseStream | None = litellm.stream_chunk_builder(
                 chunks=self.chunks,
                 messages=self.messages if isinstance(self.messages, list) else None,
                 logging_obj=self.logging_obj,
                 count_prompt_tokens=self.count_prompt_tokens,
             )
-            if self.chunks
-            else None
-        )
+        except Exception as builder_error:  # noqa: BLE001  # builder re-raises APIError; match end-of-stream
+            partial = self._builder_failure_response(builder_error)
         usage: Final[object] = getattr(partial, "usage", None)
         if partial is None or not isinstance(usage, Usage):
             return None
