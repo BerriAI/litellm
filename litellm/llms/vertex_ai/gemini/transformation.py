@@ -945,6 +945,7 @@ def gemini_convert_messages_with_history(
                         assistant_msg,
                         model=model,
                         forward_function_call_id=forward_function_call_id,
+                        custom_llm_provider=custom_llm_provider,
                     )
                     ## check if gemini_tool_call already exists in assistant_content
                     for gemini_tool_call_part in gemini_tool_call_parts:

@@ -2093,13 +2093,12 @@ def test_vertex_ai_transform_empty_function_call_arguments():
     [
         (None, {}),
         ('{"location": "Boston"', {"location": "Boston"}),
-        ({"location": "Boston"}, {"location": "Boston"}),
         (b'{"location": "Boston"}', {"location": "Boston"}),
     ],
-    ids=["null_arguments", "truncated_arguments", "already_parsed_arguments", "bytes_arguments"],
+    ids=["null_arguments", "truncated_arguments", "bytes_arguments"],
 )
-def test_convert_to_gemini_tool_call_invoke_tolerates_null_truncated_and_parsed_arguments(
-    arguments: str | bytes | dict[str, str] | None, expected_args: dict[str, str]
+def test_convert_to_gemini_tool_call_invoke_tolerates_null_truncated_and_bytes_arguments(
+    arguments: str | bytes | None, expected_args: dict[str, str]
 ) -> None:
     from litellm.litellm_core_utils.prompt_templates.factory import (
         convert_to_gemini_tool_call_invoke,
@@ -2122,9 +2121,13 @@ def test_convert_to_gemini_tool_call_invoke_tolerates_null_truncated_and_parsed_
     assert parts[0]["function_call"]["args"] == expected_args
 
 
-@pytest.mark.parametrize("arguments", [["Boston"], 5, False], ids=["list", "number", "false"])
+@pytest.mark.parametrize(
+    "arguments",
+    [{"location": "Boston"}, ["Boston"], 5, False],
+    ids=["object", "list", "number", "false"],
+)
 def test_convert_to_gemini_tool_call_invoke_rejects_arguments_that_are_not_a_json_string(
-    arguments: list[str] | int | bool,
+    arguments: dict[str, str] | list[str] | int | bool,
 ) -> None:
     from litellm.litellm_core_utils.prompt_templates.factory import (
         convert_to_gemini_tool_call_invoke,
