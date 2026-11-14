@@ -4,9 +4,10 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from itertools import chain, product
 from types import MappingProxyType
 from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
@@ -64,13 +65,16 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.redis.stores.spend_counters import (
     end_user_counter,
     key_counter,
+    key_window_counter,
     model_access_group_counter,
     org_counter,
     project_counter,
     tag_counter,
     team_counter,
     team_member_counter,
+    team_window_counter,
     user_counter,
+    user_window_counter,
 )
 from litellm.redis.stores.spend_counters.types import customer_window_counter
 from litellm.router import Router
@@ -330,7 +334,7 @@ async def reserve_budget_for_request(
     raw_body: bytes | None = None,
     path_params: Mapping[str, object] | None = None,
 ) -> dict | None:
-    if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
+    if valid_token is None or not RouteChecks.runs_inference_checks(route=route):
         return None
     if RouteChecks.is_unbilled_route(route):
         return None
@@ -468,7 +472,7 @@ async def release_budget_reservation(budget_reservation: dict | None) -> None:
 
 
 async def release_budget_reservation_on_cancel(
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,  # mutable-ok: stamps finalized on the caller's reservation
 ) -> None:
     """Reconcile a still-open reservation when the request is cancelled mid-flight.
 
@@ -491,7 +495,8 @@ async def release_budget_reservation_on_cancel(
     """
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
-    incurred_cost: Final = float(budget_reservation.get("input_cost") or 0.0)
+    input_cost: Final = budget_reservation.get("input_cost")
+    incurred_cost: Final = float(input_cost) if isinstance(input_cost, (int, float)) else 0.0
     try:
         await asyncio.shield(
             reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
@@ -539,6 +544,15 @@ async def release_or_invalidate_budget_reservation(
             budget_reservation["finalized"] = True
 
 
+async def release_cancelled_budget_reservation(
+    budget_reservation: dict[str, object] | None,  # mutable-ok: stamps finalized on the caller's reservation
+) -> None:
+    if budget_reservation is not None and budget_reservation.get("callback_bound") is True:
+        await release_budget_reservation_on_cancel(budget_reservation)
+        return
+    await asyncio.shield(release_or_invalidate_budget_reservation(budget_reservation))
+
+
 async def release_unbound_budget_reservation(budget_reservation: Mapping[str, object]) -> None:
     """Release a reservation no logging callback took ownership of, once the request ended.
 
@@ -584,7 +598,7 @@ async def _get_budget_counters(
             )
         counters.extend(
             _get_budget_limit_counters(
-                entity_prefix=key_counter(valid_token.token),
+                window_counter=partial(key_window_counter, valid_token.token),
                 entity_type="Key",
                 entity_id=valid_token.token,
                 budget_limits=valid_token.budget_limits,
@@ -607,7 +621,7 @@ async def _get_budget_counters(
             )
         counters.extend(
             _get_budget_limit_counters(
-                entity_prefix=team_counter(team_id),
+                window_counter=partial(team_window_counter, team_id),
                 entity_type="Team",
                 entity_id=team_id,
                 budget_limits=team_object.budget_limits,
@@ -616,6 +630,16 @@ async def _get_budget_counters(
         )
 
     is_team_key: Final = team_object is not None and team_object.team_id is not None
+    if (not is_team_key or apply_user_budget_to_team_keys) and user_object is not None:
+        counters.extend(
+            _get_budget_limit_counters(
+                window_counter=partial(user_window_counter, user_object.user_id),
+                entity_type="User",
+                entity_id=user_object.user_id,
+                budget_limits=user_object.budget_limits,
+                fallback_spend=0.0,
+            )
+        )
     if (
         (not is_team_key or apply_user_budget_to_team_keys)
         and user_object is not None
@@ -936,7 +960,7 @@ async def _get_project_budget_counter(
 
 
 def _get_budget_limit_counters(
-    entity_prefix: str,
+    window_counter: Callable[[str], str],
     entity_type: str,
     entity_id: str,
     budget_limits: Sequence[object] | None,
@@ -963,7 +987,7 @@ def _get_budget_limit_counters(
             continue
         counters.append(
             _BudgetCounter(
-                counter_key=f"{entity_prefix}:window:{budget_duration}",
+                counter_key=window_counter(str(budget_duration)),
                 max_budget=float(max_budget),
                 fallback_spend=0.0,
                 entity_type=entity_type,

@@ -160,7 +160,10 @@ from litellm.integrations.custom_guardrail import (
     merged_guardrail_entries,
 )
 from litellm.integrations.custom_logger import CustomLogger, subclass_overrides_hook
+from litellm.integrations.custom_logger_v2.call import CallFacts
+from litellm.integrations.custom_logger_v2.dispatcher import HookResult
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
+from litellm.integrations.custom_logger_v2.field_sources import HookArgs, with_sources
 from litellm.integrations.custom_logger_v2.legacy import (
     PROXY_REQUEST_KEYS,
     Admit,
@@ -175,6 +178,7 @@ from litellm.integrations.custom_logger_v2.legacy import (
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.integrations.custom_logger_v2.outcomes import (
     MERGEABLE_FIELDS,
+    Abort,
     InvalidPatchError,
     MergeField,
     Patch,
@@ -315,6 +319,14 @@ from litellm.proxy.policy_engine.pipeline_executor import (
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
+from litellm.proxy.v2_proxy_fields import (
+    DERIVED_POST_CALL_FAILURE_PROXY_FIELDS,
+    DERIVED_POST_CALL_SUCCESS_FIELDS,
+    DERIVED_RESPONSE_HEADERS_FIELDS,
+    PRE_CALL_SOURCES,
+    post_call_facts,
+    proxy_call_facts,
+)
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.spend_log_insert import RejectedSpendLogRow
@@ -392,6 +404,8 @@ class _TeamMembershipRow(TypedDict):
     team_members_with_roles: ReadOnly[Iterable[_TeamMemberRow] | None]
 
 
+_ROOTED_STREAM_LOGGING_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep tasks alive
+_MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS: Final = 64
 _VIEW_SETUP_POLL_INTERVAL_SECONDS: Final = 5.0
 _VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
 _VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
@@ -1298,6 +1312,7 @@ _INPUT_ESTIMABLE_CALL_TYPES: Final = frozenset(
 
 
 _RESPONSES_CALL_TYPES: Final = frozenset((CallTypes.responses.value, CallTypes.aresponses.value))
+_RERANK_CALL_TYPES: Final = frozenset((CallTypes.rerank.value, CallTypes.arerank.value))
 
 _FAILED_ATTEMPTS_USAGE: Final = TypeAdapter(tuple[tuple[Usage, float], ...])
 
@@ -1385,12 +1400,32 @@ def _estimated_prompt_usage(
         model=usage_tokenizer_model(
             str(model_call_details.get("model") or ""), get_base_model_from_metadata(model_call_details)
         ),
-        request_input=(
-            messages_since_newest_compaction(dispatched_input)
-            if dispatched_call_type in _RESPONSES_CALL_TYPES
-            else dispatched_input
-        ),
+        request_input=_dispatched_request_input(dispatched_input, request_body, dispatched_call_type),
         system_input=system_input,
+    )
+
+
+def _dispatched_request_input(
+    dispatched_input: object, request_body: Mapping[str, object], dispatched_call_type: str | None
+) -> object:
+    if dispatched_call_type in _RESPONSES_CALL_TYPES:
+        return messages_since_newest_compaction(dispatched_input)
+    if dispatched_call_type in _RERANK_CALL_TYPES:
+        return _rerank_input_text(request_body.get("query"), request_body.get("documents"))
+    return dispatched_input
+
+
+def _rerank_input_text(query: object, documents: object) -> str:
+    sent_documents: Final = (
+        cast("Sequence[object]", documents)  # cast-ok: a rerank body's documents is a JSON array
+        if isinstance(documents, list)
+        else ()
+    )
+    return "\n".join(
+        (
+            query if isinstance(query, str) else "",
+            *(document if isinstance(document, str) else safe_dumps(document) for document in sent_documents),
+        )
     )
 
 
@@ -1565,6 +1600,61 @@ def _priced_input_cost(pricing_model: str, custom_llm_provider: str | None, prom
 
 
 def _estimated_input_cost(
+    model_call_details: Mapping[str, object],
+    prompt_tokens: int,
+    deployment_id: str | None,
+    base_model: str | None,
+) -> float:
+    """A rerank model the provider prices per query bills the one query sent, the way the success path
+    bills one search unit per query; every other estimate is priced per token."""
+    if str(model_call_details.get("call_type")) not in _RERANK_CALL_TYPES:
+        return _estimated_token_input_cost(model_call_details, prompt_tokens, deployment_id, base_model)
+    pricing_details: Final = _routed_deployment_pricing_details(model_call_details, deployment_id)
+    query_rate: Final = _input_cost_per_query(pricing_details, deployment_id, base_model)
+    if query_rate is not None:
+        return query_rate
+    return _estimated_token_input_cost(pricing_details, prompt_tokens, deployment_id, base_model)
+
+
+def _routed_deployment_pricing_details(
+    model_call_details: Mapping[str, object], deployment_id: str | None
+) -> Mapping[str, object]:
+    """The failure handler logs the model group as the model, so price the deployment the router picked,
+    inferring its provider from that deployment's model as ``_record_pricing`` does."""
+    from litellm.proxy.proxy_server import llm_router
+
+    deployment: Final = (
+        llm_router.registry().deployment(deployment_id) if llm_router is not None and deployment_id else None
+    )
+    if deployment is None or deployment.litellm_params.model == model_call_details.get("model"):
+        return model_call_details
+    return {**model_call_details, "model": deployment.litellm_params.model, "custom_llm_provider": None}
+
+
+def _input_cost_per_query(
+    model_call_details: Mapping[str, object], deployment_id: str | None, base_model: str | None
+) -> float | None:
+    """The per-query rate the deployment declares, else, when it declares no pricing at all, the cost
+    map's rate for ``base_model`` or the deployment model; None when the model is priced per token."""
+    model: Final = str(model_call_details.get("model") or "")
+    declared_rate: Final = _cost_per_query(deployment_id) if deployment_id else None
+    if declared_rate is not None:
+        return declared_rate
+    if deployment_pricing_model_info(model_id=deployment_id, deployment_model=model) is not None:
+        return None
+    published_rates: Final = map(_cost_per_query, pricing_models(base_model, model))
+    return next((rate for rate in published_rates if rate is not None), None)
+
+
+def _cost_per_query(model_cost_key: str) -> float | None:
+    try:
+        model_info: Final = litellm.get_model_info(model=model_cost_key)
+    except Exception:  # noqa: BLE001  # get_model_info raises for a key the cost map does not know
+        return None
+    return model_info.get("input_cost_per_query")
+
+
+def _estimated_token_input_cost(
     model_call_details: Mapping[str, object],
     prompt_tokens: int,
     deployment_id: str | None,
@@ -2136,13 +2226,46 @@ def hook_fields(kwargs: object, run: HookRun[_T], slot: Field) -> HookRunFields[
     return HookRunFields(KwargsFields(kwargs, PROXY_REQUEST_KEYS), run, slot)
 
 
+def v2_abort_error(abort: Abort) -> Exception:
+    return abort.exception or HTTPException(
+        status_code=abort.status,
+        detail={"error": abort.message},
+        headers=dict(abort.headers or {}),
+    )
+
+
+def raise_v2_abort(result: HookResult) -> HookResult:
+    if isinstance(result.outcome, Abort):
+        raise v2_abort_error(result.outcome)
+    return result
+
+
+def _keep_v2_abort(run: HookRun[Exception], abort: Abort) -> None:
+    error: Final = v2_abort_error(abort)
+    if isinstance(error, HTTPException):
+        run.keep_first(error)
+        return
+    verbose_proxy_logger.error(
+        "[Non-Blocking] Error in async_post_call_failure_hook callback: %s", error, exc_info=error
+    )
+
+
 async def run_hook_subscribers(
     subscribers: HookSubscribers,
     fields: Mapping[Field, object],
     binding: Callable[[object, object], Awaitable[None] | None],
+    on_abort: Callable[[Abort], None] | None = None,
+    call: Callable[[], CallFacts] | None = None,
 ) -> None:
-    if subscribers.entries:
-        _ = kwargs_after(await run_subscribers(subscribers, fields, binding))
+    if not subscribers.entries:
+        return
+    result: Final = await run_subscribers(
+        subscribers, fields, binding, call=None if call is None or not subscribers.has_v2 else call()
+    )
+    if on_abort is not None and isinstance(result.outcome, Abort):
+        on_abort(result.outcome)
+        return
+    _ = kwargs_after(raise_v2_abort(result))
 
 
 class ProxyLogging:
@@ -2402,7 +2525,7 @@ class ProxyLogging:
         # global lists. The manager dedupes, so this is idempotent with
         # ``function_setup``.
         for callback in litellm.callbacks:
-            if isinstance(callback, CustomLogger):
+            if isinstance(callback, CustomLogger | CustomLoggerV2):
                 litellm.logging_callback_manager.add_litellm_success_callback(callback)
                 litellm.logging_callback_manager.add_litellm_failure_callback(callback)
                 litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
@@ -3533,16 +3656,26 @@ class ProxyLogging:
             subscribers: Final = hook_subscribers(
                 Hook.pre_call, caps.hook_callbacks, include_v2=not run.guardrails_only
             )
+            request_fields: Final = KwargsFields(run.latest, PROXY_REQUEST_KEYS)
             try:
                 result: Final = await run_subscribers(
                     subscribers,
-                    KwargsFields(run.latest, PROXY_REQUEST_KEYS),
+                    with_sources(
+                        request_fields,
+                        PRE_CALL_SOURCES,
+                        HookArgs(auth=run.user_api_key_dict, request=run.latest, call_type=run.call_type),
+                    )
+                    if subscribers.has_v2
+                    else request_fields,
                     partial(self._pre_call_start, run),
                     between=partial(self._pre_call_deferred_reroute, run),
+                    call=proxy_call_facts(run.latest, run.call_type, run.user_api_key_dict, run.endpoint_type.value)
+                    if subscribers.has_v2
+                    else None,
                 )
             finally:
                 run.settle_parallel()
-            run.latest = _request_dict(kwargs_after(result))
+            run.latest = _request_dict(kwargs_after(raise_v2_abort(result)))
             run.raise_parallel_flow_change()
 
             if run.latest is not None:
@@ -3969,7 +4102,9 @@ class ProxyLogging:
         def start(callback: object, request: object) -> Awaitable[object] | None:
             return self._start_during_call(callback, request, user_api_key_dict, call_type, guardrails_only)
 
-        _ = kwargs_after(await run_subscribers(subscribers, KwargsFields(data, PROXY_REQUEST_KEYS), start))
+        _ = kwargs_after(
+            raise_v2_abort(await run_subscribers(subscribers, KwargsFields(data, PROXY_REQUEST_KEYS), start))
+        )
         return data
 
     def _start_during_call(
@@ -4329,8 +4464,14 @@ class ProxyLogging:
             return run.transformed
         await run_hook_subscribers(
             hook_subscribers(Hook.post_call_failure, callbacks, admit=Admit.every_entry),
-            hook_fields(request_data, run, Field.error),
+            with_sources(
+                hook_fields(request_data, run, Field.error),
+                DERIVED_POST_CALL_FAILURE_PROXY_FIELDS,
+                HookArgs(auth=user_api_key_dict, request=request_data),  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
+            ),
             partial(self._post_call_failure_one, run, request_data, user_api_key_dict, redacted_traceback_str),
+            on_abort=partial(_keep_v2_abort, run),
+            call=partial(post_call_facts, request_data, user_api_key_dict, logging_obj),
         )
         return run.transformed
 
@@ -4391,7 +4532,7 @@ class ProxyLogging:
         #########################################################
         if route is None:
             return False
-        if not (RouteChecks.is_llm_api_route(route) or RouteChecks.is_info_route(route)):
+        if not (RouteChecks.runs_inference_checks(route) or RouteChecks.is_info_route(route)):
             return False
         # Dashboard session keys poll info routes in the background; their failures are not user requests.
         if RouteChecks.is_dashboard_session_info_route(route, team_id):
@@ -4624,17 +4765,24 @@ class ProxyLogging:
         if not any(isinstance(callback, CustomLoggerV2) for callback in other_callbacks):
             await self._post_call_without_v2(run, guardrails, guardrail_callbacks, other_callbacks)
             return run.response
-        fields: Final = hook_fields(data, run, Field.response)
+        fields: Final = with_sources(
+            hook_fields(data, run, Field.response),
+            DERIVED_POST_CALL_SUCCESS_FIELDS,
+            HookArgs(auth=user_api_key_dict, request=data),  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
+        )
+        facts: Final = partial(post_call_facts, data, user_api_key_dict)
         await run_hook_subscribers(
             hook_subscribers(Hook.post_call_success, guardrail_callbacks),
             fields,
             partial(self._post_call_guardrail_start, run, guardrails),
+            call=facts,
         )
         run.raise_flow_change()
         await run_hook_subscribers(
             hook_subscribers(Hook.post_call_success, other_callbacks),
             fields,
             partial(self._post_call_logger, run, data, user_api_key_dict),
+            call=facts,
         )
         return run.response
 
@@ -4854,7 +5002,11 @@ class ProxyLogging:
             litellm_call_info: Final = self._build_litellm_call_info(data=data, response=response)
             await run_hook_subscribers(
                 hook_subscribers(Hook.response_headers, litellm.callbacks, admit=Admit.every_entry),
-                hook_fields(data, HookRun(response=merged_headers), Field.response_headers),
+                with_sources(
+                    hook_fields(data, HookRun(response=merged_headers), Field.response_headers),
+                    DERIVED_RESPONSE_HEADERS_FIELDS,
+                    HookArgs(auth=user_api_key_dict, request=data),  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
+                ),
                 partial(
                     self._response_headers_one,
                     merged_headers,
@@ -4864,6 +5016,7 @@ class ProxyLogging:
                     request_headers,
                     litellm_call_info,
                 ),
+                call=partial(post_call_facts, data, user_api_key_dict),
             )
         except Exception as e:
             verbose_proxy_logger.exception("Error in post_call_response_headers_hook: %s", str(e))
@@ -4901,6 +5054,10 @@ class ProxyLogging:
         )
         if result is not None:
             merged_headers.update(result)
+
+    @staticmethod
+    def filters_listed_models() -> bool:
+        return bool(hook_subscribers(Hook.list_models, ProxyLogging.callback_capabilities().hook_callbacks).entries)
 
     async def hidden_by_listing_callbacks(
         self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
@@ -5180,8 +5337,17 @@ class ProxyLogging:
         # completed.  unified_guardrail writes guardrail_information during
         # its end-of-stream block (inside current_response), so by the time
         # we reach this point the metadata is fully populated.
-        await ProxyLogging._record_served_stream_output(request_data, served_chunks)
-        ProxyLogging.fire_deferred_stream_logging(request_data)
+        # Rebuilding the served output only feeds logging, so it runs after the stream closes,
+        # unless enough rebuilds are already pending that this stream should wait like it used to.
+        if len(_ROOTED_STREAM_LOGGING_TASKS) >= _MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS:
+            await ProxyLogging._record_served_stream_output(request_data, served_chunks)
+            ProxyLogging.fire_deferred_stream_logging(request_data)
+            return
+        ProxyLogging._spawn_rooted(
+            ProxyLogging._log_served_stream(
+                request_data, served_chunks, ProxyLogging._take_deferred_stream_logging(request_data)
+            )
+        )
 
     async def async_post_call_event_stream_iterator_hook(
         self,
@@ -5444,6 +5610,39 @@ class ProxyLogging:
         record_served_output_texts(logging_obj.model_call_details, texts)
 
     @staticmethod
+    async def _log_served_stream(
+        request_data: Mapping[str, object],
+        served_chunks: Sequence[object],
+        deferred_logging: Coroutine[object, object, object] | None,
+    ) -> None:
+        try:
+            await ProxyLogging._record_served_stream_output(request_data, served_chunks)
+        finally:
+            if deferred_logging is not None:
+                _ = await deferred_logging
+
+    @staticmethod
+    def _spawn_rooted(work: Coroutine[object, object, None]) -> None:
+        task: Final = asyncio.create_task(work)
+        _ROOTED_STREAM_LOGGING_TASKS.add(task)
+        task.add_done_callback(_ROOTED_STREAM_LOGGING_TASKS.discard)
+
+    @staticmethod
+    def _take_deferred_stream_logging(request_data: Mapping[str, object]) -> Coroutine[object, object, object] | None:
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        if logging_obj is None:
+            return None
+        _deferred_cb: Final[Callable[..., Coroutine[object, object, object]] | None] = getattr(
+            logging_obj, "_on_deferred_stream_complete", None
+        )
+        _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
+        if _deferred_cb is None or _args is None:
+            return None
+        logging_obj._on_deferred_stream_complete = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
+        logging_obj._deferred_stream_complete_args = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
+        return _deferred_cb(*_args)
+
+    @staticmethod
     def fire_deferred_stream_logging(request_data: dict) -> None:
         """
         Fire the deferred streaming logging callback after the full streaming
@@ -5453,17 +5652,9 @@ class ProxyLogging:
         scheduling via create_task (which would race with unified_guardrail's
         end-of-stream block).  This method retrieves and fires them.
         """
-        logging_obj: Final = request_data.get("litellm_logging_obj")
-        if logging_obj is None:
-            return
-        _deferred_cb: Final[Callable[..., Coroutine[object, object, object]] | None] = getattr(
-            logging_obj, "_on_deferred_stream_complete", None
-        )
-        _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
-        if _deferred_cb is not None and _args is not None:
-            logging_obj._on_deferred_stream_complete = None
-            logging_obj._deferred_stream_complete_args = None
-            asyncio.create_task(_deferred_cb(*_args))
+        deferred_logging: Final = ProxyLogging._take_deferred_stream_logging(request_data)
+        if deferred_logging is not None:
+            asyncio.create_task(deferred_logging)
 
     _fire_deferred_stream_logging = fire_deferred_stream_logging
 

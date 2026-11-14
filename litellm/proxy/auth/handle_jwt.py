@@ -2277,12 +2277,13 @@ class JWTAuthManager:
     ) -> None:
         """Attach team context from x-litellm-team-id to an admin result.
 
-        Only applies on LLM API routes so team TPM/RPM limits and attribution
-        are enforced when admins act on behalf of a team. Admin management
-        routes ignore the header to preserve pre-existing bypass behavior.
+        Only applies on inference routes (LLM API routes and the queued chat
+        route) so team TPM/RPM limits and attribution are enforced when admins
+        act on behalf of a team. Admin management routes ignore the header to
+        preserve pre-existing bypass behavior.
         """
         header_team_id: Final = request_headers.get("x-litellm-team-id") if request_headers else None
-        if not header_team_id or not RouteChecks.is_llm_api_route(route=route):
+        if not header_team_id or not RouteChecks.runs_inference_checks(route=route):
             return
         try:
             team_object: Final = await get_team_object(

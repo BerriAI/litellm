@@ -37,7 +37,7 @@ mod _native {
     #[pymodule_export]
     use crate::http::unsupported_tls_settings;
     #[pymodule_export]
-    use crate::logger::NativeDiagnosticProcessor;
+    use crate::logger::{NativeDiagnosticProcessor, NativeTokenRedactor};
     #[pymodule_export]
     use crate::model_cost::{
         NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched, NativeInstalled,
@@ -151,6 +151,7 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
+                "NativeTokenRedactor",
                 "NativeRedisClient",
                 "NativeRedisBreaker",
                 "NativeAdmission",
