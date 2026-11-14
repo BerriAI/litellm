@@ -683,6 +683,10 @@ def billed_input_token_minimum(info: Mapping[str, object]) -> int:
         return 0
 
 
+def deployment_billed_input_token_minimum(model_info: Mapping[str, object]) -> int | None:
+    return None if model_info.get("min_billed_input_tokens") is None else billed_input_token_minimum(model_info)
+
+
 def unbilled_minimum_input_tokens(model_info: ModelInfo, prompt_tokens: int) -> int:
     if prompt_tokens <= 0:
         return 0

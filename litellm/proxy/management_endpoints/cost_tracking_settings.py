@@ -21,6 +21,7 @@ from litellm._internal_context import current_billing_time, pinned_billing_time
 from litellm._logging import verbose_proxy_logger
 from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.cost_discount import parse_cost_discount_key
+from litellm.litellm_core_utils.llm_cost_calc.utils import deployment_billed_input_token_minimum
 from litellm.proxy._types import (
     CommonProxyErrors,
     CostEstimateRequest,
@@ -84,6 +85,7 @@ def _extract_custom_pricing(
         output_cost_per_token=output_price or 0.0,
         cache_read_input_token_cost=input_rate if cache_read_price is None else cache_read_price,
         cache_creation_input_token_cost=input_rate if cache_creation_price is None else cache_creation_price,
+        min_billed_input_tokens=deployment_billed_input_token_minimum(model_info),
     )
 
 

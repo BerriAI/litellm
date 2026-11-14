@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     billed_input_token_minimum,
     calculate_cache_writing_cost,
+    deployment_billed_input_token_minimum,
     generic_cost_per_character,
     generic_cost_per_token,
     get_batch_cost_rates,
@@ -580,7 +581,12 @@ def cost_per_token(
         _normalized_prompt_tokens += _cache_read_tokens + _cache_creation_tokens
 
     billed_prompt_tokens: Final = (
-        max(_normalized_prompt_tokens, _min_billed_input_tokens(model, custom_llm_provider))
+        max(
+            _normalized_prompt_tokens,
+            _custom_rate_input_minimum(
+                custom_cost_per_token, requested_model_info_override, model, custom_llm_provider
+            ),
+        )
         if custom_cost_per_token is not None and _normalized_prompt_tokens > 0
         else _normalized_prompt_tokens
     )
@@ -2826,7 +2832,20 @@ def _raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
     return raw_entry if isinstance(raw_entry, Mapping) else None
 
 
-def _min_billed_input_tokens(model: str, custom_llm_provider: str | None) -> int:
+def _custom_rate_input_minimum(
+    custom_cost_per_token: CostPerToken,
+    requested_model_info: ModelInfo | None,
+    model: str,
+    custom_llm_provider: str | None,
+) -> int:
+    configured_minimum: Final = custom_cost_per_token.get("min_billed_input_tokens")
+    if configured_minimum is not None:
+        return configured_minimum
+    deployment_minimum: Final = (
+        None if requested_model_info is None else deployment_billed_input_token_minimum(requested_model_info)
+    )
+    if deployment_minimum is not None:
+        return deployment_minimum
     cost_entry: Final = _raw_cost_map_entry(model) or _raw_cost_map_entry(f"{custom_llm_provider}/{model}") or {}
     return billed_input_token_minimum(cost_entry)
 

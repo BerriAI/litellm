@@ -12058,6 +12058,63 @@ def test_a_billing_minimum_written_the_way_the_cost_map_guard_accepts_bills_the_
     assert prompt_cost == pytest.approx(600 * 2e-6)
 
 
+_MODEL_INFO: Final = TypeAdapter(ModelInfo)
+
+
+@pytest.mark.parametrize(
+    ("rates_minimum", "model_info_minimum", "billed_prompt_tokens"),
+    [(None, None, 600), (0, None, 10), (1000, None, 1000), (None, 0, 10), (None, 1000, 1000)],
+    ids=[
+        "inherits_cost_map_minimum",
+        "rates_waive_the_minimum",
+        "rates_raise_the_minimum",
+        "model_info_waives_the_minimum",
+        "model_info_raises_the_minimum",
+    ],
+)
+def test_custom_rates_bill_the_deployment_minimum_over_the_cost_map_minimum(
+    _local_model_cost_map,
+    monkeypatch: pytest.MonkeyPatch,
+    rates_minimum: int | None,
+    model_info_minimum: int | None,
+    billed_prompt_tokens: int,
+) -> None:
+    model: Final = "deployment-minimum-fixture"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 1e-6,
+            "min_billed_input_tokens": 600,
+        },
+    )
+
+    prompt_cost, _ = litellm.cost_per_token(
+        model=model,
+        custom_llm_provider="openai",
+        prompt_tokens=10,
+        completion_tokens=1,
+        custom_cost_per_token=CostPerToken(
+            input_cost_per_token=2e-6, output_cost_per_token=5e-6, min_billed_input_tokens=rates_minimum
+        ),
+        requested_model_info_override=(
+            None
+            if model_info_minimum is None
+            else _MODEL_INFO.validate_python(
+                {
+                    **litellm.get_model_info(model=model, custom_llm_provider="openai"),
+                    "min_billed_input_tokens": model_info_minimum,
+                }
+            )
+        ),
+    )
+
+    assert prompt_cost == pytest.approx(billed_prompt_tokens * 2e-6)
+
+
 _REPORTED_TOTAL: Final = 0.037
 
 
