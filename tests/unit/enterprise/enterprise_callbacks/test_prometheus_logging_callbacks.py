@@ -1,7 +1,9 @@
 
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from typing import Final, TypeAlias
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -25,12 +27,19 @@ except Exception:
     PrometheusLogger = None
 from litellm.proxy._types import UserAPIKeyAuth
 
+DeploymentStateValues: TypeAlias = Callable[[str], list[float]]
+
+REQUEST_SERIES: Final = {
+    "litellm_model_name": "gpt-5.4-mini",
+    "model_id": "dep-1",
+    "api_base": "https://api.openai.com/v1",
+    "api_provider": "openai",
+}
+LABELS_DERIVED_FROM_CONFIG: Final = {**REQUEST_SERIES, "litellm_model_name": "prod-chat", "api_base": ""}
+
 
 @pytest.fixture
-def prometheus_logger() -> PrometheusLogger:
-    collectors = list(REGISTRY._collector_to_names.keys())
-    for collector in collectors:
-        REGISTRY.unregister(collector)
+def prometheus_logger(isolated_prometheus_registry: None) -> PrometheusLogger:
     return PrometheusLogger()
 
 
@@ -1189,6 +1198,134 @@ def test_deployment_state_management(prometheus_logger):
     # Test set_deployment_complete_outage (state=2)
     prometheus_logger.set_deployment_complete_outage(**test_params)
     prometheus_logger.litellm_deployment_state.labels().set.assert_called_with(2)
+
+
+def test_the_public_state_setter_writes_the_given_labels_straight_to_the_gauge(
+    prometheus_logger: PrometheusLogger, deployment_state_values: DeploymentStateValues
+) -> None:
+    prometheus_logger.set_litellm_deployment_state(2, "gpt-5.4-mini", "dep-1", "https://api.openai.com/v1", "openai")
+
+    assert deployment_state_values("dep-1") == [2.0]
+
+
+@pytest.mark.parametrize("record_request_outcome", ["set_deployment_healthy", "set_deployment_partial_outage"])
+def test_cooldown_marks_the_series_the_request_path_wrote_and_the_next_success_clears_it(
+    prometheus_logger: PrometheusLogger, deployment_state_values: DeploymentStateValues, record_request_outcome: str
+) -> None:
+    prometheus_logger.set_deployment_healthy(**{**REQUEST_SERIES, "model_id": "dep-2"})
+    getattr(prometheus_logger, record_request_outcome)(**REQUEST_SERIES)
+
+    prometheus_logger.set_deployment_complete_outage(**LABELS_DERIVED_FROM_CONFIG)
+
+    assert deployment_state_values("dep-1") == [2.0]
+    assert deployment_state_values("dep-2") == [0.0]
+
+    prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
+
+    assert deployment_state_values("dep-1") == [0.0]
+
+
+def test_cooldown_before_any_request_series_is_cleared_by_the_next_success(
+    prometheus_logger: PrometheusLogger, deployment_state_values: DeploymentStateValues
+) -> None:
+    prometheus_logger.set_deployment_complete_outage(**LABELS_DERIVED_FROM_CONFIG)
+    prometheus_logger.set_deployment_partial_outage(**REQUEST_SERIES)
+
+    assert deployment_state_values("dep-1") == [2.0, 2.0]
+
+    prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
+
+    assert deployment_state_values("dep-1") == [0.0, 0.0]
+
+
+def test_a_failure_logged_after_the_cooldown_keeps_the_series_at_two_until_the_next_success(
+    prometheus_logger: PrometheusLogger, deployment_state_values: DeploymentStateValues
+) -> None:
+    prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
+    prometheus_logger.set_deployment_complete_outage(**LABELS_DERIVED_FROM_CONFIG)
+
+    prometheus_logger.set_deployment_partial_outage(**REQUEST_SERIES)
+
+    assert deployment_state_values("dep-1") == [2.0]
+
+    prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
+
+    assert deployment_state_values("dep-1") == [0.0]
+
+
+def test_a_second_cooldown_leaves_no_series_stuck_at_two_after_the_next_success(
+    prometheus_logger: PrometheusLogger, deployment_state_values: DeploymentStateValues
+) -> None:
+    prometheus_logger.set_deployment_complete_outage(**LABELS_DERIVED_FROM_CONFIG)
+    prometheus_logger.set_deployment_partial_outage(**REQUEST_SERIES)
+    prometheus_logger.set_deployment_complete_outage(**LABELS_DERIVED_FROM_CONFIG)
+
+    prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
+
+    assert deployment_state_values("dep-1") == [0.0, 0.0]
+
+
+def test_cooldown_marks_every_series_written_since_the_last_success_and_the_next_success_clears_them(
+    prometheus_logger: PrometheusLogger, deployment_state_values: DeploymentStateValues
+) -> None:
+    streaming_series: Final = {**REQUEST_SERIES, "api_base": "https://api.openai.com/v1/streaming"}
+    prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
+    prometheus_logger.set_deployment_partial_outage(**streaming_series)
+
+    prometheus_logger.set_deployment_complete_outage(**LABELS_DERIVED_FROM_CONFIG)
+
+    assert deployment_state_values("dep-1") == [2.0, 2.0]
+
+    prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
+
+    assert deployment_state_values("dep-1") == [0.0, 0.0]
+
+
+def test_a_failure_after_the_deployment_recovered_from_a_cooldown_is_a_partial_outage_again(
+    prometheus_logger: PrometheusLogger, deployment_state_values: DeploymentStateValues
+) -> None:
+    prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
+    prometheus_logger.set_deployment_complete_outage(**LABELS_DERIVED_FROM_CONFIG)
+    prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
+
+    prometheus_logger.set_deployment_partial_outage(**REQUEST_SERIES)
+
+    assert deployment_state_values("dep-1") == [1.0]
+
+
+def test_every_failure_logged_after_a_cooldown_stays_at_two(
+    prometheus_logger: PrometheusLogger, deployment_state_values: DeploymentStateValues
+) -> None:
+    prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
+    prometheus_logger.set_deployment_complete_outage(**LABELS_DERIVED_FROM_CONFIG)
+
+    prometheus_logger.set_deployment_partial_outage(**REQUEST_SERIES)
+    prometheus_logger.set_deployment_partial_outage(**REQUEST_SERIES)
+
+    assert deployment_state_values("dep-1") == [2.0]
+
+
+def test_a_cooldown_leaves_a_series_the_deployment_stopped_reporting_before_its_last_success_alone(
+    prometheus_logger: PrometheusLogger, deployment_state_values: DeploymentStateValues
+) -> None:
+    stale_series: Final = {**REQUEST_SERIES, "api_base": "https://api.openai.com/v1/stale"}
+    prometheus_logger.set_deployment_partial_outage(**stale_series)
+    prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
+
+    prometheus_logger.set_deployment_complete_outage(**LABELS_DERIVED_FROM_CONFIG)
+
+    assert deployment_state_values("dep-1") == [1.0, 2.0]
+
+
+def test_a_success_leaves_the_partial_outage_of_another_series_alone_when_no_cooldown_happened(
+    prometheus_logger: PrometheusLogger, deployment_state_values: DeploymentStateValues
+) -> None:
+    other_series: Final = {**REQUEST_SERIES, "litellm_model_name": "gpt-5.6"}
+    prometheus_logger.set_deployment_partial_outage(**other_series)
+
+    prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
+
+    assert deployment_state_values("dep-1") == [0.0, 1.0]
 
 
 def test_increment_deployment_cooled_down(prometheus_logger):
