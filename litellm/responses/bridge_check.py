@@ -83,6 +83,10 @@ def _chat_gate_refuses_reasoning_effort_none(model: str, custom_llm_provider: st
             return OpenAIGPT5Config.refuses_reasoning_effort_level(model, "none")
 
 
+def serves_only_responses(model: str, custom_llm_provider: str) -> bool:
+    return custom_llm_provider == LlmProviders.VERTEX_AI.value and is_vertex_muse_model(model)
+
+
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
@@ -119,7 +123,7 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
-    if custom_llm_provider == LlmProviders.VERTEX_AI.value and is_vertex_muse_model(model):
+    if serves_only_responses(model, custom_llm_provider):
         model_info["mode"] = "responses"
 
     if web_search_options is not None and custom_llm_provider == "xai":
