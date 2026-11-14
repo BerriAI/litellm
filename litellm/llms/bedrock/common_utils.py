@@ -94,27 +94,46 @@ def _reports_zero_usage(body: Mapping[str, object]) -> bool:
     return bool(counts) and all(count == 0 for count in counts)
 
 
-def _reports_no_invocation(event: Mapping[str, object]) -> bool:
+def _reports_model_run(event: Mapping[str, object]) -> bool:
     metrics: Final = object_mapping(event.get(_BEDROCK_INVOKE_INVOCATION_METRICS_FIELD))
-    return metrics is None or metrics.get("invocationLatency") == 0
+    return metrics is not None and metrics.get("invocationLatency") != 0
 
 
-def _guardrail_blocked(
-    payload: Mapping[str, object], blocked_without_trace: Callable[[Mapping[str, object]], bool]
-) -> bool:
-    if payload.get(_BEDROCK_INVOKE_GUARDRAIL_ACTION_FIELD) != "INTERVENED":
-        return False
+def _intervened(payload: Mapping[str, object]) -> bool:
+    return payload.get(_BEDROCK_INVOKE_GUARDRAIL_ACTION_FIELD) == "INTERVENED"
+
+
+def _trace_actions(payload: Mapping[str, object]) -> frozenset[str] | None:
     trace: Final = object_mapping(payload.get(BEDROCK_INVOKE_TRACE_FIELD))
-    actions: Final = None if trace is None else guardrail_trace_actions(trace)
-    return blocked_without_trace(payload) if actions is None else "BLOCKED" in actions
+    return None if trace is None else guardrail_trace_actions(trace)
 
 
 def bedrock_invoke_guardrail_blocked(body: Mapping[str, object]) -> bool:
-    return _guardrail_blocked(body, _reports_zero_usage)
+    if not _intervened(body):
+        return False
+    actions: Final = _trace_actions(body)
+    return _reports_zero_usage(body) if actions is None else "BLOCKED" in actions
 
 
-def bedrock_invoke_stream_guardrail_blocked(event: Mapping[str, object]) -> bool:
-    return _guardrail_blocked(event, _reports_no_invocation)
+@dataclass(frozen=True, slots=True)
+class BedrockInvokeStreamGuardrail:
+    intervened: bool = False
+    trace_actions: frozenset[str] | None = None
+    model_ran: bool = False
+
+    def with_event(self, event: Mapping[str, object]) -> BedrockInvokeStreamGuardrail:
+        actions: Final = _trace_actions(event)
+        return BedrockInvokeStreamGuardrail(
+            intervened=self.intervened or _intervened(event),
+            trace_actions=self.trace_actions if actions is None else actions | (self.trace_actions or frozenset()),
+            model_ran=self.model_ran or _reports_model_run(event),
+        )
+
+    @property
+    def blocked(self) -> bool:
+        if not self.intervened:
+            return False
+        return not self.model_ran if self.trace_actions is None else "BLOCKED" in self.trace_actions
 
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"

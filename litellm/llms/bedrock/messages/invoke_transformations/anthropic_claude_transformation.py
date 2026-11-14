@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast
 
 import httpx
 from pydantic import TypeAdapter
@@ -41,9 +41,9 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
     BedrockError,
+    BedrockInvokeStreamGuardrail,
     apply_bedrock_invoke_structured_output,
     bedrock_invoke_guardrail_blocked,
-    bedrock_invoke_stream_guardrail_blocked,
     bedrock_native_output_format,
     bedrock_native_output_retry_requested,
     bedrock_supports_per_turn_control,
@@ -1098,34 +1098,41 @@ class AmazonAnthropicClaudeMessagesConfig(
             yield pending_delta
 
 
-def _refused(message_delta: GChunk | dict[str, object]) -> dict[str, object]:  # mutable-ok: stream chunks are dicts
-    delta: Final = object_mapping(message_delta.get("delta"))
-    return {**message_delta, "delta": {**(delta or {}), "stop_reason": "refusal"}}
+_MessagesStreamChunk: TypeAlias = GChunk | ModelResponseStream | dict[str, object]
+
+
+def _is_message_delta(chunk: _MessagesStreamChunk) -> bool:
+    return isinstance(chunk, dict) and chunk.get("type") == "message_delta"
+
+
+def _refused(chunk: _MessagesStreamChunk) -> _MessagesStreamChunk:
+    if not isinstance(chunk, dict) or chunk.get("type") != "message_delta":
+        return chunk
+    delta: Final = object_mapping(chunk.get("delta"))
+    return {**chunk, "delta": {**(delta or {}), "stop_reason": "refusal"}}
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
     def __init__(self, model: str, json_mode: bool | None = False) -> None:
         super().__init__(model=model, json_mode=json_mode)
-        self._held_message_delta: GChunk | dict[str, object] | None = None  # mutable-ok: stream chunks are dicts
+        self._guardrail: BedrockInvokeStreamGuardrail = BedrockInvokeStreamGuardrail()
+        self._tail: tuple[_MessagesStreamChunk, ...] = ()
 
     def _chunks_for_event(
         self,
         chunk_data: dict[str, object],  # mutable-ok: chunk_parser takes the decoded event as is
-    ) -> tuple[GChunk | ModelResponseStream | dict[str, object], ...]:  # mutable-ok: mirrors override contract
-        blocked: Final = bedrock_invoke_stream_guardrail_blocked(chunk_data)
+    ) -> tuple[_MessagesStreamChunk, ...]:
+        self._guardrail = self._guardrail.with_event(chunk_data)
         parsed: Final = self.chunk_parser(chunk_data=chunk_data)
-        held: Final = self._held_chunks()
-        if isinstance(parsed, dict) and parsed.get("type") == "message_delta":
-            self._held_message_delta = parsed
-            return held
-        if blocked:
-            return (*map(_refused, held), parsed)
-        return (*held, parsed)
+        if not self._tail and not _is_message_delta(parsed):
+            return (parsed,)
+        self._tail = (*self._tail, parsed)
+        return ()
 
-    def _held_chunks(self) -> tuple[GChunk | dict[str, object], ...]:  # mutable-ok: stream chunks are dicts
-        held: Final = self._held_message_delta
-        self._held_message_delta = None
-        return () if held is None else (held,)
+    def _held_chunks(self) -> tuple[_MessagesStreamChunk, ...]:
+        tail: Final = self._tail
+        self._tail = ()
+        return tuple(map(_refused, tail)) if self._guardrail.blocked else tail
 
     def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         """
