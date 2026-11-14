@@ -201,7 +201,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         Some providers like Bedrock require signing the request. The sign request funtion needs access to `request_data` and `complete_url`
         Args:
             headers: dict
-            optional_params: dict
+            litellm_params: dict
             request_data: dict - the request body being sent in http request
             api_base: str - the complete url being sent in http request
         Returns:
