@@ -165,6 +165,7 @@ async fn deployment_sampling_params_sit_under_the_client_body(
     json!([{"type": "dangerous_tool_use", "classifier_context": {"v": 1}}]),
 )]
 #[case::service_tier("service_tier", json!("auto"))]
+#[case::thread("thread", json!({"type": "create"}))]
 #[tokio::test]
 async fn a_deployment_default_reaches_the_provider_as_the_same_client_value(
     #[case] name: &str,

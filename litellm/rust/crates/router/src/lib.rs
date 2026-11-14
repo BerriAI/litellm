@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use litellm_config::{Config, Spelled};
 use litellm_core_utils::{serde_compat::parse_pydantic_bool, settings::Lookup};
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
+use litellm_llms::anthropic::model_capabilities::anthropic_model_capabilities;
+use litellm_model_catalog::Catalog;
 
 pub use deployment::Deployment;
 
@@ -25,7 +27,7 @@ fn is_on(flag: Option<&Spelled<bool>>, env: &impl Lookup) -> bool {
 }
 
 impl Router {
-    pub fn from_config(config: &Config, env: &impl Lookup) -> Self {
+    pub fn from_config(config: &Config, env: &impl Lookup, catalog: &Catalog) -> Self {
         let drops_params_globally = is_on(config.litellm_settings.drop_params.as_ref(), env);
         config
             .model_list
@@ -51,7 +53,22 @@ impl Router {
                                 drops_unsupported_params: drop_params,
                                 ..MessagesSettings::default()
                             },
-                            ..MessagesShaping::default()
+                            capabilities: anthropic_model_capabilities(
+                                catalog,
+                                &model.litellm_params.model,
+                                model.litellm_params.custom_llm_provider.as_deref(),
+                                model
+                                    .litellm_params
+                                    .extra
+                                    .get("base_model")
+                                    .and_then(|value| value.as_str()),
+                                &|capability| {
+                                    model
+                                        .model_info
+                                        .get(capability)
+                                        .and_then(|value| value.as_bool())
+                                },
+                            ),
                         },
                         ..Deployment::default()
                     },
@@ -74,6 +91,7 @@ impl FromIterator<(String, Deployment)> for Router {
 #[cfg(test)]
 mod tests {
     use litellm_config::Config;
+    use litellm_model_catalog::Catalog;
     use rstest::rstest;
 
     use super::Router;
@@ -115,9 +133,13 @@ mod tests {
         ))
         .unwrap();
 
-        let settings = Router::from_config(&config, &|name: &str| {
-            (name == "DROP_PARAMS_FLAG").then(|| " Yes ".to_owned())
-        })
+        let settings = Router::from_config(
+            &config,
+            &|name: &str| (name == "DROP_PARAMS_FLAG").then(|| " Yes ".to_owned()),
+            &Catalog::parse(br#"{"provider-model": {"litellm_provider": "provider"}}"#)
+                .unwrap()
+                .value,
+        )
         .get("public-model")
         .unwrap()
         .shaping
@@ -127,6 +149,33 @@ mod tests {
         assert_eq!(
             (settings.drop_params, settings.drops_unsupported_params),
             (expected, expected)
+        );
+    }
+
+    #[rstest]
+    #[case::declared("\n    model_info:\n      supports_reasoning: true", true)]
+    #[case::declared_off("\n    model_info:\n      supports_reasoning: false", false)]
+    #[case::undeclared("", false)]
+    fn model_info_flags_reach_the_deployment(#[case] model_info: &str, #[case] expected: bool) {
+        let config = Config::from_yaml(&format!(
+            "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: anthropic/claude-unlisted-9{model_info}"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            Router::from_config(
+                &config,
+                &|_: &str| None,
+                &Catalog::parse(br#"{"provider-model": {"litellm_provider": "provider"}}"#)
+                    .unwrap()
+                    .value
+            )
+            .get("public-model")
+            .unwrap()
+            .shaping
+            .capabilities
+            .supports_reasoning,
+            expected
         );
     }
 }

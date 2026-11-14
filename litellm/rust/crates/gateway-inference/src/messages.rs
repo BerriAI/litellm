@@ -25,7 +25,7 @@ const OPENROUTER_API_HEADERS: [&str; 2] = [
 ];
 const ANTHROPIC_API_HEADER_PROVIDERS: &str =
     "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
-const DEPLOYMENT_DEFAULT_PARAMS: [&str; 22] = [
+const DEPLOYMENT_DEFAULT_PARAMS: [&str; 23] = [
     "max_tokens",
     "metadata",
     "stop_sequences",
@@ -48,6 +48,7 @@ const DEPLOYMENT_DEFAULT_PARAMS: [&str; 22] = [
     "reasoning_effort",
     "safeguards",
     "service_tier",
+    "thread",
 ];
 
 pub async fn create(
