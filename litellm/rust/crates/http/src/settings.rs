@@ -3,10 +3,8 @@ use std::{
     time::Duration,
 };
 
-use litellm_core_utils::{
-    serde_compat::parse_str_bool,
-    settings::{Layer, Lookup, merge},
-};
+use litellm_core_utils::settings::{Layer, Lookup, merge};
+use litellm_python_compat::boolean::str_to_bool;
 
 use crate::proxy::EnvironmentProxies;
 
@@ -19,7 +17,7 @@ pub enum SslVerify {
 
 impl SslVerify {
     pub fn parse(value: &str) -> Self {
-        match parse_str_bool(value) {
+        match str_to_bool(value) {
             Some(true) => Self::Enabled,
             Some(false) => Self::Disabled,
             _ => Self::CaBundle(PathBuf::from(value)),

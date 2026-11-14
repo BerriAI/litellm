@@ -10,6 +10,7 @@ fancy-regex.workspace = true
 litellm-error.workspace = true
 litellm-tracing.workspace = true
 litellm-llms-types.workspace = true
+litellm-python-compat.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error = "0.1"

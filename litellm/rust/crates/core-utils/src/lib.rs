@@ -8,6 +8,5 @@ pub mod get_provider_specific_headers;
 pub mod params;
 pub mod prompt_templates;
 pub mod secret_redaction;
-pub mod serde_compat;
 pub mod settings;
 pub mod url_utils;

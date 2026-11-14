@@ -3761,6 +3761,7 @@ dependencies = [
  "fancy-regex 0.19.2",
  "litellm-error",
  "litellm-llms-types",
+ "litellm-python-compat",
  "litellm-tracing",
  "rstest",
  "serde",
@@ -4109,6 +4110,7 @@ dependencies = [
  "hyper-util",
  "litellm-core-utils",
  "litellm-error",
+ "litellm-python-compat",
  "rcgen",
  "reqwest",
  "rstest",
@@ -4624,6 +4626,7 @@ dependencies = [
  "litellm-core-utils",
  "litellm-inference",
  "litellm-inference-messages",
+ "litellm-python-compat",
  "litellm-router-types",
  "rstest",
 ]

@@ -1,6 +1,7 @@
 - Pure Python *data formats* in Rust, for state Python LiteLLM writes and Rust must read or write byte-compatibly
   - No PyO3, no live objects: truthiness, `__str__`, descriptors of real Python objects belong to `python-bridge`'s coercion layer
   - Format *choices* stay with callers: the `{timestamp, response}` envelope, diskcache modes, and the cache-key recipe live in the cache crates and only call into this crate
+- LiteLLM's string-to-bool readers (`str_to_bool`, `lax_bool`) live in `boolean`, since config, env and secret values all go through them. Domain crates call these, never re-trim or re-match tokens themselves
 - Intended users
   - `cache-response` codec: reading `str(dict)` values Python's sync Redis path writes (`literal_eval`)
   - `cache-disk`: diskcache's pickled values (`pickle`), falsy-is-miss (`truthy`)
