@@ -15,6 +15,8 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+    TOOL_RESULT_MEDIA_BOUNDARY,
+    TOOL_RESULT_MEDIA_PLACEHOLDER,
     encrypted_reasoning_signature,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -4744,23 +4746,70 @@ def _base64_pdf_block():
     }
 
 
-def test_tool_result_single_document_kept_as_pdf_data_url():
-    adapter = LiteLLMAnthropicMessagesAdapter()
-    translated = adapter.translate_anthropic_messages_to_openai(
-        messages=[
+@pytest.mark.parametrize(
+    ("leading_blocks", "expected_tool_content"),
+    [
+        ((), TOOL_RESULT_MEDIA_PLACEHOLDER),
+        (
+            ({"type": "text", "text": "PDF file read: pong.pdf (579 bytes)"},),
+            [{"type": "text", "text": "PDF file read: pong.pdf (579 bytes)"}],
+        ),
+    ],
+    ids=["document_only", "text_and_document"],
+)
+def test_tool_result_pdf_document_reaches_openai_compatible_providers_as_file_part(
+    leading_blocks: tuple[dict[str, str], ...], expected_tool_content: object
+) -> None:
+    request_messages: Final = _run_chat_completions_pipeline(
+        [
             _anthropic_tool_use_turn("toolu_01"),
-            _anthropic_tool_result_turn({"toolu_01": [_base64_pdf_block()]}),
+            _anthropic_tool_result_turn({"toolu_01": [*leading_blocks, _base64_pdf_block()]}),
         ]
     )
 
-    tool_messages = [m for m in translated if m.get("role") == "tool"]
-    assert len(tool_messages) == 1
-    assert tool_messages[0]["content"] == [
+    assert request_messages[1:] == [
+        {"role": "tool", "tool_call_id": "toolu_01", "content": expected_tool_content},
         {
-            "type": "image_url",
-            "image_url": {"url": f"data:application/pdf;base64,{TOOL_RESULT_PDF_B64}"},
-        }
+            "role": "user",
+            "content": [
+                {"type": "text", "text": TOOL_RESULT_MEDIA_BOUNDARY},
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "document.pdf",
+                        "file_data": f"data:application/pdf;base64,{TOOL_RESULT_PDF_B64}",
+                    },
+                },
+            ],
+        },
     ]
+
+
+@pytest.mark.parametrize(
+    ("document", "expected_part"),
+    [
+        (
+            {**_base64_pdf_block(), "title": "pong.pdf"},
+            {
+                "type": "file",
+                "file": {"filename": "pong.pdf", "file_data": f"data:application/pdf;base64,{TOOL_RESULT_PDF_B64}"},
+            },
+        ),
+        (
+            {"type": "document", "source": {"type": "url", "url": "https://example.com/pong.pdf"}},
+            {"type": "image_url", "image_url": {"url": "https://example.com/pong.pdf"}},
+        ),
+    ],
+    ids=["titled_base64_source", "url_source"],
+)
+def test_tool_result_document_is_named_by_its_title_and_a_url_source_stays_an_image_url(
+    document: dict[str, object], expected_part: dict[str, object]
+) -> None:
+    translated: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=[_anthropic_tool_use_turn("toolu_01"), _anthropic_tool_result_turn({"toolu_01": [document]})]
+    )
+
+    assert translated[1:] == [{"role": "tool", "tool_call_id": "toolu_01", "content": [expected_part]}]
 
 
 def test_tool_result_text_and_document_reach_bedrock_converse_tool_result():

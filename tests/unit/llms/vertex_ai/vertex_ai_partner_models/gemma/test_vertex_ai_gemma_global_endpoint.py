@@ -13,12 +13,14 @@ These tests verify that:
 
 import json
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
@@ -422,3 +424,77 @@ async def test_vertex_ai_gemma_vision_passthrough():
         assert isinstance(content, list), f"Expected list content, got: {content}"
         image_parts = [p for p in content if p.get("type") == "image_url"]
         assert image_parts, f"No image_url part in forwarded message content: {content}"
+
+
+_PDF_DATA_URL: Final = "data:application/pdf;base64,JVBERi0xLjQKJcfsj6IKMSAwIG9iago8PD4+CmVuZG9iagp0cmFpbGVyCjw8Pj4KJSVFT0YK"
+_PDF_FILE_PART: Final = {"type": "file", "file": {"file_data": _PDF_DATA_URL, "filename": "report.pdf"}}
+_PDF_IMAGE_URL_PART: Final = {"type": "image_url", "image_url": {"url": _PDF_DATA_URL}}
+_READ_TOOL_CALL: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [{"id": "toolu_01", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+}
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected_tail"),
+    [
+        (
+            [{"role": "user", "content": [{"type": "text", "text": "What does the PDF say?"}, _PDF_FILE_PART]}],
+            [{"role": "user", "content": [{"type": "text", "text": "What does the PDF say?"}, _PDF_IMAGE_URL_PART]}],
+        ),
+        (
+            [
+                {"role": "user", "content": "Read report.pdf"},
+                _READ_TOOL_CALL,
+                {
+                    "role": "tool",
+                    "tool_call_id": "toolu_01",
+                    "content": [{"type": "text", "text": "PDF file read"}, _PDF_FILE_PART],
+                },
+            ],
+            [
+                {"role": "tool", "tool_call_id": "toolu_01", "content": [{"type": "text", "text": "PDF file read"}]},
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY}, _PDF_IMAGE_URL_PART],
+                },
+            ],
+        ),
+    ],
+    ids=["user_message", "tool_message"],
+)
+@pytest.mark.asyncio
+async def test_vertex_ai_gemma_pdf_file_part_is_sent_as_image_url(
+    messages: list[dict[str, object]], expected_tail: list[dict[str, object]]
+) -> None:
+    mock_response: Final = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {}
+    mock_response.json.return_value = _MOCK_RESPONSE_JSON
+
+    mock_vertexai: Final = MagicMock()
+    mock_vertexai.preview = MagicMock()
+
+    with (
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler,
+        patch(
+            "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels._ensure_access_token",
+            return_value=("fake-token", "test-project"),
+        ),
+        patch.dict(
+            "sys.modules",
+            {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview},
+        ),
+        patch.dict(litellm.model_cost, _GEMMA_MODEL_COST_ENTRY, clear=False),
+    ):
+        mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
+
+        await litellm.acompletion(
+            model="vertex_ai/google/gemma-4-26b-a4b-it-maas",
+            messages=messages,
+            vertex_ai_project="test-project",
+        )
+
+        body: Final = json.loads(mock_http_handler.return_value.post.call_args.kwargs["data"])
+        assert body["messages"][-len(expected_tail) :] == expected_tail

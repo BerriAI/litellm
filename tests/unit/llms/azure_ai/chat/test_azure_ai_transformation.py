@@ -18,6 +18,7 @@ from litellm.llms.azure_ai.azure_model_router.transformation import (
     AzureModelRouterConfig,
 )
 from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionFileObjectFile
 
 
 @pytest.mark.asyncio
@@ -1155,6 +1156,65 @@ async def test_azure_ai_with_image_url():
                 ],
             }
         ]
+
+
+_PDF_FILE_PART: Final = {
+    "type": "file",
+    "file": {"filename": "document.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {
+            "role": "user",
+            "content": [
+                _PDF_FILE_PART,
+                {"type": "text", "text": "What is the codeword?"},
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01",
+            "content": [
+                {"type": "text", "text": "PDF file read: pong.pdf (579 bytes)"},
+                _PDF_FILE_PART,
+            ],
+        },
+    ],
+    ids=["user_message", "tool_message"],
+)
+def test_azure_ai_sends_pdf_file_parts_instead_of_flattening_them_to_text(message: AllMessageValues) -> None:
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="Kimi-K2.6",
+        messages=[message],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [message]
+
+
+@pytest.mark.parametrize(
+    "file",
+    [
+        {"filename": "notes.txt", "file_data": "data:text/plain;base64,aGVsbG8="},
+        {"file_id": "file-abc"},
+    ],
+    ids=["text_data_url", "file_id_only"],
+)
+def test_azure_ai_flattens_a_non_pdf_file_part_to_its_text_as_before(file: ChatCompletionFileObjectFile) -> None:
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="Llama-3.3-70B-Instruct",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "summarize"}, {"type": "file", "file": file}]}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": "summarize"}]
 
 
 def test_azure_deepseek_reasoning_content():

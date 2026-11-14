@@ -122,6 +122,7 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     anthropic_image_source_to_openai_url,
+    anthropic_inline_document,
     parse_tool_call_arguments,
     reasoning_content_from_thinking_blocks,
     thinking_blocks_with_encrypted_reasoning,
@@ -185,6 +186,8 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionFileObject,
+    ChatCompletionFileObjectFile,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
     ChatCompletionRedactedThinkingBlock,
@@ -1419,14 +1422,27 @@ class LiteLLMAnthropicMessagesAdapter:
         match block.get("type"):
             case "text":
                 return ChatCompletionTextObject(type="text", text=str(block.get("text") or ""))
-            case "image" | "document":
+            case "image":
                 return self._tool_result_image_part(block.get("source"))
+            case "document":
+                return self._tool_result_document_part(block)
             case "tool_reference":
                 return ChatCompletionToolReferenceObject(
                     type="tool_reference", tool_name=str(block.get("tool_name") or "")
                 )
             case _:
                 return None
+
+    def _tool_result_document_part(
+        self, document: Mapping[str, object]
+    ) -> ChatCompletionFileObject | ChatCompletionImageObject | None:
+        inline_document: Final = anthropic_inline_document(document)
+        if inline_document is None:
+            return self._tool_result_image_part(document.get("source"))
+        return ChatCompletionFileObject(
+            type="file",
+            file=ChatCompletionFileObjectFile(filename=inline_document.filename, file_data=inline_document.file_data),
+        )
 
     def _tool_result_image_part(self, image_source: object) -> ChatCompletionImageObject | None:
         if not isinstance(image_source, dict):

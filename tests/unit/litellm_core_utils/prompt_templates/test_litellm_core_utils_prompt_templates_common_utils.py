@@ -16,6 +16,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     ENCRYPTED_REASONING_SIGNATURE_PREFIX,
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+    TOOL_RESULT_MEDIA_BOUNDARY,
+    TOOL_RESULT_MEDIA_PLACEHOLDER,
     add_system_prompt_to_messages,
     cache_control_as_prompt_cache_breakpoint,
     converse_redacted_content,
@@ -44,6 +46,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_messages_with_model_file_ids,
     with_prompt_cache_breakpoint,
 )
+from litellm.types.llms.openai import ChatCompletionAudioObject, ChatCompletionFileObject, ChatCompletionImageObject
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 _ARTIFACT_DATA_ID_PATTERN: Final = r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"
@@ -864,18 +867,45 @@ def test_hoist_images_from_tool_messages_bare_data_uri_string_passes_through():
     assert result is messages
 
 
-def test_hoist_images_from_tool_messages_structured_image_part():
-    messages = [
+@pytest.mark.parametrize(
+    "part,placeholder,boundary",
+    [
+        (
+            {"type": "image_url", "image_url": {"url": DATA_URI_PNG}},
+            TOOL_RESULT_IMAGE_PLACEHOLDER,
+            TOOL_RESULT_IMAGE_BOUNDARY,
+        ),
+        (
+            {"type": "file", "file": {"file_data": "data:application/pdf;base64,cGRm", "filename": "report.pdf"}},
+            TOOL_RESULT_MEDIA_PLACEHOLDER,
+            TOOL_RESULT_MEDIA_BOUNDARY,
+        ),
+        (
+            {"type": "input_audio", "input_audio": {"data": "c291bmQ=", "format": "wav"}},
+            TOOL_RESULT_MEDIA_PLACEHOLDER,
+            TOOL_RESULT_MEDIA_BOUNDARY,
+        ),
+    ],
+)
+def test_hoist_tool_media_preserves_payload_and_call(
+    part: ChatCompletionImageObject | ChatCompletionFileObject | ChatCompletionAudioObject,
+    placeholder: str,
+    boundary: str,
+) -> None:
+    messages: Final = [
         _assistant_tool_call_msg("call_1"),
-        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]),
+        {**_tool_msg([part]), "cache_control": {"type": "ephemeral"}},
     ]
+    original: Final = copy.deepcopy(messages)
 
-    result = hoist_images_from_tool_messages(messages)
+    result: Final = hoist_images_from_tool_messages(messages)
 
-    assert len(result) == 3
-    assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
-    assert result[2]["role"] == "user"
-    assert result[2]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+    assert result == [
+        messages[0],
+        {**messages[1], "content": placeholder},
+        {"role": "user", "content": [{"type": "text", "text": boundary}, part]},
+    ]
+    assert messages == original
 
 
 def test_hoist_images_from_tool_messages_keeps_text_parts_in_tool_message():
@@ -895,24 +925,26 @@ def test_hoist_images_from_tool_messages_keeps_text_parts_in_tool_message():
     assert result[2]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
 
 
-def test_hoist_images_from_tool_messages_parallel_tool_calls_insert_after_run():
-    messages = [
+def test_hoist_images_from_tool_messages_parallel_tool_calls_insert_after_run() -> None:
+    image: Final = {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}
+    file: Final = {"type": "file", "file": {"file_id": "file_report"}}
+    audio: Final = {"type": "input_audio", "input_audio": {"data": "c291bmQ=", "format": "wav"}}
+    text: Final = {"type": "text", "text": "Report and recording follow"}
+    messages: Final = [
         _assistant_tool_call_msg("call_1", "call_2"),
-        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}], tool_call_id="call_1"),
-        _tool_msg([{"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}}], tool_call_id="call_2"),
+        _tool_msg([image], tool_call_id="call_1"),
+        _tool_msg([text, file, audio], tool_call_id="call_2"),
         {"role": "assistant", "content": "looking"},
     ]
 
-    result = hoist_images_from_tool_messages(messages)
+    result: Final = hoist_images_from_tool_messages(messages)
 
-    roles = [m["role"] for m in result]
-    assert roles == ["assistant", "tool", "tool", "user", "assistant"]
-    assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
-    assert result[2]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
-    assert result[3]["content"] == [
-        BOUNDARY_PART,
-        {"type": "image_url", "image_url": {"url": DATA_URI_PNG}},
-        {"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}},
+    assert result == [
+        messages[0],
+        {**messages[1], "content": TOOL_RESULT_IMAGE_PLACEHOLDER},
+        {**messages[2], "content": [text]},
+        {"role": "user", "content": [{"type": "text", "text": TOOL_RESULT_MEDIA_BOUNDARY}, image, file, audio]},
+        messages[3],
     ]
 
 

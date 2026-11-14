@@ -911,7 +911,7 @@ class ChatCompletionToolReferenceObject(TypedDict):
 
 
 ToolMessageContentPart: TypeAlias = (
-    ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionToolReferenceObject
+    ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionFileObject | ChatCompletionToolReferenceObject
 )
 
 

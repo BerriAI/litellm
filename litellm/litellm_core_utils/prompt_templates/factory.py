@@ -1793,8 +1793,7 @@ def convert_to_anthropic_tool_result(
             elif content["type"] == "tool_reference":
                 anthropic_content_list.append(ToolReference(type="tool_reference", tool_name=content["tool_name"]))
             elif content["type"] == "file":
-                file_content = cast(ChatCompletionFileObject, content)
-                _file_block = anthropic_process_openai_file_message(file_content)
+                _file_block = anthropic_process_openai_file_message(content)
                 _file_block = add_cache_control_to_content(
                     anthropic_content_element=cast(AnthropicMessagesDocumentParam, _file_block),
                     original_content_element=content,
@@ -2059,7 +2058,7 @@ def add_cache_control_to_content(
     | AnthropicMessagesDocumentParam
     | AnthropicMessagesToolUseParam
     | ChatCompletionThinkingBlock,
-    original_content_element: dict | AllMessageValues,
+    original_content_element: dict | AllMessageValues | ChatCompletionFileObject,
 ):
     cache_control_param: Final = original_content_element.get("cache_control")
     if cache_control_param is not None and isinstance(cache_control_param, dict):
