@@ -8992,8 +8992,8 @@ from litellm.caching.in_memory_cache import InMemoryCache
 
 
 class AvailableModelsCache(InMemoryCache):
-    def __init__(self, ttl_seconds: int = 300, max_size: int = 1000):
-        super().__init__(ttl_seconds, max_size)
+    def __init__(self, ttl_seconds: int = 300, max_size: int = 1000, clock: Callable[[], float] | None = None):
+        super().__init__(max_size_in_memory=max_size, default_ttl=ttl_seconds, clock=clock)
         self._env_hash: str | None = None
 
     def _get_env_hash(self) -> str:

@@ -11549,6 +11549,33 @@ def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
     assert _model_cache.get_cached_model_info("openai") is None
 
 
+def test_available_models_cache_expires_entries_after_ttl_seconds():
+    from litellm.utils import AvailableModelsCache
+
+    now: Final = [1_000.0]
+    cache: Final = AvailableModelsCache(ttl_seconds=300, max_size=1000, clock=lambda: now[0])
+    cache.get_cached_model_info("openai")  # first call records the env hash
+    cache.set_cached_model_info("openai", litellm_params=None, available_models=["gpt-5-mini"])
+
+    now[0] = 1_299.0
+    assert cache.get_cached_model_info("openai") == ["gpt-5-mini"]
+
+    now[0] = 1_301.0
+    assert cache.get_cached_model_info("openai") is None
+
+
+def test_available_models_cache_keeps_max_size_entries():
+    from litellm.utils import AvailableModelsCache
+
+    cache: Final = AvailableModelsCache(ttl_seconds=300, max_size=1000, clock=lambda: 1_000.0)
+    providers: Final = tuple(f"provider-{i}" for i in range(999))
+    cache.get_cached_model_info()  # first call records the env hash
+    for provider in providers:
+        cache.set_cached_model_info(provider, litellm_params=None, available_models=[provider])
+
+    assert all(cache.get_cached_model_info(provider) == [provider] for provider in providers)
+
+
 def test_delta_tool_calls_sequential_indices():
     """
     Test that multiple tool calls without explicit indices receive sequential indices.
