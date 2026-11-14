@@ -932,20 +932,29 @@ def _estimate_json_bytes(obj: object) -> int:
 _JSON_SCHEMA_ANNOTATION_KEYWORDS: Final = frozenset(
     {"title", "description", "default", "deprecated", "readOnly", "writeOnly", "examples"}
 )
+JSON_SCHEMA_KEPT_REF_SIBLINGS: Final = _JSON_SCHEMA_ANNOTATION_KEYWORDS | frozenset({"required"})
 
 _SCHEMA_NODE: Final = TypeAdapter(Mapping[str, object])
+
+
+def _required_names(schema: Mapping[str, object]) -> tuple[str, ...] | None:
+    entries: Final = as_object_list(schema.get("required", []))
+    if entries is None:
+        return None
+    names: Final = tuple(entry for entry in entries if isinstance(entry, str))
+    return names if len(names) == len(entries) else None
 
 
 def _ref_target_with_siblings(
     target_schema: Mapping[str, object], ref_node: Mapping[str, object]
 ) -> Mapping[str, object]:
-    target_required: Final = as_object_list(target_schema.get("required")) or ()
-    sibling_required: Final = as_object_list(ref_node.get("required")) or ()
-    added: Final = tuple(name for name in sibling_required if name not in target_required)
+    target_required: Final = _required_names(target_schema)
+    target_names: Final = frozenset(target_required or ())
+    added: Final = tuple(dict.fromkeys(name for name in _required_names(ref_node) or () if name not in target_names))
     return {
         **target_schema,
         **{key: value for key, value in ref_node.items() if key in _JSON_SCHEMA_ANNOTATION_KEYWORDS},
-        **({"required": [*target_required, *added]} if added else {}),
+        **({"required": [*target_required, *added]} if target_required is not None and added else {}),
     }
 
 
@@ -985,7 +994,7 @@ def unpack_defs(
     # Combine the defs handed down by the caller with defs/definitions found on
     # the current node.  Local keys shadow parent keys to match JSON-schema
     # scoping rules.
-    root_defs: Final[dict] = {
+    root_defs: Final[dict[str, object]] = {
         **defs,
         **schema.get("$defs", {}),
         **schema.get("definitions", {}),
@@ -1017,8 +1026,16 @@ def unpack_defs(
                 if target_schema is None:
                     continue
 
+                replacement = (
+                    _ref_target_with_siblings(
+                        _SCHEMA_NODE.validate_python(target_schema), _SCHEMA_NODE.validate_python(node)
+                    )
+                    if keep_ref_siblings
+                    else target_schema
+                )
+
                 if max_inlined_bytes is not None:
-                    inlined_bytes += _estimate_json_bytes(target_schema)
+                    inlined_bytes += _estimate_json_bytes(replacement)
                     if inlined_bytes > max_inlined_bytes:
                         raise ValueError(
                             f"unpack_defs: inlined schema exceeded the "
@@ -1035,13 +1052,7 @@ def unpack_defs(
                 )
 
                 # Replace the reference with resolved copy
-                resolved = copy.deepcopy(
-                    _ref_target_with_siblings(
-                        _SCHEMA_NODE.validate_python(target_schema), _SCHEMA_NODE.validate_python(node)
-                    )
-                    if keep_ref_siblings
-                    else target_schema
-                )
+                resolved = copy.deepcopy(replacement)
                 if parent is not None and key is not None:
                     if (
                         isinstance(parent, dict)
@@ -1101,7 +1112,7 @@ def _has_legacy_defs(schema: object) -> bool:
 DEFS_MAX_INLINED_BYTES: Final = 10_000_000
 
 
-def defs_unpacked(json_schema: Mapping[str, object]) -> Mapping[str, object]:
+def defs_unpacked(json_schema: Mapping[str, object], keep_ref_siblings: bool = False) -> Mapping[str, object]:
     import copy
 
     unpacked: Final = copy.deepcopy(dict(json_schema))
@@ -1112,7 +1123,7 @@ def defs_unpacked(json_schema: Mapping[str, object]) -> Mapping[str, object]:
         **(dollar_defs if isinstance(dollar_defs, dict) else {}),
     }
     if defs:
-        unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES, keep_ref_siblings=True)
+        unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES, keep_ref_siblings=keep_ref_siblings)
     return unpacked
 
 

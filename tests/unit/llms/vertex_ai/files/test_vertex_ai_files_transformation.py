@@ -2607,6 +2607,17 @@ def _schema_entry(schema: Mapping[str, object], **body: object) -> Mapping[str, 
     )
 
 
+def _uploaded_json_schema(
+    config: VertexAIFilesConfig, deployment: Mapping[str, object], schema: Mapping[str, object], **body: object
+) -> object:
+    (row,) = TypeAdapter(tuple[dict[str, object]]).validate_python(
+        _uploaded_rows(config, deployment, [_schema_entry(schema, **body)])
+    )
+    return TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generation_config"])[
+        "response_json_schema"
+    ]
+
+
 def test_a_json_schema_annotation_bigquery_refuses_answers_400_without_drop_params(config, monkeypatch) -> None:
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
@@ -2623,15 +2634,14 @@ def test_a_json_schema_annotation_bigquery_refuses_answers_400_without_drop_para
     ids=["deployment", "request"],
 )
 def test_drop_params_drops_json_schema_annotations_bigquery_refuses(
-    config, monkeypatch, deployment: Mapping[str, object], body: Mapping[str, object]
+    config: VertexAIFilesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    deployment: Mapping[str, object],
+    body: Mapping[str, object],
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
 
-    (row,) = _uploaded_rows(config, deployment, [_schema_entry(_ANNOTATED_ANSWER_SCHEMA, **body)])
-
-    assert TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generation_config"])[
-        "response_json_schema"
-    ] == dict(_ANSWER_SCHEMA)
+    assert _uploaded_json_schema(config, deployment, _ANNOTATED_ANSWER_SCHEMA, **body) == dict(_ANSWER_SCHEMA)
 
 
 @pytest.mark.parametrize(
@@ -2647,8 +2657,12 @@ def test_drop_params_drops_json_schema_annotations_bigquery_refuses(
             r"\$ref",
         ),
         ({"type": "object", "properties": {"$id": {"type": "string"}}}, r"\$id"),
+        (
+            {"type": "object", "properties": {"a": {"$ref": "#/$defs/Town"}}, "$defs": {"City": {"type": "string"}}},
+            r"\$ref.*no \$defs block defines",
+        ),
     ],
-    ids=["recursive_ref", "property_name"],
+    ids=["recursive_ref", "property_name", "missing_ref"],
 )
 def test_a_json_schema_key_bigquery_refuses_answers_400_even_with_drop_params(
     config, schema: Mapping[str, object], key: str
@@ -2682,38 +2696,91 @@ def test_a_json_schema_ref_that_is_not_a_defs_name_answers_400_even_with_drop_pa
     assert exc_info.value.status_code == 400
 
 
+_CONSTRAINED_CAPITAL_SCHEMA: Final = MappingProxyType(
+    {
+        "type": "object",
+        "properties": {
+            "capital": {"$ref": "#/$defs/City", "description": "The capital", "minLength": 2, "$comment": "a city"}
+        },
+        "$defs": {"City": {"type": "string"}},
+    }
+)
+
+
+def test_a_json_schema_constraint_next_to_a_ref_answers_400_without_drop_params(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(VertexAIError, match=r"line 1 .*\$comment.*minLength.*next to a \$ref.*drop_params") as exc_info:
+        _uploaded_rows(config, _GEMINI_DEPLOYMENT, [_schema_entry(_CONSTRAINED_CAPITAL_SCHEMA)])
+    assert exc_info.value.status_code == 400
+
+
+def test_drop_params_drops_json_schema_keys_next_to_a_ref_that_its_target_does_not_keep(
+    config: VertexAIFilesConfig,
+) -> None:
+    assert _uploaded_json_schema(config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, _CONSTRAINED_CAPITAL_SCHEMA) == {
+        "type": "object",
+        "properties": {"capital": {"type": "string", "description": "The capital"}},
+    }
+
+
 @pytest.mark.parametrize(
     "literal",
-    [{"const": {"$id": "answer"}}, {"enum": [{"$id": "answer"}]}, {"default": {"name": {"$comment": "a city"}}}],
-    ids=["const", "enum", "nested_default"],
+    [
+        {"const": {"$id": "answer"}},
+        {"enum": [{"$id": "answer"}]},
+        {"default": {"name": {"$comment": "a city"}}},
+        {"default": {"$ref": "#/$defs/City"}},
+    ],
+    ids=["const", "enum", "nested_default", "ref_in_default"],
 )
 def test_a_dollar_key_inside_a_json_schema_literal_answers_400_even_with_drop_params(
     config, literal: Mapping[str, object]
 ) -> None:
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
-    schema: Final = {"type": "object", "properties": {"answer": {"type": "object", **literal}}}
+    schema: Final = {
+        "type": "object",
+        "properties": {"answer": {"type": "object", **literal}},
+        "$defs": {"City": {"type": "object", "properties": {"name": {"type": "string"}}}},
+    }
     with pytest.raises(VertexAIError, match=r"line 1 .*\$.*inside a const") as exc_info:
         _uploaded_rows(config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, [_schema_entry(schema)])
     assert exc_info.value.status_code == 400
 
 
-def test_drop_params_drops_annotations_inside_properties_named_like_json_schema_keywords(config) -> None:
+def test_drop_params_drops_annotations_inside_properties_named_like_json_schema_keywords(
+    config: VertexAIFilesConfig,
+) -> None:
     properties: Final = {name: {"type": "string"} for name in ("const", "default", "enum", "example", "examples")}
     annotated: Final = {name: {**schema, "$comment": "a field"} for name, schema in properties.items()}
 
-    (row,) = _uploaded_rows(
-        config,
-        {**_GEMINI_DEPLOYMENT, "drop_params": True},
-        [_schema_entry({"type": "object", "properties": annotated})],
-    )
-
-    assert TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generation_config"])[
-        "response_json_schema"
-    ] == {"type": "object", "properties": properties}
+    assert _uploaded_json_schema(
+        config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, {"type": "object", "properties": annotated}
+    ) == {"type": "object", "properties": properties}
 
 
-def test_drop_params_keeps_json_schema_literals_whole_while_dropping_annotations(config) -> None:
+def test_json_schema_defs_named_like_json_schema_keywords_are_inlined(config: VertexAIFilesConfig) -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/default"}},
+        "$defs": {
+            "default": {"type": "object", "properties": {"b": {"$ref": "#/$defs/enum"}}},
+            "enum": {"type": "string"},
+        },
+    }
+
+    assert _uploaded_json_schema(config, _GEMINI_DEPLOYMENT, schema) == {
+        "type": "object",
+        "properties": {"a": {"type": "object", "properties": {"b": {"type": "string"}}}},
+    }
+
+
+def test_drop_params_keeps_json_schema_literals_whole_while_dropping_annotations(config: VertexAIFilesConfig) -> None:
     answer: Final = {
         "type": "object",
         "const": {"name": "Paris"},
@@ -2722,8 +2789,7 @@ def test_drop_params_keeps_json_schema_literals_whole_while_dropping_annotations
     }
     schema: Final = {"type": "object", "properties": {"answer": {**answer, "$comment": "a city"}}}
 
-    (row,) = _uploaded_rows(config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, [_schema_entry(schema)])
-
-    assert TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generation_config"])[
-        "response_json_schema"
-    ] == {"type": "object", "properties": {"answer": answer}}
+    assert _uploaded_json_schema(config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, schema) == {
+        "type": "object",
+        "properties": {"answer": answer},
+    }

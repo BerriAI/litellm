@@ -1257,6 +1257,16 @@ def test_defs_unpacked_resolves_a_name_both_blocks_define_to_its_defs_schema() -
     assert defs_unpacked(schema) == {"type": "object", "properties": {"a": {"type": "string"}}}
 
 
+def test_defs_unpacked_inlines_a_ref_target_alone_unless_asked_to_keep_its_siblings() -> None:
+    city: Final = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+    schema: Final = {
+        "type": "object",
+        "properties": {"capital": {"$ref": "#/$defs/City", "description": "The capital", "required": ["country"]}},
+        "$defs": {"City": city},
+    }
+    assert defs_unpacked(schema) == {"type": "object", "properties": {"capital": city}}
+
+
 def test_defs_unpacked_keeps_the_annotations_next_to_a_ref() -> None:
     city: Final = {"type": "object", "properties": {"name": {"type": "string"}}, "description": "A city"}
     schema: Final = {
@@ -1264,7 +1274,7 @@ def test_defs_unpacked_keeps_the_annotations_next_to_a_ref() -> None:
         "properties": {"capital": {"$ref": "#/$defs/City", "description": "The capital city"}},
         "$defs": {"City": city},
     }
-    assert defs_unpacked(schema) == {
+    assert defs_unpacked(schema, keep_ref_siblings=True) == {
         "type": "object",
         "properties": {"capital": {**city, "description": "The capital city"}},
     }
@@ -1280,15 +1290,45 @@ def test_defs_unpacked_adds_a_required_next_to_a_ref_to_the_target_constraints()
     schema: Final = {
         "type": "object",
         "properties": {
-            "capital": {"$ref": "#/$defs/City", "required": ["country", "name"], "type": "string"},
+            "capital": {"$ref": "#/$defs/City", "required": ["country", "name", "country"], "type": "string"},
             "town": {"$ref": "#/$defs/Town", "required": ["name"]},
         },
         "$defs": {"City": city, "Town": town},
     }
-    assert defs_unpacked(schema) == {
+    assert defs_unpacked(schema, keep_ref_siblings=True) == {
         "type": "object",
         "properties": {
             "capital": {**city, "required": ["name", "country"]},
             "town": {**town, "required": ["name"]},
         },
     }
+
+
+def test_defs_unpacked_drops_a_required_next_to_a_ref_when_either_side_is_not_a_list_of_names() -> None:
+    city: Final = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "country": {"type": "string"}},
+        "required": ["name"],
+    }
+    town: Final = {"type": "object", "properties": {"name": {"type": "string"}}, "required": "name"}
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            "capital": {"$ref": "#/$defs/City", "required": ["country", {"name": True}]},
+            "town": {"$ref": "#/$defs/Town", "required": ["name"]},
+        },
+        "$defs": {"City": city, "Town": town},
+    }
+    assert defs_unpacked(schema, keep_ref_siblings=True) == {"type": "object", "properties": {"capital": city, "town": town}}
+
+
+def test_defs_unpacked_counts_the_annotations_next_to_a_ref_against_the_inlining_budget() -> None:
+    hops: Final = 120
+    chain: Final = {f"D{i}": {"$ref": f"#/$defs/D{i + 1}"} for i in range(hops)}
+    schema: Final = {
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/D0", "description": "x" * 100_000}},
+        "$defs": {**chain, f"D{hops}": {"type": "string"}},
+    }
+    with pytest.raises(ValueError, match="byte budget"):
+        defs_unpacked(schema, keep_ref_siblings=True)
