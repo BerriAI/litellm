@@ -1833,6 +1833,14 @@ class CustomStreamWrapper:
                 response.hidden_params["additional_headers"] = {}
             response.hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
 
+    def _maybe_set_final_chunk_usage(self, chunk: ModelResponseStream) -> None:
+        if self.sent_last_chunk is True and self.stream_options is None:
+            chunk_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
+                dict[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
+            )
+            chunk_hidden_params["usage"] = calculate_total_usage(chunks=self.chunks)
+            self._last_returned_hidden_params = chunk_hidden_params
+
     def __next__(self) -> "ModelResponseStream":
         if self._closed:
             raise StopIteration
@@ -2133,13 +2141,7 @@ class CustomStreamWrapper:
                         self.chunks.append(processed_chunk)
 
                     # add usage as hidden param
-                    if self.sent_last_chunk is True and self.stream_options is None:
-                        usage = calculate_total_usage(chunks=self.chunks)
-                        processed_chunk_hidden_params = cast(  # cast-ok: preserve dynamic mapping behavior
-                            dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
-                        )
-                        processed_chunk_hidden_params["usage"] = usage
-                        self._last_returned_hidden_params = processed_chunk_hidden_params
+                    self._maybe_set_final_chunk_usage(processed_chunk)
 
                     # Call post-call streaming deployment hook for final chunk
                     if self.sent_last_chunk is True:
@@ -2176,6 +2178,7 @@ class CustomStreamWrapper:
                             and getattr(processed_chunk, "usage", None) is not None
                         ):
                             continue
+                        self._maybe_set_final_chunk_usage(processed_chunk)
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
             return await self._finalize_completed_stream(cache_hit=cache_hit)

@@ -1900,6 +1900,8 @@ async def test_openrouter_post_finish_usage_trailer_does_not_emit_empty_choice(
     assert not any(chunk.choices for chunk in post_finish_chunks[:-1]), post_finish_chunks
     post_finish_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in post_finish_chunks))
     assert not any(choice.delta.role for choice in post_finish_choices), post_finish_choices
+    rebuilt_usage: Final = litellm.stream_chunk_builder(chunks=collected_chunks).usage
+    assert (rebuilt_usage.prompt_tokens, rebuilt_usage.completion_tokens, rebuilt_usage.cost) == (14, 2, 0.0000088)
 
 
 _POST_FINISH_TRAILER_PAYLOADS: Final[tuple[tuple[StreamingChoices, Callable[[StreamingChoices], object]], ...]] = (
