@@ -1830,6 +1830,11 @@ object, meaning the request died (auth, body parsing, model resolution) before t
 object rather than ``True`` because ``request_data`` is the client body: JSON cannot forge this identity, so a
 client can neither hide a guardrail block nor force a row by sending the key or a ``litellm_call_id`` itself."""
 
+GUARDRAIL_ENDPOINT_FAILURE_KEY: Final = "litellm_guardrail_endpoint_failure"
+GUARDRAIL_ENDPOINT_FAILURE: Final = object()
+"""Stored under ``GUARDRAIL_ENDPOINT_FAILURE_KEY`` by ``/apply_guardrail`` when a request it had set up fails, so the
+spend logs keep that failure although the route is not an LLM API route. A sentinel for the same reason as above."""
+
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
     {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}

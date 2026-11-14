@@ -184,6 +184,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
     redacted_model_call_details_for_custom_logger,
     redacted_response_obj_for_custom_logger,
+    redacted_standard_logging_payload,
     should_redact_message_logging,
 )
 from litellm.litellm_core_utils.served_output_texts import (
@@ -5151,7 +5152,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         ## STANDARDIZED LOGGING PAYLOAD
 
-        self.model_call_details["standard_logging_object"] = get_standard_logging_object_payload(
+        failure_payload: Final = get_standard_logging_object_payload(
             kwargs=self.model_call_details,
             init_response_obj={},
             start_time=start_time,
@@ -5161,6 +5162,11 @@ class Logging(LiteLLMLoggingBaseClass):
             error_str=redact_string(str(exception)),
             original_exception=exception,
             standard_built_in_tools_params=self.standard_built_in_tools_params,
+        )
+        self.model_call_details["standard_logging_object"] = (
+            redacted_standard_logging_payload(failure_payload)
+            if failure_payload is not None and should_redact_message_logging(self.model_call_details)
+            else failure_payload
         )
         return start_time, end_time
 
@@ -5577,7 +5583,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 return
             if isinstance(callback, CustomLogger):  # custom logger class
                 await callback.async_log_failure_event(
-                    kwargs=self.model_call_details,
+                    kwargs=redacted_model_call_details_for_custom_logger(
+                        model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                            model_call_details=self.model_call_details
+                        ),
+                        custom_logger=callback,
+                    ),
                     response_obj=result,
                     start_time=start_time,
                     end_time=end_time,

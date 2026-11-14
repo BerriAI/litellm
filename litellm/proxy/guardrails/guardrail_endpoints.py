@@ -18,7 +18,13 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.integrations.custom_guardrail import CustomGuardrail, GuardrailSetupError
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    GuardrailSetupError,
+    _append_slg_to_litellm_params,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # share the guardrail logging bridge, which takes a bare list
+    _sync_guardrail_info_to_logging_obj,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # share the guardrail logging bridge, which takes a bare dict
+)
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import AUDIT_ACTIONS, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -2528,6 +2534,19 @@ async def _guardrail_response_after_success_hook(
     return response
 
 
+def _record_verdict_for_logging(
+    request_data: dict[str, object],  # mutable-ok: the logging bridge takes the request dict itself
+    data: dict[str, object],  # mutable-ok: the logged request receives the guardrail's verdict
+    litellm_logging_obj: object,
+) -> None:
+    metadata: Final = as_str_mapping(request_data.get("metadata")) or {}
+    records: Final = as_object_list(metadata.get("standard_logging_guardrail_information"))
+    if not records:
+        return
+    _append_slg_to_litellm_params(data, list(records))
+    _sync_guardrail_info_to_logging_obj(request_data, litellm_logging_obj)
+
+
 async def _emit_guardrail_success_logs(
     response_handler: StandardGuardrailResponseHandler,
     proxy_logging_obj: _GuardrailProxyLogging,
@@ -2586,7 +2605,11 @@ async def apply_guardrail(
         proxy_logging_obj,
         version,
     )
-    from litellm.proxy.utils import handle_exception_on_proxy
+    from litellm.proxy.utils import (
+        GUARDRAIL_ENDPOINT_FAILURE,
+        GUARDRAIL_ENDPOINT_FAILURE_KEY,
+        handle_exception_on_proxy,
+    )
 
     data: dict[str, object] = {
         "guardrail_name": request.guardrail_name,
@@ -2631,14 +2654,18 @@ async def apply_guardrail(
         response_handler: Final = GUARDRAIL_RESPONSE_HANDLERS[request.response_format]
         request_data: Final = dict(response_handler.prepare_request_data(request))
         input_type: Final = response_handler.resolve_input_type(request, active_guardrail)
-        guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
-            inputs={"texts": [request.text]},
-            request_data=request_data,
-            input_type=input_type,
-        )
+        try:
+            guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
+                inputs={"texts": [request.text]},
+                request_data=request_data,
+                input_type=input_type,
+            )
+        finally:
+            _record_verdict_for_logging(request_data, data, litellm_logging_obj)
         response: Final = response_handler.build_response(request, guardrailed_inputs, request_data)
     except Exception as e:
-        if litellm_logging_obj is not None and not isinstance(e, HTTPException):
+        if litellm_logging_obj is not None:
+            data[GUARDRAIL_ENDPOINT_FAILURE_KEY] = GUARDRAIL_ENDPOINT_FAILURE
             try:
                 await litellm_logging_obj.async_failure_handler(
                     exception=e,

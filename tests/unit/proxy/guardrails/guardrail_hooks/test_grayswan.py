@@ -1,10 +1,14 @@
+import contextlib
 from collections.abc import Mapping
 from types import MappingProxyType
+from typing import Final
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.completion.guardrail_translation.handler import OpenAITextCompletionHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.grayswan import grayswan as grayswan_module
@@ -912,3 +916,25 @@ async def test_post_call_never_forwards_the_proxy_key_metadata_of_the_request_me
     )
 
     assert "litellm_metadata" not in client.calls[0]["json"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_open", [True, False])
+async def test_unreachable_api_failure_is_recorded_on_a_request_dict_that_starts_empty(fail_open: bool) -> None:
+    def refuse_connection(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    guardrail: Final = GraySwanGuardrail(
+        guardrail_name="grayswan-unreachable",
+        api_key="test-key",
+        fail_open=fail_open,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+    guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(refuse_connection))
+    request_data: Final[dict[str, object]] = {}
+
+    with contextlib.suppress(Exception):
+        await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data=request_data, input_type="request")
+
+    recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [record["guardrail_status"] for record in recorded] == ["guardrail_failed_to_respond"]
