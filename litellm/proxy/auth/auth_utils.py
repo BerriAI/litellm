@@ -812,6 +812,23 @@ def _check_banned_params(
             # Proxy-wide opt-in: every banned param is permitted, exit
             # entirely so the rest of the loop doesn't waste work.
             return
+        proxy_clientside_auth_params = general_settings.get("configurable_clientside_auth_params")
+        if (
+            isinstance(proxy_clientside_auth_params, list)
+            and _is_param_allowed(
+                param=param,
+                request_body_value=body[param],
+                configurable_clientside_auth_params=proxy_clientside_auth_params,
+            )
+            is True
+        ):
+            # Proxy-wide SELECTIVE opt-in: only the params the admin named in
+            # ``general_settings.configurable_clientside_auth_params`` are
+            # permitted, for EVERY model. Unlike ``allow_client_side_credentials``
+            # (which lifts the whole blocklist), this admits only the listed
+            # params, so a client that may set ``langfuse_environment`` still
+            # cannot smuggle ``api_base``/``aws_web_identity_token``/etc.
+            continue
         if (
             setting := _PROXY_ALLOWLIST_SETTING_BY_PARAM.get(param)
         ) is not None and _ClientSideStorageAllowlist.model_validate(general_settings).admits(setting, body[param]):
