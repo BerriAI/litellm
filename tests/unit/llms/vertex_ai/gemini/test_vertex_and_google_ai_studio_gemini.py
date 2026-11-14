@@ -11508,21 +11508,36 @@ def test_root_definitions_are_inlined_once_against_the_budget() -> None:
 
 
 @pytest.mark.respx(assert_all_called=False)
-@pytest.mark.parametrize("def_block", ["$defs", "definitions"])
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"type": "object", "properties": {"city": {"$ref": "#/$defs/City"}}, "$defs": [{"City": {"type": "string"}}]},
+        {
+            "type": "object",
+            "properties": {"city": {"$ref": "#/definitions/City"}},
+            "definitions": [{"City": {"type": "string"}}],
+        },
+        {
+            "type": "object",
+            "properties": {
+                "place": {
+                    "type": "object",
+                    "properties": {"city": {"$ref": "#/$defs/City"}},
+                    "$defs": [{"City": {"type": "string"}}],
+                }
+            },
+        },
+        {"type": "object", "properties": {"city": {"$ref": "#/$defs/City"}}, "$defs": {"City": True}},
+    ],
+    ids=("root-defs-list", "root-definitions-list", "nested-defs-list", "boolean-def"),
+)
 def test_gemini_tool_whose_def_block_is_not_an_object_is_rejected_with_a_400(
-    respx_mock: respx.MockRouter, def_block: str
+    respx_mock: respx.MockRouter, parameters: dict[str, object]
 ) -> None:
     route: Final = respx_mock.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*").mock(
         return_value=_gemini_reply()
     )
-    tool: Final = _function_tool(
-        "weather",
-        {
-            "type": "object",
-            "properties": {"city": {"$ref": f"#/{def_block}/City"}},
-            def_block: [{"City": {"type": "string"}}],
-        },
-    )
+    tool: Final = _function_tool("weather", parameters)
 
     with pytest.raises(litellm.BadRequestError, match="must be JSON objects") as raised:
         completion(
@@ -11535,3 +11550,27 @@ def test_gemini_tool_whose_def_block_is_not_an_object_is_rejected_with_a_400(
 
     assert raised.value.status_code == 400
     assert not route.called
+
+
+def test_recursive_tool_schema_reaches_gemini_the_same_under_defs_and_definitions() -> None:
+    def mapped(block: str) -> object:
+        tool: Final = _function_tool(
+            "linked_list",
+            {
+                "type": "object",
+                "properties": {"head": {"$ref": f"#/{block}/MaybeNode"}},
+                block: {
+                    "MaybeNode": {"anyOf": [{"$ref": f"#/{block}/Node"}, {"type": "null"}]},
+                    "Node": {
+                        "type": "object",
+                        "properties": {"text": {"type": "string"}, "next": {"$ref": f"#/{block}/MaybeNode"}},
+                        "required": ["text"],
+                    },
+                },
+            },
+        )
+        return GoogleAIStudioGeminiConfig().map_openai_params(
+            non_default_params={"tools": [tool]}, optional_params={}, model="gemini-2.5-flash", drop_params=False
+        )["tools"]
+
+    assert mapped("definitions") == mapped("$defs")

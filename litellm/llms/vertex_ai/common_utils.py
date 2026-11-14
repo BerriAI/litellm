@@ -20,6 +20,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     DefsInliningBudgetExceededError,
+    MalformedDefsError,
     unpack_defs,
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
@@ -928,6 +929,11 @@ def build_vertex_schema_within_budget(
             f"Inlining the $ref definitions of {schema_name} copies more than {DEFS_MAX_INLINED_BYTES:,} bytes of "
             "definitions, more than a model context window holds. Reference shared $defs less often or flatten the "
             "schema."
+        ) from e
+    except MalformedDefsError as e:
+        raise VertexAIError(
+            status_code=400,
+            message=f"The $defs and definitions of {schema_name} must be JSON objects that map names to schemas: {e}.",
         ) from e
 
     _convert_schema_types(parameters)
