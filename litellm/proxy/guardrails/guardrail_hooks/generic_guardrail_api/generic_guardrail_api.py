@@ -34,6 +34,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
     GuardrailToolParam,
+    tool_calls_to_write_back,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -45,6 +46,9 @@ GUARDRAIL_NAME: Final = "generic_guardrail_api"
 _CHAT_ROW: Final[TypeAdapter[AllMessageValues]] = TypeAdapter(AllMessageValues)
 _SENT_ROW: Final = TypeAdapter(Mapping[str, object])
 _SENT_ROWS: Final = TypeAdapter(Sequence[Mapping[str, object]])
+_SENT_TOOL_CALLS: Final[TypeAdapter[tuple[Mapping[str, object], ...] | None]] = TypeAdapter(
+    tuple[Mapping[str, object], ...] | None
+)
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -453,12 +457,16 @@ class GenericGuardrailAPI(CustomGuardrail):
         tools: list[ChatCompletionToolParam] | None,
         structured_messages: Sequence[AllMessageValues] | None,
         shown_messages: Sequence[AllMessageValues] | None,
+        sent_tool_calls: Sequence[Mapping[str, object]] | None,
         guardrail_response: GenericGuardrailAPIResponse,
     ) -> GenericGuardrailAPIInputs:
         # Action is NONE or no modifications needed
         return_inputs: Final = GenericGuardrailAPIInputs(texts=texts)
         if guardrail_response.texts:
             return_inputs["texts"] = guardrail_response.texts
+        rewritten_tool_calls: Final = tool_calls_to_write_back(sent_tool_calls, guardrail_response.tool_calls)
+        if rewritten_tool_calls is not None:
+            return_inputs["tool_calls"] = list(rewritten_tool_calls)
         if guardrail_response.images:
             return_inputs["images"] = guardrail_response.images
         elif images:
@@ -612,11 +620,8 @@ class GenericGuardrailAPI(CustomGuardrail):
 
             # Make the API request
             # Use mode="json" to ensure all iterables are converted to lists
-            response: Final = await self._post_check(
-                self._request_body(guardrail_request, structured_messages),
-                headers,
-                self.num_retries,
-            )
+            guardrail_request_body: Final = self._request_body(guardrail_request, structured_messages)
+            response: Final = await self._post_check(guardrail_request_body, headers, self.num_retries)
 
             response.raise_for_status()
             response_json: Final = _DECODED_JSON.validate_python(response.json())
@@ -643,6 +648,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 tools=tools,
                 structured_messages=structured_messages,
                 shown_messages=guardrail_request.structured_messages,
+                sent_tool_calls=_SENT_TOOL_CALLS.validate_python(guardrail_request_body.get("tool_calls")),
                 guardrail_response=guardrail_response,
             )
 

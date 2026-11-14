@@ -1,8 +1,8 @@
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
 
-from pydantic import ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
-from typing_extensions import TypedDict
+from pydantic import ConfigDict, Field, SerializerFunctionWrapHandler, TypeAdapter, model_serializer, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.guardrails import GuardrailNumRetries
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -188,12 +188,57 @@ def structured_messages_from_response(value: object) -> Sequence[AllMessageValue
     return cast("Sequence[AllMessageValues]", value)  # cast-ok: JSON rows checked for a role, the same trust texts get
 
 
+@with_config(ConfigDict(extra="allow"))
+class GuardrailToolCallFunction(TypedDict):
+    name: ReadOnly[str]
+    arguments: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow"))
+class GuardrailToolCall(TypedDict):
+    function: ReadOnly[GuardrailToolCallFunction]
+
+
+_TOOL_CALLS: Final = TypeAdapter(tuple[GuardrailToolCall, ...])
+_SENT_FUNCTION: Final = TypeAdapter(Mapping[str, object])
+_RESPONSE_FIELDS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _tool_calls_from_response(value: object) -> tuple[GuardrailToolCall, ...] | None:
+    return None if value is None else _TOOL_CALLS.validate_python(value)
+
+
+def _with_returned_function(sent_call: Mapping[str, object], returned_call: GuardrailToolCall) -> Mapping[str, object]:
+    sent_function: Final = _SENT_FUNCTION.validate_python(sent_call.get("function") or {})
+    returned_function: Final = returned_call["function"]
+    return {
+        **sent_call,
+        "function": {**sent_function, "name": returned_function["name"], "arguments": returned_function["arguments"]},
+    }
+
+
+def tool_calls_to_write_back(
+    sent_calls: Sequence[Mapping[str, object]] | None, returned: object
+) -> tuple[ChatCompletionToolCallChunk, ...] | None:
+    returned_calls: Final = _tool_calls_from_response(returned)
+    if not returned_calls:
+        return None
+    sent_count: Final = 0 if sent_calls is None else len(sent_calls)
+    if sent_calls is None or len(returned_calls) != sent_count:
+        raise ValueError(f"the guardrail returned {len(returned_calls)} tool_calls for the {sent_count} it received")
+    return cast(  # cast-ok: the rows the proxy sent as tool calls, each with a pydantic-validated function
+        tuple[ChatCompletionToolCallChunk, ...],
+        tuple(_with_returned_function(sent, returned) for sent, returned in zip(sent_calls, returned_calls)),
+    )
+
+
 class GenericGuardrailAPIResponse:
     """Response model for the Generic Guardrail API"""
 
     texts: list[str] | None
     images: list[str] | None
     tools: list[GuardrailToolParam] | None
+    tool_calls: object
     structured_messages: Sequence[AllMessageValues] | None
     action: str
     blocked_reason: str | None
@@ -208,12 +253,14 @@ class GenericGuardrailAPIResponse:
         tools: list[GuardrailToolParam] | None = None,
         stream_holdback_chars: list[int] | None = None,
         structured_messages: Sequence[AllMessageValues] | None = None,
+        tool_calls: object = None,
     ) -> None:
         self.action = action
         self.blocked_reason = blocked_reason
         self.texts = texts
         self.images = images
         self.tools = tools
+        self.tool_calls = tool_calls
         self.structured_messages = structured_messages
         # Number of trailing chars, indexed the same as ``texts``, that the
         # framework must withhold from streaming emission until the next
@@ -226,6 +273,7 @@ class GenericGuardrailAPIResponse:
         stream_holdback_chars: Final = (
             [coerce_stream_holdback_value(value) for value in raw_holdback] if isinstance(raw_holdback, list) else None
         )
+        fields: Final = _RESPONSE_FIELDS.validate_python(data)
         return cls(
             action=data.get("action", "NONE"),
             blocked_reason=data.get("blocked_reason"),
@@ -234,4 +282,5 @@ class GenericGuardrailAPIResponse:
             tools=data.get("tools"),
             stream_holdback_chars=stream_holdback_chars,
             structured_messages=structured_messages_from_response(data.get("structured_messages")),
+            tool_calls=fields.get("tool_calls"),
         )

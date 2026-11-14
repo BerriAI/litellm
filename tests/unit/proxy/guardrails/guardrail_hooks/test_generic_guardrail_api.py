@@ -2776,3 +2776,129 @@ async def test_during_mcp_call_blocked_raises() -> None:
             )
 
     assert exc_info.value.message == "credential detected in tool input"
+
+
+def _run_shell_call(arguments: str) -> dict[str, object]:
+    return {"id": "call_1", "type": "function", "function": {"name": "run_shell", "arguments": arguments}}
+
+
+def _guardrail_answering(body: dict[str, object], fail_on_error: bool = True) -> GenericGuardrailAPI:
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body, request=request)
+
+    return GenericGuardrailAPI(
+        api_base="https://api.test.guardrail.com",
+        guardrail_name="tool-call-rewriter",
+        event_hook="post_call",
+        default_on=True,
+        fail_on_error=fail_on_error,
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(answer)),
+    )
+
+
+async def _tool_calls_after(guardrail: GenericGuardrailAPI) -> GenericGuardrailAPIInputs:
+    return await guardrail.apply_guardrail(
+        inputs={"texts": [], "tool_calls": [_run_shell_call('{"cmd": "echo SECRET-123"}')]},
+        request_data={},
+        input_type="response",
+    )
+
+
+class TestToolCallsInResponse:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "returned_call",
+        [
+            _run_shell_call('{"cmd": "echo [REDACTED]"}'),
+            {"function": {"name": "run_shell", "arguments": '{"cmd": "echo [REDACTED]"}'}},
+            {
+                "id": "ignored",
+                "type": "ignored",
+                "function": {"name": "run_shell", "arguments": '{"cmd": "echo [REDACTED]"}'},
+            },
+        ],
+        ids=["as_received", "function_only", "foreign_id_and_type"],
+    )
+    async def test_rewritten_tool_calls_reach_the_caller_with_the_calls_own_id_and_type(
+        self, returned_call: dict[str, object]
+    ) -> None:
+        guardrail: Final = _guardrail_answering({"action": "GUARDRAIL_INTERVENED", "tool_calls": [returned_call]})
+
+        guardrailed: Final = await _tool_calls_after(guardrail)
+
+        assert guardrailed["tool_calls"] == [_run_shell_call('{"cmd": "echo [REDACTED]"}')]
+
+    @pytest.mark.asyncio
+    async def test_a_rewritten_name_reaches_the_caller(self) -> None:
+        guardrail: Final = _guardrail_answering(
+            {"action": "GUARDRAIL_INTERVENED", "tool_calls": [{"function": {"name": "run_safely", "arguments": "{}"}}]}
+        )
+
+        guardrailed: Final = await _tool_calls_after(guardrail)
+
+        assert guardrailed["tool_calls"] == [
+            {"id": "call_1", "type": "function", "function": {"name": "run_safely", "arguments": "{}"}}
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"action": "NONE"},
+            {"action": "NONE", "tool_calls": None},
+            {"action": "GUARDRAIL_INTERVENED", "texts": ["[MASKED]"], "tool_calls": []},
+        ],
+        ids=["absent", "null", "empty"],
+    )
+    async def test_an_answer_without_tool_calls_leaves_the_key_out(self, body: dict[str, object]) -> None:
+        guardrailed: Final = await _tool_calls_after(_guardrail_answering(body))
+
+        assert "tool_calls" not in guardrailed
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tool_calls",
+        [
+            "not a list",
+            ["not a tool call"],
+            [{"id": "call_1", "type": "function", "function": None}],
+            [{"function": {"name": "run_shell"}}],
+            [{"function": {"name": "run_shell", "arguments": {"cmd": "echo [REDACTED]"}}}],
+            [_run_shell_call("{}"), _run_shell_call("{}")],
+        ],
+        ids=["not_a_list", "not_a_call", "null_function", "no_arguments", "object_arguments", "one_call_too_many"],
+    )
+    async def test_a_tool_calls_answer_that_cannot_be_applied_fails_the_guardrail(self, tool_calls: object) -> None:
+        guardrail: Final = _guardrail_answering({"action": "GUARDRAIL_INTERVENED", "tool_calls": tool_calls})
+
+        with pytest.raises(Exception, match="Generic Guardrail API failed"):
+            await _tool_calls_after(guardrail)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("fail_on_error", [True, False])
+    @pytest.mark.parametrize(
+        "tool_calls",
+        ["not a list", [{"function": {"name": "run_shell", "arguments": {"cmd": "echo [REDACTED]"}}}]],
+        ids=["not_a_list", "object_arguments"],
+    )
+    async def test_a_blocked_answer_blocks_even_when_its_tool_calls_are_malformed(
+        self, tool_calls: object, fail_on_error: bool
+    ) -> None:
+        guardrail: Final = _guardrail_answering(
+            {"action": "BLOCKED", "blocked_reason": "dangerous command", "tool_calls": tool_calls},
+            fail_on_error=fail_on_error,
+        )
+
+        with pytest.raises(GuardrailRaisedException, match="dangerous command"):
+            await _tool_calls_after(guardrail)
+
+    @pytest.mark.asyncio
+    async def test_fail_on_error_off_sends_the_calls_as_received_when_the_answer_cannot_be_applied(self) -> None:
+        guardrail: Final = _guardrail_answering(
+            {"action": "GUARDRAIL_INTERVENED", "tool_calls": [_run_shell_call("{}"), _run_shell_call("{}")]},
+            fail_on_error=False,
+        )
+
+        guardrailed: Final = await _tool_calls_after(guardrail)
+
+        assert guardrailed["tool_calls"] == [_run_shell_call('{"cmd": "echo SECRET-123"}')]
