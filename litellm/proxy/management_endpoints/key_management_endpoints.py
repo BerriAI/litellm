@@ -5070,7 +5070,7 @@ async def info_key_fn_v2(
 
     **New endpoint**. Currently admin only.
     Parameters:
-        keys: Optional[list] = body parameter representing the key(s) in the request
+        data: Optional[KeyRequest] = body parameter carrying the key(s) in the request
         user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
     Returns:
         Dict containing the key and its associated information
@@ -5816,7 +5816,9 @@ async def delete_verification_tokens(
 
     Args:
         tokens: List of tokens to delete
-        user_id: Optional user_id to filter by
+        user_api_key_cache: Cache holding the key objects
+        user_api_key_dict: UserAPIKeyAuth = the caller's authentication
+        litellm_changed_by: Optional[str] = who triggered the deletion
 
     Returns:
         Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
