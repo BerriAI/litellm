@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig, drops_params
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase, graft_default_vertex_path
 from litellm.types.llms.openai import ResponseInputParam
@@ -107,9 +107,10 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
         if not api_base:
             return default_url
-        if urlparse(api_base).path.rstrip("/") in ("/v1", "/v1beta1"):
+        parsed_api_base: Final = urlparse(api_base)
+        if parsed_api_base.path.rstrip("/").endswith(("/v1", "/v1beta1")):
             return graft_default_vertex_path(api_base, default_url)
-        return join_api_base(api_base, urlparse(default_url).path)
+        return parsed_api_base._replace(path=parsed_api_base.path.rstrip("/") + urlparse(default_url).path).geturl()
 
     def transform_extra_body(
         self,
