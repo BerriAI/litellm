@@ -6654,6 +6654,10 @@ async def test_fetch_all_mcp_servers_env_vars_full_admin_vs_view_only():
                 AsyncMock(return_value=[server]),
             ),
             patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.get_all_allowed_mcp_servers",
+                AsyncMock(return_value=[server]),
+            ),
+            patch(
                 "litellm.proxy.proxy_server.prisma_client",
                 None,
             ),
@@ -6760,6 +6764,185 @@ async def test_list_mcp_servers_full_admin_still_sees_secrets():
     assert raw.static_headers == {"Authorization": "Bearer sk-secret-header"}
     assert raw.credentials is None
     assert raw.pinned_tools == _leaky_list_server().pinned_tools
+
+
+def _governance_server() -> "LiteLLM_MCPServerTable":
+    return LiteLLM_MCPServerTable.model_construct(
+        server_id="gov-server-1",
+        server_name="Governance Server",
+        alias="Governance Server",
+        transport=MCPTransport.http,
+        url="https://internal.example.com/mcp?token=secret-token",
+        static_headers={"Authorization": "Bearer internal-secret"},
+        env={"API_KEY": "internal-env"},
+        credentials={"auth_value": "internal-cred"},
+        created_at=datetime(2026, 1, 1, 12, 0, 0),
+        created_by="catalog-admin",
+        updated_at=datetime(2026, 1, 2, 12, 0, 0),
+        mcp_info={
+            "server_name": "Governance Server",
+            "description": "Enterprise tool catalog",
+            "owners": ["platform-team@company.com"],
+            "documentation_url": "https://docs.company.com/mcp",
+            "data_classification": "confidential",
+            "is_public": False,
+        },
+    )
+
+
+def test_is_restricted_virtual_key_request_exempts_admin_view_roles():
+    """Admin-tier callers (PROXY_ADMIN or PROXY_ADMIN_VIEW_ONLY) with scoped
+    allowed_routes are administrative service accounts/integrations, not untrusted
+    tenant keys needing discovery-only metadata stripping (Issue #51618)."""
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        _is_restricted_virtual_key_request,
+    )
+
+    admin_scoped = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        allowed_routes=["/v1/mcp/server"],
+    )
+    viewer_scoped = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        allowed_routes=["/v1/mcp/server"],
+    )
+    tenant_scoped = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        allowed_routes=["llm_api_routes"],
+    )
+    anonymous_scoped = UserAPIKeyAuth(
+        allowed_routes=["/v1/mcp/server"],
+    )
+    unscoped_viewer = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
+
+    assert _is_restricted_virtual_key_request(admin_scoped) is False
+    assert _is_restricted_virtual_key_request(viewer_scoped) is False
+    assert _is_restricted_virtual_key_request(tenant_scoped) is True
+    assert _is_restricted_virtual_key_request(anonymous_scoped) is True
+    assert _is_restricted_virtual_key_request(unscoped_viewer) is False
+
+
+@pytest.mark.asyncio
+async def test_list_mcp_servers_proxy_admin_viewer_with_allowed_routes_preserves_governance_metadata():
+    """Regression test for Issue #51618: GET /v1/mcp/server called with a
+    PROXY_ADMIN_VIEW_ONLY key holding allowed_routes must preserve mcp_info governance
+    metadata and timestamps (created_at, created_by, updated_at) while redacting credentials.
+    In contrast, an untrusted tenant virtual key receives only minimal discovery fields."""
+    server = _governance_server()
+
+    async def _fetch(auth: UserAPIKeyAuth):
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+                return_value="view_all",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.get_all_mcp_servers_unfiltered",
+                AsyncMock(return_value=[server]),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.get_all_allowed_mcp_servers",
+                AsyncMock(return_value=[server]),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                None,
+            ),
+        ):
+            return await mgmt_endpoints.fetch_all_mcp_servers(
+                user_api_key_dict=auth,
+            )
+
+    viewer_auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        allowed_routes=["/v1/mcp/server"],
+    )
+    viewer_result = await _fetch(viewer_auth)
+    assert len(viewer_result) == 1
+    viewer_server = viewer_result[0]
+
+    # Governance metadata and timestamps must be intact
+    assert viewer_server.created_at == server.created_at
+    assert viewer_server.created_by == "catalog-admin"
+    assert viewer_server.updated_at == server.updated_at
+    assert viewer_server.mcp_info["owners"] == ["platform-team@company.com"]
+    assert viewer_server.mcp_info["documentation_url"] == "https://docs.company.com/mcp"
+    assert viewer_server.mcp_info["data_classification"] == "confidential"
+
+    # Credentials/secrets must be redacted
+    assert viewer_server.credentials is None
+    assert viewer_server.url is None
+    assert viewer_server.static_headers is None
+    assert viewer_server.env == {}
+
+    # Untrusted tenant virtual key receives only minimal discovery fields
+    tenant_auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        allowed_routes=["llm_api_routes"],
+    )
+    tenant_result = await _fetch(tenant_auth)
+    assert len(tenant_result) == 1
+    tenant_server = tenant_result[0]
+    assert tenant_server.created_at is None
+    assert tenant_server.created_by is None
+    assert tenant_server.mcp_info == {"is_public": False, "is_public_explicit": False}
+
+
+@pytest.mark.asyncio
+async def test_fetch_single_mcp_server_proxy_admin_viewer_with_allowed_routes_preserves_governance_metadata():
+    """Regression test for Issue #51618: GET /v1/mcp/server/{server_id} called with a
+    PROXY_ADMIN_VIEW_ONLY key holding allowed_routes must preserve mcp_info governance
+    metadata and timestamps while redacting credentials."""
+    server = _governance_server()
+
+    health_result = generate_mock_mcp_server_db_record(server_id=server.server_id)
+    health_result.status = "healthy"
+    health_result.last_health_check = datetime.now()
+    health_result.health_check_error = None
+
+    async def _fetch(auth: UserAPIKeyAuth):
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.add_server",
+                AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
+                AsyncMock(return_value=health_result),
+            ),
+        ):
+            return await mgmt_endpoints.fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id=server.server_id,
+                user_api_key_dict=auth,
+            )
+
+    viewer_auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        allowed_routes=["/v1/mcp/server"],
+    )
+    viewer_server = await _fetch(viewer_auth)
+
+    assert viewer_server.created_at == server.created_at
+    assert viewer_server.created_by == "catalog-admin"
+    assert viewer_server.updated_at == server.updated_at
+    assert viewer_server.mcp_info["owners"] == ["platform-team@company.com"]
+    assert viewer_server.mcp_info["documentation_url"] == "https://docs.company.com/mcp"
+    assert viewer_server.mcp_info["data_classification"] == "confidential"
+
+    assert viewer_server.credentials is None
+    assert viewer_server.url is None
+    assert viewer_server.static_headers is None
 
 
 def _make_env_var_server(
