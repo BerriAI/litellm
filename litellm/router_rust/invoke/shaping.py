@@ -28,7 +28,7 @@ from litellm.litellm_core_utils.clientside_credential_handler import (
     is_clientside_credential,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.core_helpers import without
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, without
 from litellm.litellm_core_utils.get_litellm_params import SUPPLEMENTAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, inferred_provider
 from litellm.litellm_core_utils.request_timeout_resolver import get_service_tier_timeout
@@ -242,11 +242,7 @@ def _is_classifier_internal_call(kwargs: Mapping[str, object]) -> bool:
 
 
 def _declared_param_allowlist(params: Mapping[str, object]) -> frozenset[str]:
-    declared: Final = params.get("allowed_openai_params")
-    if not isinstance(declared, (list, tuple, set, frozenset)):
-        return frozenset()
-    entries: Final[Sequence[object]] = list(declared)  # pyright: ignore[reportUnknownArgumentType]  # the deployment's untyped allowlist
-    return frozenset(entry for entry in entries if isinstance(entry, str))
+    return frozenset(allowed_openai_param_names(params.get("allowed_openai_params")))
 
 
 def _deployment_supports_param(deployment: Mapping[str, object], group: str, param: str, host: "PythonHost") -> bool:
