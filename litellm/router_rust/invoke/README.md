@@ -1,6 +1,6 @@
 # invoke
 
-The host side of `Host::invoke`: running one attempt against the one deployment router-core picked. Nothing here selects, retries, falls back or records cooldowns.
+The host side of `Host::invoke`, running one attempt against the deployment router-core picked. Retries, fallbacks and default-tier parameters belong to router-core. The bridge applies the core's parameter projection without serializing Python-owned state. The host attaches the service-tier response header.
 
 - `shaping`: the kwargs an attempt sends to its deployment
 - `endpoints`: what each public router method does before, around and after the routed call

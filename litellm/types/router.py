@@ -148,6 +148,7 @@ class RoutingGroup(LiteLLMBaseModel):
 
 class RouterConfig(LiteLLMBaseModel):
     model_list: list[ModelConfig]
+    service_tier_fallbacks: bool = True
 
     redis_url: str | None = None
     redis_host: str | None = None
@@ -217,6 +218,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     """
 
     routing_strategy_args: dict | None = None
+    service_tier_fallbacks: bool | None = None
     routing_strategy: str | None = None
     routing_groups: list[RoutingGroup] | None = None
     retry_policy: RetryPolicy | None = None

@@ -57,6 +57,7 @@ ROUTER_MAX_FALLBACKS: Final = get_env_int("ROUTER_MAX_FALLBACKS", 5)
 ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS: Final = 2000
 RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
     {
+        "service_tier_fallbacks",
         "routing_strategy_args",
         "routing_strategy",
         "routing_groups",

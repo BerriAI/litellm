@@ -52465,6 +52465,8 @@ export interface components {
             routing_strategy_args?: {
                 [key: string]: unknown;
             } | null;
+            /** Service Tier Fallbacks */
+            service_tier_fallbacks?: boolean | null;
             /** Tag Routing Prefix */
             tag_routing_prefix?: string | null;
             /** Timeout */

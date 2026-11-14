@@ -25,6 +25,7 @@ const STATIC_KEYS: &[&str] = &[
     "plugins",
     "cooldown_time",
     "disable_cooldowns",
+    "service_tier_fallbacks",
     "allowed_fails_policy",
     "retry_policy",
     "model_group_retry_policy",
