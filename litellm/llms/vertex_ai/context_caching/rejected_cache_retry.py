@@ -1,4 +1,4 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
 from typing import Final, TypeVar
@@ -17,16 +17,27 @@ Built: Final = TypeVar("Built")
 Sent: Final = TypeVar("Sent")
 
 
-def cache_rebuild(
+def _build_from_copies(
+    build: Callable[..., Built], messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]
+) -> Built:
+    return build(messages=deepcopy(list(messages)), optional_params=independent_snapshot(dict(optional_params)))
+
+
+def cache_rebuilds(
     build: Callable[..., Built], messages: list[AllMessageValues], optional_params: dict
-) -> Callable[[], Built] | None:
-    """Copies the inputs before the first transform, which pops keys from ``optional_params`` and ``messages``."""
+) -> tuple[Callable[[], Built], Callable[[], Built]] | tuple[None, None]:
+    """Returns one build with a fresh cache and one with the history inline, both over a snapshot of the inputs
+    taken before the first transform, which pops keys from ``optional_params`` and ``messages``. Each call
+    copies the snapshot again, since every transform consumes the inputs it is given."""
     if not any(map(is_cached_message, messages)):
-        return None
-    return partial(build, messages=deepcopy(messages), optional_params=independent_snapshot(optional_params))
+        return None, None
+    from_snapshot: Final = partial(
+        _build_from_copies, messages=deepcopy(messages), optional_params=independent_snapshot(optional_params)
+    )
+    return partial(from_snapshot, build), partial(from_snapshot, partial(build, context_caching=False))
 
 
-def _status_and_message(error: httpx.HTTPStatusError | BaseLLMException) -> tuple[int, str]:
+def status_and_message(error: httpx.HTTPStatusError | BaseLLMException) -> tuple[int, str]:
     match error:
         case httpx.HTTPStatusError():
             return error.response.status_code, error.response.text
@@ -35,7 +46,7 @@ def _status_and_message(error: httpx.HTTPStatusError | BaseLLMException) -> tupl
 
 
 def _cache_rejected(body: RequestBody, error: httpx.HTTPStatusError | BaseLLMException) -> bool:
-    return body.get("cachedContent") is not None and names_rejected_cache(*_status_and_message(error))
+    return body.get("cachedContent") is not None and names_rejected_cache(*status_and_message(error))
 
 
 async def post_with_fresh_cache_async(
