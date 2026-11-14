@@ -383,6 +383,9 @@ class AgenticLoopState:
     websearch_emit_native_blocks: bool | None = field(
         default=None, metadata=wire("_websearch_interception_emit_native_blocks")
     )
+    websearch_accumulated_native_blocks: Sequence[Mapping[str, object]] | None = field(
+        default=None, metadata=wire("_websearch_interception_accumulated_native_blocks")
+    )
     websearch_converted_stream: bool | None = field(
         default=None, metadata=wire("_websearch_interception_converted_stream")
     )

@@ -6183,10 +6183,14 @@ class BaseLLMHTTPHandler:
             max_tokens = cast(int, kwargs.get("max_tokens", 1024))
 
         internal_keys: Final = {"litellm_logging_obj"}
+        from litellm.integrations.websearch_interception.handler import (
+            is_websearch_interception_provider_internal_key,
+        )
+
         kwargs_for_followup: Final = {
             k: v
             for k, v in kwargs.items()
-            if not k.startswith("_websearch_interception")
+            if not is_websearch_interception_provider_internal_key(k)
             and not k.startswith("_compression_interception")
             and k not in internal_keys
             and k not in optional_params
@@ -6250,13 +6254,20 @@ class BaseLLMHTTPHandler:
             if k != "stream" and k != "_code_interpreter_interception_converted_stream"
         }
 
+        from litellm.integrations.websearch_interception.handler import (
+            WEBSEARCH_AGENTIC_LOOP_STATE_KEYS,
+        )
+
         internal_keys: Final = {"litellm_logging_obj"}
         kwargs_for_followup: Final = build_agentic_followup_kwargs(
             request_kwargs=MappingProxyType(
                 {
                     k: v
                     for k, v in kwargs.items()
-                    if not is_interception_internal_key(k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES)
+                    if (
+                        k in WEBSEARCH_AGENTIC_LOOP_STATE_KEYS
+                        or not is_interception_internal_key(k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES)
+                    )
                     and k != "_code_interpreter_interception_converted_stream"
                     and k not in internal_keys
                 }

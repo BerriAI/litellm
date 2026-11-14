@@ -99,6 +99,20 @@ if TYPE_CHECKING:
 # (e.g. Claude Desktop's citations panel) can render sources.
 WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: Final = "_websearch_interception_emit_native_blocks"
 
+# Agentic-loop state: survives follow-up kwargs filtering but never reaches the provider.
+WEBSEARCH_ACCUMULATED_NATIVE_BLOCKS_KEY: Final = "_websearch_interception_accumulated_native_blocks"
+WEBSEARCH_AGENTIC_LOOP_STATE_KEYS: Final = frozenset(
+    {WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY, WEBSEARCH_ACCUMULATED_NATIVE_BLOCKS_KEY}
+)
+
+
+def is_websearch_interception_provider_internal_key(key: str) -> bool:
+    """Return True when a kwarg must be stripped before the upstream LLM HTTP request."""
+    if key in WEBSEARCH_AGENTIC_LOOP_STATE_KEYS:
+        return False
+    return key.startswith(WEBSEARCH_INTERCEPTION_PREFIX)
+
+
 # Key on ``AgenticLoopPlan.metadata`` carrying the list of pre-built
 # ``web_search_tool_result`` blocks to inject into the final response.
 WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: Final = "websearch_native_blocks"
@@ -696,8 +710,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         # If the client sent an Anthropic-native web_search_* tool, mark the
         # request so the agentic loop emits native web_search_tool_result
         # blocks in the final response (for citations panels, etc.). The flag
-        # is read by async_build_agentic_loop_plan; the leading underscore
-        # prefix ensures it is stripped before the follow-up call kwargs.
+        # is read by async_build_agentic_loop_plan and kept on agentic-loop
+        # follow-up kwargs; provider-facing request kwargs still strip it.
         if any(is_anthropic_native_web_search_tool(t) for t in tools):
             kwargs[WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY] = True
 
@@ -1086,7 +1100,12 @@ class WebSearchInterceptionLogger(CustomLogger):
         native_blocks: Final = metadata_view["websearch_native_blocks"]
         if not native_blocks:
             return response
-        return self._inject_native_blocks(response, native_blocks)
+        accumulated: Final[list[Mapping[str, object]]] = list(
+            kwargs.get(WEBSEARCH_ACCUMULATED_NATIVE_BLOCKS_KEY) or ()
+        )
+        accumulated.extend(native_blocks)
+        kwargs[WEBSEARCH_ACCUMULATED_NATIVE_BLOCKS_KEY] = accumulated
+        return self._inject_native_blocks(response, accumulated)
 
     @staticmethod
     def _build_native_result_blocks(

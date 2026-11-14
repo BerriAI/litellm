@@ -337,10 +337,15 @@ def _with_agentic_loop_metadata(kwargs_for_followup: Mapping[str, object]) -> Ma
 
 
 def _filter_followup_kwargs(source: dict[str, object]) -> dict[str, object]:
+    from litellm.integrations.websearch_interception.handler import WEBSEARCH_AGENTIC_LOOP_STATE_KEYS
+
     return {
         k: v
         for k, v in source.items()
-        if not is_interception_internal_key(k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES)
+        if (
+            k in WEBSEARCH_AGENTIC_LOOP_STATE_KEYS
+            or not is_interception_internal_key(k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES)
+        )
         and k not in _FOLLOWUP_INTERNAL_PARAMS
     }
 
