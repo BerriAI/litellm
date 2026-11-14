@@ -1,22 +1,28 @@
 import json
 from collections.abc import Mapping
-from typing import Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final
 from urllib.parse import urlparse
 
-from pydantic import JsonValue, TypeAdapter
+import httpx
+from openai.types.responses import ResponseFunctionToolCall
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.openai.chat.gpt_reasoning_transformation import unsupported_reasoning_effort_message
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig, drops_params
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase, graft_default_vertex_path
-from litellm.types.llms.openai import ResponseInputParam
+from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse, ResponsesAPIStreamingResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
 _FIELDS: Final = TypeAdapter(dict[str, object])
 _PARAM_NAMES: Final = TypeAdapter(tuple[str, ...])
-_TOOLS: Final = TypeAdapter(tuple[object, ...])
+_OBJECTS: Final = TypeAdapter(tuple[object, ...])
 _CREDENTIALS: Final[TypeAdapter[str | Mapping[str, JsonValue] | None]] = TypeAdapter(
     str | Mapping[str, JsonValue] | None
 )
@@ -24,6 +30,7 @@ _AUTH: Final = VertexBase()
 _MUSE_PREFIX: Final = "meta/muse-"
 _STORED_RESPONSE_PARAMS: Final = frozenset({"background", "conversation", "previous_response_id"})
 _MUSE_TOOL_TYPES: Final = frozenset({"function", "namespace"})
+_NO_NAMESPACES: Final[Mapping[str, frozenset[str]]] = MappingProxyType({})
 _MUSE_PUBLISHER_PATH: Final = "/publishers/meta/v1"
 _MUSE_RESPONSES_PATH: Final = f"{_MUSE_PUBLISHER_PATH}/responses"
 MUSE_CHAT_PARAMS: Final = (
@@ -48,6 +55,33 @@ MUSE_CHAT_PARAMS: Final = (
 )
 
 
+class _SentMember(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    name: str | None = None
+
+
+class _SentTool(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: str | None = None
+    name: str | None = None
+    tools: tuple[_SentMember, ...] = ()
+
+
+class _SentRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    tools: tuple[_SentTool, ...] = ()
+
+
+class _SentArgs(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    complete_input_dict: _SentRequest = _SentRequest()
+
+
+class _LoggedCall(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    additional_args: _SentArgs = _SentArgs()
+
+
 def is_vertex_muse_model(model: str | None) -> bool:
     return (model or "").removeprefix("vertex_ai/").startswith(_MUSE_PREFIX)
 
@@ -63,7 +97,7 @@ def _keeps_muse_tool(tool: object) -> bool:
 def _muse_tools(tools: object) -> tuple[object, ...] | None:
     if not isinstance(tools, list | tuple):
         return None
-    return tuple(tool for tool in _TOOLS.validate_python(tools) if _keeps_muse_tool(tool))
+    return tuple(tool for tool in _OBJECTS.validate_python(tools) if _keeps_muse_tool(tool))
 
 
 def _refused_reasoning_effort(model: str, reasoning: Mapping[str, object]) -> str | None:
@@ -78,6 +112,69 @@ def _refused_reasoning_effort(model: str, reasoning: Mapping[str, object]) -> st
         key=f"supports_{effort}_reasoning_effort",
     )
     return effort if disabled else None
+
+
+def _sent_namespaces(logging_obj: "Logging") -> Mapping[str, frozenset[str]]:
+    try:
+        tools: Final = _LoggedCall.model_validate(
+            logging_obj.model_call_details
+        ).additional_args.complete_input_dict.tools
+    except ValidationError:
+        return _NO_NAMESPACES
+    return {
+        tool.name: frozenset(member.name for member in tool.tools if member.name)
+        for tool in tools
+        if tool.type == "namespace" and tool.name
+    }
+
+
+def _split_member_name(name: str, namespaces: Mapping[str, frozenset[str]]) -> tuple[str, str] | None:
+    return next(
+        (
+            (namespace, name.removeprefix(f"{namespace}."))
+            for namespace, members in namespaces.items()
+            if name.startswith(f"{namespace}.") and name.removeprefix(f"{namespace}.") in members
+        ),
+        None,
+    )
+
+
+def _namespaced_call(item: object, namespaces: Mapping[str, frozenset[str]]) -> object:
+    if isinstance(item, ResponseFunctionToolCall):
+        typed_split: Final = None if item.namespace else _split_member_name(item.name, namespaces)
+        return (
+            item
+            if typed_split is None
+            else item.model_copy(update={"namespace": typed_split[0], "name": typed_split[1]})
+        )
+    if not isinstance(item, Mapping):
+        return item
+    fields: Final = _FIELDS.validate_python(item)
+    name: Final = fields.get("name")
+    split: Final = (
+        _split_member_name(name, namespaces)
+        if fields.get("type") == "function_call" and not fields.get("namespace") and isinstance(name, str)
+        else None
+    )
+    return fields if split is None else {**fields, "namespace": split[0], "name": split[1]}
+
+
+def _namespaced_output(response: object, namespaces: Mapping[str, frozenset[str]]) -> object:
+    if not isinstance(response, Mapping):
+        return response
+    fields: Final = _FIELDS.validate_python(response)
+    output: Final = fields.get("output")
+    if not isinstance(output, list | tuple):
+        return fields
+    return {**fields, "output": tuple(_namespaced_call(item, namespaces) for item in _OBJECTS.validate_python(output))}
+
+
+def _namespaced_event(chunk: Mapping[str, object], namespaces: Mapping[str, frozenset[str]]) -> Mapping[str, object]:
+    return {
+        **chunk,
+        **({"item": _namespaced_call(chunk["item"], namespaces)} if "item" in chunk else {}),
+        **({"response": _namespaced_output(chunk["response"], namespaces)} if "response" in chunk else {}),
+    }
 
 
 class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -229,3 +326,31 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "model": model.removeprefix("vertex_ai/").removeprefix("meta/"),
             "store": False,
         }
+
+    def transform_response_api_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: "Logging",
+    ) -> ResponsesAPIResponse:
+        namespaces: Final = _sent_namespaces(logging_obj)
+        response: Final = super().transform_response_api_response(model, raw_response, logging_obj)
+        if not namespaces:
+            return response
+        return response.model_copy(
+            update={
+                "output": [_namespaced_call(item, namespaces) for item in _OBJECTS.validate_python(response.output)]
+            }
+        )
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: Mapping[str, object],
+        logging_obj: "Logging",
+    ) -> ResponsesAPIStreamingResponse:
+        carries_items: Final = "item" in parsed_chunk or "response" in parsed_chunk
+        namespaces: Final = _sent_namespaces(logging_obj) if carries_items else _NO_NAMESPACES
+        return super().transform_streaming_response(  # pyright: ignore[reportUnknownMemberType]  # base takes an untyped dict
+            model, dict(_namespaced_event(parsed_chunk, namespaces) if namespaces else parsed_chunk), logging_obj
+        )

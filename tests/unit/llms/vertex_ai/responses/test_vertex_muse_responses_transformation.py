@@ -8,11 +8,14 @@ import httpx
 import pytest
 import respx
 from google.oauth2.credentials import Credentials
+from openai.types.responses import ToolParam
 from pydantic import TypeAdapter
 from pytest_mock import MockerFixture
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.utils import ProviderConfigManager
 
 MODELS: Final = ("muse-wonder-1.0", "muse-ember-1.0", "muse-spark-1.3")
@@ -367,6 +370,95 @@ def test_muse_drop_params_omits_builtin_tools_vertex_refuses(
     with_accepted: Final = _sent_tools(route, [builtin, *accepted], drop_params)
     alone: Final = _sent_tools(route, [builtin], drop_params)
     assert (with_accepted, alone) == ((accepted, None) if drop_params else ([builtin, *accepted], [builtin]))
+
+
+NAMESPACED_TOOLS: Final[list[ToolParam]] = [
+    {
+        "type": "namespace",
+        "name": "mcp__weather",
+        "description": "Weather tools.",
+        "tools": [{"type": "function", "name": "get_weather", "description": "Get the weather.", "parameters": {}}],
+    },
+    {
+        "type": "function",
+        "name": "weather.get_forecast",
+        "description": "Get the forecast.",
+        "parameters": {},
+        "strict": None,
+    },
+]
+MUSE_CALLS: Final = tuple(
+    {"type": "function_call", "id": f"fc_{n}", "call_id": f"call_{n}", "name": name, "arguments": "{}"}
+    for n, name in enumerate(("mcp__weather.get_weather", "weather.get_forecast", "mcp__other.get_weather"))
+)
+CLIENT_CALLS: Final = (
+    ("mcp__weather", "get_weather"),
+    (None, "weather.get_forecast"),
+    (None, "mcp__other.get_weather"),
+)
+
+
+def _call_names(items: object) -> tuple[tuple[object, object], ...]:
+    fields: Final = (FIELDS.validate_python(item) for item in TypeAdapter(tuple[object, ...]).validate_python(items))
+    return tuple((item.get("namespace"), item.get("name")) for item in fields if item.get("type") == "function_call")
+
+
+def test_muse_returns_declared_namespace_member_calls_under_their_namespace(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(ENDPOINT).mock(
+        return_value=httpx.Response(
+            200, json={**_response("muse-spark-1.3"), "output": [{**call, "status": "completed"} for call in MUSE_CALLS]}
+        )
+    )
+    response: Final = litellm.responses(
+        model="vertex_ai/meta/muse-spark-1.3",
+        input="Weather in Paris?",
+        tools=NAMESPACED_TOOLS,
+        vertex_project="unit-project",
+        num_retries=0,
+    )
+    assert isinstance(response, ResponsesAPIResponse)
+    assert _call_names(FIELDS.validate_python(response.model_dump())["output"]) == CLIENT_CALLS
+
+
+@pytest.mark.asyncio
+async def test_muse_streams_declared_namespace_member_calls_under_their_namespace(
+    respx_mock: respx.MockRouter,
+) -> None:
+    done: Final = tuple({**call, "status": "completed"} for call in MUSE_CALLS)
+    events: Final = (
+        *(
+            {"type": "response.output_item.added", "output_index": n, "item": {**call, "status": "in_progress"}}
+            for n, call in enumerate(MUSE_CALLS)
+        ),
+        *({"type": "response.output_item.done", "output_index": n, "item": call} for n, call in enumerate(done)),
+        {"type": "response.completed", "response": {**_response("muse-spark-1.3"), "output": list(done)}},
+    )
+    respx_mock.post(ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+    try:
+        stream: Final = await litellm.aresponses(
+            model="vertex_ai/meta/muse-spark-1.3",
+            input="Weather in Paris?",
+            tools=NAMESPACED_TOOLS,
+            vertex_project="unit-project",
+            stream=True,
+            num_retries=0,
+            client=client,
+        )
+        assert isinstance(stream, ResponsesAPIStreamingIterator)
+        chunks: Final = tuple([FIELDS.validate_python(chunk.model_dump()) async for chunk in stream])
+    finally:
+        await client.close()
+    added: Final = _call_names(chunk["item"] for chunk in chunks if chunk["type"] == "response.output_item.added")
+    finished: Final = _call_names(chunk["item"] for chunk in chunks if chunk["type"] == "response.output_item.done")
+    completed: Final = next(chunk["response"] for chunk in chunks if chunk["type"] == "response.completed")
+    assert (added, finished, _call_names(FIELDS.validate_python(completed)["output"])) == (CLIENT_CALLS,) * 3
 
 
 @pytest.mark.parametrize("choice", ["none", "required", {"type": "function", "name": "report_number"}])
