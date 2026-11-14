@@ -3,19 +3,17 @@ Google GenAI generateContent handler for Unified Guardrails.
 
 Request text comes from every system instruction the request carries
 (systemInstruction and system_instruction, top level and inside config) and from
-contents[].parts[]: text parts, plain-string parts, executableCode code, toolCall
-args, and the tool results (codeExecutionResult output, functionResponse and
-toolResponse response), which are left out when the guardrail skips tool messages.
+contents[].parts[]: text parts, plain-string parts, executableCode code, functionCall
+and toolCall args, and the tool results (codeExecutionResult output, functionResponse
+and toolResponse response), which are left out when the guardrail skips tool messages.
 Structured values are scanned as one JSON text, the way chat scans a tool message,
 with control characters left raw so patterns still see line starts and numbers
 quoted so a mask can replace them. A changed text is decoded back into the part,
 numbers the guardrail left alone keep their type, and a text that no longer
-decodes is blocked with a 400. Request functionCall parts reach the guardrail as chat-shaped
-tool_calls under the call's own id (or a per-position one), and arguments the
-guardrail changed are written back into args when it returns every call, or
-blocked with a 400 when they are no longer a JSON object.
-Response text comes from candidates[].content.parts[].text. Guardrailed text is
-written back in place, so the provider gets the caller's wire shape. Requests and
+decodes, or turns an object into something else, is blocked with a 400.
+Responses are scanned the same way across candidates[].content.parts[], tool
+results included, and streaming chunks only for their text. Guardrailed text is
+written back in place, so the provider and the client get their wire shape. Requests and
 responses may be dicts (wire format) or google-genai SDK objects; streaming
 chunks may additionally be raw SSE frames, which are scanned for detection (a
 blocking guardrail raises) without rewriting the frames.
@@ -23,7 +21,7 @@ blocking guardrail raises) without rewriting the frames.
 
 import json
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
@@ -39,7 +37,6 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import effective_skip_tool_message_for_guardrail
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
-from litellm.types.llms.openai import ChatCompletionToolCallChunk, ChatCompletionToolCallFunctionChunk
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -52,7 +49,6 @@ if TYPE_CHECKING:
 _EMPTY_REQUEST_DATA: Final[Mapping[str, object]] = MappingProxyType({})
 _DECODED_JSON: Final = TypeAdapter(object)
 _SYSTEM_INSTRUCTION_KEYS: Final = ("systemInstruction", "system_instruction")
-_FUNCTION_CALL_KEYS: Final = ("functionCall", "function_call")
 _JSON_SCALAR: Final = re.compile(r'"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?')
 _JSON_STRING_ESCAPE: Final = re.compile(r'\\(["\\]|[bfnrt]|u[0-9a-fA-F]{4})')
 _CONTROL_CHARACTER_ESCAPES: Final = MappingProxyType({"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"})
@@ -67,6 +63,7 @@ class _PartField:
 
 _MODEL_PART_FIELDS: Final = (
     _PartField(keys=("executableCode", "executable_code"), name="code", is_json=False),
+    _PartField(keys=("functionCall", "function_call"), name="args", is_json=True),
     _PartField(keys=("toolCall", "tool_call"), name="args", is_json=True),
 )
 _TOOL_RESULT_PART_FIELDS: Final = (
@@ -82,14 +79,6 @@ class _TextSlot:
     key: str | int
     text: str
     json_value: object = None
-
-
-@dataclass(frozen=True, slots=True)
-class _FunctionCallSlot:
-    call: object
-    call_id: str | None
-    name: str
-    arguments: str
 
 
 def _json_object(value: object) -> Mapping[str, object] | None:
@@ -197,7 +186,7 @@ def _request_part_slots(parts: Sequence[object], index: int, include_tool_result
     return (*_part_text_slots(parts, index), *field_slots)
 
 
-def _content_request_slots(content: object, include_tool_results: bool) -> tuple[_TextSlot, ...]:
+def _content_part_slots(content: object, include_tool_results: bool) -> tuple[_TextSlot, ...]:
     parts: Final = _repeated_field(_field(content, "parts"))
     return tuple(
         chain.from_iterable(_request_part_slots(parts, index, include_tool_results) for index in range(len(parts)))
@@ -218,40 +207,27 @@ def _request_contents(data: Mapping[str, object]) -> tuple[object, ...]:
 
 def _request_text_slots(data: Mapping[str, object], include_tool_results: bool) -> tuple[_TextSlot, ...]:
     return tuple(
-        chain.from_iterable(
-            _content_request_slots(content, include_tool_results) for content in _request_contents(data)
-        )
+        chain.from_iterable(_content_part_slots(content, include_tool_results) for content in _request_contents(data))
     )
 
 
-def _function_call_slot(call: object) -> _FunctionCallSlot:
-    call_id: Final = _field(call, "id")
-    name: Final = _field(call, "name")
-    args: Final = _field(call, "args")
-    return _FunctionCallSlot(
-        call=call,
-        call_id=call_id if isinstance(call_id, str) and call_id else None,
-        name=name if isinstance(name, str) else "",
-        arguments=json.dumps({} if args is None else args),
-    )
-
-
-def _content_function_calls(content: object) -> Iterable[object]:
-    return chain.from_iterable(
-        _present_fields(part, _FUNCTION_CALL_KEYS) for part in _repeated_field(_field(content, "parts"))
-    )
-
-
-def _request_function_calls(data: Mapping[str, object]) -> tuple[_FunctionCallSlot, ...]:
-    calls: Final = chain.from_iterable(_content_function_calls(content) for content in _request_contents(data))
-    return tuple(_function_call_slot(call) for call in calls)
-
-
-def _response_text_slots(response: object) -> tuple[_TextSlot, ...]:
+def _candidate_contents(response: object) -> tuple[object, ...]:
     candidates: Final = _field(response, "candidates")
     if not isinstance(candidates, (list, tuple)):
         return ()
-    return tuple(chain.from_iterable(_content_text_slots(_field(candidate, "content")) for candidate in candidates))
+    return tuple(_field(candidate, "content") for candidate in candidates)
+
+
+def _response_text_slots(response: object) -> tuple[_TextSlot, ...]:
+    return tuple(chain.from_iterable(_content_text_slots(content) for content in _candidate_contents(response)))
+
+
+def _response_part_slots(response: object) -> tuple[_TextSlot, ...]:
+    return tuple(
+        chain.from_iterable(
+            _content_part_slots(content, include_tool_results=True) for content in _candidate_contents(response)
+        )
+    )
 
 
 def _slot_texts(text_slots: Sequence[_TextSlot]) -> tuple[str, ...]:
@@ -264,27 +240,9 @@ def _texts_payload(
     return list(texts)
 
 
-def _tool_call_chunk(index: int, slot: _FunctionCallSlot) -> ChatCompletionToolCallChunk:
-    return ChatCompletionToolCallChunk(
-        id=slot.call_id or f"call_{index}_{slot.name or 'unknown'}",
-        type="function",
-        function=ChatCompletionToolCallFunctionChunk(name=slot.name, arguments=slot.arguments),
-        index=index,
-    )
-
-
-def _guardrail_inputs(
-    texts: Sequence[str],
-    model: object,
-    function_calls: Sequence[_FunctionCallSlot] = (),
-) -> GenericGuardrailAPIInputs:
+def _guardrail_inputs(texts: Sequence[str], model: object) -> GenericGuardrailAPIInputs:
     with_texts: Final[GenericGuardrailAPIInputs] = {"texts": _texts_payload(texts)}
-    with_model: Final[GenericGuardrailAPIInputs] = (
-        {**with_texts, "model": model} if isinstance(model, str) else with_texts
-    )
-    if not function_calls:
-        return with_model
-    return {**with_model, "tool_calls": [_tool_call_chunk(index, slot) for index, slot in enumerate(function_calls)]}
+    return {**with_texts, "model": model} if isinstance(model, str) else with_texts
 
 
 def _unwritable_guardrail_change(rewrite: str) -> "HTTPException":
@@ -297,9 +255,14 @@ def _written_value(slot: _TextSlot, text: str) -> object:
     if slot.json_value is None:
         return text
     try:
-        return _DECODED_JSON.validate_python(json.loads(_with_original_numbers(slot.json_value, text), strict=False))
+        value: Final = _DECODED_JSON.validate_python(
+            json.loads(_with_original_numbers(slot.json_value, text), strict=False)
+        )
     except json.JSONDecodeError:
         raise _unwritable_guardrail_change(f"a part's {slot.key} into text that is not valid JSON") from None
+    if isinstance(slot.json_value, dict) and not isinstance(value, dict):
+        raise _unwritable_guardrail_change(f"a part's {slot.key} into a value that is not a JSON object")
+    return value
 
 
 def _write_back_texts(text_slots: Sequence[_TextSlot], guardrailed_texts: Sequence[str] | None) -> None:
@@ -310,30 +273,6 @@ def _write_back_texts(text_slots: Sequence[_TextSlot], guardrailed_texts: Sequen
     )
     for slot, value in writes:
         _write_field(slot.container, slot.key, value)
-
-
-def _guardrailed_args(slot: _FunctionCallSlot, tool_call: object) -> Mapping[str, object] | None:
-    arguments: Final = _field(_field(tool_call, "function"), "arguments")
-    if not isinstance(arguments, str) or arguments == slot.arguments:
-        return None
-    args: Final = _parse_json_dict_or_none(arguments)
-    if args is None:
-        raise _unwritable_guardrail_change("a functionCall's args into a value that is not a JSON object")
-    return args
-
-
-def _write_back_function_calls(
-    function_calls: Sequence[_FunctionCallSlot], guardrailed_tool_calls: Sequence[object] | None
-) -> None:
-    if guardrailed_tool_calls is None or len(guardrailed_tool_calls) != len(function_calls):
-        return
-    rewrites: Final = tuple(
-        (slot.call, args)
-        for slot, tool_call in zip(function_calls, guardrailed_tool_calls)
-        if (args := _guardrailed_args(slot, tool_call)) is not None
-    )
-    for call, args in rewrites:
-        _write_field(call, "args", args)
 
 
 def _parse_json_dict_or_none(payload: str) -> Mapping[str, object] | None:
@@ -393,18 +332,16 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         text_slots: Final = _request_text_slots(
             request, include_tool_results=not effective_skip_tool_message_for_guardrail(guardrail_to_apply)
         )
-        function_calls: Final = _request_function_calls(request)
-        if not text_slots and not function_calls:
-            verbose_proxy_logger.debug("Google GenAI guardrail: no request text or function call found, skipping")
+        if not text_slots:
+            verbose_proxy_logger.debug("Google GenAI guardrail: no request text found, skipping")
             return data
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-            inputs=_guardrail_inputs(_slot_texts(text_slots), request.get("model"), function_calls),
+            inputs=_guardrail_inputs(_slot_texts(text_slots), request.get("model")),
             request_data=data,
             input_type="request",
             logging_obj=litellm_logging_obj,
         )
         _write_back_texts(text_slots, guardrailed_inputs.get("texts"))
-        _write_back_function_calls(function_calls, guardrailed_inputs.get("tool_calls"))
         return data
 
     async def process_output_response(
@@ -415,7 +352,7 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: Mapping[str, object] | None = None,
     ) -> object:
-        text_slots: Final = _response_text_slots(response)
+        text_slots: Final = _response_part_slots(response)
         if not text_slots:
             verbose_proxy_logger.debug("Google GenAI guardrail: no response text found, skipping")
             return response

@@ -141,11 +141,9 @@ def _mock_guardrail(returned_texts):
     return guardrail
 
 
-class _LastToolCallMaskingGuardrail(CustomGuardrail):
-    def __init__(self, return_every_call: bool) -> None:
-        super().__init__(guardrail_name="last-tool-call-masker")
-        self.return_every_call = return_every_call
-        self.seen_tool_call_ids: tuple[object, ...] = ()
+class _WholeTextMaskingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="whole-text-masker")
 
     async def apply_guardrail(
         self,
@@ -154,14 +152,7 @@ class _LastToolCallMaskingGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
-        tool_calls: Final = list(inputs.get("tool_calls", []))
-        self.seen_tool_call_ids = tuple(tool_call["id"] for tool_call in tool_calls)
-        masked_last: Final = {
-            **tool_calls[-1],
-            "function": {**tool_calls[-1]["function"], "arguments": '{"q": "[MASKED]"}'},
-        }
-        kept: Final = tool_calls[:-1] if self.return_every_call else []
-        return GenericGuardrailAPIInputs(texts=inputs.get("texts", []), tool_calls=[*kept, masked_last])
+        return GenericGuardrailAPIInputs(texts=[json.dumps("[MASKED]") for _ in inputs.get("texts", [])])
 
 
 class _TruncatingGuardrail(CustomGuardrail):
@@ -237,9 +228,16 @@ async def test_a_masked_word_reaches_the_provider_masked_in_the_callers_wire_sha
     assert _sent_request(guardrailed) == masked_body
 
 
+def _function_call_with_rows(rows: object) -> dict[str, object]:
+    return _lookup_calls({"args": {"rows": rows}})
+
+
 @pytest.mark.asyncio
-async def test_a_clean_function_response_nested_deeper_than_any_scan_cap_reaches_the_provider_unchanged() -> None:
-    sent: Final = _function_response_with_rows(_nested_in_lists(_DEEPER_THAN_ANY_SCAN_CAP, "plums"))
+@pytest.mark.parametrize(
+    "tool_turn", [_function_response_with_rows, _function_call_with_rows], ids=["function-response", "function-call"]
+)
+async def test_a_clean_tool_turn_nested_deeper_than_any_scan_cap_reaches_the_provider_unchanged(tool_turn) -> None:
+    sent: Final = tool_turn(_nested_in_lists(_DEEPER_THAN_ANY_SCAN_CAP, "plums"))
 
     guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
         data=copy.deepcopy(sent),
@@ -300,6 +298,18 @@ async def test_a_masked_card_number_replaces_the_json_number_and_other_values_ke
     assert isinstance(sent_rows[0]["card"], str)
     assert "4111111111111111" not in sent_rows[0]["card"]
     assert type(sent_rows[0]["count"]) is int
+
+
+@pytest.mark.asyncio
+async def test_a_masked_card_number_in_function_call_args_is_masked_instead_of_blocking_the_request() -> None:
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=_function_call_with_rows([{"card": 4111111111111111, "count": 3}]),
+        guardrail_to_apply=_card_filter(ContentFilterAction.MASK),
+    )
+
+    sent_rows: Final = guardrailed["contents"][0]["parts"][0]["functionCall"]["args"]["rows"]
+    assert "4111111111111111" not in sent_rows[0]["card"]
+    assert sent_rows[0]["count"] == 3
 
 
 @pytest.mark.asyncio
@@ -366,39 +376,11 @@ async def test_only_the_function_call_the_guardrail_changed_gets_new_args() -> N
 
 
 @pytest.mark.asyncio
-async def test_each_function_call_reaches_the_guardrail_under_its_own_id() -> None:
-    guardrail: Final = _LastToolCallMaskingGuardrail(return_every_call=True)
-
-    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
-        data=_lookup_calls({"id": "fc-7", "args": {"q": "plums"}}, {"args": {"q": "figs"}}, {"args": {"q": "kiwis"}}),
-        guardrail_to_apply=guardrail,
-    )
-
-    assert guardrail.seen_tool_call_ids[0] == "fc-7"
-    assert len(set(guardrail.seen_tool_call_ids)) == 3
-    assert _sent_request(guardrailed) == _lookup_calls(
-        {"id": "fc-7", "args": {"q": "plums"}}, {"args": {"q": "figs"}}, {"args": {"q": "[MASKED]"}}
-    )
-
-
-@pytest.mark.asyncio
-async def test_a_guardrail_returning_fewer_tool_calls_than_it_got_changes_no_function_call() -> None:
-    sent: Final = _lookup_calls({"args": {"q": "plums"}}, {"args": {"q": "zebrafruit"}})
-
-    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
-        data=copy.deepcopy(sent),
-        guardrail_to_apply=_LastToolCallMaskingGuardrail(return_every_call=False),
-    )
-
-    assert _sent_request(guardrailed) == sent
-
-
-@pytest.mark.asyncio
-async def test_a_masked_function_call_whose_args_are_not_an_object_blocks_the_request_instead_of_sending_it() -> None:
+async def test_a_guardrail_turning_function_call_args_into_a_non_object_blocks_the_request() -> None:
     with pytest.raises(HTTPException) as blocked:
         await GoogleGenAIGenerateContentHandler().process_input_messages(
-            data=_lookup_calls({"args": "zebrafruit"}),
-            guardrail_to_apply=_zebrafruit_filter(ContentFilterAction.MASK),
+            data=_lookup_calls({"args": {"q": "plums"}}),
+            guardrail_to_apply=_WholeTextMaskingGuardrail(),
         )
 
     assert blocked.value.status_code == 400
@@ -542,6 +524,31 @@ async def test_output_dict_response_text_is_guardrailed_and_written_back():
     assert call_kwargs["input_type"] == "response"
     assert call_kwargs["request_data"]["response"] is response
     assert result["candidates"][0]["content"]["parts"][0]["text"] == "masked answer"
+
+
+def _model_reply(part: dict[str, object]) -> dict[str, object]:
+    return {"candidates": [{"content": {"role": "model", "parts": [part]}, "finishReason": "STOP"}]}
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_word_in_a_function_call_the_model_returns_blocks_the_response() -> None:
+    with pytest.raises(HTTPException) as blocked:
+        await GoogleGenAIGenerateContentHandler().process_output_response(
+            response=_model_reply({"functionCall": {"name": "lookup", "args": {"q": "zebrafruit"}}}),
+            guardrail_to_apply=_zebrafruit_filter(ContentFilterAction.BLOCK),
+        )
+
+    assert blocked.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_a_masked_word_in_a_function_call_the_model_returns_reaches_the_client_masked() -> None:
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_output_response(
+        response=_model_reply({"functionCall": {"name": "lookup", "args": {"q": "zebrafruit", "limit": 3}}}),
+        guardrail_to_apply=_zebrafruit_filter(ContentFilterAction.MASK),
+    )
+
+    assert guardrailed == _model_reply({"functionCall": {"name": "lookup", "args": {"q": _MASKED, "limit": 3}}})
 
 
 @pytest.mark.asyncio
