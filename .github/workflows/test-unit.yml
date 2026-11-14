@@ -236,6 +236,7 @@ jobs:
               tests/unit/llms/aiml
               tests/unit/llms/aiohttp_openai
               tests/unit/llms/apiserpent
+              tests/unit/llms/autom
               tests/unit/llms/aws_polly
               tests/unit/llms/azure
               tests/unit/llms/azure_ai
