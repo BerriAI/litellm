@@ -216,6 +216,21 @@ async def test_dropped_audio_request_reaches_upstream_without_audio(
 
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize("bridge", SURFACES)
+async def test_global_drop_params_drops_audio_before_upstream(
+    respx_mock: respx.MockRouter, bridge: Bridge, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    upstream: Final = _upstream(respx_mock, VOICE_API, TEXT_REPLY)
+
+    await bridge(VOICE_MODEL, api_base=VOICE_API, audio=AUDIO, modalities=["audio"])
+
+    sent: Final = _sent_body(upstream)
+    assert "audio" not in sent
+    assert "modalities" not in sent
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("bridge", SURFACES)
 @pytest.mark.parametrize(
     "audio_request",
     [
