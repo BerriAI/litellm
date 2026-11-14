@@ -475,6 +475,11 @@ def update_kwargs_with_deployment(
     )
     _stamp_pricing_snapshot(metadata, deployment)
     other_bucket: Final = "metadata" if metadata_variable_name == "litellm_metadata" else "litellm_metadata"
+    stale_snapshot_bucket: Final = kwargs.get(other_bucket)
+    if isinstance(stale_snapshot_bucket, Mapping) and PRICING_SNAPSHOT in stale_snapshot_bucket:
+        kwargs[other_bucket] = {  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
+            key: value for key, value in as_dict(stale_snapshot_bucket).items() if key != PRICING_SNAPSHOT
+        }
     other_bucket_metadata: Final = kwargs.get(other_bucket)
     if isinstance(other_bucket_metadata, Mapping) and KUBERNETES_POD_ROUTING_KEY in other_bucket_metadata:
         kwargs[other_bucket] = {**as_dict(other_bucket_metadata), KUBERNETES_POD_ROUTING_KEY: routing}  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them

@@ -63,6 +63,7 @@ class PricingCurrencyError:
         "invalid_price",
         "out_of_range",
         "unsupported_field",
+        "no_prices",
     ]
     message: str
 
@@ -392,8 +393,14 @@ def normalize_deployment_pricing(
     params_base: Final = _without(litellm_params, CURRENCY_FIELDS)
     info_base: Final = _without(model_info, CURRENCY_FIELDS | PRICING_PROJECTION_KEYS)
     shadowed: Final = frozenset(field for field in params_prices if field in _MIRRORED_FIELDS)
-    if currency is PricingCurrency.USD or (not params_prices and not info_prices):
+    if currency is PricingCurrency.USD:
         return NormalizedPricing(litellm_params=params_base, model_info=info_base, source=None)
+    if not params_prices and not info_prices:
+        return PricingCurrencyError(
+            "no_prices",
+            f"pricing_currency {currency.value} needs at least one custom price on the deployment, "
+            "or leave it out to use the cost map's USD prices",
+        )
     source: Final = PricingSource(
         currency=currency,
         usd_per_currency_unit=str(rate),

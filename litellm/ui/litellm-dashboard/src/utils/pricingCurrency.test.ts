@@ -32,6 +32,10 @@ describe("priceUnit", () => {
     ["input_cost_per_character", "million_characters"],
     ["cost_per_ptu_per_hour", "ptu_hour"],
     ["output_cost_per_billable_unit", "unit"],
+    ["tiered_pricing[1].input_cost_per_token", "million_tokens"],
+    ["off_peak_pricing.output_cost_per_token", "million_tokens"],
+    ["output_cost_per_video_clip.720p.5s", "clip"],
+    ["search_context_cost_per_query.search_context_size_low", "query"],
   ])("reads %s as priced %s", (field, unit) => {
     expect(priceUnit(field)).toBe(unit);
   });
@@ -90,6 +94,27 @@ describe("configuredPrices", () => {
         },
       }),
     ).toEqual({ input_cost_per_token: 0.0008, cache_read_input_token_cost: 0.00008 });
+  });
+});
+
+describe("configuredPrices for price tables", () => {
+  it("lists each rate inside tier, off-peak, clip and search tables and skips their settings", () => {
+    expect(
+      configuredPrices({
+        litellm_params: {
+          tiered_pricing: [{ range: [0, 32000], input_cost_per_token: 0.000001, output_cost_per_token: null }],
+        },
+        model_info: {
+          off_peak_pricing: { hours_utc: "00:00-06:00", windows: [], input_cost_per_token: 0.0000005 },
+          output_cost_per_video_clip: { "720p": { "5s": 0.4 } },
+          usd_pricing: { tiered_pricing: [], off_peak_pricing: {}, output_cost_per_video_clip: {} },
+        },
+      }),
+    ).toEqual({
+      "tiered_pricing[0].input_cost_per_token": 0.000001,
+      "off_peak_pricing.input_cost_per_token": 0.0000005,
+      "output_cost_per_video_clip.720p.5s": 0.4,
+    });
   });
 });
 

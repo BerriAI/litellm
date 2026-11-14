@@ -15,12 +15,14 @@ export type PriceUnit =
   | "page"
   | "pixel"
   | "ptu_hour"
+  | "clip"
   | "unit";
 
 const THRESHOLD_SUFFIX = /_above_.*$/;
 
 const UNIT_PATTERNS: ReadonlyArray<readonly [RegExp, PriceUnit]> = [
   [/_per_ptu_per_hour$/, "ptu_hour"],
+  [/_per_video_clip$/, "clip"],
   [/_per_second(_|$)/, "second"],
   [/_token(_|$)/, "million_tokens"],
   [/_per_character(_|$)/, "million_characters"],
@@ -32,10 +34,18 @@ const UNIT_PATTERNS: ReadonlyArray<readonly [RegExp, PriceUnit]> = [
 
 const PER_MILLION_UNITS: ReadonlySet<PriceUnit> = new Set(["million_tokens", "million_characters"]);
 
-export const priceUnit = (field: string): PriceUnit => {
-  const unitPart = field.replace(THRESHOLD_SUFFIX, "");
+const segmentUnit = (segment: string): PriceUnit => {
+  const unitPart = segment.replace(THRESHOLD_SUFFIX, "");
   return UNIT_PATTERNS.find(([pattern]) => pattern.test(unitPart))?.[1] ?? "unit";
 };
+
+export const priceUnit = (path: string): PriceUnit =>
+  path
+    .split(/[.[\]]+/)
+    .filter((segment) => segment !== "")
+    .reverse()
+    .map(segmentUnit)
+    .find((unit) => unit !== "unit") ?? "unit";
 
 export const displayedAmount = (field: string, ratePerUnit: number): number =>
   PER_MILLION_UNITS.has(priceUnit(field)) ? ratePerUnit * 1_000_000 : ratePerUnit;
@@ -88,6 +98,19 @@ export const currencyPatch = (stored: CurrencySetting, edited: CurrencySetting):
 
 const isPriceValue = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
+const SETTING_KEYS = new Set(["range", "hours_utc", "windows", "weekday_timezone"]);
+
+const flattenPrices = (path: string, value: unknown): ReadonlyArray<readonly [string, number]> => {
+  if (isPriceValue(value)) return [[path, value]];
+  if (Array.isArray(value)) return value.flatMap((item, index) => flattenPrices(`${path}[${index}]`, item));
+  if (value !== null && typeof value === "object") {
+    return Object.entries(value).flatMap(([key, item]) =>
+      SETTING_KEYS.has(key) ? [] : flattenPrices(`${path}.${key}`, item),
+    );
+  }
+  return [];
+};
+
 export const configuredPrices = (model: {
   litellm_params?: Record<string, unknown> | null;
   model_info?: Record<string, unknown> | null;
@@ -101,10 +124,7 @@ export const configuredPrices = (model: {
     ...(Array.isArray(overrides) ? overrides.filter((field): field is string => typeof field === "string") : []),
   ]);
   return Object.fromEntries(
-    [...fields].flatMap((field) => {
-      const value = litellmParams[field] ?? modelInfo[field];
-      return isPriceValue(value) ? [[field, value] as const] : [];
-    }),
+    [...fields].flatMap((field) => flattenPrices(field, litellmParams[field] ?? modelInfo[field])),
   );
 };
 

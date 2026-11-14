@@ -24,7 +24,7 @@ from litellm.litellm_core_utils.pricing_currency import (
 )
 from litellm.router_api import ChangeSet
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
-from litellm.types.utils import MONETARY_PRICING_FIELDS, NON_MONETARY_PRICING_FIELDS, CustomPricingLiteLLMParams
+from litellm.types.utils import CustomPricingLiteLLMParams
 
 EUR_RATE: Final = "0.5"
 HUF_RATE: Final = "0.0025"
@@ -75,8 +75,21 @@ def _halved(field: str) -> object:
             return 2.0
 
 
-@pytest.mark.parametrize("field", sorted(MONETARY_PRICING_FIELDS))
-def test_every_declared_price_field_is_converted_with_its_settings_kept(field: str) -> None:
+NOT_MONEY: Final = frozenset(
+    {
+        "regional_processing_uplift_multiplier_eu",
+        "regional_processing_uplift_multiplier_us",
+        "fedramp_uplift_multiplier",
+        "regional_endpoint_uplift_multiplier",
+        "output_vector_size",
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "field", sorted({*CustomPricingLiteLLMParams.model_fields, "off_peak_pricing", "cost_per_ptu_per_hour"} - NOT_MONEY)
+)
+def test_every_custom_price_field_is_billed_in_usd_with_its_settings_kept(field: str) -> None:
     result: Final = _normalized(
         {"pricing_currency": "EUR", "usd_per_currency_unit": EUR_RATE}, {field: _sample_price(field)}
     )
@@ -85,16 +98,7 @@ def test_every_declared_price_field_is_converted_with_its_settings_kept(field: s
     assert result.source.model_info == {field: _sample_price(field)}
 
 
-def test_every_custom_pricing_field_is_either_a_price_or_explicitly_not_money() -> None:
-    unclassified: Final = sorted(
-        field
-        for field in CustomPricingLiteLLMParams.model_fields
-        if field not in MONETARY_PRICING_FIELDS and field not in NON_MONETARY_PRICING_FIELDS
-    )
-    assert unclassified == ["output_vector_size"]
-
-
-@pytest.mark.parametrize("field", [*sorted(NON_MONETARY_PRICING_FIELDS), "output_vector_size", "max_tokens"])
+@pytest.mark.parametrize("field", [*sorted(NOT_MONEY), "max_tokens"])
 def test_multipliers_and_other_numbers_are_never_converted(field: str) -> None:
     result: Final = _normalized(
         {"pricing_currency": "HUF", "usd_per_currency_unit": HUF_RATE, "input_cost_per_token": 0.0008, field: 1.1},
@@ -130,7 +134,7 @@ def test_explicit_usd_is_identity_and_records_no_provenance() -> None:
     tiers: Final = [{"range": [0, 10], "input_cost_per_token": 0.1}]
     result: Final = _normalized({"pricing_currency": "USD", "input_cost_per_token": 0.3, "tiered_pricing": tiers}, {})
     assert result.litellm_params["input_cost_per_token"] == 0.3
-    assert result.litellm_params["tiered_pricing"] is tiers
+    assert result.litellm_params["tiered_pricing"] == tiers
     assert result.source is None and PRICING_SOURCE not in result.model_info
 
 
@@ -201,6 +205,10 @@ def test_a_price_table_with_non_text_keys_is_refused_with_a_reason() -> None:
         {"pricing_currency": "EUR", "usd_per_currency_unit": 1.1}, {"output_cost_per_video_clip": {720: {5: 0.1}}}
     )
     assert error.kind == "invalid_price"
+
+
+def test_a_currency_without_any_custom_price_is_refused_rather_than_dropped() -> None:
+    assert _error({"pricing_currency": "HUF", "usd_per_currency_unit": HUF_RATE}).kind == "no_prices"
 
 
 def test_conflicting_currency_between_sections_is_refused() -> None:
@@ -549,7 +557,7 @@ async def test_a_held_call_bills_the_rate_it_was_routed_under_through_edits_and_
     await held
     await router.acompletion(model="eur", messages=MESSAGES, mock_response="after", litellm_call_id="later-call")
     await recorder.done.wait()
-    by_call: Final = {str(payload["id"]): payload for payload in recorder.payloads}
+    by_call: Final = {str(payload.get("litellm_call_id")): payload for payload in recorder.payloads}
     held_payload, later_payload = by_call["held-call"], by_call["later-call"]
     assert held_payload["response_cost"] == pytest.approx(
         _expected_cost(held_payload, USD_INPUT, USD_OUTPUT), rel=1e-12

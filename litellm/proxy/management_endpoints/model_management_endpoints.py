@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.pricing_currency import (
+    CURRENCY_FIELDS,
     PRICING_CURRENCY,
     USD_PER_CURRENCY_UNIT,
     configures_pricing_currency,
@@ -573,6 +574,8 @@ def _encrypted_litellm_params(
         name: (
             _effective_complexity_router_config(incoming_params, existing_params)
             if name == "complexity_router_config"
+            else value
+            if name in CURRENCY_FIELDS
             else encrypt_value_helper(value)
         )
         for name, value in dumped.items()
@@ -1608,15 +1611,7 @@ def update_db_model(
             merged_model_info.pop(field, None)
 
     _validate_ptu_model_info(merged_model_info)
-    plain_patch: Final[Mapping[str, object]] = (
-        updated_patch.litellm_params.model_dump(exclude_none=True, exclude_unset=True)
-        if updated_patch.litellm_params
-        else MappingProxyType({})
-    )
-    pricing_error: Final = pricing_configuration_error(
-        {**merged_litellm_params, **{k: v for k, v in plain_patch.items() if k in merged_litellm_params}},
-        merged_model_info,
-    )
+    pricing_error: Final = pricing_configuration_error(merged_litellm_params, merged_model_info)
     if pricing_error is not None:
         raise HTTPException(status_code=400, detail={"error": pricing_error})
     ptu_pricing, ptu_released = _ptu_pricing_delta(
@@ -2189,7 +2184,9 @@ async def add_model_to_db(
     _original_litellm_model_name: Final = model_params.litellm_params.model
     for k, v in _litellm_params_dict.items():
         encrypted_value = (
-            encrypt_value_helper(value=v, new_encryption_key=new_encryption_key) if isinstance(v, str) else v
+            encrypt_value_helper(value=v, new_encryption_key=new_encryption_key)
+            if isinstance(v, str) and k not in CURRENCY_FIELDS
+            else v
         )
         model_params.litellm_params[k] = encrypted_value
     _data: Final[dict] = {

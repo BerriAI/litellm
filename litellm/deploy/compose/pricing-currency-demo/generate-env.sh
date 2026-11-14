@@ -15,5 +15,6 @@ LITELLM_SALT_KEY=sk-$(random 24)
 POSTGRES_PASSWORD=$(random 16)
 UI_PASSWORD=$(random 12)
 DEMO_VIRTUAL_KEY=sk-$(random 20)
+DEMO_PRICING_KEY=sk-$(random 20)
 ENV
 echo "Wrote .env with demo-only keys. UI login: admin / UI_PASSWORD from .env"

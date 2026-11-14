@@ -21032,7 +21032,8 @@
       "amount": "{{currency}} {{amount}} {{unit}}",
       "needsRate": "Enter a valid rate",
       "empty": "No custom prices are set on this model yet.",
-      "reinterpreted": "Changing the currency or rate re-reads these existing prices as {{currency}}: {{fields}}. Check the USD values before saving."
+      "reinterpreted": "Changing the currency or rate re-reads these existing prices as {{currency}}: {{fields}}. Check the USD values before saving.",
+      "emptyCurrency": "Enter at least one price in {{currency}}. A currency without custom prices cannot be saved."
     },
     "units": {
       "million_tokens": "per 1M tokens",
@@ -21043,7 +21044,8 @@
       "page": "per page",
       "pixel": "per pixel",
       "ptu_hour": "per PTU-hour",
-      "unit": "per unit"
+      "unit": "per unit",
+      "clip": "per clip"
     }
   }
 }

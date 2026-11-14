@@ -12,6 +12,7 @@ const UNIT_LABELS: Record<PriceUnit, ParseKeys> = {
   page: "pricingCurrency.units.page",
   pixel: "pricingCurrency.units.pixel",
   ptu_hour: "pricingCurrency.units.ptu_hour",
+  clip: "pricingCurrency.units.clip",
   unit: "pricingCurrency.units.unit",
 };
 
@@ -25,7 +26,13 @@ interface PricingCurrencyPreviewProps {
 export function PricingCurrencyPreview({ currency, rows, reinterpreted, rateValid }: PricingCurrencyPreviewProps) {
   const { t } = useTranslation();
   if (rows.length === 0) {
-    return <p className="text-xs text-muted-foreground">{t("pricingCurrency.preview.empty")}</p>;
+    return (
+      <p className="text-xs text-muted-foreground">
+        {currency === "USD"
+          ? t("pricingCurrency.preview.empty")
+          : t("pricingCurrency.preview.emptyCurrency", { currency })}
+      </p>
+    );
   }
   return (
     <div className="space-y-2" aria-live="polite">

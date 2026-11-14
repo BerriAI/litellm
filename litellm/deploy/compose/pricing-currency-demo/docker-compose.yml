@@ -1,12 +1,21 @@
 name: litellm-pricing-currency-demo
 
+x-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
 x-demo-image: &demo-image
   image: litellm-pricing-currency-demo:local
   build:
     context: ../../../..
     dockerfile: litellm/deploy/docker/Dockerfile
     target: runtime
+    args:
+      MATURIN_PEP517_ARGS: ${DEMO_MATURIN_PEP517_ARGS:---profile ci}
   pull_policy: build
+  logging: *bounded-logging
 
 services:
   gateway:
@@ -77,6 +86,7 @@ services:
       DEMO_PROXY_URL: http://gateway:4000
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?run ./generate-env.sh first}
       DEMO_VIRTUAL_KEY: ${DEMO_VIRTUAL_KEY:?run ./generate-env.sh first}
+      DEMO_PRICING_KEY: ${DEMO_PRICING_KEY:?run ./generate-env.sh first}
     volumes:
       - ./seed.py:/demo/seed.py:ro
     read_only: true
@@ -88,6 +98,7 @@ services:
 
   db:
     image: postgres:16
+    logging: *bounded-logging
     environment:
       POSTGRES_DB: litellm
       POSTGRES_USER: llmproxy
@@ -102,6 +113,7 @@ services:
 
   redis:
     image: redis:7.4-alpine
+    logging: *bounded-logging
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -111,3 +123,7 @@ services:
 
 volumes:
   postgres_data:
+    name: litellm-pricing-currency-demo-postgres
+    labels:
+      litellm.demo: pricing-currency
+      litellm.demo.lifecycle: disposable

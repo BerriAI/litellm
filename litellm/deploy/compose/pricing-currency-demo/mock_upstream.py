@@ -1,7 +1,8 @@
 """A deterministic OpenAI-compatible upstream for the pricing currency demo.
 
 Every chat completion reports 1000 prompt and 500 completion tokens, so a deployment's bill is fixed by its prices
-alone. Responses are synthetic and say so; no model is called.
+alone. A model name containing "reported-cost" also reports a provider cost of 9.99 USD, which a deployment with
+custom prices must ignore. Responses are synthetic and say so, and no model is called.
 """
 
 import json
@@ -17,6 +18,7 @@ from starlette.routing import Route
 PROMPT_TOKENS: Final = 1000
 COMPLETION_TOKENS: Final = 500
 CREATED: Final = 1_700_000_000
+REPORTED_COST: Final = 9.99
 
 
 async def chat_completions(request: Request) -> JSONResponse:
@@ -39,6 +41,7 @@ async def chat_completions(request: Request) -> JSONResponse:
                 "prompt_tokens": PROMPT_TOKENS,
                 "completion_tokens": COMPLETION_TOKENS,
                 "total_tokens": PROMPT_TOKENS + COMPLETION_TOKENS,
+                **({"cost": REPORTED_COST} if "reported-cost" in model else {}),
             },
         }
     )
