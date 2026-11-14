@@ -69,12 +69,20 @@ spec:
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.backend.command }}
+          command:
+            {{- tpl (toYaml .) $ | nindent 12 }}
+          {{- end }}
           args:
+            {{- if .Values.backend.args }}
+            {{- tpl (toYaml .Values.backend.args) $ | nindent 12 }}
+            {{- else }}
             - backend
             - --host
             - 0.0.0.0
             - --port
             - "4001"
+            {{- end }}
           ports:
             - name: http
               containerPort: 4001

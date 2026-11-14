@@ -77,8 +77,14 @@ spec:
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.gateway.command }}
+          command:
+            {{- tpl (toYaml .) $ | nindent 12 }}
+          {{- end }}
           args:
-            {{- if .Values.monolith.enabled }}
+            {{- if .Values.gateway.args }}
+            {{- tpl (toYaml .Values.gateway.args) $ | nindent 12 }}
+            {{- else if .Values.monolith.enabled }}
             {{- include "litellm.proxy.args" . | nindent 12 }}
             {{- else }}
             - gateway
