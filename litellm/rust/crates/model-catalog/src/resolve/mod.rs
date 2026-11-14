@@ -2,6 +2,12 @@ mod image;
 
 pub use image::*;
 
+use serde_json::Value;
+
+use crate::{Catalog, wire::Fields};
+
+const BACKFILL_MODES: [&str; 2] = ["chat", "responses"];
+
 /// The seven names main's `get_model_info` tries, built by Python, walked in this order by Rust
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Candidates {
@@ -43,4 +49,54 @@ pub enum Resolution {
     Missing {
         tried: Vec<String>,
     },
+}
+
+impl Catalog {
+    pub fn model_info(&self, names: &[&str], provider: &str) -> Option<Fields> {
+        let registered = names.iter().find_map(|name| {
+            let found = self.lookup(name)?;
+            let entry_provider = found
+                .entry
+                .field("litellm_provider")
+                .and_then(Value::as_str);
+            provider_matches(entry_provider, provider).then(|| {
+                self.with_missing_filled(
+                    found.matched_key,
+                    found.entry.fields(),
+                    entry_provider.unwrap_or_default(),
+                )
+            })
+        });
+        if registered.is_some() || names.iter().any(|name| self.lookup(name).is_some()) {
+            return registered;
+        }
+        names
+            .iter()
+            .find_map(|name| self.capability_rules().matching(name))
+    }
+
+    fn with_missing_filled(&self, key: &str, fields: &Fields, entry_provider: &str) -> Fields {
+        let backfills = fields.get("mode").is_none_or(|mode| {
+            mode.as_str()
+                .is_some_and(|mode| BACKFILL_MODES.contains(&mode))
+        });
+        let missing = if backfills {
+            self.capability_rules().filling(key, entry_provider)
+        } else {
+            Fields::new()
+        };
+        missing.into_iter().chain(fields.clone()).collect()
+    }
+}
+
+fn provider_matches(entry_provider: Option<&str>, provider: &str) -> bool {
+    let Some(entry_provider) = entry_provider else {
+        return true;
+    };
+    provider.is_empty()
+        || entry_provider == provider
+        || matches!(provider, "vertex_ai" | "fireworks_ai") && entry_provider.starts_with(provider)
+        || provider.starts_with("bedrock") && entry_provider.starts_with("bedrock")
+        || matches!(provider, "litellm_proxy" | "github" | "nadir")
+        || provider == "azure_ai" && matches!(entry_provider, "azure" | "openai")
 }
