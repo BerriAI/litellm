@@ -114,7 +114,8 @@ def redact_mcp_resource_url(url: str | None) -> str | None:
         return None
     if not hostname:
         return None
-    netloc: Final = f"{hostname}:{port}" if port else hostname
+    host: Final = f"[{hostname}]" if ":" in hostname else hostname
+    netloc: Final = f"{host}:{port}" if port else host
     return urlunsplit((parts.scheme, netloc, "", "", "")) or None
 
 

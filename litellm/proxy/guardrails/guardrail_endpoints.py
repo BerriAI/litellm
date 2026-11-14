@@ -2422,6 +2422,9 @@ async def test_custom_code_guardrail(
             "team_id": mock_request_data.get("team_id"),
             "end_user_id": mock_request_data.get("end_user_id"),
             "metadata": mock_request_data.get("metadata", {}),
+            **{
+                key: mock_request_data[key] for key in ("mcp_server_name", "mcp_server_url") if key in mock_request_data
+            },
         }
 
         # Step 4: Execute the function with timeout protection

@@ -6442,6 +6442,7 @@ class MCPServerManager:
             "arguments": arguments,
             "server_name": server_name,
             "mcp_rate_limit_server_name": server.alias or server.server_name or server.name,
+            "mcp_server_url": redact_mcp_resource_url(server.url),
             "user_api_key_auth": checked_auth,
             "user_api_key_user_id": checked_auth.user_id if checked_auth else None,
             "user_api_key_team_id": checked_auth.team_id if checked_auth else None,
@@ -6542,6 +6543,7 @@ class MCPServerManager:
         self,
         name: str,
         arguments: _ToolArguments,
+        server: MCPServer,
         server_name_from_prefix: str | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         proxy_logging_obj: ProxyLogging,
@@ -6571,6 +6573,8 @@ class MCPServerManager:
             "name": name,
             "arguments": arguments,
             "server_name": server_name_from_prefix,
+            "mcp_rate_limit_server_name": server.alias or server.server_name or server.name,
+            "mcp_server_url": redact_mcp_resource_url(server.url),
             "user_api_key_auth": user_api_key_auth,
         }
 
@@ -7343,6 +7347,7 @@ class MCPServerManager:
             during_hook_task: Final = self._create_during_hook_task(
                 name=name,
                 arguments=arguments,
+                server=mcp_server,
                 server_name_from_prefix=server_name,
                 user_api_key_auth=effective_guardrail_auth,
                 proxy_logging_obj=proxy_logging_obj,
