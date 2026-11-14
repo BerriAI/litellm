@@ -1005,7 +1005,6 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     BudgetCounter,
     customer_window_counters,
     get_budget_window_start,
-    release_budget_reservation_on_cancel,
     release_unbound_budget_reservation,
     stamp_budget_reservation_actual_cost,
 )
@@ -11207,8 +11206,6 @@ async def async_data_generator(
         for guarded_layer in (stream_source, stream_iterator):
             if guarded_layer is not response:
                 await close_guarded_stream(guarded_layer)
-        if not provider_output_started and not withheld_provider_output(_UNTYPED_VALUE.validate_python(response)):
-            await release_budget_reservation_on_cancel(user_api_key_dict.budget_reservation)
         raise
     except Exception as e:  # noqa: BLE001  # stream boundary: any failure must end the SSE body as an error event
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)
@@ -11259,6 +11256,9 @@ async def async_data_generator(
             client_disconnected=client_disconnected,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
+            release_reservation_if_unbilled=client_disconnected
+            and not provider_output_started
+            and not withheld_provider_output(_UNTYPED_VALUE.validate_python(response)),
         )
 
 
