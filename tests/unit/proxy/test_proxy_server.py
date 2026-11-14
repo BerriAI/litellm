@@ -4169,6 +4169,67 @@ async def test_queue_request_labels_an_upstream_failure_a_server_error_not_an_au
     assert (exc_info.value.code, exc_info.value.type) == ("500", "internal_server_error")
 
 
+@pytest.mark.asyncio
+async def test_queue_request_refuses_a_non_admin_s3_image_outside_the_allowed_buckets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import async_queue_request
+
+    body: Final = json.dumps(
+        {
+            "model": "nova-lite",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "image_url", "image_url": {"url": "s3://another-teams-bucket/cat.png"}}],
+                }
+            ],
+        }
+    ).encode()
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/queue/chat/completions",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "root_path": "",
+        },
+        receive,
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "nova-lite",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-test", "mock_response": "ok"},
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "general_settings", {"allowed_client_side_s3_buckets": ["media-bucket"]})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await async_queue_request(
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert exc_info.value.code == "403"
+
+
 _DEBUG_LOG_SENTINEL: Final = "sentinel-request-body-7f3a"
 _LONG_PROMPT: Final = f"{_DEBUG_LOG_SENTINEL} " + "Keep edits minimal and explain them briefly. " * 20
 _TOOL_PARAMETERS: Final = {"type": "object", "properties": {"cmd": {"type": "string"}}}

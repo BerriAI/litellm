@@ -13275,8 +13275,12 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "reasoning_effort_levels": [
+            "none",
+            "minimal",
             "low",
+            "medium",
             "high",
+            "xhigh",
             "max"
         ],
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
@@ -44294,6 +44298,10 @@
         "max_output_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 7.5e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -44310,6 +44318,10 @@
         "max_output_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/model-cards/mistral-small-4-0-26-03",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,

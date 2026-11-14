@@ -1,0 +1,539 @@
+{
+  "hooks": [
+    {
+      "name": "prompt_resolve",
+      "bit": 0,
+      "request_path": true,
+      "subscribable": true,
+      "writes": [
+        "messages",
+        "model",
+        "optional_params"
+      ],
+      "outcomes": [
+        "abort",
+        "respond"
+      ]
+    },
+    {
+      "name": "pre_route",
+      "bit": 1,
+      "request_path": true,
+      "subscribable": true,
+      "writes": [
+        "messages",
+        "model"
+      ],
+      "outcomes": [
+        "abort",
+        "respond"
+      ]
+    },
+    {
+      "name": "filter_deployments",
+      "bit": 2,
+      "request_path": true,
+      "subscribable": true,
+      "writes": [
+        "candidate_deployments"
+      ],
+      "outcomes": [
+        "abort"
+      ]
+    },
+    {
+      "name": "pre_call",
+      "bit": 3,
+      "request_path": true,
+      "subscribable": true,
+      "writes": [
+        "budget_reservation",
+        "guardrail_info",
+        "input",
+        "messages",
+        "metadata",
+        "model",
+        "optional_params",
+        "rate_limit_statuses",
+        "request_headers",
+        "tools"
+      ],
+      "outcomes": [
+        "abort",
+        "reroute",
+        "respond"
+      ]
+    },
+    {
+      "name": "during_call",
+      "bit": 4,
+      "request_path": true,
+      "subscribable": true,
+      "writes": [],
+      "outcomes": [
+        "abort",
+        "respond"
+      ]
+    },
+    {
+      "name": "pre_deployment_call",
+      "bit": 5,
+      "request_path": true,
+      "subscribable": true,
+      "writes": [
+        "provider_request_body",
+        "request_headers"
+      ],
+      "outcomes": [
+        "abort",
+        "respond"
+      ]
+    },
+    {
+      "name": "post_deployment_success",
+      "bit": 6,
+      "request_path": true,
+      "subscribable": true,
+      "writes": [
+        "response"
+      ],
+      "outcomes": [
+        "abort",
+        "respond"
+      ]
+    },
+    {
+      "name": "post_deployment_failure",
+      "bit": 7,
+      "request_path": true,
+      "subscribable": true,
+      "writes": [
+        "error"
+      ],
+      "outcomes": [
+        "abort"
+      ]
+    },
+    {
+      "name": "post_call_success",
+      "bit": 8,
+      "request_path": true,
+      "subscribable": true,
+      "writes": [
+        "guardrail_info",
+        "response"
+      ],
+      "outcomes": [
+        "abort",
+        "respond"
+      ]
+    },
+    {
+      "name": "post_call_failure",
+      "bit": 9,
+      "request_path": true,
+      "subscribable": true,
+      "writes": [
+        "error"
+      ],
+      "outcomes": [
+        "abort"
+      ]
+    },
+    {
+      "name": "response_headers",
+      "bit": 10,
+      "request_path": true,
+      "subscribable": true,
+      "writes": [
+        "response_headers"
+      ],
+      "outcomes": []
+    },
+    {
+      "name": "stream_chunk",
+      "bit": 11,
+      "request_path": true,
+      "subscribable": false,
+      "writes": [
+        "stream_chunk"
+      ],
+      "outcomes": [
+        "abort"
+      ]
+    },
+    {
+      "name": "list_models",
+      "bit": 12,
+      "request_path": true,
+      "subscribable": true,
+      "writes": [
+        "model_list"
+      ],
+      "outcomes": [
+        "abort"
+      ]
+    },
+    {
+      "name": "mcp_tool_result",
+      "bit": 13,
+      "request_path": true,
+      "subscribable": true,
+      "writes": [
+        "tool_result"
+      ],
+      "outcomes": [
+        "abort",
+        "respond"
+      ]
+    },
+    {
+      "name": "log_prepare",
+      "bit": 14,
+      "request_path": false,
+      "subscribable": true,
+      "writes": [
+        "standard_logging_payload"
+      ],
+      "outcomes": []
+    },
+    {
+      "name": "provider_request_sent",
+      "bit": 15,
+      "request_path": false,
+      "subscribable": true,
+      "writes": [],
+      "outcomes": []
+    },
+    {
+      "name": "provider_response_received",
+      "bit": 16,
+      "request_path": false,
+      "subscribable": true,
+      "writes": [],
+      "outcomes": []
+    },
+    {
+      "name": "attempt_ended",
+      "bit": 17,
+      "request_path": false,
+      "subscribable": true,
+      "writes": [],
+      "outcomes": []
+    },
+    {
+      "name": "call_ended",
+      "bit": 18,
+      "request_path": false,
+      "subscribable": true,
+      "writes": [],
+      "outcomes": []
+    },
+    {
+      "name": "router_event",
+      "bit": 19,
+      "request_path": false,
+      "subscribable": true,
+      "writes": [],
+      "outcomes": []
+    },
+    {
+      "name": "audit_event",
+      "bit": 20,
+      "request_path": false,
+      "subscribable": true,
+      "writes": [],
+      "outcomes": []
+    }
+  ],
+  "fields": [
+    {
+      "name": "model",
+      "bit": 0,
+      "tier": "small_record"
+    },
+    {
+      "name": "key_identity",
+      "bit": 1,
+      "tier": "small_record"
+    },
+    {
+      "name": "deployment",
+      "bit": 2,
+      "tier": "small_record"
+    },
+    {
+      "name": "candidate_deployments",
+      "bit": 3,
+      "tier": "small_record"
+    },
+    {
+      "name": "request_tags",
+      "bit": 4,
+      "tier": "small_record"
+    },
+    {
+      "name": "dynamic_params",
+      "bit": 5,
+      "tier": "small_record"
+    },
+    {
+      "name": "guardrail_info",
+      "bit": 6,
+      "tier": "small_record"
+    },
+    {
+      "name": "outcome",
+      "bit": 7,
+      "tier": "small_record"
+    },
+    {
+      "name": "error",
+      "bit": 8,
+      "tier": "small_record"
+    },
+    {
+      "name": "usage",
+      "bit": 9,
+      "tier": "small_record"
+    },
+    {
+      "name": "cost",
+      "bit": 10,
+      "tier": "small_record"
+    },
+    {
+      "name": "metadata",
+      "bit": 11,
+      "tier": "content"
+    },
+    {
+      "name": "messages",
+      "bit": 12,
+      "tier": "content"
+    },
+    {
+      "name": "input",
+      "bit": 13,
+      "tier": "content"
+    },
+    {
+      "name": "tools",
+      "bit": 14,
+      "tier": "content"
+    },
+    {
+      "name": "optional_params",
+      "bit": 15,
+      "tier": "content"
+    },
+    {
+      "name": "request_headers",
+      "bit": 16,
+      "tier": "content"
+    },
+    {
+      "name": "response",
+      "bit": 17,
+      "tier": "content"
+    },
+    {
+      "name": "response_headers",
+      "bit": 18,
+      "tier": "content"
+    },
+    {
+      "name": "stream_chunk",
+      "bit": 19,
+      "tier": "content"
+    },
+    {
+      "name": "assembled_stream",
+      "bit": 20,
+      "tier": "content"
+    },
+    {
+      "name": "tool_result",
+      "bit": 21,
+      "tier": "content"
+    },
+    {
+      "name": "model_list",
+      "bit": 22,
+      "tier": "content"
+    },
+    {
+      "name": "request_body",
+      "bit": 23,
+      "tier": "wire"
+    },
+    {
+      "name": "provider_request_body",
+      "bit": 24,
+      "tier": "wire"
+    },
+    {
+      "name": "provider_response_raw",
+      "bit": 25,
+      "tier": "wire"
+    },
+    {
+      "name": "provider_response_headers",
+      "bit": 26,
+      "tier": "wire"
+    },
+    {
+      "name": "standard_logging_payload",
+      "bit": 27,
+      "tier": "compatibility"
+    },
+    {
+      "name": "deprecated_kwargs",
+      "bit": 28,
+      "tier": "compatibility"
+    },
+    {
+      "name": "deprecated_response_obj",
+      "bit": 29,
+      "tier": "compatibility"
+    },
+    {
+      "name": "key_limits",
+      "bit": 30,
+      "tier": "small_record"
+    },
+    {
+      "name": "budget_plan",
+      "bit": 31,
+      "tier": "small_record"
+    },
+    {
+      "name": "budget_reservation",
+      "bit": 32,
+      "tier": "small_record"
+    },
+    {
+      "name": "rate_limit_statuses",
+      "bit": 33,
+      "tier": "small_record"
+    },
+    {
+      "name": "output_cap",
+      "bit": 34,
+      "tier": "small_record"
+    },
+    {
+      "name": "attempt_timing",
+      "bit": 35,
+      "tier": "small_record"
+    },
+    {
+      "name": "rate_limit_state",
+      "bit": 36,
+      "tier": "small_record"
+    },
+    {
+      "name": "logged_request",
+      "bit": 37,
+      "tier": "small_record"
+    },
+    {
+      "name": "mcp_tool_call",
+      "bit": 38,
+      "tier": "small_record"
+    },
+    {
+      "name": "log_id",
+      "bit": 39,
+      "tier": "small_record"
+    },
+    {
+      "name": "cold_storage_object_key",
+      "bit": 40,
+      "tier": "small_record"
+    },
+    {
+      "name": "standard_logging_payload_ref",
+      "bit": 41,
+      "tier": "compatibility"
+    },
+    {
+      "name": "logged_key_identity",
+      "bit": 42,
+      "tier": "small_record"
+    },
+    {
+      "name": "logged_model_group",
+      "bit": 43,
+      "tier": "small_record"
+    },
+    {
+      "name": "metadata_labels",
+      "bit": 44,
+      "tier": "small_record"
+    },
+    {
+      "name": "input_sequence_length",
+      "bit": 45,
+      "tier": "small_record"
+    },
+    {
+      "name": "limiter_request",
+      "bit": 46,
+      "tier": "small_record"
+    }
+  ],
+  "tiers": [
+    {
+      "name": "small_record",
+      "rank": 1
+    },
+    {
+      "name": "content",
+      "rank": 2
+    },
+    {
+      "name": "wire",
+      "rank": 3
+    },
+    {
+      "name": "compatibility",
+      "rank": 4
+    }
+  ],
+  "derived_only": [
+    "attempt_timing",
+    "budget_plan",
+    "cold_storage_object_key",
+    "cost",
+    "deployment",
+    "input_sequence_length",
+    "key_identity",
+    "key_limits",
+    "limiter_request",
+    "log_id",
+    "logged_key_identity",
+    "logged_model_group",
+    "logged_request",
+    "mcp_tool_call",
+    "metadata_labels",
+    "outcome",
+    "output_cap",
+    "rate_limit_state",
+    "request_tags",
+    "standard_logging_payload_ref",
+    "usage"
+  ],
+  "by_reference": [
+    "standard_logging_payload_ref"
+  ],
+  "activations": [
+    "required",
+    "default_on",
+    "opt_in"
+  ],
+  "opt_out_by": [
+    "admin",
+    "caller"
+  ]
+}
