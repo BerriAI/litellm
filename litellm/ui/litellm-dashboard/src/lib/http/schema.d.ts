@@ -25222,7 +25222,8 @@ export interface paths {
          *         page / size: Pagination controls (defaults: page=1, size=50).
          *         search: Case-insensitive partial match on model name or team public name.
          *         modelId: Return a single deployment by LiteLLM model id.
-         *         use_stored_params: With modelId, return only persisted litellm_params keys, retaining normal redaction.
+         *         use_stored_params: With modelId, return only persisted litellm_params keys and null upstream-discovered
+         *             token limits, retaining normal redaction.
          *         teamId: Filter to models with direct access or team membership for this team id.
          *         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
          *         blocked: Filter by routing status (false = active, true = paused).
@@ -91402,7 +91403,7 @@ export interface operations {
                 search?: string | null;
                 /** @description Search for a specific model by its unique ID */
                 modelId?: string | null;
-                /** @description With modelId, omit runtime-only litellm_params defaults from a DB-stored model's editor view. */
+                /** @description With modelId, omit runtime-only litellm_params defaults and upstream-discovered token limits from a DB-stored model's editor view. */
                 use_stored_params?: boolean;
                 /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
                 teamId?: string | null;

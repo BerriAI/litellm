@@ -47,10 +47,17 @@ import json
 import os
 import re
 import threading
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast  # noqa: TID251  # entries as a caller wrote them
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    Protocol,
+    TypeAlias,
+    cast,  # noqa: TID251  # entries as a caller wrote them
+)
 
 from pydantic import BaseModel, TypeAdapter
 
@@ -93,8 +100,13 @@ from litellm.litellm_core_utils.routing_common_utils import (
     without_model_capability_flags,
 )
 from litellm.litellm_core_utils.routing_groups import apply_routing_group_priority
+from litellm.llms.lm_studio.model_info import get_lm_studio_model_info
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
+from litellm.llms.openai_like.model_info import (
+    MODEL_INFO_DISCOVERY_PROVIDERS,
+    MODEL_INFO_REFRESH_SECONDS,
+    get_openai_compatible_model_info,
+)
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_usage import RouterUsage, RouterUsageStore, UsageCounter
 from litellm.responses.bridge_check import keep_registered_mode
@@ -158,6 +170,29 @@ _PTUMemo: TypeAlias = tuple[
 ]
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+class _ModelInfoDiscoverer(Protocol):
+    def __call__(
+        self, *, model: str, api_base: str, headers: Mapping[str, str], client: "AsyncHTTPHandler", cache: InMemoryCache
+    ) -> Awaitable[Mapping[str, int] | None]: ...
+
+
+async def _discover_openai_compatible_model_info(
+    *, model: str, api_base: str, headers: Mapping[str, str], client: "AsyncHTTPHandler", cache: InMemoryCache
+) -> Mapping[str, int] | None:
+    limits: Final = await get_openai_compatible_model_info(
+        model=model, api_base=api_base, headers=headers, client=client, cache=cache
+    )
+    return limits or None
+
+
+_MODEL_INFO_DISCOVERERS: Final[Mapping[str, _ModelInfoDiscoverer]] = MappingProxyType(
+    {
+        **dict.fromkeys(MODEL_INFO_DISCOVERY_PROVIDERS, _discover_openai_compatible_model_info),
+        "lm_studio": get_lm_studio_model_info,
+    }
+)
 
 
 _CACHE_PRICING_FIELDS: Final = (
@@ -849,8 +884,8 @@ class HostRegistry(HostModelInfo):
                 self._core_deployment_latency_map[str(params["model"])] = 0
 
     async def arefresh_model_info(self, client: "AsyncHTTPHandler | None") -> None:
-        """``_core_arefresh_model_info``: token limits the served OpenAI-compatible deployments
-        advertise on their models endpoint, read with a few workers over a snapshot of the list."""
+        """``_core_arefresh_model_info``: token limits the served deployments advertise on their
+        models endpoint, read with a few workers over a snapshot of the list."""
         import asyncio
 
         from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_CONCURRENCY
@@ -871,10 +906,6 @@ class HostRegistry(HostModelInfo):
         self, raw_deployment: Mapping[str, object], *, client: "AsyncHTTPHandler | None"
     ) -> None:
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-        from litellm.llms.openai_like.model_info import (
-            MODEL_INFO_DISCOVERY_PROVIDERS,
-            get_openai_compatible_model_info,
-        )
         from litellm.types.router import DiscoveredDeploymentModelInfo
         from litellm.utils import aresolve_api_key_secret_reference
 
@@ -893,7 +924,8 @@ class HostRegistry(HostModelInfo):
         model, provider, dynamic_api_key, api_base = self._host.invoke("get_llm_provider")(  # pyright: ignore[reportAny]  # litellm's untyped tuple
             model=params.model, litellm_params=params
         )
-        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
+        discover: Final = _MODEL_INFO_DISCOVERERS.get(provider)
+        if discover is None:
             return
         if api_base is None or "*" in model or params.get("use_clientside_credentials"):  # pyright: ignore[reportUnknownMemberType]  # the params' untyped get
             return
@@ -909,7 +941,7 @@ class HostRegistry(HostModelInfo):
         auth_headers: Final = (
             MappingProxyType({"authorization": f"Bearer {api_key}"}) if api_key else MappingProxyType({})
         )
-        limits: Final = await get_openai_compatible_model_info(
+        limits: Final = await discover(
             model=model,  # pyright: ignore[reportAny]  # see above
             api_base=api_base,  # pyright: ignore[reportAny]  # see above
             headers=MappingProxyType(
@@ -919,7 +951,7 @@ class HostRegistry(HostModelInfo):
             cache=self._core_cache.in_memory_cache,
         )
         model_id: Final = deployment.model_info.id
-        if not limits or model_id is None or self._core_get_model_info(model_id) is not raw_deployment:
+        if limits is None or model_id is None or self._core_get_model_info(model_id) is not raw_deployment:
             return
         self._discovered_model_info_cache.max_size_in_memory = max(len(self._core_model_list), 1)
         self._discovered_model_info_cache.delete_cache(model_id)

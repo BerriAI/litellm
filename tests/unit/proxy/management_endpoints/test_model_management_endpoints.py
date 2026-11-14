@@ -1939,6 +1939,51 @@ class TestUpdateModel:
         assert not {"max_input_tokens", "direct_access", "access_via_team_ids"} & persisted.keys()
 
     @pytest.mark.asyncio
+    async def test_patch_model_does_not_pin_discovered_limits_echoed_from_model_info(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        db: Final = _ContendedModelDb(
+            LiteLLM_ProxyModelTable(
+                model_id="m1",
+                model_name="my-model",
+                litellm_params=dict(_LOCAL_DEPLOYMENT_PARAMS),
+                model_info={"id": "m1"},
+            ),
+            (),
+        )
+        router: Final = Router(
+            model_list=[
+                {"model_name": "my-model", "litellm_params": dict(_LOCAL_DEPLOYMENT_PARAMS), "model_info": {"id": "m1"}}
+            ]
+        )
+        await _discover_from_upstream(router, {"id": "local-model", "max_model_len": 128000})
+        discovered: Final = dict(router.registry().discovered_model_info("m1"))
+        assert discovered
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", db),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(  # test-quality-ok: [TQ008] the route reloads the proxy-global router with no seam to inject
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+            ),
+        ):
+            await patch_model(
+                model_id="m1",
+                patch_data=updateDeployment(
+                    model_info=ModelInfo(id="m1", key="hosted_vllm/local-model", tier="paid", **discovered)
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+        persisted: Final = db.row.model_info
+        assert persisted is not None
+        assert persisted["tier"] == "paid"
+        assert not discovered.keys() & persisted.keys()
+
+    @pytest.mark.asyncio
     async def test_update_model_does_not_copy_litellm_params_pricing_into_model_info(self):
         db: Final = await self._update_model(
             {"id": "m1"},

@@ -18048,7 +18048,10 @@ async def _find_model_by_id(
 
 
 async def _models_with_stored_param_keys(
-    models: Sequence[Mapping[str, object]], model_id: str, prisma_client: PrismaClient
+    models: Sequence[Mapping[str, object]],
+    model_id: str,
+    prisma_client: PrismaClient,
+    discovered_model_info: Mapping[str, object],
 ) -> Sequence[Mapping[str, object]]:
     visible_model: Final = next(
         (model for model in models if _with_get(model.get("model_info", {})).get("id") == model_id), None
@@ -18067,10 +18070,12 @@ async def _models_with_stored_param_keys(
         else _LITELLM_PARAMS_COPY.validate_python(raw_params)
     )
     visible_params: Final = _LITELLM_PARAMS_COPY.validate_python(visible_model.get("litellm_params", {}))
+    visible_info: Final = _LITELLM_PARAMS_COPY.validate_python(visible_model.get("model_info", {}))
     editor_model: Final = MappingProxyType(
         {
             **visible_model,
             "litellm_params": {key: value for key, value in visible_params.items() if key in stored_params},
+            "model_info": {key: None if key in discovered_model_info else value for key, value in visible_info.items()},
         }
     )
     return tuple(editor_model if model is visible_model else model for model in models)
@@ -18095,7 +18100,10 @@ async def model_info_v2(
     modelId: str | None = fastapi.Query(None, description="Search for a specific model by its unique ID"),
     use_stored_params: bool = fastapi.Query(
         False,
-        description="With modelId, omit runtime-only litellm_params defaults from a DB-stored model's editor view.",
+        description=(
+            "With modelId, omit runtime-only litellm_params defaults and upstream-discovered token limits "
+            "from a DB-stored model's editor view."
+        ),
     ),
     teamId: str | None = fastapi.Query(
         None,
@@ -18148,7 +18156,8 @@ async def model_info_v2(
         page / size: Pagination controls (defaults: page=1, size=50).
         search: Case-insensitive partial match on model name or team public name.
         modelId: Return a single deployment by LiteLLM model id.
-        use_stored_params: With modelId, return only persisted litellm_params keys, retaining normal redaction.
+        use_stored_params: With modelId, return only persisted litellm_params keys and null upstream-discovered
+            token limits, retaining normal redaction.
         teamId: Filter to models with direct access or team membership for this team id.
         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
         blocked: Filter by routing status (false = active, true = paused).
@@ -18339,7 +18348,12 @@ async def model_info_v2(
 
     if use_stored_params is True and isinstance(modelId, str):
         return _paginate_models_response(
-            all_models=await _models_with_stored_param_keys(all_models, modelId, prisma_client),
+            all_models=await _models_with_stored_param_keys(
+                all_models,
+                modelId,
+                prisma_client,
+                llm_router.registry().discovered_model_info(modelId),
+            ),
             page=page,
             size=size,
             total_count=search_total_count,

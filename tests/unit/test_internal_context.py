@@ -61,6 +61,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/llms/github_copilot/per_user_auth.py",
         "litellm/llms/github_copilot/authenticator.py",
         "litellm/llms/litellm_proxy/skills/handler.py",
+        "litellm/llms/lm_studio/model_info.py",
         "litellm/llms/openai/common_utils.py",
         "litellm/llms/openai_like/model_info.py",
         "litellm/llms/vertex_ai/vertex_ai_non_gemini.py",

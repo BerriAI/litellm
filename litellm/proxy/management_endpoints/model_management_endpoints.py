@@ -1509,6 +1509,7 @@ def update_db_model(
     db_model: Deployment,
     updated_patch: updateDeployment,
     loaded_catalog: LoadedCatalog = GetModelCostMap.loaded_model_cost_map,
+    discovered_model_info: Mapping[str, object] = MappingProxyType({}),
     llm_router: Router | None = None,
     caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY,
     listed_name: str | None = None,
@@ -1544,6 +1545,7 @@ def update_db_model(
             _cost_map_entry(db_model, incoming_model_info, listed_row),
             _routed_cost_map_entry(db_model, listed_row),
             _loaded_catalog_entry(incoming_model_info, loaded_catalog),
+            discovered_model_info,
         )
         stored_model_info_fields: Final[Mapping[str, object]] = without_server_derived_pricing(incoming_model_info)
         merged_model_info.update(
@@ -1893,6 +1895,11 @@ async def patch_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             write_row=write_row,
+            discovered_model_info=(
+                llm_router.registry().discovered_model_info(model_id)
+                if llm_router is not None
+                else MappingProxyType({})
+            ),
             llm_router=llm_router,
             caller_aliases=await request_caller_aliases(user_api_key_dict),
         )
@@ -2250,6 +2257,7 @@ async def _update_team_model_in_db(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
     write_row: Callable[[PrismaCompatibleUpdateDBModel], Awaitable[_RowT]],
+    discovered_model_info: Mapping[str, object] = MappingProxyType({}),
     llm_router: Router | None = None,
     caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY,
 ) -> _RowT:
@@ -2298,7 +2306,11 @@ async def _update_team_model_in_db(
     if patch_team_id is None:
         return await write_row(
             update_db_model(
-                db_model=db_model, updated_patch=patch_data, llm_router=llm_router, caller_aliases=caller_aliases
+                db_model=db_model,
+                updated_patch=patch_data,
+                discovered_model_info=discovered_model_info,
+                llm_router=llm_router,
+                caller_aliases=caller_aliases,
             )
         )
 
@@ -2325,6 +2337,7 @@ async def _update_team_model_in_db(
         update_db_model(
             db_model=db_model,
             updated_patch=team_patch,
+            discovered_model_info=discovered_model_info,
             llm_router=llm_router,
             caller_aliases=caller_aliases,
             listed_name=patch_data.model_name,
