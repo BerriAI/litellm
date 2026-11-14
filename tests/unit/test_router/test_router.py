@@ -20514,3 +20514,40 @@ def test_registry_finds_a_team_deployment_by_public_and_internal_name_for_its_te
     assert [row["model_info"]["id"] for row in registry.deployments(internal_name, team_id="team-a")] == ["team-row"]
     assert list(registry.deployments("public-chat", team_id="team-b")) == []
     assert list(registry.deployments("public-chat")) == []
+
+
+def test_sync_completion_tracks_router_metrics():
+    """
+    Regression: sync router.completion() must update router.total_calls /
+    router.success_calls / router.fail_calls, same as router.acompletion() does.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "num_retries": 0},
+            }
+        ],
+        num_retries=0,
+    )
+
+    ## success: total/success track the deployment model
+    router.completion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="Hello",
+    )
+    assert router.total_calls["openai/gpt-4o"] == 1
+    assert router.success_calls["openai/gpt-4o"] == 1
+    assert router.fail_calls.get("openai/gpt-4o", 0) == 0
+
+    ## failure: fail tracks the deployment model
+    with pytest.raises(Exception):
+        router.completion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="litellm.InternalServerError",
+        )
+    assert router.fail_calls["openai/gpt-4o"] == 1
+    assert router.total_calls["openai/gpt-4o"] == 2
+    assert router.success_calls["openai/gpt-4o"] == 1

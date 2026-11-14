@@ -675,8 +675,17 @@ async def test_acompletion_counts_total_success_and_failed_calls_per_deployment_
     assert counts == (2, 1, 1)
 
 
-def test_sync_completion_does_not_count_calls(make_core: MakeCore, host: ScriptedHost) -> None:
-    """Oddity: only the async path updates ``total_calls``/``success_calls``/``fail_calls``."""
-    core: Final = make_core(model_list=[deployment("g", "d1")])
+def test_sync_completion_counts_total_success_and_failed_calls_per_deployment_model(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "d1")], num_retries=0)
     core.completion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]
-    assert core.total_calls["openai/d1"] == 0  # pyright: ignore[reportAttributeAccessIssue]
+    host.answer("openai/d1", rate_limit())
+    with pytest.raises(litellm.RateLimitError):
+        core.completion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]
+    counts: Final = (
+        core.total_calls["openai/d1"],  # pyright: ignore[reportAttributeAccessIssue]
+        core.success_calls["openai/d1"],  # pyright: ignore[reportAttributeAccessIssue]
+        core.fail_calls["openai/d1"],  # pyright: ignore[reportAttributeAccessIssue]
+    )
+    assert counts == (2, 1, 1)

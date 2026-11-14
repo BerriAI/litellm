@@ -374,9 +374,7 @@ PLANS: Final[Mapping[str, Plan]] = MappingProxyType(
             sync=True,
             splits_stream_timeout=True,
             stamp="deployment",
-            total_key=None,
-            success_key=None,
-            fail_key=None,
+            # The sync path updates the same deployment counters as ``acompletion``.
             named=("messages",),
         ),
         "atext_completion": Plan(
