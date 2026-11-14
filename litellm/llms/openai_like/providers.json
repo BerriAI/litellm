@@ -11,6 +11,18 @@
       "convert_content_list_to_string": true
     }
   },
+  "fortytwo": {
+    "base_url": "https://api.fortytwo.network/v1",
+    "api_key_env": "FORTYTWO_API_KEY",
+    "api_base_env": "FORTYTWO_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions"
+    ]
+  },
   "helicone": {
     "base_url": "https://ai-gateway.helicone.ai/",
     "api_key_env": "HELICONE_API_KEY"
