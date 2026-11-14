@@ -92,7 +92,7 @@ _STREAM_EVENTS: Final = (
 )
 
 
-@pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/interactions"])
+@pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/v1/interactions", "/interactions"])
 @pytest.mark.parametrize(
     "request_input",
     [
@@ -151,7 +151,7 @@ def test_interaction_forwards_native_body_to_gemini(gateway: Gateway, prefix: st
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")], response.text
 
 
-@pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/interactions"])
+@pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/v1/interactions", "/interactions"])
 def test_interaction_authenticates_google_key_header(gateway: Gateway, prefix: str) -> None:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
@@ -184,7 +184,7 @@ def test_interaction_authenticates_google_key_header(gateway: Gateway, prefix: s
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")], response.text
 
 
-@pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/interactions"])
+@pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/v1/interactions", "/interactions"])
 def test_agent_interaction_uses_env_gemini_credentials(gateway: Gateway, tmp_path: Path, prefix: str) -> None:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
@@ -224,7 +224,7 @@ def test_agent_interaction_uses_env_gemini_credentials(gateway: Gateway, tmp_pat
             assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")], response.text
 
 
-@pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/interactions"])
+@pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/v1/interactions", "/interactions"])
 def test_stream_interaction_relays_gemini_events(gateway: Gateway, prefix: str) -> None:
     frames: Final = tuple(_sse_event(event_type, payload) for event_type, payload in _STREAM_EVENTS)
 
@@ -253,7 +253,7 @@ def test_stream_interaction_relays_gemini_events(gateway: Gateway, prefix: str) 
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions?alt=sse")], response.text
 
 
-@pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/interactions"])
+@pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/v1/interactions", "/interactions"])
 def test_stream_interaction_ends_without_openai_done_terminator(gateway: Gateway, prefix: str) -> None:
     pytest.skip("BUG: /interactions stream=true appends an OpenAI data: [DONE] frame to the Gemini event stream")
     frames: Final = tuple(_sse_event(event_type, payload) for event_type, payload in _STREAM_EVENTS)

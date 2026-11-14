@@ -79,7 +79,7 @@ def _assert_no_virtual_key(request: Request, key: str) -> None:
     assert all(key not in value for value in request.headers.values()), dict(request.headers)
 
 
-@pytest.mark.parametrize("prefix", ["/v1beta/models", "/models"])
+@pytest.mark.parametrize("prefix", ["/v1beta/models", "/v1/models", "/models"])
 def test_generate_content_rewrites_native_request_for_gemini_backend(gateway: Gateway, prefix: str) -> None:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
@@ -137,6 +137,8 @@ def test_generate_content_rewrites_native_request_for_gemini_backend(gateway: Ga
         ("/v1beta/models", "", "whole"),
         ("/models", "?alt=sse", "whole"),
         ("/models", "", "whole"),
+        ("/v1/models", "?alt=sse", "whole"),
+        ("/v1/models", "", "whole"),
         ("/v1beta/models", "?alt=sse", "split"),
         ("/v1beta/models", "", "split"),
         ("/models", "?alt=sse", "split"),
@@ -196,7 +198,7 @@ def test_stream_generate_content_relays_gemini_sse_frames(
         ]
 
 
-@pytest.mark.parametrize("prefix", ["/v1beta/models", "/models"])
+@pytest.mark.parametrize("prefix", ["/v1beta/models", "/v1/models", "/models"])
 def test_generate_content_accepts_snake_case_top_level_fields(gateway: Gateway, prefix: str) -> None:
     pytest.skip(
         "BUG: top-level snake_case generation_config, tool_config and safety_settings are dropped before reaching Gemini"
@@ -253,7 +255,7 @@ def test_generate_content_accepts_snake_case_top_level_fields(gateway: Gateway, 
         )
 
 
-@pytest.mark.parametrize("prefix", ["/v1beta/models", "/models"])
+@pytest.mark.parametrize("prefix", ["/v1beta/models", "/v1/models", "/models"])
 @pytest.mark.parametrize("spelling", ["header", "query"])
 @pytest.mark.parametrize(
     "route,path",
@@ -288,7 +290,7 @@ def test_generate_content_authenticates_google_key_spellings(
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", path)], response.text
 
 
-@pytest.mark.parametrize("prefix", ["/v1beta/models", "/models"])
+@pytest.mark.parametrize("prefix", ["/v1beta/models", "/v1/models", "/models"])
 @pytest.mark.parametrize(
     "route",
     [":generateContent", ":streamGenerateContent?alt=sse"],
