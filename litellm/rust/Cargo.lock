@@ -3705,6 +3705,7 @@ dependencies = [
  "litellm-coroutine",
  "litellm-python-compat",
  "litellm-redis-store",
+ "litellm-tracing",
  "rstest",
  "serde",
  "serde_json",

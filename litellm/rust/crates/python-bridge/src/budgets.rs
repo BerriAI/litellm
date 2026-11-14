@@ -38,8 +38,10 @@ pub(crate) struct NativeBudgets(Arc<Budgets>);
 #[pymethods]
 impl NativeBudgets {
     #[new]
-    fn new(spend_counters: PyRef<'_, NativeSpendCounters>) -> Self {
-        Self(Arc::new(Budgets::new(spend_counters.store())))
+    fn new(py: Python<'_>, spend_counters: PyRef<'_, NativeSpendCounters>) -> Self {
+        Self(Arc::new(
+            Budgets::new(spend_counters.store()).with_logger(crate::logger::capture(py)),
+        ))
     }
 
     fn callback(&self) -> PyResult<RustCallback> {

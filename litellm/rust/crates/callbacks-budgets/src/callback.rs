@@ -7,6 +7,7 @@ use litellm_callbacks::{
     Subscription, Verdict, typed,
 };
 use litellm_redis_store::spend_counters::SpendCounters;
+use litellm_tracing::Logger;
 use serde_json::{Map, json};
 
 use crate::{
@@ -20,6 +21,7 @@ pub const NAME: &str = "budgets";
 pub struct Budgets {
     store: Arc<SpendCounters>,
     manifest: Manifest,
+    logger: Option<Logger>,
 }
 
 fn manifest() -> Manifest {
@@ -102,11 +104,27 @@ impl Budgets {
         Self {
             store,
             manifest: manifest(),
+            logger: None,
+        }
+    }
+
+    pub fn with_logger(self, logger: Logger) -> Self {
+        Self {
+            logger: Some(logger),
+            ..self
+        }
+    }
+
+    async fn logged<T>(&self, future: impl Future<Output = T>) -> T {
+        match &self.logger {
+            Some(logger) => logger.instrument(future).await,
+            None => future.await,
         }
     }
 
     pub async fn settle(&self, request: &Settle<'_>) -> Result<Settlement, EngineError> {
-        engine::settle(&self.store, request, &Moment::now()).await
+        self.logged(engine::settle(&self.store, request, &Moment::now()))
+            .await
     }
 
     async fn admit(&self, input: &HookInput, host: Host) -> HookOutput {
@@ -115,7 +133,10 @@ impl Budgets {
         };
         let plan =
             Plan::try_from(record).map_err(|error| CallbackError::Failed(error.to_string()))?;
-        match engine::reserve(&self.store, &plan, &host).await {
+        match self
+            .logged(engine::reserve(&self.store, &plan, &host))
+            .await
+        {
             Ok(None) => Ok(None),
             Ok(Some(reservation)) => {
                 let record = serde_json::to_value(reservation_record(&reservation))
