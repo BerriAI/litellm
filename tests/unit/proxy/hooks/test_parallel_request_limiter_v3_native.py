@@ -439,9 +439,17 @@ def _run(
     return asyncio.get_running_loop().create_task(step(side, index, request), context=context)
 
 
-def _ttl_bucket(pttl: object) -> int:
+@dataclass(frozen=True, eq=False)
+class _Ttl:
+    milliseconds: int
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _Ttl) and abs(self.milliseconds - other.milliseconds) < 10_000
+
+
+def _ttl_bucket(pttl: object) -> int | _Ttl:
     assert isinstance(pttl, int)
-    return pttl if pttl < 0 else pttl // 10_000
+    return pttl if pttl < 0 else _Ttl(pttl)
 
 
 def _snapshot(side: Side, scopes: Sequence[tuple[str, str]]) -> object:
@@ -1216,9 +1224,9 @@ def _enqueued_probe(batch_ids: Sequence[str]) -> Callable[[Side], Awaitable[obje
             raw = remote.get(f"batch_enqueued_token_reservation:{batch_id}")
             record = {} if not raw else _RECORD.validate_json(str(raw))
             parsed = {name: value for name, value in record.items() if name != "reserved_at_monotonic"}
-            records.append((parsed, remote.ttl(f"batch_enqueued_token_reservation:{batch_id}") // 10))
+            records.append((parsed, _ttl_bucket(remote.pttl(f"batch_enqueued_token_reservation:{batch_id}"))))
         keys = sorted(str(key) for key in remote.scan_iter("batch_enqueued_tokens:*"))
-        return counters, records, [(key, remote.get(key), remote.ttl(key) // 10) for key in keys]
+        return counters, records, [(key, remote.get(key), _ttl_bucket(remote.pttl(key))) for key in keys]
 
     return probe
 
