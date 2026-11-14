@@ -73,9 +73,31 @@ func resourceLiteLLMOrganizationMemberCreate(d *schema.ResourceData, m interface
 }
 
 func resourceLiteLLMOrganizationMemberRead(d *schema.ResourceData, m interface{}) error {
-	// There's no specific endpoint to read a single organization member
-	// We'll just return the data we have in the state
+	client := m.(*Client)
+
 	log.Printf("[INFO] Reading organization member with ID: %s", d.Id())
+
+	orgID := d.Get("organization_id").(string)
+	members, found, err := fetchOrganizationMembers(client, orgID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		log.Printf("[WARN] Organization %s not found, removing member %s from state", orgID, d.Id())
+		d.SetId("")
+		return nil
+	}
+
+	member, ok := findOrgMember(members, d.Get("user_id").(string), d.Get("user_email").(string))
+	if !ok {
+		log.Printf("[WARN] Organization member %s not found, removing from state", d.Id())
+		d.SetId("")
+		return nil
+	}
+
+	if err := d.Set("role", member.Role); err != nil {
+		return fmt.Errorf("error setting role: %w", err)
+	}
 	return nil
 }
 
@@ -106,17 +128,9 @@ func resourceLiteLLMOrganizationMemberUpdate(d *schema.ResourceData, m interface
 func resourceLiteLLMOrganizationMemberDelete(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
 
-	deleteData := map[string]interface{}{
-		"user_id":         d.Get("user_id").(string),
-		"user_email":      d.Get("user_email").(string),
-		"organization_id": d.Get("organization_id").(string),
-	}
-
-	log.Printf("[DEBUG] Delete organization member request payload: %+v", deleteData)
-
-	_, err := client.DeleteOrganizationMember(deleteData)
+	err := deleteOrganizationMember(client, d.Get("organization_id").(string), d.Get("user_id").(string), d.Get("user_email").(string))
 	if err != nil {
-		return fmt.Errorf("error deleting organization member: %v", err)
+		return err
 	}
 
 	log.Printf("[INFO] Successfully deleted organization member with ID: %s", d.Id())
