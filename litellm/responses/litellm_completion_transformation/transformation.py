@@ -77,7 +77,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     message_field,
     parts_of,
 )
-from litellm.litellm_core_utils.tool_fields import chat_member_name
+from litellm.litellm_core_utils.tool_fields import chat_member_name, qualified_member_name
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     anthropic_server_tool_calls,
@@ -1409,8 +1409,8 @@ class LiteLLMCompletionResponsesConfig:
                 else bridged_messages
             ),
             "model": model,
-            "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
-                responses_api_request.get("tool_choice")
+            "tool_choice": LiteLLMCompletionResponsesConfig._chat_tool_choice(
+                responses_api_request.get("tool_choice"), request_tools
             ),
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
@@ -3233,13 +3233,32 @@ class LiteLLMCompletionResponsesConfig:
         )
 
     @staticmethod
-    def namespace_tool_name_map(tools: ResponseTools) -> NamespaceNameMap:
-        namespace_entries: Final = tuple(
+    def _namespace_entries(tools: ResponseTools) -> tuple[tuple[str, str], ...]:
+        return tuple(
             (str(tool.get("name") or ""), member_name)
             for tool in tools or ()
             if tool.get("type") == "namespace"
             for member_name in LiteLLMCompletionResponsesConfig._namespace_member_names(tool)
         )
+
+    @staticmethod
+    def _chat_tool_choice(tool_choice: object, tools: ResponseTools) -> object:
+        chat_tool_choice: Final = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
+        match chat_tool_choice:
+            case {"type": "function", "function": {"name": str(forced_name)}}:
+                chat_names: Final = MappingProxyType(
+                    {
+                        qualified_member_name(namespace, member): chat_member_name(namespace, member)
+                        for namespace, member in LiteLLMCompletionResponsesConfig._namespace_entries(tools)
+                    }
+                )
+                return {"type": "function", "function": {"name": chat_names.get(forced_name, forced_name)}}
+            case _:
+                return chat_tool_choice
+
+    @staticmethod
+    def namespace_tool_name_map(tools: ResponseTools) -> NamespaceNameMap:
+        namespace_entries: Final = LiteLLMCompletionResponsesConfig._namespace_entries(tools)
         top_level_function_names: Final = frozenset(
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
         )

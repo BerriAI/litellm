@@ -1080,6 +1080,32 @@ class TestLiteLLMCompletionResponsesConfig:
         tool_calls = [item for item in responses_api_response.output if item.type == "function_call"]
         assert [(call.namespace, call.name) for call in tool_calls] == [(namespace, member)]
 
+    def test_forced_tool_choice_on_a_namespace_member_past_64_characters_names_its_chat_tool(self) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        member: Final = "_get_document_tool_schemas"
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="azure_ai/grok-4.3",
+            input="Fetch the document tool schemas",
+            responses_api_request={
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "description": "Document control",
+                        "tools": [
+                            {"type": "function", "name": member, "parameters": {"type": "object", "properties": {}}}
+                        ],
+                    }
+                ],
+                "tool_choice": {"type": "function", "name": f"{namespace}__{member}"},
+            },
+            custom_llm_provider="azure_ai",
+        )
+
+        declared_names: Final = [tool["function"]["name"] for tool in result["tools"]]
+        assert len(declared_names[0]) <= 64
+        assert result["tool_choice"] == {"type": "function", "function": {"name": declared_names[0]}}
+
     def test_transform_chat_completion_response_deferred_top_level_tool_call_has_namespace_equal_to_name(self):
         """A deferred top-level function (defer_loading=True) comes back with namespace == name,
         the shape the OpenAI Agents SDK reserves for it. Without it the SDK raises
