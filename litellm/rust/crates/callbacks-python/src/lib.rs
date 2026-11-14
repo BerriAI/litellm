@@ -2,7 +2,8 @@ use std::{any::Any, panic::AssertUnwindSafe, sync::Arc};
 
 use futures_util::FutureExt;
 use litellm_callbacks::{
-    CallFacts, Callback, Field, FieldValues, Hook, HookInput, ManifestError, RequestState, Verdict,
+    CallFacts, ErasedCallback, Field, FieldValues, Hook, HookInput, ManifestError, RequestState,
+    Verdict,
 };
 use litellm_host_python::{Execution, from_py, json_from_py, json_to_py, run_async_value};
 use pyo3::{
@@ -18,7 +19,7 @@ mod pyjson;
 
 #[pyclass(frozen, name = "RustCallback")]
 pub struct RustCallback {
-    callback: Arc<dyn Callback>,
+    callback: Arc<dyn ErasedCallback>,
     manifest: String,
 }
 
@@ -40,14 +41,14 @@ impl From<RegisterError> for PyErr {
 }
 
 impl RustCallback {
-    pub fn new(callback: Arc<dyn Callback>) -> Result<Self, RegisterError> {
+    pub fn new(callback: Arc<dyn ErasedCallback>) -> Result<Self, RegisterError> {
         let manifest = callback.manifest();
         manifest.validate()?;
         let manifest = serde_json::to_string(manifest)?;
         Ok(Self { callback, manifest })
     }
 
-    pub fn callback(&self) -> &Arc<dyn Callback> {
+    pub fn callback(&self) -> &Arc<dyn ErasedCallback> {
         &self.callback
     }
 }
@@ -112,7 +113,8 @@ impl RustCallback {
         call: Option<&Bound<'py, PyAny>>,
         state: Option<PyRef<'py, RustRequestState>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let input = contained(|| self.input(hook, fields, call, state))?;
+        let input = contained(|| self.input(hook, fields, call))?;
+        let state = state.map(|state| Arc::clone(&state.0));
         let render_loop = matches!(input.fields.payload(), Ok(Some(_)))
             .then(|| payload::running_loop(py))
             .flatten();
@@ -120,7 +122,8 @@ impl RustCallback {
         run_async_value(py, async move {
             let handled = payload::on_render_loop(
                 render_loop,
-                AssertUnwindSafe(async move { callback.handle(&input).await }).catch_unwind(),
+                AssertUnwindSafe(async move { callback.handle(&input, state.as_ref()).await })
+                    .catch_unwind(),
             )
             .await
             .map_err(panic_error)?;
@@ -141,12 +144,19 @@ impl RustCallback {
         state: Option<PyRef<'py, RustRequestState>>,
         host: Py<PyAny>,
     ) -> PyResult<Execution> {
-        let input = contained(|| self.input(hook, fields, call, state))?;
+        let input = contained(|| self.input(hook, fields, call))?;
+        let state = state.map(|state| Arc::clone(&state.0));
         let render_loop = matches!(input.fields.payload(), Ok(Some(_)))
             .then(|| payload::running_loop(py))
             .flatten();
         Ok(Execution::new(
-            hosted::HostedExecution::new(Arc::clone(&self.callback), input, render_loop, host),
+            hosted::HostedExecution::new(
+                Arc::clone(&self.callback),
+                input,
+                state,
+                render_loop,
+                host,
+            ),
             execution_steps,
         ))
     }
@@ -158,7 +168,6 @@ impl RustCallback {
         hook: &str,
         fields: &Bound<'py, PyDict>,
         call: Option<&Bound<'py, PyAny>>,
-        state: Option<PyRef<'py, RustRequestState>>,
     ) -> PyResult<HookInput> {
         let hook: Hook = named(hook)?;
         let subscription = self
@@ -179,7 +188,6 @@ impl RustCallback {
             hook,
             fields: values,
             call: call.map(from_py::<CallFacts>).transpose()?,
-            state: state.map(|state| Arc::clone(&state.0)),
         })
     }
 }

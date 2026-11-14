@@ -25,11 +25,17 @@ struct Recorder {
 }
 
 impl Callback for Recorder {
+    type State = ();
+
     fn manifest(&self) -> &Manifest {
         &self.manifest
     }
 
-    fn handle<'a>(&'a self, input: &'a HookInput) -> BoxFuture<'a, HookOutput> {
+    fn handle<'a>(
+        &'a self,
+        input: &'a HookInput,
+        _state: Option<&'a ()>,
+    ) -> BoxFuture<'a, HookOutput> {
         Box::pin(async move {
             let seen = (
                 input.fields.get::<typed::LoggedKeyIdentity>()?,

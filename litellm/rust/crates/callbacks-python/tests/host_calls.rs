@@ -123,15 +123,26 @@ impl Scripted {
 }
 
 impl Callback for Scripted {
+    type State = ();
+
     fn manifest(&self) -> &Manifest {
         &self.0
     }
 
-    fn handle<'a>(&'a self, input: &'a HookInput) -> BoxFuture<'a, HookOutput> {
-        self.handle_hosted(input, Host::detached())
+    fn handle<'a>(
+        &'a self,
+        input: &'a HookInput,
+        state: Option<&'a ()>,
+    ) -> BoxFuture<'a, HookOutput> {
+        self.handle_hosted(input, state, Host::detached())
     }
 
-    fn handle_hosted<'a>(&'a self, input: &'a HookInput, host: Host) -> BoxFuture<'a, HookOutput> {
+    fn handle_hosted<'a>(
+        &'a self,
+        input: &'a HookInput,
+        _state: Option<&'a ()>,
+        host: Host,
+    ) -> BoxFuture<'a, HookOutput> {
         Box::pin(self.run(input, host))
     }
 }

@@ -164,13 +164,6 @@ pub struct HookInput {
     pub hook: Hook,
     pub fields: FieldValues,
     pub call: Option<CallFacts>,
-    pub state: Option<RequestState>,
-}
-
-impl HookInput {
-    pub fn state<T: Any>(&self) -> Option<&T> {
-        self.state.as_deref()?.downcast_ref()
-    }
 }
 
 #[cfg(test)]
@@ -282,17 +275,5 @@ mod tests {
         .unwrap();
         assert!(!facts.kind.synchronous);
         assert_eq!(facts.kind.endpoint_type, None);
-    }
-
-    #[rstest]
-    fn request_state_downcasts_to_the_type_the_callback_created() {
-        let input = HookInput {
-            hook: Hook::PreCall,
-            fields: FieldValues::default(),
-            call: None,
-            state: Some(Arc::new(7_u32)),
-        };
-        assert_eq!(input.state::<u32>(), Some(&7));
-        assert_eq!(input.state::<String>(), None);
     }
 }

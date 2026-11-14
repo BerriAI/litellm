@@ -10,7 +10,7 @@ mod record;
 mod scalar;
 mod verdict;
 
-pub use callback::{Callback, CallbackError, HookOutput};
+pub use callback::{Callback, CallbackError, ErasedCallback, HookOutput};
 pub use field::{BY_REFERENCE, DERIVED_ONLY, Field, FieldSet, FieldTier, TypedField, typed};
 pub use hook::{Hook, OutcomeKind};
 pub use host::{

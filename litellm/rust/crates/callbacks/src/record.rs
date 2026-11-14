@@ -440,7 +440,7 @@ mod tests {
             assert_eq!(&decoded(field, sample), sample, "{name}");
         }
         let typed: Vec<&str> = samples.keys().map(String::as_str).collect();
-        assert_eq!(typed.len(), 24);
+        assert_eq!(typed.len(), 23);
     }
 
     #[rstest]

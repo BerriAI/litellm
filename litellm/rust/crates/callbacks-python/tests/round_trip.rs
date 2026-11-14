@@ -7,7 +7,7 @@ use std::{
 use futures_util::future::BoxFuture;
 use litellm_callbacks::{
     Abort, Activation, Callback, Field, FieldSet, Hook, HookInput, HookOutput, Manifest, Patch,
-    RequestState, Selection, Subscription, Verdict, typed,
+    Selection, Subscription, Verdict, typed,
 };
 use litellm_callbacks_python::RustCallback;
 use pyo3::{prelude::*, types::PyDict};
@@ -47,7 +47,7 @@ impl Example {
         }
     }
 
-    fn pre_call(&self, input: &HookInput) -> HookOutput {
+    fn pre_call(&self, input: &HookInput, state: Option<&Seen>) -> HookOutput {
         let model = input.fields.get::<typed::Model>()?.unwrap_or_default();
         if model == "blocked" {
             let mut abort = Abort::new(403, "blocked by the rust example");
@@ -55,7 +55,7 @@ impl Example {
             abort.headers.insert("x-rust".into(), "blocked".into());
             return Ok(Some(Verdict::Abort(abort)));
         }
-        if let Some(seen) = input.state::<Seen>() {
+        if let Some(seen) = state {
             *seen.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(model.clone());
         }
         Ok(Some(Verdict::Patch(
@@ -63,8 +63,8 @@ impl Example {
         )))
     }
 
-    fn attempt_ended(&self, input: &HookInput) -> HookOutput {
-        let remembered = input.state::<Seen>().and_then(|seen| {
+    fn attempt_ended(&self, input: &HookInput, state: Option<&Seen>) -> HookOutput {
+        let remembered = state.and_then(|seen| {
             seen.0
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -83,19 +83,25 @@ impl Example {
 }
 
 impl Callback for Example {
+    type State = Seen;
+
     fn manifest(&self) -> &Manifest {
         &self.manifest
     }
 
-    fn request_state(&self) -> Option<RequestState> {
-        Some(Arc::new(Seen::default()))
+    fn request_state(&self) -> Option<Seen> {
+        Some(Seen::default())
     }
 
-    fn handle<'a>(&'a self, input: &'a HookInput) -> BoxFuture<'a, HookOutput> {
+    fn handle<'a>(
+        &'a self,
+        input: &'a HookInput,
+        state: Option<&'a Seen>,
+    ) -> BoxFuture<'a, HookOutput> {
         Box::pin(async move {
             match input.hook {
-                Hook::PreCall => self.pre_call(input),
-                Hook::AttemptEnded => self.attempt_ended(input),
+                Hook::PreCall => self.pre_call(input, state),
+                Hook::AttemptEnded => self.attempt_ended(input, state),
                 _ => Ok(None),
             }
         })
@@ -169,15 +175,21 @@ fn a_rust_callback_runs_at_its_list_position_between_two_legacy_entries() {
 struct Panicking(Manifest);
 
 impl Callback for Panicking {
+    type State = ();
+
     fn manifest(&self) -> &Manifest {
         &self.0
     }
 
-    fn request_state(&self) -> Option<RequestState> {
+    fn request_state(&self) -> Option<()> {
         panic!("no state for this request")
     }
 
-    fn handle<'a>(&'a self, input: &'a HookInput) -> BoxFuture<'a, HookOutput> {
+    fn handle<'a>(
+        &'a self,
+        input: &'a HookInput,
+        _state: Option<&'a ()>,
+    ) -> BoxFuture<'a, HookOutput> {
         Box::pin(async move {
             let usage = input.fields.raw(Field::Usage).ok().flatten().cloned();
             panic!("usage was {usage:?}")

@@ -10,8 +10,8 @@ use futures_util::{
     future::{AbortHandle, Abortable},
 };
 use litellm_callbacks::{
-    Callback, CallbackError, HookInput, HookOutput, HostCallError, HostException, HostFault,
-    HostReply, HostRequest, Hosted, hosted,
+    CallbackError, ErasedCallback, HookInput, HookOutput, HostCallError, HostException, HostFault,
+    HostReply, HostRequest, Hosted, RequestState, hosted,
 };
 use litellm_coroutine::{CoroutineState, Reply, ResumeError};
 use litellm_host_python::{
@@ -87,16 +87,19 @@ fn is_awaitable(value: &Bound<'_, PyAny>) -> PyResult<bool> {
 
 impl HostedExecution {
     pub(crate) fn new(
-        callback: Arc<dyn Callback>,
+        callback: Arc<dyn ErasedCallback>,
         input: HookInput,
+        state: Option<RequestState>,
         render_loop: Option<Arc<Py<PyAny>>>,
         host: Py<PyAny>,
     ) -> Self {
         let body = hosted(move |host| async move {
             payload::on_render_loop(
                 render_loop,
-                AssertUnwindSafe(async { callback.handle_hosted(&input, host).await })
-                    .catch_unwind(),
+                AssertUnwindSafe(async {
+                    callback.handle_hosted(&input, state.as_ref(), host).await
+                })
+                .catch_unwind(),
             )
             .await
         });

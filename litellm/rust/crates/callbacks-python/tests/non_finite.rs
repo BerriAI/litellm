@@ -12,11 +12,17 @@ use rstest::rstest;
 struct Echo(Manifest);
 
 impl Callback for Echo {
+    type State = ();
+
     fn manifest(&self) -> &Manifest {
         &self.0
     }
 
-    fn handle<'a>(&'a self, input: &'a HookInput) -> BoxFuture<'a, HookOutput> {
+    fn handle<'a>(
+        &'a self,
+        input: &'a HookInput,
+        _state: Option<&'a ()>,
+    ) -> BoxFuture<'a, HookOutput> {
         Box::pin(async move {
             let mut reservation = input
                 .fields

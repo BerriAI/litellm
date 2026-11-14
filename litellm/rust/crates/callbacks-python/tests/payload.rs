@@ -25,11 +25,17 @@ struct Keeper {
 }
 
 impl Callback for Keeper {
+    type State = ();
+
     fn manifest(&self) -> &Manifest {
         &self.manifest
     }
 
-    fn handle<'a>(&'a self, input: &'a HookInput) -> BoxFuture<'a, HookOutput> {
+    fn handle<'a>(
+        &'a self,
+        input: &'a HookInput,
+        _state: Option<&'a ()>,
+    ) -> BoxFuture<'a, HookOutput> {
         Box::pin(async move {
             let Some(payload) = input.fields.payload()? else {
                 return Ok(None);
