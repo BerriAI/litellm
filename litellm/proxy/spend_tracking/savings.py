@@ -281,12 +281,12 @@ def _cache_token_split(usage: Usage) -> tuple[int, int]:
 def _baseline_cache_rate_keys(baseline_info: ModelInfo | None) -> tuple[bool, bool]:
     """Whether the baseline model has a ``(cache read, cache write)`` rate of its own.
 
-    A missing rate is not a free bucket. `_get_token_base_cost` resolves an absent
-    `cache_read_input_token_cost` or `cache_creation_input_token_cost` to 0.0, so a
-    baseline whose provider prices caching implicitly, which is every OpenAI, Azure and
-    Gemini entry for cache writes, would carry the whole prompt for nothing and turn a
-    profitable route into a reported loss. Such a model pays its plain input rate for
-    those tokens, so the buckets it cannot price become ordinary input below.
+    A missing rate is not a free bucket. Were an absent `cache_read_input_token_cost` or
+    `cache_creation_input_token_cost` priced at 0.0, a baseline whose provider prices
+    caching implicitly, which is every OpenAI, Azure and Gemini entry for cache writes,
+    would carry the whole prompt for nothing and turn a profitable route into a reported
+    loss. Such a model pays its plain input rate for those tokens, so the buckets it
+    cannot price become ordinary input below.
     """
     if baseline_info is None:
         return True, True

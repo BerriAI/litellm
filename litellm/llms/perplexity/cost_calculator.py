@@ -7,7 +7,8 @@ from datetime import datetime
 from typing import Final
 
 from litellm.litellm_core_utils.core_helpers import finite_reported_cost
-from litellm.litellm_core_utils.llm_cost_calc.utils import TokenRates, apply_off_peak_pricing
+from litellm.litellm_core_utils.llm_cost_calc.utils import call_context
+from litellm.rust_bridge._native import NativePrices
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
@@ -52,19 +53,9 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         except (ValueError, TypeError):
             return default
 
-    rates: Final = apply_off_peak_pricing(
-        model_info,
-        current_time,
-        TokenRates(
-            input_rate=_safe_float_cast(model_info.get("input_cost_per_token")),
-            output_rate=_safe_float_cast(model_info.get("output_cost_per_token")),
-            cache_read_rate=0.0,
-            cache_creation_rate=0.0,
-            reasoning_rate=None,
-        ),
-    )
-    input_cost_per_token: Final = rates.input_rate
-    output_cost_per_token: Final = rates.output_rate
+    quote: Final = NativePrices(model_info, "perplexity").quote(0, call_context(None, None, None, current_time))
+    input_cost_per_token: Final = quote.input
+    output_cost_per_token: Final = quote.output
 
     ## CALCULATE INPUT COST
     prompt_cost: float = (usage.prompt_tokens or 0) * input_cost_per_token
