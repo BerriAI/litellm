@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.anthropic_messages.transformation import (
         BaseAnthropicMessagesConfig,
@@ -70,6 +71,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     # Class variables or attributes
     server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset()
     wants_failed_prompt_token_estimate: ClassVar[bool] = False
+    v2_companion: "CustomLoggerV2 | None" = None
 
     enforces_request_content: bool = False
     """

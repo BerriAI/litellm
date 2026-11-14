@@ -110,6 +110,7 @@ class LoggingCallbackManager:
         """
         with _callback_lists_lock:
             self._safe_add_callback_to_list(callback=callback, parent_list=litellm._async_success_callback)
+            self._add_v2_companion(callback=callback, parent_list=litellm._async_success_callback)
 
     def add_litellm_async_failure_callback(self, callback: CustomLogger | Callable[..., object] | str | CustomLoggerV2):
         """
@@ -117,6 +118,7 @@ class LoggingCallbackManager:
         """
         with _callback_lists_lock:
             self._safe_add_callback_to_list(callback=callback, parent_list=litellm._async_failure_callback)
+            self._add_v2_companion(callback=callback, parent_list=litellm._async_failure_callback)
 
     def remove_callback_from_list_by_object(self, callback_list, obj, require_self=True):
         """
@@ -301,6 +303,16 @@ class LoggingCallbackManager:
 
         elif callable(callback):
             self._add_callback_function_to_list(callback=callback, parent_list=parent_list)
+
+    def _add_v2_companion(
+        self,
+        callback: CustomLogger | CustomLoggerV2 | Callable[..., object] | str,
+        parent_list: list[CustomLogger | Callable[..., object] | str],
+    ) -> None:
+        if not isinstance(callback, CustomLogger) or callback.v2_companion is None:
+            return
+        if any(existing is callback for existing in parent_list):
+            self._safe_add_callback_to_list(callback=callback.v2_companion, parent_list=parent_list)
 
     def _add_callback_function_to_list(
         self,
