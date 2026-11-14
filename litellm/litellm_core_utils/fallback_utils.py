@@ -1,4 +1,6 @@
-from collections.abc import Generator, Iterator, Mapping
+import functools
+import inspect
+from collections.abc import Awaitable, Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -14,12 +16,13 @@ from litellm.constants import INTERNAL_KWARG_PREFIX
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
 )
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.clientside_credential_handler import UPSTREAM_BOUND_PARAMS
 from litellm.litellm_core_utils.core_helpers import (
     filter_internal_params,
     safe_deep_copy,
 )
-from litellm.types.utils import CustomPricingLiteLLMParams
+from litellm.types.utils import CallTypes, CustomPricingLiteLLMParams
 
 FALLBACK_ATTEMPT_KWARG: Final = f"{INTERNAL_KWARG_PREFIX}fallback_attempt"
 
@@ -28,7 +31,12 @@ _FALLBACK_CHAIN: Final = TypeAdapter(FallbackChain)
 _REQUEST_KWARGS: Final = TypeAdapter(dict[str, object])
 _NO_OVERRIDES: Final[Mapping[str, object]] = MappingProxyType({})
 _RUNNER_PARAMS: Final = frozenset({"kwargs", "fallbacks", "acompletion", "model", "litellm_logging_obj"})
-_PROVIDER_BOUND_PARAMS: Final = UPSTREAM_BOUND_PARAMS | {"custom_llm_provider", "client"}
+_PROVIDER_BOUND_PARAMS: Final = UPSTREAM_BOUND_PARAMS | {
+    "custom_llm_provider",
+    "client",
+    "headers",
+    "litellm_credential_name",
+}
 _MODEL_BOUND_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
 _GLOBAL_FALLBACKS_OFF: Final[ContextVar[bool]] = ContextVar("litellm_global_model_fallbacks_off", default=False)
 
@@ -40,6 +48,29 @@ def without_global_fallbacks() -> Generator[None]:
         yield
     finally:
         _GLOBAL_FALLBACKS_OFF.reset(token)
+
+
+async def _awaited(pending: Awaitable[object]) -> object:
+    return await pending
+
+
+def without_global_fallbacks_around(endpoint: Callable[..., object]) -> Callable[..., object]:
+    if not inspect.iscoroutinefunction(endpoint):
+
+        @functools.wraps(endpoint)
+        def call(*args: object, **kwargs: object) -> object:  # kwargs-ok: endpoint payload
+            with without_global_fallbacks():
+                return endpoint(*args, **kwargs)
+
+        return call
+
+    @functools.wraps(endpoint)
+    async def acall(*args: object, **kwargs: object) -> object:  # kwargs-ok: endpoint payload
+        with without_global_fallbacks():
+            result: Final = endpoint(*args, **kwargs)
+            return await _awaited(result) if inspect.isawaitable(result) else result
+
+    return acall
 
 
 def _configured_fallbacks(request_kwargs: Mapping[str, object]) -> object:
@@ -92,7 +123,7 @@ def _inherited_kwargs(
         return base_kwargs
     original_provider: Final = _provider_of(original_model, base_kwargs.get("custom_llm_provider"))
     provider: Final = _provider_of(model, custom_llm_provider)
-    switches_provider: Final = None not in (original_provider, provider) and original_provider != provider
+    switches_provider: Final = original_provider is None or original_provider != provider
     dropped: Final = (_MODEL_BOUND_PARAMS | _PROVIDER_BOUND_PARAMS) if switches_provider else _MODEL_BOUND_PARAMS
     return {key: value for key, value in base_kwargs.items() if key not in dropped}
 
@@ -128,6 +159,12 @@ def _fallback_attempts(plan: _FallbackPlan) -> Iterator[_FallbackAttempt]:
     return (_fallback_attempt(plan, fallback) for fallback in plan.fallbacks)
 
 
+def _all_attempts_failed(last_error: Exception) -> Exception:
+    return Exception(
+        f"{last_error}. All fallback attempts failed. Enable verbose logging with `litellm.set_verbose=True` for details."
+    )
+
+
 async def async_completion_with_fallbacks(**kwargs: object) -> object:
     plan: Final = _fallback_plan(kwargs)
     primary: Final = _fallback_attempt(plan, plan.original_model)
@@ -135,8 +172,9 @@ async def async_completion_with_fallbacks(**kwargs: object) -> object:
         return add_fallback_headers_to_response(
             response=await litellm.acompletion(**primary.kwargs), attempted_fallbacks=0
         )
-    except Exception as primary_error:
+    except Exception as primary_error:  # noqa: BLE001  # every failed attempt moves on to the next fallback
         verbose_logger.exception("Fallback attempt failed for model %s: %s", primary.model, primary_error)
+        last_error: Exception = primary_error  # rebind-ok: the newest failure names the final error
         for attempted_fallbacks, attempt in enumerate(_fallback_attempts(plan), start=1):
             try:
                 return add_fallback_headers_to_response(
@@ -144,21 +182,40 @@ async def async_completion_with_fallbacks(**kwargs: object) -> object:
                 )
             except Exception as fallback_error:  # noqa: BLE001  # any failed attempt moves on to the next fallback
                 verbose_logger.exception("Fallback attempt failed for model %s: %s", attempt.model, fallback_error)
-        raise
+                last_error = fallback_error
+        raise _all_attempts_failed(last_error) from last_error
+
+
+def _completion_with_deployment_hooks(request_kwargs: Mapping[str, object]) -> object:
+    from litellm.utils import async_post_call_success_deployment_hook, async_pre_call_deployment_hook
+
+    request: Final = _REQUEST_KWARGS.validate_python(
+        run_async_function(async_pre_call_deployment_hook, request_kwargs, CallTypes.completion.value, include_v2=True)
+    )
+    response: Final = litellm.completion(**request)
+    if request.get("stream"):
+        return response
+    return run_async_function(
+        async_post_call_success_deployment_hook, request, response, CallTypes.completion, include_v2=True
+    )
 
 
 def completion_with_fallbacks(**kwargs: object) -> object:
     plan: Final = _fallback_plan(kwargs)
     primary: Final = _fallback_attempt(plan, plan.original_model)
     try:
-        return add_fallback_headers_to_response(response=litellm.completion(**primary.kwargs), attempted_fallbacks=0)
-    except Exception as primary_error:
+        return add_fallback_headers_to_response(
+            response=_completion_with_deployment_hooks(primary.kwargs), attempted_fallbacks=0
+        )
+    except Exception as primary_error:  # noqa: BLE001  # every failed attempt moves on to the next fallback
         verbose_logger.exception("Fallback attempt failed for model %s: %s", primary.model, primary_error)
+        last_error: Exception = primary_error  # rebind-ok: the newest failure names the final error
         for attempted_fallbacks, attempt in enumerate(_fallback_attempts(plan), start=1):
             try:
                 return add_fallback_headers_to_response(
-                    response=litellm.completion(**attempt.kwargs), attempted_fallbacks=attempted_fallbacks
+                    response=_completion_with_deployment_hooks(attempt.kwargs), attempted_fallbacks=attempted_fallbacks
                 )
             except Exception as fallback_error:  # noqa: BLE001  # any failed attempt moves on to the next fallback
                 verbose_logger.exception("Fallback attempt failed for model %s: %s", attempt.model, fallback_error)
-        raise
+                last_error = fallback_error
+        raise _all_attempts_failed(last_error) from last_error

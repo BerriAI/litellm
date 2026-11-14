@@ -14,6 +14,8 @@ import respx
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.core_helpers import process_response_headers
@@ -24,6 +26,9 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.chatgpt.common_utils import CHATGPT_DEVICE_CODE_URL
 from litellm.main import acompletion as python_acompletion
 from litellm.main import completion as python_completion
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.types.utils import CallTypesLiteral, Choices, CredentialItem, LLMResponseTypes, Message, ModelResponse
 from litellm.vector_stores.vector_store_registry import LiteLLM_ManagedVectorStore, VectorStoreRegistry
 
 LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
@@ -218,7 +223,7 @@ async def test_acompletion_fallbacks_bad_models(respx_mock: respx.MockRouter, mo
         )
     )
 
-    with pytest.raises(litellm.NotFoundError, match="model unavailable"):
+    with pytest.raises(Exception, match=r"fallback unavailable\. All fallback attempts failed"):
         await python_acompletion(
             model="openai/first",
             messages=[{"role": "user", "content": "hello"}],
@@ -449,6 +454,27 @@ def test_completion_fallbacks_sync(respx_mock: respx.MockRouter, monkeypatch: py
 
     assert response.choices[0].message.content == "sync fallback answer"
     assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("first", "second")
+
+
+@pytest.mark.timeout(30, method="thread")
+def test_completion_fallbacks_name_the_last_error_when_every_model_fails(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    fallback_unavailable: Final = {
+        "error": {"message": "fallback unavailable", "type": "invalid_request_error", "param": None, "code": None}
+    }
+    _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=(_model_unavailable(), httpx.Response(404, json=fallback_unavailable))
+    )
+
+    with pytest.raises(Exception, match=r"fallback unavailable\. All fallback attempts failed"):
+        python_completion(
+            model="openai/first",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="test-key",
+            fallbacks=["openai/second"],
+        )
 
 
 CACHE_POINTS: Final = ({"location": "message", "role": "system"},)
@@ -874,6 +900,111 @@ async def test_acompletion_fallback_sends_credentials_only_to_the_provider_they_
     assert respx_mock.calls.last.request.headers[header] == value
 
 
+GATEWAY_CREDENTIAL_CARRIERS: Final = (
+    pytest.param("openai/first", {"litellm_credential_name": "gateway"}, id="named-credential"),
+    pytest.param(
+        "openai/first",
+        {
+            "api_key": "gateway-key",
+            "api_base": "https://gateway.example/v1",
+            "headers": {"authorization": "Bearer gateway-key"},
+        },
+        id="request-headers",
+    ),
+)
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.parametrize(("model", "gateway_credentials"), GATEWAY_CREDENTIAL_CARRIERS)
+@pytest.mark.asyncio
+async def test_acompletion_fallback_to_another_provider_never_reuses_the_first_providers_credentials(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    gateway_credentials: dict[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="gateway",
+                credential_values={"api_key": "gateway-key", "api_base": "https://gateway.example/v1"},
+                credential_info={},
+            )
+        ],
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-env-key")
+    _ = respx_mock.post("https://gateway.example/v1/chat/completions").mock(return_value=_model_unavailable())
+    _ = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=ANTHROPIC_ANSWER)
+    )
+
+    response: Final = await python_acompletion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        fallbacks=["anthropic/claude-haiku-5-5"],
+        **gateway_credentials,
+    )
+
+    fallback_request: Final = respx_mock.calls.last.request
+    assert response.choices[0].message.content == "ok"
+    assert str(fallback_request.url) == "https://api.anthropic.com/v1/messages"
+    assert fallback_request.headers["x-api-key"] == "anthropic-env-key"
+    assert not any("gateway-key" in value for value in fallback_request.headers.values())
+
+
+@pytest.mark.timeout(30, method="thread")
+def test_completion_fallback_from_a_model_without_a_provider_never_reuses_its_credentials(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-env-key")
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=ANTHROPIC_ANSWER)
+    )
+
+    response: Final = python_completion(
+        model="first-without-a-provider",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="first-key",
+        fallbacks=["anthropic/claude-haiku-5-5"],
+    )
+
+    assert response.choices[0].message.content == "ok"
+    assert route.calls.last.request.headers["x-api-key"] == "anthropic-env-key"
+
+
+async def _router_completion(router: litellm.Router, *, is_async: bool) -> object:
+    messages: Final = [{"role": "user", "content": "hello"}]
+    if is_async:
+        return await router.acompletion(model="first", messages=messages)
+    return router.completion(model="first", messages=messages)
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_router_leaves_fallbacks_to_the_router_when_global_model_fallbacks_are_set(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/second"])
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=_replies((None, "global fallback answer"))
+    )
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "first", "litellm_params": {"model": "openai/first", "api_key": "test-key"}}],
+        num_retries=0,
+    )
+
+    with pytest.raises(litellm.NotFoundError, match="model unavailable"):
+        await _router_completion(router, is_async=is_async)
+
+    assert _requested_models(route) == ("first",)
+
+
 STREAMED_ANSWER: Final = (
     "".join(
         f"data: {json.dumps(chunk)}\n\n"
@@ -950,6 +1081,70 @@ def test_completion_through_the_global_model_fallbacks_logs_one_success(
     logging_executor.shutdown(wait=True)
 
     assert recorder.models == ["second"]
+
+
+class _RedactingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(
+            guardrail_name="redact", event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
+        )
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict[str, object]:
+        return {**data, "messages": [{"role": "user", "content": "[REDACTED]"}]}
+
+    async def async_post_call_success_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+    ) -> ModelResponse:
+        return ModelResponse(model="checked", choices=[Choices(message=Message(content="[CHECKED]"))])
+
+
+@pytest.mark.timeout(30, method="thread")
+def test_completion_with_fallbacks_runs_the_requested_guardrail_before_every_attempt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_RedactingGuardrail()])
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=_replies((None, "fallback answer"))
+    )
+
+    response: Final = python_completion(
+        model="openai/first",
+        messages=[{"role": "user", "content": "my card is 4111 1111 1111 1111"}],
+        api_key="test-key",
+        fallbacks=["openai/second"],
+        guardrails=["redact"],
+    )
+
+    assert response.choices[0].message.content == "[CHECKED]"
+    assert [json.loads(call.request.content)["messages"] for call in route.calls] == [
+        [{"role": "user", "content": "[REDACTED]"}]
+    ] * 2
+
+
+@pytest.mark.timeout(30, method="thread")
+def test_completion_streams_through_fallbacks_with_the_requested_guardrail(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_RedactingGuardrail()])
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=STREAMED_ANSWER, headers={"content-type": "text/event-stream"})
+    )
+
+    stream: Final = python_completion(
+        model="openai/first",
+        messages=[{"role": "user", "content": "my card is 4111 1111 1111 1111"}],
+        api_key="test-key",
+        stream=True,
+        fallbacks=["openai/second"],
+        guardrails=["redact"],
+    )
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in stream) == "streamed answer"
+    assert json.loads(route.calls.last.request.content)["messages"] == [{"role": "user", "content": "[REDACTED]"}]
 
 
 @pytest.mark.timeout(30, method="thread")
