@@ -529,7 +529,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                     function_args = tool_call.get("function").get("arguments")
                     if function_args is not None and len(function_args) > 0:
                         is_function_call_complete = self._is_function_call_complete(function_args)
-                        if is_function_call_complete:
+                        if is_function_call_complete and not tool_call.get("id"):
                             tool_call["id"] = str(uuid.uuid4())
 
             # PROCESS REASONING CONTENT
