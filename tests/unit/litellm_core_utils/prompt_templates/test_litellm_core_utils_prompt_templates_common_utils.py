@@ -1,102 +1,40 @@
-import base64
+import contextlib
 import copy
-import functools
+import importlib
 import json
-import os
-import sys
+import warnings
 from collections.abc import Mapping
 from typing import Final, cast
+from unittest import mock
 
 import pytest
 
+from litellm.litellm_core_utils.prompt_templates import common_utils
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    ENCRYPTED_REASONING_SIGNATURE_PREFIX,
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     TOOL_RESULT_MEDIA_BOUNDARY,
     TOOL_RESULT_MEDIA_PLACEHOLDER,
     add_system_prompt_to_messages,
-    cache_control_as_prompt_cache_breakpoint,
-    converse_redacted_content,
-    encrypted_content_from_signature,
-    encrypted_reasoning_signature,
-    get_file_ids_from_messages,
-    get_format_from_file_id,
+    get_content_from_model_response,
     get_semantic_cache_prompt_from_messages,
     get_str_from_messages,
     handle_any_messages_to_chat_completion_str_messages_conversion,
     handle_messages_with_content_list_to_str_conversion,
     hoist_images_from_tool_messages,
-    is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
-    native_redacted_thinking_data,
-    parse_tool_call_arguments,
-    prompt_cache_breakpoint_for_wire,
-    responses_reasoning_items_from_thinking_blocks,
-    salvage_concatenated_tool_arguments,
-    schema_grammar_branch_count,
-    schema_has_open_object,
-    schema_has_unresolvable_ref,
-    schema_property_count,
-    split_concatenated_json_objects,
-    split_media_for_tpm,
-    strip_encrypted_reasoning_from_messages,
     strip_litellm_response_only_fields,
     system_messages_first,
-    update_messages_with_model_file_ids,
-    with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    flatten_combinators_and_drop_non_python_regex_patterns,
+)
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import parse_tool_call_arguments
 from litellm.types.llms.openai import ChatCompletionAudioObject, ChatCompletionFileObject, ChatCompletionImageObject
+from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Function, Message, ModelResponse
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 _ARTIFACT_DATA_ID_PATTERN: Final = r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"
-
-
-def test_get_format_from_file_id():
-    unified_file_id = "litellm_proxy:application/pdf;unified_id,cbbe3534-8bf8-4386-af00-f5f6b7e370bf"
-
-    format = get_format_from_file_id(unified_file_id)
-
-    assert format == "application/pdf"
-
-
-def test_update_messages_with_model_file_ids():
-    file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCxmYzdmMmVhNS0wZjUwLTQ5ZjYtODljMS03ZTZhNTRiMTIxMzg"
-    model_id = "my_model_id"
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "What is in this recording?"},
-                {
-                    "type": "file",
-                    "file": {
-                        "file_id": file_id,
-                    },
-                },
-            ],
-        },
-    ]
-
-    model_file_id_mapping = {file_id: {"my_model_id": "provider_file_id"}}
-
-    updated_messages = update_messages_with_model_file_ids(messages, model_id, model_file_id_mapping)
-
-    assert updated_messages == [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "What is in this recording?"},
-                {
-                    "type": "file",
-                    "file": {
-                        "file_id": "provider_file_id",
-                        "format": "application/pdf",
-                    },
-                },
-            ],
-        }
-    ]
 
 
 def test_handle_any_messages_to_chat_completion_str_messages_conversion_list():
@@ -215,413 +153,6 @@ def test_convert_prefix_message_to_non_prefix_messages():
 
 
 # ── split_concatenated_json_objects tests ──
-
-
-def test_split_concatenated_json_single_object():
-    """A single valid JSON object is returned as a one-element list."""
-    result = split_concatenated_json_objects('{"location": "Boston"}')
-    assert result == [{"location": "Boston"}]
-
-
-def test_split_concatenated_json_multiple_objects():
-    """
-    Multiple JSON objects concatenated without separators are split correctly.
-    This is the exact pattern from issue #20543 where Bedrock Claude Sonnet 4.5
-    returns concatenated JSON in a single tool call arguments string.
-    """
-    raw = (
-        '{"command": ["curl", "-i", "http://localhost:9009"]}'
-        '{"command": ["curl", "-i", "http://localhost:9009/robots.txt"]}'
-        '{"command": ["curl", "-i", "http://localhost:9009/sitemap.xml"]}'
-    )
-    result = split_concatenated_json_objects(raw)
-    assert len(result) == 3
-    assert result[0] == {"command": ["curl", "-i", "http://localhost:9009"]}
-    assert result[1] == {"command": ["curl", "-i", "http://localhost:9009/robots.txt"]}
-    assert result[2] == {"command": ["curl", "-i", "http://localhost:9009/sitemap.xml"]}
-
-
-def test_split_concatenated_json_with_whitespace():
-    """Objects separated by whitespace are handled correctly."""
-    raw = '{"a": 1}  {"b": 2}\n{"c": 3}'
-    result = split_concatenated_json_objects(raw)
-    assert len(result) == 3
-    assert result[0] == {"a": 1}
-    assert result[1] == {"b": 2}
-    assert result[2] == {"c": 3}
-
-
-def test_split_concatenated_json_empty_string():
-    """Empty or whitespace-only strings return an empty list."""
-    assert split_concatenated_json_objects("") == []
-    assert split_concatenated_json_objects("   ") == []
-
-
-def test_split_concatenated_json_non_dict_value():
-    """Non-dict JSON values (e.g. arrays, strings) are replaced with {}."""
-    result = split_concatenated_json_objects("[1, 2, 3]")
-    assert result == [{}]
-
-
-def test_split_concatenated_json_wholly_invalid_returns_empty():
-    """
-    Wholly unparseable JSON degrades to an empty list instead of raising.
-
-    Regression for https://github.com/BerriAI/litellm/issues/18667: a raise
-    here propagated out of `_convert_to_bedrock_tool_call_invoke` and turned
-    every replayed conversation into a 500.
-    """
-    assert split_concatenated_json_objects("not json at all") == []
-
-
-def test_split_concatenated_json_malformed_object_returns_empty():
-    """
-    A single malformed object (missing comma between keys) degrades to an
-    empty list rather than raising `Expecting ',' delimiter`.
-    """
-    assert split_concatenated_json_objects('{"location": "Boston" "unit": "celsius"}') == []
-
-
-def test_split_concatenated_json_salvages_prefix_before_truncated_tail():
-    """
-    Complete objects parsed before an unparseable/truncated tail are kept;
-    only the bad tail is discarded.
-    """
-    result = split_concatenated_json_objects('{"a": 1}{"b": 2}{"c":')
-    assert result == [{"a": 1}, {"b": 2}]
-
-
-def test_parse_tool_call_arguments_rejects_concatenated_json() -> None:
-    with pytest.raises(ValueError, match="Failed to parse tool call arguments"):
-        parse_tool_call_arguments('{"a":1}{"b":2}')
-
-
-def _distinct_json_objects(count: int) -> str:
-    return "".join(json.dumps({"n": index}, separators=(",", ":")) for index in range(count))
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    (
-        ('{"a":1}{"b":2}', ({"a": 1}, {"b": 2})),
-        ('{"a":1}{"a":1}{"a":1}', ({"a": 1},)),
-        ('{"a":1}{"a":1}{"b":2}', ({"a": 1}, {"a": 1}, {"b": 2})),
-        (_distinct_json_objects(8), tuple({"n": index} for index in range(8))),
-        (_distinct_json_objects(9), ()),
-        (_distinct_json_objects(9) + " junk", ()),
-        ('{"a":1}' * 7 + '{"b":2}', tuple({"a": 1} for _ in range(7)) + ({"b": 2},)),
-        ('{"a":1}' * 8 + '{"b":2}', ()),
-        ('{"a":1}' * 5000, ({"a": 1},)),
-        ('{"a":1}' * 20, ({"a": 1},)),
-        ('{"a":1}{"b":', ()),
-        ('0{"x":1}', ()),
-        ('{"x":1}0', ()),
-        ('[1]{"x":1}', ()),
-        ('{"a":1}{"b":2}}', ()),
-        ('{"a":1} junk', ()),
-    ),
-)
-def test_salvage_concatenated_tool_arguments(raw: str, expected: tuple[dict[str, object], ...]) -> None:
-    assert salvage_concatenated_tool_arguments(raw) == expected
-
-
-# ---------------------------------------------------------------------------
-# Regression tests for non-OpenAI file content blocks.
-#
-# `type: "file"` is a public content-block discriminator. Several producers
-# (LangChain v1, provider-native shapes, custom user code) emit blocks with
-# `type: "file"` but without the OpenAI Chat Completions `file` sub-dict.
-# The discovery helpers below are used unconditionally inside
-# `AnthropicConfig.validate_environment`, so any crash there surfaces as a
-# `500 InternalServerError` before the request is even dispatched.
-# ---------------------------------------------------------------------------
-
-
-def test_get_file_ids_from_messages_skips_langchain_v1_file_block():
-    """A LangChain v1 standardized file block must not crash file-id discovery."""
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "summarise this PDF"},
-                # LangChain v1 shape produced by `_normalize_messages`.
-                # No `file` sub-dict: the discriminator is `type: "file"` but
-                # the payload lives on `base64`/`mime_type` siblings.
-                {
-                    "type": "file",
-                    "id": "lc_1",
-                    "base64": "JVBERi0xLjQK",
-                    "mime_type": "application/pdf",
-                    "extras": {"file_format": "application/pdf"},
-                },
-            ],
-        }
-    ]
-
-    assert get_file_ids_from_messages(messages) == []
-
-
-def test_get_file_ids_from_messages_still_extracts_from_openai_shape():
-    """Well-formed OpenAI file blocks still yield their file_id."""
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "what is this?"},
-                {"type": "file", "file": {"file_id": "file-abc"}},
-            ],
-        }
-    ]
-
-    assert get_file_ids_from_messages(messages) == ["file-abc"]
-
-
-def test_get_file_ids_from_messages_mixed_shapes():
-    """Mixed OpenAI and non-OpenAI file blocks: extract from the former,
-    ignore the latter."""
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "file", "file": {"file_id": "file-keep"}},
-                {
-                    "type": "file",
-                    "id": "lc_2",
-                    "base64": "AAA",
-                    "mime_type": "application/pdf",
-                },
-            ],
-        }
-    ]
-
-    assert get_file_ids_from_messages(messages) == ["file-keep"]
-
-
-def test_get_file_ids_from_messages_file_field_not_dict():
-    """`file` set to a non-dict value (e.g. stringified payload) must not crash."""
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "file", "file": "unexpectedly-a-string"},
-            ],
-        }
-    ]
-
-    assert get_file_ids_from_messages(messages) == []
-
-
-def test_get_file_ids_from_messages_skips_bare_string_content_items():
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                "what type of file is this?",
-                {"type": "file", "file": {"file_id": "file-abc"}},
-            ],
-        }
-    ]
-
-    assert get_file_ids_from_messages(messages) == ["file-abc"]
-
-
-def test_update_messages_with_model_file_ids_skips_non_openai_file_blocks():
-    """`update_messages_with_model_file_ids` is also called on user content
-    before provider dispatch. It must tolerate non-OpenAI file blocks the same
-    way."""
-    langchain_v1_block = {
-        "type": "file",
-        "id": "lc_3",
-        "base64": "AAA",
-        "mime_type": "application/pdf",
-    }
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "hello"},
-                langchain_v1_block,
-            ],
-        }
-    ]
-
-    updated = update_messages_with_model_file_ids(messages, "model-1", {})
-
-    # Messages pass through unchanged when there is no `file` sub-dict to remap.
-    assert updated == messages
-
-
-# Reusable fixture (decodes to: litellm_proxy:application/pdf;unified_id,...;
-# target_model_names,gpt-4o;llm_output_file_id,file-ECBPW7ML9g7XHdwGgUPZaM;
-# llm_output_file_model_id,...)
-UNIFIED_FILE_ID_B64 = (
-    "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0"
-    "LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1f"
-    "b3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRf"
-    "ZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFk"
-    "MDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
-)
-
-
-def test_update_messages_with_model_file_ids_decodes_unified_id_when_mapping_empty():
-    """When the mapping is empty (e.g. multi-replica cache miss), the function
-    must decode the base64-encoded unified file id and substitute the embedded
-    llm_output_file_id — mirroring the Responses-API sibling."""
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "What is in this recording?"},
-                {
-                    "type": "file",
-                    "file": {
-                        "file_id": UNIFIED_FILE_ID_B64,
-                        "format": "audio/wav",
-                    },
-                },
-            ],
-        }
-    ]
-
-    updated = update_messages_with_model_file_ids(messages, "any-model-id", {})
-
-    assert updated[0]["content"][1]["file"]["file_id"] == "file-ECBPW7ML9g7XHdwGgUPZaM"
-    # Customer-supplied format is preserved (this is the field whose absence
-    # the misleading error message used to complain about).
-    assert updated[0]["content"][1]["file"]["format"] == "audio/wav"
-
-
-def test_update_messages_with_model_file_ids_mapping_takes_precedence_over_decode():
-    """When both mapping and decode would resolve, the mapping must win
-    (preserves per-deployment routing precision)."""
-    mapping = {UNIFIED_FILE_ID_B64: {"model-A": "mapped-provider-file-id"}}
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "file",
-                    "file": {
-                        "file_id": UNIFIED_FILE_ID_B64,
-                        "format": "application/pdf",
-                    },
-                },
-            ],
-        }
-    ]
-
-    updated = update_messages_with_model_file_ids(messages, "model-A", mapping)
-
-    assert updated[0]["content"][0]["file"]["file_id"] == "mapped-provider-file-id"
-
-
-def test_update_messages_with_model_file_ids_non_unified_passes_through():
-    """A raw provider id (e.g. gs:// URI or a random string) must be left
-    untouched when the mapping doesn't resolve it. The decode fallback must
-    not corrupt non-unified ids."""
-    raw_id = "gs://my-bucket/uploads/abc-123.wav"
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "file", "file": {"file_id": raw_id, "format": "audio/wav"}},
-            ],
-        }
-    ]
-
-    updated = update_messages_with_model_file_ids(messages, "model-A", {})
-
-    assert updated[0]["content"][0]["file"]["file_id"] == raw_id
-
-
-def test_update_messages_with_model_file_ids_mapping_miss_falls_back_to_decode():
-    """A mapping that exists but doesn't contain this file_id should still
-    trigger the decode fallback — covers the case where the hook resolved
-    *some* ids but not this one."""
-    other_id = "some-other-file-id"
-    mapping = {other_id: {"model-A": "other-provider-id"}}
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "file",
-                    "file": {"file_id": UNIFIED_FILE_ID_B64, "format": "audio/wav"},
-                },
-            ],
-        }
-    ]
-
-    updated = update_messages_with_model_file_ids(messages, "model-A", mapping)
-
-    assert updated[0]["content"][0]["file"]["file_id"] == "file-ECBPW7ML9g7XHdwGgUPZaM"
-
-
-def test_update_messages_with_model_file_ids_tolerates_non_dict_content_items():
-    """Content list items aren't always dicts. text_completion forwards
-    token-ids (list of ints, or list of list of ints for batch) through
-    this path. The function must skip non-dict items instead of indexing
-    into them."""
-    messages_token_ids = [{"role": "user", "content": [15496, 995]}]
-    messages_token_ids_batch = [{"role": "user", "content": [[15496, 995], [9906, 0]]}]
-
-    # Both should pass through unchanged without raising.
-    assert update_messages_with_model_file_ids(messages_token_ids, "model-A", {}) == messages_token_ids
-    assert update_messages_with_model_file_ids(messages_token_ids_batch, "model-A", {}) == messages_token_ids_batch
-
-
-class TestExtractFileDataBareStr:
-    """``extract_file_data`` used to accept bare ``str`` values and ``open()``
-    them server-side. When the helper runs inside a proxy request handler the
-    value is attacker-controlled, so the open() call was a textbook arbitrary
-    local file read. Lock the new contract: bare ``str`` is rejected with a
-    clear migration message; ``pathlib.Path`` is still accepted for SDK
-    ergonomics because it's a Python-level type that HTTP form values can't
-    fabricate."""
-
-    def test_rejects_bare_str(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            extract_file_data,
-        )
-
-        with pytest.raises(ValueError, match="does not accept bare str inputs"):
-            extract_file_data("/etc/passwd")
-
-    def test_accepts_pathlib_path(self):
-        import tempfile
-        from pathlib import Path
-
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            extract_file_data,
-        )
-
-        content = b"hello"
-        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
-            f.write(content)
-            tmp_path = Path(f.name)
-
-        try:
-            extracted = extract_file_data(tmp_path)
-            assert extracted.get("content") == content
-        finally:
-            os.unlink(str(tmp_path))
-
-    def test_accepts_bytes(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            extract_file_data,
-        )
-
-        extracted = extract_file_data(b"raw bytes content")
-        assert extracted.get("content") == b"raw bytes content"
-
-    def test_accepts_tuple(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            extract_file_data,
-        )
-
-        extracted = extract_file_data(("foo.txt", b"raw bytes content"))
-        assert extracted.get("filename") == "foo.txt"
-        assert extracted.get("content") == b"raw bytes content"
 
 
 class TestUnpackLegacyDefs:
@@ -872,21 +403,25 @@ def test_hoist_images_from_tool_messages_bare_data_uri_string_passes_through():
     [
         (
             {"type": "image_url", "image_url": {"url": DATA_URI_PNG}},
-            TOOL_RESULT_IMAGE_PLACEHOLDER, TOOL_RESULT_IMAGE_BOUNDARY,
+            TOOL_RESULT_IMAGE_PLACEHOLDER,
+            TOOL_RESULT_IMAGE_BOUNDARY,
         ),
         (
             {"type": "file", "file": {"file_data": "data:application/pdf;base64,cGRm", "filename": "report.pdf"}},
-            TOOL_RESULT_MEDIA_PLACEHOLDER, TOOL_RESULT_MEDIA_BOUNDARY,
+            TOOL_RESULT_MEDIA_PLACEHOLDER,
+            TOOL_RESULT_MEDIA_BOUNDARY,
         ),
         (
             {"type": "input_audio", "input_audio": {"data": "c291bmQ=", "format": "wav"}},
-            TOOL_RESULT_MEDIA_PLACEHOLDER, TOOL_RESULT_MEDIA_BOUNDARY,
+            TOOL_RESULT_MEDIA_PLACEHOLDER,
+            TOOL_RESULT_MEDIA_BOUNDARY,
         ),
     ],
 )
 def test_hoist_tool_media_preserves_payload_and_call(
     part: ChatCompletionImageObject | ChatCompletionFileObject | ChatCompletionAudioObject,
-    placeholder: str, boundary: str,
+    placeholder: str,
+    boundary: str,
 ) -> None:
     messages: Final = [
         _assistant_tool_call_msg("call_1"),
@@ -897,7 +432,8 @@ def test_hoist_tool_media_preserves_payload_and_call(
     result: Final = hoist_images_from_tool_messages(messages)
 
     assert result == [
-        messages[0], {**messages[1], "content": placeholder},
+        messages[0],
+        {**messages[1], "content": placeholder},
         {"role": "user", "content": [{"type": "text", "text": boundary}, part]},
     ]
     assert messages == original
@@ -1061,104 +597,6 @@ class TestCustomToolFormatShapeConversion:
 # --- x-litellm-model upload-path decoding (litellm #29830) -------------------
 
 
-def _xlitellm_encoded(raw_id: str, model: str) -> str:
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        encode_file_id_with_model,
-    )
-
-    return encode_file_id_with_model(raw_id, model)
-
-
-def test_update_messages_with_model_file_ids_decodes_xlitellm_encoded_id():
-    """x-litellm-model upload returns `file-<b64(litellm:<raw>;model,<m>)>`.
-    Without decoding, the encoded id leaks to upstream OpenAI and errors as
-    'Files [...] were not found'. Decode it back to raw provider id."""
-    raw_id = "file-ExTuCawUqxEMjVFK6xwR9B"
-    encoded_id = _xlitellm_encoded(raw_id, "gpt-5.1")
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Summarize this."},
-                {"type": "file", "file": {"file_id": encoded_id}},
-            ],
-        }
-    ]
-
-    updated = update_messages_with_model_file_ids(messages, "model-A", {})
-
-    assert updated[0]["content"][1]["file"]["file_id"] == raw_id
-
-
-def test_update_responses_input_with_model_file_ids_decodes_xlitellm_encoded_id():
-    """Same bug on /v1/responses path. Without decoding the encoded id (>64
-    chars), OpenAI rejects with 'string too long. Expected ... maximum length
-    64'."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-        update_responses_input_with_model_file_ids,
-    )
-
-    raw_id = "file-ExTuCawUqxEMjVFK6xwR9B"
-    encoded_id = _xlitellm_encoded(raw_id, "gpt-5.1")
-    input_items = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": "Summarize."},
-                {"type": "input_file", "file_id": encoded_id},
-            ],
-        }
-    ]
-
-    updated = update_responses_input_with_model_file_ids(input_items)
-
-    assert updated[0]["content"][1]["file_id"] == raw_id
-
-
-
-@pytest.mark.parametrize("unusable_file_id", [[1], {"a": 1}])
-def test_update_responses_input_with_model_file_ids_keeps_a_non_string_file_id_as_sent(unusable_file_id):
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-        update_responses_input_with_model_file_ids,
-    )
-
-    encoded_id = _xlitellm_encoded("file-ExTuCawUqxEMjVFK6xwR9B", "gpt-5.1")
-    input_items = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "input_file", "file_id": encoded_id},
-                {"type": "input_file", "file_id": unusable_file_id},
-            ],
-        }
-    ]
-
-    updated = update_responses_input_with_model_file_ids(
-        input_items, "model-A", {encoded_id: {"model-A": "file-on-a"}}
-    )
-
-    assert [item["file_id"] for item in updated[0]["content"]] == ["file-on-a", unusable_file_id]
-
-def test_update_messages_xlitellm_decode_does_not_override_mapping():
-    """If the call-site already resolved a provider id via the mapping, that
-    wins. The new decode fallback runs only when no mapping match."""
-    raw_id = "file-ExTuCawUqxEMjVFK6xwR9B"
-    encoded_id = _xlitellm_encoded(raw_id, "gpt-5.1")
-    mapping = {encoded_id: {"model-A": "provider-explicit-id"}}
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "file", "file": {"file_id": encoded_id}},
-            ],
-        }
-    ]
-
-    updated = update_messages_with_model_file_ids(messages, "model-A", mapping)
-
-    assert updated[0]["content"][0]["file"]["file_id"] == "provider-explicit-id"
-
-
 def test_drop_tool_reference_parts_keeps_text_parts():
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         drop_tool_reference_parts_from_tool_messages,
@@ -1258,719 +696,6 @@ class TestSystemMessagesFirst:
         assert system_messages_first(messages) == messages
 
 
-class TestFlattenTopLevelSchemaCombinators:
-    def _customer_anyof_schema(self):
-        return {
-            "type": "object",
-            "anyOf": [
-                {
-                    "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}},
-                    "required": ["id", "enabled"],
-                },
-                {
-                    "properties": {"id": {"type": "string"}, "schedule": {"type": "string"}},
-                    "required": ["id", "schedule"],
-                },
-            ],
-            "properties": {"id": {"type": "string"}},
-            "required": ["id"],
-        }
-
-    def test_merges_anyof_branches_into_object_schema(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        result = flatten_top_level_schema_combinators(self._customer_anyof_schema())
-
-        assert "anyOf" not in result
-        assert result["type"] == "object"
-        assert set(result["properties"]) == {"id", "enabled", "schedule"}
-        assert result["properties"]["enabled"] == {"type": "boolean"}
-        assert result["required"] == ["id"]
-
-    def test_typeless_anyof_of_object_branches_gets_intersected_required(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        schema = {
-            "anyOf": [
-                {
-                    "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}},
-                    "required": ["id", "enabled"],
-                },
-                {
-                    "properties": {"id": {"type": "string"}, "schedule": {"type": "string"}},
-                    "required": ["id", "schedule"],
-                },
-            ]
-        }
-
-        result = flatten_top_level_schema_combinators(schema)
-
-        assert result["type"] == "object"
-        assert "anyOf" not in result
-        assert result["required"] == ["id"]
-
-    def test_allof_required_is_the_union_of_branches(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        schema = {
-            "type": "object",
-            "allOf": [
-                {"properties": {"id": {"type": "string"}}, "required": ["id"]},
-                {"properties": {"enabled": {"type": "boolean"}}, "required": ["enabled"]},
-            ],
-        }
-
-        result = flatten_top_level_schema_combinators(schema)
-
-        assert "allOf" not in result
-        assert result["required"] == ["enabled", "id"]
-        assert set(result["properties"]) == {"id", "enabled"}
-
-    def test_top_level_schema_wins_property_collisions(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        schema = {
-            "type": "object",
-            "anyOf": [
-                {"properties": {"id": {"type": "integer"}}},
-                {"properties": {"id": {"type": "number"}}},
-            ],
-            "properties": {"id": {"type": "string"}},
-        }
-
-        result = flatten_top_level_schema_combinators(schema)
-
-        assert result["properties"]["id"] == {"type": "string"}
-
-    def test_drops_openai_rejected_scalar_keys_on_object_schema(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        schema = {
-            "type": "object",
-            "properties": {"id": {"type": "string"}},
-            "enum": [{"id": "a"}],
-            "const": {"id": "a"},
-            "not": {"required": ["other"]},
-        }
-
-        result = flatten_top_level_schema_combinators(schema)
-
-        assert "enum" not in result
-        assert "const" not in result
-        assert "not" not in result
-        assert result["properties"] == {"id": {"type": "string"}}
-
-    def test_resolves_local_ref_branches_from_defs(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        schema = {
-            "anyOf": [{"$ref": "#/$defs/Enable"}, {"$ref": "#/$defs/Schedule"}],
-            "$defs": {
-                "Enable": {
-                    "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}},
-                    "required": ["id", "enabled"],
-                },
-                "Schedule": {
-                    "properties": {"id": {"type": "string"}, "schedule": {"type": "string"}},
-                    "required": ["id", "schedule"],
-                },
-            },
-        }
-
-        result = flatten_top_level_schema_combinators(schema)
-
-        assert "anyOf" not in result
-        assert result["type"] == "object"
-        assert set(result["properties"]) == {"id", "enabled", "schedule"}
-        assert result["required"] == ["id"]
-        assert "$defs" in result
-
-    def test_flattens_nested_combinator_branch_from_definitions(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        schema = {
-            "type": "object",
-            "oneOf": [
-                {"$ref": "#/definitions/Toggle"},
-                {"allOf": [{"properties": {"schedule": {"type": "string"}}, "required": ["schedule"]}]},
-            ],
-            "definitions": {"Toggle": {"properties": {"enabled": {"type": "boolean"}}, "required": ["enabled"]}},
-        }
-
-        result = flatten_top_level_schema_combinators(schema)
-
-        assert "oneOf" not in result
-        assert set(result["properties"]) == {"enabled", "schedule"}
-        assert "required" not in result
-
-    def test_unresolvable_ref_branch_leaves_schema_untouched(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        schema = {
-            "type": "object",
-            "anyOf": [{"$ref": "https://example.com/schemas/automation.json"}],
-            "properties": {"id": {"type": "string"}},
-        }
-
-        assert flatten_top_level_schema_combinators(schema) is schema
-
-    def test_self_referencing_ref_branch_leaves_schema_untouched(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        schema = {
-            "type": "object",
-            "anyOf": [{"$ref": "#/$defs/Node"}],
-            "$defs": {"Node": {"type": "object", "anyOf": [{"$ref": "#/$defs/Node"}]}},
-        }
-
-        assert flatten_top_level_schema_combinators(schema) is schema
-
-    @pytest.mark.parametrize("boolean_branch", [True, False])
-    def test_boolean_branch_leaves_schema_untouched(self, boolean_branch):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        schema = {
-            "type": "object",
-            "anyOf": [boolean_branch, {"properties": {"id": {"type": "string"}}, "required": ["id"]}],
-        }
-
-        assert flatten_top_level_schema_combinators(schema) is schema
-
-    def test_root_required_is_combined_with_branch_required(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        allof_schema = {
-            "type": "object",
-            "required": ["id"],
-            "properties": {"id": {"type": "string"}},
-            "allOf": [{"properties": {"enabled": {"type": "boolean"}}, "required": ["enabled"]}],
-        }
-        anyof_schema = {
-            "type": "object",
-            "required": ["id"],
-            "properties": {"id": {"type": "string"}},
-            "anyOf": [
-                {"properties": {"name": {"type": "string"}, "a": {"type": "string"}}, "required": ["name", "a"]},
-                {"properties": {"name": {"type": "string"}, "b": {"type": "string"}}, "required": ["name", "b"]},
-            ],
-        }
-
-        assert flatten_top_level_schema_combinators(allof_schema)["required"] == ["enabled", "id"]
-        assert flatten_top_level_schema_combinators(anyof_schema)["required"] == ["id", "name"]
-
-    def test_repeated_refs_are_expanded_once(self):
-        import time
-
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        fan_out, chain_length = 8, 8
-        schema = {
-            "type": "object",
-            "anyOf": [{"$ref": "#/$defs/Level0"}],
-            "$defs": {
-                **{
-                    f"Level{level}": {"anyOf": [{"$ref": f"#/$defs/Level{level + 1}"}] * fan_out}
-                    for level in range(chain_length)
-                },
-                f"Level{chain_length}": {"type": "object", "properties": {"id": {"type": "string"}}},
-            },
-        }
-
-        started = time.perf_counter()
-        result = flatten_top_level_schema_combinators(schema)
-
-        assert time.perf_counter() - started < 5
-        assert "anyOf" not in result
-        assert result["properties"] == {"id": {"type": "string"}}
-
-    def test_nesting_past_the_depth_cap_leaves_schema_untouched(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        def nested(levels):
-            leaf = {"type": "object", "properties": {"id": {"type": "string"}}}
-            return functools.reduce(lambda inner, _: {"type": "object", "anyOf": [inner]}, range(levels), leaf)
-
-        shallow, deep = nested(20), nested(40)
-
-        assert "anyOf" not in flatten_top_level_schema_combinators(shallow)
-        assert flatten_top_level_schema_combinators(deep) is deep
-
-    @pytest.mark.parametrize(
-        "branches",
-        [
-            [{"required": ["enabled"]}, {"required": ["schedule"]}],
-            [{"type": "object", "required": ["enabled"]}, {"type": "object", "required": ["schedule"]}],
-        ],
-    )
-    def test_typeless_root_with_properties_flattens_branches_without_properties(self, branches):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        schema = {
-            "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}, "schedule": {"type": "string"}},
-            "required": ["id"],
-            "anyOf": branches,
-        }
-
-        result = flatten_top_level_schema_combinators(schema)
-
-        assert "anyOf" not in result
-        assert result["type"] == "object"
-        assert set(result["properties"]) == {"id", "enabled", "schedule"}
-        assert result["required"] == ["id"]
-
-    def test_typeless_root_flattens_typed_object_branches_without_properties(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        schema = {
-            "anyOf": [
-                {"type": "object", "properties": {"id": {"type": "string"}}},
-                {"type": "object", "required": ["id"]},
-            ]
-        }
-
-        result = flatten_top_level_schema_combinators(schema)
-
-        assert "anyOf" not in result
-        assert result["type"] == "object"
-        assert result["properties"] == {"id": {"type": "string"}}
-        assert "required" not in result
-
-    def test_non_object_union_passes_through_unchanged(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        schema = {"anyOf": [{"type": "string"}, {"type": "number"}]}
-
-        assert flatten_top_level_schema_combinators(schema) is schema
-
-    def test_schema_without_rejected_keys_is_returned_as_is(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        schema = {"type": "object", "properties": {"nested": {"anyOf": [{"type": "string"}, {"type": "null"}]}}}
-
-        assert flatten_top_level_schema_combinators(schema) is schema
-
-    def test_input_schema_is_never_mutated(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
-        schema = self._customer_anyof_schema()
-        snapshot = json.loads(json.dumps(schema))
-
-        flatten_top_level_schema_combinators(schema)
-
-        assert schema == snapshot
-
-
-class TestToolWithSanitizedParameters:
-    def _anyof_tool(self):
-        return {
-            "type": "function",
-            "function": {
-                "name": "automation_update",
-                "description": "Update an automation",
-                "parameters": {
-                    "type": "object",
-                    "anyOf": [
-                        {
-                            "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}},
-                            "required": ["id", "enabled"],
-                        },
-                        {
-                            "properties": {"id": {"type": "string"}, "schedule": {"type": "string"}},
-                            "required": ["id", "schedule"],
-                        },
-                    ],
-                    "properties": {"id": {"type": "string"}},
-                    "required": ["id"],
-                },
-            },
-        }
-
-    def test_flattens_anyof_parameters_into_new_tool(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_combinators_and_drop_non_python_regex_patterns,
-            tool_with_sanitized_parameters,
-        )
-
-        tool = self._anyof_tool()
-        result = tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns)
-
-        assert result is not tool
-        parameters = result["function"]["parameters"]
-        assert "anyOf" not in parameters
-        assert parameters["type"] == "object"
-        assert set(parameters["properties"]) == {"id", "enabled", "schedule"}
-        assert parameters["required"] == ["id"]
-        assert result["function"]["name"] == "automation_update"
-        assert tool == self._anyof_tool()
-
-    def test_clean_parameters_return_the_same_tool_object(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_combinators_and_drop_non_python_regex_patterns,
-            tool_with_sanitized_parameters,
-        )
-
-        tool = {
-            "type": "function",
-            "function": {
-                "name": "lookup",
-                "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
-            },
-        }
-
-        assert tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns) is tool
-
-    def test_pattern_only_sanitizer_drops_the_regex_and_keeps_the_union(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            drop_non_python_regex_patterns,
-            tool_with_sanitized_parameters,
-        )
-
-        tool = self._anyof_tool()
-        tool["function"]["parameters"]["properties"]["id"]["pattern"] = _ARTIFACT_FIELD_PATTERN
-
-        result = tool_with_sanitized_parameters(tool, drop_non_python_regex_patterns)
-
-        parameters = result["function"]["parameters"]
-        assert parameters["properties"]["id"] == {"type": "string"}
-        assert parameters["anyOf"] == self._anyof_tool()["function"]["parameters"]["anyOf"]
-        assert tool["function"]["parameters"]["properties"]["id"]["pattern"] == _ARTIFACT_FIELD_PATTERN
-
-    @pytest.mark.parametrize(
-        "tool",
-        [
-            {"type": "function"},
-            {"type": "function", "function": "not-a-dict"},
-            {"type": "function", "function": {"name": "no_params"}},
-            {"type": "function", "function": {"name": "bad_params", "parameters": "not-a-dict"}},
-        ],
-    )
-    def test_non_dict_function_or_parameters_return_the_same_tool_object(self, tool):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_combinators_and_drop_non_python_regex_patterns,
-            tool_with_sanitized_parameters,
-        )
-
-        assert tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns) is tool
-
-    def test_sanitizes_the_input_schema_of_an_anthropic_tool(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            drop_lookaround_regex_patterns,
-            tool_with_sanitized_parameters,
-        )
-
-        tool = {
-            "name": "ArtifactData",
-            "description": "Read a shared database",
-            "input_schema": {
-                "type": "object",
-                "properties": {"doc_id": {"type": "string", "pattern": _ARTIFACT_DATA_ID_PATTERN}},
-            },
-        }
-
-        result = tool_with_sanitized_parameters(tool, drop_lookaround_regex_patterns)
-
-        assert result == {
-            "name": "ArtifactData",
-            "description": "Read a shared database",
-            "input_schema": {"type": "object", "properties": {"doc_id": {"type": "string"}}},
-        }
-        assert tool["input_schema"]["properties"]["doc_id"]["pattern"] == _ARTIFACT_DATA_ID_PATTERN
-
-    def test_returns_the_same_anthropic_tool_when_its_schema_has_nothing_to_drop(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            drop_lookaround_regex_patterns,
-            tool_with_sanitized_parameters,
-        )
-
-        tool = {"name": "Read", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}
-
-        assert tool_with_sanitized_parameters(tool, drop_lookaround_regex_patterns) is tool
-
-
-def _regex_schema(pattern):
-    return {
-        "type": "object",
-        "properties": {
-            "field": {"type": "string", "pattern": pattern},
-            "writes": {
-                "type": "array",
-                "items": {"properties": {"doc_id": {"type": "string", "pattern": pattern}}},
-            },
-            "query": {"anyOf": [{"type": "string", "pattern": pattern}, {"type": "null"}]},
-            "pair": {"type": "array", "prefixItems": [{"type": "string", "pattern": pattern}]},
-            "extra": {"type": "object", "additionalProperties": {"type": "string", "pattern": pattern}},
-            "tagged": {
-                "type": "object",
-                "patternProperties": {pattern: {"type": "string"}, "^x_": {"type": "integer"}},
-            },
-        },
-        "$defs": {"segment": {"type": "string", "pattern": pattern}},
-        "required": ["field"],
-    }
-
-
-class TestDropNonPythonRegexPatterns:
-    """Claude Code's Artifact tool declares ECMA-262 ``\\p{..}`` escapes that OpenAI's
-    validator, which compiles ``pattern`` values and ``patternProperties`` keys with
-    Python ``re``, refuses as "not a 'regex'"."""
-
-    def test_drops_every_regex_python_re_rejects_from_every_schema_position(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            drop_non_python_regex_patterns,
-        )
-
-        schema = _regex_schema(_ARTIFACT_FIELD_PATTERN)
-
-        result = drop_non_python_regex_patterns(schema)
-
-        assert '"pattern"' not in json.dumps(result)
-        properties = result["properties"]
-        assert properties["field"] == {"type": "string"}
-        assert properties["writes"]["items"]["properties"]["doc_id"] == {"type": "string"}
-        assert properties["query"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
-        assert properties["pair"]["prefixItems"] == [{"type": "string"}]
-        assert properties["extra"]["additionalProperties"] == {"type": "string"}
-        assert properties["tagged"]["patternProperties"] == {"^x_": {"type": "integer"}}
-        assert result["$defs"]["segment"] == {"type": "string"}
-        assert result["required"] == ["field"]
-        assert schema == _regex_schema(_ARTIFACT_FIELD_PATTERN)
-
-    def test_keeps_regexes_python_re_compiles_and_returns_the_same_object(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            drop_non_python_regex_patterns,
-        )
-
-        schema = _regex_schema(r'^(?!__.*__$)[^"\\./[\]]{1,200}$')
-
-        assert drop_non_python_regex_patterns(schema) is schema
-
-    def test_pattern_keys_inside_data_positions_are_not_regexes(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            drop_non_python_regex_patterns,
-        )
-
-        schema = {
-            "type": "object",
-            "properties": {
-                "pattern": {"type": "string"},
-                "template": {"type": "object", "default": {"pattern": _ARTIFACT_FIELD_PATTERN}},
-                "samples": {"type": "array", "examples": [{"pattern": _ARTIFACT_FIELD_PATTERN}]},
-                "fixed": {"const": {"pattern": _ARTIFACT_FIELD_PATTERN}},
-                "vendor": {"type": "string", "x-litellm": {"pattern": _ARTIFACT_FIELD_PATTERN}},
-            },
-            "required": ["pattern"],
-        }
-
-        assert drop_non_python_regex_patterns(schema) is schema
-
-    def test_regex_nested_past_what_python_re_can_parse_is_dropped_not_raised(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            drop_non_python_regex_patterns,
-        )
-
-        schema = {
-            "type": "object",
-            "properties": {"deep": {"type": "string", "pattern": "(" * 2000 + "a" + ")" * 2000}},
-        }
-
-        assert drop_non_python_regex_patterns(schema)["properties"]["deep"] == {"type": "string"}
-
-    def test_walks_schemas_deeper_than_the_interpreter_recursion_limit(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            drop_non_python_regex_patterns,
-        )
-
-        depth = sys.getrecursionlimit()
-        leaf = {"type": "string", "pattern": _ARTIFACT_FIELD_PATTERN}
-        schema = functools.reduce(
-            lambda inner, _: {"type": "object", "properties": {"child": inner}}, range(depth), leaf
-        )
-
-        result = drop_non_python_regex_patterns(schema)
-
-        assert functools.reduce(lambda node, _: node["properties"]["child"], range(depth), result) == {"type": "string"}
-        assert functools.reduce(lambda node, _: node["properties"]["child"], range(depth), schema) is leaf
-
-    def test_leaves_levels_past_the_json_nesting_limit_alone(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            drop_non_python_regex_patterns,
-        )
-
-        leaf = {"type": "string", "pattern": _ARTIFACT_FIELD_PATTERN}
-        schema = functools.reduce(
-            lambda inner, _: {"type": "object", "properties": {"child": inner}}, range(1100), leaf
-        )
-
-        assert drop_non_python_regex_patterns(schema) is schema
-
-
-class TestDropLookaroundRegexPatterns:
-    """Kimi K3 and Grok 4.6/4.7 on Bedrock Converse reject every tool schema regex that
-    uses a lookaround assertion, Claude Code's ``ArtifactData`` ``pattern`` included."""
-
-    @pytest.mark.parametrize(
-        "pattern",
-        [r"^(?!x).*$", r"^(?=.*a).*$", r"^.*(?<!x)$", r"^.*(?<=a)$", _ARTIFACT_DATA_ID_PATTERN],
-        ids=["negative-lookahead", "positive-lookahead", "negative-lookbehind", "positive-lookbehind", "ArtifactData"],
-    )
-    def test_drops_every_lookaround_regex_from_every_schema_position(self, pattern):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            drop_lookaround_regex_patterns,
-        )
-
-        schema = _regex_schema(pattern)
-
-        result = drop_lookaround_regex_patterns(schema)
-
-        assert '"pattern"' not in json.dumps(result)
-        properties = result["properties"]
-        assert properties["field"] == {"type": "string"}
-        assert properties["writes"]["items"]["properties"]["doc_id"] == {"type": "string"}
-        assert properties["query"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
-        assert properties["pair"]["prefixItems"] == [{"type": "string"}]
-        assert properties["extra"]["additionalProperties"] == {"type": "string"}
-        assert properties["tagged"]["patternProperties"] == {"^x_": {"type": "integer"}}
-        assert result["$defs"]["segment"] == {"type": "string"}
-        assert result["required"] == ["field"]
-        assert schema == _regex_schema(pattern)
-
-    @pytest.mark.parametrize(
-        "pattern",
-        [r"^[A-Za-z0-9_\-.~:@+]{1,200}$", r"^(?:a|b)+$", r"^(?P<name>\w+)$", r"^(?i)abc$", r"^[^\p{Cc}\p{Cf}]{1,200}$"],
-        ids=["plain", "non-capturing-group", "named-group", "inline-flag", "non-python-without-lookaround"],
-    )
-    def test_keeps_regexes_without_lookaround_and_returns_the_same_object(self, pattern):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            drop_lookaround_regex_patterns,
-        )
-
-        schema = _regex_schema(pattern)
-
-        assert drop_lookaround_regex_patterns(schema) is schema
-
-    def test_lookaround_inside_data_positions_is_not_a_regex(self):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            drop_lookaround_regex_patterns,
-        )
-
-        schema = {
-            "type": "object",
-            "properties": {
-                "pattern": {"type": "string"},
-                "template": {"type": "object", "default": {"pattern": _ARTIFACT_DATA_ID_PATTERN}},
-                "hint": {"type": "string", "description": "ids match " + _ARTIFACT_DATA_ID_PATTERN},
-            },
-            "required": ["pattern"],
-        }
-
-        assert drop_lookaround_regex_patterns(schema) is schema
-
-
-@pytest.mark.parametrize(
-    ("dropper", "patterns"),
-    [
-        ("drop_non_python_regex_patterns", (_ARTIFACT_FIELD_PATTERN, r"^\p{L}+$")),
-        ("drop_lookaround_regex_patterns", (_ARTIFACT_DATA_ID_PATTERN, r"^(?=.*[a-z])\w+$")),
-    ],
-    ids=["non-python", "lookaround"],
-)
-class TestDroppedPatternPropertiesKeepTheirNamesAllowed:
-    """Dropping a ``patternProperties`` key from an object closed by ``additionalProperties:
-    false`` must not ban the names that key allowed: its value schema takes over as the
-    object's ``additionalProperties``."""
-
-    @staticmethod
-    def _drop(dropper):
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            drop_lookaround_regex_patterns,
-            drop_non_python_regex_patterns,
-        )
-
-        return {
-            "drop_non_python_regex_patterns": drop_non_python_regex_patterns,
-            "drop_lookaround_regex_patterns": drop_lookaround_regex_patterns,
-        }[dropper]
-
-    def test_closed_object_takes_the_dropped_value_schema(self, dropper, patterns):
-        schema = {
-            "type": "object",
-            "patternProperties": {patterns[0]: {"type": "string", "pattern": patterns[0]}},
-            "additionalProperties": False,
-        }
-
-        assert self._drop(dropper)(schema) == {
-            "type": "object",
-            "patternProperties": {},
-            "additionalProperties": {"type": "string"},
-        }
-
-    def test_closed_object_losing_two_entries_accepts_either_value_schema(self, dropper, patterns):
-        schema = {
-            "type": "object",
-            "patternProperties": {
-                patterns[0]: {"type": "string"},
-                patterns[1]: {"type": "integer"},
-                "^x_": {"type": "boolean"},
-            },
-            "additionalProperties": False,
-        }
-
-        assert self._drop(dropper)(schema) == {
-            "type": "object",
-            "patternProperties": {"^x_": {"type": "boolean"}},
-            "additionalProperties": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
-        }
-
-    def test_object_with_its_own_additional_properties_schema_keeps_it(self, dropper, patterns):
-        schema = {
-            "type": "object",
-            "patternProperties": {patterns[0]: {"type": "string"}},
-            "additionalProperties": {"type": "integer"},
-        }
-
-        assert self._drop(dropper)(schema) == {
-            "type": "object",
-            "patternProperties": {},
-            "additionalProperties": {"type": "integer"},
-        }
-
-
 class TestRequestContainsImageContent:
     """One detector for every dialect that reaches pre-routing hooks untranslated."""
 
@@ -2001,6 +726,12 @@ class TestRequestContainsImageContent:
             [{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "x"}}]}],
             [{"role": "user", "content": [{"type": "tool_result", "content": [{"type": "text", "text": "ok"}]}]}],
             [{"role": "user", "content": None}],
+            [{"role": "user", "content": [None, "text", {"type": []}]}],
+            ["malformed"],
+            [None, 5],
+            "malformed",
+            5,
+            None,
             [],
         ],
     )
@@ -2016,134 +747,6 @@ class TestRequestContainsImageContent:
         for _ in range(50):
             nested = {"type": "tool_result", "content": [nested]}
         assert request_contains_image_content([{"role": "user", "content": [nested]}]) is False
-
-
-class TestEncryptedReasoningReplay:
-    """Regression for https://github.com/BerriAI/litellm/issues/40288."""
-
-    def test_signature_round_trips_the_encrypted_content(self):
-        assert encrypted_content_from_signature(encrypted_reasoning_signature("gAAAA_bytes")) == "gAAAA_bytes"
-
-    @pytest.mark.parametrize(
-        "signature", [None, "", "ErcBCkgIValidAnthropicSignature", "litellm_encrypted_reasoning:", 7]
-    )
-    def test_anything_else_is_not_encrypted_content(self, signature):
-        assert encrypted_content_from_signature(signature) is None
-
-    def test_encrypted_thinking_block_replays_its_own_item(self):
-        items = responses_reasoning_items_from_thinking_blocks(
-            [{"type": "thinking", "thinking": "Plan.", "signature": encrypted_reasoning_signature("gAAAA_1")}]
-        )
-        assert items == (
-            {
-                "type": "reasoning",
-                "summary": [{"type": "summary_text", "text": "Plan."}],
-                "encrypted_content": "gAAAA_1",
-            },
-        )
-
-    def test_encrypted_redacted_block_replays_with_an_empty_summary(self):
-        items = responses_reasoning_items_from_thinking_blocks(
-            [{"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_1")}]
-        )
-        assert items == ({"type": "reasoning", "summary": [], "encrypted_content": "gAAAA_1"},)
-
-    def test_plain_blocks_collapse_into_one_summary_item_around_encrypted_ones(self):
-        items = responses_reasoning_items_from_thinking_blocks(
-            [
-                {"type": "thinking", "thinking": "A.", "signature": None},
-                {"type": "thinking", "thinking": "B.", "signature": ""},
-                {"type": "thinking", "thinking": "C.", "signature": encrypted_reasoning_signature("gAAAA_c")},
-                {"type": "redacted_thinking", "data": "anthropic-minted-opaque-data"},
-                {"type": "thinking", "thinking": "D."},
-            ]
-        )
-        assert items == (
-            {
-                "type": "reasoning",
-                "summary": [{"type": "summary_text", "text": "A."}, {"type": "summary_text", "text": "B."}],
-            },
-            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "C."}], "encrypted_content": "gAAAA_c"},
-            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "D."}]},
-        )
-        assert all("id" not in item for item in items)
-
-    def test_blocks_without_text_or_encrypted_content_produce_nothing(self):
-        assert responses_reasoning_items_from_thinking_blocks([{"type": "thinking", "thinking": ""}]) == ()
-        assert responses_reasoning_items_from_thinking_blocks([]) == ()
-
-    @pytest.mark.parametrize(
-        ("block", "expected"),
-        [
-            ({"type": "thinking", "thinking": "x", "signature": encrypted_reasoning_signature("g")}, True),
-            ({"type": "redacted_thinking", "data": encrypted_reasoning_signature("g")}, True),
-            ({"type": "thinking", "thinking": "x", "signature": ENCRYPTED_REASONING_SIGNATURE_PREFIX}, True),
-            ({"type": "redacted_thinking", "data": ENCRYPTED_REASONING_SIGNATURE_PREFIX}, True),
-            ({"type": "thinking", "thinking": "x", "signature": "ErcBCkgIValid"}, False),
-            ({"type": "redacted_thinking", "data": "EmwKAhgBEgy"}, False),
-            ({"type": "text", "text": encrypted_reasoning_signature("g")}, False),
-            ("not a block", False),
-        ],
-    )
-    def test_is_encrypted_reasoning_block(self, block, expected):
-        assert is_encrypted_reasoning_block(block) is expected
-
-    def test_strip_drops_every_bridge_tagged_block_and_leaves_no_unsigned_thinking_behind(self):
-        assistant_content = [
-            {"type": "thinking", "thinking": "minted by Anthropic", "signature": "ErcBCkgIValid"},
-            {"type": "thinking", "thinking": "packed by the bridge", "signature": encrypted_reasoning_signature("g1")},
-            {"type": "redacted_thinking", "data": encrypted_reasoning_signature("g2")},
-            {"type": "thinking", "thinking": "", "signature": encrypted_reasoning_signature("g3")},
-            {"type": "text", "text": "answer"},
-        ]
-        messages = [
-            {"role": "user", "content": "question"},
-            {"role": "assistant", "content": assistant_content},
-            {"role": "user", "content": [{"type": "text", "text": "follow-up"}]},
-        ]
-
-        strip_encrypted_reasoning_from_messages(messages)
-
-        assert messages[1]["content"] is assistant_content
-        assert assistant_content == [
-            {"type": "thinking", "thinking": "minted by Anthropic", "signature": "ErcBCkgIValid"},
-            {"type": "text", "text": "answer"},
-        ]
-        assert all(block["signature"] for block in assistant_content if block["type"] == "thinking")
-        assert messages[0] == {"role": "user", "content": "question"}
-        assert messages[2] == {"role": "user", "content": [{"type": "text", "text": "follow-up"}]}
-
-    def test_strip_uses_predicate_to_keep_selected_encrypted_blocks(self):
-        kept_signature = encrypted_reasoning_signature("keep")
-        stripped_signature = encrypted_reasoning_signature("strip")
-        content = [
-            {"type": "thinking", "thinking": "keep", "signature": kept_signature},
-            {"type": "thinking", "thinking": "strip", "signature": stripped_signature},
-        ]
-        messages = [{"role": "assistant", "content": content}]
-
-        strip_encrypted_reasoning_from_messages(messages, should_strip=lambda block: block.get("thinking") == "strip")
-
-        assert messages[0]["content"] is content
-        assert content == [{"type": "thinking", "thinking": "keep", "signature": kept_signature}]
-
-    @pytest.mark.parametrize(
-        "messages",
-        [
-            "not a list",
-            None,
-            [{"role": "user", "content": None}],
-            [{"role": "user", "content": "plain string"}],
-            ["not a message"],
-            [{"role": "assistant", "content": [{"type": "thinking", "thinking": "x", "signature": "ErcBCkgIValid"}]}],
-        ],
-    )
-    def test_strip_leaves_history_without_bridge_reasoning_untouched(self, messages):
-        before = copy.deepcopy(messages)
-
-        strip_encrypted_reasoning_from_messages(messages)
-
-        assert messages == before
 
 
 class TestMergeConsecutiveSystemMessages:
@@ -2330,118 +933,6 @@ def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_w
     assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
 
 
-_MALFORMED_PROMPT_CACHE_BREAKPOINTS: Final = (
-    "yes",
-    1,
-    ["explicit"],
-    "",
-    {},
-    {"mode": "bogus"},
-    {"mode": "explicit", "ttl": "1h"},
-)
-_MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS: Final = (
-    "string",
-    "int",
-    "list",
-    "empty-string",
-    "empty-object",
-    "bogus-mode",
-    "bad-ttl",
-)
-_VALID_PROMPT_CACHE_BREAKPOINTS: Final = ({"mode": "explicit"}, {"mode": "explicit", "ttl": "30m"})
-
-
-@pytest.mark.parametrize("drop_params", (True, False), ids=("drop", "keep"))
-def test_prompt_cache_breakpoint_for_wire_passes_a_missing_marker_through(drop_params: bool) -> None:
-    assert prompt_cache_breakpoint_for_wire(None, drop_params) is None
-
-
-@pytest.mark.parametrize("marker", _MALFORMED_PROMPT_CACHE_BREAKPOINTS, ids=_MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS)
-def test_prompt_cache_breakpoint_for_wire_drops_a_malformed_marker_under_drop_params(marker: object) -> None:
-    assert prompt_cache_breakpoint_for_wire(marker, True) is None
-
-
-@pytest.mark.parametrize("marker", _MALFORMED_PROMPT_CACHE_BREAKPOINTS, ids=_MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS)
-def test_prompt_cache_breakpoint_for_wire_forwards_a_malformed_marker_without_drop_params(marker: object) -> None:
-    assert prompt_cache_breakpoint_for_wire(marker, False) is marker
-
-
-@pytest.mark.parametrize("drop_params", (True, False), ids=("drop", "keep"))
-@pytest.mark.parametrize("marker", _VALID_PROMPT_CACHE_BREAKPOINTS, ids=("explicit", "explicit-30m"))
-def test_prompt_cache_breakpoint_for_wire_keeps_a_valid_marker(marker: dict[str, str], drop_params: bool) -> None:
-    assert prompt_cache_breakpoint_for_wire(marker, drop_params) == marker
-
-
-def test_prompt_cache_breakpoint_for_wire_strips_an_unknown_key_under_drop_params() -> None:
-    assert prompt_cache_breakpoint_for_wire({"mode": "explicit", "note": "kept"}, True) == {"mode": "explicit"}
-
-
-def test_cache_control_is_replaced_by_an_explicit_prompt_cache_breakpoint_on_the_same_block() -> None:
-    marked: Final = {"type": "text", "text": "rules", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
-
-    assert cache_control_as_prompt_cache_breakpoint(marked) == {
-        "type": "text",
-        "text": "rules",
-        "prompt_cache_breakpoint": {"mode": "explicit"},
-    }
-
-
-def test_a_block_without_cache_control_is_returned_untouched() -> None:
-    unmarked: Final = {"type": "text", "text": "rules"}
-
-    assert cache_control_as_prompt_cache_breakpoint(unmarked) is unmarked
-
-
-def test_a_breakpoint_the_client_wrote_survives_a_message_level_mark_ttl_included() -> None:
-    block: Final = {
-        "type": "input_text",
-        "text": "rules",
-        "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
-    }
-
-    assert with_prompt_cache_breakpoint(block, {"mode": "explicit"}) is block
-
-
-def test_a_breakpoint_the_client_wrote_survives_a_per_part_cache_control() -> None:
-    both: Final = {
-        "type": "input_text",
-        "text": "rules",
-        "cache_control": {"type": "ephemeral"},
-        "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
-    }
-
-    assert cache_control_as_prompt_cache_breakpoint(both) == {
-        "type": "input_text",
-        "text": "rules",
-        "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
-    }
-
-
-_NATIVE_REDACTED_DATA: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
-_CONVERSE_REDACTED_DATA: Final = base64.b64encode(_NATIVE_REDACTED_DATA.encode()).decode()
-
-
-@pytest.mark.parametrize(
-    "data, native",
-    [
-        pytest.param(_NATIVE_REDACTED_DATA, _NATIVE_REDACTED_DATA, id="claude-native"),
-        pytest.param(_CONVERSE_REDACTED_DATA, _NATIVE_REDACTED_DATA, id="converse-wrapped-legacy-history"),
-        pytest.param(
-            encrypted_reasoning_signature("gAAAA_1"), encrypted_reasoning_signature("gAAAA_1"), id="openai-encrypted"
-        ),
-        pytest.param("", "", id="blank"),
-        pytest.param(base64.b64encode(b"not base64!").decode(), base64.b64encode(b"not base64!").decode(), id="b64-once"),
-    ],
-)
-def test_native_redacted_thinking_data_only_unwraps_the_converse_base64_layer(data: str, native: str) -> None:
-    assert native_redacted_thinking_data(data) == native
-
-
-@pytest.mark.parametrize("data", [_NATIVE_REDACTED_DATA, _CONVERSE_REDACTED_DATA], ids=["native", "legacy-wrapped"])
-def test_converse_redacted_content_wraps_claude_native_data_exactly_once(data: str) -> None:
-    assert converse_redacted_content(data) == _CONVERSE_REDACTED_DATA
-
-
 def test_strip_litellm_response_only_fields_drops_nested_tool_call_provider_fields() -> None:
     message: Final = {
         "role": "assistant",
@@ -2469,78 +960,6 @@ def test_strip_litellm_response_only_fields_drops_nested_tool_call_provider_fiel
     assert function["arguments"] == '{"city": "Paris"}'
 
 
-@pytest.mark.parametrize(
-    ("schema", "is_open"),
-    [
-        ({"type": "object", "properties": {"a": {"type": "string"}}}, False),
-        ({"type": "object", "properties": {}}, False),
-        ({"type": "object", "additionalProperties": False}, False),
-        ({"type": "string"}, False),
-        ({"type": "object"}, True),
-        ({"type": ["object", "null"]}, True),
-        ({"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": True}, True),
-        ({"type": "object", "additionalProperties": {"type": "integer"}}, True),
-        ({"type": "object", "properties": {}, "patternProperties": {"^x": {"type": "string"}}}, True),
-        ({"type": "object", "properties": {"inner": {"anyOf": [{"type": "object"}, {"type": "null"}]}}}, True),
-        ({"type": "array", "items": {"type": "object", "additionalProperties": {"type": "string"}}}, True),
-    ],
-)
-def test_schema_has_open_object_flags_any_node_that_accepts_unlisted_keys(schema, is_open):
-    assert schema_has_open_object(schema) is is_open
-
-
-def _object_with(properties: Mapping[str, object], **defs: Mapping[str, object]) -> Mapping[str, object]:
-    return {"type": "object", "properties": properties, **defs}
-
-
-@pytest.mark.parametrize(
-    ("schema", "unresolvable"),
-    [
-        (_object_with({"a": {"type": "string"}}), False),
-        (_object_with({"a": {"$ref": "#/$defs/A"}, "b": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "string"}}}), False),
-        (_object_with({"a": {"$ref": "#/definitions/A"}}, definitions={"A": {"$ref": "#/definitions/B"}, "B": {"type": "integer"}}), False),
-        (_object_with({"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"items": {"$ref": "/$defs/B"}}, "B": {"type": "string"}}}), False),
-        (_object_with({"a": {"$ref": "#/$defs/Missing"}}, **{"$defs": {"A": {"type": "string"}}}), True),
-        (_object_with({"a": {"$ref": "other.json#/A"}}), True),
-        (_object_with({"parent": {"$ref": "#"}}), True),
-        (_object_with({"a": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "#/$defs/A"}}}}), True),
-        (_object_with({"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "/$defs/A"}}}}), True),
-        (
-            _object_with(
-                {"a": {"$ref": "#/$defs/A"}},
-                **{"$defs": {"A": {"properties": {"b": {"$ref": "#/$defs/B"}}}, "B": {"properties": {"a": {"$ref": "#/$defs/A"}}}}},
-            ),
-            True,
-        ),
-    ],
-    ids=["no-refs", "shared-def", "chained-definitions", "root-path-defs", "missing-def", "external", "root", "self-cycle", "root-path-self-cycle", "mutual-cycle"],
-)
-def test_schema_has_unresolvable_ref_flags_refs_that_cannot_be_inlined(schema, unresolvable):
-    assert schema_has_unresolvable_ref(schema) is unresolvable
-
-
-@pytest.mark.parametrize(
-    ("schema", "properties", "branches"),
-    [
-        (_object_with({"a": {"type": "string"}, "b": {"type": "string"}, "c": {"type": "string"}}, required=["a"]), 3, 8),
-        (
-            _object_with(
-                {"x": {"$ref": "#/$defs/Pair"}, "y": {"$ref": "#/$defs/Pair"}},
-                required=["x", "y"],
-                **{"$defs": {"Pair": _object_with({"l": {"type": "string"}, "r": {"type": "string"}}, required=["l"])}},
-            ),
-            4,
-            7,
-        ),
-        (_object_with({"inner": _object_with({"z": {"type": "string"}})}, required=["inner"]), 2, 4),
-    ],
-    ids=["flat", "shared-def-counted-once", "nested"],
-)
-def test_schema_size_counts_every_written_object_once(schema, properties, branches):
-    assert schema_property_count(schema) == properties
-    assert schema_grammar_branch_count(schema) == branches
-
-
 @pytest.mark.parametrize("part_type", ["image_url", "input_image"])
 @pytest.mark.parametrize(
     "fields",
@@ -2551,7 +970,8 @@ def test_schema_size_counts_every_written_object_once(schema, properties, branch
     ],
 )
 def test_shared_image_url_agrees_with_responses_normalization(
-    part_type: str, fields: Mapping[str, object],
+    part_type: str,
+    fields: Mapping[str, object],
 ) -> None:
     from litellm.litellm_core_utils.prompt_templates.common_utils import as_openai_image_part
     from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
@@ -2561,121 +981,6 @@ def test_shared_image_url_agrees_with_responses_normalization(
     expected: Final = {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE"}}
     assert as_openai_image_part(part) == expected
     assert as_openai_image_part(normalized) == expected
-
-
-@pytest.mark.parametrize(
-    "part,projected,media",
-    [
-        (
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "high"}},
-            {"type": "image_url", "image_url": {"url": "", "detail": "high"}},
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "high"}},
-        ),
-        (
-            {"type": "input_image", "image_url": "https://example.com/image.png", "detail": "low"},
-            {"type": "input_image", "image_url": "", "detail": "low"},
-            {"type": "image_url", "image_url": {"url": "https://example.com/image.png", "detail": "low"}},
-        ),
-        (
-            {"type": "computer_screenshot", "image_url": "data:image/png;base64,IMAGE"},
-            {"type": "computer_screenshot", "image_url": ""},
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "auto"}},
-        ),
-        (
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "IMAGE"}},
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}},
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "auto"}},
-        ),
-        (
-            {"type": "input_audio", "input_audio": {"data": "AUDIO", "format": "wav"}},
-            {"type": "input_audio", "input_audio": {"data": "", "format": "wav"}},
-            {"type": "input_audio", "input_audio": {"data": "AUDIO", "format": "wav"}},
-        ),
-        (
-            {"type": "file", "file": {"file_data": "IMAGE", "format": "image/png", "filename": "image.png"}},
-            {"type": "file", "file": {"file_data": "", "format": "image/png", "filename": "image.png"}},
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "auto"}},
-        ),
-        (
-            {"type": "input_file", "file_data": "data:audio/wav;base64,AUDIO", "filename": "audio.wav"},
-            {"type": "input_file", "file_data": "", "filename": "audio.wav"},
-            {"type": "input_audio", "input_audio": {"data": "AUDIO", "format": "wav"}},
-        ),
-    ],
-)
-def test_tpm_projection_blanks_only_declared_media_transport(
-    part: Mapping[str, object], projected: Mapping[str, object], media: Mapping[str, object],
-) -> None:
-    text: Final = {"type": "text", "text": "data:image/png;base64,IMAGE"}
-    request: Final = [{"role": "user", "content": [text, {**part, "cache_control": {"type": "ephemeral"}}]}]
-    original: Final = copy.deepcopy(request)
-    assert split_media_for_tpm(request) == (
-        [{"role": "user", "content": [text, {**projected, "cache_control": {"type": "ephemeral"}}]}],
-        (media,),
-    )
-    assert request == original
-
-
-def test_tpm_projection_retains_nested_and_native_history_around_media() -> None:
-    image: Final = {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "high"}}
-    empty_image: Final = {"type": "image_url", "image_url": {"url": "", "detail": "high"}}
-    document: Final = {"type": "document", "title": "keep", "source": {"type": "content", "content": [image]}}
-    empty_document: Final = {**document, "source": {"type": "content", "content": [empty_image]}}
-    tool: Final = {"type": "tool_result", "tool_use_id": "call", "content": [document, {"type": "text", "text": "keep"}]}
-    empty_tool: Final = {**tool, "content": [empty_document, {"type": "text", "text": "keep"}]}
-    request: Final = [
-        {"role": "user", "content": [tool]},
-        {"type": "function_call_output", "call_id": "call", "output": [image]},
-        {"type": "custom_tool_call_output", "call_id": "custom", "output": [image]},
-        {"type": "computer_call_output", "call_id": "computer", "output": {
-            "type": "computer_screenshot", "image_url": "data:image/png;base64,IMAGE",
-        }},
-        {"type": "image_generation_call", "id": "ig", "result": "IMAGE", "status": "completed"},
-        {"type": "code_interpreter_call", "id": "ci", "code": "keep()", "outputs": [
-            {"type": "logs", "logs": "keep"}, {"type": "image", "url": "https://example.com/image.png"},
-        ]},
-    ]
-    original: Final = copy.deepcopy(request)
-    projected, media = split_media_for_tpm(request)
-    assert projected == [
-        {"role": "user", "content": [empty_tool]},
-        {"type": "function_call_output", "call_id": "call", "output": [empty_image]},
-        {"type": "custom_tool_call_output", "call_id": "custom", "output": [empty_image]},
-        {"type": "computer_call_output", "call_id": "computer", "output": {
-            "type": "computer_screenshot", "image_url": "",
-        }},
-        {"type": "image_generation_call", "id": "ig", "result": "", "status": "completed"},
-        {"type": "code_interpreter_call", "id": "ci", "code": "keep()", "outputs": [
-            {"type": "logs", "logs": "keep"}, {"type": "image", "url": ""},
-        ]},
-    ]
-    assert media == (
-        image, image, image,
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "auto"}},
-        {"type": "image_url", "image_url": {"url": "data:application/octet-stream;base64,IMAGE", "detail": "auto"}},
-        {"type": "image_url", "image_url": {"url": "https://example.com/image.png", "detail": "auto"}},
-    )
-    assert request == original
-
-
-def test_tpm_projection_preserves_non_media_identity_and_opaque_values() -> None:
-    image: Final = {"type": "input_image", "image_url": "data:image/png;base64,OPAQUE"}
-    request: Final = [
-        {"role": "user", "content": json.dumps(image)},
-        {"type": "custom_tool_call_output", "call_id": "call", "output": json.dumps(image)},
-        {"type": "function_call", "call_id": "call", "name": "keep", "arguments": {"content": [image]}},
-        {"type": "file_search_call", "results": [{"text": "keep", "content": [image]}]},
-        {"type": "image_generation_call", "id": "ig", "status": "in_progress", "result": None},
-        {"role": "user", "content": [
-            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "PDF"}},
-            {"type": "document", "source": {"type": "text", "data": json.dumps(image)}},
-            {"type": "file", "file": {"format": "application/pdf", "file_data": "PDF"}},
-            {"type": "text", "text": "keep", "metadata": {"content": [image]}},
-        ]},
-    ]
-    projected, media = split_media_for_tpm(request)
-    assert projected is request
-    assert media == ()
 
 
 def test_content_list_flattening_returns_new_messages_and_leaves_the_callers_untouched() -> None:
@@ -2689,3 +994,204 @@ def test_content_list_flattening_returns_new_messages_and_leaves_the_callers_unt
 
     assert flattened == [{"role": "user", "content": "Hello world"}, {"role": "assistant", "content": "Hi"}]
     assert messages == messages_before
+
+
+_MOVED_PRIVATE_NAMES_BY_MODULE: Final = (
+    (
+        "file_id_utils",
+        ("_decode_vector_store_ids_in_tools",),
+    ),
+    (
+        "json_schema_utils",
+        (
+            "_EMPTY_SCHEMA",
+            "_LOCAL_SCHEMA_REF_PREFIXES",
+            "_MAX_SCHEMA_FLATTEN_DEPTH",
+            "_MAX_SCHEMA_NESTING",
+            "_OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS",
+            "_REGEX_LOOKAROUND_RE",
+            "_SCHEMA_LIST",
+            "_SUBSCHEMA_KEYWORDS",
+            "_SUBSCHEMA_LIST_KEYWORDS",
+            "_SUBSCHEMA_MAP_KEYWORDS",
+            "_TOP_LEVEL_SCHEMA_COMBINATORS",
+            "_any_of",
+            "_combinator_required_names",
+            "_dropped_pattern_properties",
+            "_flatten_schema_against_root",
+            "_grammar_branches",
+            "_is_not_python_regex",
+            "_is_object_schema",
+            "_is_open_object",
+            "_is_union",
+            "_keyword_value_rebuilt",
+            "_list_at",
+            "_may_be_string",
+            "_mergeable_branch",
+            "_named_schemas",
+            "_node_without_rejected_regex",
+            "_optional_property_names",
+            "_property_schemas",
+            "_refs_in",
+            "_resolve_local_schema_ref",
+            "_root_definitions",
+            "_schema_at",
+            "_schema_branches",
+            "_schema_levels",
+            "_schema_nodes",
+            "_schema_properties",
+            "_schema_required_names",
+            "_schema_without_rejected_regex",
+            "_subschemas",
+            "_uses_regex_lookaround",
+        ),
+    ),
+    (
+        "prompt_cache_breakpoint_utils",
+        (
+            "_BREAKPOINT_BLOCKS",
+            "_BREAKPOINT_BLOCK_LIST_KEYS",
+            "_BREAKPOINT_FIELDS",
+            "_MarkedT",
+            "_PROMPT_CACHE_BREAKPOINT",
+            "_breakpoints_stripped_from",
+            "_without_prompt_cache_breakpoint",
+        ),
+    ),
+    (
+        "reasoning_utils",
+        (
+            "_carries_encrypted_reasoning",
+            "_converse_wrapped_payload",
+            "_encrypted_reasoning_field",
+            "_provider_text_or_none",
+            "_readable_thinking_text",
+            "_reasoning_item_from_block_group",
+            "_reasoning_replay_group_key",
+            "_strip_encrypted_reasoning_from_blocks",
+        ),
+    ),
+    (
+        "tool_call_json_repair",
+        (
+            "_DECODED_JSON",
+            "_attempt_json_repair",
+        ),
+    ),
+    (
+        "tpm_media_utils",
+        (
+            "_TPMMediaProjection",
+            "_tpm_blank_fields",
+            "_tpm_code_output_media",
+            "_tpm_document_media",
+            "_tpm_file_media",
+            "_tpm_image_part",
+            "_tpm_input_media",
+            "_tpm_media_leaf",
+            "_tpm_media_list",
+            "_tpm_replace_field",
+            "_tpm_tool_result_media",
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize(("module_name", "names"), _MOVED_PRIVATE_NAMES_BY_MODULE)
+def test_moved_private_helpers_still_import_from_common_utils(module_name: str, names: tuple[str, ...]) -> None:
+    new_home: Final = importlib.import_module(f"litellm.litellm_core_utils.prompt_templates.{module_name}")
+    unreachable: Final = [name for name in names if getattr(common_utils, name, None) is not getattr(new_home, name)]
+    assert unreachable == []
+
+
+def test_unknown_private_name_still_raises_attribute_error_on_common_utils() -> None:
+    missing_name: Final = "_not_a_moved_helper"
+    with pytest.raises(AttributeError, match=missing_name):
+        getattr(common_utils, missing_name)
+
+
+def test_old_path_access_warns_from_the_callers_line_with_the_new_home() -> None:
+    moved_name: Final = "_any_of"
+    with pytest.warns(DeprecationWarning, match=r"common_utils\._any_of moved to .*\.json_schema_utils") as caught:
+        getattr(common_utils, moved_name)
+    assert [warning.filename for warning in caught] == [__file__]
+
+
+def test_patching_a_moved_helper_at_its_old_path_reaches_the_callers_in_its_new_home() -> None:
+    patched_result: Final = {"patched": True}
+    with mock.patch(
+        "litellm.litellm_core_utils.prompt_templates.common_utils._attempt_json_repair", return_value=patched_result
+    ):
+        assert parse_tool_call_arguments('{"a": 1') == patched_result
+    assert parse_tool_call_arguments('{"a": 1') == {"a": 1}
+
+
+def test_patching_a_re_exported_helper_at_its_old_path_reaches_the_callers_in_its_new_home() -> None:
+    schema: Final = {"anyOf": [{"type": "object", "properties": {"a": {"type": "string"}}}]}
+    unpatched: Final = flatten_combinators_and_drop_non_python_regex_patterns(schema)
+    patched_result: Final = {"patched": True}
+    with mock.patch(
+        "litellm.litellm_core_utils.prompt_templates.common_utils.flatten_top_level_schema_combinators",
+        return_value=patched_result,
+    ):
+        assert flatten_combinators_and_drop_non_python_regex_patterns(schema) == patched_result
+    assert flatten_combinators_and_drop_non_python_regex_patterns(schema) == unpatched
+
+
+def test_old_path_patch_restores_the_moved_helper_when_warnings_become_errors_inside_it() -> None:
+    with warnings.catch_warnings(), contextlib.suppress(DeprecationWarning):
+        with mock.patch(
+            "litellm.litellm_core_utils.prompt_templates.common_utils._attempt_json_repair", return_value=None
+        ):
+            warnings.simplefilter("error", DeprecationWarning)
+    assert parse_tool_call_arguments('{"a": 1') == {"a": 1}
+
+
+def test_old_path_patch_with_create_leaves_the_moved_helper_in_place() -> None:
+    with mock.patch(
+        "litellm.litellm_core_utils.prompt_templates.common_utils._attempt_json_repair", return_value=None, create=True
+    ):
+        assert parse_tool_call_arguments("{}") == {}
+    assert parse_tool_call_arguments('{"a": 1') == {"a": 1}
+
+
+def test_overriding_a_moved_helper_through_the_old_path_warns_and_deleting_it_restores_the_released_one() -> None:
+    moved_name: Final = "_attempt_json_repair"
+    with pytest.warns(DeprecationWarning, match=r"common_utils\._attempt_json_repair moved to .*\.tool_call_json_repair"):
+        setattr(common_utils, moved_name, mock.Mock(return_value={"overridden": True}))
+    assert parse_tool_call_arguments('{"a": 1') == {"overridden": True}
+    delattr(common_utils, moved_name)
+    assert parse_tool_call_arguments('{"a": 1') == {"a": 1}
+
+
+def test_patching_a_name_common_utils_still_defines_stays_on_common_utils() -> None:
+    with mock.patch.object(common_utils, "invalid_type_message", return_value="patched"):
+        assert common_utils.invalid_type_message("field", 1) == "patched"
+    assert common_utils.invalid_type_message("field", 1) != "patched"
+
+
+def test_get_content_from_model_response_includes_server_tool_calls_before_client_calls() -> None:
+    server_call: Final = ChatCompletionMessageToolCall(
+        id="srvtoolu_01", type="function", function=Function(name="web_search", arguments='{"query": "persimmon"}')
+    )
+    client_call: Final = ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="get_weather", arguments='{"city": "SF"}')
+    )
+    response: Final = ModelResponse(
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content="Looking it up.",
+                    tool_calls=[client_call.model_dump()],
+                    provider_specific_fields={"server_tool_calls": [server_call.model_dump()]},
+                ),
+            )
+        ],
+    )
+
+    assert get_content_from_model_response(response) == (
+        "Looking it up." + server_call.model_dump_json() + client_call.model_dump_json()
+    )

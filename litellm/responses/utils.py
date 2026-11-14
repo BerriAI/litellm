@@ -13,7 +13,14 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire pay
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, iter_items
+from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
+    as_object_list,
+    as_str_mapping,
+    attribute_or_none,
+    decoded_json_object,
+    iter_items,
+)
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.base_llm.responses.transformation import (
@@ -50,6 +57,20 @@ from litellm.types.utils import (
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]
 ] = TypeAdapter(ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None)
+_REASONING_FIELDS_ONLY_ITS_ORIGIN_RESOLVES: Final = frozenset({"encrypted_content", "id", "status"})
+_ENCRYPTED_OUTPUT_ITEM_TYPES: Final = frozenset({"reasoning", "compaction"})
+_OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
+_REASONING_ITEM_EVENT_TYPES: Final = frozenset(
+    {
+        "response.reasoning_summary_part.added",
+        "response.reasoning_summary_part.done",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.done",
+        "response.reasoning_text.delta",
+        "response.reasoning_text.done",
+    }
+)
+_CONTENT_PART_EVENT_TYPES: Final = frozenset({"response.content_part.added", "response.content_part.done"})
 
 
 class _UsageExtraFields(ExtraItemsTypedDict, total=False, extra_items=object):
@@ -90,8 +111,9 @@ def _is_object_dict(
 def _prompt_tokens_details_wrapper(details: object) -> PromptTokensDetailsWrapper:
     if _is_object_dict(details):
         input_details: Final = InputTokensDetails.model_validate(details)
+        input_fields: Final = decoded_json_object(input_details.model_dump(exclude={"cache_write_tokens_details"}))
         return PromptTokensDetailsWrapper(
-            **input_details.model_dump(exclude={"cache_write_tokens_details"}),
+            **input_fields,
             cache_creation_token_details=_cache_write_lifetimes(input_details.cache_write_tokens_details),
         )
     return PromptTokensDetailsWrapper(
@@ -131,6 +153,7 @@ def _as_input_text_part(part: object) -> object:
 
 
 _RequestInputT: Final = TypeVar("_RequestInputT")
+_StreamEventT: Final = TypeVar("_StreamEventT", bound=BaseModel)
 
 
 def _provider_mapped_params(
@@ -292,7 +315,7 @@ class ResponsesAPIRequestUtils:
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
-        allowed_openai_params: list[str] | None = None,
+        allowed_openai_params: Sequence[str] | None = None,
         drop_params: bool | None = None,
         declared_reasoning_efforts: Collection[str] | None = None,
     ) -> dict:
@@ -318,7 +341,7 @@ class ResponsesAPIRequestUtils:
         non_default_params: Final = cast(dict, response_api_optional_params)
         # Check for unsupported parameters
         ResponsesAPIRequestUtils._check_valid_arg(
-            supported_params=supported_params + (allowed_openai_params or []),
+            supported_params=[*supported_params, *allowed_openai_param_names(allowed_openai_params)],
             non_default_params=non_default_params,
             drop_params=should_drop_params,
             custom_llm_provider=responses_api_provider_config.custom_llm_provider,
@@ -347,7 +370,7 @@ class ResponsesAPIRequestUtils:
         return apply_openai_param_overrides(
             optional_params=params_with_normalized_stream_options,
             non_default_params=non_default_params,
-            allowed_openai_params=allowed_openai_params or [],
+            allowed_openai_params=allowed_openai_params,
         )
 
     @staticmethod
@@ -520,6 +543,95 @@ class ResponsesAPIRequestUtils:
     _decode_encrypted_item_id = decode_encrypted_item_id
 
     @staticmethod
+    def affinity_model_id(litellm_metadata: Mapping[str, object] | None) -> str | None:
+        if not litellm_metadata or not litellm_metadata.get("encrypted_content_affinity_enabled"):
+            return None
+        model_info: Final = litellm_metadata.get("model_info")
+        model_id: Final = model_info.get("id") if _is_object_dict(model_info) else None
+        return model_id if isinstance(model_id, str) and model_id else None
+
+    @staticmethod
+    def affinity_item_id(item_type: object, item_id: object, encrypted_content: object, model_id: str) -> str | None:
+        """The ``encitem_`` id an output item carries under encrypted-content affinity, or ``None`` to keep its id.
+
+        Reasoning and compaction items qualify by type, so a stream encodes them before their
+        ``encrypted_content`` arrives and every event agrees with the final response.
+        """
+        if not isinstance(item_id, str) or not item_id:
+            return None
+        if ResponsesAPIRequestUtils.decode_encrypted_item_id(item_id) is not None:
+            return None
+        encrypted_type: Final = isinstance(item_type, str) and item_type in _ENCRYPTED_OUTPUT_ITEM_TYPES
+        if not encrypted_type and not (isinstance(encrypted_content, str) and encrypted_content):
+            return None
+        return ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, item_id)
+
+    @staticmethod
+    def _reasoning_event_item_id(event_type: object, part_type: object, item_id: object, model_id: str) -> str | None:
+        if not isinstance(event_type, str):
+            return None
+        scoped_to_reasoning: Final = event_type in _REASONING_ITEM_EVENT_TYPES or (
+            event_type in _CONTENT_PART_EVENT_TYPES and part_type == "reasoning_text"
+        )
+        if not scoped_to_reasoning:
+            return None
+        return ResponsesAPIRequestUtils.affinity_item_id("reasoning", item_id, None, model_id)
+
+    @staticmethod
+    def _affinity_item_updates(
+        item_type: object, item_id: object, encrypted_content: object, model_id: str
+    ) -> Mapping[str, str]:
+        encoded_id: Final = ResponsesAPIRequestUtils.affinity_item_id(item_type, item_id, encrypted_content, model_id)
+        wrapped: Final = (
+            ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(encrypted_content, model_id)
+            if isinstance(encrypted_content, str) and encrypted_content
+            else None
+        )
+        return MappingProxyType(
+            {key: value for key, value in (("id", encoded_id), ("encrypted_content", wrapped)) if value is not None}
+        )
+
+    @staticmethod
+    def encode_stream_event_for_affinity(event: _StreamEventT, model_id: str) -> _StreamEventT:
+        """The stream event with the item id and wrapped ``encrypted_content`` the final response carries."""
+        event_type: Final = attribute_or_none(event, "type")
+        if isinstance(event_type, str) and event_type in _OUTPUT_ITEM_EVENT_TYPES:
+            item: Final = attribute_or_none(event, "item")
+            if not isinstance(item, BaseModel):
+                return event
+            item_updates: Final = ResponsesAPIRequestUtils._affinity_item_updates(
+                attribute_or_none(item, "type"),
+                attribute_or_none(item, "id"),
+                attribute_or_none(item, "encrypted_content"),
+                model_id,
+            )
+            return event.model_copy(update={"item": item.model_copy(update=item_updates)}) if item_updates else event
+        part: Final = attribute_or_none(event, "part")
+        encoded_item_id: Final = ResponsesAPIRequestUtils._reasoning_event_item_id(
+            event_type,
+            part.get("type") if _is_object_dict(part) else attribute_or_none(part, "type"),
+            attribute_or_none(event, "item_id"),
+            model_id,
+        )
+        return event if encoded_item_id is None else event.model_copy(update={"item_id": encoded_item_id})
+
+    @staticmethod
+    def affinity_encoded_stream_event(event: Mapping[str, object], model_id: str) -> dict[str, object] | None:
+        """The JSON stream event with the ids and wrapped content the final response carries, or ``None``."""
+        event_type: Final = event.get("type")
+        item: Final = event.get("item")
+        if isinstance(event_type, str) and event_type in _OUTPUT_ITEM_EVENT_TYPES and _is_object_dict(item):
+            item_updates: Final = ResponsesAPIRequestUtils._affinity_item_updates(
+                item.get("type"), item.get("id"), item.get("encrypted_content"), model_id
+            )
+            return {**event, "item": {**item, **item_updates}} if item_updates else None
+        part: Final = event.get("part")
+        encoded_item_id: Final = ResponsesAPIRequestUtils._reasoning_event_item_id(
+            event_type, part.get("type") if _is_object_dict(part) else None, event.get("item_id"), model_id
+        )
+        return None if encoded_item_id is None else {**event, "item_id": encoded_item_id}
+
+    @staticmethod
     def wrap_encrypted_content_with_model_id(encrypted_content: str, model_id: str) -> str:
         """Wrap encrypted_content with model_id metadata for affinity routing.
 
@@ -574,7 +686,7 @@ class ResponsesAPIRequestUtils:
         response: Union["ResponsesAPIResponse", dict[str, object]],
         model_id: str | None,
     ) -> Union["ResponsesAPIResponse", dict[str, object]]:
-        """Rewrite item IDs for output items that contain ``encrypted_content``.
+        """Rewrite item IDs for reasoning, compaction and other output items that contain ``encrypted_content``.
 
         Encodes ``model_id`` into the item ID so that follow-up requests can be
         routed back to the originating deployment without any cache lookup.
@@ -591,40 +703,28 @@ class ResponsesAPIRequestUtils:
         else:
             output = getattr(response, "output", None)
 
-        if not isinstance(output, list):
+        items: Final = as_object_list(output)
+        if items is None:
             return response
 
-        for item in output:
-            if isinstance(item, dict):
-                item_id = item.get("id")
-                encrypted_content = item.get("encrypted_content")
-
-                if encrypted_content and isinstance(encrypted_content, str):
-                    # Always wrap encrypted_content with model_id for redundancy
-                    item["encrypted_content"] = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
-                        encrypted_content, model_id
+        for item in items:
+            if _is_object_dict(item):
+                item.update(
+                    ResponsesAPIRequestUtils._affinity_item_updates(
+                        item.get("type"), item.get("id"), item.get("encrypted_content"), model_id
                     )
-                    # Also encode the ID if present
-                    if item_id and isinstance(item_id, str):
-                        item["id"] = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, item_id)
-            else:
-                item_id = getattr(item, "id", None)
-                encrypted_content = getattr(item, "encrypted_content", None)
-
-                if encrypted_content and isinstance(encrypted_content, str):
-                    # Always wrap encrypted_content with model_id for redundancy
-                    try:
-                        item.encrypted_content = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
-                            encrypted_content, model_id
-                        )
-                    except AttributeError:
-                        pass
-                    # Also encode the ID if present
-                    if item_id and isinstance(item_id, str):
-                        try:
-                            item.id = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, item_id)
-                        except AttributeError:
-                            pass
+                )
+                continue
+            for key, value in ResponsesAPIRequestUtils._affinity_item_updates(
+                attribute_or_none(item, "type"),
+                attribute_or_none(item, "id"),
+                attribute_or_none(item, "encrypted_content"),
+                model_id,
+            ).items():
+                try:
+                    setattr(item, key, value)
+                except AttributeError:
+                    pass
 
         return response
 
@@ -678,27 +778,32 @@ class ResponsesAPIRequestUtils:
             return
         items: Final = cast(list[object], request_input)  # cast-ok: untyped client json
         stripped: Final = tuple(
-            ResponsesAPIRequestUtils._without_encrypted_reasoning(item)
-            if should_strip is None or (isinstance(item, Mapping) and should_strip(cast(Mapping[str, object], item)))
+            ResponsesAPIRequestUtils.readable_reasoning(reasoning)
+            if (reasoning := ResponsesAPIRequestUtils._encrypted_reasoning_item(item)) is not None
+            and (should_strip is None or should_strip(reasoning))
             else item
             for item in items
         )
         items[:] = (item for item in stripped if item is not None)
 
     @staticmethod
-    def _without_encrypted_reasoning(item: object) -> object | None:
+    def _encrypted_reasoning_item(item: object) -> Mapping[str, object] | None:
         if not isinstance(item, dict):
-            return item
+            return None
         reasoning: Final = cast(Mapping[str, object], item)  # cast-ok: untyped client json
         if reasoning.get("type") != "reasoning" or not reasoning.get("encrypted_content"):
-            return reasoning
+            return None
+        return reasoning
+
+    @staticmethod
+    def readable_reasoning(reasoning: Mapping[str, object]) -> Mapping[str, object] | None:
         readable: Final = any(
             ResponsesAPIRequestUtils._has_readable_text(reasoning.get(key)) for key in ("summary", "content")
         )
         if not readable:
             return None
         kept: Final[dict[str, object]] = {  # mutable-ok: request item rebuilt without the undecryptable keys
-            key: value for key, value in reasoning.items() if key not in ("encrypted_content", "id")
+            key: value for key, value in reasoning.items() if key not in _REASONING_FIELDS_ONLY_ITS_ORIGIN_RESOLVES
         }
         return kept
 

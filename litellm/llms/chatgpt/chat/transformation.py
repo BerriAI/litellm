@@ -1,12 +1,13 @@
 from collections.abc import Mapping
 from typing import Any, Final
 
+from litellm._logging import WarningLogger, verbose_logger
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
-from ..authenticator import Authenticator, get_cached_authenticator, get_chatgpt_auth_file
+from ..authenticator import Authenticator, get_chatgpt_auth_file, resolve_chatgpt_authenticator
 from ..common_utils import (
     GetAccessTokenError,
     chatgpt_client_api_base,
@@ -29,12 +30,6 @@ class ChatGPTConfig(OpenAIConfig):
     ) -> None:
         super().__init__()
         self.authenticator = authenticator if authenticator is not None else Authenticator()
-
-    def _resolve_authenticator(
-        self, litellm_params: Mapping[str, object] | GenericLiteLLMParams | None
-    ) -> Authenticator:
-        auth_file: Final = get_chatgpt_auth_file(litellm_params)
-        return get_cached_authenticator(auth_file) if auth_file else self.authenticator
 
     @staticmethod
     def _get_access_token_or_raise(authenticator: Authenticator, model: str, llm_provider: str) -> str:
@@ -63,7 +58,7 @@ class ChatGPTConfig(OpenAIConfig):
             return chatgpt_client_api_base(api_base), client_credential.access_token, custom_llm_provider
         if api_key:
             return api_base or self.api_base_without_login(), api_key, custom_llm_provider
-        authenticator: Final = self._resolve_authenticator(litellm_params)
+        authenticator: Final = resolve_chatgpt_authenticator(litellm_params, self.authenticator)
         dynamic_api_base: Final = authenticator.get_api_base()
         dynamic_api_key: Final = self._get_access_token_or_raise(authenticator, model, custom_llm_provider)
         return dynamic_api_base, dynamic_api_key, custom_llm_provider
@@ -98,7 +93,7 @@ class ChatGPTConfig(OpenAIConfig):
                 ),
                 **strip_chatgpt_client_credential_headers(headers),
             )
-        authenticator: Final = self._resolve_authenticator(litellm_params)
+        authenticator: Final = resolve_chatgpt_authenticator(litellm_params, self.authenticator)
         resolved_api_key: Final = (
             self._get_access_token_or_raise(authenticator, model, "chatgpt")
             if get_chatgpt_auth_file(litellm_params)
@@ -124,11 +119,15 @@ class ChatGPTConfig(OpenAIConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
-        optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        *,
+        reasoning_drop_logger: WarningLogger = verbose_logger,
+    ) -> dict[str, object]:
+        optional_params = super().map_openai_params(
+            non_default_params, optional_params, model, drop_params, reasoning_drop_logger=reasoning_drop_logger
+        )
         optional_params.setdefault("stream", False)
         return optional_params
