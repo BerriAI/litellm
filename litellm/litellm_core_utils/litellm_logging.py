@@ -5913,6 +5913,9 @@ class Logging(LiteLLMLoggingBaseClass):
         row is built from this response rather than re-parsed from the served body."""
         self.bridged_model_response = response
 
+    def clear_bridged_model_response(self) -> None:
+        self.bridged_model_response = None
+
     def record_bridged_chat_request(
         self, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
     ) -> None:

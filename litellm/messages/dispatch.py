@@ -6,6 +6,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.messages.native import handler as main
+from litellm.llms.anthropic.messages.utils import litellm_logging_obj_from_kwargs
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import catalog, detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
@@ -229,12 +230,19 @@ async def _python_anthropic_messages(*args: object, **kwargs: object) -> Message
     return await _PYTHON_AMESSAGES(*args, **kwargs)
 
 
+def _forget_earlier_attempt_bridge(kwargs: Mapping[str, object]) -> None:
+    logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
+    if logging_obj is not None:
+        logging_obj.clear_bridged_model_response()
+
+
 def anthropic_messages_handler(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public Anthropic Messages call shape
 ) -> MessagesResult | Coroutine[object, object, MessagesResult]:
     if _FLAG.requested(kwargs):
         return anthropic_messages(**_FLAG.keywords(args, kwargs))
+    _forget_earlier_attempt_bridge(kwargs)
     return _DISPATCH.run(
         args,
         _FLAG.dropped(kwargs),
@@ -245,6 +253,7 @@ def anthropic_messages_handler(
 
 
 async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:  # kwargs-ok: public call shape
+    _forget_earlier_attempt_bridge(kwargs)
     return await _ADISPATCH.arun(
         args,
         _FLAG.dropped(kwargs),
