@@ -4837,6 +4837,7 @@ class LlmProviders(str, Enum):
     INFERENCEAPIS = "inferenceapis"
     HOSTINGER_ROUTER = "hostinger_router"
     ZEROGPU = "zerogpu"
+    TOPXAI = "topxai"
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
