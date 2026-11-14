@@ -1,7 +1,12 @@
+import json
+from typing import Final
+
 import pytest
 
+import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap, install_model_cost_map
 from litellm.llms.openai_like import dynamic_config
-from litellm.llms.openai_like.dynamic_config import create_responses_config_class
+from litellm.llms.openai_like.dynamic_config import create_config_class, create_responses_config_class
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -20,7 +25,6 @@ def _isolate_generated_class_cache():
 
 
 class TestClassCaching:
-
     def test_cache_is_keyed_on_slug_not_on_the_provider_instance(self):
         first = create_responses_config_class(_provider("cache_by_slug"))
         second = create_responses_config_class(_provider("cache_by_slug"))
@@ -141,9 +145,120 @@ class TestForceStoreFalse:
         assert params["store"] is True
 
 
+class TestToolParamsFollowTheModelMap:
+    _TOOLS: Final = [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}]
+
+    @pytest.mark.parametrize(
+        ("model_supports_fc", "provider_supports_fc", "tools_forwarded"),
+        [
+            (None, None, True),
+            (None, False, False),
+            (None, True, True),
+            (True, None, True),
+            (False, None, False),
+            (True, False, True),
+            (False, True, False),
+        ],
+        ids=[
+            "unmapped",
+            "unmapped_provider_unsupported",
+            "unmapped_provider_supported",
+            "mapped_as_supported",
+            "mapped_as_unsupported",
+            "model_supported_overrides_provider",
+            "model_unsupported_overrides_provider",
+        ],
+    )
+    def test_tools_are_dropped_only_when_the_model_or_provider_says_unsupported(
+        self,
+        model_supports_fc: bool | None,
+        provider_supports_fc: bool | None,
+        tools_forwarded: bool,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        if model_supports_fc is not None:
+            monkeypatch.setitem(
+                litellm.model_cost,
+                "tools_map/some-model",
+                {"litellm_provider": "tools_map", "mode": "chat", "supports_function_calling": model_supports_fc},
+            )
+        provider_overrides: Final = (
+            {}
+            if provider_supports_fc is None
+            else {"provider_info": {"supports_function_calling": provider_supports_fc}}
+        )
+        config: Final = create_config_class(_provider("tools_map", **provider_overrides))()
+
+        optional_params: Final = config.map_openai_params(
+            non_default_params={"tools": self._TOOLS, "tool_choice": "auto"},
+            optional_params={},
+            model="some-model",
+            drop_params=True,
+        )
+
+        assert ("tools" in optional_params) is tools_forwarded
+        assert ("tool_choice" in optional_params) is tools_forwarded
+
+    @pytest.mark.parametrize(
+        ("shipped", "provider_supports_fc", "tools_forwarded"),
+        [(True, None, False), (False, None, True), (False, False, False)],
+        ids=["shipped", "registered", "registered_provider_unsupported"],
+    )
+    def test_a_row_that_leaves_function_calling_unset_drops_tools_when_shipped_or_the_provider_says_so(
+        self, shipped: bool, provider_supports_fc: bool | None, tools_forwarded: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        row: Final = {"litellm_provider": "tools_map", "mode": "chat"}
+        if shipped:
+            monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+            install_model_cost_map(
+                json.dumps({**GetModelCostMap.load_local_model_cost_map(), "tools_map/row-model": row}).encode()
+            )
+        else:
+            monkeypatch.setitem(litellm.model_cost, "tools_map/row-model", row)
+        provider_overrides: Final = (
+            {}
+            if provider_supports_fc is None
+            else {"provider_info": {"supports_function_calling": provider_supports_fc}}
+        )
+        config: Final = create_config_class(_provider("tools_map", **provider_overrides))()
+
+        optional_params: Final = config.map_openai_params(
+            non_default_params={"tools": self._TOOLS, "tool_choice": "auto"},
+            optional_params={},
+            model="row-model",
+            drop_params=True,
+        )
+
+        assert ("tools" in optional_params) is tools_forwarded
+        assert ("tool_choice" in optional_params) is tools_forwarded
+
+    def test_unprefixed_model_row_overrides_a_provider_that_says_unsupported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(litellm.model_cost, "publicai/twin-model", {"litellm_provider": "publicai", "mode": "chat"})
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "twin-model",
+            {"litellm_provider": "openai", "mode": "chat", "supports_function_calling": True},
+        )
+        config: Final = create_config_class(_provider("publicai", provider_info={"supports_function_calling": False}))()
+
+        optional_params: Final = config.map_openai_params(
+            non_default_params={"tools": self._TOOLS, "tool_choice": "auto"},
+            optional_params={},
+            model="twin-model",
+            drop_params=True,
+        )
+
+        assert optional_params["tools"] == self._TOOLS
+        assert optional_params["tool_choice"] == "auto"
+
+
 class TestWebSearchRequestsFromToolUsage:
     def test_counts_only_paid_search_tools(self):
-        payload = {"usage": {"tool_usage": {"web_search": 2, "image_search": 1, "code_interpreter": 3, "web_extractor": 1}}}
+        payload = {
+            "usage": {"tool_usage": {"web_search": 2, "image_search": 1, "code_interpreter": 3, "web_extractor": 1}}
+        }
         assert dynamic_config.web_search_requests_from_tool_usage(payload) == 3
 
     @pytest.mark.parametrize(
