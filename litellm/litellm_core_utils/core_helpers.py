@@ -114,8 +114,10 @@ _OBJECT_KEYS: Final = TypeAdapter(dict[object, object])
 
 
 def allowed_openai_param_names(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
     if isinstance(value, str):
-        return tuple(name for name in (part.strip() for part in value.split(",")) if name)
+        return tuple("".join(char if char.isalnum() or char == "_" else " " for char in value).split())
     if isinstance(value, Mapping):
         return tuple(key for key in _OBJECT_KEYS.validate_python(value) if isinstance(key, str))
     try:

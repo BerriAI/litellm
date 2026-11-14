@@ -130,8 +130,8 @@ def test_get_optional_params_with_allowed_openai_params():
 
 @pytest.mark.parametrize(
     "allowlist",
-    ["user", "seed, user", {"user": True}],
-    ids=["bare-string", "comma-separated", "dict"],
+    ["user", "seed, user", "seed user", '["user"]', {"user": True}],
+    ids=["bare-string", "comma-separated", "space-separated", "json-list-string", "dict"],
 )
 def test_get_optional_params_reads_param_names_from_a_string_or_dict_allowlist(
     monkeypatch: pytest.MonkeyPatch, allowlist: str | dict[str, bool]
@@ -149,8 +149,15 @@ def test_get_optional_params_reads_param_names_from_a_string_or_dict_allowlist(
 
 @pytest.mark.parametrize(
     "allowlist",
-    [["dimensions"], "dimensions", "dimensions,user", {"dimensions": True}],
-    ids=["list", "bare-string", "comma-separated", "dict"],
+    [
+        ["dimensions"],
+        "dimensions",
+        "dimensions,user",
+        "dimensions encoding_format",
+        '["dimensions"]',
+        {"dimensions": True},
+    ],
+    ids=["list", "bare-string", "comma-separated", "space-separated", "json-list-string", "dict"],
 )
 def test_get_optional_params_embeddings_keeps_dimensions_the_allowlist_names(
     allowlist: list[str] | str | dict[str, bool],
