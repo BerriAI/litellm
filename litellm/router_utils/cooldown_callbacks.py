@@ -45,13 +45,12 @@ async def router_cooldown_event_callback(
             deployment_id,
         )
         return
-    _litellm_params: Final = _deployment["litellm_params"]
+    _litellm_params: Final = _deployment.litellm_params
     temp_litellm_params = copy.deepcopy(_litellm_params)
     temp_litellm_params = dict(temp_litellm_params)
-    model_group_name: Final = _deployment.get("model_name", None) or ""
-    _api_base: Final = litellm.get_api_base(model=model_group_name, optional_params=temp_litellm_params) or ""
-    model_info: Final = _deployment["model_info"]
-    model_id: Final = model_info.id
+    _model_name: Final = _deployment.model_name or ""
+    _api_base: Final = litellm.get_api_base(model=_model_name, optional_params=temp_litellm_params) or ""
+    model_id: Final = _deployment.model_info.id
 
     litellm_model_name, llm_provider = resolved_model_and_provider(
         temp_litellm_params.get("model") or "", temp_litellm_params.get("custom_llm_provider")
@@ -69,8 +68,8 @@ async def router_cooldown_event_callback(
         )
 
         prometheusLogger.increment_deployment_cooled_down(
-            litellm_model_name=model_group_name,
-            model_id=model_id,
+            litellm_model_name=_model_name,
+            model_id=str(model_id),
             api_base=_api_base,
             api_provider=llm_provider,
             exception_status=str(exception_status),

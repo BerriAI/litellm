@@ -15,7 +15,7 @@ import pytest
 import litellm
 from litellm import Router
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry
 from litellm.proxy.common_utils.model_deprecation import (
     _classify,
     _parse_deprecation_date,
@@ -467,6 +467,52 @@ class TestFormatDeprecationAlertMessage:
 
 
 class TestSuccessorModel:
+    def test_unmatched_successor_logs_warning_by_default(self, monkeypatch, caplog):
+        monkeypatch.setattr(litellm, "model_cost", {})
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "old",
+                    "litellm_params": {"model": "openai/old-model"},
+                    "model_info": {
+                        "id": "1",
+                        "deprecation_date": "2026-06-10",
+                        "successor_model": "missing-model",
+                    },
+                }
+            ]
+        )
+
+        with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+            collect_model_deprecations(llm_router=router, today=date(2026, 6, 1))
+
+        successor_records: Final = tuple(
+            record for record in caplog.records if "names successor missing-model" in record.getMessage()
+        )
+        assert len(successor_records) == 1
+        assert successor_records[0].levelno == logging.WARNING
+
+    def test_empty_team_public_model_name_is_normalized_to_none(self, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", {})
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "team-model",
+                    "litellm_params": {"model": "openai/team-model"},
+                    "model_info": {
+                        "id": "1",
+                        "team_id": "team-1",
+                        "team_public_model_name": "",
+                        "deprecation_date": "2026-06-10",
+                    },
+                }
+            ]
+        )
+
+        snapshot: Final = collect_model_deprecations(llm_router=router, today=date(2026, 6, 1))
+
+        assert snapshot.imminent[0].team_public_model_name is None
+
     def test_should_surface_the_successor_set_on_the_deployment(self, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", {})
         router = Router(
@@ -572,6 +618,8 @@ class TestSuccessorModel:
             "typo-old": "gpt-nwe",
             "wildcard-old": "anthropic/x",
         }
+        team_deprecation: Final = next(info for info in snapshot.imminent if info.model_name == "model_name_t1_old")
+        assert team_deprecation.team_public_model_name == "team-old"
         warnings = [record.getMessage() for record in caplog.records if "names successor" in record.getMessage()]
         assert len(warnings) == 2
         assert any("global-old names successor team-new" in warning for warning in warnings)
@@ -638,3 +686,70 @@ class TestSuccessorModel:
         assert "migrate to `&lt;https://evil.example|new&gt;`" in message
         assert "<https://evil.example|new>" not in message
         assert message.count("migrate to") == 1
+
+
+class TestRecommendationSources:
+    def test_should_return_the_cost_map_recommendation_and_provider_notice(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {
+                "old-model": {
+                    "deprecation_date": "2026-06-10",
+                    "successor_model": "new-model",
+                    "deprecation_source": "https://provider.example/model-retirements",
+                }
+            },
+        )
+        router = _make_router(
+            [{"model_name": "support", "litellm_params": {"model": "openai/old-model"}, "model_info": {}}]
+        )
+        info = collect_model_deprecations(llm_router=router, today=date(2026, 6, 1)).imminent[0]
+        assert info.successor_model == "new-model"
+        assert info.successor_model_source == "model_cost_map"
+        assert info.deprecation_source == "https://provider.example/model-retirements"
+
+    def test_should_keep_configured_recommendation_provenance_when_merging_deployments(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {"old-model": {"deprecation_date": "2026-06-10", "successor_model": "catalog-pick"}},
+        )
+        router = _make_router(
+            [
+                {"model_name": "support", "litellm_params": {"model": "openai/old-model"}, "model_info": {}},
+                {
+                    "model_name": "support",
+                    "litellm_params": {"model": "openai/old-model"},
+                    "model_info": {"successor_model": "configured-pick"},
+                },
+            ]
+        )
+        info = collect_model_deprecations(llm_router=router, today=date(2026, 6, 1)).imminent[0]
+        assert info.successor_model == "configured-pick"
+        assert info.successor_model_source == "deployment_config"
+        assert info.deprecation_source is None
+
+    def test_should_carry_the_notice_from_the_same_deployment_as_the_selected_recommendation(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {
+                "a": {"deprecation_date": "2026-06-10", "deprecation_source": "https://provider.example/a"},
+                "b": {
+                    "deprecation_date": "2026-06-10",
+                    "successor_model": "b-next",
+                    "deprecation_source": "https://provider.example/b",
+                },
+            },
+        )
+        router = _make_router(
+            [
+                {"model_name": "support", "litellm_params": {"model": "openai/a"}, "model_info": {}},
+                {"model_name": "support", "litellm_params": {"model": "openai/b"}, "model_info": {}},
+            ]
+        )
+        info = collect_model_deprecations(llm_router=router, today=date(2026, 6, 1)).imminent[0]
+        assert info.successor_model == "b-next"
+        assert info.successor_model_source == "model_cost_map"
+        assert info.deprecation_source == "https://provider.example/b"

@@ -132,12 +132,19 @@ def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
             assert_never(delta_type)
 
 
-def _first_thinking_block_index(chunk: "ModelResponseStream") -> int | None:
+def _first_thinking_block(chunk: "ModelResponseStream") -> Mapping[str, object] | None:
     delta: Final = _optional_attr(chunk.choices[0], "delta") if chunk.choices else None
     blocks: Final = _optional_attr_sequence(delta, "thinking_blocks")
-    first_block: Final = as_str_mapping(blocks[0]) if blocks else None
-    index: Final = first_block.get("index") if first_block is not None else None
+    return as_str_mapping(blocks[0]) if blocks else None
+
+
+def _thinking_block_index(block: Mapping[str, object] | None) -> int | None:
+    index: Final = block.get("index") if block is not None else None
     return index if isinstance(index, int) else None
+
+
+def _closes_thinking_block(block: Mapping[str, object] | None) -> bool:
+    return block is not None and _thinking_block_index(block) is not None and bool(block.get("signature"))
 
 
 def _optional_str_attr(obj: object, name: str) -> str | None:
@@ -632,6 +639,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     sent_content_block_finish: bool = False
     current_content_block_type: Literal["text", "tool_use", "thinking", "redacted_thinking"] = "text"
     current_thinking_block_index: int | None = None
+    current_thinking_block_closed: bool = False
     sent_last_message: bool = False
     holding_chunk: ContentBlockDelta | None = None
     holding_stop_reason_chunk: MessageBlockDelta | None = None
@@ -670,6 +678,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Synthesized compaction block from compact_20260112 polyfill (streaming).
         self.compaction_block = compaction_block
         self.iterations_usage = iterations_usage
+        # The provider's error behind this stream's error frame, for a router that accounts for it.
+        self.stream_failure: Exception | None = None
         self._refusal_text: str = ""
         self._paused_turn: bool = False
         self._claude_refusal_stop_details: AnthropicStopDetails | None = None
@@ -1396,6 +1406,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             verbose_logger.exception("Anthropic Adapter - mid-stream error: %s", e)
             logging_obj: Final = self.litellm_logging_obj
             provider_error: Final = _provider_error(e)
+            self.stream_failure = provider_error
             if logging_obj is not None and logging_obj.on_detached_stream_failure is not None:
                 if provider_error is e:
                     raise
@@ -1572,9 +1583,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 original_name: Final = self.tool_name_mapping.get(truncated_name, truncated_name)
                 tool_block["name"] = original_name
 
-        thinking_block_index: Final = _first_thinking_block_index(chunk)
+        thinking_block: Final = _first_thinking_block(chunk)
+        thinking_block_index: Final = _thinking_block_index(thinking_block)
         previous_thinking_block_index: Final = self.current_thinking_block_index
-        if thinking_block_index is not None or block_type != self.current_content_block_type:
+        follows_closed_thinking_block: Final = self.current_thinking_block_closed and block_type == "thinking"
+        self.current_thinking_block_closed = _closes_thinking_block(thinking_block)
+        if (
+            thinking_block_index is not None
+            or block_type != self.current_content_block_type
+            or follows_closed_thinking_block
+        ):
             self.current_thinking_block_index = thinking_block_index
 
         if block_type != self.current_content_block_type:
@@ -1582,7 +1600,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             self.current_content_block_start = content_block_start
             return True
 
-        if (
+        if follows_closed_thinking_block or (
             thinking_block_index is not None
             and previous_thinking_block_index is not None
             and thinking_block_index != previous_thinking_block_index
@@ -1618,6 +1636,10 @@ class AnthropicSSEStream(AsyncIterator[bytes]):
         self._anthropic_wrapper = anthropic_wrapper
         self._byte_stream: Final[AsyncIterator[bytes]] = anthropic_wrapper.async_anthropic_sse_wrapper()
         self._hidden_params: dict[str, object] = {}
+
+    @property
+    def stream_failure(self) -> Exception | None:
+        return self._anthropic_wrapper.stream_failure
 
     @property
     def chunks(self) -> "list[ModelResponseStream] | None":

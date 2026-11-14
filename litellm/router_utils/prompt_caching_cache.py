@@ -432,18 +432,18 @@ class PromptCachingCache:
         if not positions:
             return
 
-        ttl: Final = (
+        await self.async_set_pin(
+            model_id,
+            positions[-1].cache_key,
             await offload_token_count(PromptCachingCache.pin_ttl_seconds)(messages, tools)
             if honors_one_hour_ttl
-            else PROMPT_CACHE_PIN_TTL_SECONDS
+            else PROMPT_CACHE_PIN_TTL_SECONDS,
         )
-        self.cache.in_memory_cache.delete_cache(positions[-1].cache_key)
+
+    async def async_set_pin(self, model_id: str, cache_key: str, ttl: int) -> None:
+        self.cache.in_memory_cache.delete_cache(cache_key)
         with service_target(_PROMPT_CACHE_PINS_TARGET):
-            await self.cache.async_set_cache(
-                positions[-1].cache_key,
-                PromptCachingCacheValue(model_id=model_id),
-                ttl=ttl,
-            )
+            await self.cache.async_set_cache(cache_key, PromptCachingCacheValue(model_id=model_id), ttl=ttl)
 
     async def async_get_model_id(
         self,
@@ -455,7 +455,10 @@ class PromptCachingCache:
         same way the provider cache does, so a breakpoint that moved forward since the last
         turn still lands on the deployment whose cache holds the earlier prefix.
         """
-        cache_keys: Final = _lookback_keys(await PromptCachingCache.async_prefix_positions(messages, tools))
+        return await self.async_get_model_id_at(await PromptCachingCache.async_prefix_positions(messages, tools))
+
+    async def async_get_model_id_at(self, positions: tuple[PrefixPosition, ...]) -> PromptCachingCacheValue | None:
+        cache_keys: Final = _lookback_keys(positions)
         if not cache_keys:
             return None
 

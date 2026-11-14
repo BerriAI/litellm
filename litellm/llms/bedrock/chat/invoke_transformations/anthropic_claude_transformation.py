@@ -23,6 +23,7 @@ from litellm.llms.anthropic.common_utils import (
     OBJECT_MAPPING_ADAPTER,
     AnthropicModelInfo,
     carried_thinking_keys,
+    replays_tool_search,
 )
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
@@ -34,6 +35,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_capability_model,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
+    bedrock_native_output_retry_requested,
     bedrock_supports_tool_search,
     deployment_model_info,
     get_anthropic_beta_from_headers,
@@ -142,19 +144,31 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         json_schema: Mapping[str, object] | None,
         request_params: Mapping[str, object],
     ) -> bool:
-        return self.chat_uses_native_structured_output(
-            model, self.is_thinking_requested(request_params), self._deployment_model_info
-        ) and (json_schema is None or bedrock_cleaned_output_schema(model, json_schema) is not None)
+        return self.chat_uses_native_structured_output(model, request_params, self._deployment_model_info) and (
+            json_schema is None or bedrock_cleaned_output_schema(model, json_schema) is not None
+        )
 
     def chat_uses_native_structured_output(
-        self, model: str, thinking_requested: bool, model_info: Mapping[str, object] | None
+        self, model: str, request_params: Mapping[str, object], model_info: Mapping[str, object] | None
     ) -> bool:
-        return bedrock_chat_uses_native_structured_output(model, thinking_requested, model_info=model_info)
+        return bedrock_chat_uses_native_structured_output(
+            model,
+            will_think=self.will_think(model, "bedrock", request_params),
+            thinking_requested=self.is_thinking_requested(request_params),
+            model_info=model_info,
+        )
 
     def uses_opt_in_native_output(
         self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
     ) -> bool:
         return requests_opt_in_native_output(model, optional_params, deployment_model_info(litellm_params))
+
+    def uses_native_output(
+        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> bool:
+        return bedrock_native_output_retry_requested(
+            model, optional_params, model_info=deployment_model_info(litellm_params)
+        )
 
     def map_openai_params(
         self,
@@ -252,6 +266,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             optional_params=optional_params,
             headers=headers,
             thinking=_anthropic_request.get("thinking"),
+            history_holds_tool_search=replays_tool_search(
+                OBJECT_MAPPING_ADAPTER.validate_python(_anthropic_request).get("messages")
+            ),
         )
         if beta_list:
             _anthropic_request["anthropic_beta"] = beta_list
@@ -359,7 +376,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             request_body=anthropic_request,
             model_info=model_info,
             chat_uses_native_output=lambda: self.chat_uses_native_structured_output(
-                model, self.is_thinking_requested(_NON_DEFAULT_PARAMS.validate_python(filtered_params)), model_info
+                model, _NON_DEFAULT_PARAMS.validate_python(filtered_params), model_info
             ),
         )
         strip_unsupported_bedrock_invoke_output_config_keys(
@@ -384,9 +401,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         optional_params: dict,
         headers: dict,
         thinking: AnthropicThinkingParam | None,
+        history_holds_tool_search: bool,
     ) -> list[str]:
         tools: Final = optional_params.get("tools")
-        tool_search_used: Final = self.is_tool_search_used(tools)
+        tool_search_used: Final = self.is_tool_search_used(tools) or history_holds_tool_search
         programmatic_tool_calling_used: Final = self.is_programmatic_tool_calling_used(tools)
         input_examples_used: Final = self.is_input_examples_used(tools)
         is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages)

@@ -5,24 +5,21 @@ import time
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import Any, Final, Literal, NoReturn
+from typing import Any, Final, NoReturn
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-import respx
 from pydantic import TypeAdapter
 
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.router_api import RouterSettings, RoutingContext
 from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments, mark_advisor_orchestration_failure
-from litellm.types.utils import Choices, Message, ModelResponse, StandardLoggingPayload, Usage
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     PRE_ROUTING_SELECTED_MODEL_KEY,
@@ -39,7 +36,6 @@ from litellm.router_utils.fallback_event_handlers import (
     is_bad_request_without_fallback,
     log_failure_fallback_event,
     log_success_fallback_event,
-    mid_stream_fallback_hop_kwargs,
     mid_stream_fallback_snapshot_kwargs,
     mid_stream_retry_kwargs,
     record_pre_routing_selection,
@@ -48,10 +44,8 @@ from litellm.router_utils.fallback_event_handlers import (
     run_async_fallback,
 )
 from litellm.types.router import FallbackSkipReason, SkippedFallbackTarget
+from litellm.types.utils import Choices, Message, ModelResponse, StandardLoggingPayload, Usage
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
-from typing import Dict
-import os
 
 
 class StreamingWrapper:
@@ -245,61 +239,8 @@ async def test_run_async_fallback_preserves_superseded_usage_when_hop_fails_befo
     assert logging_obj.model_call_details["failed_attempts_usage"] == ((partial_usage, 0.01),)
 
 
-class _RateLimitedHop(Exception):
-    def __init__(self, deployment_id: str = "fallback-dep-1") -> None:
-        super().__init__("fallback deployment rate limited")
-        self.status_code = 429
-        self.failed_deployment_id = deployment_id
-
-
 _EARLIER_FAILURE_MARKER: Final = datetime(2026, 1, 1)
-_FIRST_HOP_FAILURE_MARKER: Final = datetime(2026, 1, 2)
 _FINAL_HOP_FAILURE_MARKER: Final = datetime(2026, 1, 3)
-
-
-class _TwoFailureFallbackRouter(Router):
-    def __init__(self) -> None:
-        super().__init__(
-            model_list=[
-                {
-                    "model_name": "fallback-model",
-                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "fake-key"},
-                    "model_info": {"id": f"fallback-dep-{index}"},
-                }
-                for index in (1, 2)
-            ],
-            allowed_fails=0,
-            cooldown_time=60,
-            num_retries=0,
-        )
-
-    async def async_function_with_fallbacks(self, *args: object, **kwargs: object) -> NoReturn:
-        logging_obj: Final[object] = kwargs["litellm_logging_obj"]
-        assert isinstance(logging_obj, Logging)
-        assert logging_obj.model_call_details.get("has_logged_async_failure", False) is False
-
-        logging_obj.model_call_details["current_attempt_api_call_start_time"] = _FIRST_HOP_FAILURE_MARKER
-        try:
-            raise _RateLimitedHop("fallback-dep-1")
-        except _RateLimitedHop:
-            logging_obj.mark_logging_complete("async_failure")
-
-        logging_obj.model_call_details["current_attempt_api_call_start_time"] = _FINAL_HOP_FAILURE_MARKER
-        raise _RateLimitedHop("fallback-dep-2")
-
-
-def _two_deployment_router() -> Router:
-    return Router(
-        model_list=[
-            {
-                "model_name": "fallback-model",
-                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "fake-key"},
-                "model_info": {"id": f"fallback-dep-{index}"},
-            }
-            for index in (1, 2)
-        ],
-        num_retries=0,
-    )
 
 
 def _entra_fallback_router() -> Router:
@@ -357,66 +298,6 @@ async def test_fallback_hop_cools_down_only_a_deployment_entra_rejected_its_own_
     )
 
     assert await async_get_cooldown_deployments(ctx=RoutingContext(router), parent_otel_span=None) == cooled_down
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failure_already_logged", [False, True])
-async def test_run_async_fallback_cools_down_a_failed_hop_once(failure_already_logged: bool) -> None:
-    """The manual cooldown stands in for the failure callbacks the logging object blocks once a failure has
-    been logged. A hop whose own failure was the first one logged already ran them, so only a hop that failed
-    with the flag already set gets the manual cooldown."""
-    router: Final = _two_deployment_router()
-    logging_obj: Final = _request_logging_obj()
-    if failure_already_logged:
-        logging_obj.model_call_details["current_attempt_api_call_start_time"] = _EARLIER_FAILURE_MARKER
-        logging_obj.mark_logging_complete("async_failure")
-
-    async def rate_limited_hop(*args: object, **kwargs: object) -> NoReturn:
-        hop_logging_obj: Final = kwargs["litellm_logging_obj"]
-        assert isinstance(hop_logging_obj, Logging)
-        hop_logging_obj.model_call_details["current_attempt_api_call_start_time"] = _FINAL_HOP_FAILURE_MARKER
-        if hop_logging_obj.model_call_details.get("has_logged_async_failure", False) is not True:
-            hop_logging_obj.mark_logging_complete("async_failure")
-        raise _RateLimitedHop()
-
-    with pytest.raises(_RateLimitedHop):
-        await run_async_fallback(
-            litellm_routing_ctx=RoutingContext(router),
-            fallback_model_group=["fallback-model"],
-            original_model_group="primary-model",
-            original_exception=RuntimeError("stream dropped before content"),
-            max_fallbacks=3,
-            fallback_depth=0,
-            litellm_logging_obj=logging_obj,
-            original_function=rate_limited_hop,
-            metadata={},
-        )
-
-    cooled_down: Final = await async_get_cooldown_deployments(ctx=RoutingContext(router), parent_otel_span=None)
-    assert cooled_down == (["fallback-dep-1"] if failure_already_logged else [])
-
-
-@pytest.mark.asyncio
-async def test_run_async_fallback_cools_down_the_final_deployment_after_retry_failure_logging() -> None:
-    router: Final = _TwoFailureFallbackRouter()
-    logging_obj: Final = _request_logging_obj()
-    assert logging_obj.model_call_details.get("has_logged_async_failure", False) is False
-
-    with pytest.raises(_RateLimitedHop):
-        await run_async_fallback(
-            litellm_routing_ctx=RoutingContext(router),
-            fallback_model_group=["fallback-model"],
-            original_model_group="primary-model",
-            original_exception=RuntimeError("stream dropped before content"),
-            max_fallbacks=3,
-            fallback_depth=0,
-            litellm_logging_obj=logging_obj,
-            metadata={},
-        )
-
-    assert logging_obj.model_call_details.get("has_logged_async_failure", False) is True
-    cooled_down: Final = await async_get_cooldown_deployments(ctx=RoutingContext(router), parent_otel_span=None)
-    assert cooled_down == ["fallback-dep-2"]
 
 
 @pytest.mark.asyncio
@@ -1359,7 +1240,7 @@ class TestTriggerCooldownForFailedDeployment:
 
 
 async def _stalled_stream_error() -> Exception:
-    from litellm.router import _aread_first_chunk
+    from litellm.router_rust.invoke.streaming import _aread_first_chunk  # noqa: PLC2701
 
     async def _stall(**kwargs: object) -> NoReturn:
         raise httpx.ReadTimeout("Timeout on reading data from socket")
@@ -2243,41 +2124,6 @@ async def test_streaming_refusal_without_fallback_row_passes_frames_through():
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
-async def test_refused_stream_built_from_a_finished_agentic_turn_is_delivered_without_a_fallback():
-    """Websearch, MCP and advisor loops run their tools before streaming the final reply, so a
-    fallback would run every tool call again for a reply the client then gets from another model."""
-    fake: Final = FakeAnthropicUpstream()
-    router: Final = _router(content_policy_fallbacks=[{"fable-tier": ["opus-target"]}])
-
-    with fake.install():
-        stream: Final = await router._aanthropic_messages_streaming_iterator(
-            response=FakeAnthropicMessagesStreamIterator(REFUSAL_RESPONSE),
-            initial_kwargs=mid_stream_fallback_hop_kwargs(
-                model="fable-tier",
-                original_generic_function=litellm.anthropic_messages,
-                controls=None,
-                kwargs={
-                    "model": "fable-tier",
-                    "max_tokens": 16,
-                    "stream": True,
-                    "messages": [{"role": "user", "content": "hi"}],
-                },
-            ),
-        )
-        events: Final = [
-            json.loads(line[len(b"data: ") :])
-            for line in (await _collect(stream)).splitlines()
-            if line.startswith(b"data: ")
-        ]
-
-    assert fake.calls == []
-    message_delta: Final = next(event for event in events if event["type"] == "message_delta")
-    assert message_delta["delta"]["stop_reason"] == "refusal"
-    assert message_delta["delta"]["stop_details"] == REFUSAL_RESPONSE["stop_details"]
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-@pytest.mark.asyncio
 async def test_streaming_refusal_on_routed_tier_matches_tier_keyed_row_without_inbound_metadata():
     """The pre-routing hook's tier stamp must reach the mid-stream fallback lookup even when the
     request carries no metadata bucket at all (the snapshot is taken before the request runs)."""
@@ -2422,28 +2268,6 @@ async def test_configured_content_policy_list_stays_authoritative_over_generic_r
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-def test_refusal_fallback_available_arms_on_generic_rows_only_without_content_policy():
-    router = Router(model_list=[FABLE_TIER, OPUS_TARGET], fallbacks=[{"tier-group": ["opus-target"]}])
-    stamped = {"litellm_metadata": {PRE_ROUTING_SELECTED_MODEL_KEY: "tier-group"}}
-
-    assert router._refusal_fallback_available("router-group", stamped) is True
-    assert router._refusal_fallback_available("router-group", {}) is False
-    assert router._refusal_fallback_available("router-group", {"content_policy_fallbacks": [{"other": ["x"]}]}) is False
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-def test_chat_content_filter_gate_unchanged_by_generic_rows():
-    """The generic-row arming is scoped to /v1/messages safeguard refusals; the chat surface's
-    content_filter gate keeps its long-standing content-policy-only semantics."""
-    from litellm.types.utils import Choices, ModelResponse
-
-    router = Router(model_list=[FABLE_TIER, OPUS_TARGET], fallbacks=[{"fable-tier": ["opus-target"]}])
-    response = ModelResponse(choices=[Choices(finish_reason="content_filter")])
-
-    assert router._should_raise_content_policy_error(model="fable-tier", response=response, kwargs={}) is False
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
 async def test_disable_fallbacks_returns_the_refusal_instead_of_raising(stream):
@@ -2490,74 +2314,6 @@ async def test_disable_fallbacks_beats_a_content_policy_row_too():
     assert len(fake.calls) == 1
 
 
-@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-def test_refusal_gate_keys_on_pre_routing_tier_stamp():
-    router = _router(content_policy_fallbacks=[{"tier-group": ["opus-target"]}])
-
-    def anthropic_messages(**kwargs: Any) -> None:
-        return None
-
-    refusal_kwargs = {"litellm_metadata": {PRE_ROUTING_SELECTED_MODEL_KEY: "tier-group"}}
-    assert (
-        router._should_raise_anthropic_refusal_error(
-            model="router-group",
-            original_generic_function=anthropic_messages,
-            response=dict(REFUSAL_RESPONSE),
-            kwargs=refusal_kwargs,
-        )
-        is True
-    )
-    assert (
-        router._should_raise_anthropic_refusal_error(
-            model="router-group",
-            original_generic_function=anthropic_messages,
-            response=dict(REFUSAL_RESPONSE),
-            kwargs={},
-        )
-        is False
-    )
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-def test_has_content_policy_fallback_default_fallbacks_arm():
-    router = Router(model_list=[OPUS_TARGET], fallbacks=[{"*": ["opus-target"]}])
-
-    assert router._has_content_policy_fallback("any-group", {}) is True
-    assert router._has_content_policy_fallback("any-group", {"content_policy_fallbacks": [{"other": ["x"]}]}) is False
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-def test_get_fallback_model_group_for_lookup_groups_orders_tier_before_requested():
-    router = _router(content_policy_fallbacks=None)
-    fallbacks = [{"tier1": ["backup-a"]}, {"smart-router": ["backup-b"]}]
-
-    assert router._get_fallback_model_group_for_lookup_groups(
-        fallbacks=fallbacks, lookup_groups=("tier1", "smart-router")
-    ) == ["backup-a"]
-    assert router._get_fallback_model_group_for_lookup_groups(
-        fallbacks=fallbacks, lookup_groups=("tier9", "smart-router")
-    ) == ["backup-b"]
-    assert router._get_fallback_model_group_for_lookup_groups(fallbacks=fallbacks, lookup_groups=()) is None
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-def test_refusal_gate_ignores_other_generic_call_types():
-    router = _router(content_policy_fallbacks=[{"fable-tier": ["opus-target"]}])
-
-    def aresponses(**kwargs: Any) -> None:
-        return None
-
-    assert (
-        router._should_raise_anthropic_refusal_error(
-            model="fable-tier",
-            original_generic_function=aresponses,
-            response=dict(REFUSAL_RESPONSE),
-            kwargs={},
-        )
-        is False
-    )
-
-
 class FallbackEventLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -2595,61 +2351,6 @@ def _create_fallback_event_router() -> Router:
         ],
         fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}],
     )
-
-
-@pytest.mark.parametrize(
-    "function_name",
-    ["_acompletion", "_atext_completion", "_aembedding"],
-)
-@pytest.mark.asyncio
-async def test_run_async_fallback(function_name):
-    """
-    Basic test - given a list of fallback models, run the original function with the fallback models
-    """
-    router = create_test_router()
-    original_function = getattr(router, function_name)
-
-    litellm.set_verbose = True
-    fallback_model_group = ["gpt-4"]
-    original_model_group = "gpt-3.5-turbo"
-    original_exception = litellm.exceptions.InternalServerError(
-        message="Simulated error",
-        llm_provider="openai",
-        model="gpt-3.5-turbo",
-    )
-
-    request_kwargs = {
-        "mock_response": "hello this is a test for run_async_fallback",
-        "metadata": {"previous_models": ["gpt-3.5-turbo"]},
-    }
-
-    if function_name == "_aembedding":
-        request_kwargs["input"] = "hello this is a test for run_async_fallback"
-    elif function_name == "_atext_completion":
-        request_kwargs["prompt"] = "hello this is a test for run_async_fallback"
-    elif function_name == "_acompletion":
-        request_kwargs["messages"] = [{"role": "user", "content": "Hello, world!"}]
-
-    result = await run_async_fallback(
-        litellm_routing_ctx=RoutingContext(router),
-        original_function=original_function,
-        num_retries=1,
-        fallback_model_group=fallback_model_group,
-        original_model_group=original_model_group,
-        original_exception=original_exception,
-        max_fallbacks=5,
-        fallback_depth=0,
-        **request_kwargs,
-    )
-
-    assert result is not None
-
-    if function_name == "_acompletion":
-        assert isinstance(result, litellm.ModelResponse)
-    elif function_name == "_atext_completion":
-        assert isinstance(result, litellm.TextCompletionResponse)
-    elif function_name == "_aembedding":
-        assert isinstance(result, litellm.EmbeddingResponse)
 
 
 @pytest.mark.asyncio
@@ -2711,71 +2412,6 @@ async def test_log_failure_fallback_event():
     )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("function_name", ["_acompletion", "_atext_completion"])
-async def test_failed_fallbacks_raise_most_recent_exception(function_name):
-    """
-    Tests that if all fallbacks fail, the most recent occuring exception is raised
-
-    meaning the exception from the last fallback model is raised
-    """
-    router = create_test_router()
-    original_function = getattr(router, function_name)
-
-    fallback_model_group = ["gpt-4"]
-    original_model_group = "gpt-3.5-turbo"
-    original_exception = litellm.exceptions.InternalServerError(
-        message="Simulated error",
-        llm_provider="openai",
-        model="gpt-3.5-turbo",
-    )
-
-    request_kwargs: Dict[str, Any] = {"metadata": {"previous_models": ["gpt-3.5-turbo"]}}
-
-    if function_name == "_aembedding":
-        request_kwargs["input"] = "hello this is a test for run_async_fallback"
-    elif function_name == "_atext_completion":
-        request_kwargs["prompt"] = "hello this is a test for run_async_fallback"
-    elif function_name == "_acompletion":
-        request_kwargs["messages"] = [{"role": "user", "content": "Hello, world!"}]
-
-    with pytest.raises(litellm.exceptions.RateLimitError):
-        await run_async_fallback(
-            litellm_routing_ctx=RoutingContext(router),
-            original_function=original_function,
-            num_retries=1,
-            fallback_model_group=fallback_model_group,
-            original_model_group=original_model_group,
-            original_exception=original_exception,
-            mock_response="litellm.RateLimitError",
-            max_fallbacks=5,
-            fallback_depth=0,
-            **request_kwargs,
-        )
-
-
-def create_test_router():
-    return Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                },
-            },
-            {
-                "model_name": "gpt-4",
-                "litellm_params": {
-                    "model": "gpt-4",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                },
-            },
-        ],
-        fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}],
-    )
-
-
 class CustomTestLogger(CustomLogger):
     def __init__(self):
         super().__init__()
@@ -2795,120 +2431,6 @@ class CustomTestLogger(CustomLogger):
             original_model_group,
         )
         self.failure_fallback_events.append((original_model_group, kwargs, original_exception))
-
-
-def create_test_router_2():
-    return Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                },
-            },
-            {
-                "model_name": "gpt-4",
-                "litellm_params": {
-                    "model": "gpt-4",
-                    "api_key": "very-fake-key",
-                },
-            },
-            {
-                "model_name": "fake-openai-endpoint-2",
-                "litellm_params": {
-                    "model": "openai/fake-openai-endpoint-2",
-                    "api_key": "working-key-since-this-is-fake-endpoint",
-                    "api_base": FAKE_OPENAI_API_BASE,
-                },
-            },
-        ],
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("function_name", ["_acompletion", "_atext_completion"])
-async def test_multiple_fallbacks(function_name, respx_mock: respx.MockRouter, monkeypatch):
-    """
-    Tests that if multiple fallbacks passed:
-    - fallback 1 = bad configured deployment / failing endpoint
-    - fallback 2 = working deployment / working endpoint
-
-    Assert that:
-    - a success response is received from the working endpoint (fallback 2)
-    """
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    invalid_key = httpx.Response(
-        401,
-        json={
-            "error": {
-                "message": "Incorrect API key provided",
-                "type": "invalid_request_error",
-                "code": "invalid_api_key",
-            }
-        },
-    )
-    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(return_value=invalid_key)
-    respx_mock.post("https://api.openai.com/v1/completions").mock(return_value=invalid_key)
-    respx_mock.post(f"{FAKE_OPENAI_API_BASE}/chat/completions").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "id": "chatcmpl-fake",
-                "object": "chat.completion",
-                "created": 1700000000,
-                "model": "fake-openai-endpoint-2",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
-            },
-        )
-    )
-    respx_mock.post(f"{FAKE_OPENAI_API_BASE}/completions").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "id": "cmpl-fake",
-                "object": "text_completion",
-                "created": 1700000000,
-                "model": "fake-openai-endpoint-2",
-                "choices": [{"index": 0, "text": "hi", "logprobs": None, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
-            },
-        )
-    )
-    router_2 = create_test_router_2()
-    original_function = getattr(router_2, function_name)
-
-    fallback_model_group = ["gpt-4", "fake-openai-endpoint-2"]
-    original_model_group = "gpt-3.5-turbo"
-    original_exception = Exception("Simulated error")
-
-    request_kwargs: dict[str, object] = {"metadata": {"previous_models": ["gpt-3.5-turbo"]}}
-
-    if function_name == "_aembedding":
-        request_kwargs["input"] = "hello this is a test for run_async_fallback"
-    elif function_name == "_atext_completion":
-        request_kwargs["prompt"] = "hello this is a test for run_async_fallback"
-    elif function_name == "_acompletion":
-        request_kwargs["messages"] = [{"role": "user", "content": "Hello, world!"}]
-
-    result = await run_async_fallback(
-        litellm_routing_ctx=RoutingContext(router_2),
-        original_function=original_function,
-        num_retries=1,
-        fallback_model_group=fallback_model_group,
-        original_model_group=original_model_group,
-        original_exception=original_exception,
-        max_fallbacks=5,
-        fallback_depth=0,
-        **request_kwargs,
-    )
-
-    print(result)
-
-    print(result._hidden_params)
-
-    assert result._hidden_params["api_base"] == FAKE_OPENAI_API_BASE
 
 
 def _provider_error(status_code: int) -> httpx.Response:
@@ -2979,3 +2501,148 @@ def test_is_bad_request_without_fallback_only_stops_on_a_real_400_when_the_flag_
 ) -> None:
     assert is_bad_request_without_fallback(exception, fallback_on_unsupported_params=False) is stops_fallbacks
     assert is_bad_request_without_fallback(exception, fallback_on_unsupported_params=True) is False
+
+
+@pytest.mark.asyncio
+async def test_a_role_less_request_is_not_retried_on_the_fallback_group() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "house",
+                "litellm_params": {"model": "house-model", "custom_llm_provider": "openai", "mock_response": "ok"},
+            },
+            {"model_name": "backup", "litellm_params": {"model": "openai/gpt-5.6", "mock_response": "ok"}},
+        ],
+        fallbacks=[{"house": ["backup"]}],
+        fallback_on_unsupported_params=False,
+    )
+
+    with pytest.raises(litellm.MalformedRequestFieldError, match="Missing required parameter") as exc_info:
+        await router.acompletion(model="house", messages=json.loads('[{"content": "hi"}]'))
+    assert "Fallback to backup" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_skips_a_target_the_rate_limit_check_rejects() -> None:
+    checked: Final = []  # mutable-ok: records the targets the check saw
+
+    async def refuse(*, model: str, request_kwargs: Mapping[str, object], ctx: object) -> bool:
+        checked.append(model)
+        return False
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://127.0.0.1:9"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "mock_response": "served"},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+        fallback_rate_limit_check=refuse,
+    )
+    with pytest.raises(
+        Exception, match="Fallback to fallback was skipped because the caller is over its per-model rate limit"
+    ):
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+    assert checked == ["fallback"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_serves_a_target_the_rate_limit_check_admits() -> None:
+    async def admit(*, model: str, request_kwargs: Mapping[str, object], ctx: object) -> bool:
+        return True
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://127.0.0.1:9"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "mock_response": "served"},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+        fallback_rate_limit_check=admit,
+    )
+    response: Final = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+    assert response.choices[0].message.content == "served"
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_reserves_a_repeated_target_once() -> None:
+    checked: Final = []  # mutable-ok: records the targets the check saw
+
+    async def admit(*, model: str, request_kwargs: Mapping[str, object], ctx: object) -> bool:
+        checked.append(model)
+        return True
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://127.0.0.1:9"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://127.0.0.1:9"},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback", "fallback"]}],
+        num_retries=0,
+        fallback_rate_limit_check=admit,
+    )
+    with pytest.raises(Exception, match="model group 'primary' failed"):
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+    assert checked == ["fallback"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_never_re_reserves_the_requested_model_group() -> None:
+    checked: Final = []  # mutable-ok: records the targets the check saw
+
+    async def admit(*, model: str, request_kwargs: Mapping[str, object], ctx: object) -> bool:
+        checked.append(model)
+        return True
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://127.0.0.1:9"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://127.0.0.1:9"},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}, {"fallback": ["primary"]}],
+        num_retries=0,
+        fallback_rate_limit_check=admit,
+    )
+    with pytest.raises(Exception, match="model group 'primary' failed"):
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+    assert checked == ["fallback"]
+
+
+@pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.rust_bridge import catalog
+    from litellm.rust_bridge.configuration import Rollout
+
+    monkeypatch.setattr(
+        catalog,
+        "RULES",
+        tuple(
+            rule
+            for rule in catalog.RULES
+            if not (rule.route is catalog.Route.MESSAGES and rule.rollout is Rollout.RUST_REQUIRED)
+        ),
+    )

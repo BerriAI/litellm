@@ -32,7 +32,6 @@ test.describe("Internal Viewer", () => {
       "Usage",
       "Logs",
       "Teams",
-      "API Reference",
       "AI Hub",
     ];
     for (const label of expectedVisible) {

@@ -41,13 +41,6 @@ jobs:
         timeout-minutes: 2
         uses: ./.github/actions/detect-changes
 
-      - name: Define editable Rust bridge cache key
-        id: rust-bridge-key
-        if: steps.changes.outputs.decision != 'skip'
-        env:
-          RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm-rust/Cargo.lock', 'litellm-rust/Cargo.toml', 'litellm-rust/crates/**', 'model_prices_and_context_window.json', 'pyproject.toml') }}
-        run: echo "key=$RUST_BRIDGE_CACHE_KEY" >> "$GITHUB_OUTPUT"
-
       - name: Set up Python
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
@@ -66,37 +59,32 @@ jobs:
         id: rust-bridge-cache
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: rust-bridge-dist
-          key: ${{ steps.rust-bridge-key.outputs.key }}
+        uses: ./.github/actions/restore-rust-bridge
 
       - name: Cache the Rust build
         if: steps.changes.outputs.decision != 'skip' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
         timeout-minutes: 5
         uses: ./.github/actions/cache-cargo-build
 
-      - name: Set up sccache
-        if: steps.changes.outputs.decision != 'skip' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
-        uses: mozilla-actions/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a
-        with:
-          version: "v0.18.0"
-
       - name: Build editable Rust bridge
         if: steps.changes.outputs.decision != 'skip' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
         timeout-minutes: 15
         env:
-          RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: "true"
-          SCCACHE_GHA_VERSION: litellm-ci-v1
-          SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
           CARGO_INCREMENTAL: "0"
         run: |
           mkdir -p rust-bridge-dist
-          uv run --no-project --with maturin==1.15.0 python -c 'import maturin; maturin.build_editable("rust-bridge-dist")'
+          uv run --no-project --with maturin==1.15.0 python .github/packaging/build_backend.py rust-bridge-dist
           strip --strip-debug litellm/rust_bridge/_native.abi3.so
           mkdir -p rust-bridge-dist/litellm/rust_bridge
           cp litellm/rust_bridge/_native.abi3.so rust-bridge-dist/litellm/rust_bridge/_native.abi3.so
+
+      - name: Build the gateway wheel once for test shards
+        if: steps.changes.outputs.decision != 'skip' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 15
+        working-directory: litellm/packaging/litellm-proxy
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: uv run --no-project --with maturin==1.15.0 maturin build --profile dev --strip --out ../../../rust-bridge-dist
 
       - name: Upload Rust bridge artifact
         if: steps.changes.outputs.decision != 'skip'
@@ -113,7 +101,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: rust-bridge-dist
-          key: ${{ steps.rust-bridge-key.outputs.key }}
+          key: ${{ steps.rust-bridge-cache.outputs.key }}
 
       - name: Expose the Rust bridge artifact
         id: rust-bridge-artifact
@@ -170,6 +158,7 @@ jobs:
               tests/unit/google_genai
               tests/unit/router_strategy
               tests/unit/router_utils
+              tests/unit/redis
               tests/unit/proxy/common_utils/test_cache_aware_routing.py
               tests/unit/enterprise/enterprise_callbacks/send_emails
               tests/unit/enterprise/proxy/test_afile_retrieve_returns_unified_id.py
@@ -384,6 +373,7 @@ jobs:
               tests/unit/llms/voyage
               tests/unit/llms/wandb
               tests/unit/llms/watsonx
+              tests/unit/llms/webiq
               tests/unit/llms/xai
               tests/unit/llms/xinference
               tests/unit/llms/you_com
@@ -419,6 +409,7 @@ jobs:
 
           - shard: router
             test-path: >-
+              tests/unit/router_rust
               tests/unit/test_router
             python-version: "3.12"
             workers: 4
@@ -445,7 +436,6 @@ jobs:
               tests/unit/ocr
               tests/unit/passthrough
               tests/unit/rag
-              tests/unit/cookbook
               tests/unit/realtime_api
               tests/unit/rerank_api
               tests/unit/search
@@ -537,6 +527,7 @@ jobs:
               tests/unit/proxy/management_helpers
               tests/unit/proxy/list_api
               tests/unit/proxy/analytics_endpoints
+              tests/unit/proxy/alerting_endpoints
               tests/unit/proxy/decisions_endpoints
               tests/unit/proxy/memory
               tests/unit/proxy/agent_endpoints
@@ -576,6 +567,7 @@ jobs:
               tests/unit/proxy/credential_endpoints
               tests/unit/proxy/discovery_endpoints
               tests/unit/proxy/shutdown
+              tests/unit/proxy/rust_forward
               tests/unit/proxy/public_endpoints
               tests/unit/proxy/prompts
               tests/unit/proxy/rag_endpoints
@@ -618,23 +610,32 @@ jobs:
             job-timeout-minutes: 60
             dist: loadscope
 
-          - shard: proxy-infra
+          - shard: proxy-infra-db-spend
             test-path: |-
               tests/unit/proxy/db
               --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
               --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py
-              tests/unit/proxy/middleware
-              --ignore=tests/unit/proxy/middleware/test_request_size_limit_middleware.py
               tests/unit/proxy/spend_tracking
               --ignore=tests/unit/proxy/spend_tracking/test_search_api_logging.py
-              tests/unit/proxy/pass_through_endpoints
-              tests/unit/proxy/mcp_server/test_tool_registry.py
               tests/unit/proxy/common_utils
               --ignore=tests/unit/proxy/common_utils/test_cache_aware_routing.py
               --ignore=tests/unit/proxy/common_utils/test_check_batch_cost.py
               --ignore=tests/unit/proxy/common_utils/test_check_responses_cost.py
               --ignore=tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py
               --ignore=tests/unit/proxy/common_utils/test_realtime_cache.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: proxy-infra-routing
+            test-path: |-
+              tests/unit/proxy/middleware
+              --ignore=tests/unit/proxy/middleware/test_request_size_limit_middleware.py
+              tests/unit/proxy/pass_through_endpoints
+              tests/unit/proxy/mcp_server/test_tool_registry.py
               tests/unit/proxy/enterprise_billing
               tests/unit/proxy/types_utils
               tests/unit/proxy/logging_endpoints
@@ -649,36 +650,61 @@ jobs:
             job-timeout-minutes: 60
             dist: loadscope
 
-          - shard: proxy-infra-root
+          - shard: proxy-infra-root-a-p
             test-path: |-
-              tests/unit/proxy/test_*.py
-              --ignore=tests/unit/proxy/test_aproxy_startup.py
-              --ignore=tests/unit/proxy/test_credential_slot_registry.py
-              --ignore=tests/unit/proxy/test_custom_callback_input.py
-              --ignore=tests/unit/proxy/test_custom_logger_s3_gcs.py
-              --ignore=tests/unit/proxy/test_custom_tokenizer_bug.py
-              --ignore=tests/unit/proxy/test_db_schema_changes.py
-              --ignore=tests/unit/proxy/test_deprecated_key_grace_period.py
-              --ignore=tests/unit/proxy/test_get_favicon.py
-              --ignore=tests/unit/proxy/test_get_image.py
-              --ignore=tests/unit/proxy/test_prisma_client_backoff_retry.py
-              --ignore=tests/unit/proxy/test_prompt_test_endpoint.py
-              --ignore=tests/unit/proxy/test_proxy_config_unit_test.py
-              --ignore=tests/unit/proxy/test_proxy_custom_auth.py
-              --ignore=tests/unit/proxy/test_proxy_reject_logging.py
-              --ignore=tests/unit/proxy/test_proxy_server.py
-              --ignore=tests/unit/proxy/test_proxy_setting_guardrails.py
-              --ignore=tests/unit/proxy/test_proxy_token_counter.py
-              --ignore=tests/unit/proxy/test_proxy_utils.py
-              --ignore=tests/unit/proxy/test_reducto_ocr_route.py
-              --ignore=tests/unit/proxy/test_response_polling_pre_call_checks.py
-              --ignore=tests/unit/proxy/test_server_root_path.py
-              --ignore=tests/unit/proxy/test_ui_path_detection.py
-              --ignore=tests/unit/proxy/test_unit_test_proxy_hooks.py
-              --ignore=tests/unit/proxy/test_update_spend.py
-              --ignore=tests/unit/proxy/test_zero_cost_model_budget_bypass.py
+              tests/unit/proxy/test_[_a-p]*.py
+              --deselect=tests/unit/proxy/test_aproxy_startup.py
+              --deselect=tests/unit/proxy/test_component_allowlists.py
+              --deselect=tests/unit/proxy/test_credential_slot_registry.py
+              --deselect=tests/unit/proxy/test_custom_callback_input.py
+              --deselect=tests/unit/proxy/test_custom_logger_s3_gcs.py
+              --deselect=tests/unit/proxy/test_custom_tokenizer_bug.py
+              --deselect=tests/unit/proxy/test_db_schema_changes.py
+              --deselect=tests/unit/proxy/test_deprecated_key_grace_period.py
+              --deselect=tests/unit/proxy/test_get_favicon.py
+              --deselect=tests/unit/proxy/test_get_image.py
+              --deselect=tests/unit/proxy/test_prisma_client_backoff_retry.py
+              --deselect=tests/unit/proxy/test_prometheus_metrics_server.py
+              --deselect=tests/unit/proxy/test_prompt_test_endpoint.py
+              --deselect=tests/unit/proxy/test_proxy_cli.py
+              --deselect=tests/unit/proxy/test_proxy_config_unit_test.py
+              --deselect=tests/unit/proxy/test_proxy_custom_auth.py
+              --deselect=tests/unit/proxy/test_proxy_reject_logging.py
+              --deselect=tests/unit/proxy/test_proxy_server.py
+              --deselect=tests/unit/proxy/test_proxy_setting_guardrails.py
+              --deselect=tests/unit/proxy/test_proxy_token_counter.py
+              --deselect=tests/unit/proxy/test_proxy_utils.py
             python-version: "3.12"
             workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: proxy-infra-root-q-z
+            test-path: |-
+              tests/unit/proxy/test_[q-z]*.py
+              --deselect=tests/unit/proxy/test_reducto_ocr_route.py
+              --deselect=tests/unit/proxy/test_response_polling_pre_call_checks.py
+              --deselect=tests/unit/proxy/test_server_root_path.py
+              --deselect=tests/unit/proxy/test_ui_path_detection.py
+              --deselect=tests/unit/proxy/test_unit_test_proxy_hooks.py
+              --deselect=tests/unit/proxy/test_update_spend.py
+              --deselect=tests/unit/proxy/test_zero_cost_model_budget_bypass.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: proxy-subprocess
+            test-path: |-
+              tests/unit/proxy/test_component_allowlists.py
+              tests/unit/proxy/test_prometheus_metrics_server.py
+              tests/unit/proxy/test_proxy_cli.py
+            python-version: "3.12"
+            workers: 2
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
@@ -1021,16 +1047,16 @@ jobs:
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
           else
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project --no-install-package litellm-proxy
             uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
             cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
             uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
           fi
           uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
 
-      - name: Check schema.prisma against the merge base
+      - name: Check litellm/schema.prisma against the merge base
         if: steps.changes.outputs.decision != 'skip' && matrix.shard == 'db-and-spend' && github.event_name == 'pull_request'
         timeout-minutes: 3
         env:
@@ -1043,7 +1069,7 @@ jobs:
           merge_base=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${base_ref}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
           test -n "$merge_base"
           git fetch --no-tags --depth=1 origin "$merge_base"
-          uv run --no-sync python scripts/check_schema_compatibility.py --base-commit "$merge_base"
+          uv run --no-sync python litellm/scripts/check_schema_compatibility.py --base-commit "$merge_base"
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
@@ -1108,7 +1134,7 @@ jobs:
             --timeout="${TEST_TIMEOUT_SECONDS}" \
             --rerun-except "from pytest-timeout" \
             --durations=20 \
-            --cov=./litellm --cov=./enterprise/litellm_enterprise \
+            --cov=./litellm --cov=./litellm/enterprise/litellm_enterprise \
             --cov-report=xml:coverage.xml \
             --cov-config=pyproject.toml
           status=$?
@@ -1138,7 +1164,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: ui/litellm-dashboard
+        working-directory: litellm/ui/litellm-dashboard
 
     steps:
       - name: Checkout repository
@@ -1157,9 +1183,9 @@ jobs:
         if: steps.changes.outputs.decision != 'skip'
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version-file: ui/litellm-dashboard/.nvmrc
+          node-version-file: litellm/ui/litellm-dashboard/.nvmrc
           cache: "npm"
-          cache-dependency-path: ui/litellm-dashboard/package-lock.json
+          cache-dependency-path: litellm/ui/litellm-dashboard/package-lock.json
 
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
@@ -1280,7 +1306,7 @@ jobs:
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
@@ -1329,17 +1355,16 @@ jobs:
 
       - name: Run unit tests
         run: |
-          for chart in helm/litellm-helm helm/litellm; do
-            declared="$(grep -h '^suite:' "$chart"/tests/*.yaml | wc -l | tr -d '[:space:]')"
-            output="$(mktemp)"
-            helm unittest -f 'tests/*.yaml' "$chart" | tee "$output"
-            executed="$(sed -n 's/^Test Suites:.*[[:space:]]\([0-9][0-9]*\) total$/\1/p' "$output")"
-            if [ "$declared" != "$executed" ]; then
-              echo "::error::$chart declares $declared test suites but helm-unittest ran $executed. Suites are being skipped silently, so their assertions never execute."
-              exit 1
-            fi
-            echo "$chart: all $declared declared test suites ran"
-          done
+          chart=litellm/deploy/helm/litellm
+          declared="$(grep -h '^suite:' "$chart"/tests/*.yaml | wc -l | tr -d '[:space:]')"
+          output="$(mktemp)"
+          helm unittest -f 'tests/*.yaml' "$chart" | tee "$output"
+          executed="$(sed -n 's/^Test Suites:.*[[:space:]]\([0-9][0-9]*\) total$/\1/p' "$output")"
+          if [ "$declared" != "$executed" ]; then
+            echo "::error::$chart declares $declared test suites but helm-unittest ran $executed. Suites are being skipped silently, so their assertions never execute."
+            exit 1
+          fi
+          echo "$chart: all $declared declared test suites ran"
   openai-sdk-compat:
     name: OpenAI ${{ matrix.openai-version }} compatibility
     needs: rust-bridge
@@ -1483,9 +1508,9 @@ jobs:
           RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
         run: |
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
           else
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project --no-install-package litellm-proxy
             uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
             cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
           fi

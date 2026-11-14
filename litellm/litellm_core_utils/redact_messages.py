@@ -12,16 +12,18 @@ import copy
 import inspect
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
+    attribute_or_none,
     get_metadata_variable_name_from_kwargs,
+    has_attributes,
 )
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
@@ -32,6 +34,7 @@ from litellm.llms.vertex_ai.common_utils import (
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.vector_stores import RETRIEVAL_QUERY_PARAMS
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -41,6 +44,11 @@ if TYPE_CHECKING:
     LiteLLMLoggingObject = _LiteLLMLoggingObject
 else:
     LiteLLMLoggingObject = Any
+
+
+class _HasArguments(Protocol):
+    arguments: str
+
 
 MESSAGE_REDACTION_ENABLE_HEADERS: Final = ("litellm-enable-message-redaction", "x-litellm-enable-message-redaction")
 
@@ -79,8 +87,8 @@ def _redacted_entries_for_opted_out_logger(model_call_details: Mapping[str, obje
         "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],
         "prompt": "",
         "input": "",
-        **({"instructions": REDACTED_BY_LITELLM} if model_call_details.get("instructions") is not None else {}),
-        **({"optional_params": _with_redacted_instructions(optional_params)} if optional_params is not None else {}),
+        **_request_field_redactions(model_call_details),
+        **({"optional_params": _with_redacted_request_fields(optional_params)} if optional_params is not None else {}),
         **({"litellm_params": redacted_litellm_params(litellm_params)} if litellm_params is not None else {}),
         **(
             {"standard_logging_object": _redact_standard_logging_object(standard_logging_object)}
@@ -163,7 +171,7 @@ def _redact_bedrock_guardrail_trace(response: object) -> None:
         }
         response.update(traces)
         return
-    for field, value in ((name, getattr(response, name, None)) for name in BEDROCK_GUARDRAIL_TRACE_FIELDS):
+    for field, value in ((name, attribute_or_none(response, name)) for name in BEDROCK_GUARDRAIL_TRACE_FIELDS):
         if value is not None:
             setattr(response, field, _redacted_bedrock_trace(value))
 
@@ -191,8 +199,8 @@ def _redact_tool_calls(tool_calls) -> None:
     if not tool_calls:
         return
     for tool_call in tool_calls:
-        function = getattr(tool_call, "function", None)
-        if function is not None and hasattr(function, "arguments"):
+        function = attribute_or_none(tool_call, "function")
+        if function is not None and has_attributes(function, _HasArguments, "arguments"):
             function.arguments = REDACTED_BY_LITELLM
 
 
@@ -215,6 +223,7 @@ def _redact_choice_content(choice):
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
         _drop_field_when_present(choice.message, "reasoning_items")
+        _drop_field_when_present(choice.message, "audio")
         _redact_provider_specific_fields(choice.message)
         _redact_tool_calls(getattr(choice.message, "tool_calls", None))
         _redact_function_call(getattr(choice.message, "function_call", None))
@@ -226,6 +235,7 @@ def _redact_choice_content(choice):
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
         _drop_field_when_present(choice.delta, "reasoning_items")
+        _drop_field_when_present(choice.delta, "audio")
         _redact_provider_specific_fields(choice.delta)
         _redact_tool_calls(getattr(choice.delta, "tool_calls", None))
         _redact_function_call(getattr(choice.delta, "function_call", None))
@@ -301,7 +311,61 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
             )
             if key in fields
         },
+        **(
+            {"server_tool_calls": _redacted_tool_call_dicts(fields["server_tool_calls"])}
+            if "server_tool_calls" in fields
+            else {}
+        ),
+        **(
+            {"web_search_calls": _redacted_web_search_calls(fields["web_search_calls"])}
+            if "web_search_calls" in fields
+            else {}
+        ),
     }
+
+
+def _redacted_tool_call_dict(call: object) -> object:
+    if (mapping := _as_mapping(call)) is None or (function := _as_mapping(mapping.get("function"))) is None:
+        return call
+    return {**mapping, "function": {**function, "arguments": REDACTED_BY_LITELLM}}
+
+
+def _redacted_tool_call_dicts(calls: object) -> object:
+    return [_redacted_tool_call_dict(call) for call in calls] if isinstance(calls, list) else calls
+
+
+_WEB_ACTION_TEXT_FIELDS: Final = ("query", "url", "pattern")
+_WEB_ACTION_LIST_FIELDS: Final = ("queries", "sources")
+
+
+def _web_action_redactions(action: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **{key: REDACTED_BY_LITELLM for key in _WEB_ACTION_TEXT_FIELDS if action.get(key) is not None},
+        **{key: None for key in _WEB_ACTION_LIST_FIELDS if action.get(key) is not None},
+    }
+
+
+def _redacted_web_search_action(action: object) -> object:
+    if isinstance(action, BaseModel):
+        return action.model_copy(update=dict(_web_action_redactions(action.model_dump())))
+    mapping: Final = _as_mapping(action)
+    return action if mapping is None else {**mapping, **_web_action_redactions(mapping)}
+
+
+def _redacted_web_search_call(item: object) -> object:
+    if isinstance(item, BaseModel):
+        action: Final = attribute_or_none(item, "action")
+        return item if action is None else item.model_copy(update={"action": _redacted_web_search_action(action)})
+    mapping: Final = _as_mapping(item)
+    if mapping is None or mapping.get("action") is None:
+        return item
+    return {**mapping, "action": _redacted_web_search_action(mapping["action"])}
+
+
+def _redacted_web_search_calls(calls: object) -> object:
+    if (mapping := _as_mapping(calls)) is not None:
+        return {key: _redacted_web_search_call(call) for key, call in mapping.items()}
+    return [_redacted_web_search_call(call) for call in calls] if isinstance(calls, list) else calls
 
 
 def _redact_field_when_present(item: object, field: str) -> None:
@@ -335,6 +399,8 @@ def _redact_responses_api_output(output_items):
             output_item.arguments = REDACTED_BY_LITELLM
         if output_type == "custom_tool_call" and hasattr(output_item, "input"):
             output_item.input = REDACTED_BY_LITELLM
+        if output_type == "web_search_call" and getattr(output_item, "action", None) is not None:
+            output_item.action = _redacted_web_search_action(output_item.action)
 
 
 _RESPONSE_ITEMS: Final = TypeAdapter(tuple[object, ...])
@@ -389,6 +455,11 @@ def _redacted_responses_api_output_item(item: object, redacted_str: str) -> obje
             if item_mapping.get("type") == "custom_tool_call" and "input" in item_mapping
             else {}
         ),
+        **(
+            {"action": _redacted_web_search_action(item_mapping["action"])}
+            if item_mapping.get("type") == "web_search_call" and item_mapping.get("action") is not None
+            else {}
+        ),
     }
 
 
@@ -396,8 +467,24 @@ def _redact_responses_api_output_dict(output_items: Sequence[object], redacted_s
     return [_redacted_responses_api_output_item(item, redacted_str) for item in output_items]
 
 
-def _with_redacted_instructions(params: Mapping[str, object]) -> Mapping[str, object]:
-    return params if params.get("instructions") is None else {**params, "instructions": REDACTED_BY_LITELLM}
+_REDACTED_REQUEST_FIELDS: Final = ("instructions", "query_image", *RETRIEVAL_QUERY_PARAMS)
+_NESTED_REQUEST_FIELDS: Final = ("extra_body", "additional_args", "complete_input_dict")
+
+
+def _request_field_redactions(params: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **{field: REDACTED_BY_LITELLM for field in _REDACTED_REQUEST_FIELDS if params.get(field) is not None},
+        **{
+            field: _with_redacted_request_fields(nested)
+            for field in _NESTED_REQUEST_FIELDS
+            if (nested := _as_mapping(params.get(field))) is not None
+        },
+    }
+
+
+def _with_redacted_request_fields(params: Mapping[str, object]) -> Mapping[str, object]:
+    redactions: Final = _request_field_redactions(params)
+    return {**params, **redactions} if redactions else params
 
 
 def _redacted_responses_api_response(
@@ -410,7 +497,7 @@ def _redacted_responses_api_response(
         if isinstance(output, list)
         else output,
     }
-    return _with_redacted_instructions(redacted) if redact_instructions else redacted
+    return _with_redacted_request_fields(redacted) if redact_instructions else redacted
 
 
 def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
@@ -434,7 +521,7 @@ def _redact_standard_logging_object(
         standard_logging_object["messages"] = [{"role": "user", "content": redacted_str}]
     model_parameters: Final = _as_mapping(standard_logging_object.get("model_parameters"))
     if model_parameters is not None and redact_instructions:
-        standard_logging_object["model_parameters"] = _with_redacted_instructions(model_parameters)
+        standard_logging_object["model_parameters"] = _with_redacted_request_fields(model_parameters)
 
     response: Final = standard_logging_object.get("response")
     if response is not None:
@@ -531,7 +618,7 @@ def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body
     """
     request: Final = _as_mapping(params.get("proxy_server_request"))
     return {
-        **(_with_redacted_instructions(params) if redact_request_body else params),
+        **(_with_redacted_request_fields(params) if redact_request_body else params),
         **{
             key: _redacted_baseline_metadata(value)
             for key, value in params.items()
@@ -545,7 +632,7 @@ def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body
     }
 
 
-def perform_redaction(model_call_details: dict, result, redact_streaming_responses: bool = True):
+def perform_redaction(model_call_details: dict[str, object], result, redact_streaming_responses: bool = True):
     """
     Performs the actual redaction on the logging object and result.
 
@@ -570,8 +657,8 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     if redact_streaming_responses:
         model_call_details.update(
             {
-                **({"instructions": REDACTED_BY_LITELLM} if model_call_details.get("instructions") is not None else {}),
-                **({"optional_params": _with_redacted_instructions(optional_params)} if optional_params else {}),
+                **_request_field_redactions(model_call_details),
+                **({"optional_params": _with_redacted_request_fields(optional_params)} if optional_params else {}),
             }
         )
     model_call_details.pop(SERVED_OUTPUT_TEXTS_KEY, None)
