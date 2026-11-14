@@ -21,7 +21,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm import verbose_logger
 from litellm.constants import REDACTED_BY_LITELLM
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -997,6 +997,21 @@ _JSON_SCHEMA_ANNOTATION_KEYWORDS: Final = frozenset(
     {"title", "description", "default", "deprecated", "readOnly", "writeOnly", "examples"}
 )
 
+_SCHEMA_NODE: Final = TypeAdapter(Mapping[str, object])
+
+
+def _ref_target_with_siblings(
+    target_schema: Mapping[str, object], ref_node: Mapping[str, object]
+) -> Mapping[str, object]:
+    target_required: Final = as_object_list(target_schema.get("required")) or ()
+    sibling_required: Final = as_object_list(ref_node.get("required")) or ()
+    added: Final = tuple(name for name in sibling_required if name not in target_required)
+    return {
+        **target_schema,
+        **{key: value for key, value in ref_node.items() if key in _JSON_SCHEMA_ANNOTATION_KEYWORDS},
+        **({"required": [*target_required, *added]} if added else {}),
+    }
+
 
 def unpack_defs(
     schema: dict,
@@ -1024,8 +1039,8 @@ def unpack_defs(
     raises ``ValueError`` on overflow.
 
     ``keep_ref_siblings`` keeps the annotations next to a ``$ref`` (a field's
-    ``description``, say) over the inlined target's, while the target's
-    constraints such as ``required`` stay as they are.
+    ``description``, say) over the inlined target's and adds a sibling
+    ``required`` to the target's, since both apply to the value.
     """
 
     import copy
@@ -1085,7 +1100,9 @@ def unpack_defs(
 
                 # Replace the reference with resolved copy
                 resolved = copy.deepcopy(
-                    {**target_schema, **{k: v for k, v in node.items() if k in _JSON_SCHEMA_ANNOTATION_KEYWORDS}}
+                    _ref_target_with_siblings(
+                        _SCHEMA_NODE.validate_python(target_schema), _SCHEMA_NODE.validate_python(node)
+                    )
                     if keep_ref_siblings
                     else target_schema
                 )
