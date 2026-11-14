@@ -61,8 +61,7 @@ from litellm.proxy.spend_tracking.input_tokens import (
     openai_chat_pdf_file_tokens,
 )
 from litellm.proxy.spend_tracking.native_budgets import (
-    await_native_admission,
-    is_native_reservation,
+    admitted_native_reservation,
     native_admission,
     native_budget_route,
     native_owner_reserves,
@@ -198,15 +197,13 @@ def _raise_reservation_unavailable(counter_key: str) -> NoReturn:
     )
 
 
-def get_reserved_counter_keys(budget_reservation: dict | None) -> frozenset[str]:
+def get_reserved_counter_keys(budget_reservation: dict | None) -> set:
     if not budget_reservation:
-        return frozenset()
-    entries: Final[object] = budget_reservation.get("entries") or []
-    if not _is_entry_sequence(entries):
-        return frozenset()
-    return frozenset(
-        str(entry["counter_key"]) for entry in entries if _is_held_entry(entry) and entry.get("counter_key") is not None
-    )
+        return set()
+    entries: Final = budget_reservation.get("entries") or []
+    return {
+        entry["counter_key"] for entry in entries if isinstance(entry, dict) and entry.get("counter_key") is not None
+    }
 
 
 _lease_renewals: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: asyncio only weak-refs pending tasks
@@ -504,7 +501,7 @@ async def _native_budget_plan(
 
 
 async def reconcile_budget_reservation(
-    budget_reservation: dict[str, object] | None,  # mutable-ok: settlement stamps finalized on the caller's reservation
+    budget_reservation: dict | None,
     actual_cost: float | None,
     finalize: bool = True,
     apply_consistent: bool = True,
@@ -512,20 +509,19 @@ async def reconcile_budget_reservation(
     """Settle every reserved counter on ``actual_cost``. With ``apply_consistent`` False the adjustments for
     counters that still hold the reservation are returned instead of written, so the caller can pipeline them with
     its own increments and then call ``stamp_budget_reservation_actual_cost``."""
-    await await_native_admission(budget_reservation)
+    native: Final = await admitted_native_reservation(budget_reservation)
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return ()
 
-    reserved_cost: Final = _float_or_zero(budget_reservation.get("reserved_cost"))
+    reserved_cost: Final = float(budget_reservation.get("reserved_cost") or 0.0)
     actual: Final = float(actual_cost or 0.0)
-    native: Final = is_native_reservation(budget_reservation)
-    if native:
-        await settle_native_reservation(budget_reservation, actual)
+    if native is not None:
+        await settle_native_reservation(native, actual)
     pending: Final = (
         ()
-        if native
+        if native is not None
         else await _set_reserved_entries_actual_cost(
-            entries=_held_entries(budget_reservation.get("entries")),
+            entries=budget_reservation.get("entries") or [],
             actual_cost=actual,
             default_reserved_cost=reserved_cost,
             apply_consistent=apply_consistent,
@@ -559,7 +555,7 @@ async def release_budget_reservation(budget_reservation: dict | None) -> None:
 
 
 async def release_budget_reservation_on_cancel(
-    budget_reservation: dict[str, object] | None,  # mutable-ok: reconciling stamps finalized on it
+    budget_reservation: dict | None,
 ) -> None:
     """Reconcile a still-open reservation when the request is cancelled mid-flight.
 
@@ -586,7 +582,7 @@ async def release_budget_reservation_on_cancel(
             _ = await asyncio.shield(admission)
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
-    incurred_cost: Final = _float_or_zero(budget_reservation.get("input_cost"))
+    incurred_cost: Final = float(budget_reservation.get("input_cost") or 0.0)
     try:
         await asyncio.shield(
             reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
@@ -1605,7 +1601,7 @@ def _input_cost_for_cost_info(
     if estimated_input_tokens is None:
         return None
     tiered_pricing: Final = model_info.get("tiered_pricing")
-    if isinstance(tiered_pricing, list) and tiered_pricing:
+    if _is_tier_table(tiered_pricing) and tiered_pricing:
         tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
         if tier is not None:
             return estimated_input_tokens * tier_rate(tier, "input_cost_per_token")
@@ -1667,7 +1663,7 @@ def _max_cost_for_cost_info(
 
     output_multiplier: Final = _get_output_multiplier(request_body=request_body)
     tiered_pricing: Final = model_info.get("tiered_pricing")
-    if isinstance(tiered_pricing, list) and tiered_pricing:
+    if _is_tier_table(tiered_pricing) and tiered_pricing:
         tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
         if tier is not None:
             output_rate = max(
@@ -1943,38 +1939,10 @@ def _is_input_only_route(route: str) -> bool:
     )
 
 
-def _float_or_zero(value: object) -> float:
-    if not value:
-        return 0.0
-    if not isinstance(value, (SupportsFloat, SupportsIndex, str, bytes, bytearray)):
-        raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
-    return float(value)
-
-
-def _is_entry_sequence(
+def _is_tier_table(
     value: object,
-) -> TypeGuard[Sequence[object]]:  # guard-ok: the held entries are a JSON array the reservation wrote
-    return isinstance(value, list | tuple)
-
-
-def _is_held_entry(
-    value: object,
-) -> TypeGuard[Mapping[str, object]]:  # guard-ok: a held entry is a str-keyed JSON object the reservation wrote
-    return isinstance(value, dict)
-
-
-def _is_held_entries(
-    value: object,
-) -> TypeGuard[list[dict[str, object]]]:  # guard-ok: str-keyed JSON entries  # mutable-ok: settlement stamps each entry
-    return isinstance(value, list) and all(isinstance(entry, dict) for entry in value)
-
-
-def _held_entries(value: object) -> list[dict[str, object]]:  # mutable-ok: settlement stamps each held entry in place
-    if not value:
-        return []
-    if not _is_held_entries(value):
-        raise TypeError(f"reservation entries must be a list of objects, not '{type(value).__name__}'")
-    return value
+) -> TypeGuard[list[Mapping[str, object]]]:  # guard-ok: JSON tiers  # mutable-ok: cost map list
+    return isinstance(value, list)
 
 
 def _to_float(value: object) -> float | None:

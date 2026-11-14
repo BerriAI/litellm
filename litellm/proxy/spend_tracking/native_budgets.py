@@ -119,11 +119,11 @@ _Admission: TypeAlias = "asyncio.Future[Patch | Abort | None]"
 _admissions: Final[dict[int, _Admission]] = {}  # mutable-ok: in-flight admissions by reservation
 
 
-def native_admission(reservation: Mapping[str, object] | None) -> _Admission | None:
+def native_admission(reservation: object) -> _Admission | None:
     return None if reservation is None else _admissions.get(id(reservation))
 
 
-async def await_native_admission(reservation: Mapping[str, object] | None) -> None:
+async def await_native_admission(reservation: object) -> None:
     admission: Final = native_admission(reservation)
     if admission is None:
         return
@@ -453,6 +453,17 @@ async def settle_native_reservation(
     for entry, target in zip(entries, settled.adjustments):
         if target is not None and isinstance(entry, dict):
             entry["applied_adjustment"] = target
+
+
+def _is_native_record(
+    value: object,
+) -> TypeGuard[dict[str, object]]:  # guard-ok: a str-keyed JSON reservation  # mutable-ok: settled in place
+    return isinstance(value, dict) and NATIVE_CALL_ID_KEY in value
+
+
+async def admitted_native_reservation(reservation: object) -> dict[str, object] | None:  # mutable-ok: settled in place
+    await await_native_admission(reservation)
+    return reservation if _is_native_record(reservation) else None
 
 
 def is_native_reservation(reservation: Mapping[str, object] | None) -> bool:

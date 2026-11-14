@@ -33,6 +33,7 @@ from litellm.proxy.spend_tracking import native_budgets
 from litellm.proxy.spend_tracking.budget_reservation import (
     customer_window_counters,
     estimate_request_max_cost,
+    get_reserved_counter_keys,
     reconcile_budget_reservation,
     release_budget_reservation,
     release_budget_reservation_on_cancel,
@@ -719,3 +720,42 @@ async def test_python_reserves_again_once_the_native_owner_leaves_the_callbacks(
     assert _snapshot(store) == python.counters
     native_budgets.install_native_budgets(store, litellm.callbacks)
     assert native_budgets.native_owner_reserves()
+
+
+MALFORMED_COSTS: Final[Mapping[str, tuple[object, type[Exception]]]] = {
+    "unparseable_string": ("not-a-number", ValueError),
+    "list": ([1.0], TypeError),
+    "mapping": ({"cost": 1.0}, TypeError),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cost", MALFORMED_COSTS.values(), ids=MALFORMED_COSTS.keys())
+async def test_a_malformed_reserved_cost_fails_settlement_as_main_does(cost: tuple[object, type[Exception]]) -> None:
+    value, error = cost
+    with pytest.raises(error):
+        _ = await reconcile_budget_reservation({"reserved_cost": value, "entries": []}, 0.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cost", MALFORMED_COSTS.values(), ids=MALFORMED_COSTS.keys())
+async def test_a_malformed_input_cost_fails_the_cancel_release_as_main_does(
+    cost: tuple[object, type[Exception]],
+) -> None:
+    value, error = cost
+    with pytest.raises(error):
+        await release_budget_reservation_on_cancel({"input_cost": value, "entries": []})
+
+
+MALFORMED_ENTRIES: Final[Mapping[str, tuple[object, frozenset[object]]]] = {
+    "a_mapping_of_entries": ({"counter_key": "spend:key:a"}, frozenset()),
+    "a_tuple_of_entries": (({"counter_key": "spend:key:a"},), frozenset({"spend:key:a"})),
+    "a_non_string_counter_key": ([{"counter_key": 5}], frozenset({5})),
+    "a_non_mapping_entry": (["spend:key:a", {"counter_key": "spend:key:b"}], frozenset({"spend:key:b"})),
+}
+
+
+@pytest.mark.parametrize("entries", MALFORMED_ENTRIES.values(), ids=MALFORMED_ENTRIES.keys())
+def test_reserved_counter_keys_read_malformed_entries_as_main_does(entries: tuple[object, frozenset[object]]) -> None:
+    value, keys = entries
+    assert get_reserved_counter_keys({"entries": value}) == keys
