@@ -224,6 +224,7 @@ TOOL_CALLS_CACHE: Final = InMemoryCache()
 _ANY_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[object, object])
 _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+_OBJECT_ADAPTER: Final = TypeAdapter(object)
 _CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
@@ -232,6 +233,14 @@ _RESPONSES_API_TOOL_CHOICE_ADAPTER: Final = TypeAdapter(ToolChoice)
 
 def _is_s3_url(url: object) -> bool:
     return isinstance(url, str) and is_s3_uri(url)
+
+
+def _tool_mappings(raw_tools: object) -> tuple[Mapping[str, object], ...]:
+    try:
+        entries: Final = _OBJECT_LIST_ADAPTER.validate_python(raw_tools)
+    except ValidationError:
+        return ()
+    return tuple(_STR_KEY_DICT_ADAPTER.validate_python(entry) for entry in entries if isinstance(entry, Mapping))
 
 
 @runtime_checkable
@@ -976,11 +985,7 @@ class LiteLLMCompletionResponsesConfig:
                 input=input if item_cache_control else without_item_cache_control(input),
                 replay_reasoning=replay_reasoning,
                 member_chat_names=LiteLLMCompletionResponsesConfig.member_chat_names(
-                    tuple(
-                        _STR_KEY_DICT_ADAPTER.validate_python(tool)
-                        for tool in _OBJECT_LIST_ADAPTER.validate_python(responses_api_request.get("tools") or [])
-                        if isinstance(tool, Mapping)
-                    )
+                    _tool_mappings(_OBJECT_ADAPTER.validate_python(responses_api_request.get("tools")))
                 ),
             )
         )
