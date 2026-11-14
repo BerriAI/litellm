@@ -6558,12 +6558,20 @@ class TestDisconnectGatherCleanup:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("client_model, expected", [("AgentX-LLM", "AgentX-LLM"), (None, "gpt-mini")])
+@pytest.mark.parametrize(
+    "client_model, body_model, endpoint_model, expected",
+    [
+        ("AgentX-LLM", "gpt-mini", None, "AgentX-LLM"),
+        (None, "gpt-mini", None, "gpt-mini"),
+        (None, None, "team-model", "team-model"),
+    ],
+)
 async def test_response_model_echoes_the_name_the_client_sent_before_auth_rewrote_it(
-    monkeypatch, client_model, expected
+    monkeypatch, client_model, body_model, endpoint_model, expected
 ):
     """LIT-3054: auth resolves router_settings.model_group_alias in the body, so the alias the
-    client sent only survives in the request scope. The response must still echo it."""
+    client sent only survives in the request scope. The response must still echo it. Azure-style
+    routes carry the name in the path alone, and the response must echo that too (#49932)."""
     import litellm.proxy.common_request_processing as cpr
 
     async def llm():
@@ -6582,9 +6590,11 @@ async def test_response_model_echoes_the_name_the_client_sent_before_auth_rewrot
     proxy_logging._callback_capabilities_cache = {}
     monkeypatch.setattr(cpr, "route_request", fake_route_request)
 
-    processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-mini", "messages": []})
+    processor = ProxyBaseLLMRequestProcessing(data={"messages": [], **({"model": body_model} if body_model else {})})
     monkeypatch.setattr(
-        processor, "common_processing_pre_call_logic", AsyncMock(return_value=({"model": "gpt-mini"}, logging_obj))
+        processor,
+        "common_processing_pre_call_logic",
+        AsyncMock(return_value=({"model": body_model or endpoint_model}, logging_obj)),
     )
     monkeypatch.setattr(processor, "_has_post_call_guardrails", MagicMock(return_value=False))
     scope = {"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": [], "query_string": b""}
@@ -6599,6 +6609,7 @@ async def test_response_model_echoes_the_name_the_client_sent_before_auth_rewrot
         proxy_config=MagicMock(spec=ProxyConfig),
         route_type="acompletion",
         version=None,
+        model=endpoint_model,
     )
 
     assert response.model == expected

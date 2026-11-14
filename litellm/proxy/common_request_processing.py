@@ -3831,7 +3831,7 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
-        client_model: Final = get_client_requested_model(request) or self.data.get("model")
+        client_model: Final = get_client_requested_model(request) or self.data.get("model") or model
         requested_model_from_client: Final[str | None] = client_model if isinstance(client_model, str) else None
         self._debug_log_request_payload()
 
