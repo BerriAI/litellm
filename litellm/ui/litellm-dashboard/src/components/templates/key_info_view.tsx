@@ -145,14 +145,14 @@ export default function KeyInfoView({
   const { mutate: setKeyBlockedState, isPending: blockLoading } = useSetKeyBlockedState();
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
-  const memberBudgetTeamIds = useMemo(
-    () =>
+  const memberBudgetUserIds = useMemo(
+    (): Record<string, string[]> =>
       currentKeyData?.max_budget === null && currentKeyData.team_id && currentKeyData.user_id
-        ? [currentKeyData.team_id]
-        : [],
+        ? { [currentKeyData.team_id]: [currentKeyData.user_id] }
+        : {},
     [currentKeyData],
   );
-  const teamMemberBudgets = useTeamMemberBudgets(memberBudgetTeamIds);
+  const teamMemberBudgets = useTeamMemberBudgets(memberBudgetUserIds);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
   const [keyDataUpdateHeldUntilModalClose, setKeyDataUpdateHeldUntilModalClose] = useState<Partial<KeyResponse> | null>(
     null,

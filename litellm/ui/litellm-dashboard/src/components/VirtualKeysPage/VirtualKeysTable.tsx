@@ -148,14 +148,18 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const keyList = useMemo(() => keys?.keys ?? [], [keys]);
   const rowCount = keys?.total_count ?? 0;
 
-  const teamIds = useMemo(
+  const memberBudgetUserIds = useMemo(
     () =>
-      Array.from(
-        new Set(keyList.flatMap((key) => (key.max_budget == null && key.team_id && key.user_id ? [key.team_id] : []))),
+      keyList.reduce<Record<string, string[]>>(
+        (byTeam, key) =>
+          key.max_budget == null && key.team_id && key.user_id
+            ? { ...byTeam, [key.team_id]: [...(byTeam[key.team_id] ?? []), key.user_id] }
+            : byTeam,
+        {},
       ),
     [keyList],
   );
-  const teamMemberBudgets = useTeamMemberBudgets(teamIds);
+  const teamMemberBudgets = useTeamMemberBudgets(memberBudgetUserIds);
   const applyUserBudgetToTeamKeys = useApplyUserBudgetToTeamKeys();
 
   const columnDeps = useMemo(

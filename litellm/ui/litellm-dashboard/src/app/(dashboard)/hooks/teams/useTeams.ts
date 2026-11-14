@@ -10,7 +10,8 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchTeams } from "@/app/(dashboard)/networking";
 import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
-import { teamInfoCall } from "@/components/networking";
+import { apiClient, teamInfoCall } from "@/components/networking";
+import type { components } from "@/lib/http/schema";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import { teamListScopeUserId } from "@/utils/roles";
 
@@ -171,7 +172,9 @@ export const useTeam = (teamId?: string) => {
         throw new Error("Missing auth or teamId");
       }
 
-      const { team_info } = (await teamInfoCall(accessToken, teamId)) as { team_info: Team };
+      const { team_info } = (await teamInfoCall(accessToken, teamId, { includeMembers: false })) as {
+        team_info: Team;
+      };
       return team_info;
     },
 
@@ -182,6 +185,57 @@ export const useTeam = (teamId?: string) => {
 
       return teams?.find((team) => team.team_id === teamId);
     },
+  });
+};
+
+export type TeamMemberListItem = components["schemas"]["TeamMemberListItem"];
+type TeamMemberListResponse = components["schemas"]["ListResponse_TeamMemberListItem_"];
+
+const TEAM_MEMBER_FILTER_BATCH = 100;
+
+const fetchTeamMemberPage = (accessToken: string, teamId: string, query: Record<string, string | number>) =>
+  apiClient.get<TeamMemberListResponse>(`/management/v1/teams/${encodeURIComponent(teamId)}/members`, {
+    accessToken,
+    query,
+  });
+
+export const fetchTeamMembersByUserId = async (
+  accessToken: string,
+  teamId: string,
+  userIds: readonly string[],
+): Promise<TeamMemberListItem[]> => {
+  const batches = Array.from({ length: Math.ceil(userIds.length / TEAM_MEMBER_FILTER_BATCH) }, (_, index) =>
+    userIds.slice(index * TEAM_MEMBER_FILTER_BATCH, (index + 1) * TEAM_MEMBER_FILTER_BATCH),
+  );
+  const pages = await Promise.all(
+    batches.map((batch) =>
+      fetchTeamMemberPage(accessToken, teamId, {
+        "filter[user_id][in]": batch.join(","),
+        page_size: TEAM_MEMBER_FILTER_BATCH,
+      }),
+    ),
+  );
+  return pages.flatMap((page) => page.data);
+};
+
+export const useTeamMemberCount = (teamId?: string): UseQueryResult<number> => {
+  const { accessToken } = useAuthorized();
+  return useQuery<number>({
+    queryKey: [...teamKeys.detail(teamId!), "memberCount"],
+    enabled: Boolean(accessToken && teamId),
+    queryFn: async () => (await fetchTeamMemberPage(accessToken!, teamId!, { page_size: 1 })).meta.total_count,
+  });
+};
+
+export const useTeamMembersByUserId = (
+  teamId: string | undefined,
+  userIds: readonly string[],
+): UseQueryResult<TeamMemberListItem[]> => {
+  const { accessToken } = useAuthorized();
+  return useQuery<TeamMemberListItem[]>({
+    queryKey: [...teamKeys.detail(teamId!), "members", userIds],
+    enabled: Boolean(accessToken && teamId && userIds.length > 0),
+    queryFn: () => fetchTeamMembersByUserId(accessToken!, teamId!, userIds),
   });
 };
 

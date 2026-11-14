@@ -98,11 +98,11 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
 
   const displayKeys = useMemo(() => keys?.keys ?? [], [keys?.keys]);
 
-  const teamMemberBudgetTeamIds = useMemo(
-    () => (displayKeys.some((key) => key.max_budget == null && Boolean(key.user_id)) ? [teamId] : []),
-    [displayKeys, teamId],
-  );
-  const teamMemberBudgets = useTeamMemberBudgets(teamMemberBudgetTeamIds);
+  const memberBudgetUserIds = useMemo((): Record<string, string[]> => {
+    const userIds = displayKeys.flatMap((key) => (key.max_budget == null && key.user_id ? [key.user_id] : []));
+    return userIds.length > 0 ? { [teamId]: userIds } : {};
+  }, [displayKeys, teamId]);
+  const teamMemberBudgets = useTeamMemberBudgets(memberBudgetUserIds);
 
   const rowCount = keys?.total_count ?? 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});

@@ -10072,6 +10072,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/teams/{team_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Team Members
+         * @description One team's members, paged, sortable and filterable. Readable by whoever can read the team
+         *     through `/team/info`: proxy admins and admin viewers, a key of the team, its members, and
+         *     admins of its organization. An unknown team is a 404.
+         *
+         *     Each row is a roster entry (`user_id`, `user_email`, `user_alias`, `role`) with the fields
+         *     `/team/info` reports for that member in `team_memberships` (`spend`, `total_spend`,
+         *     `budget_id`, `litellm_budget_table`, `budget_source`). `/team/info` returns the whole roster
+         *     on every call; this route reads one page of it.
+         *
+         *     `sort` takes a comma-separated list of `user_id`, `user_email`, `user_alias`, `role`, `spend`,
+         *     `total_spend`, `max_budget` (the member's own limit, else the team default), `budget_reset_at`
+         *     or `position` (roster order, the default and the tiebreaker), each optionally prefixed with `-`
+         *     for descending. `q` is a case-insensitive substring match on `user_id`, `user_email` and
+         *     `user_alias`. `page_size` defaults to 50 and is capped at 100. Filters are
+         *     `filter[role][eq|in]` and `filter[user_id][in]`.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/teams/team-1/members?q=jane&sort=-spend&filter[role][eq]=user'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
+         *     ```
+         */
+        get: operations["list_team_members_management_v1_teams__team_id__members_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/teams/{team_id}/members/bulk_delete": {
         parameters: {
             query?: never;
@@ -18192,6 +18231,7 @@ export interface paths {
          *
          *     Parameters:
          *     - team_id: str - Required. The unique identifier of the team to get info on.
+         *     - include_members: bool - Optional, default true. Pass false to get the team's settings without its roster.
          *
          *     ```
          *     curl --location 'http://localhost:4000/team/info?team_id=your_team_id_here'     --header 'Authorization: Bearer your_api_key_here'
@@ -36656,6 +36696,13 @@ export interface components {
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
+        /** ListResponse[TeamMemberListItem] */
+        ListResponse_TeamMemberListItem_: {
+            /** Data */
+            data: components["schemas"]["TeamMemberListItem"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
+        };
         /** ListResponse[Team] */
         ListResponse_Team_: {
             /** Data */
@@ -50351,6 +50398,41 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * TeamMemberListItem
+         * @description One roster entry with the same membership fields `/team/info` reports in `team_memberships`.
+         */
+        TeamMemberListItem: {
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Budget Source
+             * @enum {string}
+             */
+            budget_source: "team_default" | "custom" | "none";
+            /** Litellm Budget Table */
+            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Role */
+            role: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number | null;
+            /** Team Id */
+            team_id: string;
+            /**
+             * Total Spend
+             * @default 0
+             */
+            total_spend: number | null;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * TeamMemberRef
@@ -69876,6 +69958,37 @@ export interface operations {
             };
         };
     };
+    list_team_members_management_v1_teams__team_id__members_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_TeamMemberListItem_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     bulk_delete_team_members_action_management_v1_teams__team_id__members_bulk_delete_post: {
         parameters: {
             query?: never;
@@ -80905,6 +81018,8 @@ export interface operations {
                 team_id?: string;
                 /** @description Limit the number of keys returned */
                 key_limit?: number | null;
+                /** @description Set to false to skip loading the roster: `team_info.members_with_roles` and `team_memberships` come back empty. Page through members with `GET /management/v1/teams/{team_id}/members` */
+                include_members?: boolean;
             };
             header?: never;
             path?: never;

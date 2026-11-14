@@ -2,9 +2,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
-import { useTeams, useTeam, useAllTeams, useDeletedTeams, DeletedTeam, teamListCall } from "./useTeams";
+import {
+  useTeams,
+  useTeam,
+  useAllTeams,
+  useDeletedTeams,
+  DeletedTeam,
+  teamListCall,
+  fetchTeamMembersByUserId,
+  useTeamMemberCount,
+} from "./useTeams";
 import { fetchTeams } from "@/app/(dashboard)/networking";
-import { teamInfoCall } from "@/components/networking";
+import { apiClient, teamInfoCall } from "@/components/networking";
 import type { Team } from "@/components/key_team_helpers/key_list";
 
 vi.mock("@/app/(dashboard)/networking", () => ({
@@ -13,6 +22,7 @@ vi.mock("@/app/(dashboard)/networking", () => ({
 
 vi.mock("@/components/networking", () => ({
   teamInfoCall: vi.fn(),
+  apiClient: { get: vi.fn() },
   getProxyBaseUrl: vi.fn(() => ""),
   getGlobalLitellmHeaderName: vi.fn(() => "Authorization"),
   deriveErrorMessage: vi.fn((data) => data?.error || "Error"),
@@ -343,7 +353,7 @@ describe("useTeam", () => {
 
     expect(result.current.data).toEqual(mockTeams[0]);
     expect(result.current.error).toBeNull();
-    expect(teamInfoCall).toHaveBeenCalledWith("test-access-token", "team-1");
+    expect(teamInfoCall).toHaveBeenCalledWith("test-access-token", "team-1", { includeMembers: false });
     expect(teamInfoCall).toHaveBeenCalledTimes(1);
   });
 
@@ -364,7 +374,7 @@ describe("useTeam", () => {
 
     expect(result.current.error).toEqual(testError);
     expect(result.current.data).toBeUndefined();
-    expect(teamInfoCall).toHaveBeenCalledWith("test-access-token", "team-1");
+    expect(teamInfoCall).toHaveBeenCalledWith("test-access-token", "team-1", { includeMembers: false });
     expect(teamInfoCall).toHaveBeenCalledTimes(1);
   });
 
@@ -979,5 +989,51 @@ describe("useAllTeams", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(requestedUserId(fetchMock.mock.calls[1][0] as string)).toBe("member-8");
+  });
+});
+
+describe("team members list route", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-access-token", userId: "viewer", userRole: "Admin" });
+  });
+
+  it("asks for the named members in batches of 100 and joins the pages", async () => {
+    const userIds = Array.from({ length: 250 }, (_, index) => `user-${index}`);
+    vi.mocked(apiClient.get).mockImplementation(async (_path, options) => ({
+      data: String(options?.query?.["filter[user_id][in]"])
+        .split(",")
+        .map((user_id) => ({ user_id })),
+    }));
+
+    const members = await fetchTeamMembersByUserId("token", "team/1", userIds);
+
+    expect(members.map((member) => member.user_id)).toEqual(userIds);
+    expect(vi.mocked(apiClient.get).mock.calls.map(([path, options]) => [path, options?.query])).toEqual(
+      [0, 100, 200].map((start) => [
+        "/management/v1/teams/team%2F1/members",
+        { "filter[user_id][in]": userIds.slice(start, start + 100).join(","), page_size: 100 },
+      ]),
+    );
+  });
+
+  it("makes no request when no member is named", async () => {
+    expect(await fetchTeamMembersByUserId("token", "team-1", [])).toEqual([]);
+    expect(apiClient.get).not.toHaveBeenCalled();
+  });
+
+  it("counts a team's members from one single-row page", async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ data: [{ user_id: "user-0" }], meta: { total_count: 18500 } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useTeamMemberCount("team-1"), { wrapper });
+
+    await waitFor(() => expect(result.current.data).toBe(18500));
+    expect(apiClient.get).toHaveBeenCalledExactlyOnceWith("/management/v1/teams/team-1/members", {
+      accessToken: "test-access-token",
+      query: { page_size: 1 },
+    });
   });
 });

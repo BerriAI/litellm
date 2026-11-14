@@ -11,8 +11,13 @@ vi.mock("@/app/(dashboard)/hooks/projects/useProjectDetails", () => ({
 }));
 
 const mockUseTeam = vi.fn();
+const mockUseTeamMemberCount = vi.fn();
+const mockUseTeamMembersByUserId = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeam: (id?: string) => mockUseTeam(id),
+  useTeamMemberCount: (id?: string) => mockUseTeamMemberCount(id),
+  useTeamMembersByUserId: (id: string | undefined, userIds: readonly string[]) =>
+    mockUseTeamMembersByUserId(id, userIds),
 }));
 
 const mockUseAuthorized = vi.fn();
@@ -82,6 +87,8 @@ describe("ProjectDetail", () => {
     vi.clearAllMocks();
     mockUseUserLookup.mockReturnValue({ data: null } as ReturnType<typeof useUserLookup>);
     mockUseTeam.mockReturnValue({ data: undefined, isLoading: false });
+    mockUseTeamMemberCount.mockReturnValue({ data: undefined });
+    mockUseTeamMembersByUserId.mockReturnValue({ data: undefined });
     mockUseAuthorized.mockReturnValue({ userId: "admin-user", userRole: "Admin", isViewOnly: false });
     mockUseUISettings.mockReturnValue({ data: { values: {} } });
   });
@@ -233,12 +240,11 @@ describe("ProjectDetail", () => {
     ])("should gate 'Edit Project' for $who", ({ role, teamRole, fields, visible }) => {
       mockUseAuthorized.mockReturnValue({ userId: "caller", userRole: role, isViewOnly: false });
       mockUseUISettings.mockReturnValue({ data: { values: { team_admin_editable_team_fields: fields } } });
-      mockUseTeam.mockReturnValue({
-        data: { team_id: "team-1", members_with_roles: [{ user_id: "caller", role: teamRole }] },
-        isLoading: false,
-      });
+      mockUseTeam.mockReturnValue({ data: { team_id: "team-1", members_with_roles: [] }, isLoading: false });
+      mockUseTeamMembersByUserId.mockReturnValue({ data: [{ user_id: "caller", role: teamRole }] });
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(screen.queryByRole("button", { name: /edit project/i }) !== null).toBe(visible);
+      expect(mockUseTeamMembersByUserId).toHaveBeenCalledWith("team-1", ["caller"]);
     });
 
     it("should show 'No team assigned' when the project has no team", () => {
@@ -322,6 +328,17 @@ describe("ProjectDetail", () => {
       });
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(screen.getByText("Engineering")).toBeInTheDocument();
+    });
+
+    it("should show the member count the members route reports, not the roster /team/info no longer sends", () => {
+      mockUseTeam.mockReturnValue({
+        data: { team_id: "team-1", team_alias: "Engineering", members_with_roles: [] },
+        isLoading: false,
+      });
+      mockUseTeamMemberCount.mockReturnValue({ data: 18500 });
+      renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+      expect(screen.getByText("18500")).toBeInTheDocument();
+      expect(mockUseTeamMemberCount).toHaveBeenCalledWith("team-1");
     });
   });
 });

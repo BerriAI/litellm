@@ -7,6 +7,7 @@ import { teamInfoCall } from "@/components/networking";
 import type { TeamMemberBudgetSource } from "@/components/shared/InheritedBudgetHint";
 import { teamMemberBudgetGate } from "@/components/shared/InheritedBudgetHint";
 import { teamMemberBudgetQueryKey, useTeamMemberBudgets } from "./useTeamMemberBudgets";
+import { fetchTeamMembersByUserId } from "./useTeams";
 
 const authMocks = vi.hoisted(() => ({
   useAuthorized: vi.fn(),
@@ -21,16 +22,31 @@ vi.mock("@/components/networking", async (importOriginal) => {
   return { ...networking, teamInfoCall: vi.fn() };
 });
 
+vi.mock("./useTeams", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./useTeams")>()),
+  fetchTeamMembersByUserId: vi.fn(),
+}));
+
 describe("useTeamMemberBudgets", () => {
   const teamId = "team-1";
-  const teamIds = [teamId];
+  const teamTwoId = "team-2";
+  const userIdsByTeam = { [teamId]: ["viewer-one"] };
+  const userIdsByBothTeams = { [teamId]: ["viewer-one"], [teamTwoId]: ["viewer-one"] };
   const teamInfo: TeamMemberBudgetSource = {
     team_info: { team_id: teamId },
+  };
+  const serve = (sourceFor: (teamId: string) => TeamMemberBudgetSource) => {
+    vi.mocked(teamInfoCall).mockImplementation(
+      async (_token, id) => ({ team_info: sourceFor(id as string).team_info, team_memberships: [] }) as never,
+    );
+    vi.mocked(fetchTeamMembersByUserId).mockImplementation(
+      async (_token, id) => (sourceFor(id).team_memberships ?? []) as never,
+    );
   };
   beforeEach(() => {
     vi.clearAllMocks();
     authMocks.useAuthorized.mockReturnValue({ accessToken: "access-token", userId: "viewer-one" });
-    vi.mocked(teamInfoCall).mockResolvedValue(teamInfo as never);
+    serve(() => teamInfo);
   });
 
   afterEach(() => {
@@ -50,15 +66,15 @@ describe("useTeamMemberBudgets", () => {
 
   it("keeps separate cached results for different viewers", async () => {
     const { queryClient, wrapper } = createQueryWrapper();
-    const viewerOneKey = [...teamMemberBudgetQueryKey(teamId), "viewer-one"];
-    const viewerTwoKey = [...teamMemberBudgetQueryKey(teamId), "viewer-two"];
+    const viewerOneKey = [...teamMemberBudgetQueryKey(teamId), "viewer-one", ["viewer-one"]];
+    const viewerTwoKey = [...teamMemberBudgetQueryKey(teamId), "viewer-two", ["viewer-one"]];
 
-    const firstViewer = renderHook(() => useTeamMemberBudgets(teamIds), { wrapper });
+    const firstViewer = renderHook(() => useTeamMemberBudgets(userIdsByTeam), { wrapper });
     await waitFor(() => expect(teamInfoCall).toHaveBeenCalledTimes(1));
     firstViewer.unmount();
 
     authMocks.useAuthorized.mockReturnValue({ accessToken: "access-token", userId: "viewer-two" });
-    renderHook(() => useTeamMemberBudgets(teamIds), { wrapper });
+    renderHook(() => useTeamMemberBudgets(userIdsByTeam), { wrapper });
     await waitFor(() => expect(teamInfoCall).toHaveBeenCalledTimes(2));
 
     const cachedKeys = queryClient
@@ -68,13 +84,52 @@ describe("useTeamMemberBudgets", () => {
     expect(cachedKeys).toHaveLength(2);
     expect(cachedKeys).toContainEqual(viewerOneKey);
     expect(cachedKeys).toContainEqual(viewerTwoKey);
-    expect(teamInfoCall).toHaveBeenNthCalledWith(1, "access-token", teamId, { keyLimit: 1 });
-    expect(teamInfoCall).toHaveBeenNthCalledWith(2, "access-token", teamId, { keyLimit: 1 });
+    expect(teamInfoCall).toHaveBeenNthCalledWith(1, "access-token", teamId, { includeMembers: false, keyLimit: 1 });
+    expect(teamInfoCall).toHaveBeenNthCalledWith(2, "access-token", teamId, { includeMembers: false, keyLimit: 1 });
+  });
+
+  it("reads only the key owners' memberships and gates them like the whole roster did", async () => {
+    const wholeRoster: TeamMemberBudgetSource = {
+      team_info: { team_id: teamId, team_alias: "Platform", team_member_budget_table: { max_budget: 20 } },
+      team_memberships: [
+        { user_id: "owner-a", spend: 7, litellm_budget_table: { max_budget: 50, budget_duration: "30d" } },
+        { user_id: "owner-b", spend: 3, litellm_budget_table: null },
+        { user_id: "bystander", spend: 99, litellm_budget_table: { max_budget: 1 } },
+      ],
+    };
+    vi.mocked(teamInfoCall).mockResolvedValue({ team_info: wholeRoster.team_info, team_memberships: [] } as never);
+    vi.mocked(fetchTeamMembersByUserId).mockImplementation(
+      async (_token, _teamId, userIds) =>
+        [
+          ...(wholeRoster.team_memberships ?? []).filter((row) => userIds.includes(row.user_id)),
+          { user_id: null, spend: 0 },
+        ] as never,
+    );
+    const owners = { [teamId]: ["owner-b", "owner-a", "owner-b", "owner-without-membership"] };
+
+    const { wrapper } = createQueryWrapper();
+    const { result } = renderHook(() => useTeamMemberBudgets(owners)[teamId], { wrapper });
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    expect(fetchTeamMembersByUserId).toHaveBeenCalledExactlyOnceWith("access-token", teamId, [
+      "owner-a",
+      "owner-b",
+      "owner-without-membership",
+    ]);
+    expect(result.current.team_memberships?.map((row) => row.user_id)).toEqual(["owner-a", "owner-b"]);
+    const now = new Date("2026-06-20T12:00:00Z");
+    for (const owner of ["owner-a", "owner-b", "owner-without-membership"]) {
+      expect(teamMemberBudgetGate(result.current, owner, null, now)).toEqual(
+        teamMemberBudgetGate(wholeRoster, owner, null, now),
+      );
+    }
+    expect(teamMemberBudgetGate(result.current, "owner-a", null, now)?.maxBudget).toBe(50);
+    expect(teamMemberBudgetGate(result.current, "owner-b", null, now)).toMatchObject({ maxBudget: 20, spend: 3 });
   });
 
   it("refetches a viewer-scoped entry when invalidated by the team prefix", async () => {
     const { queryClient, wrapper } = createQueryWrapper();
-    renderHook(() => useTeamMemberBudgets(teamIds), { wrapper });
+    renderHook(() => useTeamMemberBudgets(userIdsByTeam), { wrapper });
     await waitFor(() => expect(teamInfoCall).toHaveBeenCalledTimes(1));
 
     await act(async () => {
@@ -87,7 +142,7 @@ describe("useTeamMemberBudgets", () => {
   it("drops an expired member budget increase without refetching", async () => {
     vi.useFakeTimers({ now: new Date("2026-06-20T12:00:00Z") });
     const expiry = new Date(Date.now() + 60_000).toISOString();
-    vi.mocked(teamInfoCall).mockResolvedValue({
+    serve(() => ({
       team_info: { team_id: teamId },
       team_memberships: [
         {
@@ -99,11 +154,11 @@ describe("useTeamMemberBudgets", () => {
           },
         },
       ],
-    } as never);
+    }));
 
     const { wrapper } = createQueryWrapper();
     const { result } = renderHook(
-      () => teamMemberBudgetGate(useTeamMemberBudgets(teamIds)[teamId], "viewer-one")?.maxBudget,
+      () => teamMemberBudgetGate(useTeamMemberBudgets(userIdsByTeam)[teamId], "viewer-one")?.maxBudget,
       { wrapper },
     );
     await act(async () => {
@@ -121,7 +176,6 @@ describe("useTeamMemberBudgets", () => {
 
   it("re-arms the timer for the next expiry after one fires", async () => {
     vi.useFakeTimers({ now: new Date("2026-06-20T12:00:00Z") });
-    const teamTwoId = "team-2";
     const membershipFor = (increase: number, expiryOffsetMs: number) => ({
       team_info: { team_id: "ignored" },
       team_memberships: [
@@ -135,14 +189,12 @@ describe("useTeamMemberBudgets", () => {
         },
       ],
     });
-    vi.mocked(teamInfoCall).mockImplementation(async (_token, id) =>
-      id === teamId ? (membershipFor(25, 60_000) as never) : (membershipFor(10, 120_000) as never),
-    );
+    serve((id) => (id === teamId ? membershipFor(25, 60_000) : membershipFor(10, 120_000)));
 
     const { wrapper } = createQueryWrapper();
     const { result } = renderHook(
       () => {
-        const budgets = useTeamMemberBudgets([teamId, teamTwoId]);
+        const budgets = useTeamMemberBudgets(userIdsByBothTeams);
         return {
           teamOne: teamMemberBudgetGate(budgets[teamId], "viewer-one")?.maxBudget,
           teamTwo: teamMemberBudgetGate(budgets[teamTwoId], "viewer-one")?.maxBudget,
@@ -168,13 +220,13 @@ describe("useTeamMemberBudgets", () => {
 
   it("returns the same object reference when no increase is active", async () => {
     vi.useFakeTimers({ now: new Date("2026-06-20T12:00:00Z") });
-    vi.mocked(teamInfoCall).mockResolvedValue({
+    serve(() => ({
       team_info: { team_id: teamId },
       team_memberships: [{ user_id: "viewer-one", litellm_budget_table: { max_budget: 50 } }],
-    } as never);
+    }));
 
     const { wrapper } = createQueryWrapper();
-    const { result } = renderHook(() => useTeamMemberBudgets(teamIds), { wrapper });
+    const { result } = renderHook(() => useTeamMemberBudgets(userIdsByTeam), { wrapper });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
@@ -190,7 +242,6 @@ describe("useTeamMemberBudgets", () => {
   it("does not fire early when the next expiry is far in the future", async () => {
     vi.useFakeTimers({ now: new Date("2026-06-20T12:00:00Z") });
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const teamTwoId = "team-2";
     const membershipFor = (increase: number, expiryOffsetMs: number) => ({
       team_info: { team_id: "ignored" },
       team_memberships: [
@@ -204,14 +255,12 @@ describe("useTeamMemberBudgets", () => {
         },
       ],
     });
-    vi.mocked(teamInfoCall).mockImplementation(async (_token, id) =>
-      id === teamId ? (membershipFor(25, 40 * 86_400_000) as never) : (membershipFor(10, 41 * 86_400_000) as never),
-    );
+    serve((id) => (id === teamId ? membershipFor(25, 40 * 86_400_000) : membershipFor(10, 41 * 86_400_000)));
 
     const { wrapper } = createQueryWrapper();
     const { result } = renderHook(
       () => {
-        const budgets = useTeamMemberBudgets([teamId, teamTwoId]);
+        const budgets = useTeamMemberBudgets(userIdsByBothTeams);
         return {
           budgets,
           teamOne: teamMemberBudgetGate(budgets[teamId], "viewer-one")?.maxBudget,

@@ -1186,11 +1186,19 @@ export const userGetInfoV2 = async (accessToken: string, userId?: string): Promi
   }
 };
 
-export const teamInfoCall = async (accessToken: string, teamID: string | null, options?: { keyLimit?: number }) => {
+export const teamInfoCall = async (
+  accessToken: string,
+  teamID: string | null,
+  options?: { keyLimit?: number; includeMembers?: boolean },
+) => {
   try {
     return await apiClient.get(`/team/info`, {
       accessToken,
-      query: { team_id: teamID || undefined, key_limit: options?.keyLimit },
+      query: {
+        team_id: teamID || undefined,
+        key_limit: options?.keyLimit,
+        include_members: options?.includeMembers === false ? false : undefined,
+      },
     });
   } catch (error) {
     console.error("Failed to create key:", error);

@@ -1,8 +1,7 @@
 import { useCanManageProjects } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useProjectDetails } from "@/app/(dashboard)/hooks/projects/useProjectDetails";
-import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useTeam, useTeamMemberCount, useTeamMembersByUserId } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { BarChart } from "@/components/shared/charts";
 import { ArrowLeftIcon, DollarSignIcon, EditIcon, UsersIcon } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -30,8 +29,11 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
   const { data: project, isLoading } = useProjectDetails(projectId);
   const { data: teamInfo } = useTeam(project?.team_id ?? undefined);
   const { userId } = useAuthorized();
+  const { data: teamMemberCount } = useTeamMemberCount(project?.team_id ?? undefined);
+  const callerUserIds = useMemo(() => (userId ? [userId] : []), [userId]);
+  const { data: callerTeamMembership } = useTeamMembersByUserId(project?.team_id ?? undefined, callerUserIds);
   const canEditProject = useCanManageProjects(
-    isUserTeamAdminForSingleTeam(teamInfo?.members_with_roles ?? null, userId ?? ""),
+    (callerTeamMembership ?? []).some((member) => member.user_id === userId && member.role === "admin"),
   );
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
 
@@ -267,7 +269,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
 
                     <div className="flex items-center justify-between">
                       <span className="text-xs text-muted-foreground">{t("projects.detail.team.members")}</span>
-                      <span className="text-xs text-foreground">{teamInfo.members_with_roles?.length ?? 0}</span>
+                      <span className="text-xs text-foreground">{teamMemberCount ?? 0}</span>
                     </div>
                   </div>
                 );
