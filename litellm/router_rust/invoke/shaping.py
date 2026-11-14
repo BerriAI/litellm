@@ -36,7 +36,7 @@ from litellm.litellm_core_utils.routing_common_utils import (
     deployment_model_id_pin,
     deployment_sets_litellm_param,
     drop_list_keeping_deployment_settings,
-    drop_listed_litellm_params,
+    drop_listed_deployment_settings,
     metadata_defaults_under_request,
 )
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
@@ -409,7 +409,7 @@ def update_kwargs_with_deployment(
         *_forwarded_alias_marker_keys_the_deployment_sets(
             deployment_params, kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
         ),
-        *drop_listed_litellm_params(deployment_params),
+        *drop_listed_deployment_settings(deployment_params),
     ):
         kwargs.pop(key, None)
     kwargs.pop("daily_reset_time", None)

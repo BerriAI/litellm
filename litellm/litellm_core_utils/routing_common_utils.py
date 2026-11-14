@@ -12,10 +12,14 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
-from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
+from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS, ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, iter_items
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    calls_through_openai_sdk,
+    get_llm_provider,
+    inferred_provider,
+)
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.llms.sagemaker.common_utils import deployment_inference_component
@@ -32,6 +36,7 @@ from litellm.types.utils import (
     LlmProviders,
     ProviderSpecificModelInfo,
     admin_api_key_secret_reference,
+    all_litellm_params,
 )
 
 _V = TypeVar("_V")
@@ -72,23 +77,42 @@ def deployment_sets_litellm_param(deployment_litellm_params: Mapping[str, object
     return field is None or value != field.default  # pyright: ignore[reportAny]  # pydantic types a field default as Any
 
 
-def drop_listed_litellm_params(deployment_litellm_params: Mapping[str, object]) -> frozenset[str]:
+def _is_provider_setting_the_drop_list_removes(deployment_litellm_params: Mapping[str, object], name: str) -> bool:
+    return (
+        name in LiteLLM_Params.model_fields
+        and name not in all_litellm_params
+        and name not in OPENAI_CHAT_COMPLETION_PARAMS
+        and deployment_sets_litellm_param(deployment_litellm_params, name)
+    )
+
+
+def _sends_extra_settings_in_the_request_body(deployment_litellm_params: Mapping[str, object]) -> bool:
+    declared: Final = deployment_litellm_params.get("custom_llm_provider")
+    model: Final = deployment_litellm_params.get("model")
+    provider: Final = (
+        declared if isinstance(declared, str) else inferred_provider(model if isinstance(model, str) else None)
+    )
+    return provider is not None and calls_through_openai_sdk(provider)
+
+
+def drop_listed_deployment_settings(deployment_litellm_params: Mapping[str, object]) -> frozenset[str]:
     drop_list: Final = deployment_litellm_params.get("additional_drop_params")
     if drop_list.__class__ is not list:
         return frozenset()
-    return frozenset(
-        name for name in iter_items(drop_list) if isinstance(name, str) and name in LiteLLM_Params.model_fields
+    settings: Final = frozenset(
+        name
+        for name in iter_items(drop_list)
+        if isinstance(name, str) and _is_provider_setting_the_drop_list_removes(deployment_litellm_params, name)
     )
+    if not settings or _sends_extra_settings_in_the_request_body(deployment_litellm_params):
+        return frozenset()
+    return settings
 
 
 def drop_list_keeping_deployment_settings(
     deployment_litellm_params: Mapping[str, object], drop_list: object
 ) -> tuple[str, ...] | None:
-    kept: Final = frozenset(
-        name
-        for name in drop_listed_litellm_params(deployment_litellm_params)
-        if deployment_sets_litellm_param(deployment_litellm_params, name)
-    )
+    kept: Final = drop_listed_deployment_settings(deployment_litellm_params)
     if not kept or drop_list.__class__ is not list:
         return None
     return tuple(name for name in iter_items(drop_list) if isinstance(name, str) and name not in kept)

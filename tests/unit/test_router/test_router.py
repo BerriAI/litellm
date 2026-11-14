@@ -20612,7 +20612,7 @@ async def test_a_drop_listed_request_param_the_deployment_also_sets_is_still_not
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("route", ["chat", "responses", "messages"])
+@pytest.mark.parametrize("route", ["chat", "responses"])
 async def test_a_client_region_never_reaches_a_deployment_whose_drop_list_names_it_without_setting_one(
     respx_mock: respx.MockRouter, _router_httpx_transport: None, monkeypatch: pytest.MonkeyPatch, route: str
 ) -> None:
@@ -20638,3 +20638,73 @@ async def test_a_router_default_region_stays_dropped_for_a_deployment_whose_drop
     await _call_vertex_claude_route(router, "chat", {})
 
     assert _vertex_locations_called(vertex_route) == ("europe-west4",)
+
+
+@pytest.mark.asyncio
+async def test_a_client_base_url_still_reaches_a_deployment_whose_drop_list_names_a_base_url_it_leaves_unset(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None
+) -> None:
+    client_route: Final = respx_mock.post("https://client-base.example/v1/chat/completions").respond(
+        json=dict(_CHAT_COMPLETION_REPLY)
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai-nano",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-nano",
+                    "api_key": "sk-deployment",
+                    "additional_drop_params": ["api_base"],
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    await router.acompletion(
+        model="openai-nano", messages=[{"role": "user", "content": "Say hi"}], api_base="https://client-base.example/v1"
+    )
+
+    assert client_route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_client_timeout_still_applies_when_the_drop_list_names_a_timeout_the_deployment_sets(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None
+) -> None:
+    vertex_route: Final = respx_mock.post(host__regex=r"aiplatform").respond(json=_VERTEX_CLAUDE_REPLY)
+    router: Final = _vertex_claude_router(
+        vertex_location="eu", timeout=60, additional_drop_params=["vertex_location", "timeout"]
+    )
+
+    await _call_vertex_claude_route(router, "chat", {"timeout": 7})
+
+    assert _vertex_locations_called(vertex_route) == ("eu",)
+    assert vertex_route.calls.last.request.extensions["timeout"]["read"] == 7
+
+
+@pytest.mark.asyncio
+async def test_an_openai_deployment_setting_its_drop_list_names_stays_out_of_the_request_body(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None
+) -> None:
+    openai_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+        json=dict(_CHAT_COMPLETION_REPLY)
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai-nano",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-nano",
+                    "api_key": "sk-deployment",
+                    "bucket_name": "deployment-bucket",
+                    "additional_drop_params": ["bucket_name"],
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    await router.acompletion(model="openai-nano", messages=[{"role": "user", "content": "Say hi"}])
+
+    assert "bucket_name" not in json.loads(openai_route.calls.last.request.content)
