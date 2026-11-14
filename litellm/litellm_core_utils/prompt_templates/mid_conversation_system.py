@@ -62,7 +62,7 @@ _USER_TYPE_ROLES: Final = frozenset({"user", "tool", "function"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
 _NO_IDS: Final[frozenset[str]] = frozenset()
 _RENDERED_PART_TYPES: Final = frozenset({"text", "image_url", "document", "file"})
-_RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use"})
+_RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use", "mcp_tool_use"})
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 
 _MessageKind: TypeAlias = Literal["system", "tool", "user", "other"]
@@ -316,11 +316,15 @@ def find_anthropic_server_tool_result(
     web_search_results: Sequence[object] | None,
     tool_results: Sequence[object] | None,
 ) -> dict[str, object] | None:
-    if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
-        return None
     candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
     return next(
-        (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
+        (
+            result
+            for result in candidates
+            if isinstance(result, dict)
+            and result.get("tool_use_id") == tool_id
+            and (tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) or result.get("type") == "mcp_tool_result")
+        ),
         None,
     )
 

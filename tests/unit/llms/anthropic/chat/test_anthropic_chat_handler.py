@@ -2086,6 +2086,83 @@ def test_streamed_server_tool_use_is_not_returned_as_a_client_tool_call(
     assert [message_field(result, "tool_use_id") for result in parts_of(web_search_results)] == ["srvtoolu_01Web"]
 
 
+@pytest.mark.parametrize(
+    ("initial_input", "partial_json", "expected_input"),
+    [
+        pytest.param({}, (), {}, id="empty_input"),
+        pytest.param({"repo": "example/project"}, (), {"repo": "example/project"}, id="initial_input"),
+        pytest.param({}, ('{"repo": "example/', 'project"}'), {"repo": "example/project"}, id="split_input"),
+    ],
+)
+def test_streamed_mcp_tool_use_is_preserved_as_a_server_tool_call(
+    initial_input: dict[str, str], partial_json: tuple[str, ...], expected_input: dict[str, str]
+) -> None:
+    mcp_result: Final[dict[str, object]] = {
+        "type": "mcp_tool_result",
+        "tool_use_id": "mcptoolu_01Wiki",
+        "is_error": False,
+        "content": [{"type": "text", "text": "Repository overview"}],
+    }
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {"id": "msg_01", "model": "claude-opus-5-5", "usage": {"input_tokens": 9}},
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "mcp_tool_use",
+                "id": mcp_result["tool_use_id"],
+                "name": "read_wiki_structure",
+                "server_name": "wiki",
+                "input": initial_input,
+            },
+        },
+        *(_server_tool_input_delta(fragment) for fragment in partial_json),
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": mcp_result},
+        {"type": "content_block_stop", "index": 1},
+        *_CLIENT_TOOL_CALL,
+        _message_delta("tool_use"),
+    )
+    choice: Final = _assemble_stream(events).choices[0]
+    assert isinstance(choice, Choices)
+
+    assert [
+        (call["id"], call["function"].get("name"), json.loads(call["function"].get("arguments", "")))
+        for call in anthropic_server_tool_call_params(choice.message)
+    ] == [(mcp_result["tool_use_id"], "read_wiki_structure", expected_input)]
+    assert [
+        (call.id, call.function.name, json.loads(call.function.arguments))
+        for call in choice.message.tool_calls or ()
+        if isinstance(call, ChatCompletionMessageToolCall)
+    ] == [("toolu_01Weather", "get_weather", {"city": "Paris"})]
+    assert message_field(choice.message.provider_specific_fields, "tool_results") == [mcp_result]
+    assert choice.finish_reason == "tool_calls"
+
+    replayed: Final = anthropic_messages_pt(
+        messages=[
+            {"role": "user", "content": "Read the repository overview and check the weather"},
+            choice.message.model_dump(),
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+    assert replayed[1]["content"] == [
+        {
+            "type": "mcp_tool_use",
+            "id": mcp_result["tool_use_id"],
+            "name": "read_wiki_structure",
+            "server_name": "wiki",
+            "input": expected_input,
+        },
+        mcp_result,
+        {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}},
+    ]
+
+
 def test_current_content_block_type_tracking():
     """
     Test that current_content_block_type is properly tracked and reset.

@@ -769,6 +769,7 @@ class ModelResponseIterator:
         self.tool_results: list[dict[str, Any]] = []
         self._current_server_tool_id: str | None = None
         self._current_server_tool_name: str = ""
+        self._current_mcp_server_name: str | None = None
         self._server_tool_calls: tuple[ChatCompletionToolCallChunk, ...] = ()
         self._container_id: str | None = None
 
@@ -1043,10 +1044,7 @@ class ModelResponseIterator:
                     self.thinking_block_index += 1
                 if content_block_start["content_block"]["type"] == "text":
                     text = self._release_answer_close() + self._hold_prose(content_block_start["content_block"]["text"])
-                elif (
-                    content_block_start["content_block"]["type"] == "tool_use"
-                    or content_block_start["content_block"]["type"] == "server_tool_use"
-                ):
+                elif content_block_start["content_block"]["type"] in ("tool_use", "server_tool_use", "mcp_tool_use"):
                     # Reverse-map the (sanitized) tool name back to the
                     # caller's original. No-op when the map is empty.
                     _stream_tool_name = content_block_start["content_block"]["name"]
@@ -1070,9 +1068,15 @@ class ModelResponseIterator:
                     # The initial input in content_block_start is typically {}
                     # for streaming; the full input arrives via input_json_delta
                     # and is assembled at content_block_stop.
-                    if content_block_start["content_block"]["type"] == "server_tool_use":
+                    if content_block_start["content_block"]["type"] in ("server_tool_use", "mcp_tool_use"):
                         self._current_server_tool_id = content_block_start["content_block"]["id"]
                         self._current_server_tool_name = _stream_tool_name
+                        mcp_server_name: Final = content_block_start["content_block"].get("server_name")
+                        self._current_mcp_server_name = (
+                            mcp_server_name
+                            if self.current_content_block_type == "mcp_tool_use" and isinstance(mcp_server_name, str)
+                            else None
+                        )
                         tool_input: Final = content_block_start["content_block"].get("input", {})
                         self._server_tool_inputs[self._current_server_tool_id] = tool_input
                         if _stream_tool_name in HOSTED_WEB_TOOL_NAMES:
@@ -1140,8 +1144,7 @@ class ModelResponseIterator:
 
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)
-                # check if tool call content block - only for tool_use and server_tool_use blocks
-                if self.current_content_block_type in ("tool_use", "server_tool_use"):
+                if self.current_content_block_type in ("tool_use", "server_tool_use", "mcp_tool_use"):
                     is_empty: Final = self.check_empty_tool_call_args()
                     if is_empty and self.current_content_block_type == "tool_use":
                         tool_use = ChatCompletionToolCallChunk(
@@ -1155,7 +1158,10 @@ class ModelResponseIterator:
                         )
                     # Update server_tool_inputs with fully assembled input
                     # from input_json_delta chunks (content_block_start has {})
-                    if self.current_content_block_type == "server_tool_use" and self._current_server_tool_id:
+                    if (
+                        self.current_content_block_type in ("server_tool_use", "mcp_tool_use")
+                        and self._current_server_tool_id
+                    ):
                         args = ""
                         for block in self.content_blocks:
                             if block["delta"]["type"] == "input_json_delta":
@@ -1180,6 +1186,11 @@ class ModelResponseIterator:
                                 function=ChatCompletionToolCallFunctionChunk(
                                     name=self._current_server_tool_name,
                                     arguments=args or json.dumps(server_tool_input),
+                                    **(
+                                        {"provider_specific_fields": {"server_name": self._current_mcp_server_name}}
+                                        if self._current_mcp_server_name is not None
+                                        else {}
+                                    ),
                                 ),
                                 index=len(self._server_tool_calls),
                             ),

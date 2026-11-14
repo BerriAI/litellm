@@ -4007,6 +4007,120 @@ def test_server_tool_use_is_not_returned_as_a_client_tool_call(
         assert choice.message.content == _PARIS_TEXT
 
 
+@pytest.mark.parametrize("tool_input", [{}, {"repo": "example/project"}])
+def test_mcp_tool_use_is_preserved_as_a_server_tool_call(tool_input: dict[str, str]) -> None:
+    mcp_result: Final[dict[str, object]] = {
+        "type": "mcp_tool_result",
+        "tool_use_id": "mcptoolu_01Wiki",
+        "is_error": False,
+        "content": [{"type": "text", "text": "Repository overview"}],
+    }
+    choice: Final = _parsed_choice(
+        [
+            {
+                "type": "mcp_tool_use",
+                "id": mcp_result["tool_use_id"],
+                "name": "read_wiki_structure",
+                "server_name": "wiki",
+                "input": tool_input,
+            },
+            mcp_result,
+            _WEATHER_TOOL_USE,
+        ],
+        "tool_use",
+    )
+
+    assert [
+        (call["id"], call["function"].get("name"), json.loads(call["function"].get("arguments", "")))
+        for call in anthropic_server_tool_call_params(choice.message)
+    ] == [(mcp_result["tool_use_id"], "read_wiki_structure", tool_input)]
+    assert [call.id for call in choice.message.tool_calls or ()] == [_WEATHER_TOOL_USE["id"]]
+    assert message_field(choice.message.provider_specific_fields, "tool_results") == [mcp_result]
+    assert choice.finish_reason == "tool_calls"
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Read the repository overview and check the weather"},
+        choice.message.model_dump(),
+        {"role": "tool", "tool_call_id": _WEATHER_TOOL_USE["id"], "content": "18C"},
+    )
+    assert replayed[1]["content"] == [
+        {
+            "type": "mcp_tool_use",
+            "id": mcp_result["tool_use_id"],
+            "name": "read_wiki_structure",
+            "server_name": "wiki",
+            "input": tool_input,
+        },
+        mcp_result,
+        _WEATHER_TOOL_USE,
+    ]
+
+
+@pytest.mark.parametrize("native_content", [False, True], ids=["parsed_response", "native_blocks"])
+def test_mcp_tool_pairs_round_trip_with_interleaved_thinking(native_content: bool) -> None:
+    first_call: Final = {
+        "type": "mcp_tool_use",
+        "id": "mcptoolu_01Wiki",
+        "name": "read_wiki_structure",
+        "server_name": "wiki",
+        "input": {"repo": "example/project"},
+    }
+    first_result: Final = {
+        "type": "mcp_tool_result",
+        "tool_use_id": first_call["id"],
+        "is_error": False,
+        "content": [{"type": "text", "text": "Repository overview"}],
+    }
+    content: Final = [
+        {"type": "thinking", "thinking": "Read the first repository.", "signature": "sig_first"},
+        first_call,
+        first_result,
+        {"type": "thinking", "thinking": "Read the second repository.", "signature": "sig_second"},
+        {**first_call, "id": "mcptoolu_02Wiki", "server_name": "other_wiki"},
+        {**first_result, "tool_use_id": "mcptoolu_02Wiki"},
+        {"type": "text", "text": "Both repositories are documented."},
+    ]
+    message: Final = (
+        {"role": "assistant", "content": content}
+        if native_content
+        else _parsed_assistant_message(content, "end_turn").model_dump()
+    )
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Read both repositories"},
+        message,
+        {"role": "user", "content": "What did you find?"},
+    )
+
+    assert replayed[1]["content"] == content
+
+
+@pytest.mark.parametrize("server_name", [None, ""])
+def test_mcp_pair_without_a_server_name_is_skipped_on_replay(server_name: str | None) -> None:
+    message: Final = _parsed_assistant_message(
+        [
+            {
+                "type": "mcp_tool_use",
+                "id": "mcptoolu_01Wiki",
+                "name": "read_wiki_structure",
+                "input": {},
+                **({"server_name": server_name} if server_name is not None else {}),
+            },
+            {"type": "mcp_tool_result", "tool_use_id": "mcptoolu_01Wiki", "content": []},
+            {"type": "text", "text": "Repository overview"},
+        ],
+        "end_turn",
+    )
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Read the repository"},
+        message.model_dump(),
+        {"role": "user", "content": "What did you find?"},
+    )
+
+    assert replayed[1]["content"] == [{"type": "text", "text": "Repository overview"}]
+
+
 def _replayed(*messages: Mapping[str, object]) -> list[AllAnthropicPassThroughMessageValues]:
     return anthropic_messages_pt(
         messages=cast(list[AllMessageValues], list(messages)),  # cast-ok: replays history the way clients send it back

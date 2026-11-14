@@ -56,6 +56,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_MCP_TOOL_USE_ID_PREFIX,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
     ANTHROPIC_OAUTH_BETA_HEADER,
@@ -2462,7 +2463,13 @@ def _server_tool_call_param(tool_call: object) -> ChatCompletionAssistantToolCal
         call: Final = _SERVER_TOOL_CALL_ADAPTER.validate_python(tool_call)
     except ValidationError:
         return None
-    return call if _server_tool_call_id(call).startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) else None
+    return (
+        call
+        if _server_tool_call_id(call).startswith(
+            (ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX, ANTHROPIC_MCP_TOOL_USE_ID_PREFIX)
+        )
+        else None
+    )
 
 
 def message_dict_with_server_tool_calls_split_out(message: object) -> object:
