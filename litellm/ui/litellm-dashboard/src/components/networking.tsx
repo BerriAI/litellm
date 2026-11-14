@@ -4456,6 +4456,8 @@ export interface ConnectFlowStatus {
   connected: boolean | null;
   requested_scopes?: string[];
   servers: { server_id: string; server_name: string; connected: boolean }[] | null;
+  selectable?: false;
+  required_server_ids?: string[];
 }
 
 /**
@@ -6802,8 +6804,7 @@ export const exchangeLoginCode = async (code: string, workerBaseUrl?: string | n
   return data.token;
 };
 
-export const getUiSettings = async () => {
-  const proxyBaseUrl = getProxyBaseUrl();
+export const getUiSettings = async (proxyBaseUrl = getProxyBaseUrl()) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_settings` : `/get/ui_settings`;
   const response = await fetch(url, {
     method: "GET",
@@ -6952,6 +6953,38 @@ export const reviewSkillSubmission = (
   body?: components["schemas"]["SkillHubRejection"],
 ): Promise<components["schemas"]["SkillHubReviewResponse"]> =>
   apiClient.put(`/skill-hub/submissions/${encodeURIComponent(id)}/${action}`, { accessToken, body });
+
+export const editSkillSubmission = (
+  accessToken: string,
+  id: string,
+  body: components["schemas"]["SkillHubSubmissionEdit"],
+): Promise<components["schemas"]["SkillHubSubmission"]> =>
+  apiClient.put(`/skill-hub/submissions/${encodeURIComponent(id)}`, { accessToken, body });
+
+export const uploadSkillSubmission = (
+  accessToken: string,
+  submission: components["schemas"]["SkillHubSubmission"],
+  file: File,
+  version: string,
+): Promise<components["schemas"]["SkillHubSubmission"]> => {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("expected_revision", String(submission.revision ?? 0));
+  if (version.trim()) body.append("version", version.trim());
+  return apiClient.put(`/skill-hub/submissions/${encodeURIComponent(submission.id)}/upload`, {
+    accessToken,
+    rawBody: body,
+  });
+};
+
+export const withdrawSkillSubmission = (
+  accessToken: string,
+  submission: components["schemas"]["SkillHubSubmission"],
+): Promise<components["schemas"]["SkillHubSubmission"]> =>
+  apiClient.put(`/skill-hub/submissions/${encodeURIComponent(submission.id)}/withdraw`, {
+    accessToken,
+    body: { expected_revision: submission.revision ?? 0 },
+  });
 
 export const getSkillScan = (accessToken: string, id: string): Promise<components["schemas"]["SkillScanResponse"]> =>
   apiClient.get(`/skill-hub/submissions/${encodeURIComponent(id)}/scan`, { accessToken });

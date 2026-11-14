@@ -1,13 +1,13 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::Mutex,
     time::Duration,
 };
 
-use litellm_redis_client::{Declared, Error as RedisError, commands};
+use litellm_redis_client::{Declared, Error as RedisError, RedisBatch, commands};
+use parking_lot::Mutex;
 
 use super::{DualCache, MemorySettings};
-use crate::{Error, FromValue, Send, codec, memory::lock, request::Misses};
+use crate::{Error, FromValue, Send, codec, request::Misses};
 
 /// A batch-reading family's `DualCache` settings, as the host reads them from `litellm` globals.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,9 +66,11 @@ impl<V: Clone + FromValue + std::marker::Send + Sync + 'static> DualCache<V, Bat
                 let reservation = self.reserve(keys, &self.read_memory(keys)?);
                 (!reservation.keys.is_empty()).then(|| {
                     let keys: Vec<&str> = reservation.keys.iter().map(String::as_str).collect();
-                    let replies = send.batch(client).add(commands::mget::<Vec<u8>>(&keys));
+                    let batch = send.batch(client);
+                    let replies = batch.add(commands::mget::<Vec<u8>>(&keys));
                     Fetch {
                         reservation,
+                        batch,
                         replies,
                         misses: send.misses(client),
                     }
@@ -81,24 +83,37 @@ impl<V: Clone + FromValue + std::marker::Send + Sync + 'static> DualCache<V, Bat
         })
     }
 
-    /// The second half of `batch_get`. Memory is read again here, so a value written to memory
-    /// since the declaration wins over what Redis answered. The keys Redis lacks are noted as the
-    /// request's misses. An undecodable value serves memory for the whole read, where `main`'s
-    /// `RedisCache` returns the raw bytes and `DualCache` backfills memory with them.
+    /// The second half of `batch_get`, flushing the read's batch if nobody has yet.
     pub(crate) async fn resolve_batch_get(
+        &self,
+        declared: DeclaredRead,
+    ) -> Result<Vec<Option<V>>, Error> {
+        if let Some(batch) = declared.batch() {
+            batch.flush().await;
+        }
+        self.settle_batch_get(declared).await
+    }
+
+    /// The second half of `batch_get` once the read's batch answers, without flushing it. Memory
+    /// is read again here, so a value written to memory since the declaration wins over what Redis
+    /// answered. The keys Redis lacks are noted as the request's misses. An undecodable value
+    /// serves memory for the whole read, where `main`'s `RedisCache` returns the raw bytes and
+    /// `DualCache` backfills memory with them.
+    pub(crate) async fn settle_batch_get(
         &self,
         declared: DeclaredRead,
     ) -> Result<Vec<Option<V>>, Error> {
         let DeclaredRead { keys, fetch } = declared;
         let Some(Fetch {
             reservation,
+            batch: _,
             replies,
             misses,
         }) = fetch
         else {
             return self.read_memory(&keys);
         };
-        let fetched = replies.resolve().await;
+        let fetched = replies.settled().await;
         let local = self.read_memory(&keys)?;
         let fetched = match fetched {
             Ok(fetched) => fetched,
@@ -156,7 +171,7 @@ impl<V: Clone + FromValue + std::marker::Send + Sync + 'static> DualCache<V, Bat
     fn reserve(&self, keys: &[String], local: &[Option<V>]) -> Reservation {
         let now = self.now();
         let refresh_after = self.reads.refresh_after;
-        let mut recent = lock(&self.reads.recent);
+        let mut recent = self.reads.recent.lock();
         let due = keys
             .iter()
             .zip(local)
@@ -174,8 +189,8 @@ impl<V: Clone + FromValue + std::marker::Send + Sync + 'static> DualCache<V, Bat
         Reservation { keys, previous }
     }
 
-    fn release(&self, reservation: Reservation) {
-        let mut recent = lock(&self.reads.recent);
+    pub(crate) fn release(&self, reservation: Reservation) {
+        let mut recent = self.reads.recent.lock();
         for (key, previous) in reservation.keys.into_iter().zip(reservation.previous) {
             match previous {
                 Some(read) => recent.insert(key, read),
@@ -191,13 +206,27 @@ pub(crate) struct DeclaredRead {
     fetch: Option<Fetch>,
 }
 
+impl DeclaredRead {
+    /// The batch carrying the read, `None` when memory answers it alone.
+    pub(crate) fn batch(&self) -> Option<RedisBatch> {
+        self.fetch.as_ref().map(|fetch| fetch.batch.clone())
+    }
+
+    /// The refreshes the read reserved, `None` when memory answers it alone.
+    pub(crate) fn reservation(&self) -> Option<Reservation> {
+        self.fetch.as_ref().map(|fetch| fetch.reservation.clone())
+    }
+}
+
 struct Fetch {
     reservation: Reservation,
+    batch: RedisBatch,
     replies: Declared<Vec<Option<Vec<u8>>>>,
     misses: Option<Misses>,
 }
 
-struct Reservation {
+#[derive(Clone)]
+pub(crate) struct Reservation {
     keys: Vec<String>,
     previous: Vec<Option<Duration>>,
 }

@@ -13,11 +13,11 @@ describe("deprecation email setup", () => {
     const user = userEvent.setup();
     render(<DeprecationEmailSetup />);
     await user.click(screen.getByRole("button", { name: "Set up email reminders" }));
-    expect(await screen.findByRole("dialog", { name: "Set up model deprecation emails" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Set up alert emails" })).toBeInTheDocument();
     expect(screen.getByText("Connect email delivery")).toBeInTheDocument();
-    expect(screen.getByText("Enable model deprecation emails")).toBeInTheDocument();
-    expect(screen.getByText("Owners get two reminders")).toBeInTheDocument();
-    expect(screen.getByText(/This is off by default/)).toBeInTheDocument();
+    expect(screen.getByText("Choose your email alerts")).toBeInTheDocument();
+    expect(screen.getByText("Know what gets sent")).toBeInTheDocument();
+    expect(screen.getByText(/Both are off by default/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open Email Settings" })).toHaveAttribute(
       "href",
       "/ui/logging-and-alerts?tab=email-alerts",

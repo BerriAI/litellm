@@ -26,7 +26,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
 )
 from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.caching.redis_batch import request_redis_batch_scope
-from tests.unit.caching.test_redis_batch import FakeNativePending, FakeNatives, fake_send
+from tests.unit.caching.redis_batch_double import FakeNativePending, FakeNatives, fake_send
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 TOKEN = UserAPIKeyAuth(token="hashed", team_id="team", user_id="user", org_id="org")
@@ -147,7 +147,7 @@ async def test_counters_bound_at_auth_cost_no_redis_read_when_the_request_ends_b
         spend_counter_batch_scope(spend.store()),
     ):
         bind_admission_counter_keys(TOKEN, end_user_id=None)
-        await request.flush_all()
+        await request.flush_pre_call()
 
     assert spend.declared == []
     assert spend.commands == []

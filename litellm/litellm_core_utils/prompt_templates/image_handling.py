@@ -318,6 +318,7 @@ class _BodyPrefixReader:
         headers: Mapping[str, str] | None = None,
         follow_redirects: bool = False,
         timeout: float | httpx.Timeout | None = None,
+        max_response_bytes: int | None = None,
     ) -> Response:
         with self.client.stream(
             "GET",
@@ -342,6 +343,7 @@ class _ImageBodyReader:
         headers: Mapping[str, str] | None = None,
         follow_redirects: bool = False,
         timeout: float | httpx.Timeout | None = None,
+        max_response_bytes: int | None = None,
     ) -> Response:
         with self.client.stream(
             "GET",
