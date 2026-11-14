@@ -7037,8 +7037,8 @@ GPT_5_6_RESPONSES_CACHE_WRITE_12H: Final = CostTrackingTestCase(
     ),
 )
 
-GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE: Final = CostTrackingTestCase(
-    name="gpt-6-luna-responses_cache_write_12h_no_12h_rate",
+GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H: Final = CostTrackingTestCase(
+    name="gpt-6-luna-responses_cache_write_12h",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
     model="gpt-6-luna",
     endpoint="/v1/responses",
@@ -7078,12 +7078,12 @@ GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE: Final = CostTrackingTestCase(
         },
     ),
     expected=ExactExpected(
-        spend=0.0016078,
-        input_cost=0.0014178,
+        spend=0.0018578,
+        input_cost=0.0016678,
         output_cost=0.00019,
         prompt_tokens=12928,
         completion_tokens=380,
-        cache_creation_cost=0.000625,
+        cache_creation_cost=0.000875,
     ),
 )
 
@@ -12238,7 +12238,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     OMNI_MODERATIONS_NEXT_LIST,
     GPT_5_6_RESPONSES_CACHE_READ,
     GPT_5_6_RESPONSES_CACHE_WRITE_12H,
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     GPT_5_6_RESPONSES_REASONING,
     GPT_5_6_RESPONSES_STREAM,
     GPT_5_6_RESPONSES_STREAM_CACHE_READ,
