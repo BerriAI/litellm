@@ -488,7 +488,6 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             if dd_base_url:
                 self.intake_url = f"{dd_base_url}/api/intake/llm-obs/v1/trace/spans"
 
-            asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             self.log_queue: list[LLMObsPayload] = []
 
@@ -498,6 +497,8 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             dict_datadog_llm_obs_params: Final = self._get_datadog_llm_obs_params()
             kwargs.update(dict_datadog_llm_obs_params)
             CustomBatchLogger.__init__(self, **kwargs, flush_lock=self.flush_lock)
+            self._flush_task: asyncio.Task[None] | None = None
+            self._start_periodic_flush()
         except Exception as e:
             verbose_logger.exception("DataDogLLMObs: Error initializing - %s", e)
             raise e
@@ -545,8 +546,59 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 ).model_dump(exclude_unset=True)
         return dict_datadog_llm_obs_params
 
+    def _start_periodic_flush(self) -> None:
+        try:
+            loop: Final = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._flush_task is None or self._flush_task.done():
+            self._flush_task = loop.create_task(self.periodic_flush())
+
+    @staticmethod
+    def _serialize_batch(spans: Sequence[LLMObsPayload]) -> str:
+        return safe_dumps(
+            {
+                "data": DDIntakePayload(
+                    type="span",
+                    attributes=DDSpanAttributes(
+                        ml_app=get_datadog_service(), tags=get_datadog_tags(), spans=list(spans)
+                    ),
+                )
+            }
+        )
+
+    def log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        if not Logging.is_sync_litellm_request(_mapping_field(kwargs, "litellm_params")):
+            return
+        try:
+            payload: Final = self.create_llm_obs_payload(  # pyright: ignore[reportUnknownMemberType]  # untyped input
+                dict(kwargs), start_time, end_time
+            )
+            response: Final = litellm.module_level_client.client.post(
+                url=self.intake_url,
+                content=self._serialize_batch((payload,)),
+                headers={
+                    "Content-Type": "application/json",
+                    **({"DD-API-KEY": self.DD_API_KEY} if self.DD_API_KEY else {}),
+                },
+            )
+            if response.status_code != 202:
+                verbose_logger.error("DataDogLLMObs: Unexpected response - status_code: %s", response.status_code)
+        except Exception as e:
+            verbose_logger.exception("DataDogLLMObs: Error logging sync event - %s", e)
+
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.log_success_event(kwargs, response_obj, start_time, end_time)
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            self._start_periodic_flush()
             verbose_logger.debug("DataDogLLMObs: Logging success event for model %s", kwargs.get("model", "unknown"))
             payload: Final = self.create_llm_obs_payload(kwargs, start_time, end_time)
             verbose_logger.debug("DataDogLLMObs: Payload: %s", payload)
@@ -559,6 +611,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            self._start_periodic_flush()
             verbose_logger.debug("DataDogLLMObs: Logging failure event for model %s", kwargs.get("model", "unknown"))
             payload: Final = self.create_llm_obs_payload(kwargs, start_time, end_time)
             verbose_logger.debug("DataDogLLMObs: Payload: %s", payload)
@@ -579,27 +632,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             if self.is_mock_mode:
                 verbose_logger.debug("[DATADOG MOCK] Mock mode enabled - API calls will be intercepted")
 
-            # Prepare the payload
-            payload: Final = {
-                "data": DDIntakePayload(
-                    type="span",
-                    attributes=DDSpanAttributes(
-                        ml_app=get_datadog_service(),
-                        tags=get_datadog_tags(),
-                        spans=self.log_queue,
-                    ),
-                ),
-            }
-
-            # serialize datetime objects - for budget reset time in spend metrics
-            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-
-            try:
-                verbose_logger.debug("payload %s", safe_dumps(payload))
-            except Exception as debug_error:
-                verbose_logger.debug("payload serialization failed: %s", str(debug_error))
-
-            json_payload: Final = safe_dumps(payload)
+            json_payload: Final = self._serialize_batch(self.log_queue)
 
             headers: Final = {"Content-Type": "application/json"}
             if self.DD_API_KEY:
