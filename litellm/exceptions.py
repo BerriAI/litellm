@@ -482,10 +482,11 @@ class PermissionDeniedError(openai.PermissionDeniedError):
         message,
         llm_provider,
         model,
-        response: httpx.Response,
+        response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: object | None = None,
     ):
         self.status_code = 403
         self.message = f"litellm.PermissionDeniedError: {message}"
@@ -494,8 +495,12 @@ class PermissionDeniedError(openai.PermissionDeniedError):
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        if response is not None and getattr(response, "_request", None) is not None:
+            self.response = response
+        else:
+            self.response = error_response_without_credentials(self.status_code, response, "https://litellm.ai")
         super().__init__(
-            self.message, response=response, body=None
+            self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):

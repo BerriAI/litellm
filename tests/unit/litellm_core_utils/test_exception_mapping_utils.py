@@ -30,6 +30,41 @@ from litellm.proxy.common_utils.openai_error_payload import openai_error_type
 from litellm.types.utils import LlmProviders
 
 
+def test_permission_denied_preserves_response_without_request() -> None:
+    upstream: Final = httpx.Response(
+        403, content=b'{"error":"denied"}', headers={"x-request-id": "denied-request"}
+    )
+    error: Final = litellm.PermissionDeniedError(
+        message="Forbidden", model="gpt-4o", llm_provider="openai", response=upstream
+    )
+    assert (error.status_code, error.response.status_code, error.request.method) == (403, 403, "POST")
+    assert error.response.content == b'{"error":"denied"}'
+    assert error.response.headers["x-request-id"] == "denied-request"
+
+
+def test_permission_denied_can_be_created_without_upstream_response() -> None:
+    error: Final = litellm.PermissionDeniedError(message="Forbidden", model="gpt-4o", llm_provider="openai")
+    assert (error.status_code, error.response.status_code, error.request.method) == (403, 403, "POST")
+
+
+@pytest.mark.parametrize("error_type", ("request_forbidden", "invalid_request_error"))
+def test_openai_403_keeps_upstream_response(error_type: str) -> None:
+    payload: Final = {"error": {"message": "Forbidden", "type": error_type, "param": "organization", "code": "denied"}}
+    request: Final = httpx.Request("POST", "https://provider.example/v1/chat/completions")
+    upstream: Final = httpx.Response(403, request=request, json=payload, headers={"x-request-id": "denied-request"})
+    original: Final = openai.PermissionDeniedError(
+        f"Error code: 403 - {json.dumps(payload)}", response=upstream, body=payload["error"]
+    )
+    with pytest.raises(litellm.PermissionDeniedError) as caught:
+        exception_type(model="gpt-4o", original_exception=original, custom_llm_provider="openai")
+    assert caught.value.request.url == request.url
+    assert (caught.value.status_code, caught.value.model, caught.value.llm_provider) == (403, "gpt-4o", "openai")
+    assert caught.value.response.json() == payload
+    assert caught.value.response.headers["x-request-id"] == "denied-request"
+    assert caught.value.body == payload["error"]
+    assert (caught.value.type, caught.value.param, caught.value.code) == (error_type, "organization", "denied")
+
+
 @pytest.mark.parametrize("shape", ["sdk", "http"])
 @pytest.mark.parametrize("code", ["cyber_policy", "invalid_prompt"])
 def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: str) -> None:
@@ -1363,6 +1398,7 @@ def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
     [
         (400, "Invalid 'temperature'", litellm.BadRequestError),
         (401, "Invalid API key", litellm.AuthenticationError),
+        (403, "Forbidden", litellm.PermissionDeniedError),
         (404, "The model does not exist", litellm.NotFoundError),
     ],
 )
@@ -1401,8 +1437,8 @@ def test_openai_invalid_request_error_without_a_status_code_maps_to_bad_request(
 
 
 @pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
-@pytest.mark.parametrize("status_code", [403, 409, 422, 429, 500, 503])
-def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_401_and_404(
+@pytest.mark.parametrize("status_code", [409, 422, 429, 500, 503])
+def test_openai_invalid_request_error_keeps_bad_request_for_other_statuses(
     provider: str, status_code: int
 ) -> None:
     message: Final = "Cannot cancel a batch that is already completed."
@@ -1504,7 +1540,7 @@ OPENAI_SHAPED = {
     400: (litellm.BadRequestError, 400),
     401: (litellm.AuthenticationError, 401),
     402: (litellm.PaymentRequiredError, 402),
-    403: (litellm.APIError, 403),
+    403: (litellm.PermissionDeniedError, 403),
     404: (litellm.NotFoundError, 404),
     408: (litellm.Timeout, 408),
     422: (litellm.BadRequestError, 422),
@@ -1520,7 +1556,7 @@ STATUS_KEYED = {**OPENAI_SHAPED, 403: PERMISSION_DENIED}
 DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
     "ai21": {402: (litellm.APIError, 402)},
     "anthropic": {403: PERMISSION_DENIED},
-    "azure": {402: (litellm.APIError, 402), 500: (litellm.APIError, 500)},
+    "azure": {402: (litellm.APIError, 402), 403: (litellm.APIError, 403), 500: (litellm.APIError, 500)},
     "azure_ai": {402: (litellm.APIError, 402)},
     "bedrock": {
         403: PERMISSION_DENIED,
@@ -1538,6 +1574,7 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
     "groq": {402: (litellm.APIError, 402)},
     "huggingface": {
         402: (litellm.APIError, 402),
+        403: (litellm.APIError, 403),
         404: (litellm.APIError, 404),
         422: (litellm.APIError, 422),
         500: (litellm.APIError, 500),
@@ -1557,7 +1594,7 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
     },
     "ollama": {403: PERMISSION_DENIED},
     "openai": {402: (litellm.APIError, 402)},
-    "openrouter": {402: (litellm.APIError, 402), 500: (litellm.APIError, 500)},
+    "openrouter": {402: (litellm.APIError, 402), 403: (litellm.APIError, 403), 500: (litellm.APIError, 500)},
     "perplexity": {402: (litellm.APIError, 402)},
     "replicate": {
         403: (litellm.APIError, 500),
