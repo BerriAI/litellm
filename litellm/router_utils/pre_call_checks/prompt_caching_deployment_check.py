@@ -410,6 +410,19 @@ class PromptCachingDeploymentCheck(CustomLogger):
         if standard_logging_object is None:
             return
 
+        raw_litellm_params: Final = kwargs.get("litellm_params")
+        litellm_params: Final[Mapping[str, object]] = (
+            raw_litellm_params if isinstance(raw_litellm_params, Mapping) else {}
+        )
+        metadata: Final = (
+            as_str_mapping(litellm_params.get("litellm_metadata"))
+            or as_str_mapping(litellm_params.get("metadata"))
+            or {}
+        )
+        model_group_size: Final = metadata.get("model_group_size")
+        if type(model_group_size) is int and model_group_size == 1:
+            return
+
         call_type: Final = standard_logging_object["call_type"]
 
         if call_type in _RESPONSES_CALL_TYPES:
@@ -461,10 +474,6 @@ class PromptCachingDeploymentCheck(CustomLogger):
         ):
             cache: Final = PromptCachingCache(
                 cache=self.cache,
-            )
-            raw_litellm_params: Final = kwargs.get("litellm_params")
-            litellm_params: Final[Mapping[str, object]] = (
-                raw_litellm_params if isinstance(raw_litellm_params, Mapping) else {}
             )
             await cache.async_add_model_id(
                 model_id=model_id,

@@ -288,6 +288,92 @@ class _PinLookupCounter(DualCache):
         )
 
 
+class _PinWriteCounter(DualCache):
+    def __init__(self) -> None:
+        super().__init__()
+        self.pin_writes = 0
+
+    async def async_set_cache(self, key: str, value: object, local_only: bool = False, **kwargs: object) -> None:
+        self.pin_writes += 1
+        await super().async_set_cache(key, value, local_only=local_only, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["completion", "acompletion", "anthropic_messages"])
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("group_size", [1, 2, None])
+async def test_success_only_skips_pin_writes_for_a_known_single_deployment_group(
+    call_type: str, metadata_field: str, group_size: int | None
+) -> None:
+    cache: Final = _PinWriteCounter()
+    check: Final = PromptCachingDeploymentCheck(cache=cache)
+    messages: Final = _messages(word_count=5000)
+    standard_logging_object: Final = cast(
+        StandardLoggingPayload,
+        {
+            "call_type": call_type,
+            "custom_llm_provider": "anthropic",
+            "model": "anthropic/claude-sonnet-5-5",
+            "messages": messages,
+            "model_id": "dep-1",
+            "model_map_information": {"model_map_value": None},
+        },
+    )
+
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": standard_logging_object,
+            "litellm_params": {metadata_field: {"model_group_size": group_size}},
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert cache.pin_writes == (0 if group_size == 1 else 1)
+    assert await PromptCachingCache(cache=cache).async_get_model_id(messages=messages, tools=None) == (
+        None if group_size == 1 else {"model_id": "dep-1"}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deployment_count,unhealthy_sibling", [(1, False), (2, False), (2, True)])
+async def test_router_pin_write_uses_configured_group_size(deployment_count: int, unhealthy_sibling: bool) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-fake"},
+                "model_info": {"id": f"dep-{index}"},
+            }
+            for index in range(deployment_count)
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+        allowed_fails=0,
+    )
+    if unhealthy_sibling:
+        assert router.health().record_failure(
+            "dep-1",
+            litellm.RateLimitError(message="quota exhausted", model=MODEL_GROUP_ALIAS, llm_provider="anthropic"),
+            429,
+        )
+        assert len(await router.select(MODEL_GROUP_ALIAS, kind="healthy")) == 1
+    messages: Final = _messages(word_count=5000)
+    call_id: Final = str(uuid.uuid4())
+    capture: Final = _SentMessagesCapture(call_id)
+    litellm.logging_callback_manager.add_litellm_callback(capture)
+
+    response: Final = await router.acompletion(
+        model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok", litellm_call_id=call_id
+    )
+    await asyncio.wait_for(capture.completed.wait(), timeout=10)
+
+    assert response.choices[0].message.content == "ok"
+    assert await PromptCachingCache(cache=router.registry().plugins("prompt_caching_pins")).async_get_model_id(
+        messages=messages, tools=None
+    ) == (None if deployment_count == 1 else {"model_id": response._hidden_params["model_id"]})
+
+
 @pytest.mark.asyncio
 async def test_async_filter_deployments_skips_prefix_hash_for_a_single_deployment():
     """
@@ -500,6 +586,7 @@ class _SentMessagesCapture(CustomLogger):
     def __init__(self, litellm_call_id: str):
         self.litellm_call_id = litellm_call_id
         self.messages: list[AllMessageValues] | None = None
+        self.completed = asyncio.Event()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         if kwargs.get("litellm_call_id") != self.litellm_call_id:
@@ -507,6 +594,7 @@ class _SentMessagesCapture(CustomLogger):
         standard_logging_object = kwargs.get("standard_logging_object")
         if standard_logging_object is not None:
             self.messages = standard_logging_object["messages"]
+        self.completed.set()
 
 
 async def _eventually(predicate, timeout: float = 10.0):
