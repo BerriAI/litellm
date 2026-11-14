@@ -7559,6 +7559,182 @@ def test_hosted_vllm_stream_with_two_choices_finishes_the_first_choice_before_th
     )
 
 
+_PER_CHOICE_FINISH_REASONS: Final[Mapping[int, str]] = MappingProxyType({0: "stop", 1: "length"})
+_USAGE_TRAILER: Final[Mapping[str, object]] = MappingProxyType(
+    {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+)
+
+
+async def _async_sse_lines(sse_lines: Sequence[str]) -> AsyncIterator[str]:
+    for line in sse_lines:
+        yield line
+
+
+def _hosted_vllm_wrapper(
+    logging_obj: Logging,
+    bodies: Sequence[Mapping[str, object]],
+    include_usage: bool,
+    sync_stream: bool,
+) -> CustomStreamWrapper:
+    sse_lines: Final = [
+        *(
+            "data: "
+            + json.dumps({"id": "chatcmpl-1", "object": "chat.completion.chunk", "model": "m", "choices": [body]})
+            for body in bodies
+        ),
+        *(
+            (
+                "data: "
+                + json.dumps(
+                    {
+                        "id": "chatcmpl-1",
+                        "object": "chat.completion.chunk",
+                        "model": "m",
+                        "choices": [],
+                        "usage": dict(_USAGE_TRAILER),
+                    }
+                ),
+            )
+            if include_usage
+            else ()
+        ),
+        "data: [DONE]",
+    ]
+    return CustomStreamWrapper(
+        completion_stream=HostedVLLMChatConfig().get_model_response_iterator(
+            streaming_response=iter(sse_lines) if sync_stream else _async_sse_lines(sse_lines),
+            sync_stream=sync_stream,
+            json_mode=False,
+        ),
+        model="m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True} if include_usage else None,
+    )
+
+
+def _per_choice_finish_bodies(
+    finish_order: Sequence[int], finish_contents: Mapping[int, str]
+) -> tuple[Mapping[str, object], ...]:
+    return (
+        {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+        {"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+        {"index": 0, "delta": {"content": "0"}, "finish_reason": None},
+        {"index": 1, "delta": {"content": "1"}, "finish_reason": None},
+        *(
+            {
+                "index": index,
+                "delta": {"content": finish_contents[index]},
+                "finish_reason": _PER_CHOICE_FINISH_REASONS[index],
+                "stop_reason": str(index),
+            }
+            for index in finish_order
+        ),
+    )
+
+
+async def _collect_per_choice_stream(
+    logging_obj: Logging,
+    finish_order: Sequence[int],
+    finish_contents: Mapping[int, str],
+    include_usage: bool,
+    sync_stream: bool,
+) -> tuple[ModelResponseStream, ...]:
+    wrapper: Final = _hosted_vllm_wrapper(
+        logging_obj, _per_choice_finish_bodies(finish_order, finish_contents), include_usage, sync_stream
+    )
+    return tuple(list(wrapper) if sync_stream else [chunk async for chunk in wrapper])
+
+
+@pytest.mark.parametrize("sync_stream", [True, False], ids=["sync", "async"])
+@pytest.mark.parametrize("include_usage", [True, False], ids=["include-usage", "no-usage"])
+@pytest.mark.parametrize("finish_order", [(0, 1), (1, 0)], ids=["index-0-first", "index-1-first"])
+@pytest.mark.parametrize(
+    "finish_contents",
+    [{0: "2", 1: "3"}, {0: "", 1: ""}, {0: "", 1: "3"}, {0: "2", 1: ""}],
+    ids=["both-content", "both-finish-only", "index-0-finish-only", "index-1-finish-only"],
+)
+@pytest.mark.asyncio
+async def test_hosted_vllm_stream_with_two_choices_finishes_each_choice_exactly_once(
+    logging_obj: Logging,
+    finish_order: tuple[int, int],
+    finish_contents: Mapping[int, str],
+    include_usage: bool,
+    sync_stream: bool,
+) -> None:
+    collected: Final = await _collect_per_choice_stream(
+        logging_obj, finish_order, finish_contents, include_usage, sync_stream
+    )
+    emitted: Final = tuple(chunk.choices[0].model_dump() for chunk in collected if chunk.choices)
+
+    assert {
+        index: [
+            (choice["finish_reason"], choice["stop_reason"])
+            for choice in emitted
+            if choice["index"] == index and choice["finish_reason"] is not None
+        ]
+        for index in _PER_CHOICE_FINISH_REASONS
+    } == {index: [(reason, str(index))] for index, reason in _PER_CHOICE_FINISH_REASONS.items()}
+    assembled: Final = litellm.stream_chunk_builder(list(collected))
+    assert assembled is not None
+    assert {choice.index: choice.finish_reason for choice in assembled.choices} == _PER_CHOICE_FINISH_REASONS
+    assert [chunk.usage.total_tokens for chunk in collected if getattr(chunk, "usage", None) is not None] == (
+        [3] if include_usage else []
+    )
+
+
+@pytest.mark.parametrize("sync_stream", [True, False], ids=["sync", "async"])
+@pytest.mark.parametrize("include_usage", [True, False], ids=["include-usage", "no-usage"])
+@pytest.mark.parametrize("finish_order", [(0, 1), (1, 0)], ids=["index-0-first", "index-1-first"])
+@pytest.mark.asyncio
+async def test_hosted_vllm_stream_with_two_choices_preserves_per_choice_content(
+    logging_obj: Logging,
+    finish_order: tuple[int, int],
+    include_usage: bool,
+    sync_stream: bool,
+) -> None:
+    collected: Final = await _collect_per_choice_stream(
+        logging_obj, finish_order, {0: "", 1: ""}, include_usage, sync_stream
+    )
+
+    assert {
+        index: "".join(
+            _DELTA.validate_python(choice["delta"]).get("content") or ""
+            for choice in (chunk.choices[0].model_dump() for chunk in collected if chunk.choices)
+            if choice["index"] == index
+        )
+        for index in _PER_CHOICE_FINISH_REASONS
+    } == {index: str(index) for index in _PER_CHOICE_FINISH_REASONS}
+
+
+@pytest.mark.parametrize("sync_stream", [True, False], ids=["sync", "async"])
+@pytest.mark.parametrize("include_usage", [True, False], ids=["include-usage", "no-usage"])
+@pytest.mark.asyncio
+async def test_hosted_vllm_stream_with_one_choice_keeps_a_single_terminal_chunk(
+    logging_obj: Logging, include_usage: bool, sync_stream: bool
+) -> None:
+    wrapper: Final = _hosted_vllm_wrapper(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 0, "delta": {"content": "0"}, "finish_reason": None},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": "stop", "stop_reason": ",3"},
+        ),
+        include_usage,
+        sync_stream,
+    )
+    chunks: Final = list(wrapper) if sync_stream else [chunk async for chunk in wrapper]
+
+    assert [
+        (chunk.choices[0].finish_reason, chunk.choices[0].get("stop_reason"))
+        for chunk in chunks
+        if chunk.choices and chunk.choices[0].finish_reason is not None
+    ] == [("stop", ",3")]
+    assert [chunk.usage.total_tokens for chunk in chunks if getattr(chunk, "usage", None) is not None] == (
+        [3] if include_usage else []
+    )
+
+
 _CACHED_VLLM_TOKEN_IDS: Final = (16, 11, 220, 17, 11, 220, 18, 11, 220, 19)
 
 
