@@ -3118,6 +3118,46 @@ class TestIsCachedMessage:
         message = {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
         assert is_cached_message(message) is False
 
+    def test_tool_block_with_cache_control_returns_true(self):
+        """A breakpoint on a tool_use / tool_result block marks the message.
+
+        Agentic clients (Claude Code) place theirs there, never on a text block,
+        so a text-only test leaves those requests uncached.
+        """
+        tool_use = {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "t1", "name": "f", "input": {}, "cache_control": {"type": "ephemeral"}}],
+        }
+        tool_result = {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "r", "cache_control": {"type": "ephemeral"}}],
+        }
+        assert is_cached_message(tool_use) is True
+        assert is_cached_message(tool_result) is True
+
+    def test_image_block_with_cache_control_returns_true(self):
+        """Any block carrying the marker marks the message."""
+        message = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is this"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,AAAA"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+        assert is_cached_message(message) is True
+
+    def test_block_cache_control_of_another_type_returns_false(self):
+        """Only `ephemeral` marks a block; other control types stay uncached."""
+        message = {
+            "role": "user",
+            "content": [{"type": "text", "text": "x", "cache_control": {"type": "persistent"}}],
+        }
+        assert is_cached_message(message) is False
+
     def test_list_content_with_cache_control_returns_true(self):
         """List content with cache_control ephemeral should return True."""
         message = {

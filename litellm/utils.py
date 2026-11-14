@@ -9410,6 +9410,12 @@ def is_cached_message(message: AllMessageValues) -> bool:
 
     Follows the anthropic format {"cache_control": {"type": "ephemeral"}}
 
+    Any content block carrying the marker marks the message, not only a text block:
+    Anthropic breakpoints are prefix markers, and agentic clients (Claude Code) put
+    theirs on the last `tool_use` and the `tool_result` that follows it, so a
+    text-only test leaves those requests with no marker at all and the explicit
+    context-cache path never runs for them.
+
     Can be disabled globally by setting litellm.disable_anthropic_gemini_context_caching_transform = True
     """
     # Check if context caching is disabled globally
@@ -9441,8 +9447,7 @@ def is_cached_message(message: AllMessageValues) -> bool:
 
         cache_control = content_item.get("cache_control")
         if (
-            content_item.get("type") == "text"
-            and cache_control is not None
+            cache_control is not None
             and isinstance(cache_control, dict)
             and cache_control.get("type") == "ephemeral"
         ):

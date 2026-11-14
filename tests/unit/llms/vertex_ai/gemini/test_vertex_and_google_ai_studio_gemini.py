@@ -8591,10 +8591,57 @@ def test_gemini_context_caching_separate_messages():
         },
     ]
     cached_messages, non_cached_messages = separate_cached_messages(messages)
-    print(cached_messages)
-    print(non_cached_messages)
-    assert len(cached_messages) > 0, "Cached messages should be present"
-    assert len(non_cached_messages) > 0, "Non-cached messages should be present"
+    # Gemini reads cachedContent as a prefix of contents, so everything up to the
+    # marked block belongs in the cache. This request has a gap at index 2, which
+    # ends the first continuous run, so the prefix stops at index 1.
+    assert cached_messages == messages[:2]
+    assert non_cached_messages == messages[2:]
+
+
+_MARK = {"type": "ephemeral"}
+_SYS = {"role": "system", "content": [{"type": "text", "text": "sys"}]}
+_Q1 = {"role": "user", "content": [{"type": "text", "text": "Q1"}]}
+_A1 = {"role": "assistant", "content": [{"type": "text", "text": "A1"}]}
+_Q2_MARKED = {"role": "user", "content": [{"type": "text", "text": "Q2", "cache_control": _MARK}]}
+_Q1_MARKED = {"role": "user", "content": [{"type": "text", "text": "Q1", "cache_control": _MARK}]}
+_Q2 = {"role": "user", "content": [{"type": "text", "text": "Q2"}]}
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected_cached_count"),
+    [
+        pytest.param([_SYS, _Q1, _A1, _Q2_MARKED], 4, id="marked-latest-turn"),
+        pytest.param([_SYS, _Q1_MARKED, _A1, _Q2], 2, id="marked-middle-turn"),
+    ],
+)
+def test_separate_cached_messages_caches_prefix_through_marked_block(messages, expected_cached_count):
+    """An anthropic breakpoint means 'everything up to here', which is what Gemini caches."""
+    cached_messages, non_cached_messages = separate_cached_messages(messages)
+    assert cached_messages == messages[:expected_cached_count]
+    assert non_cached_messages == messages[expected_cached_count:]
+
+
+def test_separate_cached_messages_accepts_tool_block_breakpoints():
+    """
+    Agentic clients mark the last `tool_use` and the `tool_result` that follows it.
+
+    A text-only marker test leaves those requests with no marker at all, so the
+    explicit context-cache path never runs for them.
+    """
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "ctx"}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "t1", "name": "f", "input": {}, "cache_control": _MARK}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "r", "cache_control": _MARK}],
+        },
+    ]
+    cached_messages, non_cached_messages = separate_cached_messages(messages)
+    assert cached_messages == messages
+    assert non_cached_messages == []
 
 
 @pytest.mark.parametrize(
