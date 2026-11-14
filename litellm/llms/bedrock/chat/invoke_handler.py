@@ -1,7 +1,7 @@
 import json
 import types
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import TYPE_CHECKING, Final, TypeAlias, TypeVar
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -25,7 +25,7 @@ from litellm.llms.anthropic.chat.handler import (
 from litellm.llms.anthropic.chat.transformation import JsonModeRequest
 from litellm.llms.base_llm import base_model_iterator
 from litellm.llms.base_llm.base_utils import ResponseFormatSchema
-from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
+from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD, BedrockInvokeStreamGuardrail
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -186,6 +186,8 @@ class AmazonCohereChatConfig:
 
 _REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
 
+_DecodedChunk: TypeAlias = GChunk | ModelResponseStream | dict[str, object]
+
 
 def response_format_schema_from_request(data: str, json_mode: bool | None) -> ResponseFormatSchema | None:
     if not json_mode:
@@ -205,6 +207,8 @@ def _stream_decoder(
     sync_stream: bool,
     response_format_schema: ResponseFormatSchema | None = None,
 ) -> "AWSEventStreamDecoder":
+    if bedrock_invoke_provider is None:
+        return AWSEventStreamDecoder(model=model, json_mode=json_mode)
     if bedrock_invoke_provider == "anthropic":
         return AmazonAnthropicClaudeStreamDecoder(
             model=model,
@@ -216,7 +220,7 @@ def _stream_decoder(
         return AmazonDeepSeekR1StreamDecoder(model=model, sync_stream=sync_stream)
     if bedrock_invoke_provider == "moonshot":
         return AmazonOpenAICompatibleStreamDecoder(model=model, sync_stream=sync_stream)
-    return AWSEventStreamDecoder(model=model, json_mode=json_mode)
+    return AmazonInvokeStreamDecoder(model=model, json_mode=json_mode)
 
 
 _StreamChunk: Final = TypeVar("_StreamChunk")
@@ -287,9 +291,9 @@ async def make_call(
                 encoding=litellm.encoding,
                 json_mode=json_mode,
             )
-            completion_stream: (
-                base_model_iterator.MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict]
-            ) = base_model_iterator.MockResponseIterator(model_response=model_response)
+            completion_stream: base_model_iterator.MockResponseIterator | AsyncIterator[_DecodedChunk] = (
+                base_model_iterator.MockResponseIterator(model_response=model_response)
+            )
         else:
             decoder: Final = _stream_decoder(
                 bedrock_invoke_provider,
@@ -383,9 +387,9 @@ def make_sync_call(
                 encoding=litellm.encoding,
                 json_mode=json_mode,
             )
-            completion_stream: (
-                base_model_iterator.MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict]
-            ) = base_model_iterator.MockResponseIterator(model_response=model_response)
+            completion_stream: base_model_iterator.MockResponseIterator | Iterator[_DecodedChunk] = (
+                base_model_iterator.MockResponseIterator(model_response=model_response)
+            )
         else:
             decoder: Final = _stream_decoder(
                 bedrock_invoke_provider,
@@ -854,7 +858,7 @@ class AWSEventStreamDecoder:
 
     def iter_bytes(
         self, iterator: Iterator[bytes], *, response_headers: Mapping[str, str] | None = None
-    ) -> Iterator[GChunk | ModelResponseStream | dict[str, object]]:
+    ) -> Iterator[_DecodedChunk]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -862,16 +866,24 @@ class AWSEventStreamDecoder:
         tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
         served_tier: Final = served_service_tier(response_headers)
-        for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            tally.add_chunk(chunk)
-            for event in event_stream_buffer:
-                message = self._decode_event(event, tally, request_id_headers)
-                if message:
-                    # sse_event = ServerSentEvent(data=message, event="completion")
-                    _data = json.loads(message)
-                    yield _with_served_service_tier(self.chunk_parser(chunk_data=_data), served_tier)
+        try:
+            for chunk in iterator:
+                event_stream_buffer.add_data(chunk)
+                tally.add_chunk(chunk)
+                for event in event_stream_buffer:
+                    message = self._decode_event(event, tally, request_id_headers)
+                    if message:
+                        # sse_event = ServerSentEvent(data=message, event="completion")
+                        _data = json.loads(message)
+                        for parsed in self._chunks_for_event(_data):
+                            yield _with_served_service_tier(parsed, served_tier)
+        except Exception:
+            for held in self._held_chunks():
+                yield _with_served_service_tier(held, served_tier)
+            raise
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
+        for held in self._held_chunks():
+            yield _with_served_service_tier(held, served_tier)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
         stream_end_chunk: Final = self._stream_end_chunk()
@@ -880,7 +892,7 @@ class AWSEventStreamDecoder:
 
     async def aiter_bytes(
         self, iterator: AsyncIterator[bytes], *, response_headers: Mapping[str, str] | None = None
-    ) -> AsyncIterator[GChunk | ModelResponseStream | dict]:
+    ) -> AsyncIterator[_DecodedChunk]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -888,20 +900,37 @@ class AWSEventStreamDecoder:
         tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
         served_tier: Final = served_service_tier(response_headers)
-        async for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            tally.add_chunk(chunk)
-            for event in event_stream_buffer:
-                message = self._decode_event(event, tally, request_id_headers)
-                if message:
-                    _data = json.loads(message)
-                    yield _with_served_service_tier(self.chunk_parser(chunk_data=_data), served_tier)
+        try:
+            async for chunk in iterator:
+                event_stream_buffer.add_data(chunk)
+                tally.add_chunk(chunk)
+                for event in event_stream_buffer:
+                    message = self._decode_event(event, tally, request_id_headers)
+                    if message:
+                        _data = json.loads(message)
+                        for parsed in self._chunks_for_event(_data):
+                            yield _with_served_service_tier(parsed, served_tier)
+        except Exception:
+            for held in self._held_chunks():
+                yield _with_served_service_tier(held, served_tier)
+            raise
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
+        for held in self._held_chunks():
+            yield _with_served_service_tier(held, served_tier)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
         stream_end_chunk: Final = self._stream_end_chunk()
         if stream_end_chunk is not None:
             yield stream_end_chunk
+
+    def _chunks_for_event(
+        self,
+        chunk_data: dict[str, object],  # mutable-ok: chunk_parser takes the decoded event as is
+    ) -> tuple[_DecodedChunk, ...]:
+        return (self.chunk_parser(chunk_data=chunk_data),)
+
+    def _held_chunks(self) -> tuple[_DecodedChunk, ...]:
+        return ()
 
     def _stream_end_chunk(self) -> ModelResponseStream | None:
         return None
@@ -960,7 +989,52 @@ class AWSEventStreamDecoder:
             return chunk.decode()
 
 
-class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
+def _is_finish_chunk(chunk: _DecodedChunk) -> bool:
+    if isinstance(chunk, ModelResponseStream):
+        return any(choice.finish_reason for choice in chunk.choices)
+    return chunk.get("is_finished") is True
+
+
+def _content_filtered(chunk: _DecodedChunk) -> _DecodedChunk:
+    if isinstance(chunk, ModelResponseStream):
+        return chunk.model_copy(
+            update={
+                "choices": [choice.model_copy(update={"finish_reason": "content_filter"}) for choice in chunk.choices]
+            }
+        )
+    return {**chunk, "is_finished": True, "finish_reason": "content_filter"}
+
+
+def _content_filtered_tail(tail: tuple[_DecodedChunk, ...]) -> tuple[_DecodedChunk, ...]:
+    if any(map(_is_finish_chunk, tail)):
+        return tuple(_content_filtered(chunk) if _is_finish_chunk(chunk) else chunk for chunk in tail)
+    return tuple(_content_filtered(chunk) if index == 0 else chunk for index, chunk in enumerate(tail))
+
+
+class AmazonInvokeStreamDecoder(AWSEventStreamDecoder):
+    def __init__(self, model: str, json_mode: bool | None = False) -> None:
+        super().__init__(model=model, json_mode=json_mode)
+        self._guardrail: BedrockInvokeStreamGuardrail = BedrockInvokeStreamGuardrail()
+        self._tail: tuple[_DecodedChunk, ...] = ()
+
+    def _chunks_for_event(
+        self,
+        chunk_data: dict[str, object],  # mutable-ok: chunk_parser takes the decoded event as is
+    ) -> tuple[_DecodedChunk, ...]:
+        self._guardrail = self._guardrail.with_event(chunk_data)
+        parsed: Final = self.chunk_parser(chunk_data=chunk_data)
+        if not self._tail and not self._guardrail.intervened and not _is_finish_chunk(parsed):
+            return (parsed,)
+        self._tail = (*self._tail, parsed)
+        return ()
+
+    def _held_chunks(self) -> tuple[_DecodedChunk, ...]:
+        tail: Final = self._tail
+        self._tail = ()
+        return _content_filtered_tail(tail) if self._guardrail.blocked else tail
+
+
+class AmazonAnthropicClaudeStreamDecoder(AmazonInvokeStreamDecoder):
     def __init__(
         self,
         model: str,
@@ -999,7 +1073,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
         return self.anthropic_model_response_iterator.cut_stream_chunk()
 
 
-class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
+class AmazonDeepSeekR1StreamDecoder(AmazonInvokeStreamDecoder):
     def __init__(
         self,
         model: str,
@@ -1019,7 +1093,7 @@ class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
         return self.deepseek_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
-class AmazonOpenAICompatibleStreamDecoder(AWSEventStreamDecoder):
+class AmazonOpenAICompatibleStreamDecoder(AmazonInvokeStreamDecoder):
     def __init__(
         self,
         model: str,

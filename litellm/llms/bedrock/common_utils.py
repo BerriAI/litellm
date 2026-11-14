@@ -37,6 +37,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.core_helpers import decoded_json_object, lax_bool, require_attributes
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_trace_actions, object_mapping
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     schema_property_count,
@@ -65,6 +66,87 @@ BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS: Final[Mapping[str, str]] = Mapping
         "clear_tool_uses_20250919": ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
     }
 )
+_BEDROCK_INVOKE_GUARDRAIL_ACTION_FIELD: Final = "amazon-bedrock-guardrailAction"
+
+
+_BEDROCK_INVOKE_INVOCATION_METRICS_FIELD: Final = "amazon-bedrock-invocationMetrics"
+_BEDROCK_GUARDRAIL_REPLY_ID_PREFIX: Final = "bedrock-guardrails-"
+_BEDROCK_INVOCATION_LATENCY_HEADER: Final = "x-amzn-bedrock-invocation-latency"
+_BEDROCK_INVOKE_TOKEN_COUNT_FIELDS: Final = (
+    "input_tokens",
+    "output_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "inputTokens",
+    "outputTokens",
+    "prompt_token_count",
+    "generation_token_count",
+)
+
+
+def _token_counts(source: object) -> tuple[object, ...]:
+    fields: Final = object_mapping(source)
+    if fields is None:
+        return ()
+    return tuple(fields[name] for name in _BEDROCK_INVOKE_TOKEN_COUNT_FIELDS if name in fields)
+
+
+def _model_never_ran(body: Mapping[str, object], headers: Mapping[str, str]) -> bool:
+    counts: Final = (*_token_counts(body), *_token_counts(body.get("usage")))
+    if counts:
+        return all(count == 0 for count in counts)
+    return _BEDROCK_INVOCATION_LATENCY_HEADER not in headers
+
+
+def _reports_model_run(event: Mapping[str, object]) -> bool:
+    metrics: Final = object_mapping(event.get(_BEDROCK_INVOKE_INVOCATION_METRICS_FIELD))
+    return metrics is not None and metrics.get("invocationLatency") != 0
+
+
+def _guardrail_wrote_reply(event: Mapping[str, object]) -> bool:
+    reply_id: Final = event.get("id")
+    return isinstance(reply_id, str) and reply_id.startswith(_BEDROCK_GUARDRAIL_REPLY_ID_PREFIX)
+
+
+def _intervened(payload: Mapping[str, object]) -> bool:
+    return payload.get(_BEDROCK_INVOKE_GUARDRAIL_ACTION_FIELD) == "INTERVENED"
+
+
+def _trace_actions(payload: Mapping[str, object]) -> frozenset[str] | None:
+    trace: Final = object_mapping(payload.get(BEDROCK_INVOKE_TRACE_FIELD))
+    return None if trace is None else guardrail_trace_actions(trace)
+
+
+def bedrock_invoke_guardrail_blocked(body: Mapping[str, object], headers: Mapping[str, str]) -> bool:
+    if not _intervened(body):
+        return False
+    actions: Final = _trace_actions(body)
+    return _model_never_ran(body, headers) if actions is None else "BLOCKED" in actions
+
+
+@dataclass(frozen=True, slots=True)
+class BedrockInvokeStreamGuardrail:
+    intervened: bool = False
+    trace_actions: frozenset[str] | None = None
+    model_ran: bool = False
+    guardrail_wrote_reply: bool = False
+
+    def with_event(self, event: Mapping[str, object]) -> BedrockInvokeStreamGuardrail:
+        actions: Final = _trace_actions(event)
+        return BedrockInvokeStreamGuardrail(
+            intervened=self.intervened or _intervened(event),
+            trace_actions=self.trace_actions if actions is None else actions | (self.trace_actions or frozenset()),
+            model_ran=self.model_ran or _reports_model_run(event),
+            guardrail_wrote_reply=self.guardrail_wrote_reply or _guardrail_wrote_reply(event),
+        )
+
+    @property
+    def blocked(self) -> bool:
+        if not self.intervened:
+            return False
+        if self.trace_actions is not None:
+            return "BLOCKED" in self.trace_actions
+        return self.guardrail_wrote_reply or not self.model_ran
 
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"

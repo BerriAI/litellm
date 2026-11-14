@@ -7633,6 +7633,48 @@ def test_handle_anthropic_messages_response_logging_reparses_the_served_body_wit
     assert logged.usage.completion_tokens == 7  # type: ignore[attr-defined]
 
 
+def _blocked_bridged_attempt() -> ModelResponse:
+    from litellm.types.utils import Usage
+
+    return ModelResponse(
+        id="chatcmpl-blocked",
+        model="us.meta.llama4-maverick-17b-instruct-v1:0",
+        choices=[
+            {"index": 0, "message": {"role": "assistant", "content": "blocked"}, "finish_reason": "content_filter"}
+        ],
+        usage=Usage(prompt_tokens=27, completion_tokens=12, total_tokens=39),
+    )
+
+
+async def _messages_fallback_through_dispatch(entry: str, logging_obj: LitellmLogging) -> object:
+    from litellm.messages import anthropic_messages, anthropic_messages_handler
+
+    request: Final = {
+        "model": "bedrock/invoke/us.anthropic.claude-haiku-5-5",
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": "What is 2+2?"}],
+        "mock_response": "4",
+        "litellm_logging_obj": logging_obj,
+    }
+    if entry == "async":
+        return await anthropic_messages(**request)
+    return anthropic_messages_handler(**request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["async", "sync"])
+async def test_a_native_messages_fallback_prices_its_own_reply_not_the_bridged_attempt_before_it(entry: str) -> None:
+    """The proxy hands one logging object to every fallback attempt of a /v1/messages call. A blocked
+    attempt answered through the chat bridge must not price the native reply of the fallback after it."""
+    logging_obj: Final = _anthropic_messages_logging_obj()
+    logging_obj.record_bridged_model_response(_blocked_bridged_attempt())
+
+    served: Final = await _messages_fallback_through_dispatch(entry, logging_obj)
+
+    assert isinstance(served, dict)
+    assert logging_obj.billable_result(served) == served
+
+
 def _upstream_messages_reply(usage: Mapping[str, object], message_id: str | None = None) -> dict[str, object]:
     return {
         **({} if message_id is None else {"id": message_id}),

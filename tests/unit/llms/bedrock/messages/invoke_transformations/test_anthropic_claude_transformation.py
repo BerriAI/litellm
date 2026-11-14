@@ -4818,3 +4818,125 @@ async def test_bedrock_chat_fallback_to_anthropic_sends_the_tool_bedrock_cleaned
 
     (body,) = upstream.anthropic_bodies
     assert body["tools"] == [{"name": "get_weather", "input_schema": schema, **sent_extras}]
+
+
+_GUARDRAIL_BLOCKED_TEXT: Final = "Sorry, the model cannot answer this question."
+_INTERVENED: Final = {"amazon-bedrock-guardrailAction": "INTERVENED"}
+_MODEL_RAN_USAGE: Final = {"input_tokens": 11, "output_tokens": 7}
+_NO_MODEL_USAGE: Final = {"input_tokens": 0, "output_tokens": 0}
+_MODEL_RAN_METRICS: Final = {
+    "amazon-bedrock-invocationMetrics": {
+        "inputTokenCount": 11,
+        "outputTokenCount": 7,
+        "invocationLatency": 412,
+        "firstByteLatency": 380,
+    }
+}
+_BLOCKED_WORD_ASSESSMENT: Final = {
+    "wordPolicy": {"customWords": [{"match": "hexblade", "action": "BLOCKED", "detected": True}]}
+}
+_MASKED_SSN_ASSESSMENT: Final = {
+    "sensitiveInformationPolicy": {
+        "piiEntities": [
+            {"type": "US_SOCIAL_SECURITY_NUMBER", "match": "123-45-6789", "action": "ANONYMIZED", "detected": True}
+        ]
+    }
+}
+_MASKED_TRACE: Final = {"amazon-bedrock-trace": {"guardrail": {"input": {"6hbgpnnqoeb1": _MASKED_SSN_ASSESSMENT}}}}
+_BLOCKED_AND_MASKED_TRACE: Final = {
+    "amazon-bedrock-trace": {
+        "guardrail": {"input": {"6hbgpnnqoeb1": {**_BLOCKED_WORD_ASSESSMENT, **_MASKED_SSN_ASSESSMENT}}}
+    }
+}
+_GUARDRAIL_CASES: Final = [
+    pytest.param(_INTERVENED, _NO_MODEL_USAGE, "refusal", id="blocked"),
+    pytest.param(_INTERVENED, _MODEL_RAN_USAGE, "end_turn", id="masked"),
+    pytest.param({**_INTERVENED, **_MASKED_TRACE}, _NO_MODEL_USAGE, "end_turn", id="masked_per_trace"),
+    pytest.param(
+        {**_INTERVENED, **_BLOCKED_AND_MASKED_TRACE}, _MODEL_RAN_USAGE, "refusal", id="blocked_and_masked_per_trace"
+    ),
+    pytest.param({"amazon-bedrock-guardrailAction": "NONE"}, _MODEL_RAN_USAGE, "end_turn", id="guardrail_passed"),
+    pytest.param({}, _MODEL_RAN_USAGE, "end_turn", id="no_guardrail"),
+    pytest.param({}, _NO_MODEL_USAGE, "end_turn", id="no_guardrail_with_zero_usage"),
+]
+_GUARDRAIL_STREAM_CASES: Final = [
+    pytest.param(_INTERVENED, "refusal", id="blocked"),
+    pytest.param({**_INTERVENED, **_MODEL_RAN_METRICS}, "end_turn", id="masked"),
+    pytest.param({**_INTERVENED, **_MASKED_TRACE}, "end_turn", id="masked_per_trace"),
+    pytest.param(
+        {**_INTERVENED, **_MODEL_RAN_METRICS, **_BLOCKED_AND_MASKED_TRACE}, "refusal", id="blocked_and_masked_per_trace"
+    ),
+    pytest.param({"amazon-bedrock-guardrailAction": "NONE", **_MODEL_RAN_METRICS}, "end_turn", id="guardrail_passed"),
+    pytest.param({}, "end_turn", id="no_guardrail"),
+]
+_GUARDRAILED_MESSAGE: Final = {
+    "id": "bedrock-guardrails-19a36670",
+    "type": "message",
+    "role": "assistant",
+    "content": [{"type": "text", "text": _GUARDRAIL_BLOCKED_TEXT}],
+    "model": "claude-haiku-5-5",
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": _NO_MODEL_USAGE,
+}
+
+
+async def _guardrailed_anthropic_messages(reply: httpx.Response, stream: bool) -> object:
+    return await litellm.anthropic_messages(
+        model="bedrock/invoke/us.anthropic.claude-haiku-5-5",
+        messages=[{"role": "user", "content": "My code word is hexblade. What is 2+2?"}],
+        max_tokens=1024,
+        stream=stream,
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(lambda request: reply)),
+    )
+
+
+@pytest.mark.parametrize(("guardrail_fields", "usage", "expected_stop_reason"), _GUARDRAIL_CASES)
+async def test_bedrock_messages_reports_a_guardrail_block_as_refusal(
+    guardrail_fields: Mapping[str, object], usage: Mapping[str, int], expected_stop_reason: str
+) -> None:
+    body: Final = {**_GUARDRAILED_MESSAGE, "usage": usage, **guardrail_fields}
+
+    response: Final = await _guardrailed_anthropic_messages(httpx.Response(200, json=body), stream=False)
+
+    assert response == {**body, "stop_reason": expected_stop_reason}
+
+
+def _sse_events(stream_bytes: bytes) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        json.loads(line.removeprefix(b"data: ")) for line in stream_bytes.splitlines() if line.startswith(b"data: ")
+    )
+
+
+@pytest.mark.parametrize(("guardrail_fields", "expected_stop_reason"), _GUARDRAIL_STREAM_CASES)
+async def test_bedrock_messages_stream_reports_a_guardrail_block_as_refusal(
+    guardrail_fields: Mapping[str, object], expected_stop_reason: str
+) -> None:
+    message_stop: Final = {"type": "message_stop", **guardrail_fields}
+    frames: Final = b"".join(
+        _bedrock_event_frame(event)
+        for event in (
+            {"type": "message_start", "message": {**_GUARDRAILED_MESSAGE, "content": [], "stop_reason": None}},
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": _GUARDRAIL_BLOCKED_TEXT},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}},
+            message_stop,
+        )
+    )
+
+    stream: Final = await _guardrailed_anthropic_messages(httpx.Response(200, content=frames), stream=True)
+    assert isinstance(stream, AsyncIterator)
+    events: Final = _sse_events(b"".join([chunk async for chunk in stream]))
+
+    assert [event["delta"] for event in events if event["type"] == "message_delta"] == [
+        {"stop_reason": expected_stop_reason, "stop_sequence": None}
+    ]
+    assert [event["type"] for event in events][-2:] == ["message_delta", "message_stop"]

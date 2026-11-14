@@ -507,7 +507,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         optional_params["tools"] = normalized_tools
         return optional_params
 
-    def transform_response(
+    def _transform_invoke_response(
         self,
         model: str,
         raw_response: httpx.Response,

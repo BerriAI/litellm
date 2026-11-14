@@ -22,7 +22,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
-from litellm.llms.bedrock.common_utils import BEDROCK_SERVICE_TIER_HEADER, BedrockError
+from litellm.llms.bedrock.common_utils import (
+    BEDROCK_SERVICE_TIER_HEADER,
+    BedrockError,
+    bedrock_invoke_guardrail_blocked,
+)
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     merge_bedrock_invoke_headers,
@@ -74,6 +78,7 @@ class _InvokeServiceTierParams(TypedDict):
 _COHERE_INVOKE_RESPONSE: Final = TypeAdapter(_CohereInvokeResponse)
 _LLAMA_INVOKE_RESPONSE: Final = TypeAdapter(_LlamaInvokeResponse)
 _INVOKE_SERVICE_TIER_PARAMS: Final = TypeAdapter(_InvokeServiceTierParams)
+_INVOKE_RESPONSE_BODY: Final = TypeAdapter(Mapping[str, object])
 
 _GUARDRAIL_CONFIG_EXPECTED_FORMAT: Final = (
     "{'guardrailIdentifier': str, 'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}"
@@ -92,7 +97,7 @@ def _bedrock_invoke_service_tier_headers(optional_params: _InvokeServiceTierPara
             return ()
 
 
-def bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
+def bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> Mapping[str, str]:
     try:
         guardrail_config: Final = _GUARDRAIL_CONFIG_VALIDATOR.validate_python(raw_guardrail_config)
     except ValidationError as e:
@@ -317,10 +322,49 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ModelResponse:
+        response: Final = self._transform_invoke_response(
+            model,
+            raw_response,
+            model_response,
+            logging_obj,
+            request_data,
+            messages,
+            optional_params,
+            litellm_params,
+            encoding,
+            api_key,
+            json_mode,
+        )
+        if not bedrock_invoke_guardrail_blocked(
+            _INVOKE_RESPONSE_BODY.validate_python(raw_response.json()), raw_response.headers
+        ):
+            return response
+        return response.model_copy(
+            update={
+                "choices": [
+                    choice.model_copy(update={"finish_reason": "content_filter"}) for choice in response.choices
+                ]
+            }
+        )
+
+    def _transform_invoke_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict[str, object],
+        messages: list[AllMessageValues],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
