@@ -9585,6 +9585,35 @@ def test_trimming_with_model_cost_max_input_tokens(model):
     assert get_token_count(trimmed_messages, model=model) < litellm.model_cost[model]["max_input_tokens"]
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "openai/gpt-4o",
+        "anthropic/claude-haiku-4-5",
+        "vertex_ai/gemini-2.5-pro",
+        "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    ],
+)
+def test_trimming_with_provider_prefixed_model_resolves_catalog_max_input_tokens(model: str) -> None:
+    budget: Final = 20
+    max_input_tokens: Final = litellm.get_model_info(model)["max_input_tokens"]
+    assert max_input_tokens is not None
+    trim_ratio: Final = budget / max_input_tokens
+    messages = [{"role": "user", "content": "lorem ipsum " * 300}]
+
+    trimmed_messages = trim_messages(messages, model=model, trim_ratio=trim_ratio)
+
+    assert get_token_count(trimmed_messages, model=model) <= budget
+
+
+def test_trimming_with_unknown_prefixed_model_returns_messages_unchanged() -> None:
+    messages = [{"role": "user", "content": "lorem ipsum " * 300}]
+
+    trimmed_messages = trim_messages(messages, model="openai/nonexistent-custom-model-xyz")
+
+    assert trimmed_messages == messages
+
+
 def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> None:
     from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 

@@ -8917,7 +8917,16 @@ def trim_messages(
         if max_tokens is None:
             # Check if model is valid
             if model in litellm.model_cost:
-                max_tokens_for_model: Final = litellm.model_cost[model]["max_input_tokens"]
+                max_tokens_for_model: int | None = litellm.model_cost[model]["max_input_tokens"]
+            elif model is not None and not isinstance(
+                model_info := lookup_catalog_model_info(model, None),
+                ModelInfoLookupMiss,
+            ):
+                max_tokens_for_model = model_info.get("max_input_tokens")
+            else:
+                max_tokens_for_model = None
+
+            if max_tokens_for_model is not None:
                 max_tokens = int(max_tokens_for_model * trim_ratio)
             else:
                 # if user did not specify max (input) tokens
