@@ -3384,6 +3384,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "POWERSPRING",
+    "provider_display_name": "Powerspring",
+    "litellm_provider": "powerspring",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.powerspring.eu/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "powerspring/gpt-oss-120b"
+  },
+  {
     "provider": "PREDIBASE",
     "provider_display_name": "Predibase",
     "litellm_provider": "predibase",
