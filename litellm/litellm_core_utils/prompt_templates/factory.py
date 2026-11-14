@@ -4700,14 +4700,35 @@ def _non_string_guarded_text(item: object, model: str, llm_provider: str) -> Bad
     )
 
 
-def _guard_content_block(item: object, model: str, llm_provider: str) -> BedrockContentBlock | None:
+def _guard_content_blocks(item: object, sends_guarded_parts: bool) -> tuple[BedrockContentBlock, ...]:
     match item:
-        case {"type": "guarded_text", "text": str() as text}:
-            return BedrockContentBlock(guardContent={"text": {"text": text}}) if text.strip() else None
-        case {"type": "guarded_text"} if message_field(item, "text"):
-            raise _non_string_guarded_text(item, model, llm_provider)
+        case {"type": "guarded_text", "text": str() as text} if sends_guarded_parts and text.strip():
+            return (BedrockContentBlock(guardContent={"text": {"text": text}}),)
         case _:
-            return None
+            return ()
+
+
+def _rstripped_guard_content(block: BedrockContentBlock) -> BedrockContentBlock:
+    match block:
+        case {"guardContent": {"text": {"text": str() as text}}}:
+            return BedrockContentBlock(guardContent={"text": {"text": text.rstrip()}})
+        case _:
+            return block
+
+
+def _assistant_turn_with_its_final_guard_content_rstripped(message: BedrockMessageBlock) -> BedrockMessageBlock:
+    if message["role"] != "assistant":
+        return message
+    blocks: Final = message["content"]
+    last_text_index: Final = max(
+        (index for index, block in enumerate(blocks) if "text" in block or "guardContent" in block), default=None
+    )
+    return BedrockMessageBlock(
+        role="assistant",
+        content=[
+            _rstripped_guard_content(block) if index == last_text_index else block for index, block in enumerate(blocks)
+        ],
+    )
 
 
 def _user_guard_content_block(item: object, model: str, llm_provider: str) -> BedrockContentBlock:
@@ -4765,6 +4786,7 @@ class BedrockConverseMessagesProcessor:
         assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
         deployment_model: str | None = None,
         base_model: str | None = None,
+        sends_guarded_assistant_parts: bool = True,
     ) -> list[BedrockMessageBlock]:
         from litellm.llms.bedrock.common_utils import (
             bedrock_converse_accepts_redacted_thinking,
@@ -4953,8 +4975,8 @@ class BedrockConverseMessagesProcessor:
                                 if element.get("text", "").strip():
                                     assistants_part = BedrockContentBlock(text=element["text"])
                                     assistants_parts.append(assistants_part)
-                            elif (guard_block := _guard_content_block(element, model, llm_provider)) is not None:
-                                assistants_parts.append(guard_block)
+                            elif guard_blocks := _guard_content_blocks(element, sends_guarded_assistant_parts):
+                                assistants_parts.extend(guard_blocks)
                             elif element["type"] == "image_url":
                                 if isinstance(element["image_url"], dict):
                                     image_url = element["image_url"]["url"]
@@ -5020,7 +5042,15 @@ class BedrockConverseMessagesProcessor:
                     llm_provider=llm_provider,
                 )
 
-        return _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+        converse_messages: Final = _ensure_document_messages_have_text(
+            _rename_duplicate_bedrock_document_names(contents)
+        )
+        if not (to_claude and converse_messages):
+            return converse_messages
+        return [
+            *converse_messages[:-1],
+            _assistant_turn_with_its_final_guard_content_rstripped(converse_messages[-1]),
+        ]
 
     @staticmethod
     def translate_thinking_blocks_to_reasoning_content_blocks(
@@ -5210,6 +5240,7 @@ def _bedrock_converse_messages_pt(
     assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
     deployment_model: str | None = None,
     base_model: str | None = None,
+    sends_guarded_assistant_parts: bool = True,
 ) -> list[BedrockMessageBlock]:
     """
     Converts given messages from OpenAI format to Bedrock format
@@ -5408,8 +5439,8 @@ def _bedrock_converse_messages_pt(
                             if element.get("text", "").strip():
                                 assistants_part = BedrockContentBlock(text=element["text"])
                                 assistants_parts.append(assistants_part)
-                        elif (guard_block := _guard_content_block(element, model, llm_provider)) is not None:
-                            assistants_parts.append(guard_block)
+                        elif guard_blocks := _guard_content_blocks(element, sends_guarded_assistant_parts):
+                            assistants_parts.extend(guard_blocks)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
                                 image_url = element["image_url"]["url"]
@@ -5468,7 +5499,10 @@ def _bedrock_converse_messages_pt(
                 llm_provider=llm_provider,
             )
 
-    return _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+    converse_messages: Final = _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
+    if not (to_claude and converse_messages):
+        return converse_messages
+    return [*converse_messages[:-1], _assistant_turn_with_its_final_guard_content_rstripped(converse_messages[-1])]
 
 
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:

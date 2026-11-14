@@ -62,7 +62,6 @@ from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_image
 from litellm.llms.bedrock.common_utils import (
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
-    bedrock_converse_accepts_redacted_thinking,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
     bedrock_native_output_is_opt_in,
@@ -239,51 +238,22 @@ def _is_guarded_text_without_string_text(part: object) -> bool:
     return _is_guarded_text(part) and not isinstance(message_field(part, "text"), str)
 
 
-def _without_parts_outside_user_turns(
-    message: AllMessageValues, left_out: Callable[[object], bool]
-) -> AllMessageValues:
+def _without_guarded_system_parts(message: AllMessageValues, left_out: Callable[[object], bool]) -> AllMessageValues:
     parts: Final = parts_of(message_field(message, "content"))
-    if message_field(message, "role") not in ("system", "assistant") or not any(map(left_out, parts)):
+    if message_field(message, "role") != "system" or not any(map(left_out, parts)):
         return message
     return cast(  # cast-ok: only the content parts change, so the message keeps its role's shape
         AllMessageValues, {**message, "content": [part for part in parts if not left_out(part)]}
     )
 
 
-def _rstripped_guarded_text(part: object) -> object:
-    match part:
-        case {"type": "guarded_text", "text": str() as text}:
-            cache_control: Final = message_field(part, "cache_control")
-            stripped: Final = {"type": "guarded_text", "text": text.rstrip()}
-            return stripped if cache_control is None else {**stripped, "cache_control": cache_control}
-        case _:
-            return part
+def _sendable_messages(messages: Sequence[AllMessageValues], sends_guarded_text: bool) -> list[AllMessageValues]:
+    left_out: Final = _is_guarded_text_without_string_text if sends_guarded_text else _is_guarded_text
+    return [_without_guarded_system_parts(message, left_out) for message in messages]
 
 
-def _is_text_part(part: object) -> bool:
-    return message_field(part, "type") in ("text", "guarded_text")
-
-
-def _with_a_final_guarded_part_rstripped(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
-    if not messages or message_field(messages[-1], "role") != "assistant":
-        return messages
-    parts: Final = parts_of(message_field(messages[-1], "content"))
-    last_text_index: Final = max((index for index, part in enumerate(parts) if _is_text_part(part)), default=None)
-    if last_text_index is None or not _is_guarded_text(parts[last_text_index]):
-        return messages
-    return (
-        *messages[:-1],
-        cast(  # cast-ok: only the content parts change, so the message keeps its role's shape
-            AllMessageValues,
-            {
-                **messages[-1],
-                "content": [
-                    _rstripped_guarded_text(part) if index == last_text_index else part
-                    for index, part in enumerate(parts)
-                ],
-            },
-        ),
-    )
+def _sends_guarded_text(optional_params: Mapping[str, object], litellm_params: Mapping[str, object]) -> bool:
+    return "guardrailConfig" in optional_params or drops_unsupported_params(litellm_params.get("drop_params"))
 
 
 def _has_guarded_text(message: object) -> bool:
@@ -321,33 +291,8 @@ def _is_guarded_turn_outside_user_turns(message: object) -> bool:
     return message_field(message, "role") in ("system", "assistant") and _has_guarded_text(message)
 
 
-def _guarded_text_as_text(part: object) -> object:
-    match part:
-        case {"type": "guarded_text", "text": str() as text}:
-            cache_control: Final = message_field(part, "cache_control")
-            if cache_control is None:
-                return {"type": "text", "text": text}
-            return {"type": "text", "text": text, "cache_control": cache_control}
-        case _:
-            return part
-
-
-def _with_guarded_text_as_text(message: AllMessageValues) -> AllMessageValues:
-    if not _is_guarded_turn_outside_user_turns(message):
-        return message
-    parts: Final = parts_of(message_field(message, "content"))
-    return cast(  # cast-ok: only the content parts change, so the message keeps its role's shape
-        AllMessageValues, {**message, "content": [_guarded_text_as_text(part) for part in parts]}
-    )
-
-
 def _leading_system_count(messages: Sequence[AllMessageValues]) -> int:
     return next((index for index, message in enumerate(messages) if not is_system_message(message)), len(messages))
-
-
-def _guarded_text_as_text_past_the_system_prompt(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
-    leading_count: Final = _leading_system_count(messages)
-    return (*messages[:leading_count], *map(_with_guarded_text_as_text, messages[leading_count:]))
 
 
 def _invalid_system_part(part: object, model: str | None) -> BadRequestError:
@@ -446,16 +391,6 @@ class AmazonConverseConfig(BaseConfig):
                 messages_copy[user_message_index]["content"] = [{"type": "guarded_text", "text": content}]
 
         return messages_copy
-
-    @staticmethod
-    def _rewrites_tool_calls_as_text(
-        messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]
-    ) -> bool:
-        return (
-            litellm.bedrock_neutralize_orphaned_tool_blocks
-            and not optional_params.get("tools")
-            and AmazonConverseConfig._has_orphaned_tool_blocks(messages)
-        )
 
     @staticmethod
     def _has_orphaned_tool_blocks(messages: Sequence[AllMessageValues]) -> bool:
@@ -2423,21 +2358,14 @@ class AmazonConverseConfig(BaseConfig):
         base_model: Final = litellm_params.get("base_model")
         capability_model: Final = bedrock_capability_model(model, base_model)
         typed_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
-        sendable_messages: Final = self._sendable_messages(
-            messages, typed_optional_params, litellm_params, capability_model
-        )
+        sends_guarded_text: Final = _sends_guarded_text(typed_optional_params, litellm_params)
+        sendable_messages: Final = _sendable_messages(messages, sends_guarded_text)
         keeps_full_input_check: Final = self._keeps_the_full_input_check(sendable_messages, typed_optional_params)
         wraps_trailing_turns: Final = not keeps_full_input_check and self._wraps_the_trailing_turns(
             sendable_messages, typed_optional_params
         )
         messages, system_content_blocks = self._transform_system_message(
-            list(
-                _guarded_text_as_text_past_the_system_prompt(sendable_messages)
-                if keeps_full_input_check
-                else sendable_messages
-            ),
-            model=capability_model,
-            deployment_model=model,
+            sendable_messages, model=capability_model, deployment_model=model
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
@@ -2460,7 +2388,7 @@ class AmazonConverseConfig(BaseConfig):
             litellm_params=litellm_params,
         )
 
-        bedrock_messages: Final = list(
+        built_messages: Final = list(
             place_tool_result_images(
                 await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
                     messages=messages,
@@ -2469,9 +2397,13 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
                     base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                    sends_guarded_assistant_parts=sends_guarded_text,
                 ),
                 capability_model,
             )
+        )
+        bedrock_messages: Final = (
+            list(messages_with_guard_content_as_text(built_messages)) if keeps_full_input_check else built_messages
         )
 
         request_metadata: Final = resolve_bedrock_request_metadata(
@@ -2485,31 +2417,6 @@ class AmazonConverseConfig(BaseConfig):
         if "guardrailConfig" in data or not drops_unsupported_params(litellm_params.get("drop_params")):
             return data
         return _request_with_guard_content_as_text(bedrock_messages, _data)
-
-    def _sendable_messages(
-        self,
-        messages: Sequence[AllMessageValues],
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
-        capability_model: str,
-    ) -> Sequence[AllMessageValues]:
-        can_send_guarded_text: Final = "guardrailConfig" in optional_params or drops_unsupported_params(
-            litellm_params.get("drop_params")
-        )
-        tool_calls_become_text: Final = self._rewrites_tool_calls_as_text(messages, optional_params)
-        sendable: Final = [
-            _without_parts_outside_user_turns(
-                message,
-                _is_guarded_text_without_string_text
-                if can_send_guarded_text or (tool_calls_become_text and bool(message_field(message, "tool_calls")))
-                else _is_guarded_text,
-            )
-            for message in messages
-        ]
-        to_claude: Final = bedrock_converse_accepts_redacted_thinking(
-            capability_model, self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params))
-        )
-        return _with_a_final_guarded_part_rstripped(sendable) if to_claude else sendable
 
     @staticmethod
     def _deployment_base_model(litellm_params: Mapping[str, object]) -> str | None:
@@ -2546,21 +2453,14 @@ class AmazonConverseConfig(BaseConfig):
         base_model: Final = litellm_params.get("base_model")
         capability_model: Final = bedrock_capability_model(model, base_model)
         typed_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
-        sendable_messages: Final = self._sendable_messages(
-            messages, typed_optional_params, litellm_params, capability_model
-        )
+        sends_guarded_text: Final = _sends_guarded_text(typed_optional_params, litellm_params)
+        sendable_messages: Final = _sendable_messages(messages, sends_guarded_text)
         keeps_full_input_check: Final = self._keeps_the_full_input_check(sendable_messages, typed_optional_params)
         wraps_trailing_turns: Final = not keeps_full_input_check and self._wraps_the_trailing_turns(
             sendable_messages, typed_optional_params
         )
         messages, system_content_blocks = self._transform_system_message(
-            list(
-                _guarded_text_as_text_past_the_system_prompt(sendable_messages)
-                if keeps_full_input_check
-                else sendable_messages
-            ),
-            model=capability_model,
-            deployment_model=model,
+            sendable_messages, model=capability_model, deployment_model=model
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
@@ -2583,7 +2483,7 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         ## TRANSFORMATION ##
-        bedrock_messages: Final[list[MessageBlock]] = list(
+        built_messages: Final[list[MessageBlock]] = list(
             place_tool_result_images(
                 _bedrock_converse_messages_pt(
                     messages=messages,
@@ -2592,9 +2492,13 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
                     base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                    sends_guarded_assistant_parts=sends_guarded_text,
                 ),
                 capability_model,
             )
+        )
+        bedrock_messages: Final = (
+            list(messages_with_guard_content_as_text(built_messages)) if keeps_full_input_check else built_messages
         )
 
         request_metadata: Final = resolve_bedrock_request_metadata(

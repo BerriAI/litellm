@@ -4134,6 +4134,9 @@ async def test_without_a_guardrail_or_drop_params_only_user_turns_keep_guarded_t
     assert (_GUARDED_PART_TEXT in json.dumps(guarded)) is (placement == "user")
 
 
+_FINAL_GUARDED_PART: Final = {"type": "guarded_text", "text": "Leaves fall \n"}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
@@ -4145,19 +4148,30 @@ async def test_without_a_guardrail_or_drop_params_only_user_turns_keep_guarded_t
     ],
     ids=["guardrail_with_guarded_user_turn", "guardrail", "drop_params_without_guardrail"],
 )
+@pytest.mark.parametrize(
+    "assistant_turns",
+    [
+        ({"role": "assistant", "content": [_FINAL_GUARDED_PART]},),
+        ({"role": "assistant", "content": [_FINAL_GUARDED_PART, {"type": "text", "text": ""}]},),
+        ({"role": "assistant", "content": [_FINAL_GUARDED_PART, {"type": "text", "text": " \n"}]},),
+        ({"role": "assistant", "content": [_FINAL_GUARDED_PART]}, {"role": "assistant", "content": "  "}),
+    ],
+    ids=["guarded_part_last", "empty_text_part_after", "blank_text_part_after", "blank_assistant_message_after"],
+)
 async def test_final_assistant_guarded_text_is_rstripped_because_claude_rejects_trailing_whitespace(
     use_async: bool,
     user_part_type: str,
     optional_params: Mapping[str, object],
     drop_params: bool,
     sent_block: Mapping[str, object],
+    assistant_turns: tuple[Mapping[str, object], ...],
 ):
     config: Final = AmazonConverseConfig()
     kwargs: Final = dict(
         model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=[
             {"role": "user", "content": [{"type": user_part_type, "text": "Write a haiku about autumn."}]},
-            {"role": "assistant", "content": [{"type": "guarded_text", "text": "Leaves fall \n"}]},
+            *(copy.deepcopy(dict(turn)) for turn in assistant_turns),
         ],
         optional_params=dict(optional_params),
         litellm_params={"drop_params": drop_params},
@@ -4253,6 +4267,95 @@ async def test_without_a_guardrail_or_drop_params_a_tool_call_turn_sent_as_text_
     assert (_GUARDED_PART_TEXT in sent) is keeps_part
     assert "Paris." not in sent
     assert "guardContent" not in sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("optional_params", [{}, _GUARDRAIL_CONFIG], ids=["no_guardrail", "guardrail"])
+async def test_a_final_tool_call_turn_sent_as_text_sends_its_guarded_part_as_a_text_part_would_be_sent(
+    use_async: bool, optional_params: Mapping[str, object]
+):
+    config: Final = AmazonConverseConfig()
+
+    async def transformed(part_type: str) -> RequestObject:
+        kwargs: Final = dict(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[
+                {"role": "user", "content": "Look up the weather."},
+                {
+                    "role": "assistant",
+                    "content": [{"type": part_type, "text": "Let me check.  "}],
+                    "tool_calls": [_LOOKUP_CALL],
+                },
+            ],
+            optional_params=dict(optional_params),
+            litellm_params={},
+        )
+        return await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+    assert await transformed("guarded_text") == await transformed("text")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("optional_params", "guarded_text"),
+    [({}, "Checking the weather."), (_GUARDRAIL_CONFIG, ["Checking the weather."])],
+    ids=["no_guardrail", "guardrail_with_non_string_text"],
+)
+async def test_a_tool_call_turn_whose_guarded_parts_are_left_out_sends_only_its_tool_call(
+    use_async: bool, optional_params: Mapping[str, object], guarded_text: object
+):
+    config: Final = AmazonConverseConfig()
+
+    async def transformed(content: list[dict[str, object]] | None) -> RequestObject:
+        kwargs: Final = dict(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[
+                {"role": "user", "content": "Look up the weather."},
+                {"role": "assistant", "content": content, "tool_calls": [_LOOKUP_CALL]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
+            ],
+            optional_params={**optional_params, "tools": [_LOOKUP_TOOL]},
+            litellm_params={},
+        )
+        return await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+    with patch.object(litellm, "modify_params", True):
+        left_out: Final = await transformed([{"type": "guarded_text", "text": guarded_text}])
+        without_content: Final = await transformed(None)
+    assert left_out == without_content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_without_a_guardrail_or_drop_params_a_left_out_guarded_assistant_part_keeps_its_cache_point(
+    use_async: bool,
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[
+            {"role": "user", "content": "Pick a fruit."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "I pick"},
+                    {"type": "guarded_text", "text": _GUARDED_PART_TEXT, "cache_control": {"type": "ephemeral"}},
+                ],
+            },
+            {"role": "user", "content": "Why?"},
+        ],
+        optional_params={},
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    assert request["messages"][1] == {
+        "role": "assistant",
+        "content": [{"text": "I pick"}, {"cachePoint": {"type": "default"}}],
+    }
 
 
 def _tool_turn_conversation(placement: str, user_part_type: str) -> list[AllMessageValues]:
