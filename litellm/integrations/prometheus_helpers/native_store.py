@@ -3,7 +3,6 @@ from __future__ import annotations
 import builtins
 import json
 import math
-import os
 import traceback
 import weakref
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
@@ -35,7 +34,6 @@ from litellm.integrations.prometheus_helpers.forwarding_store import ForwardingS
 from litellm.integrations.prometheus_helpers.shared_prometheus_series_admissions import (
     SharedPrometheusSeriesAdmissions,
 )
-from litellm.litellm_core_utils.core_helpers import env_flag
 from litellm.rust_bridge import _native
 from litellm.types.integrations.custom_logger_v2 import Outcome
 from litellm.types.integrations.prometheus import DEFINED_PROMETHEUS_METRICS, NoOpMetric, PrometheusMetricLabels
@@ -71,7 +69,6 @@ NativeOp: TypeAlias = Literal[
     "router_remaining",
 ]
 
-NATIVE_PROMETHEUS_ENV: Final = "LITELLM_NATIVE_PROMETHEUS"
 NativePrometheusMetric: Final = _native.NativePrometheusMetric
 
 _PAYLOAD_LABEL_KEYS: Final = ("model_group", "model_id", "api_base", "custom_llm_provider")
@@ -94,10 +91,6 @@ _DEFINED_METRICS: Final = TypeAdapter(tuple[DEFINED_PROMETHEUS_METRICS, ...]).va
     get_args(DEFINED_PROMETHEUS_METRICS)
 )
 _KINDS: Final[Mapping[str, PrometheusKind]] = {"counter": "counter", "gauge": "gauge", "histogram": "histogram"}
-
-
-def native_prometheus_enabled() -> bool:
-    return env_flag(os.environ, NATIVE_PROMETHEUS_ENV, verbose_logger)
 
 
 def _parsed(adapter: TypeAdapter[_Parsed], value: object) -> _Parsed | None:

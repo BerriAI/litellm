@@ -9,7 +9,7 @@ from litellm.integrations.custom_logger_v2.enums import Hook
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs, with_sources
 from litellm.integrations.custom_logger_v2.legacy import Admit, KwargsFields, hook_subscribers, run_subscribers
 from litellm.integrations.prometheus import PrometheusLogger
-from litellm.integrations.prometheus_helpers.native_store import NATIVE_PROMETHEUS_ENV, PrometheusCompanion
+from litellm.integrations.prometheus_helpers.native_store import PrometheusCompanion
 from litellm.litellm_core_utils.litellm_logging import LOGGING_KEYS, Logging
 from litellm.types.integrations.custom_logger_v2 import Outcome
 
@@ -17,7 +17,6 @@ Event = Literal["success", "failure"]
 
 
 def enable_native_prometheus(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(NATIVE_PROMETHEUS_ENV, "true")
     monkeypatch.delenv("PROMETHEUS_MULTIPROC_DIR", raising=False)
 
 

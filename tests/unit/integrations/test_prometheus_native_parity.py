@@ -30,12 +30,10 @@ from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.litellm_logging import LOGGING_KEYS, Logging, _in_memory_loggers
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.integrations.prometheus_helpers.native_store import (
-    NATIVE_PROMETHEUS_ENV,
     NativeFamilyCollector,
     NativeTicket,
     PrometheusCompanion,
     Stopped,
-    native_prometheus_enabled,
 )
 from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, Member, UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
@@ -74,42 +72,10 @@ import litellm.accounting.metrics  # noqa: E402,F401  # registers its collectors
 
 _PREEXISTING: Final = frozenset(REGISTRY._collector_to_names)
 GOLDEN: Final = Path(__file__).parent / "prometheus_golden" / "python_outputs.json"
-RECORD_ENV: Final = "PROMETHEUS_GOLDEN_RECORD"
-_RECORDED: Final[dict[str, object]] = {}
-_RECORDING: Final = os.environ.get(RECORD_ENV) == "1"
-
-
-def _recording() -> bool:
-    return _RECORDING
 
 
 def _golden(case: str) -> object:
     return json.loads(GOLDEN.read_text())[case]
-
-
-def _kept_value(case: str, value: object) -> object:
-    assert _RECORDED.setdefault(case, value) == value
-    return value
-
-
-async def _python_side(case: str, produce: Callable[[], Awaitable[object]]) -> object:
-    if not _recording():
-        return _golden(case)
-    return _kept_value(case, await produce())
-
-
-def _python_side_sync(case: str, produce: Callable[[], object]) -> object:
-    return _kept_value(case, produce()) if _recording() else _golden(case)
-
-
-@pytest.fixture(scope="module", autouse=True)
-def golden_writer() -> Generator[None]:
-    yield
-    if _recording():
-        recorded: Final = json.loads(GOLDEN.read_text()) if GOLDEN.exists() else {}
-        recorded.update(_RECORDED)
-        GOLDEN.parent.mkdir(exist_ok=True)
-        GOLDEN.write_text(json.dumps(recorded, indent=1, sort_keys=True) + "\n")
 
 
 def _logger_collectors() -> list[Collector]:
@@ -323,15 +289,8 @@ CORPUS: Final = (
 )
 
 
-Mode: TypeAlias = Literal["python", "native", "fallback"]
+Mode: TypeAlias = Literal["native", "fallback"]
 MODES: Final[tuple[Mode, ...]] = ("native", "fallback")
-
-
-def _flag(mode: Mode, monkeypatch: pytest.MonkeyPatch) -> None:
-    if mode == "python":
-        monkeypatch.delenv(NATIVE_PROMETHEUS_ENV, raising=False)
-    else:
-        monkeypatch.setenv(NATIVE_PROMETHEUS_ENV, "true")
 
 
 def _line_of(logger: PrometheusLogger, mode: Mode) -> tuple[object, ...]:
@@ -348,11 +307,10 @@ async def _drive(
 ) -> str:
     monkeypatch.setattr("time.time", lambda: 1_763_000_000.25)
     monkeypatch.setattr("litellm.integrations.prometheus.datetime", _FixedDatetime)
-    _flag(mode, monkeypatch)
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
     logger: Final = PrometheusLogger()
-    assert (logger._native_store is not None) is (mode != "python")
+    assert logger._native_store is not None
     lines: Final = _Lines()
     verbose_logger.addHandler(lines)
     try:
@@ -694,7 +652,7 @@ async def test_the_native_callback_and_the_fallback_expose_exactly_what_the_pyth
 ) -> None:
     for name, value in CONFIGS[config].items():
         setattr(litellm, name, copy.deepcopy(value))
-    python_text: Final = str(await _python_side(f"main/{config}", lambda: _drive("python", monkeypatch)))
+    python_text: Final = str(_golden(f"main/{config}"))
     _clear_registry()
     native_text: Final = await _drive(mode, monkeypatch)
 
@@ -792,7 +750,7 @@ async def test_typed_field_edge_cases_expose_what_the_python_logger_does(
 ) -> None:
     for name, value in EDGE_CONFIGS[config].items():
         setattr(litellm, name, copy.deepcopy(value))
-    python_text: Final = str(await _python_side(f"edges/{config}", lambda: _drive("python", monkeypatch, _edges)))
+    python_text: Final = str(_golden(f"edges/{config}"))
     _clear_registry()
     native_text: Final = await _drive("native", monkeypatch, _edges)
 
@@ -807,7 +765,6 @@ async def test_typed_field_edge_cases_expose_what_the_python_logger_does(
 
 
 async def _shared_call_id_lines(mode: Mode, monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    _flag(mode, monkeypatch)
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
     logger: Final = PrometheusLogger()
@@ -826,7 +783,7 @@ async def _shared_call_id_lines(mode: Mode, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 async def test_concurrent_attempts_sharing_a_call_id_keep_their_own_series(monkeypatch: pytest.MonkeyPatch) -> None:
-    recorded: Final = await _python_side("shared_call_id", lambda: _shared_call_id_lines("python", monkeypatch))
+    recorded: Final = _golden("shared_call_id")
     assert isinstance(recorded, list)
     python_lines: Final = [str(line) for line in recorded]
     native_lines: Final = await _shared_call_id_lines("native", monkeypatch)
@@ -845,7 +802,7 @@ async def _openmetrics(mode: Mode, monkeypatch: pytest.MonkeyPatch) -> str:
 
 
 async def test_openmetrics_output_matches_too(monkeypatch: pytest.MonkeyPatch) -> None:
-    python_text: Final = str(await _python_side("openmetrics", lambda: _openmetrics("python", monkeypatch)))
+    python_text: Final = str(_golden("openmetrics"))
     assert await _openmetrics("native", monkeypatch) == python_text
 
 
@@ -978,18 +935,14 @@ def _kept(line: str) -> bool:
     return _TIMED.search(name) is None or (name.endswith("_count") and not name.endswith("_created"))
 
 
-def _fresh_loggers(native: bool, monkeypatch: pytest.MonkeyPatch) -> None:
-    if native:
-        monkeypatch.setenv(NATIVE_PROMETHEUS_ENV, "true")
-    else:
-        monkeypatch.delenv(NATIVE_PROMETHEUS_ENV, raising=False)
+def _fresh_loggers(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in _CALLBACK_LISTS:
         monkeypatch.setattr(litellm, name, [])
     _in_memory_loggers[:] = [logger for logger in _in_memory_loggers if not isinstance(logger, PrometheusLogger)]
 
 
-async def _completion_text(native: bool, registration: str, scenario: str, monkeypatch: pytest.MonkeyPatch) -> str:
-    _fresh_loggers(native, monkeypatch)
+async def _completion_text(registration: str, scenario: str, monkeypatch: pytest.MonkeyPatch) -> str:
+    _fresh_loggers(monkeypatch)
     dynamic: Final = _REGISTRATIONS[registration][0]()
     options: Final = dict(_SCENARIOS[scenario])
     queue: Final = options.pop("queue_time_seconds", None)
@@ -1043,18 +996,11 @@ def saved_in_memory_loggers() -> Generator[None]:
 async def test_every_registration_path_emits_each_request_exactly_once_as_python_does(
     registration: str, scenario: str, monkeypatch: pytest.MonkeyPatch, native_recordings: list[str]
 ) -> None:
-    _ = await _completion_text(not _recording(), registration, scenario, monkeypatch)
+    _ = await _completion_text(registration, scenario, monkeypatch)
     _clear_registry()
     native_recordings.clear()
-    python_text: Final = str(
-        await _python_side(
-            f"registration/{registration}/{scenario}",
-            lambda: _completion_text(False, registration, scenario, monkeypatch),
-        )
-    )
-    assert native_recordings == []
-    _clear_registry()
-    native_text: Final = await _completion_text(True, registration, scenario, monkeypatch)
+    python_text: Final = str(_golden(f"registration/{registration}/{scenario}"))
+    native_text: Final = await _completion_text(registration, scenario, monkeypatch)
 
     assert any(isinstance(collector, NativeFamilyCollector) for collector in _logger_collectors())
     assert native_text == python_text
@@ -1084,8 +1030,8 @@ async def test_every_registration_path_emits_each_request_exactly_once_as_python
     )
 
 
-def _sync_completion_text(native: bool, registration: str, monkeypatch: pytest.MonkeyPatch) -> str:
-    _fresh_loggers(native, monkeypatch)
+def _sync_completion_text(registration: str, monkeypatch: pytest.MonkeyPatch) -> str:
+    _fresh_loggers(monkeypatch)
     _ = _REGISTRATIONS[registration][0]()
     _ = litellm.completion(model="gpt-4o-mini", messages=[{"role": "user", "content": "hello"}], mock_response="hi")
     return generate_latest(_ours()).decode()
@@ -1096,23 +1042,20 @@ def _sync_completion_text(native: bool, registration: str, monkeypatch: pytest.M
 def test_a_sync_completion_emits_nothing_on_either_side(
     registration: str, monkeypatch: pytest.MonkeyPatch, native_recordings: list[str]
 ) -> None:
-    python_text: Final = str(
-        _python_side_sync(f"sync/{registration}", lambda: _sync_completion_text(False, registration, monkeypatch))
-    )
-    _clear_registry()
-    native_text: Final = _sync_completion_text(True, registration, monkeypatch)
+    python_text: Final = str(_golden(f"sync/{registration}"))
+    native_text: Final = _sync_completion_text(registration, monkeypatch)
 
     assert native_recordings == []
     assert "litellm_total_tokens_metric_total{" not in python_text
     assert native_text == python_text
 
 
-def _cooled_down_text(native: bool, monkeypatch: pytest.MonkeyPatch) -> str:
-    _fresh_loggers(native, monkeypatch)
+def _cooled_down_text(monkeypatch: pytest.MonkeyPatch) -> str:
+    _fresh_loggers(monkeypatch)
     _ = _proxy_startup()
     logger: Final = get_prometheus_logger_from_callbacks()
     assert isinstance(logger, PrometheusLogger)
-    assert (logger.v2_companion is not None) is native
+    assert logger.v2_companion is not None
     logger.increment_deployment_cooled_down("gpt-4o-mini", "id-1", "https://api.openai.com", "openai", "429")
     text: Final = generate_latest(_ours()).decode()
     return "\n".join(line for line in text.splitlines() if _kept(line))
@@ -1120,19 +1063,11 @@ def _cooled_down_text(native: bool, monkeypatch: pytest.MonkeyPatch) -> str:
 
 @pytest.mark.usefixtures("saved_in_memory_loggers")
 def test_the_router_cooldown_lookup_reaches_the_native_logger(monkeypatch: pytest.MonkeyPatch) -> None:
-    python_text: Final = str(_python_side_sync("cooled_down", lambda: _cooled_down_text(False, monkeypatch)))
-    _clear_registry()
-    native_text: Final = _cooled_down_text(True, monkeypatch)
+    python_text: Final = str(_golden("cooled_down"))
+    native_text: Final = _cooled_down_text(monkeypatch)
 
     assert re.search(r"^litellm_deployment_cooled_down_total\{.*\} 1\.0$", native_text, re.MULTILINE)
     assert native_text == python_text
-
-
-def test_multiprocess_mode_runs_the_native_logger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv(NATIVE_PROMETHEUS_ENV, "true")
-    monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
-
-    assert native_prometheus_enabled()
 
 
 _PID: Final = re.compile(r'pid="\d+"')
@@ -1164,9 +1099,7 @@ def _multiprocess_text(mode: Mode, config: str, tmp_path: Path) -> str:
     directory: Final = tmp_path / mode
     directory.mkdir()
     output: Final = tmp_path / f"{mode}.txt"
-    environment: Final = {
-        key: value for key, value in os.environ.items() if key not in (NATIVE_PROMETHEUS_ENV, RECORD_ENV)
-    }
+    environment: Final = dict(os.environ)
     environment["PROMETHEUS_MULTIPROC_DIR"] = str(directory)
     environment["PYTHONPATH"] = os.pathsep.join(
         (str(Path(litellm.__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[3]))
@@ -1187,9 +1120,7 @@ def _multiprocess_text(mode: Mode, config: str, tmp_path: Path) -> str:
 def test_multiprocess_mode_writes_what_the_python_logger_writes_to_the_shared_directory(
     config: str, mode: Mode, tmp_path: Path
 ) -> None:
-    python_text: Final = str(
-        _python_side_sync(f"multiprocess/{config}", lambda: _multiprocess_text("python", config, tmp_path))
-    )
+    python_text: Final = str(_golden(f"multiprocess/{config}"))
     native_text: Final = _multiprocess_text(mode, config, tmp_path)
 
     assert "litellm_spend_metric" in python_text or config.startswith("excludes")
