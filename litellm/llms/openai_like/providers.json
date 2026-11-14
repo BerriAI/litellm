@@ -314,5 +314,11 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "nodecode": {
+    "base_url": "https://api.nodecode.ai/v1",
+    "api_key_env": "NODECODE_API_KEY",
+    "api_base_env": "NODECODE_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   }
 }
