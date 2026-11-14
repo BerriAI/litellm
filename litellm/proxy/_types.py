@@ -29,7 +29,7 @@ from typing_extensions import (
 )
 
 from litellm._uuid import uuid
-from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
+from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, KEY_EXPIRY_ALERT_MAX_DAYS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     OTEL_DESTINATION_VALIDATORS,
     validate_arize_otlp_protocol_value,
@@ -3019,6 +3019,16 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). "
             "Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window "
             "falls under the threshold (default 0.9). Off unless set."
+        ),
+    )
+    key_expiry_alert_days: int | None = Field(
+        None,
+        ge=1,
+        le=KEY_EXPIRY_ALERT_MAX_DAYS,
+        description=(
+            "Email a key's owner once when the key has this many days or fewer left before it expires. "
+            "Applies to every key with an expiry date and an owner email, including existing keys. "
+            "A key's metadata.key_expiry_alert_days overrides it. Off unless set."
         ),
     )
     maximum_spend_logs_retention_period: str | None = Field(

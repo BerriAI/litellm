@@ -1858,6 +1858,10 @@ OTEL_SERVICE_NAME_METADATA_KEYS: Final = ("otel_service_name_override", "otel_se
 
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED: Final = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
+KEY_EXPIRY_ALERT_MAX_DAYS: Final = 365
+LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS: Final = get_env_int(
+    "LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS", 43200
+)  # 12 hours default
 LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS: Final = get_env_int(
     "LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400
 )  # 24 hours default
@@ -1917,6 +1921,7 @@ CLOUDZERO_MAX_FETCHED_DATA_RECORDS: Final = get_env_int("CLOUDZERO_MAX_FETCHED_D
 SPEND_LOG_CLEANUP_JOB_NAME: Final = "spend_log_cleanup"
 BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME: Final = "background_health_check_db_save"
 KEY_ROTATION_JOB_NAME: Final = "litellm_key_rotation_job"
+KEY_EXPIRY_ALERT_JOB_NAME: Final = "litellm_key_expiry_alert_job"
 EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME: Final = "litellm_expired_ui_session_key_cleanup_job"
 WEEKLY_SPEND_REPORT_JOB_ID: Final = "weekly_spend_report_job"
 MONTHLY_SPEND_REPORT_JOB_ID: Final = "monthly_spend_report_job"

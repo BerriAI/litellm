@@ -17,7 +17,7 @@ from pydantic import JsonValue, ValidationError
 
 import litellm
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
+from litellm.constants import KEY_EXPIRY_ALERT_MAX_DAYS, PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.project import LiteLLM_ProjectTable
@@ -102,6 +102,8 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     persist_deleted_verification_tokens,
     prepare_key_update_data,
     prepare_metadata_fields,
+    raise_on_invalid_key_expiry_alert_days,
+    raise_on_invalid_key_logging_config,
     raise_on_logging_credential_change,
     reset_key_spend_fn,
     update_key_fn,
@@ -24622,6 +24624,40 @@ def test_user_new_without_a_key_does_not_check_guardrail_names(spend_permission_
 
     assert response.status_code == 200, response.text
     find_many.assert_not_awaited()
+
+
+@pytest.mark.parametrize("value", [1, 7, KEY_EXPIRY_ALERT_MAX_DAYS])
+def test_key_expiry_metadata_accepts_day_counts(value: int) -> None:
+    assert raise_on_invalid_key_expiry_alert_days({"key_expiry_alert_days": value}) is None
+    assert raise_on_invalid_key_expiry_alert_days({}) is None
+
+
+@pytest.mark.parametrize("value", [None, "7", True, 7.0, {}, [], [7], [7, 1], 0, -1, KEY_EXPIRY_ALERT_MAX_DAYS + 1])
+def test_key_expiry_metadata_rejects_invalid_thresholds(value: object) -> None:
+    with pytest.raises(HTTPException) as exc:
+        raise_on_invalid_key_expiry_alert_days({"key_expiry_alert_days": value})
+    assert exc.value.status_code == 400
+    assert "key_expiry_alert_days" in str(exc.value.detail)
+
+
+def test_key_generate_accepts_expiry_alert_opt_in(spend_permission_client: TestClient) -> None:
+    response: Final = spend_permission_client.post("/key/generate", json={"metadata": {"key_expiry_alert_days": 7}})
+    assert response.status_code == 200, response.text
+    assert response.json()["metadata"]["key_expiry_alert_days"] == 7
+
+
+@pytest.mark.parametrize("route", ["/key/generate", "/key/update"])
+def test_key_writes_reject_invalid_expiry_alert_days(spend_permission_client: TestClient, route: str) -> None:
+    from litellm.proxy import proxy_server
+
+    proxy_server.prisma_client.db.litellm_verificationtoken.find_unique.return_value = LiteLLM_VerificationToken(
+        token=hash_token("sk-test"), metadata={}
+    )
+    response: Final = spend_permission_client.post(
+        route, json={"key": "sk-test", "metadata": {"key_expiry_alert_days": [7, 1]}}
+    )
+    assert response.status_code == 400, response.text
+    assert "key_expiry_alert_days" in response.text
 
 
 @pytest.mark.asyncio
