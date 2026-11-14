@@ -11791,3 +11791,57 @@ async def test_mcp_register_application_type_reaches_upstream_or_is_rejected(
             assert posted["application_type"] == application_type
     finally:
         mgmt_endpoints._temporary_mcp_servers.pop(server.server_id, None)
+
+
+class TestRemoveMCPServerAccessGroupSync:
+    """DELETE /v1/mcp/server/{server_id} drops the server from the access groups that listed it."""
+
+    @staticmethod
+    def _delete_patches(prisma_client, deleted_row, sync_groups, manager):
+        module = "litellm.proxy.management_endpoints.mcp_management_endpoints"
+        return (
+            patch(f"{module}.MCP_AVAILABLE", True),
+            patch(f"{module}.get_prisma_client_or_throw", return_value=prisma_client),
+            patch(f"{module}.delete_mcp_server", AsyncMock(return_value=deleted_row)),
+            patch(f"{module}.sync_access_groups_for_deleted_mcp_server", sync_groups),
+            patch(f"{module}.global_mcp_server_manager", manager),
+        )
+
+    @staticmethod
+    def _manager():
+        manager = MagicMock()
+        manager.reload_servers_from_database = AsyncMock()
+        return manager
+
+    @pytest.mark.asyncio
+    async def test_deleted_server_is_removed_from_access_groups(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import remove_mcp_server
+
+        prisma_client = MagicMock()
+        sync_groups = AsyncMock()
+        admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+        deleted_row = generate_mock_mcp_server_db_record(server_id="srv-1")
+
+        with ExitStack() as stack:
+            for active_patch in self._delete_patches(prisma_client, deleted_row, sync_groups, self._manager()):
+                stack.enter_context(active_patch)
+            response = await remove_mcp_server(server_id="srv-1", user_api_key_dict=admin)
+
+        assert response.status_code == 202
+        sync_groups.assert_awaited_once_with(prisma_client, server_id="srv-1")
+
+    @pytest.mark.asyncio
+    async def test_access_groups_are_untouched_when_the_server_does_not_exist(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import remove_mcp_server
+
+        sync_groups = AsyncMock()
+        admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+
+        with ExitStack() as stack:
+            for active_patch in self._delete_patches(MagicMock(), None, sync_groups, self._manager()):
+                stack.enter_context(active_patch)
+            with pytest.raises(HTTPException) as exc_info:
+                await remove_mcp_server(server_id="srv-missing", user_api_key_dict=admin)
+
+        assert exc_info.value.status_code == 404
+        sync_groups.assert_not_awaited()
