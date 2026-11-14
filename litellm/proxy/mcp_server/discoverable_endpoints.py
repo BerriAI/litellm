@@ -1197,7 +1197,7 @@ async def authorize_with_server(
         mcp_server_id=resolved_server.server_id
         if (litellm_user_id or ephemeral_dcr_client or managed_per_user)
         else None,
-        managed_scope=selected_scope if managed_per_user else None,
+        managed_scope=selected_scope if managed_per_user or litellm_user_id else None,
         scope_user_id=scope_user_id,
         dcr_client_id=ephemeral_dcr_client.client_id if ephemeral_dcr_client else None,
         dcr_client_secret=ephemeral_dcr_client.client_secret if ephemeral_dcr_client else None,
@@ -1381,6 +1381,7 @@ async def exchange_token_with_server(
     bridge_upstream_scope: str | None = None
     refresh_request_scope: str | None = None
     is_bridge: Final = resolved_server.is_oauth_delegate and resolved_server.is_dcr_bridge
+    requested_scope: Final[str | None]
 
     if grant_type == "refresh_token":
         # Phase 1 for a bridge refresh: open the client's refresh envelope, re-validate the sealed
@@ -1409,6 +1410,7 @@ async def exchange_token_with_server(
             **token_request.body,
         }
         refresh_request_scope = scope or bridge_upstream_scope
+        requested_scope = scope or " ".join(refresh_credential.get("scopes") or ()) if refresh_credential else None
         if refresh_request_scope:
             token_data["scope"] = refresh_request_scope
         refresh_ownership = (  # rebind-ok: grant-specific branches assign one ownership value
@@ -1464,16 +1466,18 @@ async def exchange_token_with_server(
             if managed_code is not None
             else (bridge_identity.requested_scope if bridge_identity is not None else None)
         )
-        exchange_scope: Final = scope if scope is not None else granted_scope
-        authorization_scope: Final = (
-            exchange_scope if exchange_scope is not None else " ".join(resolved_server.scopes or ())
+        exchange_scope: Final = granted_scope if granted_scope is not None else scope
+        requested_scope = (
+            exchange_scope
+            if exchange_scope is not None or managed_code is not None or bridge_identity is not None
+            else " ".join(resolved_server.scopes or ()) or None
         )
         token_data = {
             "grant_type": "authorization_code",
             "code": bridge_identity.upstream_code if bridge_identity else authorization_code,
             "redirect_uri": resolved_redirect_uri,
             **token_request.body,
-            **({"scope": authorization_scope} if authorization_scope else {}),
+            **({"scope": requested_scope} if requested_scope else {}),
         }
         if code_verifier:
             token_data["code_verifier"] = code_verifier
@@ -1551,16 +1555,6 @@ async def exchange_token_with_server(
         else None
     )
 
-    requested_scope: Final = (
-        managed_code.requested_scope
-        if managed_code is not None
-        else bridge_identity.requested_scope
-        if bridge_identity is not None
-        else scope or " ".join(refresh_credential.get("scopes") or ())
-        if refresh_credential
-        else None
-    )
-
     # Store server-side when the server is configured for per-user OAuth and
     # the calling client has provided a valid LiteLLM identity.
     # Errors are non-fatal: the token is still returned to the client.
@@ -1618,8 +1612,9 @@ async def exchange_token_with_server(
     # upstream token) instead of the raw upstream token, so the one bearer both admits the caller and
     # forwards the upstream credential. Only this mode mints; every other server returns the raw token.
     if bridge_mint_ready is not None:
-        if refresh_request_scope and isinstance(token_response, dict) and not token_response.get("scope"):
-            token_response = {**token_response, "scope": refresh_request_scope}
+        mint_scope: Final = requested_scope if grant_type == "authorization_code" else refresh_request_scope
+        if mint_scope and isinstance(token_response, dict) and not token_response.get("scope"):
+            token_response = {**token_response, "scope": mint_scope}
         # Phase 3: seal the upstream grant into the client-held envelope; failures map through the same
         # OAuth-shaped response as the phase-1 preconditions.
         minted: Final = finish_bridge_mint(
