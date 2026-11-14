@@ -8,7 +8,8 @@ unioned rather than ranked.
 """
 
 from types import SimpleNamespace
-from unittest.mock import patch
+from typing import NoReturn
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -34,16 +35,16 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     UserApiKeyCache,
     model_access_group_registry_cache_key,
-    model_access_group_spend_counter_key,
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.spend_counters import model_access_group_counter
 
 TEAM_ID = "team-1"
 USER_ID = "user-1"
 ORG_ID = "org-1"
 BUDGETED_GROUPS = ("tier-a", "tier-b", "claude-tier")
-MODEL_ACCESS_GROUP_COUNTER_KEY = model_access_group_spend_counter_key("tier-a")
+MODEL_ACCESS_GROUP_COUNTER_KEY = model_access_group_counter("tier-a")
 
 MODEL_LIST = [
     {
@@ -64,18 +65,6 @@ class _ExplodingPrismaClient:
 
     def __getattr__(self, name: str) -> object:
         raise AssertionError(f"unexpected database access: {name}")
-
-
-class _CountingRouter(Router):
-    """Counts access-group lookups, so a test can prove the registry gate skipped them."""
-
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.access_group_lookups = 0
-
-    def get_model_access_groups(self, *args, **kwargs):
-        self.access_group_lookups += 1
-        return super().get_model_access_groups(*args, **kwargs)
 
 
 async def _cache(
@@ -233,14 +222,21 @@ async def test_group_without_a_budget_is_not_attributed():
 
 
 @pytest.mark.asyncio
-async def test_empty_registry_skips_the_access_group_matching_entirely():
-    router = _CountingRouter(model_list=MODEL_LIST)
+async def test_empty_registry_skips_the_access_group_matching_entirely(monkeypatch: pytest.MonkeyPatch):
+    router = Router(model_list=MODEL_LIST)
+    registry_type = type(router.registry())
+    access_group_lookups = MagicMock(wraps=registry_type.access_groups)
+    monkeypatch.setattr(
+        registry_type,
+        "access_groups",
+        lambda registry, *args, **kwargs: access_group_lookups(registry, *args, **kwargs),
+    )
 
     assert await _matched(key_models=["tier-a"], cache=await _cache(budgeted_groups=()), llm_router=router) == ()
-    assert router.access_group_lookups == 0
+    assert access_group_lookups.call_count == 0
 
     assert await _matched(key_models=["tier-a"], llm_router=router) == ("tier-a",)
-    assert router.access_group_lookups == 1
+    assert access_group_lookups.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -262,22 +258,23 @@ async def test_stamp_records_the_matched_groups_on_the_auth_object():
     assert valid_token.matched_model_access_groups == ["tier-a", "tier-b"]
 
 
-class _BrokenRouter(Router):
-    def get_model_access_groups(self, *args, **kwargs):
-        raise RuntimeError("access group store unavailable")
+def _broken_access_group_lookup(*args: object, **kwargs: object) -> NoReturn:
+    raise RuntimeError("access group store unavailable")
 
 
 @pytest.mark.asyncio
-async def test_stamp_does_not_break_auth_when_the_access_group_lookup_fails():
+async def test_stamp_does_not_break_auth_when_the_access_group_lookup_fails(monkeypatch: pytest.MonkeyPatch):
     cache = await _cache()
     valid_token = UserAPIKeyAuth(api_key="hashed", models=["tier-a"], team_id=TEAM_ID, user_id=USER_ID)
+    router = Router(model_list=MODEL_LIST)
+    monkeypatch.setattr(type(router.registry()), "access_groups", _broken_access_group_lookup)
 
     await stamp_matched_model_access_groups(
         model="gpt-4o",
         valid_token=valid_token,
         team_object=None,
         project_object=None,
-        llm_router=_BrokenRouter(model_list=MODEL_LIST),
+        llm_router=router,
         prisma_client=_ExplodingPrismaClient(),
         user_api_key_cache=cache,
         proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
@@ -311,7 +308,7 @@ class _MagBudgetRow:
     def __init__(self, access_group_name: str, spend: float = 0.0, max_budget: float | None = None) -> None:
         self.access_group_name = access_group_name
         self.spend = spend
-        self.litellm_budget_table = None if max_budget is None else SimpleNamespace(max_budget=max_budget)
+        self.litellm_budget_table = None if max_budget is None else SimpleNamespace(max_budget=max_budget, budget_limits=None)
 
 
 class _RecordingPrismaClient:
@@ -462,7 +459,7 @@ async def test_an_over_budget_group_blocks_even_when_another_matched_group_is_fi
             _MagBudgetRow("tier-b", max_budget=1.0),
             spend_by_counter_key={
                 MODEL_ACCESS_GROUP_COUNTER_KEY: 1.0,
-                model_access_group_spend_counter_key("tier-b"): 5.0,
+                model_access_group_counter("tier-b"): 5.0,
             },
         )
 

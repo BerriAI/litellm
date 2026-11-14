@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 import json
 from collections.abc import Iterator, Mapping
@@ -12,6 +13,7 @@ import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import EmbeddingResponse
 
 FLOAT_VECTORS = [[0.1, 0.2], [0.3, 0.4]]
@@ -443,3 +445,101 @@ async def test_cohere_embed_v4_image_embedding(respx_mock: respx.MockRouter, syn
         "input_type": "image",
     }
     assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.125, -0.375]}]
+
+
+@pytest.mark.parametrize(
+    ("cohere_api_base", "expected_url"),
+    [
+        (None, "https://api.cohere.ai/v2/embed"),
+        ("https://gateway.example.com", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/cohere", "https://gateway.example.com/cohere/v2/embed"),
+        ("https://gateway.example.com/cohere-embed", "https://gateway.example.com/cohere-embed/v2/embed"),
+        ("https://gateway.example.com/cohere/v2", "https://gateway.example.com/cohere/v2/embed"),
+        ("https://gateway.example.com/v2/embed", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/v1/embed", "https://gateway.example.com/v1/embed"),
+        ("https://gateway.example.com/cohere/v1/embed/", "https://gateway.example.com/cohere/v1/embed/"),
+        ("https://gateway.example.com/v2/chat", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/v1/chat/", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/cohere/v2/chat", "https://gateway.example.com/cohere/v2/embed"),
+        ("https://gateway.example.com/v2/rerank", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/cohere/v1/rerank", "https://gateway.example.com/cohere/v2/embed"),
+        ("https://gateway.example.com/cohere/chat", "https://gateway.example.com/cohere/v2/embed"),
+        ("https://gateway.example.com/rerank", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/cohere?tenant=a", "https://gateway.example.com/cohere/v2/embed?tenant=a"),
+        ("https://gateway.example.com/v2/chat?tenant=a", "https://gateway.example.com/v2/embed?tenant=a"),
+        ("https://gateway.example.com/v2/embed?tenant=a", "https://gateway.example.com/v2/embed?tenant=a"),
+    ],
+)
+def test_get_complete_url_resolves_the_embed_endpoint_from_cohere_api_base(
+    monkeypatch: pytest.MonkeyPatch, cohere_api_base: str | None, expected_url: str
+) -> None:
+    if cohere_api_base is None:
+        monkeypatch.delenv("COHERE_API_BASE", raising=False)
+    else:
+        monkeypatch.setenv("COHERE_API_BASE", cohere_api_base)
+    url: Final = CohereEmbeddingConfig().get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="embed-english-v3.0",
+        optional_params={},
+        litellm_params={},
+    )
+    assert url == expected_url
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/gw/cohere-route",
+        "https://gateway.example.com/api/cohere?code=abc",
+        "https://gateway.example.com/cohere/v2/chat",
+    ],
+)
+def test_get_complete_url_sends_an_explicit_api_base_as_is(monkeypatch: pytest.MonkeyPatch, api_base: str) -> None:
+    monkeypatch.setenv("COHERE_API_BASE", "https://env-gateway.example.com")
+    url: Final = CohereEmbeddingConfig().get_complete_url(
+        api_base=api_base,
+        api_key=None,
+        model="embed-english-v3.0",
+        optional_params={},
+        litellm_params={},
+    )
+    assert url == api_base
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _VaultSecret:
+    value: str
+
+
+class _VaultAnsweringEveryName:
+    def get_secret(self, secret_name: str) -> _VaultSecret:
+        return _VaultSecret(value=f"https://vault-gateway.example.com/{secret_name}")
+
+
+@pytest.mark.parametrize(
+    ("env_cohere_api_base", "expected_url"),
+    [
+        (None, "https://api.cohere.ai/v2/embed"),
+        ("https://env-gateway.example.com", "https://env-gateway.example.com/v2/embed"),
+    ],
+)
+def test_get_complete_url_reads_cohere_api_base_from_the_environment_not_the_secret_manager(
+    monkeypatch: pytest.MonkeyPatch, env_cohere_api_base: str | None, expected_url: str
+) -> None:
+    monkeypatch.setattr(litellm, "secret_manager_client", _VaultAnsweringEveryName())
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.AZURE_KEY_VAULT)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings())
+    if env_cohere_api_base is None:
+        monkeypatch.delenv("COHERE_API_BASE", raising=False)
+    else:
+        monkeypatch.setenv("COHERE_API_BASE", env_cohere_api_base)
+    url: Final = CohereEmbeddingConfig().get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="embed-english-v3.0",
+        optional_params={},
+        litellm_params={},
+    )
+    assert url == expected_url

@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD
+from litellm.router_api import RoutingContext
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -134,7 +135,7 @@ class SemanticGuardRouteLoader:
         )
 
         encoder: Final = LiteLLMRouterEncoder(
-            litellm_router_instance=litellm_router,
+            ctx=RoutingContext(litellm_router),
             model_name=embedding_model,
             score_threshold=global_threshold,
         )

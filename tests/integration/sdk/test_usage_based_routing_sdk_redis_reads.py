@@ -140,7 +140,7 @@ async def _exercise_router(router: Router, model_name: str, markers: tuple[str, 
     return _model_id(first), _model_id(second)
 
 
-def test_sdk_usage_routing_reads_tpm_then_rpm_from_redis(tmp_path: Path) -> None:
+def test_sdk_usage_routing_reads_cooldown_tpm_then_rpm_from_redis(tmp_path: Path) -> None:
     with owned_redis(tmp_path) as cache, wire_server(_reply) as wire:
         run_id: Final = uuid.uuid4().hex
         model_name: Final = f"usage-redis-{run_id}"
@@ -176,15 +176,19 @@ def test_sdk_usage_routing_reads_tpm_then_rpm_from_redis(tmp_path: Path) -> None
                 for marker in markers[:2]
             )
             assert observed_bodies == expected_bodies, observed_bodies
-            expected_mget: Final = (
+            cooldown_mget: Final = (
                 "MGET",
-                f"deployment:{deployment_ids[0]}:cooldown",
-                f"deployment:{deployment_ids[1]}:cooldown",
+                *(f"deployment:{deployment_id}:cooldown" for deployment_id in deployment_ids),
+            )
+            usage_mget: Final = (
+                "MGET",
                 *(f"{deployment_id}:openai/{OPENAI_MODEL}:tpm:{minute}" for deployment_id in deployment_ids),
                 *(f"{deployment_id}:openai/{OPENAI_MODEL}:rpm:{minute}" for deployment_id in deployment_ids),
             )
             mgets: Final = _drain_mgets(commands)
-            assert any(arguments == expected_mget for _, arguments in mgets), mgets
+            mget_arguments: Final = tuple(arguments for _, arguments in mgets)
+            assert cooldown_mget in mget_arguments, mgets
+            assert usage_mget in mget_arguments, mgets
             raw_mgets: Final = tuple(line for line, _ in mgets)
             print(f"sdk MGETs: {raw_mgets}")
         finally:

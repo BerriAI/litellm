@@ -9,7 +9,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm_cli.main import cli
+from litellm.cli.main import cli
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -236,8 +236,16 @@ print(json.dumps({"modules": sorted(name[len(prefix):] for name in sys.modules i
 
 
 def _run(source: str, argv: tuple[str, ...], home: Path) -> dict[str, object]:
+    checkout: Final = str(_PYPROJECT.parent)
+    bootstrap: Final = (
+        "import pathlib,sys\n"
+        f"sys.path.insert(0, {checkout!r})\n"
+        f"sys.path.insert(0, str(pathlib.Path({checkout!r}) / '.github/packaging'))\n"
+        "from cli_package import editable_support\n"
+        f"exec(editable_support(pathlib.Path({checkout!r}) / 'litellm/cli')[0][1])\n"
+    )
     result: Final = subprocess.run(
-        [sys.executable, "-I", "-c", source, *argv],
+        [sys.executable, "-I", "-c", bootstrap + source, *argv],
         capture_output=True,
         text=True,
         timeout=120,
