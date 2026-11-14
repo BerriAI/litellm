@@ -25,7 +25,7 @@ use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
 use litellm_secrets::source::Secrets;
-use litellm_tracing::ByteChunk;
+use litellm_tracing::{ByteChunk, REDACTED};
 use serde_json::{Map, Value};
 
 use super::{
@@ -1028,7 +1028,31 @@ fn decoded_chunks(
 }
 
 fn log_request_body(provider: &str, stream: bool, body: &serde_json::Value) {
-    tracing::debug!(provider, stream, body = %body, "provider request");
+    tracing::debug!(provider, stream, body = %without_mcp_tokens(body), "provider request");
+}
+
+fn without_mcp_tokens(body: &Value) -> std::borrow::Cow<'_, Value> {
+    let Some(servers) = body.get("mcp_servers").and_then(Value::as_array) else {
+        return std::borrow::Cow::Borrowed(body);
+    };
+    let mut redacted = body.clone();
+    redacted["mcp_servers"] = servers.iter().map(without_mcp_token).collect();
+    std::borrow::Cow::Owned(redacted)
+}
+
+fn without_mcp_token(server: &Value) -> Value {
+    match server {
+        Value::Object(fields) if fields.contains_key("authorization_token") => Value::Object(
+            fields
+                .iter()
+                .map(|(key, value)| match key.as_str() {
+                    "authorization_token" => (key.clone(), Value::from(REDACTED)),
+                    _ => (key.clone(), value.clone()),
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 fn log_response_body(body: &str) {
