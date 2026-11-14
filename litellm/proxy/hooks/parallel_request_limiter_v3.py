@@ -4511,8 +4511,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return
 
         if not self.rate_limits.has_redis:
-            verbose_proxy_logger.debug("TTL preservation script not available, using regular pipeline")
-            await self.rate_limits.increment_many(pipeline_operations)
+            await self._apply_local_token_increments(pipeline_operations)
             return
 
         try:
@@ -4527,6 +4526,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 verbose_proxy_logger, logging.WARNING, "TTL preservation failed, falling back to regular pipeline", e
             )
             await self.rate_limits.increment_many(pipeline_operations)
+
+    async def _apply_local_token_increments(self, operations: Sequence[CounterIncrement]) -> None:
+        window_start: Final = str(int(self._get_current_time().timestamp()))
+        async with self._check_and_increment_lock:
+            for operation in operations:
+                await self._apply_local_token_increment(operation, window_start)
+
+    async def _apply_local_token_increment(self, operation: CounterIncrement, window_start: str) -> None:
+        scope: Final = operation.counter.scope
+        has_ttl: Final = operation.ttl is not None and operation.ttl > 0
+        window_missing: Final = has_ttl and _scalar(self.rate_limits.local((scope.window,))[0]) is None
+        if window_missing and operation.amount <= 0:
+            return
+        if window_missing:
+            for sibling in ("requests", "tokens"):
+                self.rate_limits.set_local(scope.counter(sibling), 0, operation.ttl)
+            self.rate_limits.set_local(scope.window, window_start, operation.ttl)
+        await self.rate_limits.increment_many((operation,))
 
     async def _apply_local_window_guarded_token_increments(self, operations: Sequence[WindowGuardedIncrement]) -> None:
         async with self._check_and_increment_lock:

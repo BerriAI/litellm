@@ -1,4 +1,5 @@
-//! The limiter's Lua, byte for byte as `main`'s Python registers it, so both share one script SHA.
+//! The limiter's Lua, byte for byte as `main`'s Python registered it, except `TOKEN_INCREMENT`, which also opens a
+//! window for a scope that has none.
 
 pub(super) const BATCH_RATE_LIMITER: &str = r#"
 local results = {}
@@ -233,27 +234,35 @@ return results
 "#;
 
 pub(super) const TOKEN_INCREMENT: &str = r#"
+-- KEYS: (window_key, counter_key) pairs. ARGV: (increment, ttl_seconds) pairs.
+-- A charge into a scope with no window opens one as admission does, so tokens
+-- from a call that skipped admission still count. A refund into one is dropped.
+-- A live window is never reset here, since its length can exceed this TTL.
+local time_reply = redis.call('TIME')
+local now = tonumber(time_reply[1])
 local results = {}
 
--- Process each key/increment_value/ttl triplet
-for i = 1, #KEYS do
-    local key = KEYS[i]
-    local increment_value = tonumber(ARGV[i * 2 - 1])
-    local ttl_seconds = tonumber(ARGV[i * 2])
+for i = 1, #KEYS, 2 do
+    local window_key = KEYS[i]
+    local counter_key = KEYS[i + 1]
+    local increment_value = tonumber(ARGV[i])
+    local ttl_seconds = tonumber(ARGV[i + 1])
+    local window_missing = ttl_seconds > 0 and redis.call('EXISTS', window_key) == 0
 
-    -- Increment the value
-    local new_value = redis.call('INCRBYFLOAT', key, increment_value)
-
-    -- Handle TTL: only set expire if ttl_seconds > 0 and key has no current TTL
-    -- ttl_seconds can be 0 (no TTL) or positive (set TTL)
-    if ttl_seconds and ttl_seconds > 0 then
-        local current_ttl = redis.call('TTL', key)
-        if current_ttl == -1 then
-            redis.call('EXPIRE', key, ttl_seconds)
+    if window_missing and increment_value <= 0 then
+        table.insert(results, '0')
+    else
+        if window_missing then
+            local prefix = string.sub(window_key, 1, -(#':window') - 1)
+            redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
+            redis.call('SET', window_key, tostring(now), 'EX', ttl_seconds)
         end
+        local new_value = redis.call('INCRBYFLOAT', counter_key, increment_value)
+        if ttl_seconds > 0 and redis.call('TTL', counter_key) == -1 then
+            redis.call('EXPIRE', counter_key, ttl_seconds)
+        end
+        table.insert(results, new_value)
     end
-
-    table.insert(results, new_value)
 end
 
 return results

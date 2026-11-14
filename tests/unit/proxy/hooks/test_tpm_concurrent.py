@@ -97,6 +97,15 @@ def _isolated_request_stash():
     _request_stash.reset(token)
 
 
+def _open_reserved_windows(handler: RateLimitHandler, scopes: frozenset[tuple[str, str]]) -> None:
+    for descriptor_key, descriptor_value in scopes:
+        handler.rate_limits.set_local(
+            RateLimitScope(descriptor_key, descriptor_value).window,
+            str(int(datetime.now().timestamp())),
+            handler.window_size,
+        )
+
+
 @pytest.mark.asyncio
 async def test_token_reservation_prevents_concurrent_bypass(rate_limiter):
     """
@@ -225,6 +234,7 @@ async def test_token_adjustment_on_success(recording_rate_limiter):
     stash = get_or_create_request_stash()
     stash.reserved_tokens = 100
     stash.reserved_scopes = frozenset({("api_key", api_key)})
+    _open_reserved_windows(handler, stash.reserved_scopes)
 
     mock_kwargs = {
         "standard_logging_object": {
@@ -500,6 +510,7 @@ async def test_org_scope_reconciled_on_success(recording_rate_limiter):
     stash = get_or_create_request_stash()
     stash.reserved_tokens = 100
     stash.reserved_scopes = frozenset({("organization", org_id)})
+    _open_reserved_windows(handler, stash.reserved_scopes)
 
     mock_kwargs = {
         "standard_logging_object": {
@@ -801,6 +812,7 @@ async def test_unreserved_scopes_charged_actual_not_delta_on_success(recording_r
     stash = get_or_create_request_stash()
     stash.reserved_tokens = 100
     stash.reserved_scopes = frozenset({("api_key", api_key)})
+    _open_reserved_windows(handler, stash.reserved_scopes)
 
     mock_kwargs = {
         "standard_logging_object": {
@@ -1411,6 +1423,7 @@ async def test_project_itpm_reconciled_on_success_excludes_cached_tokens(recordi
     stash.itpm_reserved_scopes = frozenset({itpm_scope})
     stash.otpm_reserved_tokens = 60
     stash.otpm_reserved_scopes = frozenset({otpm_scope})
+    _open_reserved_windows(handler, frozenset({itpm_scope, otpm_scope}))
     mock_kwargs = {}
 
     mock_response = ModelResponse(
@@ -3322,6 +3335,7 @@ async def test_streaming_combined_usage_reconciles_project_io_reservations(
     stash.itpm_reserved_scopes = frozenset({itpm_scope})
     stash.otpm_reserved_tokens = 60
     stash.otpm_reserved_scopes = frozenset({otpm_scope})
+    _open_reserved_windows(handler, frozenset({itpm_scope, otpm_scope}))
     kwargs = {
         "combined_usage_object": Usage(
             prompt_tokens=40,

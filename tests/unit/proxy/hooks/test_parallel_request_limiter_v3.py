@@ -122,7 +122,7 @@ def _capture_token_increments(fakes: FakeRateLimits) -> list[dict[str, object]]:
     async def token_increment(keys: list[str], args: list[float]) -> list[float]:
         amounts: Final = args[::2]
         captured.extend(
-            {"key": key, "increment_value": amount, "ttl": ttl} for key, amount, ttl in zip(keys, amounts, args[1::2])
+            {"key": key, "increment_value": amount, "ttl": ttl} for key, amount, ttl in zip(keys[1::2], amounts, args[1::2])
         )
         return amounts
 
@@ -2592,7 +2592,8 @@ async def test_async_log_success_event_with_dict_usage_missing_fields(monkeypatc
 @pytest.mark.asyncio
 async def test_execute_token_increment_script_cluster_compatibility():
     """
-    Token increments run one script call per slot group, each with an (increment, ttl) pair per key.
+    Token increments run one script call per slot group, each with a (window, counter) key pair and an
+    (increment, ttl) pair per counter.
     """
     from unittest.mock import AsyncMock
 
@@ -2613,8 +2614,16 @@ async def test_execute_token_increment_script_cluster_compatibility():
     )
 
     assert [(call.kwargs["keys"], call.kwargs["args"]) for call in mock_script.call_args_list] == [
-        (["{api_key:sk-123}:tokens", "{api_key:sk-123}:requests"], [100, 60, 1, 60]),
-        (["{user:user-456}:tokens"], [50, 60]),
+        (
+            [
+                "{api_key:sk-123}:window",
+                "{api_key:sk-123}:tokens",
+                "{api_key:sk-123}:window",
+                "{api_key:sk-123}:requests",
+            ],
+            [100, 60, 1, 60],
+        ),
+        (["{user:user-456}:window", "{user:user-456}:tokens"], [50, 60]),
     ]
 
 
@@ -4119,6 +4128,55 @@ async def test_a_nested_call_charges_its_own_usage_but_not_the_tags_of_the_reque
 
     assert _tokens_counted(handler, "api_key", _api_key) == 15
     assert _tokens_counted(handler, "tag", "outer-tag") == 0
+
+
+@pytest.mark.asyncio
+async def test_tokens_charged_before_any_admission_count_against_the_next_chat_v3():
+    api_key: Final = hash_token("sk-relay-before-chat")
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()),
+        rate_limit_store=FakeRateLimits(connected=False).store(),
+    )
+
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_call_id": "relay-call",
+            "call_type": CallTypes.allm_passthrough_route.value,
+            "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+        },
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=1000, completion_tokens=80, total_tokens=1080)),
+        start_time=None,
+        end_time=None,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key=api_key, tpm_limit=1000),
+            cache=DualCache(),
+            data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+            call_type="acompletion",
+        )
+
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_a_refund_into_a_scope_without_a_window_does_not_offset_tokens_charged_after_it_v3():
+    api_key: Final = hash_token("sk-late-refund")
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()),
+        rate_limit_store=FakeRateLimits(connected=False).store(),
+    )
+    counter: Final = _counter("api_key", api_key)
+
+    await handler.async_increment_tokens_with_ttl_preservation(
+        pipeline_operations=[CounterIncrement(counter, -500, handler.window_size)]
+    )
+    await handler.async_increment_tokens_with_ttl_preservation(
+        pipeline_operations=[CounterIncrement(counter, 1080, handler.window_size)]
+    )
+
+    assert _tokens_counted(handler, "api_key", api_key) == 1080
 
 
 def _socket_turn_kwargs(

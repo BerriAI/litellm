@@ -130,7 +130,7 @@ async def test_post_call_owners_declare_on_the_native_post_call_batch_until_the_
 
     assert fakes.post_call == ["token_increment", "parallel_release"]
     assert calls == [
-        ("script", ["{api_key:k1}:tokens"], [10, 60]),
+        ("script", ["{api_key:k1}:window", "{api_key:k1}:tokens"], [10, 60]),
         ("script", ["{api_key:k1}:max_parallel_requests"], ["slot-1"]),
     ]
     tpm_counter = next(iter(usage.local))

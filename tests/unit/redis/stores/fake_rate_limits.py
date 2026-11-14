@@ -252,7 +252,9 @@ class FakeRateLimits:
         return Resolved(reply, send, "parallel_count")
 
     def token_increment(self, increments: Sequence[CounterIncrement], send: object) -> Resolved[list[float]]:
-        keys: Final = [counter_key(increment.counter) for increment in increments]
+        keys: Final = list(
+            chain.from_iterable((window_key(increment.counter), counter_key(increment.counter)) for increment in increments)
+        )
         args: Final = [arg for increment in increments for arg in (increment.amount, increment.ttl or 0)]
 
         async def reply() -> list[float]:
