@@ -3800,6 +3800,24 @@
     "default_model_placeholder": "snowflake/mistral-7b"
   },
   {
+    "provider": "Saidwire",
+    "provider_display_name": "Saidwire",
+    "litellm_provider": "saidwire",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Saidwire API Key",
+        "placeholder": "sk_live_...",
+        "tooltip": "English speech-to-text on /v1/audio/transcriptions.",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "saidwire/saidwire-en"
+  },
+  {
     "provider": "Soniox",
     "provider_display_name": "Soniox",
     "litellm_provider": "soniox",

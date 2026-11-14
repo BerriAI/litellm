@@ -435,6 +435,7 @@ REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS: Final = 1.0
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
 
 DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
+SAIDWIRE_DEFAULT_API_BASE: Final = "https://api.saidwire.com/v1"
 NADIR_DEFAULT_API_BASE: Final = "https://api.getnadir.com/v1"
 DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
 DEEPGRAM_SPEAK_DEFAULT_MODEL: Final = "aura-asteria-en"
@@ -2142,6 +2143,7 @@ SENTRY_DENYLIST: Final = [
     "FIREWORKS_AI_API_KEY",
     "FIREWORKSAI_API_KEY",
     "OVHCLOUD_API_KEY",
+    "SAIDWIRE_API_KEY",
     "CLARIFAI_API_KEY",
     # Database and Connection Strings
     "database_url",
