@@ -36,7 +36,6 @@ from litellm.proxy.vector_store_endpoints.utils import (
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
-from litellm.vector_stores.deployments import VECTOR_STORE_DEPLOYMENT_PARAM, connection_override_keys
 from litellm.vector_stores.search_query import store_search_params, with_caller_query_params
 from litellm.vector_stores.utils import VectorStoreWriteBody, callers_metadata_snapshot
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
@@ -66,7 +65,6 @@ BLOCKED_QUERY_EMBEDDING_SELECTION_PARAMS: Final = frozenset(
         "litellm_embedding_model",
         "litellm_embedding_config",
         "litellm_credential_name",
-        VECTOR_STORE_DEPLOYMENT_PARAM,
     }
 )
 
@@ -78,7 +76,7 @@ def reject_caller_embedding_selection_params(payload: Mapping[str, object], sour
             status_code=400,
             detail={
                 "error": f"'{blocked[0]}' cannot be set in {source}. "
-                "This setting comes from the vector store's server-side registration."
+                "Embedding configuration comes from the vector store's server-side registration."
             },
         )
 
@@ -101,24 +99,6 @@ def reject_caller_opensearch_store_params(
             detail={
                 "error": f"'{blocked}' cannot be set in {source}. "
                 "It comes from the vector store's server-side registration."
-            },
-        )
-
-
-def reject_caller_deployment_connection(
-    caller_body: Mapping[str, object], request_fields: Mapping[str, object], source: str
-) -> None:
-    """A grouped store's deployments own its connection, so a caller may not redirect or re-key a read."""
-    group: Final = request_fields.get(VECTOR_STORE_DEPLOYMENT_PARAM)
-    if not isinstance(group, str):
-        return
-    sent: Final = sorted(connection_override_keys(group) & caller_body.keys())
-    if sent:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": f"'{sent[0]}' cannot be set in {source}. "
-                f"Vector store deployment group '{group}' owns its connection settings."
             },
         )
 
@@ -221,11 +201,6 @@ async def vector_store_search(
         )
     )
     reject_caller_opensearch_store_params(
-        caller_body=caller_body,
-        request_fields=JSON_OBJECT_ADAPTER.validate_python(data),
-        source="the search request body",
-    )
-    reject_caller_deployment_connection(
         caller_body=caller_body,
         request_fields=JSON_OBJECT_ADAPTER.validate_python(data),
         source="the search request body",

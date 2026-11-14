@@ -699,9 +699,7 @@ class _ManagedFilesHookStub:
     async def get_unified_file_ids_for_provider_file_ids(
         self, provider_file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
     ) -> Mapping[str, str]:
-        return {
-            file_id: self.unified_file_ids[file_id] for file_id in provider_file_ids if file_id in self.unified_file_ids
-        }
+        return {file_id: self.unified_file_ids[file_id] for file_id in provider_file_ids if file_id in self.unified_file_ids}
 
 
 def _managed_file_id(provider_file_id: str) -> str:
@@ -2673,62 +2671,3 @@ class TestVectorStoreUploadControls:
         assert server_filename.endswith(".txt")
         assert secured_content_type == "text/plain"
         assert content_bytes == b"benign document text\n"
-
-
-def test_rag_ingest_cannot_bind_the_new_store_to_a_deployment_group(client_internal_user):
-    response = client_internal_user.post(
-        "/v1/rag/ingest",
-        json={
-            "file_url": "https://example.com/doc.pdf",
-            "ingest_options": {
-                "vector_store": {"custom_llm_provider": "openai", "vector_store_deployment": "kb-search"}
-            },
-        },
-    )
-
-    assert response.status_code == 400, response.json()
-    assert "vector_store_deployment" in response.json()["detail"]["error"]
-
-
-def test_rag_query_keeps_a_grouped_store_on_its_group_so_the_search_can_fail_over():
-    from litellm.proxy.rag_endpoints.endpoints import _managed_store_overrides
-    from litellm.vector_stores.deployments import (
-        parse_vector_store_deployments,
-        primary_connection,
-        vector_store_deployment_registry,
-    )
-
-    vector_store_deployment_registry.load(
-        parse_vector_store_deployments(
-            {
-                "vector_store_deployments": [
-                    {
-                        "deployment_name": "kb-search",
-                        "deployment_id": "eastus",
-                        "litellm_params": {
-                            "custom_llm_provider": "azure_ai",
-                            "api_base": "https://eastus.search.windows.net",
-                            "api_key": "key-eastus",
-                        },
-                    }
-                ]
-            }
-        )
-    )
-    try:
-        overrides = _managed_store_overrides(
-            {
-                "vector_store_id": "claims-docs",
-                "custom_llm_provider": "azure_ai",
-                "litellm_params": {"vector_store_deployment": "kb-search"},
-            }
-        )
-        ingest_target = primary_connection(overrides)
-    finally:
-        vector_store_deployment_registry.load(())
-
-    assert overrides["vector_store_deployment"] == "kb-search"
-    assert "api_base" not in overrides
-    assert ingest_target["api_base"] == "https://eastus.search.windows.net"
-    assert "vector_store_deployment" not in ingest_target
-

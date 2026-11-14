@@ -16,6 +16,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
 )
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.vector_stores.search_query import with_caller_query_params
 from litellm.proxy.vector_store_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
     build_request_data_from_managed_vector_store,
@@ -38,7 +39,6 @@ from litellm.proxy.vector_store_files_endpoints.endpoints import (
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
-from litellm.vector_stores.search_query import with_caller_query_params
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
@@ -3668,146 +3668,3 @@ async def test_update_vector_store_persists_submitted_metadata_as_json() -> None
 
     written = mock_prisma_client.db.litellm_managedvectorstorestable.update.await_args.kwargs["data"]
     assert json.loads(written["vector_store_metadata"]) == {"owner": "search-team", "tier": 2}
-
-
-@pytest.mark.parametrize(
-    ("caller_body", "rejected"),
-    [
-        ({"query": "x", "api_base": "https://attacker.example"}, "'api_base'"),
-        ({"query": "x", "api_key": "caller-key"}, "'api_key'"),
-        ({"query": "x", "api_version": "2024-07-01"}, "'api_version'"),
-    ],
-)
-def test_a_grouped_store_search_rejects_caller_connection_settings(caller_body, rejected):
-    from litellm.proxy.vector_store_endpoints.endpoints import reject_caller_deployment_connection
-    from litellm.vector_stores.deployments import parse_vector_store_deployments, vector_store_deployment_registry
-
-    vector_store_deployment_registry.load(
-        parse_vector_store_deployments(
-            {
-                "vector_store_deployments": [
-                    {
-                        "deployment_name": "kb-search",
-                        "litellm_params": {"custom_llm_provider": "azure_ai", "api_base": "https://eastus.example"},
-                    }
-                ]
-            }
-        )
-    )
-    try:
-        with pytest.raises(HTTPException) as refused:
-            reject_caller_deployment_connection(
-                caller_body, {**caller_body, "vector_store_deployment": "kb-search"}, "the search request body"
-            )
-        reject_caller_deployment_connection({"query": "x"}, {"vector_store_id": "plain"}, "the search request body")
-    finally:
-        vector_store_deployment_registry.load(())
-
-    assert refused.value.status_code == 400
-    assert rejected in str(refused.value.detail)
-
-
-class TestVectorStoreDeploymentBinding:
-    """Only a proxy admin binds a new store to an existing deployment group, and the group owns the connection."""
-
-    @pytest.fixture(autouse=True)
-    def kb_search_group(self):
-        from litellm.vector_stores.deployments import parse_vector_store_deployments, vector_store_deployment_registry
-
-        vector_store_deployment_registry.load(
-            parse_vector_store_deployments(
-                {
-                    "vector_store_deployments": [
-                        {
-                            "deployment_name": "kb-search",
-                            "deployment_id": "eastus",
-                            "litellm_params": {
-                                "custom_llm_provider": "azure_ai",
-                                "api_base": "https://eastus.search.windows.net",
-                                "api_key": "key-eastus",
-                            },
-                        }
-                    ]
-                }
-            )
-        )
-        yield
-        vector_store_deployment_registry.load(())
-
-    @staticmethod
-    def _prisma() -> MagicMock:
-        prisma = MagicMock()
-        prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
-
-        async def create(**kwargs):
-            row = MagicMock()
-            row.model_dump.return_value = {
-                "vector_store_id": kwargs["data"]["vector_store_id"],
-                "custom_llm_provider": kwargs["data"]["custom_llm_provider"],
-                "litellm_params": kwargs["data"].get("litellm_params"),
-            }
-            return row
-
-        prisma.db.litellm_managedvectorstorestable.create = AsyncMock(side_effect=create)
-        return prisma
-
-    @staticmethod
-    def _registry() -> MagicMock:
-        registry = MagicMock()
-        registry.is_config_vector_store.return_value = False
-        return registry
-
-    @staticmethod
-    def _store(**litellm_params: object) -> LiteLLM_ManagedVectorStore:
-        return {"vector_store_id": "claims-docs", "custom_llm_provider": "azure_ai", "litellm_params": litellm_params}
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("user_role", "litellm_params", "status", "message"),
-        [
-            (LitellmUserRoles.INTERNAL_USER, {"vector_store_deployment": "kb-search"}, 403, "Only proxy admins"),
-            (LitellmUserRoles.PROXY_ADMIN, {"vector_store_deployment": "missing"}, 400, "'missing' is not defined"),
-            (
-                LitellmUserRoles.PROXY_ADMIN,
-                {"vector_store_deployment": "kb-search", "api_base": "https://other.example"},
-                400,
-                "['api_base']",
-            ),
-        ],
-    )
-    async def test_a_binding_that_is_not_an_admins_clean_choice_of_an_existing_group_is_never_saved(
-        self, user_role, litellm_params, status, message
-    ):
-        prisma = self._prisma()
-
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: proxy_server global, no seam
-            patch.object(litellm, "vector_store_registry", self._registry()),
-            pytest.raises(HTTPException) as refused,
-        ):
-            await new_vector_store(
-                vector_store=self._store(**litellm_params),
-                user_api_key_dict=UserAPIKeyAuth(user_role=user_role.value, user_id="u", team_id="t"),
-            )
-
-        assert refused.value.status_code == status
-        assert message in str(refused.value.detail)
-        prisma.db.litellm_managedvectorstorestable.create.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_an_admins_binding_to_an_existing_group_is_saved_with_the_store(self):
-        prisma = self._prisma()
-
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: proxy_server global, no seam
-            patch.object(litellm, "vector_store_registry", self._registry()),
-        ):
-            response = await new_vector_store(
-                vector_store=self._store(vector_store_deployment="kb-search"),
-                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value, user_id="admin"),
-            )
-
-        saved = prisma.db.litellm_managedvectorstorestable.create.await_args.kwargs["data"]
-        assert response["status"] == "success"
-        assert json.loads(saved["litellm_params"])["vector_store_deployment"] == "kb-search"
-

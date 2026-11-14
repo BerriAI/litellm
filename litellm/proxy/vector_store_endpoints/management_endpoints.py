@@ -34,7 +34,6 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.vector_store_endpoints.utils import (
-    assert_vector_store_deployment_binding_allowed,
     can_user_access_vector_store,
     filter_listable_vector_stores,
 )
@@ -315,9 +314,6 @@ async def new_vector_store(
                 detail="vector_store_id and custom_llm_provider are required",
             )
         _raise_if_config_owned(vector_store_id)
-        assert_vector_store_deployment_binding_allowed(
-            vector_store.get("litellm_params"), vector_store.get("litellm_credential_name"), user_api_key_dict
-        )
 
         # Extract and validate metadata
         metadata: Final = vector_store.get("vector_store_metadata")

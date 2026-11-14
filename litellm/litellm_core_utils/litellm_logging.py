@@ -74,6 +74,7 @@ from litellm.cost_calculator import (
 )
 from litellm.exceptions import (
     BudgetExceededError,
+    logged_class_name,
     validate_rate_limit_category,
     validate_rate_limit_type,
 )
@@ -2426,7 +2427,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         result_hidden_params: Final = getattr(priced_result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
-        if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
+        if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent, litellm.CustomStreamWrapper)) and hasattr(
             priced_result, "_hidden_params"
         ):
             hidden_params: Final = result_hidden_params
@@ -3003,6 +3004,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.record_partial_usage_for_failure(spend.usage, spend.cost)
         self.cost_breakdown = spend.cost_breakdown
 
+    def record_every_round_breakdown(self, cost_breakdown: CostBreakdown | None) -> None:
+        self.cost_breakdown = cost_breakdown
+
     def attempt_scoped_copy(self) -> "Logging":
         """A copy with its own model_call_details, so logging one attempt of a request through it leaves
         the state the request's other attempts share untouched."""
@@ -3082,11 +3086,8 @@ class Logging(LiteLLMLoggingBaseClass):
         """A billed response the router discards after its success log was parked (a safeguard refusal it falls
         back from) is owed by whichever attempt ends the request, instead of being logged in its place."""
         parked: Final = self.deferred_success_result
-        if parked is None or self.enqueue_deferred_logging is None:
+        if parked is None or not self.unpark_success_log():
             return False
-        self.deferred_success_result = None
-        self.enqueue_deferred_logging = None
-        self._async_success_scheduled = False
         served: Final = self.served_round(parked[0])
         if served is None:
             return True
@@ -3095,6 +3096,14 @@ class Logging(LiteLLMLoggingBaseClass):
             served,
         )
         self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, served)
+        return True
+
+    def unpark_success_log(self) -> bool:
+        if self.deferred_success_result is None or self.enqueue_deferred_logging is None:
+            return False
+        self.deferred_success_result = None
+        self.enqueue_deferred_logging = None
+        self._async_success_scheduled = False
         return True
 
     def mark_stash_billed_by_continuation(self) -> None:
@@ -8075,7 +8084,7 @@ class StandardLoggingPayloadSetup:
                 response_attr: Final[object] = getattr(original_exception, "response", None)
                 status_code_attr = getattr(response_attr, "status_code", None)
             error_status = str(status_code_attr) if status_code_attr is not None else ""
-        error_class: Final[str] = str(original_exception.__class__.__name__) if original_exception else ""
+        error_class: Final[str] = logged_class_name(original_exception) if original_exception else ""
         _llm_provider_in_exception: Final = getattr(original_exception, "llm_provider", "")
 
         traceback_info = traceback_str or ""
