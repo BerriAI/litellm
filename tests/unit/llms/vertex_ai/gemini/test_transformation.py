@@ -1,6 +1,5 @@
 
 import asyncio
-import base64
 import json
 import logging
 import queue
@@ -16,13 +15,8 @@ import pytest
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.context_caching.known_cached_contents import known_cached_contents
-from litellm.llms.vertex_ai.context_caching.transformation import (
-    async_transform_openai_messages_to_gemini_context_caching,
-    transform_openai_messages_to_gemini_context_caching,
-)
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -30,7 +24,6 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 from litellm.types.llms import openai
 from litellm.types import completion
 from litellm.types.llms.vertex_ai import RequestBody
-from tests.unit.conftest import ONE_PIXEL_PNG
 
 
 @pytest.mark.asyncio
@@ -559,11 +552,17 @@ def _reference_messages(**marks: object) -> list[dict[str, object]]:
 async def _complete_with(
     client: MagicMock, sync_mode: bool, messages: list[dict[str, object]], **params: object
 ) -> None:
-    request: Final = {"model": _BREAKPOINT_MODEL, "messages": messages, "api_key": "fake-key", "client": client}
+    request: Final = {
+        "model": _BREAKPOINT_MODEL,
+        "messages": messages,
+        "api_key": "fake-key",
+        "client": client,
+        **params,
+    }
     if sync_mode:
-        litellm.completion(**request, **params)
+        litellm.completion(**request)
     else:
-        await litellm.acompletion(**request, **params)
+        await litellm.acompletion(**request)
 
 
 async def _sent_bodies(sync_mode: bool, messages: list[dict[str, object]], **params: object) -> dict[str, dict]:
@@ -873,60 +872,7 @@ async def test_an_async_call_downloads_a_remote_image_for_the_cache_without_bloc
     assert sent["generate"]["cachedContent"] == _BREAKPOINT_CACHE_NAME
 
 
-@pytest.fixture
-def served_png(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    fetched: Final[list[str]] = []  # mutable-ok: the test asserts on the URLs fetched
-
-    def serve(client: object, url: str, **kwargs: object) -> httpx.Response:
-        fetched.append(url)
-        return httpx.Response(
-            200, content=ONE_PIXEL_PNG, headers={"content-type": "image/png"}, request=httpx.Request("GET", url)
-        )
-
-    async def async_serve(client: object, url: str, **kwargs: object) -> httpx.Response:
-        return serve(client, url, **kwargs)
-
-    monkeypatch.setattr(image_handling, "safe_get", serve)
-    monkeypatch.setattr(image_handling, "async_safe_get", async_serve)
-    return fetched
-
-
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
-@pytest.mark.asyncio
-async def test_a_cache_holds_an_https_image_inline_since_the_cache_api_rejects_web_urls(
-    served_png, sync_mode, custom_llm_provider
-):
-    image_url: Final = f"https://img.example/{uuid.uuid4()}.png"
-    request: Final = {
-        "model": "gemini-2.5-flash",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                    {"type": "text", "text": _REFERENCE_DOCUMENT, "cache_control": {"type": "ephemeral"}},
-                ],
-            }
-        ],
-        "custom_llm_provider": custom_llm_provider,
-        "cache_key": "inline-image",
-        "vertex_project": "project",
-        "vertex_location": "us-central1",
-    }
-
-    body: Final = (
-        transform_openai_messages_to_gemini_context_caching(**request)
-        if sync_mode
-        else await async_transform_openai_messages_to_gemini_context_caching(**request)
-    )
-
-    assert served_png == [image_url]
-    assert image_url not in json.dumps(body)
-    assert base64.b64encode(ONE_PIXEL_PNG).decode() in json.dumps(body)
-
-
-def _conversation_with_a_marked_tool_result() -> list[dict[str, object]]:
+def _conversation_with_a_marked_tool_result(**marks: object) -> list[dict[str, object]]:
     return [
         {"role": "system", "content": _REFERENCE_DOCUMENT},
         {"role": "user", "content": "What is the weather in Paris?"},
@@ -937,33 +883,86 @@ def _conversation_with_a_marked_tool_result() -> list[dict[str, object]]:
                 {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": '{"city": "Paris"}'}}
             ],
         },
-        {
-            "role": "tool",
-            "tool_call_id": "call_1",
-            "content": [{"type": "text", "text": "Sunny", "prompt_cache_breakpoint": {"mode": "explicit"}}],
-        },
+        {"role": "tool", "tool_call_id": "call_1", "content": [{"type": "text", "text": "Sunny", **marks}]},
     ]
 
 
 @pytest.mark.usefixtures("forget_known_cached_contents")
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_a_marker_on_a_tool_result_is_a_400_before_anything_reaches_gemini(sync_mode):
-    client: Final = _fake_gemini(HTTPHandler if sync_mode else AsyncHTTPHandler)
+async def test_a_marked_tool_result_is_sent_like_the_equivalent_cache_control(sync_mode):
+    marked: Final = await _sent_bodies(
+        sync_mode, _conversation_with_a_marked_tool_result(prompt_cache_breakpoint={"mode": "explicit"})
+    )
+    known_cached_contents.clear()
+    controlled: Final = await _sent_bodies(
+        sync_mode, _conversation_with_a_marked_tool_result(cache_control={"type": "ephemeral"})
+    )
+
+    assert marked == controlled
+    assert list(marked) == ["generate"]
+    assert "Sunny" in json.dumps(marked["generate"])
+
+
+_MODEL_WITHOUT_PROMPT_CACHING: Final = "gemini/gemma-without-prompt-caching"
+
+
+@pytest.fixture
+def mapped_model_without_prompt_caching(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        _MODEL_WITHOUT_PROMPT_CACHING,
+        {
+            "litellm_provider": "gemini",
+            "mode": "chat",
+            "max_input_tokens": 131072,
+            "max_output_tokens": 8192,
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents", "mapped_model_without_prompt_caching")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "model, model_info, cached",
+    [
+        (_MODEL_WITHOUT_PROMPT_CACHING, None, False),
+        (_MODEL_WITHOUT_PROMPT_CACHING, {"supports_prompt_caching": True}, True),
+        (_BREAKPOINT_MODEL, {"supports_prompt_caching": False}, False),
+        ("gemini/gemini-newer-than-the-cost-map", None, True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_marker_makes_a_cache_only_when_the_model_supports_prompt_caching(sync_mode, model, model_info, cached):
+    sent: Final = await _sent_bodies(
+        sync_mode,
+        _reference_messages(prompt_cache_breakpoint={"mode": "explicit"}),
+        model=model,
+        model_info=model_info,
+    )
+
+    assert ("cache" in sent) is cached
+    assert ("cachedContent" in sent["generate"]) is cached
+    assert (_REFERENCE_DOCUMENT in json.dumps(sent["generate"])) is not cached
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents", "mapped_model_without_prompt_caching")
+@pytest.mark.asyncio
+async def test_a_malformed_marker_is_still_a_400_on_a_model_without_prompt_caching():
+    client: Final = _fake_gemini(HTTPHandler)
 
     with pytest.raises(litellm.UnsupportedParamsError) as error:
-        await _complete_with(client, sync_mode, _conversation_with_a_marked_tool_result())
+        await _complete_with(
+            client,
+            True,
+            _reference_messages(prompt_cache_breakpoint={"mode": "implicit"}),
+            model=_MODEL_WITHOUT_PROMPT_CACHING,
+        )
 
     assert error.value.status_code == 400
-    assert "tool result" in str(error.value)
     client.post.assert_not_called()
-
-
-@pytest.mark.usefixtures("forget_known_cached_contents")
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_drop_params_sends_a_marked_tool_result_uncached(sync_mode):
-    sent: Final = await _sent_bodies(sync_mode, _conversation_with_a_marked_tool_result(), drop_params=True)
-
-    assert list(sent) == ["generate"]
-    assert "Sunny" in json.dumps(sent["generate"])

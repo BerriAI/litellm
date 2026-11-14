@@ -9,6 +9,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import Cache, LiteLLMCacheType
+from litellm.exceptions import ImageFetchError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -23,8 +24,10 @@ from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase, publisher_model_location
 from .known_cached_contents import KnownCachedContents, known_cached_contents
 from .transformation import (
+    async_cached_messages_with_media_inlined,
     async_transform_openai_messages_to_gemini_context_caching,
     cached_messages_end_on_supported_turn,
+    cached_messages_with_media_inlined,
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
 )
@@ -152,6 +155,33 @@ def _context_caching_skip_reason(
     ):
         return f"Vertex AI context caching: cached content is below minimum token count ({min_tokens})."
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class _CachingSkipped:
+    reason: str
+
+
+def _cache_contents_or_skip(
+    skip_reason: str | None, cached_messages: Sequence[AllMessageValues]
+) -> Sequence[AllMessageValues] | _CachingSkipped:
+    if skip_reason is not None:
+        return _CachingSkipped(skip_reason)
+    inlined: Final = cached_messages_with_media_inlined(cached_messages)
+    if isinstance(inlined, ImageFetchError):
+        return _CachingSkipped(f"Gemini context caching: {inlined}")
+    return inlined
+
+
+async def _async_cache_contents_or_skip(
+    skip_reason: str | None, cached_messages: Sequence[AllMessageValues]
+) -> Sequence[AllMessageValues] | _CachingSkipped:
+    if skip_reason is not None:
+        return _CachingSkipped(skip_reason)
+    inlined: Final = await async_cached_messages_with_media_inlined(cached_messages)
+    if isinstance(inlined, ImageFetchError):
+        return _CachingSkipped(f"Gemini context caching: {inlined}")
+    return inlined
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -455,11 +485,14 @@ class ContextCachingEndpoints(VertexBase):
         target: Final = _cache_target(custom_llm_provider, api_base, model, vertex_project, vertex_location)
         tools: Final = optional_params.get("tools")
         tool_choice: Final = optional_params.get("tool_choice")
-        skip_reason: Final = _context_caching_skip_reason(
-            cached_messages, non_cached_messages, tools, model, target.model, custom_llm_provider
+        inlined: Final = _cache_contents_or_skip(
+            _context_caching_skip_reason(
+                cached_messages, non_cached_messages, tools, model, target.model, custom_llm_provider
+            ),
+            cached_messages,
         )
-        if skip_reason is not None:
-            verbose_logger.debug("%s Skipping context caching.", skip_reason)
+        if isinstance(inlined, _CachingSkipped):
+            verbose_logger.debug("%s Skipping context caching.", inlined.reason)
             return messages, optional_params, None
 
         ## AUTHORIZATION ##
@@ -487,7 +520,7 @@ class ContextCachingEndpoints(VertexBase):
 
         ## CHECK IF CACHED ALREADY
         generated_cache_key: Final = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=target.model
+            messages=inlined, tools=tools, tool_choice=tool_choice, model=target.model
         )
         try:
             google_cache_name: Final = self.check_cache(
@@ -514,7 +547,7 @@ class ContextCachingEndpoints(VertexBase):
         ## TRANSFORM REQUEST
         cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
             model=target.model,
-            messages=cached_messages,
+            messages=list(inlined),
             cache_key=generated_cache_key,
             custom_llm_provider=custom_llm_provider,
             vertex_project=target.project,
@@ -604,11 +637,14 @@ class ContextCachingEndpoints(VertexBase):
         target: Final = _cache_target(custom_llm_provider, api_base, model, vertex_project, vertex_location)
         tools: Final = optional_params.get("tools")
         tool_choice: Final = optional_params.get("tool_choice")
-        skip_reason: Final = _context_caching_skip_reason(
-            cached_messages, non_cached_messages, tools, model, target.model, custom_llm_provider
+        inlined: Final = await _async_cache_contents_or_skip(
+            _context_caching_skip_reason(
+                cached_messages, non_cached_messages, tools, model, target.model, custom_llm_provider
+            ),
+            cached_messages,
         )
-        if skip_reason is not None:
-            verbose_logger.debug("%s Skipping context caching.", skip_reason)
+        if isinstance(inlined, _CachingSkipped):
+            verbose_logger.debug("%s Skipping context caching.", inlined.reason)
             return messages, optional_params, None
 
         ## AUTHORIZATION ##
@@ -639,7 +675,7 @@ class ContextCachingEndpoints(VertexBase):
 
         ## CHECK IF CACHED ALREADY
         generated_cache_key: Final = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=target.model
+            messages=inlined, tools=tools, tool_choice=tool_choice, model=target.model
         )
         scope: Final = KnownCachedContents.scope(
             url, custom_llm_provider, headers, vertex_project=target.project, vertex_location=target.location
@@ -666,7 +702,7 @@ class ContextCachingEndpoints(VertexBase):
             ## TRANSFORM REQUEST
             cached_content_request_body: Final = await async_transform_openai_messages_to_gemini_context_caching(
                 model=target.model,
-                messages=cached_messages,
+                messages=inlined,
                 cache_key=generated_cache_key,
                 custom_llm_provider=custom_llm_provider,
                 vertex_project=target.project,

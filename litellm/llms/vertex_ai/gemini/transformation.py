@@ -17,9 +17,8 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, has_attributes
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, has_attributes, lax_bool
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.factory import (
     GeminiMediaSource,
@@ -1260,14 +1259,28 @@ def transform_request_body(
 _transform_request_body = transform_request_body
 
 
+def _caches_prompts(model: str, custom_llm_provider: str, deployment_model_info: object) -> bool:
+    deployment_fields: Final = as_str_mapping(deployment_model_info)
+    declared: Final = None if deployment_fields is None else lax_bool(deployment_fields.get("supports_prompt_caching"))
+    if declared is not None:
+        return declared
+    try:
+        mapped: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:  # noqa: BLE001  # a model newer than the cost map keeps its marks and still caches
+        return True
+    return mapped.get("supports_prompt_caching") is True
+
+
 def _with_prompt_cache_breakpoints_as_cache_control(
-    messages: Sequence[AllMessageValues], litellm_params: Mapping[str, object], model: str
+    messages: Sequence[AllMessageValues], litellm_params: Mapping[str, object], model: str, custom_llm_provider: str
 ) -> tuple[AllMessageValues, ...]:
     drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
-    checked: Final = AnthropicCacheControlHook.prompt_cache_breakpoints_dropped_from_tool_results(
-        messages, drop_params, model
+    rewritten: Final = tuple(
+        prompt_cache_breakpoints_as_context_cache_control(message, drop_params) for message in messages
     )
-    return tuple(prompt_cache_breakpoints_as_context_cache_control(message, drop_params) for message in checked)
+    if _caches_prompts(model, custom_llm_provider, litellm_params.get("model_info")):
+        return rewritten
+    return tuple(messages)
 
 
 def sync_transform_request_body(
@@ -1301,6 +1314,7 @@ def sync_transform_request_body(
                 messages,
                 cast(Mapping[str, object], litellm_params),  # cast-ok: untyped shared signature
                 model,
+                custom_llm_provider,
             )
         ),
         optional_params=optional_params,
@@ -1443,6 +1457,7 @@ async def async_transform_request_body(
                 messages,
                 cast(Mapping[str, object], litellm_params),  # cast-ok: untyped shared signature
                 model,
+                custom_llm_provider,
             )
         ),
         optional_params=optional_params,

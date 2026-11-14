@@ -1,4 +1,7 @@
+import base64
 import json
+import uuid
+from collections.abc import Callable
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,12 +11,14 @@ import pytest
 import litellm
 
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.context_caching.known_cached_contents import KnownCachedContents
 from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
     ContextCachingEndpoints,
 )
+from tests.unit.conftest import ONE_PIXEL_PNG
 
 
 @pytest.fixture
@@ -2551,3 +2556,147 @@ def test_a_plain_system_prompt_goes_into_the_gemini_cache_instead_of_beside_it(l
     assert created["system_instruction"] == {"parts": [{"text": "You are terse."}]}
     assert generated["cachedContent"] == "cachedContents/created"
     assert "system_instruction" not in generated
+
+
+_DOCUMENT_BESIDE_AN_IMAGE: Final = "Section watch: the watchlist feature tracks companies. " * 600
+_CREATED_IMAGE_CACHE: Final = {
+    "name": "cachedContents/image-cache",
+    "model": "models/gemini-2.5-flash",
+    "expireTime": "2099-01-01T00:00:00Z",
+    "usageMetadata": {"totalTokenCount": 6000},
+}
+
+
+def _image_then_marked_document(image_url: str) -> list:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": image_url}},
+                {"type": "text", "text": _DOCUMENT_BESIDE_AN_IMAGE, "cache_control": {"type": "ephemeral"}},
+            ],
+        },
+        {"role": "user", "content": "What does the chart show?"},
+    ]
+
+
+@pytest.fixture
+def image_server(monkeypatch: pytest.MonkeyPatch) -> Callable[[int, bytes], list[str]]:
+    def serve(status_code: int, content: bytes) -> list[str]:
+        fetched: Final[list[str]] = []  # mutable-ok: the test asserts on the URLs fetched
+
+        def respond(client: object, url: str, **kwargs: object) -> httpx.Response:
+            fetched.append(url)
+            return httpx.Response(
+                status_code, content=content, headers={"content-type": "image/png"}, request=httpx.Request("GET", url)
+            )
+
+        async def async_respond(client: object, url: str, **kwargs: object) -> httpx.Response:
+            return respond(client, url, **kwargs)
+
+        monkeypatch.setattr(image_handling, "safe_get", respond)
+        monkeypatch.setattr(image_handling, "async_safe_get", async_respond)
+        return fetched
+
+    return serve
+
+
+def _fake_cache_api(spec: type[HTTPHandler] | type[AsyncHTTPHandler]) -> MagicMock:
+    client: Final = MagicMock(spec=spec)
+    client.get.side_effect = lambda **kwargs: httpx.Response(
+        200, json={"cachedContents": []}, request=httpx.Request("GET", kwargs["url"])
+    )
+    client.post.side_effect = lambda **kwargs: httpx.Response(
+        200, json=_CREATED_IMAGE_CACHE, request=httpx.Request("POST", kwargs["url"])
+    )
+    return client
+
+
+async def _check_and_create_cache(
+    endpoints: ContextCachingEndpoints,
+    sync_mode: bool,
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+    messages: list,
+    optional_params: dict,
+) -> tuple[tuple[list, dict, str | None], tuple[dict, ...]]:
+    client: Final = _fake_cache_api(HTTPHandler if sync_mode else AsyncHTTPHandler)
+    logging_obj: Final = MagicMock(spec=Logging)
+    logging_obj.model_call_details = {}
+    request: Final = {
+        "messages": messages,
+        "optional_params": optional_params,
+        "api_key": "test-key",
+        "api_base": None,
+        "model": "gemini-2.5-flash",
+        "client": client,
+        "timeout": 30.0,
+        "logging_obj": logging_obj,
+        "custom_llm_provider": custom_llm_provider,
+        "vertex_project": "project",
+        "vertex_location": "us-central1",
+        "vertex_auth_header": "vertex-token",
+    }
+    result: Final = (
+        endpoints.check_and_create_cache(**request)
+        if sync_mode
+        else await endpoints.async_check_and_create_cache(**request)
+    )
+    return result, tuple(call.kwargs["json"] for call in client.post.call_args_list)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.asyncio
+async def test_a_cache_holds_an_https_image_inline_since_the_cache_api_rejects_web_urls(
+    image_server, sync_mode, custom_llm_provider
+):
+    image_url: Final = f"https://img.example/{uuid.uuid4()}.png"
+    fetched: Final = image_server(200, ONE_PIXEL_PNG)
+
+    (_, _, cache_name), created = await _check_and_create_cache(
+        ContextCachingEndpoints(known_caches=KnownCachedContents()),
+        sync_mode,
+        custom_llm_provider,
+        _image_then_marked_document(image_url),
+        {},
+    )
+
+    assert fetched == [image_url]
+    assert cache_name == _CREATED_IMAGE_CACHE["name"]
+    assert image_url not in json.dumps(created)
+    assert base64.b64encode(ONE_PIXEL_PNG).decode() in json.dumps(created)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_a_cached_image_that_cannot_be_downloaded_sends_the_request_uncached_with_its_tools(
+    image_server, sync_mode
+):
+    image_server(404, b"")
+    messages: Final = _image_then_marked_document(f"https://img.example/{uuid.uuid4()}.png")
+    tools: Final = [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}]
+
+    result, created = await _check_and_create_cache(
+        ContextCachingEndpoints(known_caches=KnownCachedContents()), sync_mode, "vertex_ai", messages, {"tools": tools}
+    )
+
+    assert result == (messages, {"tools": tools}, None)
+    assert created == ()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_a_changed_image_at_the_same_url_gets_a_new_cache_holding_the_new_image(image_server, sync_mode):
+    image_url: Final = f"https://img.example/{uuid.uuid4()}.png"
+    endpoints: Final = ContextCachingEndpoints(known_caches=KnownCachedContents())
+
+    image_server(200, b"first version of the chart")
+    _, first = await _check_and_create_cache(endpoints, sync_mode, "gemini", _image_then_marked_document(image_url), {})
+    image_handling.in_memory_cache.delete_cache(image_url)
+    image_server(200, b"second version of the chart")
+    _, second = await _check_and_create_cache(
+        endpoints, sync_mode, "gemini", _image_then_marked_document(image_url), {}
+    )
+
+    assert base64.b64encode(b"first version of the chart").decode() in json.dumps(first)
+    assert base64.b64encode(b"second version of the chart").decode() in json.dumps(second)

@@ -11,6 +11,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal
 
+from litellm.exceptions import ImageFetchError
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media, inline_remote_media
@@ -143,6 +144,24 @@ def _split_after_last_cached_part(
     return head, (tail,)
 
 
+def cached_messages_with_media_inlined(
+    cached_messages: Sequence[AllMessageValues],
+) -> Sequence[AllMessageValues] | ImageFetchError:
+    try:
+        return inline_remote_media(list(cached_messages), should_inline=inlines_unless_gemini_file)
+    except ImageFetchError as error:
+        return error
+
+
+async def async_cached_messages_with_media_inlined(
+    cached_messages: Sequence[AllMessageValues],
+) -> Sequence[AllMessageValues] | ImageFetchError:
+    try:
+        return await async_inline_remote_media(list(cached_messages), should_inline=inlines_unless_gemini_file)
+    except ImageFetchError as error:
+        return error
+
+
 def cached_messages_end_on_supported_turn(cached_messages: Sequence[AllMessageValues]) -> bool:
     """
     The cachedContents API rejects contents ending on a model turn, which is how it
@@ -172,7 +191,7 @@ def transform_openai_messages_to_gemini_context_caching(
 
     transformed_system_messages, new_messages = transform_system_message(
         supports_system_message=supports_system_message,
-        messages=inline_remote_media(messages, should_inline=inlines_unless_gemini_file),
+        messages=messages,
     )
 
     transformed_messages: Final = gemini_convert_messages_with_history(
@@ -210,10 +229,9 @@ async def async_transform_openai_messages_to_gemini_context_caching(
     vertex_project: str | None,
     vertex_location: str | None,
 ) -> CachedContentRequestBody:
-    inlined_messages: Final = await async_inline_remote_media(list(messages), should_inline=inlines_unless_gemini_file)
     return await asyncify(transform_openai_messages_to_gemini_context_caching)(
         model=model,
-        messages=inlined_messages,
+        messages=list(messages),
         custom_llm_provider=custom_llm_provider,
         cache_key=cache_key,
         vertex_project=vertex_project,
