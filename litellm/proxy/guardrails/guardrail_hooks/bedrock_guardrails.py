@@ -75,6 +75,7 @@ from litellm.types.guardrails import (
     GuardrailEventHooks,
     LitellmParams,
 )
+from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockChecksMessage,
@@ -334,6 +335,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # store kwargs as optional_params
         self.optional_params = kwargs
+        self.aws_auth_params: Final = AwsAuthParams.model_validate(kwargs)
 
         self.disable_exception_on_block: bool = disable_exception_on_block or False
         """
@@ -835,7 +837,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         credentials: Final[Credentials | None] = (
             None
-            if bedrock_bearer_token(api_key) is not None
+            if bedrock_bearer_token(api_key, self.aws_auth_params) is not None
             else self.get_credentials(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
@@ -879,7 +881,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         proxy_endpoint_url = f"{proxy_endpoint_url}{request_path}"
         encoded_data: Final = json.dumps(data).encode("utf-8")
 
-        aws_bearer_token: Final = bedrock_bearer_token(api_key)
+        aws_bearer_token: Final = bedrock_bearer_token(api_key, self.aws_auth_params)
 
         if aws_bearer_token is not None:
             try:

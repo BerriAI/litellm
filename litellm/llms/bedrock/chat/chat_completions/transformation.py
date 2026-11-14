@@ -47,6 +47,7 @@ from litellm.llms.bedrock.common_utils import (
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
+from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, ModelResponse, ModelResponseStream
 
@@ -355,7 +356,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
-            api_key=bedrock_bearer_token(api_key),
+            api_key=bedrock_bearer_token(api_key, AwsAuthParams.model_validate(optional_params)),
             api_base=api_base,
         )
 
