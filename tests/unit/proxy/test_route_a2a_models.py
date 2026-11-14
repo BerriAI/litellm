@@ -9,6 +9,7 @@ import base64
 import datetime
 import json
 import logging
+import math
 import uuid
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType
@@ -844,10 +845,14 @@ async def test_route_a2a_bridge_agent_with_an_unusable_price_still_answers(
         return_value=httpx.Response(200, json=AGENT_REPLY)
     )
 
-    cost, response, _ = await _billed_chat_call(_registry_with(_priced_dbx_agent("odd-price", price)), "odd-price")
+    cost, response, logging_obj = await _billed_chat_call(
+        _registry_with(_priced_dbx_agent("odd-price", price)), "odd-price"
+    )
 
     assert response.choices[0].message.content == "pong"
     assert cost == expected_cost
+    header_values: Final = cost_headers(response_cost=cost, litellm_logging_obj=logging_obj).values()
+    assert all(math.isfinite(float(value)) for value in header_values if value not in (None, "None"))
 
 
 @respx.mock
@@ -872,16 +877,32 @@ async def test_route_a2a_bridge_token_priced_agent_reports_its_input_and_output_
 
 
 @respx.mock
+async def test_route_a2a_bridge_per_query_agent_reports_no_input_or_output_cost(httpx_transport: None) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+
+    cost, _, logging_obj = await _billed_chat_call(
+        _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE)), "per-query"
+    )
+
+    headers: Final = cost_headers(response_cost=cost, litellm_logging_obj=logging_obj)
+    assert float(headers["x-litellm-response-cost"]) == pytest.approx(0.05)
+    assert (headers["x-litellm-response-cost-input"], headers["x-litellm-response-cost-output"]) == (None, None)
+
+
+@respx.mock
 @pytest.mark.parametrize(
     ("config_name", "config"),
     [
         ("cost_margin_config", {"global": {"percentage": "ten"}}),
         ("cost_margin_config", {"global": {"fixed_amount": None}}),
         ("cost_discount_config", {"databricks_agent": "a fifth"}),
+        ("cost_discount_config", ["databricks_agent"]),
     ],
 )
 async def test_route_a2a_bridge_agent_with_a_malformed_cost_config_still_answers(
-    httpx_transport: None, monkeypatch: pytest.MonkeyPatch, config_name: str, config: Mapping[str, object]
+    httpx_transport: None, monkeypatch: pytest.MonkeyPatch, config_name: str, config: object
 ) -> None:
     respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
         return_value=httpx.Response(200, json=AGENT_REPLY)

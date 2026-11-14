@@ -2594,7 +2594,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 input_cost=agent_cost.input_cost,
                 output_cost=agent_cost.output_cost,
             )
-        except (ValueError, TypeError) as e:
+        except Exception as e:  # noqa: BLE001  # a malformed price or cost config leaves the cost unset
             self.model_call_details["response_cost_failure_debug_information"] = (
                 StandardLoggingModelCostFailureDebugInformation(
                     error_str=str(e),
