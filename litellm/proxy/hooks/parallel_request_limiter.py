@@ -21,7 +21,11 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.budget_throttle import throttled_limit
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
-from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash, get_request_stash
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    claim_request_stash_for_data,
+    get_request_stash,
+    get_request_stash_for_call,
+)
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit, socket_session_usage
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET
@@ -67,13 +71,15 @@ def _holds_admitted_slot() -> bool:
 
 def _slots_released(kwargs: Mapping[str, object]) -> int:
     """A websocket turn callback releases nothing, the socket's slot is released once at disconnect. Within a request
-    whose admission is on the stash, only the first callback to run releases the slot ``async_pre_call_hook`` took."""
+    whose admission is on the stash, only the first callback of that request releases the slot ``async_pre_call_hook``
+    took, and a nested call's callbacks (a guardrail's own model call) release nothing."""
     if kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES or _is_websocket_passthrough_row(kwargs):
         return 0
-    stash: Final = get_request_stash()
-    if stash is None:
+    if get_request_stash() is None:
         return 1
-    if not stash.v1_parallel_slot_held:
+    call_id: Final = kwargs.get("litellm_call_id")
+    stash: Final = get_request_stash_for_call(call_id if isinstance(call_id, str) else None)
+    if stash is None or not stash.v1_parallel_slot_held:
         return 0
     stash.v1_parallel_slot_held = False
     return 1
@@ -530,7 +536,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             )  # don't block execution for cache updates
         )
-        get_or_create_request_stash().v1_parallel_slot_held = True
+        claim_request_stash_for_data(data).v1_parallel_slot_held = True
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time) -> None:

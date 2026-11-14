@@ -66,10 +66,16 @@ async def _in_flight(handler: PROXY_MaxParallelRequestsHandler, api_key: str) ->
 
 
 async def _admit(
-    handler: PROXY_MaxParallelRequestsHandler, auth: UserAPIKeyAuth, call_type: str = "completion"
+    handler: PROXY_MaxParallelRequestsHandler,
+    auth: UserAPIKeyAuth,
+    call_type: str = "completion",
+    litellm_call_id: str = "call-main",
 ) -> None:
     await handler.async_pre_call_hook(
-        user_api_key_dict=auth, cache=DualCache(), data={"model": "gpt-4o-mini"}, call_type=call_type
+        user_api_key_dict=auth,
+        cache=DualCache(),
+        data={"model": "gpt-4o-mini", "litellm_call_id": litellm_call_id},
+        call_type=call_type,
     )
     await asyncio.sleep(0)
 
@@ -471,12 +477,19 @@ async def test_a_rejected_realtime_attempt_does_not_free_a_slot_it_never_took():
     assert await _in_flight(handler, api_key) == 1
 
 
-def _completed(api_key: str) -> dict[str, object]:
-    return {"litellm_params": {"metadata": {"user_api_key": api_key, "user_api_key_model_max_budget": {}}}}
+def _completed(api_key: str, litellm_call_id: str = "call-main") -> dict[str, object]:
+    return {
+        "litellm_call_id": litellm_call_id,
+        "litellm_params": {"metadata": {"user_api_key": api_key, "user_api_key_model_max_budget": {}}},
+    }
 
 
-def _failed(api_key: str) -> dict[str, object]:
-    return {"litellm_params": {"metadata": {"user_api_key": api_key}}, "exception": RuntimeError("upstream failed")}
+def _failed(api_key: str, litellm_call_id: str = "call-main") -> dict[str, object]:
+    return {
+        "litellm_call_id": litellm_call_id,
+        "litellm_params": {"metadata": {"user_api_key": api_key}},
+        "exception": RuntimeError("upstream failed"),
+    }
 
 
 @pytest.mark.parametrize(
@@ -510,8 +523,42 @@ async def test_an_ended_request_frees_its_slot_exactly_once_however_often_cleanu
                 )
         await proxy_logging_obj.arelease_max_parallel_requests(auth)
         await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(auth)
+        await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(auth)
+        await handler.async_log_success_event(
+            kwargs=_completed(api_key), response_obj=None, start_time=FROZEN_INSTANT, end_time=FROZEN_INSTANT
+        )
 
     await _as_its_own_request(_admit(handler, auth))
     assert await _in_flight(handler, api_key) == 1
     await _as_its_own_request(ended_request())
+    assert await _in_flight(handler, api_key) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_nested_calls_callbacks_leave_the_requests_slot_to_the_request():
+    api_key = hash_token("sk-guardrail")
+    handler = _frozen_handler()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = handler
+    auth = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=2)
+
+    async def request_with_a_guardrail_call() -> None:
+        await _admit(handler, auth)
+        await handler.async_log_success_event(
+            kwargs=_completed(api_key, "call-guardrail"),
+            response_obj=None,
+            start_time=FROZEN_INSTANT,
+            end_time=FROZEN_INSTANT,
+        )
+        await handler.async_log_failure_event(
+            kwargs=_failed(api_key, "call-guardrail"),
+            response_obj=None,
+            start_time=FROZEN_INSTANT,
+            end_time=FROZEN_INSTANT,
+        )
+        assert await _in_flight(handler, api_key) == 2
+        await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(auth)
+
+    await _as_its_own_request(_admit(handler, auth))
+    await _as_its_own_request(request_with_a_guardrail_call())
     assert await _in_flight(handler, api_key) == 1
