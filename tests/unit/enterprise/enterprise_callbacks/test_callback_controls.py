@@ -14,7 +14,7 @@ from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
 )
 from litellm.integrations.s3_v2 import S3Logger
-from litellm.integrations.s3_v3 import S3LoggerV3
+from litellm.integrations.s3_v3 import S3Logger as RustS3Logger
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
@@ -97,8 +97,8 @@ class TestEnterpriseCallbackControls:
         standard_callback_dynamic_params = StandardCallbackDynamicParams()
 
         # Mock S3Logger to avoid async initialization issues
-        with patch("litellm.integrations.s3_v3.S3LoggerV3.__init__", return_value=None):
-            s3_logger = S3LoggerV3()
+        with patch("litellm.integrations.s3_v3.S3Logger.__init__", return_value=None):
+            s3_logger = RustS3Logger()
             result = EnterpriseCallbackControls.is_callback_disabled_dynamically(
                 s3_logger, litellm_params, standard_callback_dynamic_params
             )

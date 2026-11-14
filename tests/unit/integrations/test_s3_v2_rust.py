@@ -27,7 +27,7 @@ from tests.unit.integrations.s3_v3_rust_support import (
 
 import litellm
 from litellm.integrations import s3_v3
-from litellm.integrations.s3_v3 import S3LoggerV3
+from litellm.integrations.s3_v3 import S3Logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.rust_bridge import _native
 from litellm.types.integrations.s3_v2 import S3LoggerSettings
@@ -56,7 +56,7 @@ def bucket() -> Iterator[ScriptedBucket]:
 
 def _logger(
     monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, **params: object
-) -> S3LoggerV3:  # kwargs-ok: S3Logger keywords
+) -> S3Logger:  # kwargs-ok: S3Logger keywords
     logger: Final = rust_s3_logger(
         monkeypatch,
         **{
@@ -76,7 +76,7 @@ def _payload(response_id: str = "test", **fields: object) -> dict[str, object]: 
     return {"id": response_id, "metadata": {}, "messages": [], **fields}
 
 
-async def _upload(logger: S3LoggerV3, payload: Mapping[str, object], start_time: datetime = START) -> None:
+async def _upload(logger: S3Logger, payload: Mapping[str, object], start_time: datetime = START) -> None:
     await log_payload(logger, payload, start_time)
     await logger.flush_queue()
 
@@ -380,7 +380,7 @@ async def test_strip_base64_recursive_redaction(monkeypatch: pytest.MonkeyPatch,
             assert "base64," not in s, f"Found real base64 blob in: {s}"
 
 
-async def _queued_key(logger: S3LoggerV3, payload: Mapping[str, object], start_time: datetime = START) -> str:
+async def _queued_key(logger: S3Logger, payload: Mapping[str, object], start_time: datetime = START) -> str:
     await log_payload(logger, payload, start_time)
     (key,) = logger.sink.queued_keys()
     return key
@@ -736,7 +736,7 @@ def _assert_signed_for_s3_canonicalization(
 
 def _logger_for_signing(
     monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, **params: object
-) -> S3LoggerV3:  # kwargs-ok: S3Logger keywords
+) -> S3Logger:  # kwargs-ok: S3Logger keywords
     return rust_s3_logger(
         monkeypatch,
         s3_bucket_name="logs-bucket",
@@ -896,7 +896,7 @@ def _partition_payload(response_id: str = _PARTITION_ID) -> dict[str, object]:
 
 def _partition_logger(
     monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, callback_params: Mapping[str, object]
-) -> S3LoggerV3:
+) -> S3Logger:
     monkeypatch.setattr(
         litellm,
         "s3_callback_params",
@@ -1047,7 +1047,7 @@ def _cold_storage_key() -> str:
     )
 
 
-def _cold_logger(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, params: Mapping[str, object]) -> S3LoggerV3:
+def _cold_logger(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, params: Mapping[str, object]) -> S3Logger:
     monkeypatch.setattr(
         litellm, "s3_callback_params", {"s3_bucket_name": "test-bucket", "s3_endpoint_url": bucket.url, **params}
     )
@@ -1106,14 +1106,12 @@ def _key(response_id: str) -> str:
     return f"2025-09-14/time-09-05-07-000042_{response_id}.json"
 
 
-async def _log_all(logger: S3LoggerV3, payloads: list[dict[str, object]]) -> None:
+async def _log_all(logger: S3Logger, payloads: list[dict[str, object]]) -> None:
     for payload in payloads:
         await log_payload(logger, payload, START)
 
 
-async def _log_once_a_put_arrives(
-    logger: S3LoggerV3, bucket: ScriptedBucket, payloads: list[dict[str, object]]
-) -> None:
+async def _log_once_a_put_arrives(logger: S3Logger, bucket: ScriptedBucket, payloads: list[dict[str, object]]) -> None:
     while not bucket.puts():
         await asyncio.sleep(0.005)
     await _log_all(logger, payloads)
@@ -1758,7 +1756,7 @@ async def test_an_unlisted_5xx_is_requeued_without_an_extra_attempt(
     assert len(bucket.puts()) == 1
 
 
-async def _peak_width(logger: S3LoggerV3, bucket: ScriptedBucket, events: int) -> int:
+async def _peak_width(logger: S3Logger, bucket: ScriptedBucket, events: int) -> int:
     bucket.peak = 0
     bucket.delay = 0.1
     await _log_all(logger, [_payload(f"width-{index}") for index in range(events)])
@@ -1860,7 +1858,7 @@ def _s3_v2_callback_params(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBuck
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
 
 
-async def _wait_for_a_queued_key(logger: S3LoggerV3) -> list[str]:
+async def _wait_for_a_queued_key(logger: S3Logger) -> list[str]:
     for _ in range(500):
         keys = logger.sink.queued_keys()
         if keys:
@@ -1912,7 +1910,7 @@ async def test_basic_s3_v2_logging(monkeypatch: pytest.MonkeyPatch, bucket: Scri
     )
 
 
-def _logger_from_globals(monkeypatch: pytest.MonkeyPatch) -> S3LoggerV3:
+def _logger_from_globals(monkeypatch: pytest.MonkeyPatch) -> S3Logger:
     logger: Final = rust_s3_logger(monkeypatch)
     _ = logger.periodic_flush_task.cancel()
     return logger
@@ -1975,7 +1973,7 @@ def _batch_line_items_payload() -> dict[str, object]:
 
 def _s3_logger_answering(
     monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, status: int, s3_path: str | None, content: bytes = b""
-) -> S3LoggerV3:
+) -> S3Logger:
     bucket.reply("/test-bucket/", (status, content.decode()))
     return _logger(
         monkeypatch,
@@ -2311,7 +2309,7 @@ async def _download_filenames(
     return [name.group(1) for name in names if name is not None]
 
 
-async def _log_all_at(logger: S3LoggerV3, payloads: list[dict[str, object]], start_time: datetime) -> None:
+async def _log_all_at(logger: S3Logger, payloads: list[dict[str, object]], start_time: datetime) -> None:
     for payload in payloads:
         await log_payload(logger, payload, start_time)
 
@@ -2502,7 +2500,7 @@ def _generation(request: Received) -> tuple[str, str]:
     return access_key.group(1).removeprefix("AKIA"), request.headers["x-amz-security-token"].removeprefix("token-")
 
 
-def _profile_logger(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, profile: str) -> S3LoggerV3:
+def _profile_logger(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, profile: str) -> S3Logger:
     logger: Final = rust_s3_logger(
         monkeypatch,
         s3_bucket_name="test-bucket",
@@ -2602,9 +2600,9 @@ def _constructed(
     *,
     configured: Mapping[str, object] | None = None,
     periodic: bool = False,
-) -> S3LoggerV3:
+) -> S3Logger:
     monkeypatch.setattr(litellm, "s3_callback_params", configured)
-    logger: Final = S3LoggerV3(override, **(_CONSTRUCTOR_BASE | {"s3_endpoint_url": bucket.url} | settings))
+    logger: Final = S3Logger(override, **(_CONSTRUCTOR_BASE | {"s3_endpoint_url": bucket.url} | settings))
     if not periodic:
         _ = logger.periodic_flush_task.cancel()
     return logger
@@ -2618,7 +2616,7 @@ async def test_constructor_keywords_build_a_logger_that_uploads_under_them(
 
     await _upload(logger, _payload("ctor"))
 
-    assert isinstance(logger, S3LoggerV3)
+    assert isinstance(logger, S3Logger)
     assert logger.s3_path == "from-constructor"
     assert [put.path for put in bucket.puts()] == [f"/test-bucket/from-constructor/{_key('ctor')}"]
 
@@ -2831,7 +2829,7 @@ async def test_the_declared_subscription_matches_the_rust_manifest(
     manifest: Final = WireManifest.model_validate_json(logger.rust.manifest())
 
     assert {(s.hook, s.reads, s.writes, s.may_abort, s.parallel, s.awaited) for s in manifest.subscriptions} == {
-        (hook, s.reads, s.writes, s.may_abort, s.parallel, s.awaited) for hook, s in S3LoggerV3.subscriptions.items()
+        (hook, s.reads, s.writes, s.may_abort, s.parallel, s.awaited) for hook, s in S3Logger.subscriptions.items()
     }
     assert logger.selection is not None
     assert manifest.selection.name == logger.selection.name
@@ -2850,5 +2848,5 @@ async def test_the_s3_v2_callback_name_resolves_to_the_rust_logger_class(
 
     logger: Final = _logger(monkeypatch, bucket)
 
-    assert CustomLoggerRegistry.get_class_type_for_custom_logger_name("s3_v2") is S3LoggerV3
+    assert CustomLoggerRegistry.get_class_type_for_custom_logger_name("s3_v2") is S3Logger
     assert CustomLoggerRegistry.get_callback_str_from_class_type(type(logger)) == "s3_v2"

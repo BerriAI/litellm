@@ -22,9 +22,9 @@ from litellm.repositories.table_repositories import AuditLogRepository
 from litellm.types.utils import StandardAuditLogPayload
 
 if TYPE_CHECKING:
-    from litellm.integrations.s3_v3 import S3LoggerV3
+    from litellm.integrations.s3_v3 import S3Logger
 
-_audit_log_callback_cache: Final[dict[str, "CustomLogger | S3LoggerV3"]] = {}
+_audit_log_callback_cache: Final[dict[str, "CustomLogger | S3Logger"]] = {}
 ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY: Final = "allow_litellm_changed_by_header"
 
 
@@ -65,7 +65,7 @@ def get_audit_log_changed_by(
     return user_api_key_dict.user_id or litellm_proxy_admin_name
 
 
-def _resolve_audit_log_callback(name: str) -> "CustomLogger | S3LoggerV3 | None":
+def _resolve_audit_log_callback(name: str) -> "CustomLogger | S3Logger | None":
     """Resolve a string callback name to a CustomLogger instance, with caching.
 
     For "s3_v2" with `litellm.s3_audit_callback_params` set, constructs a
@@ -75,12 +75,12 @@ def _resolve_audit_log_callback(name: str) -> "CustomLogger | S3LoggerV3 | None"
     if name in _audit_log_callback_cache:
         return _audit_log_callback_cache[name]
 
-    instance: CustomLogger | S3LoggerV3 | None
+    instance: CustomLogger | S3Logger | None
     audit_params: Final[Mapping[str, object] | None] = getattr(litellm, "s3_audit_callback_params", None)
     if name == "s3_v2" and audit_params is not None:
         from litellm.integrations import s3_v3
 
-        instance = s3_v3.S3LoggerV3(s3_callback_params_override=audit_params)
+        instance = s3_v3.S3Logger(s3_callback_params_override=audit_params)
     else:
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
@@ -200,7 +200,7 @@ async def _dispatch_audit_log_to_callbacks(
 
     for callback in litellm.audit_log_callbacks:
         try:
-            resolved: CustomLogger | S3LoggerV3 | None = callback if isinstance(callback, CustomLogger) else None
+            resolved: CustomLogger | S3Logger | None = callback if isinstance(callback, CustomLogger) else None
             if isinstance(callback, str):
                 resolved = _resolve_audit_log_callback(callback)
                 if resolved is None:

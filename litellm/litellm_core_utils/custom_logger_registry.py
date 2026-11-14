@@ -46,7 +46,7 @@ from litellm.integrations.opik.opik import OpikLogger
 from litellm.integrations.pointfive import PointFiveLogger
 from litellm.integrations.posthog import PostHogLogger
 from litellm.integrations.prometheus import PrometheusLogger
-from litellm.integrations.s3_v3 import S3LoggerV3
+from litellm.integrations.s3_v3 import S3Logger
 from litellm.integrations.sqs import SQSLogger
 from litellm.integrations.ternary.ternary_logger import TernaryLogger
 from litellm.integrations.vantage.vantage_logger import VantageLogger
@@ -104,7 +104,7 @@ class CustomLoggerRegistry:
         "anthropic_cache_control_hook": AnthropicCacheControlHook,
         "agentops": AgentOps,
         "deepeval": DeepEvalLogger,
-        "s3_v2": S3LoggerV3,
+        "s3_v2": S3Logger,
         "pointfive": PointFiveLogger,
         "zerobus": ZerobusLogger,
         "aws_sqs": SQSLogger,

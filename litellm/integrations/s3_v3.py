@@ -288,7 +288,7 @@ _ATTEMPT_ENDED_READS: Final = frozenset(
 )
 
 
-class S3LoggerV3(RustLogger):
+class S3Logger(RustLogger):
     selection = Selection(name=CALLBACK_NAME, honors_no_log=True)
 
     def __init__(
@@ -299,11 +299,9 @@ class S3LoggerV3(RustLogger):
         from litellm.rust_bridge._native import NativeS3Log
 
         host: Final = _Host()
-        sink: Final = NativeS3Log(
-            _constructed_params(s3_callback_params_override, settings),
-            _constants(settings.get("s3_batch_size", DEFAULT_S3_BATCH_SIZE)),
-            host,
-        )
+        params: Final = _constructed_params(s3_callback_params_override, settings)
+        sink: Final = NativeS3Log(params, _constants(settings.get("s3_batch_size", DEFAULT_S3_BATCH_SIZE)), host)
+        self.s3_region_name: Final[object] = params.get("s3_region_name") or settings.get("s3_region_name")
         self.sink: Final = sink
         self.s3_host: Final = host
         self.periodic_flush_task: Final = asyncio.create_task(
@@ -395,6 +393,6 @@ class S3LoggerV3(RustLogger):
 
 
 __all__ = [
-    "S3LoggerV3",
+    "S3Logger",
     "legacy_should_log",
 ]

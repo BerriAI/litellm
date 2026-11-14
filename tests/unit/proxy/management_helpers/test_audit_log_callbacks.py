@@ -400,7 +400,7 @@ class TestS3AuditCallbackParamsDecoupling:
     def test_opt_in_constructs_separate_instance_with_audit_config(self, monkeypatch: pytest.MonkeyPatch):
         """Audit config set → audit resolver returns a fresh S3Logger pointing
         at the audit bucket, distinct from the normal-log singleton."""
-        from litellm.integrations.s3_v3 import S3LoggerV3 as S3Logger
+        from litellm.integrations.s3_v3 import S3Logger
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
         )
@@ -428,7 +428,7 @@ class TestS3AuditCallbackParamsDecoupling:
     def test_opt_out_preserves_singleton_behavior(self, monkeypatch: pytest.MonkeyPatch):
         """No `s3_audit_callback_params` → audit and normal share the singleton
         (existing behavior, regression guard)."""
-        from litellm.integrations.s3_v3 import S3LoggerV3 as S3Logger
+        from litellm.integrations.s3_v3 import S3Logger
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
         )
@@ -454,7 +454,7 @@ class TestS3AuditCallbackParamsDecoupling:
     def test_empty_dict_opts_in(self, monkeypatch: pytest.MonkeyPatch):
         """`s3_audit_callback_params = {}` is opt-in (truthy-by-presence) and
         produces a separate instance with no bucket configured (env/IAM-only)."""
-        from litellm.integrations.s3_v3 import S3LoggerV3 as S3Logger
+        from litellm.integrations.s3_v3 import S3Logger
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
         )

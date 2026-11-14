@@ -16,7 +16,7 @@ from litellm.integrations.custom_logger_v2.enforcement import FieldView
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs, with_sources
 from litellm.integrations.custom_logger_v2.legacy import KwargsFields
 from litellm.integrations.custom_logger_v2.rust import WireManifest
-from litellm.integrations.s3_v3 import S3LoggerV3
+from litellm.integrations.s3_v3 import S3Logger
 from litellm.litellm_core_utils.litellm_logging import LOGGING_KEYS, V2_ASYNC_LOGGING_LINE
 from litellm.types.integrations.custom_logger_v2 import Outcome
 
@@ -119,12 +119,12 @@ def scripted_bucket() -> Iterator[ScriptedBucket]:
         server.shutdown()
 
 
-def rust_s3_logger(monkeypatch: pytest.MonkeyPatch, **params: object) -> S3LoggerV3:  # kwargs-ok: the S3Logger keywords
-    return S3LoggerV3(params) if params else S3LoggerV3()
+def rust_s3_logger(monkeypatch: pytest.MonkeyPatch, **params: object) -> S3Logger:  # kwargs-ok: the S3Logger keywords
+    return S3Logger(params) if params else S3Logger()
 
 
 async def log_attempt(
-    logger: S3LoggerV3, kwargs: Mapping[str, object], start_time: datetime, outcome: Outcome = Outcome.success
+    logger: S3Logger, kwargs: Mapping[str, object], start_time: datetime, outcome: Outcome = Outcome.success
 ) -> None:
     args: Final = HookArgs(request=kwargs, start_time=start_time, end_time=start_time, outcome=outcome)
     view: Final = FieldView(with_sources(KwargsFields(kwargs, LOGGING_KEYS), DERIVED_ATTEMPT_FIELDS, args))
@@ -137,5 +137,5 @@ async def log_attempt(
         V2_ASYNC_LOGGING_LINE.reset(line)
 
 
-async def log_payload(logger: S3LoggerV3, payload: Mapping[str, object], start_time: datetime) -> None:
+async def log_payload(logger: S3Logger, payload: Mapping[str, object], start_time: datetime) -> None:
     await log_attempt(logger, {"standard_logging_object": payload}, start_time)

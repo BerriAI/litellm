@@ -31,7 +31,7 @@ from litellm.integrations.custom_logger_v2.legacy import KwargsFields
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs, with_sources
 from litellm.integrations.custom_logger_v2.selection import RequestSelection
 from litellm.integrations.s3_v2 import S3Logger
-from litellm.integrations.s3_v3 import S3LoggerV3
+from litellm.integrations.s3_v3 import S3Logger as RustS3Logger
 from litellm.litellm_core_utils.litellm_logging import LOGGING_KEYS, V2_ASYNC_LOGGING_LINE
 from litellm.llms.bedrock import base_aws_llm
 from litellm.rust_bridge import _native
@@ -201,11 +201,11 @@ def _params(endpoint: str, extra: Mapping[str, object]) -> dict[str, object]:
 
 async def _loggers(
     monkeypatch: pytest.MonkeyPatch, pair: tuple[FakeBucket, FakeBucket], extra: Mapping[str, object]
-) -> tuple[S3Logger, S3LoggerV3]:
+) -> tuple[S3Logger, RustS3Logger]:
     monkeypatch.setattr(litellm, "s3_callback_params", _params(pair[0].url, extra))
     python_logger: Final = S3Logger()
     monkeypatch.setattr(litellm, "s3_callback_params", _params(pair[1].url, extra))
-    rust_logger: Final = S3LoggerV3()
+    rust_logger: Final = RustS3Logger()
     return python_logger, rust_logger
 
 
@@ -214,7 +214,7 @@ def _attempt_ended_view(kwargs: Mapping[str, object], start_time: datetime) -> F
     return FieldView(with_sources(KwargsFields(kwargs, LOGGING_KEYS), DERIVED_ATTEMPT_FIELDS, args))
 
 
-async def _log_native(rust_logger: S3LoggerV3, kwargs: Mapping[str, object], start_time: datetime = START) -> None:
+async def _log_native(rust_logger: RustS3Logger, kwargs: Mapping[str, object], start_time: datetime = START) -> None:
     line: Final = V2_ASYNC_LOGGING_LINE.set(True)
     try:
         await rust_logger.on_attempt_ended(  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # generated from the native manifest with its declared reads
@@ -225,16 +225,16 @@ async def _log_native(rust_logger: S3LoggerV3, kwargs: Mapping[str, object], sta
         V2_ASYNC_LOGGING_LINE.reset(line)
 
 
-async def _log_each(python_logger: S3Logger, rust_logger: S3LoggerV3, payloads: tuple[object, object]) -> None:
+async def _log_each(python_logger: S3Logger, rust_logger: RustS3Logger, payloads: tuple[object, object]) -> None:
     await python_logger.async_log_success_event({"standard_logging_object": payloads[0]}, None, START, START)
     await _log_native(rust_logger, {"standard_logging_object": payloads[1]})
 
 
-async def _log(python_logger: S3Logger, rust_logger: S3LoggerV3, payload: object) -> None:
+async def _log(python_logger: S3Logger, rust_logger: RustS3Logger, payload: object) -> None:
     await _log_each(python_logger, rust_logger, (payload, copy.deepcopy(payload)))
 
 
-async def _flush(python_logger: S3Logger, rust_logger: S3LoggerV3) -> None:
+async def _flush(python_logger: S3Logger, rust_logger: RustS3Logger) -> None:
     await python_logger.flush_queue()
     await rust_logger.flush_queue()
 
@@ -769,7 +769,7 @@ async def test_a_payload_changed_before_the_flush_is_stored_as_it_is_at_the_flus
 def test_both_loggers_need_a_running_event_loop(golden: Golden, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "s3_callback_params", _params("http://127.0.0.1:9", {}))
     errors: Final[dict[str, str]] = {}
-    for name, build in (("python", S3Logger), ("rust", S3LoggerV3)):
+    for name, build in (("python", S3Logger), ("rust", RustS3Logger)):
         with pytest.raises(RuntimeError, match="no running event loop") as raised:
             build()
         errors[name] = str(raised.value)
@@ -1028,7 +1028,7 @@ async def test_the_native_opt_out_matches_should_run_callback(
     assert len(buckets[1].puts()) == int(expected)
 
 
-async def _until_queued(python_logger: S3Logger, rust_logger: S3LoggerV3) -> None:
+async def _until_queued(python_logger: S3Logger, rust_logger: RustS3Logger) -> None:
     for _ in range(100):
         if python_logger.log_queue and rust_logger.sink.queued_keys():
             return
@@ -1132,7 +1132,7 @@ async def test_the_periodic_flush_keeps_running_after_a_flush_fails() -> None:
         await task
 
 
-async def _settled(pair: tuple[FakeBucket, FakeBucket], python_logger: S3Logger, rust_logger: S3LoggerV3) -> None:
+async def _settled(pair: tuple[FakeBucket, FakeBucket], python_logger: S3Logger, rust_logger: RustS3Logger) -> None:
     for _ in range(3):
         await asyncio.sleep(0.3)
         await _flush(python_logger, rust_logger)
@@ -1207,7 +1207,7 @@ def _put_paths(bucket: FakeBucket) -> list[str]:
     return [request.path for request in bucket.puts()]
 
 
-def _queues(golden: Golden, python_logger: S3Logger, rust_logger: S3LoggerV3) -> tuple[object, list[str]]:
+def _queues(golden: Golden, python_logger: S3Logger, rust_logger: RustS3Logger) -> tuple[object, list[str]]:
     python_queue: Final = golden.python(
         "queue", [element.s3_object_key for element in python_logger.log_queue] if RECORDING else _UNSET
     )
