@@ -8,7 +8,7 @@ import re
 import time
 import types
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from itertools import chain
+from itertools import chain, takewhile
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
@@ -24,6 +24,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
     RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
+from litellm.exceptions import BadRequestError
 from litellm.integrations.anthropic_cache_control_hook import (
     MAX_CACHE_CONTROL_BLOCKS,
     AnthropicCacheControlHook,
@@ -260,6 +261,79 @@ def _request_with_guard_content_as_text(
     if "system" not in request:
         return unguarded
     return {**unguarded, "system": list(system_with_guard_content_as_text(request["system"]))}
+
+
+def _is_guarded_text(part: object) -> bool:
+    return message_field(part, "type") == "guarded_text"
+
+
+def _has_guarded_text(message: object) -> bool:
+    return any(map(_is_guarded_text, parts_of(message_field(message, "content"))))
+
+
+def _is_user_turn(message: object) -> bool:
+    return message_field(message, "role") == "user"
+
+
+def _is_guarded_user_turn(message: object) -> bool:
+    return _is_user_turn(message) and _has_guarded_text(message)
+
+
+def _gets_guarded_when_trailing(message: object) -> bool:
+    content: Final = message_field(message, "content")
+    return isinstance(content, str) or any(message_field(part, "type") == "text" for part in parts_of(content))
+
+
+def _is_guarded_turn_outside_user_turns(message: object) -> bool:
+    return message_field(message, "role") in ("system", "assistant") and _has_guarded_text(message)
+
+
+def _guarded_text_as_text(part: object) -> object:
+    match part:
+        case {"type": "guarded_text", "text": str() as text}:
+            cache_control: Final = message_field(part, "cache_control")
+            if cache_control is None:
+                return {"type": "text", "text": text}
+            return {"type": "text", "text": text, "cache_control": cache_control}
+        case _:
+            return part
+
+
+def _with_guarded_text_as_text(message: AllMessageValues) -> AllMessageValues:
+    if not _is_guarded_turn_outside_user_turns(message):
+        return message
+    parts: Final = parts_of(message_field(message, "content"))
+    return cast(  # cast-ok: only the content parts change, so the message keeps its role's shape
+        AllMessageValues, {**message, "content": [_guarded_text_as_text(part) for part in parts]}
+    )
+
+
+def _messages_keeping_the_full_input_check(
+    messages: Sequence[AllMessageValues], guardrail_active: bool
+) -> Sequence[AllMessageValues]:
+    """Bedrock's guardrail checks every message until one carries guardContent, then only those blocks.
+
+    So a guarded system or assistant part goes as text when no user turn is guarded, either by the caller or by the
+    trailing user turns litellm guards, since marking it would shrink the input check to that part.
+    """
+    if not guardrail_active or not any(map(_is_guarded_turn_outside_user_turns, messages)):
+        return messages
+    if any(map(_is_guarded_user_turn, messages)) or any(
+        map(_gets_guarded_when_trailing, takewhile(_is_user_turn, reversed(messages)))
+    ):
+        return messages
+    leading_count: Final = next(
+        (index for index, message in enumerate(messages) if not is_system_message(message)), len(messages)
+    )
+    return (*messages[:leading_count], *map(_with_guarded_text_as_text, messages[leading_count:]))
+
+
+def _invalid_system_part(part: object, model: str | None) -> BadRequestError:
+    return BadRequestError(
+        message=f"Bedrock Converse needs a string `text` in every system content part, got {part!r}",
+        model=model or "",
+        llm_provider="bedrock",
+    )
 
 
 def _cache_mark_kept(block: Mapping[str, object], keeps_cache_marks: bool) -> Mapping[str, object]:
@@ -1728,14 +1802,18 @@ class AmazonConverseConfig(BaseConfig):
         return ChatCompletionTextObject(type="text", text=text, cache_control=cache_control)
 
     @staticmethod
-    def _system_content_block(part: object) -> SystemContentBlock | None:
+    def _system_content_block(part: object, model: str | None) -> SystemContentBlock | None:
         match part:
-            case {"type": "text", "text": str() as text} if text:
-                return SystemContentBlock(text=text)
-            case {"type": "guarded_text", "text": str() as text} if text:
-                return SystemContentBlock(guardContent={"text": {"text": text}})
-            case _:
+            case {"type": "text", "text": str() as text}:
+                return SystemContentBlock(text=text) if text else None
+            case {"type": "guarded_text", "text": str() as text}:
+                return SystemContentBlock(guardContent={"text": {"text": text}}) if text else None
+            case {"type": "text" | "guarded_text"} if message_field(part, "text"):
+                raise _invalid_system_part(part, model)
+            case Mapping():
                 return None
+            case _:
+                raise _invalid_system_part(part, model)
 
     def _messages_with_cache_marks(
         self,
@@ -1832,7 +1910,7 @@ class AmazonConverseConfig(BaseConfig):
                     system_content_blocks.append(cache_block)
             elif isinstance(content, list):
                 for m in content:
-                    if (content_block := self._system_content_block(m)) is None:
+                    if (content_block := self._system_content_block(m, model)) is None:
                         continue
                     system_content_blocks.append(content_block)
                     cache_block = self.get_cache_point_block(
@@ -2401,7 +2479,7 @@ class AmazonConverseConfig(BaseConfig):
         model_info: Final = routed_model_info(litellm_params.get("model_info"))
         json_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
         marked_messages: Final = self._messages_with_cache_marks(
-            messages,
+            _messages_keeping_the_full_input_check(messages, "guardrailConfig" in optional_params),
             capability_model,
             model,
             drops_unsupported_params(litellm_params.get("drop_params")),
@@ -2516,7 +2594,7 @@ class AmazonConverseConfig(BaseConfig):
         model_info: Final = routed_model_info(litellm_params.get("model_info"))
         json_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
         marked_messages: Final = self._messages_with_cache_marks(
-            messages,
+            _messages_keeping_the_full_input_check(messages, "guardrailConfig" in optional_params),
             capability_model,
             model,
             drops_unsupported_params(litellm_params.get("drop_params")),
