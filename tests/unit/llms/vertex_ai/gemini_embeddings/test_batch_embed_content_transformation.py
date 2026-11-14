@@ -717,8 +717,26 @@ def test_gemini_embedding(respx_mock: respx.MockRouter) -> None:
     assert response.usage.total_tokens == expected_prompt_tokens
 
 
+@pytest.mark.parametrize(
+    ("media_input", "modality", "media_price_key", "media_details_field"),
+    [
+        (IMAGE_DATA_URI, "IMAGE", "input_cost_per_image_token", "image_tokens"),
+        (
+            {"type": "file", "file": {"file_data": VIDEO_DATA_URI, "video_metadata": {"end_offset": "5s"}}},
+            "VIDEO",
+            "input_cost_per_video_token",
+            "video_tokens",
+        ),
+    ],
+)
 @pytest.mark.respx(assert_all_called=True)
-def test_gemini_batch_embedding_usage_comes_from_usage_metadata(respx_mock: respx.MockRouter) -> None:
+def test_gemini_batch_embedding_usage_comes_from_usage_metadata(
+    respx_mock: respx.MockRouter,
+    media_input: str | dict[str, object],
+    modality: str,
+    media_price_key: str,
+    media_details_field: str,
+) -> None:
     respx_mock.post(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
     ).mock(
@@ -727,10 +745,10 @@ def test_gemini_batch_embedding_usage_comes_from_usage_metadata(respx_mock: resp
             json={
                 "embeddings": [{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}],
                 "usageMetadata": {
-                    "promptTokenCount": 262,
+                    "promptTokenCount": 334,
                     "promptTokenDetails": [
                         {"modality": "TEXT", "tokenCount": 4},
-                        {"modality": "IMAGE", "tokenCount": 258},
+                        {"modality": modality, "tokenCount": 330},
                     ],
                 },
             },
@@ -739,17 +757,17 @@ def test_gemini_batch_embedding_usage_comes_from_usage_metadata(respx_mock: resp
 
     response: Final = litellm.embedding(
         model="gemini/gemini-embedding-2",
-        input=["a red apple", IMAGE_DATA_URI],
+        input=["a red apple", media_input],
         api_key="gemini-test-key",
     )
 
-    assert response.usage.prompt_tokens == 262
-    assert response.usage.total_tokens == 262
+    assert response.usage.prompt_tokens == 334
+    assert response.usage.total_tokens == 334
     assert response.usage.prompt_tokens_details.text_tokens == 4
-    assert response.usage.prompt_tokens_details.image_tokens == 258
+    assert getattr(response.usage.prompt_tokens_details, media_details_field) == 330
     prices: Final = litellm.model_cost["gemini/gemini-embedding-2"]
     assert litellm.completion_cost(completion_response=response) == pytest.approx(
-        4 * prices["input_cost_per_token"] + 258 * prices["input_cost_per_image_token"]
+        4 * prices["input_cost_per_token"] + 330 * prices[media_price_key]
     )
 
 

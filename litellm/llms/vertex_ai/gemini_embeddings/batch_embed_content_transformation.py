@@ -535,11 +535,12 @@ _usage_metadata_adapter: Final = TypeAdapter(UsageMetadata)
 
 
 def _parse_usage_metadata(raw_usage_metadata: object) -> UsageMetadata | None:
-    if not isinstance(raw_usage_metadata, dict):
+    fields: Final = _as_mapping(raw_usage_metadata)
+    if fields is None:
         return None
-    details: Final = raw_usage_metadata.get("promptTokensDetails", raw_usage_metadata.get("promptTokenDetails"))
+    details: Final = fields.get("promptTokensDetails", fields.get("promptTokenDetails"))
     try:
-        return _usage_metadata_adapter.validate_python({**raw_usage_metadata, "promptTokensDetails": details or []})
+        return _usage_metadata_adapter.validate_python({**fields, "promptTokensDetails": details or []})
     except ValidationError:
         return None
 
@@ -587,7 +588,14 @@ def _usage_from_embed_content_response(
     usage_metadata: Final = _parse_usage_metadata(raw_usage_metadata)
     if usage_metadata is None:
         return _fallback_usage(input, model)
+    return _usage_from_usage_metadata(input, usage_metadata, resolved_files)
 
+
+def _usage_from_usage_metadata(
+    input: GeminiEmbeddingInput,
+    usage_metadata: UsageMetadata,
+    resolved_files: Mapping[str, Mapping[str, str]],
+) -> Usage:
     prompt_tokens: Final = usage_metadata.get("promptTokenCount", 0)
     total_tokens: Final = usage_metadata.get("totalTokenCount") or prompt_tokens
 
@@ -662,48 +670,39 @@ def process_embed_content_response(
     return model_response
 
 
+def _locally_counted_usage(input: GeminiEmbeddingInput, model: str) -> Usage:
+    has_nested: Final = isinstance(input, list) and any(isinstance(element, list) for element in input)
+    counted_input: Final = (
+        [element for element in _elements(input) if isinstance(element, str) and not _is_multimodal_element(element)]
+        if has_nested or _is_multimodal_input(input)
+        else input
+    )
+    if not counted_input:
+        return Usage(prompt_tokens=0, total_tokens=0)
+    prompt_tokens: Final = token_counter(
+        model=model, text=get_formatted_prompt(data={"input": counted_input}, call_type="embedding")
+    )
+    return Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
+
+
+def _batch_embed_usage(input: GeminiEmbeddingInput, model: str, raw_usage_metadata: object) -> Usage:
+    usage_metadata: Final = _parse_usage_metadata(raw_usage_metadata)
+    if usage_metadata is None:
+        return _locally_counted_usage(input, model)
+    return _usage_from_usage_metadata(input, usage_metadata, resolved_files={})
+
+
 def process_response(
     input: GeminiEmbeddingInput,
     model_response: EmbeddingResponse,
     model: str,
     _predictions: VertexAIBatchEmbeddingsResponseObject,
-    raw_usage_metadata: object = None,
 ) -> EmbeddingResponse:
-    openai_embeddings: Final[list[Embedding]] = []
-    for idx, embedding in enumerate(_predictions["embeddings"]):
-        openai_embedding = Embedding(
-            embedding=embedding["values"],
-            index=idx,
-            object="embedding",
-        )
-        openai_embeddings.append(openai_embedding)
-
-    model_response.data = openai_embeddings
+    model_response.data = [
+        Embedding(embedding=embedding["values"], index=idx, object="embedding")
+        for idx, embedding in enumerate(_predictions["embeddings"])
+    ]
     model_response.model = model
-
-    if _parse_usage_metadata(raw_usage_metadata) is not None:
-        model_response.usage = _usage_from_embed_content_response(
-            input=input, model=model, raw_usage_metadata=raw_usage_metadata, resolved_files={}
-        )
-        return model_response
-
-    has_nested: Final = isinstance(input, list) and any(isinstance(e, list) for e in input)
-    if _is_multimodal_input(input) or has_nested:
-        input_list: Final = input if isinstance(input, list) else [input]
-        text_elements: Final[list[str]] = []
-        for e in input_list:
-            if isinstance(e, list):
-                text_elements.extend(sub for sub in e if isinstance(sub, str) and not _is_multimodal_element(sub))
-            elif isinstance(e, str) and not _is_multimodal_element(e):
-                text_elements.append(e)
-        if text_elements:
-            input_text = get_formatted_prompt(data={"input": text_elements}, call_type="embedding")
-            prompt_tokens = token_counter(model=model, text=input_text)
-        else:
-            prompt_tokens = 0
-    else:
-        input_text = get_formatted_prompt(data={"input": input}, call_type="embedding")
-        prompt_tokens = token_counter(model=model, text=input_text)
-    model_response.usage = Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
+    model_response.usage = _batch_embed_usage(input, model, _predictions.get("usageMetadata"))
 
     return model_response
