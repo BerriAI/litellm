@@ -1496,7 +1496,7 @@ async def test_route_request_keeps_key_fallbacks_out_of_pass_through_provider_bo
         ("arerank", "query", "/rerank"),
         ("acompact_responses", "input", "/responses/compact"),
         ("anthropic_messages", "messages", "anthropic_messages"),
-        ("agenerate_content", "contents", "agenerate_content"),
+        ("agenerate_content", "contents", "/models/{model_name}:generateContent"),
         ("aocr", "document", "/ocr"),
         ("avector_store_search", "query", "avector_store_search"),
         ("avector_store_file_create", "file_id", "avector_store_file_create"),
