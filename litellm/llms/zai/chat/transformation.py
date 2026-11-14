@@ -1,11 +1,25 @@
+from collections.abc import Mapping
 from typing import Final
 
+import litellm
+from litellm.router_utils.reasoning_effort_capability import (
+    declared_reasoning_efforts_for_model,
+    nearest_declared_reasoning_effort,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 ZAI_API_BASE: Final = "https://api.z.ai/api/paas/v4"
+
+
+def _accepted_effort(model: str, requested: object, drop_params: bool) -> object:
+    declared: Final = declared_reasoning_efforts_for_model(model, "zai")
+    if not isinstance(requested, str) or declared is None:
+        return requested
+    accepted: Final = nearest_declared_reasoning_effort(requested, declared)
+    return None if drop_params and accepted not in declared else accepted
 
 
 class ZAIChatConfig(OpenAIGPTConfig):
@@ -40,7 +54,7 @@ class ZAIChatConfig(OpenAIGPTConfig):
         # GLM/ZAI supports cache_control, so return messages and tools unchanged
         return messages, tools
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         base_params: Final = [
             "max_tokens",
             "stream",
@@ -52,12 +66,31 @@ class ZAIChatConfig(OpenAIGPTConfig):
             "tool_choice",
         ]
 
-        import litellm
-
         try:
             if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
-                base_params.append("thinking")
+                base_params.extend(("thinking", "reasoning_effort"))
         except Exception:
             pass
 
         return base_params
+
+    def map_openai_params(
+        self,
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        model: str,
+        drop_params: bool,
+    ) -> dict[str, object]:  # mutable-ok: request pipeline adds parameters to the returned body
+        supported_params: Final = self.get_supported_openai_params(model)
+        sent: Final = {param: value for param, value in non_default_params.items() if param in supported_params}
+        requested_effort: Final = sent.get("reasoning_effort")
+        reasoning_effort: Final = (
+            None
+            if requested_effort is None
+            else _accepted_effort(model, requested_effort, litellm.drop_params or drop_params)
+        )
+        return {
+            **optional_params,
+            **{param: value for param, value in sent.items() if param != "reasoning_effort"},
+            **({} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}),
+        }
