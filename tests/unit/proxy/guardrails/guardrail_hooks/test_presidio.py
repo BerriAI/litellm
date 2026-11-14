@@ -4950,6 +4950,68 @@ async def test_standalone_restoration_preserves_post_call_selection(event_hook: 
     assert response.choices[0].message.content == "Jane"
 
 
+@pytest.mark.asyncio
+async def test_tool_call_arguments_in_chat_history_are_masked_before_the_call() -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+
+    callback: Final = OPTIONAL_PresidioPIIMasking(
+        default_on=True,
+        output_parse_pii=True,
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+    )
+    tool_call: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "pay", "arguments": json.dumps({"card": CHUNK_MARKER_ONE})},
+    }
+    data: Final = {
+        "messages": [
+            {"role": "user", "content": "Pay with my card."},
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "paid"},
+        ],
+        "metadata": {},
+        "guardrail_to_apply": callback,
+    }
+    with patch.object(callback, "_get_session_iterator", _make_marker_session_iterator([])):
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            UserAPIKeyAuth(request_route="/v1/chat/completions"), DualCache(), data, "acompletion"
+        )
+    masked_arguments: Final = data["messages"][1]["tool_calls"][0]["function"]["arguments"]
+    assert CHUNK_MARKER_ONE not in masked_arguments
+    assert data["metadata"]["pii_tokens"][json.loads(masked_arguments)["card"]] == CHUNK_MARKER_ONE
+
+
+@pytest.mark.asyncio
+async def test_tool_call_arguments_in_a_non_streamed_response_are_restored() -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+
+    callback: Final = OPTIONAL_PresidioPIIMasking(default_on=True, output_parse_pii=True, mock_testing=True)
+    response: Final = ModelResponse(
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "call_9",
+                            "type": "function",
+                            "function": {"name": "pay", "arguments": '{"card": "<CREDIT_CARD_1>"}'},
+                        }
+                    ],
+                )
+            )
+        ]
+    )
+    data: Final = {"metadata": {"pii_tokens": {"<CREDIT_CARD_1>": CHUNK_MARKER_ONE}}, "guardrail_to_apply": callback}
+    await UnifiedLLMGuardrails().async_post_call_success_hook(
+        data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
+    )
+    assert response.choices[0].message.tool_calls[0].function.arguments == json.dumps({"card": CHUNK_MARKER_ONE})
+
+
 @pytest.mark.parametrize(
     "base_url",
     [
