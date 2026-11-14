@@ -1199,17 +1199,42 @@ def test_guardrail_info_keeps_what_prometheus_iterates(
     [("pre_call",), ["pre_call"], ["pre_call", "during_call"], "post_call", 7, None, ["pre_call", 7]],
     ids=repr,
 )
-def test_guardrail_modes_select_the_str_modes_prometheus_counts_as_additive(mode: object) -> None:
-    from litellm.integrations.prometheus import PrometheusLogger
-
+async def test_guardrail_modes_select_the_str_modes_prometheus_counts_as_additive(mode: object) -> None:
     payload: Final = {"guardrail_information": {"guardrail_mode": mode}}
     entries: Final = derivations.guardrail_info(HookArgs(request={"standard_logging_object": payload}))
     assert entries is not None
     modes: Final = frozenset(item for item in entries[0].modes or () if isinstance(item, str))
 
     assert (bool(modes) and modes <= PrometheusLogger._ADDITIVE_GUARDRAIL_MODES) is (
-        PrometheusLogger._guardrail_is_additive({"guardrail_mode": mode})  # pyright: ignore[reportArgumentType]  # the shapes guardrails write
+        await _prometheus_counts_guardrail_as_additive(mode)
     )
+
+
+async def _prometheus_counts_guardrail_as_additive(mode: object) -> bool:
+    from prometheus_client import REGISTRY
+
+    from tests.unit.integrations.prometheus_native_support import native_success, series, standard_payload
+
+    before: Final = frozenset(REGISTRY._collector_to_names)
+    now: Final = datetime.now()
+    kwargs: Final = {
+        "model": "gpt-4o",
+        "litellm_params": {"metadata": {}},
+        "start_time": now,
+        "end_time": now,
+        "standard_logging_object": standard_payload(
+            hidden_params={"additional_headers": None},
+            guardrail_information=[{"guardrail_mode": mode, "duration": 0.25}],
+        ),
+    }
+    try:
+        await native_success(PrometheusLogger(), kwargs, None)
+        observed: Final = [value for _, value in series("litellm_overhead_with_guardrails_latency_metric")]
+    finally:
+        for collector in frozenset(REGISTRY._collector_to_names) - before:
+            REGISTRY.unregister(collector)
+    assert len(observed) <= 1
+    return bool(observed) and abs(observed[0] - 0.25) < 1e-6
 
 
 @pytest.mark.parametrize(
