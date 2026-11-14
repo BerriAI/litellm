@@ -2456,6 +2456,8 @@ def test_model_info_hides_api_base_from_non_admin_callers(
         "azure_endpoint": "https://example.invalid/openai?cred=CANARY-SECRET-AZURE",
         "aws_bedrock_runtime_endpoint": "https://example.invalid/bedrock?cred=CANARY-SECRET-BEDROCK",
         "aws_bedrock_control_plane_endpoint": "https://example.invalid/bedrock-cp?cred=CANARY-SECRET-BEDROCK-CP",
+        "aws_sts_endpoint": "https://example.invalid/sts?cred=CANARY-SECRET-STS",
+        "anthropic_issuer_url": "https://example.invalid/issuer?cred=CANARY-SECRET-ISSUER",
         "sagemaker_base_url": "https://example.invalid/sagemaker?cred=CANARY-SECRET-SAGEMAKER",
         "deployment_url": "https://example.invalid/sap?cred=CANARY-SECRET-SAP",
         "s3_endpoint_url": "https://example.invalid/s3?cred=CANARY-SECRET-S3",
@@ -2468,6 +2470,11 @@ def test_model_info_hides_api_base_from_non_admin_callers(
                 "litellm_params": {
                     "model": "openai/gpt-4o",
                     **endpoint_urls,
+                    # Masked by the sensitive data masker even for admins, so it
+                    # cannot share the admin equality assertions above. It is
+                    # still dropped outright for non-admin callers.
+                    "anthropic_keycloak_token_url": "https://example.invalid/token?cred=CANARY-SECRET-TOKENURL",
+                    "token_exchange_endpoint": "https://example.invalid/exchange?cred=CANARY-SECRET-EXCHANGE",
                     "api_key": "placeholder",
                 },
                 "model_info": {"id": "cred-deployment"},
@@ -2519,6 +2526,8 @@ def test_model_info_hides_api_base_from_non_admin_callers(
             assert params["model"] == "openai/gpt-4o"
             for field in endpoint_urls:
                 assert field not in params
+            assert "anthropic_keycloak_token_url" not in params
+            assert "token_exchange_endpoint" not in params
             assert "model" not in rows["hf-url-model"]["litellm_params"]
             assert "key" not in rows["hf-url-model"]["model_info"]
             wx_params: Final = rows["wx-url-model"]["litellm_params"]
