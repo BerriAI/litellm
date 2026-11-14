@@ -108,12 +108,12 @@
     (list "/videos" "/v1/videos") (list "/search" "/v1/search") (list "/containers" "/v1/containers")
     (list "/realtime" "/v1/realtime") (list "/live/sessions" "/v1/live/sessions") (list "/v1/skills" "/v1/indexes")
     (list "/v1/evals" "/v2/rerank") (list "/v1beta" "/v1/memory") (list "/openai" "/engines")
-    (list "/queue/chat" "/api/event_logging") (list "/interactions" "/v1/interactions") (list "/azure" "/anthropic")
+    (list "/queue/chat" "/api/event_logging") (list "/toolset" "/interactions") (list "/azure" "/anthropic")
     (list "/azure_ai" "/azure_speech") (list "/aws" "/bedrock") (list "/transcribe" "/comprehendmedical")
     (list "/cohere" "/gemini") (list "/google" "/gigachat") (list "/vertex_ai" "/vertex-ai")
     (list "/assemblyai" "/eu.assemblyai") (list "/fal_ai" "/deepgram") (list "/vllm" "/langfuse")
     (list "/mistral" "/typesafe") (list "/openrouter" "/nvidia_nim") (list "/groq" "/voyage")
-    (list "/cursor" "/milvus") (list "/tinyfish" "/openai_passthrough") (list "/toolset" "/watsonx")
+    (list "/cursor" "/milvus") (list "/tinyfish" "/openai_passthrough") (list "/watsonx") (list "/v1/interactions")
     (list "/health" "/metrics")
 -}}
 {{- $gatewayPrefixes := list -}}

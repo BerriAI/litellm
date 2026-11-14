@@ -1672,7 +1672,7 @@ def is_user_proxy_admin(user_obj: LiteLLM_UserTable | None) -> bool:
 _is_user_proxy_admin: Final = is_user_proxy_admin
 
 
-def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
+def _allowed_routes_check(user_route: str, allowed_routes: Sequence[str]) -> bool:
     """
     Return if a user is allowed to access route. Helper function for `allowed_routes_check`.
 
@@ -1683,9 +1683,11 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
     """
     from starlette.routing import compile_path
 
-    for allowed_route in allowed_routes:
+    for allowed_route in RouteChecks.grants_reaching_route(route=user_route, allowed_routes=allowed_routes):
         if allowed_route in LiteLLMRoutes.__members__:
-            for template in LiteLLMRoutes[allowed_route].value:
+            for template in RouteChecks.grants_reaching_route(
+                route=user_route, allowed_routes=LiteLLMRoutes[allowed_route].value
+            ):
                 regex, _, _ = compile_path(template)
                 if regex.match(user_route):
                     return True

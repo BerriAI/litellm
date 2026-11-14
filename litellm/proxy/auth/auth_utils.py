@@ -2901,7 +2901,7 @@ def _model_from_route_path(route: str) -> str | None:
         return vertex_model.group(1) if vertex_model else None
     gemini_v1_model: Final = GEMINI_V1_ACTION_ROUTE.match(route)
     if gemini_v1_model:
-        return gemini_v1_model.group(1)
+        return gemini_v1_model.group(1) or None
     google_model: Final = re.search(r"/(?:v1beta|beta)/models/([^:]+):", route) or re.search(
         r"^/models/([^:]+):", route
     )

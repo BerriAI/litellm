@@ -1120,6 +1120,10 @@ def test_virtual_key_allowed_routes_with_no_member_names_only_explicit():
         ("/v1/models/*", "/v1/models/gemini-text:streamGenerateContent"),
         ("/v1/models*", "/v1/models/gemini-text:countTokens"),
         ("/v1/models/gemini-text*", "/v1/models/gemini-text:generateContent"),
+        ("/v1/models/*", "/v1/models/:generateContent"),
+        ("/v1/models", "/v1/models/:countTokens"),
+        ("internal_user_routes", "/v1/models/gemini-text:generateContent"),
+        ("internal_user_routes", "/v1/models/:streamGenerateContent"),
     ],
 )
 def test_virtual_key_openai_models_grant_does_not_reach_gemini_v1_inference(allowed_route: str, route: str) -> None:
@@ -1140,6 +1144,8 @@ def test_virtual_key_openai_models_grant_does_not_reach_gemini_v1_inference(allo
         ("/v1/*", "/v1/models/gemini-text:streamGenerateContent"),
         ("/v1", "/v1/models/gemini-text:countTokens"),
         ("google_routes", "/v1/models/gemini-text:generateContent"),
+        ("llm_api_routes", "/v1/models/gemini-text:countTokens"),
+        ("internal_user_routes", "/v1/models/llama3:8b"),
         ("google_routes", "/v1/interactions"),
         ("google_routes", "/v1/interactions/abc123"),
         ("llm_api_routes", "/v1/interactions/abc123/cancel"),

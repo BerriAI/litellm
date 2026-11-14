@@ -107,8 +107,11 @@ _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
 )
 _TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "count-tokens"})
 _TOKEN_COUNTING_ACTION: Final = "countTokens"
-GEMINI_V1_ACTION_ROUTE: Final = re.compile(r"^/v1/models/(.+):(?:countTokens|generateContent|streamGenerateContent)$")
+GEMINI_V1_ACTION_ROUTE: Final = re.compile(r"^/v1/models/(.*):(?:countTokens|generateContent|streamGenerateContent)$")
 _OPENAI_MODELS_ROUTE: Final = "/v1/models"
+_GEMINI_V1_ACTION_TEMPLATES: Final = frozenset(
+    template for template in LiteLLMRoutes.google_routes.value if GEMINI_V1_ACTION_ROUTE.match(template)
+)
 
 
 class RouteChecks:
@@ -157,7 +160,7 @@ class RouteChecks:
 
         denied_auth_enforced_pass_through_route = False
 
-        route_grants: Final = RouteChecks._grants_reaching_route(route=route, allowed_routes=valid_token.allowed_routes)
+        route_grants: Final = RouteChecks.grants_reaching_route(route=route, allowed_routes=valid_token.allowed_routes)
 
         # explicit check for allowed routes (exact match or prefix match)
         for allowed_route in route_grants:
@@ -170,7 +173,9 @@ class RouteChecks:
                 if allowed_route in LiteLLMRoutes._member_names_:
                     if RouteChecks.check_route_access(
                         route=route,
-                        allowed_routes=LiteLLMRoutes[allowed_route].value,
+                        allowed_routes=RouteChecks.grants_reaching_route(
+                            route=route, allowed_routes=LiteLLMRoutes[allowed_route].value
+                        ),
                     ):
                         if (
                             allowed_route in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS
@@ -685,13 +690,15 @@ class RouteChecks:
             return route == pattern
 
     @staticmethod
-    def _grants_reaching_route(route: str, allowed_routes: Iterable[str]) -> tuple[str, ...]:
+    def grants_reaching_route(route: str, allowed_routes: Collection[str]) -> Collection[str]:
         if GEMINI_V1_ACTION_ROUTE.match(route) is None:
-            return tuple(allowed_routes)
+            return allowed_routes
         return tuple(
             allowed_route
             for allowed_route in allowed_routes
-            if allowed_route == route or not allowed_route.rstrip("*").startswith(_OPENAI_MODELS_ROUTE)
+            if allowed_route == route
+            or allowed_route in _GEMINI_V1_ACTION_TEMPLATES
+            or not allowed_route.rstrip("*").startswith(_OPENAI_MODELS_ROUTE)
         )
 
     @staticmethod

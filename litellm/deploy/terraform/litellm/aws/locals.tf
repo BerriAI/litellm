@@ -87,7 +87,7 @@ locals {
     "/v1/memory/*",
     "/queue/chat/*",
     "/v1beta/*",
-    "/interactions", "/interactions/*", "/v1/interactions", "/v1/interactions/*",
+    "/interactions/*",
     "/anthropic/*", "/azure/*", "/azure_ai/*", "/azure_speech/*", "/aws/*", "/bedrock/*", "/comprehendmedical*", "/transcribe*",
     "/cohere/*", "/gemini/*", "/google/*",
     "/vertex_ai/*", "/vertex-ai/*",
@@ -98,6 +98,7 @@ locals {
     "/toolset/*",
     "/v1/realtime*", "/realtime*",
     "/health*", "/metrics", "/test*",
+    "/interactions", "/v1/interactions", "/v1/interactions/*",
   ]
 
   # Static UI asset prefixes — handled by the UI service, not the backend

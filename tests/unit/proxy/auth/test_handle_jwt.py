@@ -1922,6 +1922,35 @@ def test_default_team_allowed_routes_cover_messages_but_not_skills(route, expect
     )
 
 
+@pytest.mark.parametrize(
+    "team_allowed_routes, route, expected",
+    [
+        (["/v1/models*"], "/v1/models/gemini-text:generateContent", False),
+        (["/v1/models/*"], "/v1/models/:streamGenerateContent", False),
+        (["/v1/models/gemini-text*"], "/v1/models/gemini-text:countTokens", False),
+        (["internal_user_routes"], "/v1/models/gemini-text:generateContent", False),
+        (["/v1/models/*"], "/v1/models/llama3:8b", True),
+        (["internal_user_routes"], "/v1/models/llama3:8b", True),
+        (["google_routes"], "/v1/models/gemini-text:generateContent", True),
+        (["/v1/*"], "/v1/models/gemini-text:streamGenerateContent", True),
+        (["/v1/models/gemini-text:countTokens"], "/v1/models/gemini-text:countTokens", True),
+    ],
+)
+def test_jwt_team_openai_models_grant_does_not_reach_gemini_v1_inference(
+    team_allowed_routes: list[str], route: str, expected: bool
+) -> None:
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM,
+            user_route=route,
+            litellm_proxy_roles=LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes),
+        )
+        is expected
+    )
+
+
 @pytest.mark.asyncio
 async def test_find_team_with_model_access_reports_team_route_allowlist_denial():
     jwt_handler: Final = JWTHandler()

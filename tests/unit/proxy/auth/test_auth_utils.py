@@ -1719,6 +1719,11 @@ def test_get_model_from_request_reads_no_model_from_an_openai_model_info_route_w
     assert get_model_from_request(request_data={}, route=route) is None
 
 
+@pytest.mark.parametrize("route", ["/v1/models/:generateContent", "/v1beta/models/:generateContent"])
+def test_get_model_from_request_checks_the_body_model_when_the_url_model_is_empty(route: str) -> None:
+    assert get_model_from_request(request_data={"model": "premium-model"}, route=route) == "premium-model"
+
+
 def test_get_model_from_request_keeps_a_colon_alias_whole_on_v1_count_tokens() -> None:
     assert get_model_from_request(request_data={}, route="/v1/models/ollama/llama3:8b:countTokens") == "ollama/llama3:8b"
 
