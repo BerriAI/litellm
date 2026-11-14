@@ -529,6 +529,7 @@ REFUSED_ROUTES: Final[Mapping[str, tuple[str, Mapping[str, object]]]] = {
     "chat_completions": ("/v1/chat/completions", BODY),
     "anthropic_pass_through": (PASS_THROUGH, MESSAGES_BODY),
     "messages": ("/v1/messages", MESSAGES_BODY),
+    "text_completions": ("/v1/completions", {"model": "gpt-3.5-turbo-instruct", "prompt": "hi", "max_tokens": 10}),
 }
 
 

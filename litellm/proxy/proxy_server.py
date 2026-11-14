@@ -13656,6 +13656,9 @@ async def completion(
             _response.choices[0].text = e.message
             return _response
     except Exception as e:
+        from litellm.proxy.spend_tracking.native_budgets import raise_native_admission_refusal
+
+        await raise_native_admission_refusal(e)
         if is_provider_overload(e):
             raise await base_llm_response_processor.handle_llm_api_exception(
                 e=e,
