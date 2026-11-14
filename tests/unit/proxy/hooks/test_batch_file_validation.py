@@ -2493,28 +2493,25 @@ async def test_key_or_team_enqueued_limit_alone_governs_a_batch_over_its_daily_c
 
 
 @pytest.mark.asyncio
-async def test_a_file_bound_batch_charges_only_the_model_its_file_is_bound_to():
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_request_stash
+async def test_a_model_bound_upload_still_charges_the_model_its_rows_name():
     from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
 
     rate_limiter, local_cache = _enqueued_rate_limiter()
     afile_content_mock, patches = _enqueued_batch_patches()
 
     with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
-        data: Final = {"input_file_id": encode_file_id_with_model("file-abc123", "gpt-4o-mini-priority")}
-        result: Final = await rate_limiter.async_pre_call_hook(
-            user_api_key_dict=_project_model_limited_user({"gpt-4o-mini-priority": 1000000, "gpt-4o-mini": 10}),
-            cache=local_cache,
-            data=data,
-            call_type="acreate_batch",
-        )
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=_project_model_limited_user({"gpt-4o-mini-priority": 1000000, "gpt-4o-mini": 10}),
+                cache=local_cache,
+                data={"input_file_id": encode_file_id_with_model("file-abc123", "gpt-4o-mini-priority")},
+                call_type="acreate_batch",
+            )
 
-    assert result is data
-    stash: Final = get_request_stash()
-    assert stash is not None and stash.batch_enqueued_reservation is not None
-    (scope,) = stash.batch_enqueued_reservation.scopes
-    assert scope.value == "project-enqueued-batch:gpt-4o-mini-priority"
-    assert scope.charge(stash.batch_enqueued_reservation.tokens) == data["_batch_token_count"]
+    assert exc.value.status_code == 429
+    assert "Batch enqueued token limit exceeded for project_model: project-enqueued-batch:gpt-4o-mini." in str(
+        exc.value.detail
+    )
 
 
 @pytest.mark.asyncio

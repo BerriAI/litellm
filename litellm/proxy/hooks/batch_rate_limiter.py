@@ -154,6 +154,12 @@ class BatchFileUsage(LiteLLMBaseModel):
     per_model_usage: dict[str, dict[str, int]] = Field(default_factory=dict)
 
 
+def _rows_were_rewritten_on_upload(input_file_id: str) -> bool:
+    from litellm.proxy.openai_files_endpoints.common_utils import is_base64_encoded_unified_file_id
+
+    return bool(is_base64_encoded_unified_file_id(input_file_id))
+
+
 def _deployment_model_name_via_proxy_router(model: str) -> str | None:
     from litellm.proxy.proxy_server import llm_router
 
@@ -1362,7 +1368,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             routing_model: Final = self._get_batch_routing_model(data)  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
             row_tokens_by_model: Final[Mapping[str, int]] = MappingProxyType(
                 {model: usage.get("total_tokens", 0) for model, usage in batch_usage.per_model_usage.items()}
-                if self._get_file_bound_batch_model(data) is None  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
+                if not (isinstance(input_file_id, str) and _rows_were_rewritten_on_upload(input_file_id))
                 else {}
             )
             enqueued_scopes: Final = (
