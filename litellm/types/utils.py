@@ -4467,7 +4467,7 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
 }
 
 FILE_CONTENT_STREAMING_PROVIDERS: Final[frozenset[str]] = frozenset(
-    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value}
+    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value, LlmProviders.GEMINI.value}
 )
 
 LITELLM_EXECUTED_BATCH_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.HOSTED_VLLM.value})

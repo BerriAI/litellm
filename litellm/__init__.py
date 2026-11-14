@@ -1744,6 +1744,9 @@ if TYPE_CHECKING:
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
     )
+    from .llms.azure.decisions.transformation import (
+        AzureDecisionsConfig as AzureDecisionsConfig,
+    )
     from .llms.azure_ai.decisions.transformation import (
         AzureAIDecisionsConfig as AzureAIDecisionsConfig,
     )

@@ -1141,6 +1141,14 @@ def _normalize_service_tier(service_tier: object) -> str | None:
 _BASE_PRICING_SERVICE_TIERS: Final[frozenset[str]] = frozenset({"default", "standard"})
 
 
+def _served_image_service_tier(completion_response: object, usage_object: Usage | None) -> str | None:
+    """Image requests never send a tier upstream, so only the tier the provider reports can price them."""
+    return _resolve_billable_service_tier(
+        requested=None,
+        served=_served_service_tier(completion_response, usage_object),
+    )
+
+
 def _resolve_billable_service_tier(requested: object, served: object) -> str | None:
     """Served tier wins when it names a priced tier or explicitly says base pricing; otherwise the request decides."""
     served_lower: Final = served.lower() if isinstance(served, str) else None
@@ -1824,6 +1832,7 @@ def completion_cost(
                         call_type=call_type,
                         model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                         vertex_location=vertex_location,
+                        service_tier=_served_image_service_tier(completion_response, cost_per_token_usage_object),
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
