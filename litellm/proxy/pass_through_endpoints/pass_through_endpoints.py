@@ -93,6 +93,7 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     log_llm_api_exception,
     open_sse_before_first_byte,
+    refuse_s3_media_the_key_may_not_read,
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
@@ -252,6 +253,10 @@ async def chat_completion_pass_through_endpoint(
             data = json.loads(body_str) | data
 
         data["adapter_id"] = adapter_id
+
+        await refuse_s3_media_the_key_may_not_read(
+            data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
+        )
 
         verbose_proxy_logger.debug("Request received by LiteLLM:\n%s", data)
         data["model"] = (
