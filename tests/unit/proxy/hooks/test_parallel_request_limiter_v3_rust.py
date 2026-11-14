@@ -6,6 +6,7 @@ import asyncio
 import contextvars
 import logging
 import socket
+import threading
 import time
 from collections.abc import AsyncGenerator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -45,6 +46,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter_v3_native import policy
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
+    RATE_LIMIT_UNVERIFIABLE_MESSAGE,
     ParallelSlotAcquisition,
     RateLimitDescriptor,
     RateLimitedModel,
@@ -2671,6 +2673,36 @@ async def test_post_call_failure_hook_settles_reservation_at_recovered_partial_u
         end_time=None,
     )
     assert int(_local(handler, tokens_key) or 0) == 27
+
+
+@pytest.mark.parametrize("token_rate_limit_type, settled_tokens", [("output", 7), ("input", 20), ("total", 27)])
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_settles_partial_usage_by_the_token_type_in_the_bound_settings_store(
+    monkeypatch, token_rate_limit_type, settled_tokens
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.config_resolvers.settings_store import SettingsStore
+
+    settings: Final = SettingsStore("general_settings")
+    settings.load_yaml({"token_rate_limit_type": token_rate_limit_type})
+    monkeypatch.setattr(proxy_server, "general_settings", settings)
+    _api_key = hash_token("sk-partial-post-call-store")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key = _counter("api_key", _api_key)
+    await _reserve_tpm_for_owner_call(handler, local_cache, _api_key, "post-call-store")
+
+    await handler.async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": "post-call-store",
+            "combined_usage_object": Usage(prompt_tokens=20, completion_tokens=7, total_tokens=27),
+        },
+        original_exception=Exception("upstream dropped the stream"),
+        user_api_key_dict=UserAPIKeyAuth(api_key=_api_key, tpm_limit=10_000),
+    )
+
+    assert int(_local(handler, tokens_key) or 0) == settled_tokens
 
 
 def _responses_websocket_turn_events(total_tokens: int) -> list[dict[str, object]]:
@@ -5807,6 +5839,66 @@ async def test_fail_closed_rate_limit_enforcement_coerces_the_general_settings_v
     with pytest.raises(HTTPException) as exc:
         await _admit(_handler_with_unreachable_redis(), auth)
     assert exc.value.status_code == 503
+
+
+@contextmanager
+def _redis_that_breaks_the_pipe() -> Iterator[int]:
+    listener: Final = socket.create_server(("127.0.0.1", 0))
+    stopped: Final = threading.Event()
+
+    def serve() -> None:
+        while not stopped.is_set():
+            try:
+                connection, _ = listener.accept()
+            except OSError:
+                return
+            with connection:
+                connection.settimeout(1)
+                try:
+                    connection.recv(65536)
+                except OSError:
+                    pass
+
+    server: Final = threading.Thread(target=serve, daemon=True)
+    server.start()
+    try:
+        yield listener.getsockname()[1]
+    finally:
+        stopped.set()
+        listener.close()
+        server.join(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_read_from_the_bound_settings_store_rejects_a_limited_key_when_redis_breaks_mid_request(
+    monkeypatch, caplog
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.config_resolvers.settings_store import SettingsStore
+
+    settings: Final = SettingsStore("general_settings")
+    settings.load_yaml({"fail_closed_rate_limit_enforcement": True})
+    monkeypatch.setattr(proxy_server, "general_settings", settings)
+    limited: Final = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-store"), rpm_limit=50, tpm_limit=100000)
+    unlimited: Final = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-store-plain"))
+
+    with _redis_that_breaks_the_pipe() as port:
+        handler: Final = PROXY_MaxParallelRequestsHandler_v3(
+            internal_usage_cache=InternalUsageCache(DualCache(redis_cache=RedisCache(host="127.0.0.1", port=port)))
+        )
+        assert handler.rate_limits.has_redis
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            with pytest.raises(HTTPException) as exc:
+                await _admit(handler, limited)
+            await _admit(handler, unlimited)
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == {"error": RATE_LIMIT_UNVERIFIABLE_MESSAGE}
+    assert any(
+        "fail_closed_rate_limit_enforcement: rejecting request, batch_rate_limiter_script could not verify the "
+        "counters against Redis" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_default_hash_tag_grouping_resolver_uses_litellm_setting(monkeypatch: pytest.MonkeyPatch):
