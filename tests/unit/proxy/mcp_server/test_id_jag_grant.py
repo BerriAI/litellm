@@ -209,7 +209,7 @@ async def test_a_valid_id_jag_names_the_user_its_single_use_key_and_its_scope():
     other_jti = await _identity(_redemption(_assertion(jti="jti-2")), _Verifier(), _Resolver())
     assert isinstance(other_jti, AssertionIdentity)
     assert other_jti.replay_key != identity.replay_key
-    teamless = await _identity(_redemption(_assertion(scope=""), team_id=None))
+    teamless = await _identity(_redemption(_unscoped_assertion(), team_id=None))
     assert isinstance(teamless, AssertionIdentity)
     assert (teamless.team_id, teamless.scope, teamless.allowed_routes) == (None, None, None)
 
@@ -625,7 +625,6 @@ LLM_ROUTE_GROUPS = ("llm_api_routes_without_mcp",)
     "claim, scope, allowed_routes",
     [
         (None, None, None),
-        ("", None, None),
         ("litellm:mcp", "litellm:mcp", MCP_ROUTE_GROUPS),
         ("litellm:llm", "litellm:llm", LLM_ROUTE_GROUPS),
         ("litellm:mcp litellm:llm", "litellm:mcp litellm:llm", MCP_ROUTE_GROUPS + LLM_ROUTE_GROUPS),
@@ -647,7 +646,7 @@ def test_the_scope_claim_buys_exactly_the_route_groups_it_names(claim, scope, al
         assert "/mcp" in mcp_members and "/chat/completions" not in mcp_members
 
 
-@pytest.mark.parametrize("claim", ["openid", "litellm:mcp openid", "litellm:admin", 7, ["litellm:mcp"]])
+@pytest.mark.parametrize("claim", ["", "   ", "openid", "litellm:mcp openid", "litellm:admin", 7, ["litellm:mcp"]])
 @pytest.mark.asyncio
 async def test_a_scope_the_gateway_does_not_know_is_refused_as_invalid_scope_before_any_lookup(claim):
     refusal = granted_scope(claim, mcp_resource=False)
@@ -693,12 +692,20 @@ async def test_the_allowed_email_domain_gates_the_assertions_subject_like_bearer
     assert await allowed(_claims(), "team-eng") == SubjectIdentity(user_id="okta-user-1", team_id="team-eng")
 
 
-@pytest.mark.parametrize("claim", [None, "", "litellm:mcp", "litellm:mcp litellm:mcp"])
+@pytest.mark.parametrize("claim", [None, "litellm:mcp", "litellm:mcp litellm:mcp"])
 def test_an_assertion_for_the_mcp_resource_is_ceilinged_to_the_mcp_routes(claim):
     """``aud = {base}/mcp`` means the identity provider named the MCP resource, so no scope or
     ``litellm:mcp`` both mint an MCP-only credential and echo ``litellm:mcp``."""
     granted = granted_scope(claim, mcp_resource=True)
     assert granted == GrantedScope(scope="litellm:mcp", allowed_routes=("mcp_inference_routes",))
+
+
+@pytest.mark.parametrize("claim", ["", "   "])
+def test_an_empty_scope_claim_is_refused_under_mcp_resource(claim):
+    refusal = granted_scope(claim, mcp_resource=True)
+    assert isinstance(refusal, SubjectTokenRefusal)
+    assert refusal.error == "invalid_scope"
+    assert "litellm:mcp" in refusal.description and "litellm:llm" in refusal.description
 
 
 @pytest.mark.parametrize("claim", ["litellm:llm", "litellm:mcp litellm:llm"])

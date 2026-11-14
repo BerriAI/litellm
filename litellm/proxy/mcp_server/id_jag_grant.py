@@ -70,17 +70,19 @@ def granted_scope(claim: object, *, mcp_resource: bool) -> GrantedScope | Subjec
     no claim is the full credential. With the MCP resource (``{base}/mcp``) as ``aud`` or as every
     ``resource``, the identity provider named that resource, so the credential is ceilinged to the
     MCP routes whatever the claim says: ``litellm:llm`` cannot be granted and is refused."""
-    if claim is not None and not isinstance(claim, str):
+    if claim is None:
+        if mcp_resource:
+            return GrantedScope(scope=SCOPE_MCP, allowed_routes=SCOPE_ROUTE_GROUPS[SCOPE_MCP])
+        return GrantedScope(scope=None, allowed_routes=None)
+    if not isinstance(claim, str):
         return SubjectTokenRefusal(error="invalid_scope", description=_SCOPE_DESCRIPTION)
-    requested: Final = frozenset(claim.split()) if claim else frozenset()
-    if not requested <= SCOPE_ROUTE_GROUPS.keys():
+    requested: Final = frozenset(claim.split())
+    if not requested or not requested <= SCOPE_ROUTE_GROUPS.keys():
         return SubjectTokenRefusal(error="invalid_scope", description=_SCOPE_DESCRIPTION)
     if mcp_resource:
         if SCOPE_LLM in requested:
             return SubjectTokenRefusal(error="invalid_scope", description=_MCP_RESOURCE_DESCRIPTION)
         return GrantedScope(scope=SCOPE_MCP, allowed_routes=SCOPE_ROUTE_GROUPS[SCOPE_MCP])
-    if not requested:
-        return GrantedScope(scope=None, allowed_routes=None)
     granted: Final = tuple(scope for scope in SCOPE_ROUTE_GROUPS if scope in requested)
     return GrantedScope(scope=" ".join(granted), allowed_routes=tuple(_route_groups(granted)))
 
