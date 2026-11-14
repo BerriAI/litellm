@@ -6,6 +6,7 @@ import httpx
 from pydantic import JsonValue
 from typing_extensions import disjoint_base
 
+from litellm.integrations.custom_logger_v2.rust import RustHandle
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.redis.stores.router_session_pins.keys import PinKey
 from litellm.rust_bridge.execution import Execution
@@ -126,15 +127,6 @@ class _S3LogHost(Protocol):
     def web_identity_token(self, reference: str) -> str: ...
 
 @final
-class RustCallback:
-    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
-    def manifest(self) -> str: ...
-    def request_state(self) -> object: ...
-    def handle(
-        self, hook: str, fields: Mapping[str, object], call: Mapping[str, object] | None, state: object, /
-    ) -> Future[object]: ...
-
-@final
 class NativeS3Log:
     def __new__(
         cls, params: dict[str, object], constants: Mapping[str, object], host: _S3LogHost
@@ -143,7 +135,7 @@ class NativeS3Log:
     def s3_path(self) -> str | None: ...
     @property
     def strip_base64_files(self) -> bool: ...
-    def callback(self) -> RustCallback: ...
+    def callback(self) -> RustHandle: ...
     def stashed(self) -> int: ...
     def partition_granularity(self) -> Literal["day", "hour"]: ...
     def queued_keys(self) -> list[str]: ...
@@ -814,6 +806,7 @@ __all__ = [
     "NativeRouterCooldowns",
     "NativeRouterSessionPins",
     "NativeRouterUsage",
+    "NativeS3Log",
     "NativeSend",
     "NativeSensitiveRoutePins",
     "NativeSpendCounters",
