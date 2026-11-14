@@ -1186,7 +1186,7 @@ def billed_usage_cost(response: object, custom_llm_provider: str | None) -> floa
     return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
 
 
-_MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})
+_MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go", "wiro"})
 
 
 def reports_native_messages_cost(custom_llm_provider: object) -> bool:
