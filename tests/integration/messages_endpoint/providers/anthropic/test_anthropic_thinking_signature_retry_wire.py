@@ -46,6 +46,13 @@ def test_missing_thinking_signature_400_retries_once_without_thinking_blocks_and
         "role": "assistant",
         "content": [{"type": "tool_use", "id": "call-1", "name": "lookup", "input": {"key": "value"}}],
     }
+    unsigned_thinking_turn: Final = {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "replayed from another provider"},
+            {"type": "tool_use", "id": "call-1", "name": "lookup", "input": {"key": "value"}},
+        ],
+    }
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and request.target == "/v1/messages"
@@ -54,7 +61,7 @@ def test_missing_thinking_signature_400_retries_once_without_thinking_blocks_and
         assert body["model"] == MODEL
         assert body["tools"] == list(TOOLS), body
         if body["messages"][3]["content"][0]["type"] == "thinking":
-            assert body["messages"] == list(history), body
+            assert body["messages"] == [*history[:3], unsigned_thinking_turn, history[4]], body
             assert body["thinking"] == {"type": "enabled", "budget_tokens": 1024}, body
             return Reply(status=400, body=SIGNATURE_ERROR)
         assert body["messages"] == [*history[:3], tool_use_only_turn, history[4]], body

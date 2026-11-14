@@ -42,6 +42,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from collections.abc import Set as AbstractSet
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -629,8 +630,8 @@ def continuation_routing(core: "RustCore", request: Mapping[str, object]) -> Map
     registry: Final = core.registry()
     excluded: Final = [
         deployment.model_info.id
-        for record in registry.all()
-        if (deployment := registry.deployment(str(_record_id(record)))) is not None
+        for record_id in _record_ids(registry.all())
+        if (deployment := registry.deployment(str(record_id))) is not None
         and not deployment_can_continue(deployment.model_dump(exclude_none=True))
     ]
     return {"body": {CONTINUATION_EXCLUDED_IDS: excluded}}
@@ -641,13 +642,21 @@ def _record_id(record: Mapping[str, object]) -> object:
     return model_info.get("id") if isinstance(model_info, Mapping) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a plain record
 
 
+def _record_ids(records: Iterable[Mapping[str, object]]) -> Iterator[object]:
+    return (_record_id(record) for record in records)
+
+
+def _record_model_names(records: Iterable[Mapping[str, object]]) -> AbstractSet[object]:
+    return {record.get("model_name") for record in records}
+
+
 def _names_deployment_that_cannot_continue(core: "RustCore", target: object) -> bool:
     from litellm.router_utils.fallback_event_handlers import fallback_target_name
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import deployment_can_continue
 
     name: Final = fallback_target_name(target)
     registry: Final = core.registry()
-    model_names: Final = {record.get("model_name") for record in registry.all()}
+    model_names: Final = _record_model_names(registry.all())
     if name is None or name in model_names or not registry.has_deployment(name):
         return False
     deployment: Final = registry.deployment(name)
@@ -684,7 +693,10 @@ def _mid_stream_continuation_eligible(
     lookup_groups: Final = fallback_lookup_groups(
         request, requested_group if isinstance(requested_group, str) else None
     )
-    targets: Final = continuation_fallback_targets(core.settings().fallbacks, lookup_groups)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # fallbacks as Python spells them
+    targets: Final = continuation_fallback_targets(
+        request.get("fallbacks", core.settings().fallbacks),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the request's list replaces the router's
+        lookup_groups,
+    )
     if any(fallback_target_overrides_request_params(target) for target in targets):
         return False
     if any(_names_deployment_that_cannot_continue(core, target) for target in targets):
@@ -1751,11 +1763,11 @@ def _responses_continuation_request(
         responses_continuation_input,
     )
 
+    if source_iterator.started_tool_call:
+        _raise_original_mid_stream_error(e)
     if _mid_stream_error_before_output(e):
         return None
-    if source_iterator.started_tool_call or isinstance(
-        e.original_exception, litellm_exceptions.ContentPolicyViolationError
-    ):
+    if isinstance(e.original_exception, litellm_exceptions.ContentPolicyViolationError):
         _raise_original_mid_stream_error(e)
     cut_deployment_id: Final = (get_hidden_params(source_iterator) or {}).get("model_id")
     if constrains_responses_continuation(_params_sent_to_deployment(attempt, cut_deployment_id)):
