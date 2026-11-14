@@ -88,6 +88,12 @@ def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, o
         setattr(response, key, value)
 
 
+def _carries_payload(choice: StreamingChoices) -> bool:
+    return bool(choice.model_dump(include={"logprobs"}, exclude_none=True)) or any(
+        choice.delta.model_dump(exclude_none=True, exclude={"role"}).values()
+    )
+
+
 def is_async_iterable(obj: object) -> bool:
     """
     Check if an object is an async iterable (can be used with 'async for').
@@ -1077,7 +1083,9 @@ class CustomStreamWrapper:
                 # Some providers (like OpenRouter) send usage/cost in a chunk after the finish_reason
                 # chunk, repeating an empty choice the caller must not see after the finish
                 if getattr(model_response, "usage", None) is not None:
-                    return model_response.model_copy(update={"choices": []})
+                    return model_response.model_copy(
+                        update={"choices": [choice for choice in model_response.choices if _carries_payload(choice)]}
+                    )
                 return
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:

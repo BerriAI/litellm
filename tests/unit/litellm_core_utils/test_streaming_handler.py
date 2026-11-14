@@ -3,7 +3,7 @@ import json
 import threading
 import time
 from itertools import chain
-from typing import Final, Literal, NoReturn, Optional
+from typing import Callable, Final, Literal, NoReturn, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -20,6 +20,8 @@ from litellm.litellm_core_utils.streaming_handler import (
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import (
+    ChatCompletionTokenLogprob,
+    ChoiceLogprobs,
     CompletionTokensDetailsWrapper,
     Delta,
     ModelResponse,
@@ -1898,6 +1900,88 @@ async def test_openrouter_post_finish_usage_trailer_does_not_emit_empty_choice(
     assert not any(chunk.choices for chunk in post_finish_chunks[:-1]), post_finish_chunks
     post_finish_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in post_finish_chunks))
     assert not any(choice.delta.role for choice in post_finish_choices), post_finish_choices
+
+
+_POST_FINISH_TRAILER_PAYLOADS: Final[tuple[tuple[StreamingChoices, Callable[[StreamingChoices], object]], ...]] = (
+    (
+        StreamingChoices(
+            finish_reason="stop",
+            index=0,
+            delta=Delta(content="", role="assistant"),
+            logprobs=ChoiceLogprobs(content=[ChatCompletionTokenLogprob(token="!", logprob=-0.5, top_logprobs=[])]),
+        ),
+        lambda choice: choice.model_dump(include={"logprobs"}, exclude_none=True),
+    ),
+    (
+        StreamingChoices(
+            finish_reason="stop",
+            index=0,
+            delta=Delta(
+                content="",
+                role="assistant",
+                images=[{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}, "index": 0}],
+            ),
+        ),
+        lambda choice: getattr(choice.delta, "images", None),
+    ),
+    (
+        StreamingChoices(
+            finish_reason="stop",
+            index=0,
+            delta=Delta(
+                content="",
+                role="assistant",
+                thinking_blocks=[{"type": "thinking", "thinking": "done", "signature": "sig"}],
+            ),
+        ),
+        lambda choice: getattr(choice.delta, "thinking_blocks", None),
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("trailer_choice", "read_payload"),
+    _POST_FINISH_TRAILER_PAYLOADS,
+    ids=["logprobs", "images", "thinking_blocks"],
+)
+def test_openrouter_post_finish_usage_trailer_keeps_a_choice_with_a_payload(
+    logging_obj: Logging,
+    trailer_choice: StreamingChoices,
+    read_payload: Callable[[StreamingChoices], object],
+):
+    model: Final = "openrouter/openai/gpt-4.1-mini"
+    expected_payload: Final = read_payload(trailer_choice)
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="OK", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[trailer_choice],
+            usage=Usage(completion_tokens=2, prompt_tokens=14, total_tokens=16, cost=0.0000088),
+        ),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=list(chunks)),
+        model=model,
+        custom_llm_provider="openrouter",
+        logging_obj=logging_obj,
+        stream_options=ChatCompletionStreamOptionsParam(include_usage=True),
+    )
+
+    collected_chunks: Final = list(response)
+
+    assert [read_payload(choice) for chunk in collected_chunks for choice in chunk.choices if read_payload(choice)] == [
+        expected_payload
+    ]
 
 
 @pytest.mark.asyncio
