@@ -1697,6 +1697,11 @@ def _assert_held_back(rig: _Rig, response: httpx.Response, marker: str) -> None:
     assert _delivered(rig, marker) == ()
 
 
+def _assert_bad_entry_held_back(rig: _Rig, response: httpx.Response, marker: str) -> None:
+    _assert_rejected(response, "tools.1")
+    assert _delivered(rig, marker) == ()
+
+
 _PROVIDERS: Final[Mapping[str, Callable[[str], dict[str, JsonValue]]]] = MappingProxyType(
     {
         "openai": lambda wire: {
@@ -1834,25 +1839,25 @@ def test_a_request_list_replaces_a_router_default_list(tools_default: _Owned, ch
 @pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
 @_ENTRY_SHAPES
 @_EACH_CHECKED
-def test_a_router_default_list_replaces_a_deployment_list(
+def test_a_deployment_list_replaces_a_router_default_list(
     tools_default: _Owned, checked: _Checked, bad_entry: _BadEntry
 ) -> None:
     marker: Final = _marker()
     model: Final = _owned_name(tools_default.suffix, "lists_web_search", checked.provider)
     response: Final = checked.send(tools_default.rig, model, marker, {"tools": [checked.tool, bad_entry(checked)]})
-    _assert_forwarded(tools_default.rig, checked, response, marker, checked.kept_by_a_tools_list)
+    _assert_bad_entry_held_back(tools_default.rig, response, marker)
 
 
 @pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
 @_ENTRY_SHAPES
-def test_a_router_default_list_replaces_the_list_of_a_deployment_named_by_id(
+def test_a_deployment_named_by_id_keeps_its_list_over_a_router_default_list(
     tools_default: _Owned, bad_entry: _BadEntry
 ) -> None:
     marker: Final = _marker()
     checked: Final = _CHECKED["chat"]
     model: Final = _owned_id(tools_default.suffix, "lists_web_search", checked.provider)
     response: Final = checked.send(tools_default.rig, model, marker, {"tools": [checked.tool, bad_entry(checked)]})
-    _assert_forwarded(tools_default.rig, checked, response, marker, ())
+    _assert_bad_entry_held_back(tools_default.rig, response, marker)
 
 
 @pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
@@ -1898,13 +1903,13 @@ def test_a_request_drop_params_replaces_a_router_default_drop_params(drop_defaul
 @pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
 @_ENTRY_SHAPES
 @_CHAT_AND_COUNT
-def test_a_router_default_drop_params_replaces_a_deployment_drop_params(
+def test_a_deployment_drop_params_replaces_a_router_default_drop_params(
     drop_default: _Owned, checked: _Checked, bad_entry: _BadEntry
 ) -> None:
     marker: Final = _marker()
     model: Final = _owned_name(drop_default.suffix, "keeps", checked.provider)
     response: Final = checked.send(drop_default.rig, model, marker, {"tools": [checked.tool, bad_entry(checked)]})
-    _assert_forwarded(drop_default.rig, checked, response, marker, ("get_weather",))
+    _assert_bad_entry_held_back(drop_default.rig, response, marker)
 
 
 @pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
