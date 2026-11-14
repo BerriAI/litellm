@@ -48,6 +48,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RATE_LIMIT_UNVERIFIABLE_MESSAGE,
     PROXY_MaxParallelRequestsHandler_v3,
     RateLimitDescriptor,
+    RateLimitDescriptorRateLimitObject,
     RateLimitedModel,
     RateLimitResponse,
     RateLimitUnverifiableError,
@@ -195,6 +196,34 @@ class _Counter(BaseModel):
         return RateLimitScope(self.key, self.value).counter(self.kind)
 
 
+class _RateLimit(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    requests_per_unit: int | None
+    tokens_per_unit: int | None
+    window_size: int | None
+
+    def rate_limit(self) -> RateLimitDescriptorRateLimitObject:
+        return RateLimitDescriptorRateLimitObject(
+            requests_per_unit=self.requests_per_unit,
+            tokens_per_unit=self.tokens_per_unit,
+            window_size=self.window_size,
+        )
+
+
+class _Descriptor(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    key: str
+    value: str
+    rate_limit: _RateLimit | None
+
+    def descriptor(self) -> RateLimitDescriptor:
+        return RateLimitDescriptor(
+            key=self.key, value=self.value, rate_limit=None if self.rate_limit is None else self.rate_limit.rate_limit()
+        )
+
+
 class _Operation(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -215,11 +244,15 @@ class _Operation(BaseModel):
 
 
 _ARGS: Final = TypeAdapter(dict[str, object])
-_DESCRIPTORS: Final = TypeAdapter(list[RateLimitDescriptor])
+_DESCRIPTORS: Final = TypeAdapter(tuple[_Descriptor, ...])
 _INCREMENTS: Final = TypeAdapter(list[dict[Literal["requests", "tokens"], int]])
 _OPERATIONS: Final = TypeAdapter(tuple[_Operation, ...])
 _PAIRS: Final = TypeAdapter(tuple[tuple[str, object], ...])
 _TOKEN_LIST: Final = TypeAdapter(tuple[int, ...])
+
+
+def _descriptors(raw: object) -> tuple[RateLimitDescriptor, ...]:
+    return tuple(descriptor.descriptor() for descriptor in _DESCRIPTORS.validate_python(raw))
 
 
 def _wire_response(live: LiveRequest, response: RateLimitResponse) -> Mapping[str, object]:
@@ -353,7 +386,7 @@ class CapacityDelegate:
     @_seam
     async def check_and_increment(self, args: Mapping[str, object]) -> object:
         response: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
-            descriptors=_DESCRIPTORS.validate_python(args["descriptors"]),
+            descriptors=list(_descriptors(args["descriptors"])),
             increments=_INCREMENTS.validate_python(args["increments"]),
             parent_otel_span=self._span(),  # pyright: ignore[reportArgumentType]  # the key's span as the handler passes it
         )
@@ -362,7 +395,7 @@ class CapacityDelegate:
     @_seam
     async def should_rate_limit(self, args: Mapping[str, object]) -> object:
         response: Final = await self.v3_limiter.should_rate_limit(
-            _DESCRIPTORS.validate_python(args["descriptors"]),
+            _descriptors(args["descriptors"]),
             parent_otel_span=self._span(),  # pyright: ignore[reportArgumentType]  # the key's span as the handler passes it
             read_only=args["read_only"] is True,
             skip_parallel_check=args["skip_parallel_check"] is True,
@@ -642,9 +675,7 @@ class NativeDynamicRateLimiter(RustLogger):
         self.delegate.llm_router = llm_router
 
     def _state(self, stash: RequestRateLimiterStash) -> "NativeModelCapacityState":
-        if stash.native_capacity_state is None:
-            stash.native_capacity_state = self.capacity.request_state()
-        return stash.native_capacity_state
+        return stash.native_capacity(self.capacity.request_state)
 
     def _state_for(self, stash: RequestRateLimiterStash | None) -> "NativeModelCapacityState | None":
         return None if stash is None else self._state(stash)
