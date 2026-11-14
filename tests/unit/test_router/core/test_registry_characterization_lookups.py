@@ -644,6 +644,36 @@ def test_credentials_with_provider_carry_the_named_groups_organization_over_a_si
     assert found.get("organization") == organization
 
 
+@pytest.mark.parametrize(
+    ("model", "params"),
+    [
+        ("hosted_vllm/llama-3", {}),
+        ("litellm_proxy/gpt-x", {}),
+        ("llama-3", {"custom_llm_provider": "hosted_vllm"}),
+    ],
+)
+def test_credentials_with_provider_keep_the_openai_organization_off_another_provider(
+    make_core: MakeCore, model: str, params: dict[str, str]
+) -> None:
+    registry: Final = make_core(
+        model_list=[
+            deployment(
+                "group",
+                "one",
+                model=model,
+                organization="org-one",
+                extra_headers={"openai-organization": "org-header"},
+                **params,
+            )
+        ]
+    ).registry()
+
+    found: Final = registry.credentials("group", form="with_provider")
+
+    assert found is not None
+    assert "organization" not in found
+
+
 def test_credentials_with_provider_for_a_wildcard_name_carry_the_requested_model(make_core: MakeCore) -> None:
     found = _credential_core(make_core).registry().credentials("openai/gpt-x", form="with_provider", team_id="TA")
 

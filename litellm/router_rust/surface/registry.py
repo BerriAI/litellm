@@ -2123,9 +2123,17 @@ class HostRegistry(HostModelInfo):
         deployment: Final = self._core_get_credential_deployment(model_id=model_id, team_id=team_id)
         if deployment is None:
             return None
+        model: Final = deployment.litellm_params.model
+        custom_llm_provider: Final = (
+            deployment.litellm_params.custom_llm_provider or (model.split("/")[0] if "/" in model else None) or "openai"
+        )
         params: Final = deployment.litellm_params.model_dump(exclude_none=True)
-        organization: Final = caller_or_deployment_openai_organization(
-            as_str_mapping(params.get("extra_headers")), deployment.litellm_params.organization
+        organization: Final = (
+            caller_or_deployment_openai_organization(
+                as_str_mapping(params.get("extra_headers")), deployment.litellm_params.organization
+            )
+            if custom_llm_provider == "openai"
+            else None
         )
         base: Final = {
             **CredentialLiteLLMParams.model_validate(params).model_dump(exclude_none=True),
@@ -2139,11 +2147,8 @@ class HostRegistry(HostModelInfo):
                 verbose_router_logger.warning("Credential '%s' not found in credential_list", credential_name)
             resolved.update(credential_values)
             _ = resolved.pop("litellm_credential_name", None)
-        model: Final = deployment.litellm_params.model
         resolved["model"] = model
-        resolved["custom_llm_provider"] = (
-            deployment.litellm_params.custom_llm_provider or (model.split("/")[0] if "/" in model else None) or "openai"
-        )
+        resolved["custom_llm_provider"] = custom_llm_provider
         return resolved
 
     # -- routable names ---------------------------------------------------------------------------
