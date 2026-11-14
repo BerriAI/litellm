@@ -367,6 +367,74 @@ def test_queued_chat_carries_key_team_and_caller_tags_and_the_budget_reservation
     assert metadata["user_api_key_budget_reservation"] == reservation
 
 
+@pytest.mark.parametrize(
+    ("key_metadata", "litellm_metadata"),
+    [({"tags": ["key-tag"]}, {}), ({}, {"tags": ["key-tag"]})],
+    ids=["key_tags_with_empty_bucket", "bucket_tags"],
+)
+def test_a_queued_call_with_a_litellm_metadata_bucket_still_routes_by_its_tags(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: dict[str, object],
+    litellm_metadata: dict[str, object],
+) -> None:
+    deployments: Final = [
+        {
+            "model_name": "gpt-4",
+            "litellm_params": {
+                "model": "openai/gpt-4",
+                "api_key": "sk-queue-test",
+                "mock_response": reply,
+                "tags": [reply],
+            },
+        }
+        for reply in ("key-tag", "default")
+    ]
+    monkeypatch.setattr(
+        proxy_server, "llm_router", Router(model_list=deployments, default_priority=0, enable_tag_filtering=True)
+    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
+    with auth_as(metadata=key_metadata):
+        response: Final = client.post(
+            "/queue/chat/completions",
+            json={
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "hi"}],
+                "litellm_metadata": litellm_metadata,
+            },
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["choices"][0]["message"]["content"] == "key-tag"
+
+
+def test_a_queued_spend_row_ignores_key_fields_forged_in_the_litellm_metadata_bucket(
+    client: TestClient, auth_as: Callable[..., AbstractContextManager[None]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _queue_router(monkeypatch, default_priority=0)
+    logger: Final = _QueueRequestLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    with auth_as(team_id="real-team"):
+        response: Final = client.post(
+            "/queue/chat/completions",
+            json={
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "hi"}],
+                "litellm_metadata": {"user_api_key_team_id": "forged-team", "user_api_key_org_id": "forged-org"},
+            },
+        )
+    assert response.status_code == 200, response.text
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(
+        kwargs=logger.requests.get_nowait(),
+        response_obj=litellm.ModelResponse.model_validate(response.json()),
+        start_time=now,
+        end_time=now,
+    )
+    assert payload["team_id"] == "real-team"
+    assert payload["organization_id"] != "forged-org"
+
+
 def test_a_queued_spend_row_stores_the_trace_id_the_caller_sent(
     client: TestClient, auth_as: Callable[..., AbstractContextManager[None]], monkeypatch: pytest.MonkeyPatch
 ) -> None:

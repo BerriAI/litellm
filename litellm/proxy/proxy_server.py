@@ -19533,10 +19533,12 @@ async def async_queue_request(
 
         data["litellm_call_id"] = litellm_call_id
 
-        if not isinstance(data.get("metadata"), dict):
-            # Covers both missing and JSON-string metadata (multipart /
-            # extra_body); see above for the same guard upstream.
-            data["metadata"] = {}
+        caller_litellm_metadata: Final = LiteLLMProxyRequestSetup.caller_metadata(data.pop("litellm_metadata", None))
+        queued_metadata: Final = {
+            **caller_litellm_metadata,
+            **LiteLLMProxyRequestSetup.caller_metadata(data.get("metadata")),
+        }
+        data["metadata"] = queued_metadata
         logged_api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         data["metadata"]["user_api_key"] = logged_api_key
         data["metadata"]["user_api_key_hash"] = logged_api_key
@@ -19557,7 +19559,7 @@ async def async_queue_request(
         )
         queued_tags: Final = LiteLLMProxyRequestSetup.merged_request_tags(
             request=request,
-            metadata_tags=data["metadata"].get("tags"),
+            metadata_buckets=(queued_metadata, caller_litellm_metadata),
             body_tags=data.get("tags"),
             user_api_key_dict=user_api_key_dict,
         )
