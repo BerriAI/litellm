@@ -3726,7 +3726,6 @@ dependencies = [
 name = "litellm-callbacks-prometheus"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "futures-util",
  "indexmap 2.14.0",
  "litellm-callbacks",

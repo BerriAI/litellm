@@ -1,4 +1,3 @@
-use chrono::Local;
 use litellm_callbacks::{
     AttemptTiming, CallbackError, Cost, Deployment, GuardrailEntry, HookInput, InputSequenceLength,
     LoggedKeyIdentity, LoggedModelGroup, LoggedRequest, McpToolCall, MetadataKind, MetadataLabel,
@@ -99,13 +98,6 @@ fn days_from_civil(year: i32, month: u8, day: u8) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
-fn local_now() -> Moment {
-    Moment {
-        us: Local::now().naive_local().and_utc().timestamp_micros(),
-        aware: false,
-    }
-}
-
 pub fn moment(stamp: Option<&Stamp>) -> Option<Moment> {
     let stamp = stamp?;
     let seconds = days_from_civil(stamp.year, stamp.month, stamp.day) * 86_400
@@ -161,7 +153,7 @@ impl AttemptFacts {
             cache_hit: call.and_then(|call| call.cache_hit),
             settings: Settings::from(&settings),
             deployment_labels: read::<typed::LoggedDeploymentLabels>(input)?.unwrap_or_default(),
-            now: Some(local_now()),
+            now: moment(read::<typed::LoggedWallClock>(input)?.as_ref()),
         };
         Ok(Some((outcome, facts)))
     }

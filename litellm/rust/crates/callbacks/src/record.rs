@@ -441,6 +441,7 @@ mod tests {
             Field::LimiterRequest => round_trip::<typed::LimiterRequest>(sample),
             Field::PrometheusSettings => round_trip::<typed::PrometheusSettings>(sample),
             Field::LoggedDeploymentLabels => round_trip::<typed::LoggedDeploymentLabels>(sample),
+            Field::LoggedWallClock => round_trip::<typed::LoggedWallClock>(sample),
             other => panic!("{other:?} has no typed record sample"),
         }
     }
@@ -454,7 +455,7 @@ mod tests {
             assert_eq!(&decoded(field, sample), sample, "{name}");
         }
         let typed: Vec<&str> = samples.keys().map(String::as_str).collect();
-        assert_eq!(typed.len(), 25);
+        assert_eq!(typed.len(), 26);
     }
 
     #[rstest]

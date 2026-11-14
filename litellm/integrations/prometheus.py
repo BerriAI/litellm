@@ -8,7 +8,7 @@ import math
 import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
@@ -3797,6 +3797,10 @@ class PrometheusLogger(CustomLogger):
         # Mount the metrics app to the app
         app.mount("/metrics", metrics_app)
         verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics (no authentication)")
+
+
+def wall_clock() -> datetime:
+    return datetime.now(timezone.utc).astimezone().replace(tzinfo=None)
 
 
 def get_custom_labels_from_metadata(metadata: dict) -> dict[str, str]:

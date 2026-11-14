@@ -110,6 +110,7 @@ fields! {
     LimiterRequest = 46, SmallRecord, crate::record::LimiterRequest;
     PrometheusSettings = 48, SmallRecord, crate::record::PrometheusSettings;
     LoggedDeploymentLabels = 49, SmallRecord, serde_json::Map<std::string::String, serde_json::Value>;
+    LoggedWallClock = 51, SmallRecord, crate::record::Moment;
 }
 
 impl Field {
@@ -150,6 +151,7 @@ pub const DERIVED_ONLY: FieldSet = FieldSet::of(&[
     Field::LimiterRequest,
     Field::PrometheusSettings,
     Field::LoggedDeploymentLabels,
+    Field::LoggedWallClock,
 ]);
 
 pub const BY_REFERENCE: FieldSet = FieldSet::of(&[Field::StandardLoggingPayloadRef]);
@@ -241,7 +243,7 @@ mod tests {
     #[case::wire(Field::ProviderRequestBody, 24, "provider_request_body")]
     #[case::compatibility(Field::DeprecatedResponseObj, 29, "deprecated_response_obj")]
     #[case::typed(Field::KeyLimits, 30, "key_limits")]
-    #[case::last(Field::LoggedDeploymentLabels, 49, "logged_deployment_labels")]
+    #[case::last(Field::LoggedWallClock, 51, "logged_wall_clock")]
     fn a_field_keeps_its_bit_and_its_snake_case_name(
         #[case] field: Field,
         #[case] bit: u8,

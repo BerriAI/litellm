@@ -94,6 +94,7 @@ class Field(str, Enum):
     limiter_request = ("limiter_request", 46, FieldTier.small_record)
     prometheus_settings = ("prometheus_settings", 48, FieldTier.small_record)
     logged_deployment_labels = ("logged_deployment_labels", 49, FieldTier.small_record)
+    logged_wall_clock = ("logged_wall_clock", 51, FieldTier.small_record)
 
 
 class Activation(str, Enum):
@@ -132,6 +133,7 @@ DERIVED_ONLY: Final = frozenset(
         Field.limiter_request,
         Field.prometheus_settings,
         Field.logged_deployment_labels,
+        Field.logged_wall_clock,
     }
 )
 BY_REFERENCE: Final = frozenset({Field.standard_logging_payload_ref})

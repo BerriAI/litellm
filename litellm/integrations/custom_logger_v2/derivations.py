@@ -28,6 +28,8 @@ from litellm.types.integrations.custom_logger_v2 import (
     MetadataKind,
     MetadataLabel,
     ModelInfo,
+    Moment,
+    MomentInput,
     Outcome,
     OutputCap,
     PrometheusSettings,
@@ -49,6 +51,7 @@ _TAGS: Final[TypeAdapter[tuple[str | int | float | bool | Stringified | None, ..
 _DERIVED_RESERVATION_MEMBERS: Final = frozenset({"rejected", "entries_is_list", "not_a_mapping"})
 _LIMITER_HEADER_PREFIX: Final = "x-ratelimit-"
 _PROMETHEUS_SETTINGS: Final = TypeAdapter(PrometheusSettings)
+_WALL_CLOCK: Final[TypeAdapter[Moment]] = TypeAdapter(MomentInput)
 _PAYLOAD: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _DEPLOYMENT_LABEL_KEYS: Final = ("model_group", "model_id", "api_base", "custom_llm_provider")
 
@@ -696,6 +699,12 @@ def logged_deployment_labels(args: HookArgs) -> Mapping[str, object]:
     return {key: json_safe(payload[key]) for key in kept if key in payload}
 
 
+def logged_wall_clock(_args: HookArgs) -> Moment | None:
+    from litellm.integrations.prometheus import wall_clock
+
+    return coerce_value(Moment.__name__, _WALL_CLOCK, wall_clock())
+
+
 def payload_copy(
     args: HookArgs,
 ) -> dict[str, object] | None:  # mutable-ok: the shallow copy handed to Rust by reference
@@ -730,6 +739,7 @@ RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
         Field.limiter_request: LimiterRequest,
         Field.prometheus_settings: PrometheusSettings,
         Field.logged_deployment_labels: Mapping[str, JsonValue],
+        Field.logged_wall_clock: MomentInput,
     }
 )
 
@@ -759,6 +769,7 @@ DERIVED_ATTEMPT_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType(
         Field.input_sequence_length: derived(input_sequence_length),
         Field.prometheus_settings: derived(prometheus_settings),
         Field.logged_deployment_labels: derived(logged_deployment_labels),
+        Field.logged_wall_clock: derived(logged_wall_clock),
     }
 )
 DERIVED_AUTH_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType({Field.key_identity: derived(key_identity)})
@@ -813,6 +824,7 @@ __all__ = [
     "logged_key_identity",
     "logged_model_group",
     "logged_request",
+    "logged_wall_clock",
     "mapping",
     "mcp_tool_call",
     "member",

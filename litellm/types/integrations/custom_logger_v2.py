@@ -506,6 +506,7 @@ __all__ = [
     "MetadataLabel",
     "ModelInfo",
     "Moment",
+    "MomentInput",
     "Outcome",
     "OutputCap",
     "PrometheusSettings",

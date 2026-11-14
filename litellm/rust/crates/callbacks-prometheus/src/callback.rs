@@ -93,7 +93,7 @@ const SUCCESS_STEPS: [Step; 4] = [
     Step::SuccessTail,
 ];
 const FAILURE_STEPS: [Step; 1] = [Step::Failure];
-const READS: [Field; 17] = [
+const READS: [Field; 18] = [
     Field::Model,
     Field::Outcome,
     Field::LoggedKeyIdentity,
@@ -111,6 +111,7 @@ const READS: [Field; 17] = [
     Field::InputSequenceLength,
     Field::PrometheusSettings,
     Field::LoggedDeploymentLabels,
+    Field::LoggedWallClock,
 ];
 
 pub struct Prometheus {
