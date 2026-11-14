@@ -47,7 +47,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, PromptCacheBreakpoint
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ModelResponseStream, ProviderField
-from litellm.utils import add_path_to_api_base, supports_tool_choice
+from litellm.utils import add_path_to_api_base, catalog_with_runtime_registrations, supports_tool_choice
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -180,8 +180,15 @@ azureAIGPT5Config: Final = AzureAIGPT5Config()
 _REASONING_EFFORT: Final = "reasoning_effort"
 
 
+def _catalog_row(key: str) -> Mapping[str, object] | None:
+    catalog: Final = catalog_with_runtime_registrations()
+    exact: Final = catalog.get(key)
+    canonical: Final = GetModelCostMap.loaded_model_cost_map_key(key)
+    return exact if exact is not None or canonical is None else catalog.get(canonical)
+
+
 def _catalog_levels(model: str) -> tuple[str, ...] | None:
-    row: Final = GetModelCostMap.loaded_model_cost_map_entry(f"azure_ai/{model.removeprefix('azure_ai/')}")
+    row: Final = _catalog_row(f"azure_ai/{model.removeprefix('azure_ai/')}")
     return declared_reasoning_efforts(row) if row is not None else None
 
 

@@ -566,6 +566,21 @@ def test_azure_ai_checks_declared_levels_whatever_the_model_name_casing(
         _foundry_request_body(respx_mock, requested_as, reasoning_effort="low")
 
 
+@pytest.mark.usefixtures("foundry_catalog")
+@pytest.mark.parametrize("model", ["qa-registered", "qa-reasoner"], ids=["new-row", "over-catalog-row"])
+@pytest.mark.parametrize(("requested", "sent"), [("low", "low"), ("max", None)], ids=["declared", "undeclared"])
+def test_azure_ai_checks_levels_against_a_register_model_registration(
+    respx_mock: respx.MockRouter, model: str, requested: str, sent: str | None
+) -> None:
+    litellm.register_model(
+        {f"azure_ai/{model}": _foundry_row(supports_reasoning=True, reasoning_effort_levels=["low", "high"])}
+    )
+
+    body: Final = _foundry_request_body(respx_mock, model, reasoning_effort=requested, drop_params=True)
+
+    assert body.get("reasoning_effort") == sent
+
+
 def test_azure_ai_grok_stop_parameter_handling():
     """
     Test that Grok models properly handle stop parameter filtering in Azure AI Studio.
