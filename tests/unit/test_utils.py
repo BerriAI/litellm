@@ -12299,3 +12299,53 @@ async def test_post_deployment_failure_reaches_the_legacy_hook_and_keeps_the_rea
     assert type(recorder.failures[0]) is type(raised.value)
     assert recorder.failures[0] is not raised.value
     assert seen == (["v2", "legacy"] if with_v2 else ["legacy"])
+
+
+@respx.mock
+def test_get_valid_models_honors_deployment_check_provider_endpoint(
+    monkeypatch: pytest.MonkeyPatch, reset_mock_cache: None
+) -> None:
+    import httpx
+
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    route: Final = respx.get("https://gw.test/subpath/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "gemini-4-example"}]})
+    )
+    deployment: Final = LiteLLM_Params(
+        model="openai/gemini-*",
+        api_base="https://gw.test/subpath/v1",
+        api_key="gw-key",
+        check_provider_endpoint=True,
+    )
+
+    assert get_valid_models(custom_llm_provider="openai", litellm_params=deployment) == ["gemini-4-example"]
+    assert route.called
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expect_catalog"),
+    [
+        ("https://gw.test/subpath/v1", False),
+        ("https://api.openai.com/v1", True),
+        (None, True),
+    ],
+)
+def test_get_valid_models_skips_bundled_openai_catalog_for_custom_api_base(
+    monkeypatch: pytest.MonkeyPatch, reset_mock_cache: None, api_base: str | None, expect_catalog: bool
+) -> None:
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    deployment: Final = LiteLLM_Params(model="openai/*", api_base=api_base)
+
+    listed: Final = get_valid_models(custom_llm_provider="openai", litellm_params=deployment)
+    if expect_catalog:
+        assert listed == get_valid_models(custom_llm_provider="openai")
+        assert len(listed) > 0
+    else:
+        assert listed == []

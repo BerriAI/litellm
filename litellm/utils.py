@@ -9169,6 +9169,36 @@ def bundled_provider_models(provider: str) -> tuple[str, ...]:
 AZURE_MODEL_PLACEHOLDER: Final = "Azure-LLM"
 
 
+def _resolve_check_provider_endpoint(
+    check_provider_endpoint: bool | None,
+    litellm_params: LiteLLM_Params,
+) -> bool:
+    if check_provider_endpoint is not None:
+        return bool(check_provider_endpoint or litellm.check_provider_endpoint)
+    deployment_setting: Final = getattr(litellm_params, "check_provider_endpoint", None)
+    if isinstance(deployment_setting, bool):
+        return deployment_setting
+    return bool(litellm.check_provider_endpoint)
+
+
+def _resolve_custom_openai_api_base(litellm_params: LiteLLM_Params) -> str | None:
+    from litellm.secret_managers.main import get_secret_str
+
+    raw_api_base: Final = litellm_params.api_base
+    if isinstance(raw_api_base, str) and raw_api_base.strip():
+        return get_secret_str(raw_api_base) if raw_api_base.startswith("os.environ/") else raw_api_base
+    return litellm.api_base or get_secret_str("OPENAI_BASE_URL") or get_secret_str("OPENAI_API_BASE")
+
+
+def _has_custom_openai_api_base(litellm_params: LiteLLM_Params) -> bool:
+    from litellm.llms.openai.common_utils import is_openai_backed_api_base
+
+    resolved_api_base: Final = _resolve_custom_openai_api_base(litellm_params)
+    if not isinstance(resolved_api_base, str) or not resolved_api_base.strip():
+        return False
+    return not is_openai_backed_api_base(resolved_api_base.strip())
+
+
 def get_valid_models(
     check_provider_endpoint: bool | None = None,
     custom_llm_provider: str | None = None,
@@ -9202,7 +9232,9 @@ def get_valid_models(
             litellm_params.api_base = api_base
         #################################
 
-        check_provider_endpoint = check_provider_endpoint or litellm.check_provider_endpoint
+        resolved_check_provider_endpoint: Final = _resolve_check_provider_endpoint(
+            check_provider_endpoint, litellm_params
+        )
         # get keys set in .env
 
         valid_providers: list[str] = []
@@ -9225,7 +9257,7 @@ def get_valid_models(
 
             if provider == "azure":
                 valid_models.append(AZURE_MODEL_PLACEHOLDER)
-            elif provider_config is not None and check_provider_endpoint and provider is not None:
+            elif provider_config is not None and resolved_check_provider_endpoint and provider is not None:
                 valid_models.extend(
                     _get_valid_models_from_provider_api(
                         provider_config,
@@ -9233,6 +9265,8 @@ def get_valid_models(
                         litellm_params,
                     )
                 )
+            elif provider == LlmProviders.OPENAI.value and _has_custom_openai_api_base(litellm_params):
+                continue
             else:
                 valid_models.extend(bundled_provider_models(provider))
 
