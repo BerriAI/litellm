@@ -37,7 +37,7 @@ _SCAN_WINDOW: Final = 32
 
 # Past this the rewrite rolls to disk, keeping the router's per-deployment deepcopy of the handle
 # as cheap as it is for the spooled upload this replaces.
-_REWRITE_SPOOL_BYTES: Final = 1024 * 1024
+REWRITE_SPOOL_BYTES: Final = 1024 * 1024
 
 # custom_id is caller-supplied and reaches a log line, so it is stripped of control characters
 # and capped rather than rendered as given.
@@ -480,7 +480,7 @@ async def scan_batch_input_file(
     window: Final[list[_ParsedRecord]] = []  # mutable-ok: bounded read-ahead buffer
     scanned: Final[list[int]] = []  # mutable-ok: counts records the scan actually reached
     redactions: Final = tempfile.SpooledTemporaryFile(  # noqa: SIM115  # the rewrite reads this back
-        max_size=_REWRITE_SPOOL_BYTES
+        max_size=REWRITE_SPOOL_BYTES
     )
 
     async def drain() -> None:
@@ -548,7 +548,7 @@ def rewrite_batch_input_file(file_source: BinaryIO, result: BatchScanResult) -> 
     dropped: Final = frozenset(change.line_number for change in result.changes if isinstance(change, RecordDropped))
 
     output: Final = tempfile.SpooledTemporaryFile(  # noqa: SIM115  # the caller uploads this handle
-        max_size=_REWRITE_SPOOL_BYTES
+        max_size=REWRITE_SPOOL_BYTES
     )
     wrote_any = False  # rebind-ok: tracks whether a separator is needed
     try:

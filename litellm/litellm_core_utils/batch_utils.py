@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from os import PathLike
-from typing import Final, Literal, TypeVar
+from typing import IO, Final, Literal, TypeVar
 
 from openai.types import Batch
 from pydantic import TypeAdapter, ValidationError
@@ -171,6 +171,7 @@ def replace_model_in_jsonl(
     new_model_name: str,
     keep_line_numbers: bool = False,
     only_rows_naming: str | None = None,
+    output_file: IO[bytes] | None = None,
 ) -> FileTypes:
     try:
         ## if pathlike, return the original file content
@@ -208,7 +209,11 @@ def replace_model_in_jsonl(
         # lines included, so a row error naming a line still points into the
         # caller's file; otherwise rows go back to back, since OpenAI rejects a
         # batch file whose first line is empty.
-        output: Final = InMemoryFile(b"", name="modified_file.jsonl", content_type="application/jsonl")
+        output: Final = (
+            output_file
+            if output_file is not None
+            else InMemoryFile(b"", name="modified_file.jsonl", content_type="application/jsonl")
+        )
         last_written_line = 0
         buffer = ""
         for line_number, raw_line in enumerate(line_iter, start=1):

@@ -8,11 +8,12 @@
 import asyncio
 import functools
 import itertools
+import tempfile
 import traceback
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from os import PathLike
-from typing import Any, BinaryIO, Final, NoReturn, Protocol, TypedDict, cast, get_args
+from typing import IO, Any, BinaryIO, Final, NoReturn, Protocol, TypedDict, cast, get_args
 
 import httpx
 from fastapi import (
@@ -72,6 +73,7 @@ from litellm.proxy.openai_files_endpoints.batch_file_validation import (
 )
 from litellm.proxy.openai_files_endpoints.batch_guardrails import (
     EMPTY_MAPPING,
+    REWRITE_SPOOL_BYTES,
     BatchScanResult,
     raise_nothing_to_submit,
     raise_public,
@@ -114,7 +116,6 @@ from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
-    FileContent,
     FileExpiresAfter,
     FileListPage,
     FileTypes,
@@ -390,21 +391,23 @@ def get_model_from_json_obj(json_object: dict) -> str | None:
 
 
 def _rewrite_alias_rows_to_deployment_model(
-    file: FileTypes, alias: str, deployment_model: str, provider: str
+    file: FileTypes, alias: str, deployment_model: str, provider: str, spool: IO[bytes]
 ) -> FileTypes:
     rewritten: Final = replace_model_in_jsonl(
         file_content=file,
         new_model_name=batch_row_model_for_deployment(deployment_model, provider),
         keep_line_numbers=provider == LlmProviders.VERTEX_AI.value,
         only_rows_naming=alias,
+        output_file=spool,
     )
-    source: Final = file[1] if isinstance(file, tuple) else file
-    if rewritten is file:
+    if rewritten is not spool:
+        source: Final = file[1] if isinstance(file, tuple) else file
         if not isinstance(source, (bytes, PathLike)):
             source.seek(0)
         return file
-    content: Final = cast(FileContent, rewritten)  # cast-ok: a new object from the rewrite is always its InMemoryFile
-    return (file[0], content, file[2] if len(file) > 2 else None) if isinstance(file, tuple) else content
+    if isinstance(file, tuple):
+        return (file[0], spool, file[2] if len(file) > 2 else None)
+    return ("modified_file.jsonl", spool, "application/jsonl")
 
 
 async def _deprecated_loadbalanced_create_file(
@@ -498,28 +501,30 @@ async def route_create_file(
             keep_request_buckets=True,
         )
 
-        upload_request: Final[CreateFileRequest] = (
-            {
-                **_create_file_request,
-                "file": await asyncio.to_thread(
-                    _rewrite_alias_rows_to_deployment_model,
-                    _create_file_request["file"],
-                    model,
-                    credentials["model"],
-                    credentials["custom_llm_provider"],
-                ),
-            }
-            if should_replace_model_in_jsonl(
-                purpose=purpose, passthrough=_create_file_request.get("passthrough") is True
+        with tempfile.SpooledTemporaryFile(max_size=REWRITE_SPOOL_BYTES) as rewrite_spool:
+            upload_request: Final[CreateFileRequest] = (
+                {
+                    **_create_file_request,
+                    "file": await asyncio.to_thread(
+                        _rewrite_alias_rows_to_deployment_model,
+                        _create_file_request["file"],
+                        model,
+                        credentials["model"],
+                        credentials["custom_llm_provider"],
+                        rewrite_spool,
+                    ),
+                }
+                if should_replace_model_in_jsonl(
+                    purpose=purpose, passthrough=_create_file_request.get("passthrough") is True
+                )
+                else _create_file_request
             )
-            else _create_file_request
-        )
 
-        # Create the file with model credentials
-        response = await litellm.acreate_file(
-            **upload_request,
-            custom_llm_provider=credentials["custom_llm_provider"],
-        )
+            # Create the file with model credentials
+            response = await litellm.acreate_file(
+                **upload_request,
+                custom_llm_provider=credentials["custom_llm_provider"],
+            )
 
         # Encode the file ID with model information
         if response and hasattr(response, "id") and response.id:

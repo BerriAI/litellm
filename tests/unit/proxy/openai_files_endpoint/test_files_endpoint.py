@@ -1,7 +1,10 @@
 import io
 import itertools
 import json
-from typing import Final, List, Optional
+import tempfile
+import tracemalloc
+from collections import Counter
+from typing import IO, Final, List, Optional
 from urllib.parse import quote
 from unittest.mock import ANY, AsyncMock, MagicMock
 
@@ -1237,8 +1240,13 @@ async def _route_model_upload(mocker: MockerFixture, file: FileTypes) -> Extract
     mocker.patch(  # test-quality-ok: the route calls litellm.acreate_file directly with no injection seam
         "litellm.acreate_file", new=read_the_upload_like_a_provider
     )
+    await _route_alias_upload(_router_with_executed_batch_model(), file)
+    return received[0]
+
+
+async def _route_alias_upload(llm_router: Router, file: FileTypes) -> None:
     await route_create_file(
-        llm_router=_router_with_executed_batch_model(),
+        llm_router=llm_router,
         _create_file_request=CreateFileRequest(file=file, purpose="batch"),
         purpose="batch",
         proxy_logging_obj=MagicMock(),
@@ -1249,7 +1257,6 @@ async def _route_model_upload(mocker: MockerFixture, file: FileTypes) -> Extract
         custom_llm_provider="openai",
         model="gpt-5.4-nano-batch",
     )
-    return received[0]
 
 
 MALFORMED_TRAILING_BATCH_CONTENT: Final = (
@@ -1280,6 +1287,49 @@ async def test_route_create_file_rewrites_a_bare_upload_to_the_deployment_model(
     received = await _route_model_upload(mocker, _batch_row("r", "gpt-5.4-nano-batch"))
 
     assert _models_named_by_rows(received) == ["gpt-5.4-nano"]
+
+
+@pytest.mark.asyncio
+async def test_route_create_file_rewrites_a_large_upload_on_disk_and_discards_it_after_the_upload(
+    mocker: MockerFixture,
+):
+    row: Final = _batch_row("r", "gpt-5.4-nano-batch").replace(b'"hi"', b'"' + b"x" * 4096 + b'"')
+    rows: Final = 4096
+    rows_per_model: Final[list[Counter[str]]] = []
+    uploaded_handles: Final[list[IO[bytes]]] = []
+
+    async def stream_the_upload_like_a_provider(*, file: tuple[str, IO[bytes], str], **_: object) -> OpenAIFileObject:
+        uploaded_handles.append(file[1])
+        rows_per_model.append(Counter(json.loads(line)["body"]["model"] for line in file[1]))
+        return OpenAIFileObject(
+            id="file-kept",
+            object="file",
+            purpose="batch",
+            created_at=0,
+            bytes=0,
+            filename="batch.jsonl",
+            status="uploaded",
+        )
+
+    mocker.patch(  # test-quality-ok: the route calls litellm.acreate_file directly with no injection seam
+        "litellm.acreate_file", new=stream_the_upload_like_a_provider
+    )
+    llm_router: Final = _router_with_executed_batch_model()
+    await _route_alias_upload(llm_router, ("warm-up.jsonl", io.BytesIO(row), "application/jsonl"))
+    with tempfile.TemporaryFile() as upload:
+        upload.write(b"\n".join(itertools.repeat(row, rows)))
+        upload_size: Final = upload.tell()
+        upload.seek(0)
+        tracemalloc.start()
+        try:
+            await _route_alias_upload(llm_router, ("batch.jsonl", upload, "application/jsonl"))
+            peak: Final = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+    assert rows_per_model[-1] == Counter({"gpt-5.4-nano": rows})
+    assert peak < upload_size // 4
+    assert uploaded_handles[-1].closed
 
 
 @pytest.mark.skip(reason="mock respx fails on ci/cd - unclear why")
