@@ -866,6 +866,25 @@ def test_a_counter_handle_keeps_the_prometheus_client_errors() -> None:
     assert counter.collect()[5] == [(["1"], 0.0, 0.0, [], counter.collect()[5][0][4])]
 
 
+def test_the_router_remaining_op_sets_each_gauge_it_is_given_under_the_request_labels() -> None:
+    store: Final = _native.NativePrometheusStore()
+    labelnames: Final = ["model_group", "api_provider"]
+    tokens: Final = store.metric(
+        "gauge", "litellm_remaining_tokens_metric", "doc", labelnames, [], [], False, False, False
+    )
+    requests: Final = store.metric(
+        "gauge", "litellm_remaining_requests_metric", "doc", labelnames, [], [], False, False, False
+    )
+
+    store.op(
+        "router_remaining",
+        json.dumps({"values": {"model_group": "group", "api_provider": "bedrock"}, "tokens": 900, "requests": None}),
+    )
+
+    assert [(values, value) for values, value, *_ in tokens.collect()[5]] == [(["group", "bedrock"], 900.0)]
+    assert requests.collect()[5] == []
+
+
 _CALLBACK_LISTS: Final = (
     "callbacks",
     "input_callback",
