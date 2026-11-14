@@ -79,6 +79,7 @@ from litellm.responses.mcp.round_billing import (
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
+    AllMessageValues,
     PromptObject,
     Reasoning,
     ResponseIncludable,
@@ -102,7 +103,7 @@ else:
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import is_openai_compatible_endpoint
 from litellm.llms.openai.data_residency import infer_openai_data_residency
-from litellm.types.litellm_params import prompt_management_applied
+from litellm.types.litellm_params import PROMPT_TEMPLATE_APPLIED, PromptManagement, prompt_management_applied
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
@@ -768,6 +769,20 @@ def _deployment_model_info_after_prompt_swap(
 class _AsyncPromptManagementOutcome:
     merged_optional_params: Mapping[str, object]
     deployment_model_info: object
+    prompt_management_marker: Mapping[str, PromptManagement] = MappingProxyType({})
+
+
+def _prompt_template_marker(
+    original_model: str,
+    model: str,
+    client_messages_before_the_hook: Sequence[AllMessageValues],
+    merged_input: Sequence[AllMessageValues],
+) -> Mapping[str, PromptManagement]:
+    return (
+        PROMPT_TEMPLATE_APPLIED
+        if model != original_model or tuple(merged_input) != tuple(client_messages_before_the_hook)
+        else MappingProxyType({})
+    )
 
 
 def _resolve_responses_api_provider_config(
@@ -1018,6 +1033,7 @@ async def aresponses(
             and litellm_logging_obj.should_run_prompt_management_hooks(prompt_id=prompt_id, non_default_params=kwargs)
         ):
             client_input: Final = ResponsesAPIRequestUtils.responses_input_to_chat_messages(input)
+            client_messages_before_the_hook: Final = tuple(client_input)
             with _prompt_management_sees_a_provisional_message_list(
                 kwargs,
                 bridged=_will_bridge_to_chat_completions(
@@ -1065,6 +1081,9 @@ async def aresponses(
                 merged_optional_params=merged_optional_params,
                 deployment_model_info=_deployment_model_info_after_prompt_swap(
                     requested_provider, custom_llm_provider, kwargs.get("model_info")
+                ),
+                prompt_management_marker=_prompt_template_marker(
+                    original_model, model, client_messages_before_the_hook, merged_input
                 ),
             )
 
@@ -1175,9 +1194,10 @@ def _apply_prompt_management_to_responses_call(
     kwargs: dict[str, Any],
     local_vars: dict[str, object],
     use_chat_completions_api: bool,
-) -> tuple[str | ResponseInputParam, str, str | None, object]:
-    """Returns the prompt-managed input, model and provider, plus the deployment metadata that still
-    describes the upstream (``None`` once the prompt manager moved the request to another provider)."""
+) -> tuple[str | ResponseInputParam, str, str | None, object, Mapping[str, PromptManagement]]:
+    """Returns the prompt-managed input, model and provider, the deployment metadata that still
+    describes the upstream (``None`` once the prompt manager moved the request to another provider), and
+    the marker that tells a chat call bridged from here whether the prompt template already applied."""
     carried_outcome: Final[object] = kwargs.get("_async_prompt_merged_params")
     kwargs.pop("_async_prompt_merged_params", None)
     if carried_outcome is not None:
@@ -1186,13 +1206,20 @@ def _apply_prompt_management_to_responses_call(
         )
         for key, value in async_outcome.merged_optional_params.items():
             local_vars[key] = value
-        return input, model, custom_llm_provider, async_outcome.deployment_model_info
+        return (
+            input,
+            model,
+            custom_llm_provider,
+            async_outcome.deployment_model_info,
+            async_outcome.prompt_management_marker,
+        )
 
     prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))
     prompt_variables: Final = cast(dict | None, kwargs.get("prompt_variables", None))
     original_model: Final = model
 
     client_input: Final = ResponsesAPIRequestUtils.responses_input_to_chat_messages(input)
+    client_messages_before_the_hook: Final = tuple(client_input)
 
     if (
         isinstance(litellm_logging_obj, LiteLLMLoggingObj)
@@ -1253,9 +1280,10 @@ def _apply_prompt_management_to_responses_call(
             model,
             resolved_provider,
             _deployment_model_info_after_prompt_swap(custom_llm_provider, resolved_provider, kwargs.get("model_info")),
+            _prompt_template_marker(original_model, model, client_messages_before_the_hook, merged_input),
         )
 
-    return input, model, custom_llm_provider, kwargs.get("model_info")
+    return input, model, custom_llm_provider, kwargs.get("model_info"), MappingProxyType({})
 
 
 # Opt-in via model id (mirrors the `responses/` prefix pattern on chat completions).
@@ -1603,15 +1631,17 @@ def responses(
             )
             local_vars["custom_llm_provider"] = custom_llm_provider
 
-        input, model, custom_llm_provider, deployment_model_info = _apply_prompt_management_to_responses_call(
-            input=input,
-            tools=tools,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            litellm_logging_obj=litellm_logging_obj,
-            kwargs=kwargs,
-            local_vars=local_vars,
-            use_chat_completions_api=use_chat_completions_api,
+        input, model, custom_llm_provider, deployment_model_info, prompt_management_marker = (
+            _apply_prompt_management_to_responses_call(
+                input=input,
+                tools=tools,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                litellm_logging_obj=litellm_logging_obj,
+                kwargs=kwargs,
+                local_vars=local_vars,
+                use_chat_completions_api=use_chat_completions_api,
+            )
         )
         litellm_logging_obj.record_agentic_loop_params(AgenticLoopParams(model=model))
 
@@ -1811,7 +1841,7 @@ def responses(
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
                 allowed_openai_params=allowed_openai_params,
-                **bridge_kwargs,
+                **{**bridge_kwargs, **prompt_management_marker},
             )
 
         # Get optional parameters for the responses API

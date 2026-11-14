@@ -63,15 +63,23 @@ PROMPT_MANAGEMENT_APPLIED_FIELD: Final = "_litellm_prompt_management_applied"
 
 class PromptManagement(Enum):
     APPLIED = "applied"
+    TEMPLATE_APPLIED = "template_applied"
 
 
 PROMPT_MANAGEMENT_APPLIED: Final[Mapping[str, PromptManagement]] = MappingProxyType(
     {PROMPT_MANAGEMENT_APPLIED_FIELD: PromptManagement.APPLIED}
 )
+PROMPT_TEMPLATE_APPLIED: Final[Mapping[str, PromptManagement]] = MappingProxyType(
+    {PROMPT_MANAGEMENT_APPLIED_FIELD: PromptManagement.TEMPLATE_APPLIED}
+)
 
 
 def prompt_management_applied(request_kwargs: Mapping[str, object]) -> bool:
     return request_kwargs.get(PROMPT_MANAGEMENT_APPLIED_FIELD) is PromptManagement.APPLIED
+
+
+def prompt_template_applied(request_kwargs: Mapping[str, object]) -> bool:
+    return request_kwargs.get(PROMPT_MANAGEMENT_APPLIED_FIELD) is PromptManagement.TEMPLATE_APPLIED
 
 
 WIRE_NAME: Final = "wire_name"

@@ -50,7 +50,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.litellm_params import PROMPT_MANAGEMENT_APPLIED_FIELD, ControlOptions
-from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
+from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import (
     Delta,
@@ -6928,7 +6928,7 @@ class _PromptHookRecorder(CustomPromptManagement):
         ignore_prompt_manager_optional_params: bool | None = False,
     ) -> tuple[str, list[AllMessageValues], dict]:
         self.on_prompt("sync")
-        return model, messages, non_default_params
+        return _render_prompt(None, model, messages, non_default_params)
 
     async def async_get_chat_completion_prompt(
         self,
@@ -6947,7 +6947,7 @@ class _PromptHookRecorder(CustomPromptManagement):
         ignore_prompt_manager_optional_params: bool | None = False,
     ) -> tuple[str, list[AllMessageValues], dict]:
         self.on_prompt("async")
-        return model, messages, non_default_params
+        return _render_prompt(None, model, messages, non_default_params)
 
 
 async def _call_completion(is_async: bool, **kwargs: object) -> None:
@@ -7085,15 +7085,48 @@ class _PromptManager(_SyncOnlyPromptManager):
         return _render_prompt(prompt_id, model, messages, non_default_params)
 
 
+class _PromptManagerWithAPassThroughAsyncHook(_SyncOnlyPromptManager):
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        non_default_params: dict[str, object],
+        prompt_id: str | None,
+        prompt_variables: dict[str, object] | None,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LiteLLMLogging,
+        prompt_spec: PromptSpec | None = None,
+        tools: list[dict[str, object]] | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
+        return await super().async_get_chat_completion_prompt(
+            model=model,
+            messages=messages,
+            non_default_params=non_default_params,
+            prompt_id=prompt_id,
+            prompt_variables=prompt_variables,
+            dynamic_callback_params=dynamic_callback_params,
+            litellm_logging_obj=litellm_logging_obj,
+            prompt_spec=prompt_spec,
+            tools=tools,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
+        )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("prompt_manager", "prompt_id"),
     [
         (_PromptManager, "one-word"),
         (_SyncOnlyPromptManager, "one-word"),
+        (_PromptManagerWithAPassThroughAsyncHook, "one-word"),
         (_PromptManager, "one-sentence-at-low-temperature"),
     ],
-    ids=["both-hooks", "sync-hook-only", "template-sets-temperature"],
+    ids=["both-hooks", "sync-hook-only", "async-hook-defers-to-the-base-class", "template-sets-temperature"],
 )
 @pytest.mark.parametrize(
     ("model", "fallbacks", "sent_models"),
@@ -7327,6 +7360,74 @@ async def test_a_chat_call_the_responses_api_hands_back_to_chat_sends_the_templa
 
     assert response.choices[0].message.content == "Blue"
     assert route.calls.last.request.content.decode().count(ONE_WORD) == 1
+
+
+def _anthropic_answering_blue(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "msg_one_word",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "Blue"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 28, "output_tokens": 1},
+        }
+    )
+
+
+async def _responses_with_system_cache_points(
+    asynchronous: bool, prompt_manager: CustomPromptManagement, prompt_id: str | None = "one-word"
+) -> ResponsesAPIResponse:
+    request: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            "model": "anthropic/claude-haiku-5-5",
+            "input": "What color is the sky?",
+            "callbacks": [prompt_manager],
+            "api_key": "sk-test",
+            "cache_control_injection_points": [{"location": "message", "role": "system"}],
+            **({"prompt_id": prompt_id} if prompt_id is not None else {}),
+        }
+    )
+    return await litellm.aresponses(**request) if asynchronous else litellm.responses(**request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prompt_manager", [_PromptManager, _SyncOnlyPromptManager], ids=["both-hooks", "sync-hook-only"]
+)
+@pytest.mark.parametrize("asynchronous", [True, False], ids=["aresponses", "responses"])
+@pytest.mark.parametrize("prompt_id", ["one-word", None], ids=["with-prompt-id", "without-prompt-id"])
+async def test_a_responses_call_with_cache_points_handed_to_chat_sends_the_template_once(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    prompt_manager: type[CustomPromptManagement],
+    asynchronous: bool,
+    prompt_id: str | None,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = _anthropic_answering_blue(respx_mock)
+
+    response: Final = await _responses_with_system_cache_points(asynchronous, prompt_manager(), prompt_id)
+
+    assert response.output_text == "Blue"
+    assert route.calls.last.request.content.decode().count(ONE_WORD) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [True, False], ids=["aresponses", "responses"])
+async def test_a_responses_call_handed_to_chat_still_places_the_cache_points_on_the_template(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, asynchronous: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = _anthropic_answering_blue(respx_mock)
+
+    await _responses_with_system_cache_points(asynchronous, _PromptManager())
+
+    assert json.loads(route.calls.last.request.content)["system"] == [
+        {"type": "text", "text": ONE_WORD, "cache_control": {"type": "ephemeral"}}
+    ]
 
 
 _PROMPT_SETTINGS_API_BASE: Final = "https://prompt-settings.test/v1"

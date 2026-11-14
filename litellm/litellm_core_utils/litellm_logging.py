@@ -1615,6 +1615,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_version: int | None = None,
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
         injected_for_every_deployment: bool = False,
+        template_applied: bool = False,
     ) -> tuple[str, list[AllMessageValues], dict]:
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 
@@ -1624,6 +1625,7 @@ class Logging(LiteLLMLoggingBaseClass):
             prompt_id=prompt_id,
             prompt_spec=prompt_spec,
             dynamic_callback_params=self.standard_callback_dynamic_params,
+            template_applied=template_applied,
         )
 
         if custom_logger:
@@ -1769,6 +1771,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_id: str | None = None,
         prompt_spec: PromptSpec | None = None,
         dynamic_callback_params: StandardCallbackDynamicParams | None = None,
+        template_applied: bool = False,
     ) -> CustomLogger | None:
         """
         Get a custom logger for prompt management based on model name or available callbacks.
@@ -1779,10 +1782,57 @@ class Logging(LiteLLMLoggingBaseClass):
             tools: Optional tools passed to the completion call
             prompt_id: Optional prompt ID to auto-detect which system owns this prompt
             dynamic_callback_params: Dynamic callback parameters for should_run_prompt_management checks
+            template_applied: An earlier layer of this request already applied its prompt template, so only the
+                cache control and vector store passes may still run
 
         Returns:
             A CustomLogger instance if one is found, None otherwise
         """
+        if (
+            not template_applied
+            and (
+                template_logger := self._get_custom_logger_for_prompt_template(
+                    model=model,
+                    prompt_id=prompt_id,
+                    prompt_spec=prompt_spec,
+                    dynamic_callback_params=dynamic_callback_params,
+                )
+            )
+            is not None
+        ):
+            return template_logger
+
+        if (
+            anthropic_cache_control_logger
+            := AnthropicCacheControlHook.get_custom_logger_for_anthropic_cache_control_hook(non_default_params)
+        ):
+            self.model_call_details["prompt_integration"] = anthropic_cache_control_logger.__class__.__name__
+            return anthropic_cache_control_logger
+
+        #########################################################
+        # Vector Store / Knowledge Base hooks
+        #########################################################
+        if litellm.vector_store_registry is not None:
+            vector_store_custom_logger: Final = _init_custom_logger_compatible_class(
+                logging_integration="vector_store_pre_call_hook",
+                internal_usage_cache=None,
+                llm_router=None,
+            )
+            self.model_call_details["prompt_integration"] = vector_store_custom_logger.__class__.__name__
+            # Add to global callbacks so post-call hooks are invoked
+            if vector_store_custom_logger and vector_store_custom_logger not in litellm.callbacks:
+                litellm.logging_callback_manager.add_litellm_callback(vector_store_custom_logger)
+            return vector_store_custom_logger
+
+        return None
+
+    def _get_custom_logger_for_prompt_template(
+        self,
+        model: str,
+        prompt_id: str | None,
+        prompt_spec: PromptSpec | None,
+        dynamic_callback_params: StandardCallbackDynamicParams | None,
+    ) -> CustomLogger | None:
         # First check if model starts with a known custom logger compatible callback
         # This takes precedence for backward compatibility
         for callback_name in litellm._known_custom_logger_compatible_callbacks:
@@ -1820,28 +1870,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 continue
             self.model_call_details["prompt_integration"] = logger.__class__.__name__
             return logger
-
-        if (
-            anthropic_cache_control_logger
-            := AnthropicCacheControlHook.get_custom_logger_for_anthropic_cache_control_hook(non_default_params)
-        ):
-            self.model_call_details["prompt_integration"] = anthropic_cache_control_logger.__class__.__name__
-            return anthropic_cache_control_logger
-
-        #########################################################
-        # Vector Store / Knowledge Base hooks
-        #########################################################
-        if litellm.vector_store_registry is not None:
-            vector_store_custom_logger: Final = _init_custom_logger_compatible_class(
-                logging_integration="vector_store_pre_call_hook",
-                internal_usage_cache=None,
-                llm_router=None,
-            )
-            self.model_call_details["prompt_integration"] = vector_store_custom_logger.__class__.__name__
-            # Add to global callbacks so post-call hooks are invoked
-            if vector_store_custom_logger and vector_store_custom_logger not in litellm.callbacks:
-                litellm.logging_callback_manager.add_litellm_callback(vector_store_custom_logger)
-            return vector_store_custom_logger
 
         return None
 
