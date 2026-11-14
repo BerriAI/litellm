@@ -1969,7 +1969,9 @@ def _openai_decisions_route(respx_mock: respx.MockRouter, monkeypatch: pytest.Mo
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("api", "request_kwargs"), _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
 @pytest.mark.parametrize(
-    "extra_headers", (*_MALFORMED_EXTRA_HEADERS, {"X-Foo": 1}), ids=(*_MALFORMED_EXTRA_HEADERS_IDS, "non_string_value")
+    "extra_headers",
+    (*_MALFORMED_EXTRA_HEADERS, {"X-Foo": 1}, {"X-Foo": "caf\u00e9"}, {"X-Foo": "a\r\nX-Injected: 1"}),
+    ids=(*_MALFORMED_EXTRA_HEADERS_IDS, "non_string_value", "non_ascii_value", "crlf_value"),
 )
 async def test_malformed_extra_headers_is_rejected_before_http(
     extra_headers: object,
@@ -2066,8 +2068,13 @@ async def test_malformed_extra_headers_is_dropped_under_drop_params(
 @pytest.mark.parametrize(("api", "request_kwargs"), _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
 @pytest.mark.parametrize(
     ("extra_headers", "dropped_header"),
-    (({"X-Kept": "yes", "X-Bad": 1}, "x-bad"), ({"X-Kept": "yes", 1: "x-bad"}, "1")),
-    ids=("non_string_value", "non_string_name"),
+    (
+        ({"X-Kept": "yes", "X-Bad": 1}, "x-bad"),
+        ({"X-Kept": "yes", 1: "x-bad"}, "1"),
+        ({"X-Kept": "yes", "X-Bad": "a\r\nX-Injected: 1"}, "x-bad"),
+        ({"X-Kept": "yes", "X-Bad": "caf\u00e9"}, "x-bad"),
+    ),
+    ids=("non_string_value", "non_string_name", "crlf_value", "non_ascii_value"),
 )
 async def test_drop_params_keeps_the_well_formed_extra_headers(
     extra_headers: Mapping[object, object],
@@ -2090,6 +2097,87 @@ async def test_drop_params_keeps_the_well_formed_extra_headers(
     sent: Final = route.calls.last.request.headers
     assert sent["x-kept"] == "yes"
     assert dropped_header not in sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("api", "request_kwargs"), _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+async def test_ascii_bytes_extra_headers_value_is_sent_unchanged(
+    api: str,
+    request_kwargs: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = _openai_decisions_route(respx_mock, monkeypatch)
+
+    await getattr(litellm, f"a{api}")(
+        model="openai/gpt-6-luna", api_key="caller-key", extra_headers={"X-Foo": b"plain"}, **request_kwargs
+    )
+
+    assert route.calls.last.request.headers["x-foo"] == "plain"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("api", "request_kwargs"), _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+async def test_router_deployment_number_header_is_rejected_naming_it(
+    api: str,
+    request_kwargs: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = _openai_decisions_route(respx_mock, monkeypatch)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "decider",
+                "litellm_params": {
+                    "model": "openai/gpt-6-luna",
+                    "api_key": "deployment-key",
+                    "extra_headers": {"X-Kept": "yes", "X-Tenant": 123},
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=r"(?s)extra_headers.*X-Tenant") as caught:
+        await getattr(router, f"a{api}")(model="decider", **request_kwargs)
+
+    assert caught.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("api", "request_kwargs"), _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+async def test_router_deployment_number_header_is_dropped_under_its_drop_params(
+    api: str,
+    request_kwargs: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = _openai_decisions_route(respx_mock, monkeypatch)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "decider",
+                "litellm_params": {
+                    "model": "openai/gpt-6-luna",
+                    "api_key": "deployment-key",
+                    "drop_params": True,
+                    "extra_headers": {"X-Kept": "yes", "X-Tenant": 123},
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    await getattr(router, f"a{api}")(model="decider", **request_kwargs)
+
+    sent: Final = route.calls.last.request.headers
+    assert sent["x-kept"] == "yes"
+    assert "x-tenant" not in sent
 
 
 _CLOUDFLARE_RUN_URL: Final = "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare"
