@@ -3216,6 +3216,8 @@ async def test_openrouter_post_finish_usage_trailer_does_not_emit_empty_choice(
     post_finish_chunks: Final = collected_chunks[finish_index + 1 :]
     assert all(getattr(chunk, "usage", None) is not None for chunk in post_finish_chunks), post_finish_chunks
     assert [chunk.usage.cost for chunk in post_finish_chunks] == ([0.0000088] if stream_options else [])
+    rebuilt_usage: Final = litellm.stream_chunk_builder(chunks=collected_chunks).usage
+    assert (rebuilt_usage.prompt_tokens, rebuilt_usage.completion_tokens, rebuilt_usage.cost) == (14, 2, 0.0000088)
 
 
 @pytest.mark.parametrize(

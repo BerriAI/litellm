@@ -2402,6 +2402,10 @@ class CustomStreamWrapper:
             dict[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
         )
 
+    def _maybe_set_final_chunk_usage(self, chunk: ModelResponseStream) -> None:
+        if self.sent_last_chunk is True and self.stream_options is None:
+            self._set_final_chunk_usage(chunk)
+
     def __next__(self) -> "ModelResponseStream":
         if self._closed:
             raise StopIteration
@@ -2667,8 +2671,7 @@ class CustomStreamWrapper:
                         self.chunks.append(processed_chunk)
 
                     # add usage as hidden param
-                    if self.sent_last_chunk is True and self.stream_options is None:
-                        self._set_final_chunk_usage(processed_chunk)
+                    self._maybe_set_final_chunk_usage(processed_chunk)
 
                     # Call post-call streaming deployment hook for final chunk
                     if self.sent_last_chunk is True:
@@ -2701,10 +2704,12 @@ class CustomStreamWrapper:
                             not self.send_stream_usage and processed_chunk.choices
                         ):
                             self.chunks.append(processed_chunk)
+                            self._maybe_set_final_chunk_usage(processed_chunk)
                             return processed_chunk
                         usage_free_chunk = self._record_and_strip_usage_chunk(processed_chunk)
                         if usage_free_chunk is None:
                             continue
+                        self._maybe_set_final_chunk_usage(usage_free_chunk)
                         return usage_free_chunk
         except (StopAsyncIteration, StopIteration):
             if self._should_fail_on_clean_eof():
