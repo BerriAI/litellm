@@ -1455,15 +1455,14 @@ async def test_a_stream_keeps_reading_after_the_client_that_opened_it_is_collect
 def _self_signed_server_context(directory: Path) -> ssl.SSLContext:
     key: Final = ec.generate_private_key(ec.SECP256R1())
     name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
-    now: Final = datetime.datetime.now(datetime.UTC)
     cert: Final = (
         x509.CertificateBuilder()
         .subject_name(name)
         .issuer_name(name)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(days=1))
-        .not_valid_after(now + datetime.timedelta(days=1))
+        .not_valid_before(datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc))
+        .not_valid_after(datetime.datetime(2027, 1, 1, tzinfo=datetime.timezone.utc))
         .sign(key, hashes.SHA256())
     )
     cert_path: Final = directory / "cert.pem"
@@ -1524,8 +1523,7 @@ def test_closing_a_tls_stream_mid_body_on_uvloop_drops_the_connection_at_once(
             await session.close()
 
     try:
-        with asyncio.Runner(loop_factory=uvloop.new_event_loop) as runner:
-            assert runner.run(scenario()), "the closed stream kept reading the server's body"
+        assert uvloop.run(scenario()), "the closed stream kept reading the server's body"
     finally:
         server.shutdown()
         server.server_close()
