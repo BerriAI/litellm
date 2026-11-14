@@ -26,7 +26,10 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
-from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+    supports_openai_prompt_cache_breakpoint,
+)
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_allowed_tools_tool_choice,
     responses_allowed_tools_tool_choice,
@@ -195,6 +198,24 @@ def _supports_audio_input(model: str, litellm_params: Mapping[str, object]) -> b
         isinstance(base_model, str)
         and bool(base_model)
         and litellm.supports_audio_input(model=base_model, custom_llm_provider=provider)
+    )
+
+
+class _PromptCacheRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    prompt_cache_options: object = None
+
+
+def _reads_prompt_cache_breakpoints(
+    model: str, litellm_params: Mapping[str, object], prompt_cache_options: object
+) -> bool:
+    provider: Final = _served_provider(litellm_params)
+    api_base: Final = litellm_params.get("api_base") or litellm_params.get("base_url")
+    base_model: Final = litellm_params.get("base_model")
+    named_models: Final = (model, base_model) if isinstance(base_model, str) and base_model else (model,)
+    return any(
+        AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(name, provider, api_base, prompt_cache_options)
+        for name in named_models
     )
 
 
@@ -1156,8 +1177,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and bool(base_model)
             and supports_openai_prompt_cache_breakpoint(base_model, provider)
         )
+        bridged_messages: Final = (
+            [AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages]
+            if supports_prompt_cache_breakpoint
+            and _reads_prompt_cache_breakpoints(
+                model, litellm_params, _PromptCacheRequest.model_validate(optional_params).prompt_cache_options
+            )
+            else messages
+        )
         converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
-            messages,
+            bridged_messages,
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
