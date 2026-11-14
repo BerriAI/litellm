@@ -9,12 +9,12 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
 
-import litellm
 from litellm.proxy import common_request_processing, proxy_server
 from litellm.types.router import RouterErrors
 
@@ -56,15 +56,14 @@ def patched_completion(monkeypatch):
 
 
 @pytest.fixture
-def completion_pipeline_raises(request, monkeypatch):
-    failure = getattr(request, "param", ValueError("boom"))
+def completion_pipeline_raises(monkeypatch):
     monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
     monkeypatch.setattr(
         proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock())
     )
 
     async def _raise(self, *args, **kwargs):
-        raise failure
+        raise ValueError("boom")
 
     monkeypatch.setattr(
         common_request_processing.ProxyBaseLLMRequestProcessing,
@@ -130,30 +129,17 @@ def test_completion_pipeline_error(client, auth_as, completion_pipeline_raises, 
     assert response.headers.get("content-type", "").startswith("application/json")
 
 
-_STREAM_CUT_BEFORE_THE_FIRST_CHUNK = litellm.APIConnectionError(
-    message=(
-        "Azure_textException APIConnectionError - Response payload is not completed\n"
-        "Traceback (most recent call last):\n"
-        '  File "/usr/local/lib/python3.13/site-packages/litellm/litellm_core_utils/streaming_handler.py", '
-        "line 2363, in __anext__\n"
-        "httpx.ReadError: Response payload is not completed"
-    ),
-    llm_provider="azure_text",
-    model="gpt-3.5-turbo-instruct",
-)
-
-
-@pytest.mark.parametrize("completion_pipeline_raises", [_STREAM_CUT_BEFORE_THE_FIRST_CHUNK], indirect=True)
-def test_a_stream_cut_before_the_first_chunk_answers_without_the_servers_traceback(
-    client, auth_as, completion_pipeline_raises
-):
+def test_an_azure_text_stream_cut_answers_the_client_with_the_error_line_alone(client, auth_as, azure_stream_cut):
     payload = {"model": "gpt-3.5-turbo-instruct", "prompt": "hi", "stream": True}
     with auth_as():
         response = client.post("/v1/completions", json=payload)
-    assert response.status_code == 500
-    assert response.json()["error"]["message"] == (
-        "litellm.APIConnectionError: Azure_textException APIConnectionError - Response payload is not completed"
+    _, error_frame, done = response.text.removesuffix("\n\n").split("\n\n")
+    assert response.status_code == 200
+    assert json.loads(error_frame.removeprefix("data: "))["error"]["message"] == (
+        "litellm.MidStreamFallbackError: litellm.APIConnectionError: "
+        "Azure_textException APIConnectionError - Response payload is not completed"
     )
+    assert done == "data: [DONE]"
 
 
 @pytest.mark.parametrize(

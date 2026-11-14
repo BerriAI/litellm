@@ -1880,7 +1880,7 @@ def test_an_azure_stream_cut_maps_to_the_error_line_without_a_traceback(
     assert "test_exception_mapping_utils.py" not in str(raised.value)
 
 
-CONTEXT_WINDOW_MESSAGE ="This model's maximum context length is 4096 tokens."
+CONTEXT_WINDOW_MESSAGE = "This model's maximum context length is 4096 tokens."
 CONTENT_POLICY_MESSAGE = '{"error": {"type": "invalid_request_error", "code": "content_policy_violation"}}'
 TIMEOUT_MESSAGE = "Request timed out."
 
