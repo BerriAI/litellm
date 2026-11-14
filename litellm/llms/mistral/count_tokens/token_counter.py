@@ -31,6 +31,7 @@ from litellm.llms.mistral.count_tokens.handler import (
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
     ResponsesCountRequestParts,
+    chat_content_blocks_to_responses_content,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
@@ -116,18 +117,24 @@ def _file_id(block: object) -> str | None:
             return None
 
 
-def _file_id_parts(message: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
-    blocks: Final = parts_of(message.get("content")) if message.get("role") == "user" else ()
-    file_ids: Final = tuple(file_id for file_id in map(_file_id, blocks) if file_id is not None)
-    return tuple({"type": "input_file", "file_id": file_id} for file_id in file_ids)
+def _is_file_id_block(block: object) -> bool:
+    return _file_id(block) is not None
 
 
-def _chat_drops_turn(message: Mapping[str, object]) -> bool:
-    return (
-        message.get("role") == "assistant"
-        and message.get("content") in (None, "")
-        and message.get("tool_calls") is None
-    )
+def _sends_file_ids(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "user" and any(map(_is_file_id_block, parts_of(message.get("content"))))
+
+
+def _run_parts(is_file_id: bool, run: Iterable[object]) -> tuple[object, ...]:
+    blocks: Final = tuple(run)
+    if is_file_id:
+        return tuple({"type": "input_file", "file_id": _file_id(block)} for block in blocks)
+    return _input_content_parts(chat_content_blocks_to_responses_content(blocks, "user"))
+
+
+def _user_parts_in_order(content: object) -> tuple[object, ...]:
+    runs: Final = groupby(parts_of(content), key=_is_file_id_block)
+    return tuple(chain.from_iterable(_run_parts(is_file_id, run) for is_file_id, run in runs))
 
 
 def _replayed_reasoning_items(message: Mapping[str, object], keeps_reasoning: bool) -> tuple[Mapping[str, object], ...]:
@@ -178,11 +185,30 @@ def _joined_run(is_text: bool, run: Iterable[object]) -> tuple[object, ...]:
     return ({"type": "text", "text": "".join(map(_part_text, blocks))},) if is_text else blocks
 
 
+def _joined_text_runs(content: object) -> tuple[object, ...]:
+    runs: Final = groupby(parts_of(content), key=_is_text_block)
+    return tuple(chain.from_iterable(_joined_run(is_text, run) for is_text, run in runs))
+
+
+def _with_joined_tool_result_text(block: object) -> object:
+    tool_result: Final = as_str_mapping(block)
+    if tool_result is None or tool_result.get("type") != "tool_result":
+        return block
+    if not isinstance(tool_result.get("content"), list):
+        return block
+    return {**tool_result, "content": list(_joined_text_runs(tool_result.get("content")))}
+
+
+def _with_tool_result_text_joins(message: Mapping[str, object]) -> Mapping[str, object]:
+    if not isinstance(message.get("content"), list):
+        return message
+    return {**message, "content": list(map(_with_joined_tool_result_text, parts_of(message.get("content"))))}
+
+
 def _with_chat_text_joins(message: Mapping[str, object]) -> Mapping[str, object]:
     if not isinstance(message.get("content"), list):
         return message
-    runs: Final = groupby(parts_of(message.get("content")), key=_is_text_block)
-    blocks: Final = tuple(chain.from_iterable(_joined_run(is_text, run) for is_text, run in runs))
+    blocks: Final = _joined_text_runs(message.get("content"))
     match blocks:
         case ({"type": "text", "text": str(text)},):
             return {**message, "content": text}
@@ -193,11 +219,11 @@ def _with_chat_text_joins(message: Mapping[str, object]) -> Mapping[str, object]
 def _chat_message_items(message: Mapping[str, object], keeps_reasoning: bool) -> tuple[Mapping[str, object], ...]:
     if _is_system_turn(message):
         return ({"role": "system", "content": _system_text(message.get("content"))},)
-    items, _ = OpenAICountTokensConfig.messages_to_responses_input((_with_chat_text_joins(message),))
-    file_parts: Final = _file_id_parts(message)
+    joined_message: Final = _with_chat_text_joins(message)
+    items, _ = OpenAICountTokensConfig.messages_to_responses_input((joined_message,))
     sent_items: Final = (
-        tuple({**item, "content": [*_input_content_parts(item.get("content")), *file_parts]} for item in items)
-        if file_parts
+        tuple({**item, "content": _user_parts_in_order(joined_message.get("content"))} for item in items)
+        if _sends_file_ids(message)
         else tuple(items)
     )
     return (*_replayed_reasoning_items(message, keeps_reasoning), *sent_items)
@@ -242,15 +268,20 @@ class MistralTokenCounter(BaseTokenCounter):
         match messages_format:
             case "anthropic":
                 return OpenAICountTokensConfig.anthropic_messages_to_responses_input(
-                    model=model_to_use, messages=messages, system=system, tools=tools, output_format=output_format
+                    model=model_to_use,
+                    messages=tuple(map(_with_tool_result_text_joins, messages)),
+                    system=system,
+                    tools=tools,
+                    output_format=output_format,
                 )
             case "openai":
                 keeps_reasoning: Final = _MISTRAL_CHAT_CONFIG.accepts_reasoning(model_to_use)
+                sent_turns: Final = _MISTRAL_CHAT_CONFIG.sent_turns(messages, model_to_use)
                 input_items: Final = tuple(
                     chain.from_iterable(
                         _chat_message_items(message, keeps_reasoning)
-                        for message in messages
-                        if not _chat_drops_turn(message)
+                        for message, is_sent in zip(messages, sent_turns, strict=True)
+                        if is_sent
                     )
                 )
                 return OpenAICountTokensConfig.count_request_parts(

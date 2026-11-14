@@ -405,8 +405,11 @@ def test_valid_tool_result_text_reaches_the_upstream(gateway: Gateway, provider:
             assert _function_call_output(_only(requests, "/responses")) == f"{_WEATHER}\n"
             assert _function_call_output(_only(requests, "/responses/input_tokens")) == f"{_WEATHER}\n"
         else:
-            assert _tool_message_text(_only(requests, "/chat/completions")) == _WEATHER
-            assert _function_call_output(_only(requests, "/responses/input_tokens")) == f"{_WEATHER}\n"
+            assert (
+                _function_call_output(_only(requests, "/responses/input_tokens"))
+                == _tool_message_text(_only(requests, "/chat/completions"))
+                == _WEATHER
+            )
 
 
 def _rewritten(content: JsonValue, rewrite: Callable[[str], str]) -> JsonValue:

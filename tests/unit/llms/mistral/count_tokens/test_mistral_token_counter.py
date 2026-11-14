@@ -12,7 +12,7 @@ from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.llms.mistral.chat.transformation import MistralConfig
 from litellm.llms.mistral.count_tokens.token_counter import MistralTokenCounter
 from litellm.llms.mistral.count_tokens.transformation import MistralCountTokensConfig
-from litellm.types.utils import TokenCountResponse
+from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 
 COUNT_URL: Final = "https://api.mistral.ai/v1/responses/input_tokens"
 
@@ -622,6 +622,7 @@ async def _sent_count_body(
     messages: list[dict[str, object]],
     tools: list[dict[str, object]] | None = None,
     chat_params: dict[str, JsonValue] | None = None,
+    messages_format: TokenCountMessagesFormat = "openai",
 ) -> Mapping[str, object]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
@@ -636,6 +637,7 @@ async def _sent_count_body(
             request_model=f"mistral/{model}",
             tools=tools,
             chat_params=chat_params or {},
+            messages_format=messages_format,
         )
     assert result is not None and result.total_tokens == 3
     return decoded_json_object(json.loads(route.calls.last.request.content))
@@ -974,3 +976,111 @@ async def test_count_tokens_joins_text_blocks_the_way_mistral_chat_does(monkeypa
         "Look it up.",
         "Release on Monday.",
     ]
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_keeps_file_ids_where_mistral_chat_sends_them(monkeypatch: pytest.MonkeyPatch) -> None:
+    messages: Final[list[dict[str, object]]] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Compare"},
+                {"type": "file", "file": {"file_id": "file-release-notes"}},
+                {"type": "text", "text": "with the plan"},
+            ],
+        }
+    ]
+    chat_sent: Final = _chat_messages("mistral-large-4", messages, {})
+    sent_input: Final = await _sent_count_input(monkeypatch, "mistral-large-4", messages)
+
+    assert chat_sent == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Compare"},
+                {"type": "file", "file_id": "file-release-notes"},
+                {"type": "text", "text": "with the plan"},
+            ],
+        }
+    ]
+    assert sent_input == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Compare"},
+                {"type": "input_file", "file_id": "file-release-notes"},
+                {"type": "input_text", "text": "with the plan"},
+            ],
+        }
+    ]
+
+
+_CAPITALS_ASKED: Final = (
+    {"role": "user", "content": "Capital of France?"},
+    {"role": "assistant", "content": "Paris."},
+    {"role": "user", "content": "And of Spain?"},
+)
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [
+            {"role": "system", "content": ""},
+            _CAPITALS_ASKED[0],
+            {"role": "user", "content": ""},
+            _CAPITALS_ASKED[1],
+            {"role": "user", "content": "", "name": "reviewer"},
+            _CAPITALS_ASKED[2],
+        ],
+        [
+            _CAPITALS_ASKED[0],
+            {"role": "tool", "tool_call_id": "call_never_made", "content": ""},
+            _CAPITALS_ASKED[1],
+            _CAPITALS_ASKED[2],
+        ],
+    ],
+    ids=["empty_system_and_user_turns", "empty_reply_to_no_tool_call"],
+)
+@pytest.mark.asyncio
+async def test_count_tokens_drops_the_empty_turns_mistral_chat_drops(
+    monkeypatch: pytest.MonkeyPatch, messages: list[dict[str, object]]
+) -> None:
+    chat_sent: Final = _chat_messages("mistral-large-4", messages, {})
+    sent_input: Final = await _sent_count_input(monkeypatch, "mistral-large-4", messages)
+
+    assert sent_input == chat_sent == list(_CAPITALS_ASKED)
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_joins_anthropic_tool_result_text_the_way_mistral_chat_does(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "What's the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": [{"type": "text", "text": "sunny, "}, {"type": "text", "text": "21C"}],
+                }
+            ],
+        },
+    ]
+    sent: Final = await _sent_count_body(
+        monkeypatch,
+        "mistral-large-4",
+        messages,
+        tools=[{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}],
+        messages_format="anthropic",
+    )
+
+    sent_input: Final = sent["input"]
+    assert isinstance(sent_input, list)
+    assert {"type": "function_call_output", "call_id": "toolu_1", "output": "sunny, 21C"} in sent_input
