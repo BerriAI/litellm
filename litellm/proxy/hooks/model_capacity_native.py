@@ -1,12 +1,14 @@
+import asyncio
 import logging
 import os
 from collections.abc import Awaitable, Callable, Mapping
-from contextlib import nullcontext
+from contextlib import AbstractAsyncContextManager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from itertools import count
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from weakref import WeakKeyDictionary
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -104,6 +106,21 @@ class LiveRequest:
 
 
 _LIVE: Final[ContextVar[LiveRequest | None]] = ContextVar("native_model_capacity_live", default=None)
+
+
+_ADMISSIONS: Final[WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]] = WeakKeyDictionary()
+
+
+def _admission(limiter: PROXY_MaxParallelRequestsHandler_v3) -> AbstractAsyncContextManager[object]:
+    if limiter.rate_limits.has_redis:
+        return nullcontext()
+    loop: Final = asyncio.get_running_loop()
+    lock: Final = _ADMISSIONS.get(loop)
+    if lock is not None:
+        return lock
+    created: Final = asyncio.Lock()
+    _ADMISSIONS[loop] = created
+    return created
 
 
 def _live() -> LiveRequest:
@@ -719,7 +736,10 @@ class NativeDynamicRateLimiter(RustLogger):
                             "Error in dynamic rate limiter v3 post-call hook: %s", error, exc_info=error
                         )
                     return None
-                return await super().run_rust(hook, reads, view, ctx)
+                if hook is not Hook.pre_call:
+                    return await super().run_rust(hook, reads, view, ctx)
+                async with _admission(self.v3_limiter):
+                    return await super().run_rust(hook, reads, view, ctx)
         finally:
             _LIVE.reset(token)
 
@@ -747,9 +767,10 @@ class NativeDynamicRateLimiter(RustLogger):
         live: Final = LiveRequest(data={**request_data, "model": model}, auth=user_api_key_dict, state=state)
         token: Final = _LIVE.set(live)
         try:
-            answer: Final = await self.capacity.fallback_target_allowed(
-                state, key_inputs(user_api_key_dict), model, commit
-            )
+            async with _admission(self.v3_limiter):
+                answer: Final = await self.capacity.fallback_target_allowed(
+                    state, key_inputs(user_api_key_dict), model, commit
+                )
         finally:
             _LIVE.reset(token)
         return _native_answer(answer, live).get("allowed") is True
@@ -763,7 +784,8 @@ class NativeDynamicRateLimiter(RustLogger):
         live: Final = LiveRequest(auth=user_api_key_dict, state=state)
         token: Final = _LIVE.set(live)
         try:
-            answer: Final = await self.capacity.enforce_frame(state, key_inputs(user_api_key_dict), requested_model)
+            async with _admission(self.v3_limiter):
+                answer: Final = await self.capacity.enforce_frame(state, key_inputs(user_api_key_dict), requested_model)
         finally:
             _LIVE.reset(token)
         raised_token: Final = answer.get("raised")
