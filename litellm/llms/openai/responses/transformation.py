@@ -523,6 +523,22 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     status_code=400,
                 )
 
+        o_series_temperature: Final = params.get("temperature")
+        if (
+            self.custom_llm_provider == LlmProviders.OPENAI
+            and o_series_temperature not in (None, 1)
+            and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
+        ):
+            if not (drop_params or litellm.drop_params):
+                raise litellm.UnsupportedParamsError(
+                    message=(
+                        f"O-series models don't support temperature={o_series_temperature}. Only temperature=1 is "
+                        "supported. To drop unsupported params set `litellm.drop_params = True`"
+                    ),
+                    status_code=400,
+                )
+            params.pop("temperature", None)
+
         lookup_name: Final = self._model_map_lookup_name(model)
         if self._is_gpt_5_model(model=lookup_name):
             reasoning: Final = params.get("reasoning") or {}
