@@ -22,6 +22,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing on
 import litellm
 from litellm import verbose_logger
 from litellm.constants import REDACTED_BY_LITELLM
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
@@ -1004,8 +1005,14 @@ def _is_json_object(
     return isinstance(value, dict)
 
 
-class MalformedDefsError(ValueError):
-    pass
+class MalformedDefsError(BadRequestError):
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(
+            message=f"Tool schema $defs and definitions must be JSON objects that map names to schemas: {reason}",
+            model=None,
+            llm_provider=None,
+        )
 
 
 def _defs_object(node: Mapping[str, object], key: str) -> Mapping[str, object]:

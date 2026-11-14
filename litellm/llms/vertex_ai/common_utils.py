@@ -806,7 +806,7 @@ def build_vertex_schema_within_budget(
     except MalformedDefsError as e:
         raise VertexAIError(
             status_code=400,
-            message=f"The $defs and definitions of {schema_name} must be JSON objects that map names to schemas: {e}.",
+            message=f"The $defs and definitions of {schema_name} must be JSON objects that map names to schemas: {e.reason}.",
         ) from e
 
     _convert_schema_types(parameters)
