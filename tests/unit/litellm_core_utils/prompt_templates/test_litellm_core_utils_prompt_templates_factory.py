@@ -8335,6 +8335,50 @@ def test_anthropic_messages_pt_replays_a_recorded_block_order_with_text_back_in_
     ]
 
 
+@pytest.mark.parametrize(
+    "parts",
+    [
+        [{"type": "text", "text": "Plan first. The answer is 42."}],
+        [{"type": "text", "text": "Plan first. "}, {"type": "text", "text": "The answer is 42."}],
+    ],
+    ids=["one_part", "split_parts"],
+)
+@pytest.mark.parametrize("recorded", [True, False], ids=["recorded_order", "no_order"])
+def test_anthropic_messages_pt_replays_text_parts_content_like_the_string_it_came_from(parts, recorded):
+    turn: Final = _recorded_search_turn() if recorded else _without_block_order(_recorded_search_turn())
+    replayed: Final = _replayed_assistant_content({**turn, "content": parts})
+
+    assert replayed == _replayed_assistant_content(turn)
+    assert not any(
+        {first["type"], second["type"]} == {"thinking"} for first, second in zip(replayed, replayed[1:])
+    )
+
+
+def test_anthropic_messages_pt_sends_no_empty_text_block_when_a_recorded_search_turn_ends_the_conversation():
+    turn: Final = _with_block_order(
+        [
+            {"type": "thinking"},
+            {"type": "text", "length": 12},
+            {"type": "thinking"},
+            {"type": "server_tool_use", "id": "srvtoolu_01ONLY"},
+            {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01ONLY"},
+            {"type": "thinking"},
+            {"type": "text", "length": 3},
+            {"type": "text", "length": 1},
+            {"type": "text", "length": 13},
+        ]
+    )
+    replayed: Final = anthropic_messages_pt(
+        [{"role": "user", "content": "What is the answer?"}, turn], model="claude-opus-5-5", llm_provider="anthropic"
+    )
+    content: Final = replayed[-1]["content"]
+    texts: Final = [block["text"] for block in content if block["type"] == "text"]
+
+    assert all(texts)
+    assert texts[-1] == texts[-1].rstrip()
+    assert [block["signature"] for block in content if block["type"] == "thinking"] == ["sig_1", "sig_2", "sig_3"]
+
+
 def test_anthropic_messages_pt_adds_tool_calls_missing_from_the_block_order_at_the_end():
     turn: Final = _recorded_search_turn()
     weather_call: Final = {

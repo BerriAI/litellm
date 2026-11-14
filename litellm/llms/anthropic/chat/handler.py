@@ -751,6 +751,7 @@ class ModelResponseIterator:
         self._current_server_tool_id: str | None = None
         self._container_id: str | None = None
         self._content_block_order: tuple[AnthropicContentBlockOrderEntry, ...] = ()
+        self._open_text_length: int = 0
 
     @property
     def accumulated_json(self) -> str:
@@ -816,7 +817,7 @@ class ModelResponseIterator:
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
 
         if "text" in content_block["delta"]:
-            self._record_text_length(content_block["delta"]["text"])
+            self._open_text_length += len(content_block["delta"]["text"])
             text = content_block["delta"]["text"]
             return text, tool_use, thinking_blocks, provider_specific_fields, reasoning_content
         self.content_blocks.append(content_block)
@@ -878,15 +879,15 @@ class ModelResponseIterator:
             reasoning_content,
         )
 
-    def _record_text_length(self, text: str) -> None:
+    def _content_block_order_so_far(self) -> tuple[AnthropicContentBlockOrderEntry, ...]:
         match self._content_block_order[-1:]:
             case (AnthropicContentBlockOrderEntry(type="text", length=length) as entry,):
-                self._content_block_order = (
+                return (
                     *self._content_block_order[:-1],
-                    entry.model_copy(update={"length": (length or 0) + len(text)}),
+                    entry.model_copy(update={"length": (length or 0) + self._open_text_length}),
                 )
             case _:
-                pass
+                return self._content_block_order
 
     def _handle_redacted_thinking_content(
         self,
@@ -1001,9 +1002,10 @@ class ModelResponseIterator:
                 content_block_start: Final = self.get_content_block_start(chunk=chunk)
                 self.content_blocks = []  # reset content blocks when new block starts
                 self._content_block_order = (
-                    *self._content_block_order,
+                    *self._content_block_order_so_far(),
                     content_block_order_entry(content_block_start["content_block"]),
                 )
+                self._open_text_length = 0
                 # Track current content block type for filtering deltas
                 self.current_content_block_type = content_block_start["content_block"]["type"]
                 if self.current_content_block_type in _THINKING_BLOCK_TYPES:
@@ -1143,7 +1145,7 @@ class ModelResponseIterator:
             elif type_chunk == "message_delta":
                 finish_reason, usage, container, refusal_fields = self._handle_message_delta(chunk)
                 provider_specific_fields.update(refusal_fields)
-                block_order: Final = recorded_content_block_order(self._content_block_order)
+                block_order: Final = recorded_content_block_order(self._content_block_order_so_far())
                 if block_order is not None:
                     provider_specific_fields["content_block_order"] = block_order
                 text = self._release_answer_close() + self._drain_split_answer_blocks()
