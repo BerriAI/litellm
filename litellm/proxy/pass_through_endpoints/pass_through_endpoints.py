@@ -3175,8 +3175,9 @@ class _WebsocketTurnLedger:
         self.unstarted_turns = 0
         self.frame_grant: _TurnAuthorization | None = None
 
-    def grant_frame_access_groups(self, access_groups: tuple[str, ...]) -> None:
-        self.frame_grant = _TurnAuthorization(requested_model=None, access_groups=access_groups)
+    def record_opening_frame_grant(self, access_groups: tuple[str, ...]) -> None:
+        if self.frame_grant is None:
+            self.frame_grant = _TurnAuthorization(requested_model=None, access_groups=access_groups)
 
     def current(self, lane: str | None) -> _TurnAuthorization:
         oldest: Final = next(iter(self.queued_turns.get(lane, ())), None)
@@ -3271,7 +3272,7 @@ async def _relay_client_frame(
     if verdict.starts_turn:
         ledger.queue_turn(verdict.lane, verdict.turn)
     if isinstance(frame_verdict, ClientFrameGrant):
-        ledger.grant_frame_access_groups(frame_verdict.access_groups)
+        ledger.record_opening_frame_grant(frame_verdict.access_groups)
     await upstream_ws.send(forwarded_frame)
     return verdict
 

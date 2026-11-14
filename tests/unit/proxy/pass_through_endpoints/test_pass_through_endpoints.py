@@ -9202,6 +9202,44 @@ async def test_vertex_live_session_is_charged_to_the_access_groups_its_setup_mod
     assert metadata[MODEL_ACCESS_GROUP_METADATA_KEY] == ["tier-a"]
 
 
+@pytest.mark.asyncio
+async def test_vertex_live_later_setup_cannot_move_the_session_charge_to_another_access_group() -> None:
+    """
+    The session is billed in one row at its end, so a later allowed setup naming a model granted through another
+    group must not move the turns the opening setup's group already allowed onto that other group
+    """
+    upstream_ws: Final = ScriptedFramesUpstreamWebSocket(
+        (
+            json.dumps({"setupComplete": {}}),
+            json.dumps({"serverContent": {"turnComplete": True}, "usageMetadata": {"totalTokenCount": 60}}),
+        )
+    )
+
+    async def client_frames() -> AsyncIterator[dict[str, str]]:
+        yield _setup_frame("gemini-live-2.5-flash")
+        await upstream_ws.sent_every_frame.wait()
+        yield _setup_frame("gemini-3-pro-live")
+        yield {"type": "websocket.disconnect"}
+
+    session_token: Final = UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash", "gemini-3-pro-live"])
+    groups_by_model: Final = MappingProxyType({"gemini-live-2.5-flash": ["budgeted"], "gemini-3-pro-live": ["open"]})
+
+    async def authorize_model(model: str) -> UserAPIKeyAuth:
+        return session_token.model_copy(update={"matched_model_access_groups": groups_by_model[model]})
+
+    _, environment = await _run_vertex_live_gated_session(
+        _client_websocket(client_frames().__anext__),
+        upstream_ws,
+        session_token,
+        _vertex_live_router(),
+        authorize_model,
+    )
+
+    assert upstream_ws.send.await_count == 2
+    metadata: Final = environment.success_handler.call_args.kwargs["litellm_params"]["metadata"]
+    assert metadata[MODEL_ACCESS_GROUP_METADATA_KEY] == ["budgeted"]
+
+
 class StreamingUpstreamWebSocket(ScriptedFramesUpstreamWebSocket):
     """An upstream that sends the given frames in order, then keeps streaming model output until it is closed"""
 
