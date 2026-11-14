@@ -967,7 +967,7 @@ async def test_gateway_served_names_leaves_out_a_name_whose_toolset_read_fails()
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-        patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", MCPServerManager()),
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager", MCPServerManager()),
     ):
         served: Final = await _gateway_served_names({"research"}, servers=lambda: ())
 
