@@ -2150,7 +2150,9 @@ def _gemini_tts_audio_event(audio_base64: str) -> dict[str, object]:
 def test_gemini_tts_stream_carries_audio_in_delta_and_rebuilds_full_clip(respx_mock: respx.MockRouter) -> None:
     first_audio: Final = base64.b64encode(b"\x01\x02\x03").decode()
     second_audio: Final = base64.b64encode(b"\x04\x05").decode()
-    respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash-preview-tts:streamGenerateContent?alt=sse").mock(
+    respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1alpha/models/gemini-3.8-flash-tts:streamGenerateContent?alt=sse"
+    ).mock(
         return_value=_gemini_sse(
             _gemini_tts_audio_event(first_audio),
             _gemini_tts_audio_event(second_audio),
@@ -2165,7 +2167,7 @@ def test_gemini_tts_stream_carries_audio_in_delta_and_rebuilds_full_clip(respx_m
 
     chunks: Final = list(
         litellm.completion(
-            model="gemini/gemini-2.5-flash-preview-tts",
+            model="gemini/gemini-3.8-flash-tts",
             messages=[{"role": "user", "content": "Say hello"}],
             modalities=["audio"],
             audio={"voice": "Kore", "format": "pcm16"},

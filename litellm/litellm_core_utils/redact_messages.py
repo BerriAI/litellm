@@ -203,6 +203,8 @@ def _redact_choice_content(choice):
             choice.message.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
+        if getattr(choice.message, "audio", None) is not None:
+            choice.message.audio = None  # rebind-ok: redacts the logging copy in place like its sibling fields
         _redact_provider_specific_fields(choice.message)
         _redact_tool_calls(getattr(choice.message, "tool_calls", None))
         _redact_function_call(getattr(choice.message, "function_call", None))
@@ -213,6 +215,8 @@ def _redact_choice_content(choice):
             choice.delta.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
+        if getattr(choice.delta, "audio", None) is not None:
+            choice.delta.audio = None  # rebind-ok: redacts the logging copy in place like its sibling fields
         _redact_provider_specific_fields(choice.delta)
         _redact_tool_calls(getattr(choice.delta, "tool_calls", None))
         _redact_function_call(getattr(choice.delta, "function_call", None))
