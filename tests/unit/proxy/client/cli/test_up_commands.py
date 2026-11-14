@@ -285,7 +285,7 @@ def _capture_login(monkeypatch, on_login=lambda: None):
     login_calls = []
 
     @click.pass_context
-    def fake_login(ctx, config_claude=False, pkce=False):
+    def fake_login(ctx, config_claude=False, pkce=False, team=None):
         assert config_claude is False, "`lite up` patches settings itself; the login it starts must not also configure"
         login_calls.append((ctx.obj["base_url"], pkce))
         on_login()

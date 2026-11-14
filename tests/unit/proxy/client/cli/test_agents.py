@@ -2847,7 +2847,7 @@ class TestAgentCommands:
 
         @click.command()
         @click.option("--pkce", is_flag=True, default=None)
-        def fake_login(pkce):
+        def fake_login(pkce, team=None):
             pass
 
         with (
@@ -2891,7 +2891,7 @@ class TestAgentCommands:
 
         @click.command()
         @click.option("--pkce", is_flag=True, default=None)
-        def fake_login(pkce):
+        def fake_login(pkce, team=None):
             logins.append(pkce)
 
         with (
