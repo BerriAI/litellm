@@ -74,9 +74,9 @@ def _resolve_audit_log_callback(name: str) -> CustomLogger | None:
 
     instance: CustomLogger | None
     if name == "s3_v2" and getattr(litellm, "s3_audit_callback_params", None) is not None:
-        from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
+        from litellm.integrations.s3_v3 import new_s3_v2_logger
 
-        instance = S3V2Logger(s3_callback_params_override=litellm.s3_audit_callback_params)
+        instance = new_s3_v2_logger(s3_callback_params_override=litellm.s3_audit_callback_params)
     else:
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
@@ -91,6 +91,12 @@ def _resolve_audit_log_callback(name: str) -> CustomLogger | None:
     if instance is not None:
         _audit_log_callback_cache[name] = instance
     return instance
+
+
+def _is_native_s3_v2(resolved: object) -> bool:
+    from litellm.integrations.s3_v3 import S3LoggerV3
+
+    return isinstance(resolved, S3LoggerV3)
 
 
 def reset_audit_log_callback_cache() -> None:
@@ -203,7 +209,7 @@ async def _dispatch_audit_log_to_callbacks(
                     verbose_proxy_logger.warning("Could not resolve audit log callback: %s", callback)
                     continue
 
-            if isinstance(resolved, CustomLogger):
+            if isinstance(resolved, CustomLogger) or _is_native_s3_v2(resolved):
                 track_audit_task(
                     asyncio.create_task(
                         resolved.async_log_audit_log_event(payload),

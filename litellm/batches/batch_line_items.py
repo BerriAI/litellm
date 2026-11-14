@@ -239,8 +239,10 @@ async def _deliver(
 
 
 def _resolve_logger(callback: litellm.CALLBACK_TYPES) -> CustomLogger | None:
+    from litellm.integrations.s3_v3 import S3LoggerV3
+
     match callback:
-        case CustomLogger():
+        case CustomLogger() | S3LoggerV3():
             return callback
         case "s3_v2" | "gcs_bucket":
             return init_custom_logger_compatible_class(callback, internal_usage_cache=None, llm_router=None)
