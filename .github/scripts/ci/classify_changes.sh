@@ -19,16 +19,16 @@ while IFS= read -r file || [ -n "$file" ]; do
   esac
   case "$file" in
     *.md | *.mdx) : ;;
-    pyproject.toml | */pyproject.toml | uv.lock | uv.toml | .python-version | rust-toolchain.toml | litellm-rust/* | litellm/__init__.py | litellm/proxy/proxy_server.py | litellm/*mcp* | tests/*mcp* | litellm/integrations/arize/* | tests/base_sdk_tests/* | scripts/check_mcp_sdk_install.py | .github/workflows/test-mcp-dependency-resolution.yml | .github/actions/detect-changes/* | .github/actions/setup-uv-with-retries/* | .github/actions/cache-cargo-build/* | .github/scripts/detect_changes.sh | .github/scripts/uv_sync_with_retries.sh | .github/scripts/ci/classify_changes.sh | tests/unit/test_ci_path_filter.py | tests/unit/test_detect_changes.py)
+    pyproject.toml | */pyproject.toml | uv.lock | uv.toml | .python-version | litellm/rust/* | litellm/__init__.py | litellm/proxy/proxy_server.py | litellm/*mcp* | tests/*mcp* | litellm/integrations/arize/* | tests/base_sdk_tests/* | litellm/scripts/check_mcp_sdk_install.py | .github/workflows/test-mcp-dependency-resolution.yml | .github/actions/detect-changes/* | .github/actions/setup-uv-with-retries/* | .github/actions/cache-cargo-build/* | .github/scripts/detect_changes.sh | .github/scripts/uv_sync_with_retries.sh | .github/scripts/ci/classify_changes.sh | tests/unit/test_ci_path_filter.py | tests/unit/test_detect_changes.py)
       has_mcp_dependencies=true ;;
   esac
   case "$file" in
-    litellm-rust/* | litellm/rust_bridge/* | rust-toolchain.toml | pyproject.toml | uv.lock | tests/windows_tests/* | .github/scripts/ci/* | .github/actions/*)
+    litellm/rust/* | litellm/rust_bridge/* | pyproject.toml | uv.lock | tests/windows_tests/* | .github/scripts/ci/* | .github/actions/*)
       has_windows_release=true ;;
   esac
   case "$file" in
-    ui/* | tests/e2e/ui/*) has_client=true ;;
-    docs/* | *.md | *.mdx) : ;;
+    litellm/ui/* | tests/e2e/ui/*) has_client=true ;;
+    *.md | *.mdx) : ;;
     .github/*) has_ci=true; has_backend=true ;;
     *) has_backend=true ;;
   esac

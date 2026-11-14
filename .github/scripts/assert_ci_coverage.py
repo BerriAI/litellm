@@ -27,11 +27,11 @@ TEST_PATH_KEYS = frozenset({"test-path", "test-paths", "test_path"})
 DOCKERFILE_INPUT_KEYS = frozenset({"file", "dockerfile"})
 TEST_RUNNER_RE = re.compile(r"\bpytest\b|\bhelm unittest\b|\bplaywright test\b|\bpython[0-9.]*\s")
 IMAGE_BUILD_RE = re.compile(r"\bdocker\s+(?:buildx\s+)?build\b")
-TEST_TOKEN_RE = re.compile(r"tests/[A-Za-z0-9_./*?-]+")
-IGNORE_ARG_RE: Final = re.compile(r"--ignore(?:-glob)?[= ](\S+)")
+TEST_TOKEN_RE = re.compile(r"tests/[A-Za-z0-9_./*?\[\]-]+")
+IGNORE_ARG_RE: Final = re.compile(r"--(?:ignore(?:-glob)?|deselect)[= ](\S+)")
 DOCKERFILE_TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]*Dockerfile[A-Za-z0-9_.-]*")
 COMMENT_RE = re.compile(r"^\s*#.*$", re.MULTILINE)
-GLOB_CHARS = frozenset("*?")
+GLOB_CHARS = frozenset("*?[")
 DEDICATED_INTEGRATION_WORKFLOWS: Final = MappingProxyType(
     {
         "image-scan.yml": "tests/integration/database/image/",

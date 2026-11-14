@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from queue import SimpleQueue
-from typing import Awaitable, Callable, Final, Optional
+from typing import Awaitable, Callable, Final, Literal, Optional
 from urllib.parse import parse_qs
 from unittest.mock import ANY, MagicMock, patch
 
@@ -18,6 +18,7 @@ import openai
 import pytest
 import requests
 from azure.core.pipeline.transport import RequestsTransport
+from typing_extensions import assert_never
 
 import litellm
 from litellm.llms.azure.common_utils import (
@@ -1754,6 +1755,8 @@ def test_azure_v1_api_uses_openai_client(api_version):
     [
         "https://test.openai.azure.com",
         "https://test.openai.azure.com/",
+        "https://test.openai.azure.com/openai",
+        "https://test.openai.azure.com/openai/",
         "https://test.openai.azure.com/openai/v1",
         "https://test.openai.azure.com/openai/v1/",
     ],
@@ -2992,3 +2995,277 @@ def test_image_generation_with_an_api_key_ignores_a_non_callable_azure_ad_token_
 
     assert image_route.calls.last.request.headers["api-key"] == "configured-key"
     assert response.data[0].b64_json == "aGk="
+
+
+_FOUNDRY_PROJECT_ROOT: Final = "https://r.services.ai.azure.com/api/projects/p"
+_CHAT_COMPLETION_BODY: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-5-nano",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    ("api_base", "api_version", "expected_url"),
+    [
+        (f"{_FOUNDRY_PROJECT_ROOT}/openai/v1", None, f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/chat/completions"),
+        (
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/v1?api-version=2025-04-01-preview",
+            None,
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/chat/completions",
+        ),
+        (
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/v1?tenant=example",
+            "2025-04-01-preview",
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/chat/completions?tenant=example",
+        ),
+        (
+            "https://apim.example.com/my-foundry/openai/v1",
+            "none",
+            "https://apim.example.com/my-foundry/openai/v1/chat/completions",
+        ),
+        (
+            "https://apim.example.com/my-foundry/openai",
+            "none",
+            "https://apim.example.com/my-foundry/openai/v1/chat/completions",
+        ),
+        (
+            "https://apim.example.com/team%2Fa/openai",
+            "none",
+            "https://apim.example.com/team%2Fa/openai/v1/chat/completions",
+        ),
+        (
+            "https://apim.example.com/team%3Fa/openai/v1",
+            "none",
+            "https://apim.example.com/team%3Fa/openai/v1/chat/completions",
+        ),
+        (
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/",
+            "2025-04-01-preview",
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/chat/completions",
+        ),
+        (
+            _FOUNDRY_PROJECT_ROOT,
+            "2025-11-15-preview",
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/deployments/model-router/chat/completions?api-version=2025-11-15-preview",
+        ),
+    ],
+)
+def test_chat_on_a_foundry_project_v1_base_sends_no_api_version(
+    respx_mock, api_base: str, api_version: str | None, expected_url: str
+) -> None:
+    route: Final = respx_mock.post().mock(return_value=httpx.Response(200, json=_CHAT_COMPLETION_BODY))
+
+    response: Final = litellm.completion(
+        model="azure/model-router",
+        api_base=api_base,
+        api_key="project-key",
+        api_version=api_version,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert route.calls.last.request.url == httpx.URL(expected_url)
+    assert response.choices[0].message.content == "ok"
+
+
+@pytest.mark.parametrize("model", ["azure/o4-mini", "azure/o_series/model-router"])
+@pytest.mark.parametrize(
+    ("api_base", "api_version"),
+    [
+        (f"{_FOUNDRY_PROJECT_ROOT}/openai/v1", "2025-04-01-preview"),
+        ("https://apim.example.com/my-foundry/openai/v1", "none"),
+    ],
+)
+def test_o_series_chat_on_a_v1_base_sends_no_api_version(
+    respx_mock, model: str, api_base: str, api_version: str
+) -> None:
+    route: Final = respx_mock.post().mock(return_value=httpx.Response(200, json=_CHAT_COMPLETION_BODY))
+
+    response: Final = litellm.completion(
+        model=model,
+        api_base=api_base,
+        api_key="project-key",
+        api_version=api_version,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert route.calls.last.request.url == httpx.URL(f"{api_base}/chat/completions")
+    assert response.choices[0].message.content == "ok"
+
+
+_CHAT_STREAM_BODY: Final = (
+    b'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-5-nano",'
+    b'"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}\n\n'
+    b'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-5-nano",'
+    b'"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+    b"data: [DONE]\n\n"
+)
+
+
+_ChatMode = Literal["sync_stream", "async", "async_stream"]
+
+
+async def _model_router_chat_text(mode: _ChatMode, api_base: str, api_version: str) -> str:
+    messages: Final = [{"role": "user", "content": "hi"}]
+    match mode:
+        case "sync_stream":
+            chunks: Final = litellm.completion(
+                model="azure/model-router",
+                api_base=api_base,
+                api_key="stream-key",
+                api_version=api_version,
+                messages=messages,
+                stream=True,
+            )
+            return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+        case "async":
+            response: Final = await litellm.acompletion(
+                model="azure/model-router",
+                api_base=api_base,
+                api_key="stream-key",
+                api_version=api_version,
+                messages=messages,
+            )
+            return response.choices[0].message.content
+        case "async_stream":
+            async_chunks: Final = await litellm.acompletion(
+                model="azure/model-router",
+                api_base=api_base,
+                api_key="stream-key",
+                api_version=api_version,
+                messages=messages,
+                stream=True,
+            )
+            return "".join([chunk.choices[0].delta.content or "" async for chunk in async_chunks])
+        case _:
+            assert_never(mode)
+
+
+@pytest.mark.parametrize("mode", ["sync_stream", "async", "async_stream"])
+@pytest.mark.parametrize(
+    ("api_base", "api_version"),
+    [
+        (f"{_FOUNDRY_PROJECT_ROOT}/openai/v1", "2025-04-01-preview"),
+        ("https://apim.example.com/my-foundry/openai/v1", "none"),
+    ],
+)
+async def test_async_and_streaming_chat_on_a_v1_base_send_no_api_version(
+    respx_mock, monkeypatch, mode: _ChatMode, api_base: str, api_version: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = (
+        httpx.Response(200, json=_CHAT_COMPLETION_BODY)
+        if mode == "async"
+        else httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_CHAT_STREAM_BODY)
+    )
+    route: Final = respx_mock.post().mock(return_value=upstream)
+
+    text: Final = await _model_router_chat_text(mode, api_base, api_version)
+
+    assert route.calls.last.request.url == httpx.URL(f"{api_base}/chat/completions")
+    assert text == "ok"
+
+
+_EMBEDDING_BODY: Final = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.5]}],
+    "model": "text-embedding-3-small",
+    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+}
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("api_base", "api_version", "expected_url"),
+    [
+        ("https://r.openai.azure.com", "none", "https://r.openai.azure.com/openai/v1/embeddings"),
+        ("https://r.openai.azure.com/openai", "none", "https://r.openai.azure.com/openai/v1/embeddings"),
+        (
+            "https://apim.example.com/my-foundry/openai/v1",
+            "None",
+            "https://apim.example.com/my-foundry/openai/v1/embeddings",
+        ),
+        (
+            "https://r.openai.azure.com",
+            "2025-04-01-preview",
+            "https://r.openai.azure.com/openai/deployments/text-embedding-3-small/embeddings"
+            "?api-version=2025-04-01-preview",
+        ),
+    ],
+)
+async def test_embeddings_send_no_api_version_when_the_deployment_opts_out(
+    respx_mock, monkeypatch, use_async: bool, api_base: str, api_version: str, expected_url: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post().mock(return_value=httpx.Response(200, json=_EMBEDDING_BODY))
+
+    response: Final = (
+        await litellm.aembedding(
+            model="azure/text-embedding-3-small",
+            input=["hi"],
+            api_base=api_base,
+            api_key="embedding-key",
+            api_version=api_version,
+        )
+        if use_async
+        else litellm.embedding(
+            model="azure/text-embedding-3-small",
+            input=["hi"],
+            api_base=api_base,
+            api_key="embedding-key",
+            api_version=api_version,
+        )
+    )
+
+    assert route.calls.last.request.url == httpx.URL(expected_url)
+    assert response.data[0]["embedding"] == [0.5]
+
+
+_TEXT_COMPLETION_BODY: Final = {
+    "id": "cmpl-1",
+    "object": "text_completion",
+    "created": 1,
+    "model": "gpt-35-turbo-instruct",
+    "choices": [{"text": "ok", "index": 0, "logprobs": None, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    ("upstream_body", "call"),
+    [
+        (
+            {"text": "ok"},
+            lambda: litellm.transcription(
+                model="azure/whisper",
+                file=("a.wav", b"RIFF", "audio/wav"),
+                api_base=f"{_FOUNDRY_PROJECT_ROOT}/openai/v1",
+                api_key="project-key",
+                api_version="2025-04-01-preview",
+            ).text,
+        ),
+        (
+            _TEXT_COMPLETION_BODY,
+            lambda: litellm.text_completion(
+                model="azure_text/gpt-35-turbo-instruct",
+                prompt="hi",
+                api_base=f"{_FOUNDRY_PROJECT_ROOT}/openai/v1",
+                api_key="project-key",
+                api_version="2025-04-01-preview",
+            )
+            .choices[0]
+            .text,
+        ),
+    ],
+    ids=["transcription", "azure_text"],
+)
+def test_non_chat_calls_on_a_foundry_project_v1_base_reach_azure(
+    respx_mock, upstream_body: dict[str, object], call: Callable[[], str]
+) -> None:
+    respx_mock.post().mock(return_value=httpx.Response(200, json=upstream_body))
+
+    assert call() == "ok"
+

@@ -13,6 +13,7 @@ from typing import Final
 import httpx
 from pydantic import JsonValue
 
+from litellm.proxy.rust_forward.supervisor import SERVING_WITHOUT_RUST
 from tests.integration._support.client import eventually
 from tests.integration._support.ports import allocate_port
 from tests.integration._support.process import stop_root_process
@@ -111,6 +112,7 @@ def forwarded_proxy(
     ):
         try:
             assert eventually(lambda: _serving(proxy.url), bool, seconds=180), proxy.log.read_text()
+            assert SERVING_WITHOUT_RUST not in proxy.log.read_text(), proxy.log.read_text()
             yield proxy
         finally:
             assert stop_root_process(process), proxy.log.read_text()

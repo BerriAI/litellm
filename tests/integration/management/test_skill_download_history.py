@@ -143,7 +143,7 @@ def test_concurrent_counts_and_keyset_pages_preserve_scope_and_deleted_cursors(g
 
 def test_repeat_migration_is_catalog_only_while_download_tables_are_locked(gateway: Gateway) -> None:
     migration: Final = (Path(__file__).resolve().parents[3] /
-        "litellm-proxy-extras/litellm_proxy_extras/migrations/20261105094500_add_skill_download_history/migration.sql"
+        "litellm/proxy-extras/litellm_proxy_extras/migrations/20261105094500_add_skill_download_history/migration.sql"
     ).read_bytes()
     with gateway.scenario() as scenario:
         name: Final = f"download-{uuid.uuid4().hex}"

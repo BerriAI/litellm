@@ -354,7 +354,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     raise AzureOpenAIError(status_code=422, message="max retries must be an int")
                 # init AzureOpenAI Client
                 azure_client: Final = self.get_azure_openai_client(
-                    api_version=api_version,
+                    api_version=self.chat_client_api_version(api_base, api_version),
                     api_base=api_base,
                     api_key=api_key,
                     model=model,
@@ -433,7 +433,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         try:
             # setting Azure client
             azure_client: Final = self.get_azure_openai_client(
-                api_version=api_version,
+                api_version=self.chat_client_api_version(api_base, api_version),
                 api_base=api_base,
                 api_key=api_key,
                 model=model,
@@ -556,7 +556,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
 
         azure_client: Final = self.get_azure_openai_client(
-            api_version=api_version,
+            api_version=self.chat_client_api_version(api_base, api_version),
             api_base=api_base,
             api_key=api_key,
             model=model,
@@ -615,7 +615,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     ):
         try:
             azure_client: Final = self.get_azure_openai_client(
-                api_version=api_version,
+                api_version=self.chat_client_api_version(api_base, api_version),
                 api_base=api_base,
                 api_key=api_key,
                 model=model,
@@ -695,7 +695,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         response = None
         try:
             openai_aclient: Final = self.get_azure_openai_client(
-                api_version=api_version,
+                api_version=self.opt_out_client_api_version(api_version),
                 api_base=api_base,
                 api_key=api_key,
                 model=model,
@@ -817,7 +817,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     api_version=api_version,
                 )
             azure_client: Final = self.get_azure_openai_client(
-                api_version=api_version,
+                api_version=self.opt_out_client_api_version(api_version),
                 api_base=api_base,
                 api_key=api_key,
                 model=model,

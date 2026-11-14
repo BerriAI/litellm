@@ -1763,11 +1763,11 @@ def _responses_continuation_request(
         responses_continuation_input,
     )
 
+    if source_iterator.started_tool_call:
+        _raise_original_mid_stream_error(e)
     if _mid_stream_error_before_output(e):
         return None
-    if source_iterator.started_tool_call or isinstance(
-        e.original_exception, litellm_exceptions.ContentPolicyViolationError
-    ):
+    if isinstance(e.original_exception, litellm_exceptions.ContentPolicyViolationError):
         _raise_original_mid_stream_error(e)
     cut_deployment_id: Final = (get_hidden_params(source_iterator) or {}).get("model_id")
     if constrains_responses_continuation(_params_sent_to_deployment(attempt, cut_deployment_id)):
