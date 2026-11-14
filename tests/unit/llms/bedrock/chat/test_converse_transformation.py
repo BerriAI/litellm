@@ -5028,6 +5028,60 @@ CAPITAL_RESPONSE_FORMAT: Final = {"type": "json_schema", "json_schema": CAPITAL_
 ADAPTIVE_THINKING: Final = {"type": "adaptive"}
 
 
+@pytest.mark.parametrize("model", ["global.openai.gpt-6-luna", "us.openai.gpt-6-luna", "openai.gpt-6-luna"])
+@pytest.mark.parametrize("native", [False, True])
+def test_luna_native_json_schema_requires_strict_and_preserves_other_fields(
+    set_native_structured_output: Callable[[str, NativeStructuredOutputKey], None], model: str, native: bool
+) -> None:
+    """AWS requires strict for Luna Converse JSON Schema, verified 2026-11-04.
+
+    https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
+    """
+    set_native_structured_output(model, "legacy" if native else None)
+    config: Final = AmazonConverseConfig()
+    params: Final = config.map_openai_params(
+        non_default_params={"response_format": CAPITAL_RESPONSE_FORMAT},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    text_fields: Final = {"verbosity": "low", "format": {"strict": False, "name": "preserved"}}
+    request: Final = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params={**params, "text": text_fields, "reasoning": {"effort": "none"}},
+        litellm_params={},
+        headers={},
+    )
+    assert request.get("additionalModelRequestFields") == {
+        "text": {**text_fields, "format": {**text_fields["format"], "strict": native}},
+        "reasoning": {"effort": "none"},
+    }
+    assert text_fields["format"]["strict"] is False
+    assert ("outputConfig" in request) is native
+
+
+@pytest.mark.parametrize(
+    "model", ["global.openai.gpt-6-luna", "global.openai.gpt-6-sol", "us.anthropic.claude-sonnet-4-6"]
+)
+def test_caller_native_output_config_adds_strict_only_for_luna(model: str) -> None:
+    config: Final = AmazonConverseConfig()
+    output_config: Final = config._create_output_config_for_response_format(
+        json_schema=CAPITAL_RESPONSE_FORMAT["json_schema"]["schema"], name="capital"
+    )
+    request: Final = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params={"outputConfig": output_config},
+        litellm_params={},
+        headers={},
+    )
+    assert request.get("additionalModelRequestFields", {}) == (
+        {"text": {"format": {"strict": True}}} if model == "global.openai.gpt-6-luna" else {}
+    )
+    assert request["outputConfig"] == output_config
+
+
 def _converse_request_for_json_schema(
     model: str,
     stream: bool,

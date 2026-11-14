@@ -2272,6 +2272,14 @@ class AmazonConverseConfig(BaseConfig):
         data: Final[CommonRequestObject] = {
             "inferenceConfig": self._transform_inference_params(inference_params=inference_params),
         }
+        if BedrockModelInfo.get_base_model(model) == "openai.gpt-6-luna" and _has_native_text_format(output_config):
+            native_fields: Final = _JSON_OBJECT.validate_python(additional_request_params)
+            text_fields: Final = _JSON_OBJECT.validate_python(native_fields.get("text", {}))
+            format_fields: Final = _JSON_OBJECT.validate_python(text_fields.get("format", {}))
+            additional_request_params["text"] = {
+                **text_fields,
+                "format": {**format_fields, "strict": True},
+            }
         if additional_request_params:
             data["additionalModelRequestFields"] = additional_request_params
         if "thinking" in additional_request_params or AnthropicModelInfo.thinks_by_default(model, "bedrock"):
