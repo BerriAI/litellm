@@ -970,3 +970,209 @@ async def test_responses_concurrent_reservations_enforce_max_budget(
     assert admitted == expected_admitted
     assert rejected == 10 - expected_admitted
     assert spend_counter_store.get_local(f"spend:key:{token_id}") == pytest.approx(1.0)
+
+
+def _router_for_backend(
+    backend_model: str,
+    *,
+    model_name: str = "priced-model",
+    input_cost: float = 0.0001,
+    output_cost: float = 0.0002,
+    max_output_tokens: int = 65536,
+) -> Router:
+    return Router(
+        model_list=[
+            Deployment(
+                model_name=model_name,
+                litellm_params=LiteLLM_Params(model=backend_model, api_key="sk-fake"),
+                model_info=ModelInfo(
+                    id=f"{backend_model}-deployment",
+                    input_cost_per_token=input_cost,
+                    output_cost_per_token=output_cost,
+                    max_output_tokens=max_output_tokens,
+                ),
+            ).model_dump()
+        ]
+    )
+
+
+@pytest.mark.parametrize("backend_model", ["vertex_ai/gemini-2.5-pro", "gemini/gemini-2.5-pro"])
+def test_gemini_chat_completions_preserves_high_max_output_tokens(backend_model: str) -> None:
+    router: Final = _router_for_backend(backend_model, max_output_tokens=65536)
+    base_messages: Final = [{"role": "user", "content": "hi"}]
+    uncapped: Final = estimate_request_max_cost(
+        request_body={"model": "priced-model", "messages": base_messages},
+        route="/v1/chat/completions",
+        llm_router=router,
+    )
+    with_max_tokens: Final = estimate_request_max_cost(
+        request_body={"model": "priced-model", "messages": base_messages, "max_tokens": 65536},
+        route="/v1/chat/completions",
+        llm_router=router,
+    )
+    with_max_output: Final = estimate_request_max_cost(
+        request_body={"model": "priced-model", "messages": base_messages, "max_output_tokens": 65536},
+        route="/v1/chat/completions",
+        llm_router=router,
+    )
+    with_both: Final = estimate_request_max_cost(
+        request_body={"model": "priced-model", "messages": base_messages, "max_tokens": 1, "max_output_tokens": 65536},
+        route="/v1/chat/completions",
+        llm_router=router,
+    )
+
+    assert uncapped is not None and with_max_tokens is not None
+    assert with_max_output == pytest.approx(with_max_tokens)
+    assert with_both == pytest.approx(with_max_tokens)
+    assert with_max_output > uncapped
+
+
+@pytest.mark.parametrize("backend_model", ["vertex_ai/claude-opus-4-6", "openai/gpt-4o"])
+def test_non_gemini_chat_completions_ignore_max_output_tokens(backend_model: str) -> None:
+    router: Final = _router_for_backend(backend_model, max_output_tokens=128000)
+    base_messages: Final = [{"role": "user", "content": "hi"}]
+    uncapped: Final = estimate_request_max_cost(
+        request_body={"model": "priced-model", "messages": base_messages},
+        route="/v1/chat/completions",
+        llm_router=router,
+    )
+    decoy_only: Final = estimate_request_max_cost(
+        request_body={"model": "priced-model", "messages": base_messages, "max_output_tokens": 1},
+        route="/v1/chat/completions",
+        llm_router=router,
+    )
+    one_token: Final = estimate_request_max_cost(
+        request_body={"model": "priced-model", "messages": base_messages, "max_tokens": 1},
+        route="/v1/chat/completions",
+        llm_router=router,
+    )
+    shadowed_with_high_output: Final = estimate_request_max_cost(
+        request_body={"model": "priced-model", "messages": base_messages, "max_tokens": 1, "max_output_tokens": 65536},
+        route="/v1/chat/completions",
+        llm_router=router,
+    )
+
+    assert uncapped is not None and one_token is not None
+    assert decoy_only == pytest.approx(uncapped)
+    assert shadowed_with_high_output == pytest.approx(one_token)
+
+
+def test_mixed_openai_and_gemini_group_guards_decoy_and_high_gemini_cap() -> None:
+    router: Final = Router(
+        model_list=[
+            Deployment(
+                model_name="mixed-model",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o", api_key="sk-fake"),
+                model_info=ModelInfo(
+                    id="openai-dep",
+                    input_cost_per_token=0.0001,
+                    output_cost_per_token=0.0002,
+                    max_output_tokens=65536,
+                ),
+            ).model_dump(),
+            Deployment(
+                model_name="mixed-model",
+                litellm_params=LiteLLM_Params(model="vertex_ai/gemini-2.5-pro", api_key="sk-fake"),
+                model_info=ModelInfo(
+                    id="gemini-dep",
+                    input_cost_per_token=0.0001,
+                    output_cost_per_token=0.0002,
+                    max_output_tokens=65536,
+                ),
+            ).model_dump(),
+        ]
+    )
+    base_messages: Final = [{"role": "user", "content": "hi"}]
+    uncapped: Final = estimate_request_max_cost(
+        request_body={"model": "mixed-model", "messages": base_messages},
+        route="/v1/chat/completions",
+        llm_router=router,
+    )
+    decoy_small: Final = estimate_request_max_cost(
+        request_body={"model": "mixed-model", "messages": base_messages, "max_output_tokens": 1},
+        route="/v1/chat/completions",
+        llm_router=router,
+    )
+    high_max_tokens: Final = estimate_request_max_cost(
+        request_body={"model": "mixed-model", "messages": base_messages, "max_tokens": 65536},
+        route="/v1/chat/completions",
+        llm_router=router,
+    )
+    high_max_output: Final = estimate_request_max_cost(
+        request_body={"model": "mixed-model", "messages": base_messages, "max_output_tokens": 65536},
+        route="/v1/chat/completions",
+        llm_router=router,
+    )
+
+    assert uncapped is not None and high_max_tokens is not None
+    assert decoy_small == pytest.approx(uncapped)
+    assert high_max_output == pytest.approx(high_max_tokens)
+    assert high_max_output > uncapped
+
+
+def test_direct_non_router_gemini_chat_completions_preserves_max_output_tokens() -> None:
+    base_messages: Final = [{"role": "user", "content": "hi"}]
+    uncapped: Final = estimate_request_max_cost(
+        request_body={"model": "gemini/gemini-2.5-pro", "messages": base_messages},
+        route="/v1/chat/completions",
+        llm_router=None,
+    )
+    capped_fallback_level: Final = estimate_request_max_cost(
+        request_body={"model": "gemini/gemini-2.5-pro", "messages": base_messages, "max_output_tokens": 16384},
+        route="/v1/chat/completions",
+        llm_router=None,
+    )
+    high_output: Final = estimate_request_max_cost(
+        request_body={"model": "gemini/gemini-2.5-pro", "messages": base_messages, "max_output_tokens": 65536},
+        route="/v1/chat/completions",
+        llm_router=None,
+    )
+
+    assert uncapped is not None and capped_fallback_level is not None and high_output is not None
+    assert capped_fallback_level == pytest.approx(uncapped)
+    assert high_output > capped_fallback_level
+
+
+@pytest.mark.asyncio
+async def test_gemini_chat_completions_concurrent_reservations_reserve_high_max_output_tokens(
+    spend_counter_store: SpendCounterStore,
+) -> None:
+    router: Final = _router_for_backend(
+        "vertex_ai/gemini-2.5-pro",
+        input_cost=0.0,
+        output_cost=0.00001,
+        max_output_tokens=65536,
+    )
+    cache: Final = UserApiKeyCache()
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    token_id: Final = "gemini-high-max-output-tokens"
+    valid_token: Final = UserAPIKeyAuth(api_key=token_id, token=token_id, max_budget=1.0, spend=0.0)
+    body: Final[dict[str, object]] = {
+        "model": "priced-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_output_tokens": 65536,
+    }
+
+    outcomes: Final = await asyncio.gather(
+        *(
+            reserve_budget_for_request(
+                request_body=dict(body),
+                route="/v1/chat/completions",
+                llm_router=router,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            for _ in range(10)
+        ),
+        return_exceptions=True,
+    )
+
+    admitted: Final = sum(1 for item in outcomes if isinstance(item, dict))
+    rejected: Final = sum(1 for item in outcomes if isinstance(item, litellm.BudgetExceededError))
+    assert admitted == 2
+    assert rejected == 8
+    assert spend_counter_store.get_local(f"spend:key:{token_id}") == pytest.approx(1.0)
