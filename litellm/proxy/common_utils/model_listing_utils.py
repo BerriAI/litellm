@@ -460,7 +460,7 @@ class TeamModelNameTranslator:
     @staticmethod
     def _response_to_lookup_map(
         model_names: Sequence[str],
-        internal_to_public: dict[str, str],
+        internal_to_public: Mapping[str, str],
     ) -> dict[str, str]:
         """Map each public response id to the first internal lookup id seen in
         `model_names`, preserving first-occurrence order. First-wins keeps list
@@ -495,6 +495,12 @@ class TeamModelNameTranslator:
         if not internal_to_public:
             return [(name, name) for name in model_names]
         return list(TeamModelNameTranslator._response_to_lookup_map(model_names, internal_to_public).items())
+
+    @staticmethod
+    def public_name_entries(
+        model_names: Sequence[str], internal_to_public: Mapping[str, str]
+    ) -> tuple[tuple[str, str], ...]:
+        return tuple(TeamModelNameTranslator._response_to_lookup_map(model_names, internal_to_public).items())
 
     @staticmethod
     def translate_listing(

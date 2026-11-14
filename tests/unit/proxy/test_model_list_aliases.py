@@ -436,6 +436,33 @@ async def test_model_group_info_describes_a_team_alias_to_a_model_the_team_does_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("gate", [None, _ListingGate, _V2ListingGate])
+async def test_model_group_info_describes_a_team_alias_to_a_team_model_the_key_lists_by_internal_name(
+    router: Router, monkeypatch: pytest.MonkeyPatch, gate: type[_ListingGate | _V2ListingGate] | None
+) -> None:
+    caller: Final = _team_member(team_model_aliases={"chat": "team-chat"})
+    monkeypatch.setattr(litellm, "callbacks", [] if gate is None else [gate(frozenset({"unrelated"}))])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    rows: Final = await _model_group_rows(caller)
+    assert rows["chat"] == {**rows["model_name_team1_abc"], "model_group": "chat"}
+    assert await _model_group_rows(caller, model_group="chat") == {"chat": rows["chat"]}
+
+
+@pytest.mark.asyncio
+@_LISTING_GATES
+async def test_a_team_alias_to_a_team_model_a_listing_callback_hides_gets_no_model_group_row(
+    router: Router, monkeypatch: pytest.MonkeyPatch, gate: type[_ListingGate | _V2ListingGate]
+) -> None:
+    caller: Final = _team_member(team_model_aliases={"chat": "team-chat"})
+    monkeypatch.setattr(litellm, "callbacks", [gate(frozenset({"team-chat"}))])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    assert list(await _model_group_rows(caller)) == ["gpt-4.1-mini"]
+    assert await _model_group_rows(caller, model_group="chat") == {}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("target", "team_id"), [("paused", "team1"), ("hidden", "team1"), ("model_name_team1_abc", "team2")]
 )

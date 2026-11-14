@@ -19334,14 +19334,15 @@ async def model_group_info(
         if model_group is None
         else _names_a_model_group_row_reads(model_group, caller_aliases, llm_router.registry().aliases())
     )
+    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
     listed_group_names: Final = tuple(
         dict.fromkeys(
             name
             for name in all_models_str
-            if name not in undiscoverable_group_names and (requested_names is None or name in requested_names)
+            if name not in undiscoverable_group_names
+            and (requested_names is None or not requested_names.isdisjoint((name, internal_to_public.get(name, name))))
         )
     )
-    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
 
     from litellm.proxy.agent_endpoints.model_list_helpers import (
         append_agents_to_model_group,
@@ -19358,7 +19359,9 @@ async def model_group_info(
                 )
             )
         ),
-        unlisted_alias_targets(tuple((name, name) for name in listed_group_names), caller_aliases),
+        unlisted_alias_targets(
+            TeamModelNameTranslator.public_name_entries(listed_group_names, internal_to_public), caller_aliases
+        ),
         internal_to_public,
     )
     kept_entries: Final = tuple(
@@ -19369,7 +19372,9 @@ async def model_group_info(
         entry
         for entry in _listing_with_aliases_to_unpaused_models(
             kept_entries,
-            blocked_names,
+            TeamModelNameTranslator.public_name_entries(
+                tuple(name for name, _ in kept_entries if name not in blocked_names), internal_to_public
+            ),
             caller_aliases,
             _describable_model_groups(kept_entries, blocked_names, user_api_key_dict, None, verdict.kept_alias_targets),
         )
@@ -19416,18 +19421,16 @@ def _names_a_model_group_row_reads(model_group: str, aliases: CallerAliases, rou
 
 def _listing_with_aliases_to_unpaused_models(
     listed_entries: Sequence[tuple[str, str]],
-    blocked_names: Container[str],
+    unpaused_public_entries: Sequence[tuple[str, str]],
     aliases: CallerAliases,
     deployed: Container[str],
 ) -> tuple[tuple[str, str], ...]:
-    described: Final = alias_listing_entries(
-        tuple(entry for entry in listed_entries if entry[0] not in blocked_names), aliases, deployed
-    )
+    described: Final = alias_listing_entries(unpaused_public_entries, aliases, deployed)
     lookup_by_name: Final = MappingProxyType(dict(described))
-    listed_names: Final = frozenset(name for name, _ in listed_entries)
+    shown_names: Final = frozenset(name for name, _ in (*listed_entries, *unpaused_public_entries))
     return (
         *((name, lookup_by_name.get(name, lookup_id)) for name, lookup_id in listed_entries),
-        *(entry for entry in described if entry[0] not in listed_names),
+        *(entry for entry in described if entry[0] not in shown_names),
     )
 
 
