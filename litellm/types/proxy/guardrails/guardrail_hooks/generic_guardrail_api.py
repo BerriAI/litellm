@@ -199,7 +199,7 @@ class GuardrailToolCall(TypedDict):
     function: ReadOnly[GuardrailToolCallFunction]
 
 
-_TOOL_CALLS: Final = TypeAdapter(tuple[GuardrailToolCall, ...])
+_TOOL_CALLS: Final = TypeAdapter(tuple[GuardrailToolCall, ...], config=ConfigDict(hide_input_in_errors=True))
 _SENT_FUNCTION: Final = TypeAdapter(Mapping[str, object])
 _RESPONSE_FIELDS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 

@@ -2809,6 +2809,21 @@ class TestToolCallsInResponse:
             await _tool_calls_after(guardrail)
 
     @pytest.mark.asyncio
+    async def test_a_malformed_tool_calls_answer_keeps_its_arguments_out_of_the_error(self) -> None:
+        guardrail: Final = _guardrail_answering(
+            {
+                "action": "GUARDRAIL_INTERVENED",
+                "tool_calls": [{"function": {"name": "run_shell", "arguments": {"cmd": "echo SECRET-123"}}}],
+            }
+        )
+
+        with pytest.raises(Exception, match="Generic Guardrail API failed") as raised:
+            await _tool_calls_after(guardrail)
+
+        assert "function.arguments" in str(raised.value)
+        assert "SECRET-123" not in str(raised.value)
+
+    @pytest.mark.asyncio
     async def test_fail_on_error_off_sends_the_calls_as_received_when_the_answer_cannot_be_applied(self) -> None:
         guardrail: Final = _guardrail_answering(
             {"action": "GUARDRAIL_INTERVENED", "tool_calls": [_run_shell_call("{}"), _run_shell_call("{}")]},
