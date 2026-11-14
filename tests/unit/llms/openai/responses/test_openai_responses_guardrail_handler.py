@@ -42,6 +42,7 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.litellm_core_utils.tool_fields import chat_member_name
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
@@ -4528,6 +4529,67 @@ class TestOpenAIResponsesHandlerNamespaceTools:
 
         assert result["tools"] == expected_tools
         assert [tool["function"]["name"] for tool in guardrail.seen_inputs[0]["tools"]] == [shortened, shortened]
+
+    @staticmethod
+    def _tools_sharing_a_chat_name(top_level: bool) -> tuple[dict, dict, str]:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        long_member: Final = {
+            "type": "function",
+            "name": "_get_document_tool_schemas",
+            "description": "Fetch the schemas of a document",
+            "parameters": {"type": "object"},
+        }
+        shortened: Final = chat_member_name(namespace, long_member["name"])
+        colliding: Final = {
+            "type": "function",
+            "name": shortened if top_level else shortened.removeprefix(f"{namespace}__"),
+            "description": "Fetch the raw bytes of a document",
+            "parameters": {"type": "object"},
+        }
+        return long_member, colliding, namespace
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("top_level", [False, True], ids=["sibling_member", "top_level_function"])
+    async def test_a_guardrail_dropping_the_first_of_two_tools_sharing_a_chat_name_keeps_the_second(
+        self, top_level: bool
+    ):
+        long_member, colliding, namespace = self._tools_sharing_a_chat_name(top_level)
+        tools: Final = (
+            [colliding, {"type": "namespace", "name": namespace, "tools": [long_member]}]
+            if top_level
+            else [{"type": "namespace", "name": namespace, "tools": [long_member, colliding]}]
+        )
+        expected_tools: Final = (
+            [{"type": "namespace", "name": namespace, "tools": [long_member]}]
+            if top_level
+            else [{"type": "namespace", "name": namespace, "tools": [colliding]}]
+        )
+        guardrail: Final = ToolEditingGuardrail(edit=lambda chat_tools: chat_tools[1:], guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
+
+        assert result["tools"] == expected_tools
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("top_level", [False, True], ids=["sibling_member", "top_level_function"])
+    async def test_a_guardrail_dropping_and_editing_tools_sharing_a_chat_name_is_rejected(self, top_level: bool):
+        long_member, colliding, namespace = self._tools_sharing_a_chat_name(top_level)
+        tools: Final = (
+            [colliding, {"type": "namespace", "name": namespace, "tools": [long_member]}]
+            if top_level
+            else [{"type": "namespace", "name": namespace, "tools": [long_member, colliding]}]
+        )
+
+        def drop_first_and_edit_second(chat_tools: list[dict]) -> list[dict]:
+            kept: Final = chat_tools[1]
+            return [{**kept, "function": {**kept["function"], "description": "edited"}}]
+
+        guardrail: Final = ToolEditingGuardrail(edit=drop_first_and_edit_second, guardrail_name="test")
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await OpenAIResponsesHandler().process_input_messages({**_codex_request("hi"), "tools": tools}, guardrail)
 
     @pytest.mark.asyncio
     async def test_a_function_only_guardrail_keeps_the_tool_search_tool_it_never_scans(self):

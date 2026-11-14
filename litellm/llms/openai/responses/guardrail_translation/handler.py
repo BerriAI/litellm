@@ -936,7 +936,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             logging_obj=litellm_logging_obj,
         )
         self._apply_guardrailed_tools_to_data(
-            data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools"), scan_only=scan_only
+            data,
+            original_tools,
+            flattened_tool_groups,
+            guardrailed_inputs.get("tools"),
+            scan_only=scan_only,
+            guardrail_name=guardrail_to_apply.guardrail_name,
         )
         written_back: Final = self._written_back_request_fields(
             data,
@@ -1092,13 +1097,15 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrailed_tools: Sequence[ChatCompletionToolParam] | None,
         *,
         scan_only: bool,
+        guardrail_name: str | None,
     ) -> None:
         if guardrailed_tools is None:
             return
         merge: Final = append_returned_tools if scan_only else merge_guardrailed_tools
-        data["tools"] = list(  # rebind-ok: in-place request rewrite
-            merge(original_tools, flattened_tool_groups, guardrailed_tools)
-        )
+        merged: Final = merge(original_tools, flattened_tool_groups, guardrailed_tools)
+        if merged is None:
+            raise unappliable_request_rewrite(guardrail_name)
+        data["tools"] = list(merged)  # rebind-ok: in-place request rewrite
 
     def _extract_input_text_and_images(
         self,

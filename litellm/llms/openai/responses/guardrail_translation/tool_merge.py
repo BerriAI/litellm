@@ -58,6 +58,31 @@ def _indexed_keys(tools: Sequence[Tool]) -> tuple[IndexedKey, ...]:
     return tuple((key, ordinal_by_position[position]) for position, key in enumerate(keys))
 
 
+def _kept_ordinals(flattened: Sequence[Tool], guardrailed: Sequence[Tool]) -> tuple[int | None, ...]:
+    if len(guardrailed) >= len(flattened):
+        return tuple(range(len(guardrailed)))
+    remaining: Final = iter(enumerate(flattened))
+    return tuple(next((ordinal for ordinal, tool in remaining if tool == kept), None) for kept in guardrailed)
+
+
+def _same_key_tools(tools: Sequence[Tool], key: str) -> tuple[Tool, ...]:
+    return tuple(tool for tool in tools if _chat_tool_key(tool) == key)
+
+
+def _guardrailed_keys(flattened: Sequence[Tool], guardrailed: Sequence[Tool]) -> tuple[IndexedKey, ...] | None:
+    keys: Final = tuple(_chat_tool_key(tool) for tool in guardrailed)
+    ordinals_by_key: Final = MappingProxyType(
+        {
+            key: iter(_kept_ordinals(_same_key_tools(flattened, key), _same_key_tools(guardrailed, key)))
+            for key in frozenset(keys)
+        }
+    )
+    indexed: Final = tuple((key, next(ordinals_by_key[key])) for key in keys)
+    if any(ordinal is None for _, ordinal in indexed):
+        return None
+    return tuple((key, ordinal) for key, ordinal in indexed if ordinal is not None)
+
+
 def _namespace_members(namespace: Tool) -> tuple[Tool, ...]:
     members: Final = namespace.get("tools")
     if not isinstance(members, Sequence) or isinstance(members, (str, bytes)):
@@ -166,10 +191,13 @@ def merge_guardrailed_tools(
     original_tools: Sequence[Tool],
     flattened_groups: Sequence[Sequence[Tool]],
     guardrailed_tools: Iterable[object],
-) -> tuple[Tool, ...]:
+) -> tuple[Tool, ...] | None:
     guardrailed: Final = _validated_tools(guardrailed_tools)
-    flattened_keys: Final = _indexed_keys(tuple(chain.from_iterable(flattened_groups)))
-    guardrailed_keys: Final = _indexed_keys(guardrailed)
+    flattened: Final = tuple(chain.from_iterable(flattened_groups))
+    flattened_keys: Final = _indexed_keys(flattened)
+    guardrailed_keys: Final = _guardrailed_keys(flattened, guardrailed)
+    if guardrailed_keys is None:
+        return None
     guardrailed_by_key: Final = MappingProxyType(dict(zip(guardrailed_keys, guardrailed)))
     group_ends: Final = tuple(accumulate(len(group) for group in flattened_groups))
     group_key_slices: Final = tuple(
