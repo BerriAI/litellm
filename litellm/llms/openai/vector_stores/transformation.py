@@ -1,10 +1,14 @@
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.core_helpers import keyword_arguments
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
@@ -25,6 +29,12 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _VectorStoreResponseFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
@@ -48,11 +58,13 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         }
 
     def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
-        litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = litellm_params.api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+        params: Final = litellm_params or GenericLiteLLMParams()
+        bearer_token: Final = resolve_openai_bearer_token(
+            api_key=params.api_key, api_base=params.api_base, litellm_params=params.model_dump(exclude_none=True)
+        )
         headers.update(
             {
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {bearer_token}",
                 "Content-Type": "application/json",
             }
         )
@@ -85,10 +97,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
             or "https://api.openai.com/v1"
         )
 
-        # Remove trailing slashes
-        api_base = api_base.rstrip("/")
-
-        return f"{api_base}/vector_stores"
+        return join_api_base(api_base, "vector_stores")
 
     def transform_search_vector_store_request(
         self,
@@ -102,7 +111,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     ) -> tuple[str, dict]:
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         base_url, query_separator, query_string = api_base.partition("?")
-        url: Final = f"{base_url}/{encoded_vector_store_id}/search{query_separator}{query_string}"
+        url: Final = f"{join_api_base(base_url, f'{encoded_vector_store_id}/search')}{query_separator}{query_string}"
         typed_request_body: Final = VectorStoreSearchRequest(
             query=query,
             filters=vector_store_search_optional_params.get("filters", None),
@@ -118,8 +127,10 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         try:
-            response_json: Final = response.json()
-            return VectorStoreSearchResponse(**response_json)
+            response_json: Final = _DECODED_JSON.validate_python(response.json())
+            return VectorStoreSearchResponse(
+                **_VectorStoreResponseFields(**keyword_arguments(response_json, VectorStoreSearchResponse))
+            )
         except Exception as e:
             raise self.get_error_class(
                 error_message=str(e),
@@ -149,8 +160,10 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
 
     def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         try:
-            response_json: Final = response.json()
-            return VectorStoreCreateResponse(**response_json)
+            response_json: Final = _DECODED_JSON.validate_python(response.json())
+            return VectorStoreCreateResponse(
+                **_VectorStoreResponseFields(**keyword_arguments(response_json, VectorStoreCreateResponse))
+            )
         except Exception as e:
             raise self.get_error_class(
                 error_message=str(e),

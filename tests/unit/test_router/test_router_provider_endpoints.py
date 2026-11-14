@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import io
 import json
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
@@ -12,18 +13,20 @@ import litellm
 import pytest
 import respx
 from litellm import CustomLogger, Router
-from litellm.caching.dual_cache import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     get_deployment_successes_for_current_minute,
 )
-from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import RoutingStrategy
 from litellm.types.utils import ImageResponse, ModelResponse, RerankResponse
+from litellm.types.videos.utils import encode_video_id_with_provider
 from openai import AsyncAzureOpenAI, AsyncOpenAI
+
+
+from tests.unit.conftest import redis_cache_double
 
 EVENT_TIMEOUT_SECONDS: Final = 5
 ROUTING_SELECTIONS: Final = 40
@@ -49,9 +52,11 @@ def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 @pytest.fixture
-def router_minute_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
-    pinned: Final = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
-    monkeypatch.setattr("litellm.router.get_utc_datetime", lambda: pinned)
+def router_minute_pinned() -> None:
+    """The usage counters these tests read are per minute: start well inside one so a test never spans two."""
+    seconds_left: Final = 60 - datetime.now(timezone.utc).second
+    if seconds_left < 10:
+        time.sleep(seconds_left + 0.1)
 
 
 class _RouterLoggingCapture(CustomLogger):
@@ -143,14 +148,14 @@ async def test_router_transcription_reuses_router_level_client_for_each_deployme
         model="whisper", file=("speech.wav", io.BytesIO(b"offline audio"), "audio/wav")
     )
     public_client, public_logging = await capture.next_event()
-    internal_response: Final = await router._atranscription(
+    second_response: Final = await router.atranscription(
         model="whisper", file=("speech.wav", io.BytesIO(b"offline audio"), "audio/wav")
     )
-    internal_client, _ = await capture.next_event()
+    second_client, _ = await capture.next_event()
     upstream_requests: Final = tuple(call.request for call in route.calls)
 
     assert public_client == str(router_level_client)
-    assert internal_client == str(router_level_client)
+    assert second_client == str(router_level_client)
     assert tuple(str(request.url) for request in upstream_requests) == (route_url, route_url)
     assert all(
         request.headers.get("content-type", "").startswith("multipart/form-data")
@@ -161,7 +166,7 @@ async def test_router_transcription_reuses_router_level_client_for_each_deployme
     assert isinstance(public_logging, dict)
     assert public_logging.get("model_group") == "whisper"
     assert response.text == "hello"
-    assert internal_response.text == "hello"
+    assert second_response.text == "hello"
 
 
 @pytest.mark.asyncio
@@ -195,7 +200,7 @@ async def test_router_speech_returns_binary_content_and_logs_model_group(
 
 
 @pytest.mark.asyncio
-async def test_router_rerank_returns_valid_response_from_public_and_underlying_calls(
+async def test_router_rerank_returns_valid_response_on_every_call(
     respx_mock: respx.MockRouter,
 ) -> None:
     router: Final = Router(
@@ -221,7 +226,7 @@ async def test_router_rerank_returns_valid_response_from_public_and_underlying_c
         documents=["hello", "world"],
         top_n=1,
     )
-    underlying_response: Final = await router._arerank(
+    second_response: Final = await router.arerank(
         model="cohere-rerank",
         query="hello",
         documents=["hello", "world"],
@@ -240,9 +245,9 @@ async def test_router_rerank_returns_valid_response_from_public_and_underlying_c
     public_validated: Final = RerankResponse.model_validate(public_response)
     assert public_validated.id == "rerank-1"
     assert public_validated.results[0]["relevance_score"] == 0.9
-    underlying_validated: Final = RerankResponse.model_validate(underlying_response)
-    assert underlying_validated.id == "rerank-1"
-    assert underlying_validated.results[0]["relevance_score"] == 0.9
+    second_validated: Final = RerankResponse.model_validate(second_response)
+    assert second_validated.id == "rerank-1"
+    assert second_validated.results[0]["relevance_score"] == 0.9
 
 
 @pytest.mark.asyncio
@@ -315,9 +320,9 @@ async def test_router_image_generation_returns_valid_image_response(
     )
 
     response: Final = (
-        router._image_generation(model="gpt-image-1", prompt="a cat")
+        router.image_generation(model="gpt-image-1", prompt="a cat")
         if sync_mode
-        else await router._aimage_generation(model="gpt-image-1", prompt="a cat")
+        else await router.aimage_generation(model="gpt-image-1", prompt="a cat")
     )
 
     assert route.call_count == 1
@@ -514,104 +519,22 @@ def test_router_routing_strategy_init_accepts_provider_budget_strategy(strategy:
     assert router.get_settings()["routing_strategy"] == "provider-budget-routing"
 
 
-def test_router_track_deployment_metrics_updates_observable_usage() -> None:
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "gpt-5-mini",
-                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-fake"},
-                "model_info": {"id": "metrics-deployment"},
-            }
-        ]
-    )
-    deployment: Final = router.model_list[0]
-
-    router._track_deployment_metrics(deployment=deployment, parent_otel_span=None)
-    router._track_deployment_metrics(deployment=deployment, parent_otel_span=None)
-
-    assert router.cache.get_cache(key="metrics-deployment", local_only=True) == 2
-
-
-class _GatedIncrementCache(DualCache):
-    def __init__(self) -> None:
-        super().__init__(in_memory_cache=InMemoryCache())
-        self.first_increment_started = asyncio.Event()
-        self.release_first_increment = asyncio.Event()
-        self.deployment_success_incremented = asyncio.Event()
-        self.increment_calls = 0
-
-    def increment_cache(self, key: str, value: int, local_only: bool = False, **kwargs: object) -> int:
-        result: Final = super().increment_cache(key=key, value=value, local_only=local_only, **kwargs)
-        if key.endswith(":successes"):
-            self.deployment_success_incremented.set()
-        return result
-
-    async def async_increment_cache_pipeline(
-        self,
-        increment_list: list[RedisPipelineIncrementOperation],
-        local_only: bool = False,
-        parent_otel_span: object = None,
-        **kwargs: object,
-    ) -> list[float] | None:
-        self.increment_calls += 1
-        if self.increment_calls == 1:
-            self.first_increment_started.set()
-            await self.release_first_increment.wait()
-        return await super().async_increment_cache_pipeline(
-            increment_list=increment_list,
-            local_only=local_only,
-            parent_otel_span=parent_otel_span,
-            **kwargs,
-        )
-
-
-class _UnavailableIncrementCache(DualCache):
-    def __init__(self) -> None:
-        super().__init__(in_memory_cache=InMemoryCache())
-        self.first_increment_started = asyncio.Event()
-        self.release_first_increment = asyncio.Event()
-        self.deployment_success_incremented = asyncio.Event()
-        self.increment_calls = 0
-
-    def increment_cache(self, key: str, value: int, local_only: bool = False, **kwargs: object) -> int:
-        result: Final = super().increment_cache(key=key, value=value, local_only=local_only, **kwargs)
-        if key.endswith(":successes"):
-            self.deployment_success_incremented.set()
-        return result
-
-    async def async_increment_cache_pipeline(
-        self,
-        increment_list: list[RedisPipelineIncrementOperation],
-        local_only: bool = False,
-        parent_otel_span: object = None,
-        **kwargs: object,
-    ) -> list[float] | None:
-        self.increment_calls += 1
-        if self.increment_calls == 1:
-            self.first_increment_started.set()
-            await self.release_first_increment.wait()
-        raise RuntimeError("cache unavailable")
-
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("router_minute_pinned")
 async def test_router_success_callback_during_pre_header_increment_does_not_double_count() -> None:
+    capture: Final = _RouterLoggingCapture("lit-3058-race")
     router: Final = _rpm_tpm_router("lit-3058-race")
-    cache: Final = _GatedIncrementCache()
-    router.cache = cache
     request: Final = asyncio.create_task(
         router.acompletion(
             model="gpt-5-mini",
             messages=[{"role": "user", "content": "hi"}],
             mock_response="pong",
+            success_callback=[capture.async_log_success_event],
         )
     )
 
-    await asyncio.wait_for(cache.first_increment_started.wait(), timeout=EVENT_TIMEOUT_SECONDS)
-    await asyncio.wait_for(cache.deployment_success_incremented.wait(), timeout=EVENT_TIMEOUT_SECONDS)
+    await capture.next_event()
     assert get_deployment_successes_for_current_minute(router, "lit-3058-race") == 1
-    assert cache.increment_calls == 1
-    cache.release_first_increment.set()
     response: Final = await request
 
     assert await router.get_model_group_usage("gpt-5-mini") == (response.usage.total_tokens, 1)
@@ -619,32 +542,26 @@ async def test_router_success_callback_during_pre_header_increment_does_not_doub
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("router_minute_pinned")
-async def test_router_failed_pre_header_increment_clears_counted_tokens_stamp() -> None:
+async def test_router_failed_redis_increment_keeps_local_usage_without_double_counting() -> None:
+    capture: Final = _RouterLoggingCapture("lit-3058-fail")
     router: Final = _rpm_tpm_router("lit-3058-fail")
-    cache: Final = _UnavailableIncrementCache()
-    router.cache = cache
-    metadata: Final[dict[str, object]] = {}
+    router.update_redis_cache(redis_cache_double())
     request: Final = asyncio.create_task(
         router.acompletion(
             model="gpt-5-mini",
             messages=[{"role": "user", "content": "hi"}],
             mock_response="pong",
-            metadata=metadata,
+            success_callback=[capture.async_log_success_event],
         )
     )
 
-    await asyncio.wait_for(cache.first_increment_started.wait(), timeout=EVENT_TIMEOUT_SECONDS)
-    await asyncio.wait_for(cache.deployment_success_incremented.wait(), timeout=EVENT_TIMEOUT_SECONDS)
-    assert metadata[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] == 30
+    await capture.next_event()
     assert get_deployment_successes_for_current_minute(router, "lit-3058-fail") == 1
-    assert cache.increment_calls == 1
-    cache.release_first_increment.set()
     response: Final = await request
 
     assert response.usage.total_tokens == 30
-    assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in metadata
-    assert _ratelimit_headers(response)["x-ratelimit-remaining-requests"] == 100
-    assert await router.get_model_group_usage("gpt-5-mini") == (None, None)
+    assert _ratelimit_headers(response)["x-ratelimit-remaining-requests"] == 99
+    assert await router.get_model_group_usage("gpt-5-mini") == (response.usage.total_tokens, 1)
 
 
 ASSISTANT_RESPONSE: Final = {
@@ -660,7 +577,7 @@ ASSISTANT_RESPONSE: Final = {
 
 
 @pytest.mark.asyncio
-async def test_router_assistants_endpoint_factory_invokes_provider(
+async def test_router_create_assistants_invokes_provider(
     respx_mock: respx.MockRouter,
 ) -> None:
     router: Final = Router(model_list=[])
@@ -668,8 +585,7 @@ async def test_router_assistants_endpoint_factory_invokes_provider(
         200, json={**ASSISTANT_RESPONSE, "id": "asst-1"}
     )
 
-    response: Final = await router._pass_through_assistants_endpoint_factory(
-        original_function=litellm.acreate_assistants,
+    response: Final = await router.acreate_assistants(
         custom_llm_provider="openai",
         model="gpt-4o-mini",
         api_key="sk-fake",
@@ -682,29 +598,7 @@ async def test_router_assistants_endpoint_factory_invokes_provider(
 
 
 @pytest.mark.asyncio
-async def test_router_factory_function_returns_invokable_assistants_wrapper(
-    respx_mock: respx.MockRouter,
-) -> None:
-    router: Final = Router(model_list=[])
-    route: Final = respx_mock.post("https://api.openai.com/v1/assistants").respond(
-        200, json={**ASSISTANT_RESPONSE, "id": "asst-2"}
-    )
-    wrapper: Final = router.factory_function(litellm.acreate_assistants, call_type="assistants")
-
-    response: Final = await wrapper(
-        custom_llm_provider="openai",
-        model="gpt-4o-mini",
-        api_key="sk-fake",
-        name="offline",
-    )
-
-    assert route.call_count == 1
-    assert json.loads(route.calls[0].request.content) == {"model": "gpt-4o-mini", "name": "offline"}
-    assert response.id == "asst-2"
-
-
-@pytest.mark.asyncio
-async def test_router_moderation_endpoint_factory_invokes_default_model(
+async def test_router_moderation_without_a_model_invokes_the_default_model(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -719,9 +613,7 @@ async def test_router_moderation_endpoint_factory_invokes_default_model(
         },
     )
 
-    response: Final = await router._pass_through_moderation_endpoint_factory(
-        original_function=litellm.amoderation,
-        custom_llm_provider="openai",
+    response: Final = await router.amoderation(
         input="hello",
         model=None,
         api_key="sk-fake",
@@ -730,3 +622,285 @@ async def test_router_moderation_endpoint_factory_invokes_default_model(
     assert route.call_count == 1
     assert json.loads(route.calls[0].request.content) == {"input": "hello"}
     assert response.id == "modr-2"
+
+
+def _sora_deployment(
+    model_name: str, api_key: str, deployment_id: str, access_groups: tuple[str, ...] = ()
+) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": "openai/sora-2", "api_key": api_key},
+        "model_info": {"id": deployment_id, "access_groups": list(access_groups)},
+    }
+
+
+def _two_account_sora_router() -> Router:
+    return Router(
+        model_list=[
+            _sora_deployment("sora", "key-a", "dep-a"),
+            _sora_deployment("sora", "key-b", "dep-b"),
+            _sora_deployment("other", "key-x", "dep-x"),
+        ],
+        model_group_alias={"sora-alias": "sora"},
+    )
+
+
+async def _poll_status_keys(
+    router: Router,
+    model: str,
+    deployment_id: str,
+    respx_mock: respx.MockRouter,
+    caller: UserAPIKeyAuth | None = None,
+) -> set[str]:
+    route: Final = respx_mock.get("https://api.openai.com/v1/videos/video_raw").respond(
+        200, json={"id": "video_raw", "object": "video", "status": "in_progress"}
+    )
+    video_id: Final = encode_video_id_with_provider("video_raw", "openai", "sora", deployment_id=deployment_id)
+    metadata: Final = {} if caller is None else {"user_api_key_auth": caller}
+    for _ in range(10):
+        await router.avideo_status(model=model, video_id=video_id, litellm_metadata=dict(metadata))
+    return {call.request.headers["authorization"] for call in route.calls}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["sora", "sora-alias"])
+async def test_video_status_polls_the_deployment_that_created_the_video(
+    model: str, respx_mock: respx.MockRouter
+) -> None:
+    keys: Final = await _poll_status_keys(_two_account_sora_router(), model, "dep-b", respx_mock)
+
+    assert keys == {"Bearer key-b"}
+
+
+def test_sync_video_status_polls_the_deployment_that_created_the_video(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.get("https://api.openai.com/v1/videos/video_raw").respond(
+        200, json={"id": "video_raw", "object": "video", "status": "in_progress"}
+    )
+    router: Final = _two_account_sora_router()
+    video_id: Final = encode_video_id_with_provider("video_raw", "openai", "sora", deployment_id="dep-b")
+
+    for _ in range(10):
+        router.video_status(model="sora", video_id=video_id)
+
+    assert {call.request.headers["authorization"] for call in route.calls} == {"Bearer key-b"}
+
+
+@pytest.mark.asyncio
+async def test_video_status_on_a_wildcard_polls_the_deployment_that_created_the_video(
+    respx_mock: respx.MockRouter,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": key},
+                "model_info": {"id": dep},
+            }
+            for dep, key in (("wc-a", "key-a"), ("wc-b", "key-b"))
+        ]
+    )
+
+    keys: Final = await _poll_status_keys(router, "openai/sora-2", "wc-b", respx_mock)
+
+    assert keys == {"Bearer key-b"}
+
+
+@pytest.mark.asyncio
+async def test_video_status_never_pins_to_a_deployment_in_cooldown(respx_mock: respx.MockRouter) -> None:
+    router: Final = _two_account_sora_router()
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="dep-b",
+        original_exception=litellm.RateLimitError(message="upstream 429", llm_provider="openai", model="sora-2"),
+        exception_status=429,
+        cooldown_time=60,
+    )
+
+    keys: Final = await _poll_status_keys(router, "sora", "dep-b", respx_mock)
+
+    assert keys == {"Bearer key-a"}
+
+
+@pytest.mark.asyncio
+async def test_video_status_on_a_routing_group_polls_the_member_deployment_that_created_the_video(
+    respx_mock: respx.MockRouter,
+) -> None:
+    router: Final = Router(
+        model_list=[_sora_deployment("sora-a", "key-a", "dep-a"), _sora_deployment("sora-b", "key-b", "dep-b")],
+        routing_groups=[
+            {"group_name": "sora-group", "models": ["sora-a", "sora-b"], "routing_strategy": "simple-shuffle"}
+        ],
+    )
+
+    keys: Final = await _poll_status_keys(router, "sora-group", "dep-b", respx_mock)
+
+    assert keys == {"Bearer key-b"}
+
+
+@pytest.mark.asyncio
+async def test_video_status_never_pins_to_a_deployment_outside_the_requested_group(
+    respx_mock: respx.MockRouter,
+) -> None:
+    keys: Final = await _poll_status_keys(_two_account_sora_router(), "sora", "dep-x", respx_mock)
+
+    assert keys <= {"Bearer key-a", "Bearer key-b"}
+
+
+@pytest.mark.asyncio
+async def test_video_status_with_a_removed_deployment_routes_across_the_group(respx_mock: respx.MockRouter) -> None:
+    keys: Final = await _poll_status_keys(_two_account_sora_router(), "sora", "dep-gone", respx_mock)
+
+    assert keys <= {"Bearer key-a", "Bearer key-b"}
+    assert keys
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("key_access_group", "expected_key"), [("ag-a", "Bearer key-a"), ("ag-b", "Bearer key-b")])
+async def test_video_status_pins_only_to_a_deployment_in_the_callers_access_groups(
+    key_access_group: str, expected_key: str, respx_mock: respx.MockRouter
+) -> None:
+    router: Final = Router(
+        model_list=[
+            _sora_deployment("sora", "key-a", "dep-a", access_groups=("ag-a",)),
+            _sora_deployment("sora", "key-b", "dep-b", access_groups=("ag-b",)),
+        ]
+    )
+
+    keys: Final = await _poll_status_keys(
+        router, "sora", "dep-b", respx_mock, caller=UserAPIKeyAuth(models=[key_access_group])
+    )
+
+    assert keys == {expected_key}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["sora", "sora-alias"])
+async def test_pinned_video_status_logs_the_requested_model_group(
+    model: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture: Final = _RouterLoggingCapture("dep-b")
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+
+    keys: Final = await _poll_status_keys(_two_account_sora_router(), model, "dep-b", respx_mock)
+    _, standard_logging_object = await capture.next_event()
+
+    assert keys == {"Bearer key-b"}
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["model_group"] == model
+
+
+def _ordered_chat_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "chat-ordered",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": key, "order": order},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id, key, order in (("dep-primary", "key-a", 1), ("dep-backup", "key-b", 2))
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_video_id_in_a_chat_body_never_overrides_deployment_order() -> None:
+    router: Final = _ordered_chat_router()
+    video_id: Final = encode_video_id_with_provider("video_raw", "openai", "chat-ordered", deployment_id="dep-backup")
+
+    chats: Final = [
+        await router.acompletion(
+            model="chat-ordered", messages=list(ROUTING_MESSAGES), mock_response="ok", video_id=video_id
+        )
+        for _ in range(4)
+    ]
+    responses: Final = [
+        await router.aresponses(model="chat-ordered", input="route this request", mock_response="ok", video_id=video_id)
+        for _ in range(4)
+    ]
+
+    assert {chat._hidden_params["model_id"] for chat in chats} == {"dep-primary"}
+    assert {response._hidden_params["model_id"] for response in responses} == {"dep-primary"}
+
+
+@pytest.mark.asyncio
+async def test_video_lookup_404_never_cools_down_the_deployment_that_answered(respx_mock: respx.MockRouter) -> None:
+    respx_mock.get("https://api.openai.com/v1/videos/video_gone").respond(
+        404, json={"error": {"code": "NotFound", "message": "Video not found"}}
+    )
+    router: Final = Router(
+        model_list=[_sora_deployment("sora", "key-a", "dep-a"), _sora_deployment("sora", "key-b", "dep-b")],
+        num_retries=0,
+        allowed_fails=1,
+    )
+    video_id: Final = encode_video_id_with_provider("video_gone", "openai", "sora", deployment_id="dep-b")
+
+    for _ in range(3):
+        with pytest.raises(litellm.NotFoundError):
+            await router.avideo_status(model="sora", video_id=video_id)
+
+    assert await router.cooldown_cache.async_get_active_cooldowns(["dep-a", "dep-b"], parent_otel_span=None) == []
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "method", "path"),
+    [
+        ("aget_responses", "GET", ""),
+        ("adelete_responses", "DELETE", ""),
+        ("acancel_responses", "POST", "/cancel"),
+        ("alist_input_items", "GET", "/input_items"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_response_lookup_404_never_cools_down_the_deployment_that_answered(
+    respx_mock: respx.MockRouter, endpoint: str, method: str, path: str
+) -> None:
+    respx_mock.route(method=method, url=f"https://api.openai.com/v1/responses/resp_gone{path}").respond(
+        404, json={"error": {"code": "NotFound", "message": "Response not found"}}
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": api_key},
+                "model_info": {"id": deployment_id},
+            }
+            for api_key, deployment_id in (("key-a", "dep-a"), ("key-b", "dep-b"))
+        ],
+        num_retries=0,
+        allowed_fails=1,
+    )
+    response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id("openai", "dep-b", "resp_gone")
+
+    for _ in range(3):
+        with pytest.raises(litellm.NotFoundError):
+            await getattr(router, endpoint)(response_id=response_id)
+
+    assert await router.cooldown_cache.async_get_active_cooldowns(["dep-a", "dep-b"], parent_otel_span=None) == []
+
+
+@pytest.mark.asyncio
+async def test_chat_404_still_cools_down_the_deployment(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+        404, json={"error": {"code": "NotFound", "message": "Deployment not found"}}
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "key-a"},
+                "model_info": {"id": "dep-chat"},
+            },
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "key-b"},
+                "model_info": {"id": "dep-chat-b"},
+            },
+        ],
+        num_retries=0,
+        allowed_fails=1,
+    )
+
+    for _ in range(3):
+        with contextlib.suppress(litellm.NotFoundError, litellm.RateLimitError):
+            await router.acompletion(model="chat", messages=list(ROUTING_MESSAGES))
+
+    assert await router.cooldown_cache.async_get_active_cooldowns(["dep-chat", "dep-chat-b"], parent_otel_span=None)

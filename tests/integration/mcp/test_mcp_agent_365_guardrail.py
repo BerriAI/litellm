@@ -27,6 +27,8 @@ from integration._support.mcp import (
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 TENANT: Final = "00000000-0000-4000-8000-0000000a3650"
 REJECTED: Final = "Agent 365 guardrail rejected the tool call"
 GUARDRAIL_ROWS: Final = (

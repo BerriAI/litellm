@@ -111,7 +111,7 @@ _REQUIRED_HEADERS_BY_CALLBACK: Final[Mapping[str, frozenset[str]]] = MappingProx
 _NO_ATTRS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
-def _arize_project() -> Mapping[str, str]:
+def _arize_project(_params: StandardCallbackDynamicParams) -> Mapping[str, str]:
     from litellm.integrations.arize.arize import ArizeLogger
 
     project: Final = ArizeLogger.get_arize_config().project_name
@@ -124,10 +124,17 @@ def _arize_default_project() -> Mapping[str, str]:
     return MappingProxyType({"model_id": ARIZE_DEFAULT_PROJECT})
 
 
-#: Resource attributes the operator chose for a backend, applied to every export the
-#: team receives over the span's own resource: ``ARIZE_PROJECT_NAME`` for Arize.
-_RESOURCE_ATTRIBUTES_BY_CALLBACK: Final[Mapping[str, Callable[[], Mapping[str, str]]]] = MappingProxyType(
-    {"arize": _arize_project}
+def _langfuse_environment(params: StandardCallbackDynamicParams) -> Mapping[str, str]:
+    """The key's or team's ``langfuse_environment``, else ``LANGFUSE_TRACING_ENVIRONMENT``."""
+    from litellm.integrations.otel.presets.langfuse import langfuse_environment_attributes
+
+    return MappingProxyType(langfuse_environment_attributes(params.get("langfuse_environment")))
+
+
+#: Resource attributes a backend gets on every export the team receives, over the
+#: span's own resource: ``ARIZE_PROJECT_NAME`` for Arize, the Langfuse environment.
+_RESOURCE_ATTRIBUTES_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], Mapping[str, str]]]] = (
+    MappingProxyType({"arize": _arize_project, "langfuse_otel": _langfuse_environment})
 )
 
 #: Resource attributes a backend needs on every export to accept it, filled only where
@@ -137,12 +144,14 @@ _RESOURCE_DEFAULTS_BY_CALLBACK: Final[Mapping[str, Callable[[], Mapping[str, str
 )
 
 
-def _resource_attributes(callback_name: str, service_name: str | None) -> Mapping[str, str]:
+def _resource_attributes(
+    callback_name: str, service_name: str | None, params: StandardCallbackDynamicParams
+) -> Mapping[str, str]:
     backend: Final = _RESOURCE_ATTRIBUTES_BY_CALLBACK.get(callback_name)
     return MappingProxyType(
         {
             **({"service.name": service_name} if service_name else {}),
-            **(backend() if backend is not None else {}),
+            **(backend(params) if backend is not None else {}),
         }
     )
 
@@ -189,6 +198,7 @@ def destination_for(
     service_name: str | None = None,
     capture_message_content: str | None = None,
     excluded_db_systems: frozenset[str] | None = None,
+    metadata_keys: tuple[str, ...] | None = None,
 ) -> OtelDestination | None:
     """The destination ``params`` names for ``callback_name``, or ``None``.
 
@@ -214,13 +224,14 @@ def destination_for(
     return OtelDestination(
         endpoint=endpoint,
         headers=MappingProxyType(dict(headers)),
-        resource_attributes=_resource_attributes(callback_name, service_name),
+        resource_attributes=_resource_attributes(callback_name, service_name, params),
         resource_defaults=_resource_defaults(callback_name),
         callback_name=callback_name,
         protocol=protocol,
         span_scope=_span_scope(callback_name, params),
         capture_message_content=capture_message_content,
         excluded_db_systems=excluded_db_systems,
+        metadata_keys=metadata_keys or (),
         success_sampling_rate=success_sampling_rate,
         error_sampling_rate=error_sampling_rate,
     )

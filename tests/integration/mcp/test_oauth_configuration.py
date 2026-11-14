@@ -19,6 +19,8 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _Upstream = Callable[[Request], Reply]
 CLIENT_REDIRECT: Final = "http://127.0.0.1:9/cb"
 

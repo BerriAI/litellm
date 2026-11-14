@@ -142,6 +142,15 @@ class BatchTable(Protocol):
 
 class PrismaBatch(Protocol):
     @property
+    def litellm_customermembertable(self) -> BatchTable: ...
+
+    @property
+    def litellm_customerteamtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_customerorganizationtable(self) -> BatchTable: ...
+
+    @property
     def litellm_verificationtoken(self) -> BatchTable: ...
 
     @property
@@ -170,5 +179,7 @@ class PrismaBatch(Protocol):
 
     @property
     def litellm_projecttable(self) -> BatchTable: ...
+
+    def execute_raw(self, query: str, *args: object) -> None: ...
 
     async def commit(self) -> None: ...

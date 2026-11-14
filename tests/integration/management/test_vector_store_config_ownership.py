@@ -329,7 +329,7 @@ def test_chat_with_config_store_searches_upstream_and_injects_context_after_list
         model: Final = scenario.model()
         marker: Final = f"lit6337 {uuid.uuid4().hex}"
         assert CONFIG_STORE_ID in listed_ids(gateway)
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         completion: Final = gateway.post(
             "/v1/chat/completions",
             {"model": model, "messages": [{"role": "user", "content": marker}], "vector_store_ids": [CONFIG_STORE_ID]},
@@ -353,7 +353,7 @@ def test_passthrough_search_on_config_store_uses_yaml_credentials_after_listing(
     with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
         marker: Final = f"lit6337 passthrough {uuid.uuid4().hex}"
         assert CONFIG_STORE_ID in listed_ids(gateway)
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         searched: Final = gateway.request("POST", f"/v1/vector_stores/{CONFIG_STORE_ID}/search", {"query": marker})
         assert searched.status_code == 200, searched.text
         data: Final = listed_rows(searched)

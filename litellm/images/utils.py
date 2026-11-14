@@ -1,12 +1,28 @@
+import base64
+import os
 from collections.abc import Collection, Mapping
 from io import BufferedReader, BytesIO
-from typing import Any, Final, cast, get_type_hints
+from pathlib import Path
+from typing import Any, Final, Protocol, cast, get_type_hints, runtime_checkable
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.litellm_core_utils.token_counter import get_image_type
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.types.files import FILE_MIME_TYPES, FileType
 from litellm.types.images.main import ImageEditOptionalRequestParams
+
+
+class _ReadsBytes(Protocol):
+    def read(self, size: int, /) -> bytes: ...
+
+
+class _Tells(Protocol):
+    def tell(self) -> int: ...
+
+
+class _Seeks(Protocol):
+    def seek(self, offset: int, /) -> object: ...
 
 
 class ImageEditRequestUtils:
@@ -16,8 +32,8 @@ class ImageEditRequestUtils:
         image_edit_provider_config: BaseImageEditConfig,
         image_edit_optional_params: ImageEditOptionalRequestParams,
         drop_params: bool | None = None,
-        additional_drop_params: list[str] | None = None,
-    ) -> dict:
+        additional_drop_params: Collection[str] | None = None,
+    ) -> dict[str, object]:
         """
         Get optional parameters for the image edit API.
 
@@ -111,12 +127,12 @@ class ImageEditRequestUtils:
                 bytes_data = image_data[:100]
             else:
                 # For other types, try to read if possible
-                if hasattr(image_data, "read"):
-                    current_pos = getattr(image_data, "tell", lambda: 0)()
-                    if hasattr(image_data, "seek"):
+                if has_attributes(image_data, _ReadsBytes, "read"):
+                    current_pos = image_data.tell() if has_attributes(image_data, _Tells, "tell") else 0
+                    if has_attributes(image_data, _Seeks, "seek"):
                         image_data.seek(0)
                     bytes_data = image_data.read(100)
-                    if hasattr(image_data, "seek"):
+                    if has_attributes(image_data, _Seeks, "seek"):
                         image_data.seek(current_pos)
                 else:
                     return FILE_MIME_TYPES[FileType.PNG]  # Default fallback
@@ -145,3 +161,36 @@ class ImageEditRequestUtils:
         except Exception:
             # If anything goes wrong, default to PNG
             return FILE_MIME_TYPES[FileType.PNG]
+
+
+@runtime_checkable
+class _SeekableBinaryReader(Protocol):
+    def tell(self) -> int: ...
+
+    def seek(self, offset: int) -> int: ...
+
+    def read(self) -> bytes: ...
+
+
+def _read_image_bytes(image: object) -> bytes:
+    if isinstance(image, bytes):
+        return image
+    if isinstance(image, tuple):
+        return _read_image_bytes(image[1])
+    if isinstance(image, os.PathLike):
+        return Path(image).read_bytes()
+    if isinstance(image, _SeekableBinaryReader):
+        position: Final = image.tell()
+        image.seek(0)
+        data: Final = image.read()
+        image.seek(position)
+        return data
+    raise ValueError(f"Unsupported image type for image edit: {type(image).__name__}")
+
+
+def image_to_data_url(image: object) -> str:
+    if isinstance(image, str):
+        return image
+    image_bytes: Final = _read_image_bytes(image)
+    mime_type: Final = ImageEditRequestUtils.get_image_content_type(image_bytes)
+    return f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}"

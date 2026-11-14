@@ -9,6 +9,7 @@ Usage:
 """
 
 import asyncio
+import os
 from collections.abc import AsyncIterable, Iterable
 from typing import Final
 
@@ -40,7 +41,7 @@ _mocks_initialized = False
 
 # Default mock latency in seconds (simulates network round-trip)
 # Typical GCS API calls take 100-300ms for uploads, 50-150ms for GET/DELETE
-_MOCK_LATENCY_SECONDS: Final = float(__import__("os").getenv("GCS_MOCK_LATENCY_MS", "150")) / 1000.0
+_MOCK_LATENCY_SECONDS: Final = float(os.getenv("GCS_MOCK_LATENCY_MS", "150")) / 1000.0
 
 
 async def _mock_async_handler_get(self, url, params=None, headers=None, follow_redirects=None):

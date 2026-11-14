@@ -8,17 +8,32 @@ Source: litellm/llms/perplexity/responses/transformation.py
 """
 
 import json
+from typing import Final
 
 import httpx
 import pytest
+import respx
 
+import litellm
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.perplexity.responses.transformation import PerplexityResponsesConfig
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+
+
+_SUCCESS_RESPONSE: Final[dict[str, object]] = {
+    "id": "resp_moderation_test",
+    "object": "response",
+    "created_at": 1700000000,
+    "status": "completed",
+    "model": "openai/gpt-5.2",
+    "output": [],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
 
 
 class TestPerplexityResponsesTransformation:
@@ -60,9 +75,7 @@ class TestPerplexityResponsesTransformation:
         assert len(result["tools"]) == 1
         assert result["tools"][0]["type"] == "function"
         assert result["tools"][0]["function"]["name"] == "get_weather"
-        assert (
-            result["tools"][0]["function"]["description"] == "Get the current weather"
-        )
+        assert result["tools"][0]["function"]["description"] == "Get the current weather"
         assert "parameters" in result["tools"][0]["function"]
 
     def test_web_search_tool_passthrough(self):
@@ -130,9 +143,7 @@ class TestPerplexityResponsesTransformation:
         """tool_choice passes through"""
         config = PerplexityResponsesConfig()
 
-        params = ResponsesAPIOptionalRequestParams(
-            tool_choice="required", temperature=0.7
-        )
+        params = ResponsesAPIOptionalRequestParams(tool_choice="required", temperature=0.7)
 
         result = config.map_openai_params(
             response_api_optional_params=params,
@@ -146,9 +157,7 @@ class TestPerplexityResponsesTransformation:
         """parallel_tool_calls passes through"""
         config = PerplexityResponsesConfig()
 
-        params = ResponsesAPIOptionalRequestParams(
-            parallel_tool_calls=True, temperature=0.7
-        )
+        params = ResponsesAPIOptionalRequestParams(parallel_tool_calls=True, temperature=0.7)
 
         result = config.map_openai_params(
             response_api_optional_params=params,
@@ -354,6 +363,19 @@ class TestPerplexityResponsesTransformation:
         assert data["input"][0]["type"] == "message"
         assert data["input"][0]["role"] == "user"
 
+    def test_preset_drops_a_set_created_by_under_drop_params(self):
+        tool_output: Final = {"type": "function_call_output", "call_id": "call_1", "output": "sunny"}
+
+        data: Final = PerplexityResponsesConfig().transform_responses_api_request(
+            model="preset/pro-search",
+            input=[{**tool_output, "created_by": "user_1"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+
+        assert data["input"] == [tool_output]
+
     def test_non_preset_list_input(self):
         """Non-preset with list input preserves type field"""
         config = PerplexityResponsesConfig()
@@ -492,9 +514,7 @@ class TestPerplexityResponsesTransformation:
                     "id": "msg_123",
                     "role": "assistant",
                     "status": "completed",
-                    "content": [
-                        {"type": "output_text", "text": "Hello!", "annotations": []}
-                    ],
+                    "content": [{"type": "output_text", "text": "Hello!", "annotations": []}],
                 }
             ],
             "usage": {
@@ -549,9 +569,7 @@ class TestPerplexityResponsesTransformation:
                         "id": "msg_123",
                         "role": "assistant",
                         "status": "completed",
-                        "content": [
-                            {"type": "output_text", "text": "Hello!", "annotations": []}
-                        ],
+                        "content": [{"type": "output_text", "text": "Hello!", "annotations": []}],
                     }
                 ],
                 "usage": {
@@ -587,3 +605,26 @@ class TestPerplexityResponsesTransformation:
         assert result.type == "response.completed"
         assert result.response.usage.cost == 0.0003
         assert isinstance(result.response.usage.cost, float)
+
+
+@pytest.mark.asyncio
+async def test_aresponses_rejects_moderation_for_perplexity_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/responses").mock(
+        return_value=httpx.Response(200, json=_SUCCESS_RESPONSE)
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        await litellm.aresponses(
+            model="perplexity/openai/gpt-5.2",
+            api_base="https://api.perplexity.ai",
+            api_key="fake-api-key",
+            input="hi",
+            moderation={"model": "omni-moderation-latest"},
+        )
+
+    assert upstream.call_count == 0

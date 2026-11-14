@@ -7,10 +7,14 @@ import traceback
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import inspect
+from typing import Final
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from typing import Final
+
+_ATTRIBUTE_VALUE: Final = TypeAdapter(object)
 
 
 # This file includes the custom callbacks for LiteLLM Proxy
@@ -24,15 +28,18 @@ class MyCustomHandler(CustomLogger):
     def __init__(self):
         blue_color_code: Final = "\033[94m"
         reset_color_code: Final = "\033[0m"
-        print_verbose(f"{blue_color_code}Initialized LiteLLM custom logger")
+        print_verbose(f"{blue_color_code}Initialized LiteLLM custom logger{reset_color_code}")
         try:
             print_verbose("Logger Initialized with following methods:")
-            methods: Final = [method for method in dir(self) if inspect.ismethod(getattr(self, method))]
+            methods: Final = [
+                method
+                for method in dir(self)
+                if inspect.ismethod(_ATTRIBUTE_VALUE.validate_python(getattr(self, method)))
+            ]
 
             # Pretty print_verbose the methods
             for method in methods:
                 print_verbose(f" - {method}")
-            print_verbose(f"{reset_color_code}")
         except Exception:
             pass
 

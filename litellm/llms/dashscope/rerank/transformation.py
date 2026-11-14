@@ -34,6 +34,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -94,10 +95,10 @@ class DashScopeRerankConfig(BaseRerankConfig):
             return cleaned
 
         if cleaned.endswith("/v1"):
-            return f"{cleaned}/reranks"
+            return join_api_base(cleaned, "reranks")
 
         # Unknown base: append /reranks rather than silently ignoring the caller's api_base.
-        return f"{cleaned}/reranks"
+        return join_api_base(cleaned, "reranks")
 
     def validate_environment(
         self,

@@ -4,6 +4,8 @@ AI21 Chat Completions API
 this is OpenAI compatible - no translation needed / occurs
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
@@ -41,7 +43,7 @@ class AI21ChatConfig(OpenAILikeChatConfig):
         tool_choice: str | None = None,
         user: str | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

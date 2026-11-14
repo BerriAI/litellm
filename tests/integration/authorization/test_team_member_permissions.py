@@ -71,8 +71,8 @@ class _HTTPErrorResponse(BaseModel):
 @pytest.fixture
 def upstream(gateway: Gateway) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as client:
-        response: Final = client.get("/__observations")
-        assert response.status_code == 200, response.text
+        response: Final = client.delete("/__observations")
+        assert response.status_code == 204, response.text
         yield client
 
 

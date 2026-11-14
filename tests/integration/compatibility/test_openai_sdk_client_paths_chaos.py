@@ -26,6 +26,8 @@ from pydantic import JsonValue
 
 from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, SseResponse
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _Kind: TypeAlias = Literal["chat", "chat_stream", "messages", "responses", "completions", "moderations"]
 
 _ALL_KINDS: Final[tuple[_Kind, ...]] = ("chat", "chat_stream", "messages", "responses", "completions", "moderations")
@@ -126,7 +128,7 @@ class _Observations:
             payload: Final = JSON_OBJECT.validate_python(client.get(f"{self.url}/__observations").json())
         requests: Final = payload.get("requests")
         assert isinstance(requests, list)
-        self.items = (*self.items, *(object_value(item) for item in requests if isinstance(item, dict)))
+        self.items = tuple(object_value(item) for item in requests if isinstance(item, dict))
         return self.items
 
 

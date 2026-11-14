@@ -19,7 +19,7 @@ import httpx
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
-from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.process import OwnedProxy, OwnedState, owned_proxy_process
 from integration._support.responses_vendor import ResponsesVendor, same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
 from prometheus_client.mmap_dict import MmapedDict
@@ -207,6 +207,7 @@ def series_cap_rig(
                 config=config,
                 remove_environment=() if shared_samples else ("PROMETHEUS_MULTIPROC_DIR",),
                 workers=workers,
+                state=OwnedState.SHARED_WITH_WORKER,
             )
         )
         scenario: Final = stack.enter_context(owned.gateway.scenario())

@@ -14,6 +14,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrou
 )
 from litellm.types.utils import SpecialEnums
 from litellm.types.llms.openai import BatchJobStatus
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 class TestVertexAIBatchPassthroughHandler:
@@ -144,7 +145,9 @@ class TestVertexAIBatchPassthroughHandler:
 
     def test_get_actual_model_id_from_router_with_router(self):
         """Test getting model ID when router is available"""
-        with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+        with patch(
+            "litellm.proxy.proxy_server.llm_router", new=route_entry_points_to_stubs(MagicMock())
+        ) as mock_router:
             with patch(
                 "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path"
             ) as mock_extract:
@@ -184,7 +187,9 @@ class TestVertexAIBatchPassthroughHandler:
 
     def test_get_actual_model_id_from_router_model_not_found(self):
         """Test getting model ID when model is not found in router"""
-        with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+        with patch(
+            "litellm.proxy.proxy_server.llm_router", new=route_entry_points_to_stubs(MagicMock())
+        ) as mock_router:
             with patch(
                 "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path"
             ) as mock_extract:

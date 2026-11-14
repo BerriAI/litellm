@@ -16,6 +16,20 @@ def _untracked_tag(tag: str) -> str:
     return f"{tag}-untracked"
 
 
+def test_updating_an_unattached_budget_persists_its_limits(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        budget: Final = gateway.post("/budget/new", {"max_budget": 10, "rpm_limit": 20})
+        budget_id: Final = string_value(budget["budget_id"])
+        scenario.cleanups.callback(gateway.post, "/budget/delete", {"id": budget_id})
+        updated: Final = gateway.post(
+            "/budget/update", {"budget_id": budget_id, "max_budget": 15, "rpm_limit": 30}
+        )
+        assert (updated["budget_id"], updated["max_budget"], updated["rpm_limit"]) == (budget_id, 15, 30)
+        assert read_rows(
+            'SELECT max_budget, rpm_limit FROM "LiteLLM_BudgetTable" WHERE budget_id=%s', (budget_id,)
+        ) == [{"max_budget": 15.0, "rpm_limit": 30}]
+
+
 def _tagged_request(
     gateway: Gateway,
     model: str,
@@ -103,6 +117,46 @@ def test_spend_over_a_tag_max_budget_rejects_the_next_request(gateway: Gateway) 
             },
         )
         assert control.status_code == 200, control.text
+
+
+def test_tag_new_counts_spend_from_creation_not_before(gateway: Gateway) -> None:
+    tag: Final = f"tag-created-late-{uuid.uuid4().hex}"
+
+    def delete_tag() -> None:
+        gateway.post("/tag/delete", {"name": tag})
+
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
+
+        def tagged(text: str) -> httpx.Response:
+            return gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [{"role": "user", "content": f"{text} {uuid.uuid4().hex}"}],
+                    "metadata": {"tags": [tag]},
+                },
+            )
+
+        untracked: Final = tagged("spend before the tag exists")
+        assert untracked.status_code == 200, untracked.text
+        with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache:
+            counted: Final = eventually(
+                lambda: float(cache.get(f"spend:tag:{tag}") or 0),
+                lambda spend: spend > 0.0001,
+                seconds=70,
+            )
+        assert counted > 0.0001, counted
+        gateway.post("/tag/new", {"name": tag, "max_budget": 0.0001})
+        scenario.cleanups.callback(delete_tag)
+        admitted: Final = tagged("first request under the new budget")
+        assert admitted.status_code == 200, admitted.text
+        blocked: Final = eventually(
+            lambda: tagged("budget probe"), lambda response: response.status_code != 200, seconds=70
+        )
+        assert blocked.status_code == 422, blocked.text
+        assert "budget" in blocked.text.lower(), blocked.text
 
 
 def test_tag_object_rpm_limit_rejects_the_second_request_across_keys(gateway: Gateway) -> None:
@@ -446,9 +500,7 @@ def test_tag_budget_duration_can_be_cleared_and_limits_are_read_back(gateway: Ga
             "rpm_limit": budget_info["rpm_limit"],
             "budget_duration": budget_info["budget_duration"],
             "budget_reset_at": budget_info["budget_reset_at"],
-        } == {"max_budget": 100, "rpm_limit": 1, "budget_duration": None, "budget_reset_at": None}, (
-            info_response.text
-        )
+        } == {"max_budget": 100, "rpm_limit": 1, "budget_duration": None, "budget_reset_at": None}, info_response.text
 
         tag_rows: Final = read_rows('SELECT budget_id FROM "LiteLLM_TagTable" WHERE tag_name = %s', (tag,))
         assert len(tag_rows) == 1, tag_rows
@@ -457,9 +509,9 @@ def test_tag_budget_duration_can_be_cleared_and_limits_are_read_back(gateway: Ga
             "WHERE budget_id = %s",
             (str(tag_rows[0]["budget_id"]),),
         )
-        assert budget_rows == [
-            {"max_budget": 100, "rpm_limit": 1, "budget_duration": None, "budget_reset_at": None}
-        ], budget_rows
+        assert budget_rows == [{"max_budget": 100, "rpm_limit": 1, "budget_duration": None, "budget_reset_at": None}], (
+            budget_rows
+        )
 
 
 @pytest.mark.parametrize("tag_source", _TAG_SOURCES, ids=_TAG_SOURCE_IDS)

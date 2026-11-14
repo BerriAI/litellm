@@ -26,6 +26,7 @@ class Harness(Enum):
     CLAUDE_CODE = "claude_code"
     CODEX = "codex"
     OPENCODE = "opencode"
+    PI = "pi"
     DEEPAGENTS = "deepagents"
     TOOL_LOOP = "tool_loop"
 

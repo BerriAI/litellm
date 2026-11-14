@@ -12,6 +12,7 @@ import pytest
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "openai.gpt-5.6-luna"
@@ -776,9 +777,9 @@ def test_messages_stream_overflow_logs_one_failure_row(gateway: Gateway) -> None
 
 
 def test_chaos_mantle_peer_outage_mid_burst_logs_every_call_once_and_keeps_the_proxy_alive(gateway: Gateway) -> None:
+    port: Final = allocate_port()
     with gateway.scenario() as scenario:
-        with wire_server(_chaos_peer) as wire:
-            port: Final = int(wire.url.rsplit(":", 1)[1])
+        with wire_server(_chaos_peer, port=port) as wire:
             model: Final = scenario.model(model=_MODEL, api_base=wire.url, api_key=_API_KEY)
             before: Final = _fire(gateway, _burst_bodies(model, "before"))
             assert len(wire.drain()) == len(before)

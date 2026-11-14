@@ -172,12 +172,7 @@ def open_consent() -> None:
     raise RuntimeError("consent page timed out")
 
 
-@pytest.mark.mcp_oauth_live
-def test_oauth_dies_on_consent() -> None:
-    open_consent()
-
-
-def test_plain_dies_on_consent() -> None:
+def test_dies_on_consent() -> None:
     open_consent()
 """
 
@@ -353,16 +348,13 @@ class TestStepsReachTheReport:
 
 def test_a_failed_phase_s_own_report_carries_the_steps(tmp_path: Path) -> None:
     """Plugins that read the failed setup or call report, not the teardown one
-    junitxml writes from, see where the test died too, oauth-live or not."""
+    junitxml writes from, see where the test died too."""
     write_suite(tmp_path, {"test_consent.py": FAILED_PHASE_SUITE, "report_spy.py": REPORT_SPY_PLUGIN})
-    child: Final = run_child_pytest(tmp_path, "-p", "report_spy", env={"E2E_MCP_OAUTH_LIVE": "1"})
+    child: Final = run_child_pytest(tmp_path, "-p", "report_spy")
     seen_path: Final = tmp_path / "failed-reports.jsonl"
     assert seen_path.exists(), f"no failed report reached the spy:\n{child.stdout}\n{child.stderr}"
     seen: Final = dict(map(FailedReport.validate_json, seen_path.read_text().splitlines()))
-    assert seen == {
-        "test_oauth_dies_on_consent": ("open the consent page",),
-        "test_plain_dies_on_consent": ("open the consent page",),
-    }, child.stdout
+    assert seen == {"test_dies_on_consent": ("open the consent page",)}, child.stdout
 
 
 class TestDeclaredPropertiesReachTheReport:

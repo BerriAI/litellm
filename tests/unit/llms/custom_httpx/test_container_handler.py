@@ -1,11 +1,16 @@
+import json
+from importlib.resources import files
+from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx import container_handler
 from litellm.llms.custom_httpx.container_handler import generic_container_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.containers.main import DeleteContainerFileResponse
@@ -124,3 +129,22 @@ def test_json_endpoint_sends_the_configured_route_and_parses_its_response_model(
     assert type(response) is DeleteContainerFileResponse
     assert response.id.endswith("/containers/cntr_real/files/cfile_nonexistent")
     assert response.deleted is True
+
+
+@pytest.mark.parametrize("missing_key", ["path_params", "query_params"])
+def test_an_endpoint_table_without_a_param_list_fails_the_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, missing_key: str
+):
+    packaged: Final = json.loads(files("litellm.containers").joinpath("endpoints.json").read_text())
+    trimmed: Final = {
+        "endpoints": [
+            {key: value for key, value in entry.items() if key != missing_key} for entry in packaged["endpoints"]
+        ]
+    }
+    (tmp_path / "containers").mkdir()
+    (tmp_path / "containers" / "endpoints.json").write_text(json.dumps(trimmed))
+    monkeypatch.setattr(container_handler, "__file__", str(tmp_path / "llms" / "custom_httpx" / "container_handler.py"))
+    empty_list: Final = {"object": "list", "data": [], "first_id": None, "last_id": None, "has_more": False}
+
+    with pytest.raises(ValidationError):
+        _handle("list_container_files", _sync_client(httpx.Response(200, json=empty_list)))

@@ -4,6 +4,7 @@ import re
 from abc import abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
@@ -28,6 +29,8 @@ if TYPE_CHECKING:
 
 
 RELAYED_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
+_NO_RESPONSE_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 class PassthroughMetadata(LiteLLMBaseModel):
@@ -71,7 +74,7 @@ def relayed_json_object(httpx_response: Response) -> Mapping[str, object] | None
 
 def relayed_body(httpx_response: Response) -> str | dict:
     try:
-        body: Final[object] = httpx_response.json()
+        body: Final = _DECODED_JSON.validate_python(httpx_response.json())
     except ValueError:
         return httpx_response.text
     return body if isinstance(body, dict) else httpx_response.text
@@ -235,7 +238,12 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         return None
 
     def create_stream_collector(
-        self, model: str, custom_llm_provider: str, endpoint: str
+        self,
+        model: str,
+        custom_llm_provider: str,
+        endpoint: str,
+        *,
+        response_headers: Mapping[str, str] = _NO_RESPONSE_HEADERS,
     ) -> PassthroughStreamCollector:
         return RawBytesStreamCollector(
             provider_config=self, model=model, custom_llm_provider=custom_llm_provider, endpoint=endpoint

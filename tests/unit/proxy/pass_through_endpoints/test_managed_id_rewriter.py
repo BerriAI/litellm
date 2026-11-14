@@ -30,7 +30,7 @@ from litellm.llms.base_llm.managed_resources.utils import(
     resolve_passthrough_managed_id_provider,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from typing import Any
+from typing import Any, Final
 
 
 def _user() -> UserAPIKeyAuth:
@@ -252,6 +252,37 @@ async def test_streamed_response_with_cr_only_frame_delimiters_is_still_owned_an
     managed_id = pc.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]["create"]["unified_object_id"]
     assert RAW_RESPONSE_ID.encode() not in output
     assert output == _response_stream_bytes(managed_id).replace(b"\n", b"\r")
+
+
+def _instructed_response_stream_bytes(raw_id: str, instructions: str) -> bytes:
+    events: Final = (
+        {"type": "response.created", "response": {"id": raw_id, "status": "in_progress", "instructions": instructions}},
+        {"type": "response.completed", "response": {"id": raw_id, "status": "completed", "instructions": instructions}},
+    )
+    return b"".join(
+        f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n".encode() for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_streamed_response_whose_json_holds_unicode_line_separators_is_still_owned_and_rewritten() -> None:
+    instructions: Final = "Answer\u2028in\u2029verse"
+    pc: Final = _prisma_client()
+
+    output: Final = await _collect(
+        rewrite_streamed_response_ids(
+            stream=_chunks(_instructed_response_stream_bytes(RAW_RESPONSE_ID, instructions), 4096),
+            provider="openai",
+            method="POST",
+            route="/openai_passthrough/v1/responses",
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+        )
+    )
+
+    pc.db.litellm_managedobjecttable.upsert.assert_awaited_once()
+    managed_id: Final = pc.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]["create"]["unified_object_id"]
+    assert output == _instructed_response_stream_bytes(managed_id, instructions)
 
 
 @pytest.mark.asyncio

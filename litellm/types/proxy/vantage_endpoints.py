@@ -2,8 +2,8 @@
 Vantage endpoint types for LiteLLM Proxy
 """
 
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Any
 
 from pydantic import Field, field_validator
 
@@ -57,10 +57,10 @@ class VantageExportResponse(LiteLLMBaseModel):
 
     message: str
     status: str
-    dry_run_data: dict[str, Any] | None = Field(
+    dry_run_data: Mapping[str, object] | None = Field(
         None, description="Dry run data including usage data and FOCUS transformed data"
     )
-    summary: dict[str, Any] | None = Field(None, description="Summary statistics for dry run")
+    summary: Mapping[str, object] | None = Field(None, description="Summary statistics for dry run")
 
 
 class VantageSettingsView(LiteLLMBaseModel):

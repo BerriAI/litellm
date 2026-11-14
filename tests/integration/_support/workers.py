@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import socket
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -23,6 +22,7 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from tests.integration._support.client import Gateway
 from tests.integration._support.database import scratch_database
+from tests.integration._support.ports import allocate_port
 from tests.integration._support.redis_process import owned_redis
 from tests.integration._support.routing import WORKER_DATABASE_PREFIX
 
@@ -78,20 +78,17 @@ def wait_for_services(upstream: str, proxies: tuple[Gateway, ...], cache: Redis)
 
 
 def worker_endpoints() -> Mapping[str, str]:
-    with socket.socket() as upstream, socket.socket() as provider:
-        upstream.bind(("127.0.0.1", 0))
-        provider.bind(("127.0.0.1", 0))
-        return MappingProxyType(
-            {
-                "INTEGRATION_UPSTREAM_URL": f"http://127.0.0.1:{upstream.getsockname()[1]}",
-                "INTEGRATION_PROVIDER_PORT": str(provider.getsockname()[1]),
-            }
-        )
+    return MappingProxyType(
+        {
+            "INTEGRATION_UPSTREAM_URL": f"http://127.0.0.1:{allocate_port()}",
+            "INTEGRATION_PROVIDER_PORT": str(allocate_port()),
+        }
+    )
 
 
-def _replica_urls(database: str) -> Mapping[str, str]:
-    writer: Final = urlsplit(os.environ["INTEGRATION_PROXY_DATABASE_URL"])
-    reader: Final = urlsplit(os.environ["INTEGRATION_PROXY_READ_REPLICA_URL"])
+def replica_urls(database: str, inherited: Mapping[str, str] = os.environ) -> Mapping[str, str]:
+    writer: Final = urlsplit(inherited["INTEGRATION_PROXY_DATABASE_URL"])
+    reader: Final = urlsplit(inherited["INTEGRATION_PROXY_READ_REPLICA_URL"])
     database_path: Final = urlsplit(database).path
     assert writer.username is not None and reader.username is not None
     with psycopg.connect(database, autocommit=True) as admin:
@@ -167,7 +164,7 @@ def worker_services(
                 "INTEGRATION_PROXY_READ_REPLICA_URL": "",
                 "REDIS_HOST": cache.host,
                 "REDIS_PORT": str(cache.port),
-                **(_replica_urls(database) if replica else {}),
+                **(replica_urls(database, inherited) if replica else {}),
             }
         )
 

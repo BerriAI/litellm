@@ -6,6 +6,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -14,6 +15,7 @@ from litellm.types.rerank import OptionalRerankParams, RerankRequest, RerankResp
 from ..common_utils import CohereError
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class CohereRerankConfig(BaseRerankConfig):
@@ -31,11 +33,7 @@ class CohereRerankConfig(BaseRerankConfig):
         optional_params: dict | None = None,
     ) -> str:
         if api_base:
-            # Remove trailing slashes and ensure clean base URL
-            api_base = api_base.rstrip("/")
-            if not api_base.endswith("/v1/rerank"):
-                api_base = f"{api_base}/v1/rerank"
-            return api_base
+            return ensure_api_route(api_base, "v1/rerank")
         return "https://api.cohere.ai/v1/rerank"
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
@@ -147,7 +145,7 @@ class CohereRerankConfig(BaseRerankConfig):
         No transformation required, litellm follows cohere API response format
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 

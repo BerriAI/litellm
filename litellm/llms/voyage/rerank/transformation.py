@@ -11,6 +11,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
@@ -28,6 +29,7 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _OPTIONAL_INT: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
 _STR: Final = TypeAdapter(str)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class VoyageRerankConfig(BaseRerankConfig):
@@ -80,9 +82,9 @@ class VoyageRerankConfig(BaseRerankConfig):
         api_base = api_base.rstrip("/")
         if not api_base.endswith("/v1/rerank"):
             if api_base.endswith("/v1"):
-                api_base = f"{api_base}/rerank"
+                api_base = join_api_base(api_base, "rerank")
             else:
-                api_base = f"{api_base}/v1/rerank"
+                api_base = join_api_base(api_base, "v1/rerank")
         return api_base
 
     def transform_rerank_request(
@@ -111,7 +113,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         try:
-            _json_response: Final = raw_response.json()
+            _json_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise VoyageError(
                 message=f"Failed to parse response: {raw_response.text}",

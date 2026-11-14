@@ -11,7 +11,6 @@ import asyncio
 import base64
 import dataclasses
 import json
-import socket
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -24,6 +23,7 @@ import openai
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from integration.providers._gemini_tts_voice_support import (
     AUDIO_TOKENS,
     BACKEND,
@@ -501,7 +501,7 @@ def test_vertex_batch_file_rows_carry_the_mapped_voice(gateway: Gateway) -> None
         assert tuple(text_in(row) for row in rows) == (first, second)
 
 
-def test_vertex_live_default_mode_sends_one_setup_without_the_client_voice(gateway: Gateway) -> None:
+def test_vertex_live_sends_one_setup_carrying_the_mapped_session_update_voice(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         handle: Final = live_scenario(scenario)
         key: Final = scenario.key()
@@ -511,13 +511,7 @@ def test_vertex_live_default_mode_sends_one_setup_without_the_client_voice(gatew
         assert types[0] == "session.created" and types[-1] == "response.done", frames
         setups: Final = live_setups(gateway, handle.scenario_id)
         assert len(setups) == 1, setups
-        assert voice_in(setups[0]) == NO_VOICE, setups[0]
-
-
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return int(reserve.getsockname()[1])
+        assert voice_in(setups[0]) == "Umbriel", setups[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -586,7 +580,7 @@ def _assert_served(items: tuple[Fired, ...], received: tuple[Request, ...]) -> N
 
 
 def test_peer_outage_mid_burst_ends_each_request_once_and_recovers_on_the_same_port(gateway: Gateway) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     with gateway.scenario() as scenario:
         url: Final = f"http://127.0.0.1:{port}"
         models: Final = {

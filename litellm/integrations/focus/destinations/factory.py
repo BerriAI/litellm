@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from typing import Any, Final
 
 from .base import FocusDestination
@@ -20,7 +21,7 @@ class FocusDestinationFactory:
         *,
         provider: str,
         prefix: str,
-        config: dict[str, Any] | None = None,
+        config: Mapping[str, object] | None = None,
     ) -> FocusDestination:
         """Return a destination implementation for the requested provider."""
         provider_lower: Final = provider.lower()
@@ -39,7 +40,7 @@ class FocusDestinationFactory:
     def _resolve_config(
         *,
         provider: str,
-        overrides: dict[str, object],
+        overrides: Mapping[str, object],
     ) -> dict[str, Any]:
         if provider == "s3":
             resolved = {

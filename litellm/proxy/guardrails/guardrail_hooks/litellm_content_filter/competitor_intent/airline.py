@@ -13,6 +13,9 @@ import json
 from pathlib import Path
 from typing import Any, Final
 
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent.base import (  # noqa: F401  # legacy module exports
     BaseCompetitorIntentChecker,
     _compile_marker,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -114,6 +117,7 @@ AIRLINE_EXPLICIT_OTHER_MEANING_MARKER: Final = (
 )
 
 _MAJOR_AIRLINES_PATH: Final = Path(__file__).resolve().parent / "major_airlines.json"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _load_competitors_excluding_brand(brand_self: list[str]) -> list[str]:
@@ -127,11 +131,11 @@ def _load_competitors_excluding_brand(brand_self: list[str]) -> list[str]:
         return []
     try:
         with open(_MAJOR_AIRLINES_PATH, encoding="utf-8") as f:
-            airlines: Final = json.load(f)
+            airlines: Final = _DECODED_JSON.validate_python(json.load(f))
     except (json.JSONDecodeError, OSError):
         return []
     result: Final[list[str]] = []
-    for entry in airlines:
+    for entry in iter_items(airlines):
         if not isinstance(entry, dict):
             continue
         match_str = entry.get("match") or ""

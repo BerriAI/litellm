@@ -249,7 +249,10 @@ async def test_admission_releases_upload_on_disconnect_or_cancellation(cancel: b
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reject_auth", [False, True])
-async def test_admitted_bytes_survive_auth_parsing_and_remain_reserved_until_sent(reject_auth: bool) -> None:
+@pytest.mark.parametrize("body", [b" {} ", b"[]", b"null", b'"s"'])
+async def test_admitted_bytes_survive_auth_parsing_and_remain_reserved_until_sent(
+    reject_auth: bool, body: bytes
+) -> None:
 
     app: Final = FastAPI()
     router: Final = APIRouter(route_class=LensRoute)
@@ -264,9 +267,11 @@ async def test_admitted_bytes_survive_auth_parsing_and_remain_reserved_until_sen
         if reject_auth:
             raise HTTPException(401, "Invalid key")
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(lambda _: httpx.Response(200, content=b"result"))
-    ) as upstream:
+    def upstream_response(incoming: httpx.Request) -> httpx.Response:
+        assert incoming.content == body
+        return httpx.Response(200, content=b"result")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream_response)) as upstream:
 
         @router.post("/lens/datasets")
         async def endpoint(request: Request, auth: Annotated[None, Depends(auth_reader)]) -> Response:
@@ -284,14 +289,14 @@ async def test_admitted_bytes_survive_auth_parsing_and_remain_reserved_until_sen
                 sending.set()
                 await finish.wait()
 
-        incoming: Final = request(b" {} ")
+        incoming: Final = request(body)
         task: Final = asyncio.create_task(app(incoming.scope, incoming.receive, send))
         try:
             await asyncio.wait_for(sending.wait(), 2)
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://gateway.test"
             ) as client:
-                blocked: Final = await client.post("/lens/datasets", content=b" {} " * 2)
+                blocked: Final = await client.post("/lens/datasets", content=b" " * (11 - len(body)))
                 unrelated: Final = await client.post("/ordinary", content=b"ordinary body")
             assert blocked.status_code == 503
             assert unrelated.content == b"ordinary body"

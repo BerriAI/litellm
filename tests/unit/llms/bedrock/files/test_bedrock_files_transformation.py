@@ -22,7 +22,8 @@ from botocore.credentials import Credentials
 
 import litellm
 from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
-from litellm.llms.bedrock.files.transformation import BedrockJsonlFilesTransformation
+from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES, BedrockError
+from litellm.llms.bedrock.files.transformation import BedrockFilesConfig, BedrockJsonlFilesTransformation
 from tests.unit.proxy.conftest import httpx_transport
 
 
@@ -36,9 +37,6 @@ class TestBedrockFilesTransformation:
         Validates that the transformation correctly converts OpenAI batch completion
         format to Bedrock's expected batch format with proper recordId and modelInput structure.
         """
-        # Initialize the transformation class
-        transformation = BedrockJsonlFilesTransformation()
-
         # Load input JSONL file
         input_file_path = os.path.join(
             os.path.dirname(__file__), "input_batch_completions.jsonl"
@@ -52,8 +50,8 @@ class TestBedrockFilesTransformation:
                     openai_jsonl_content.append(json.loads(line))
 
         # Transform the content
-        bedrock_jsonl_content = transformation._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-            openai_jsonl_content=openai_jsonl_content
+        bedrock_jsonl_content: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            openai_jsonl_content
         )
 
         # Basic validation
@@ -100,6 +98,234 @@ class TestBedrockFilesTransformation:
         model_input: Final = json.dumps(result[0]["modelInput"])
         assert "_litellm_undeclared_sentinel" not in model_input, model_input
         assert result[0]["modelInput"]["max_tokens"] == 10
+
+    @staticmethod
+    def _nova_row(
+        url: str = "/v1/chat/completions",
+        model: str = "us.amazon.nova-pro-v1:0",
+        body_params: Mapping[str, object] = MappingProxyType({}),
+    ) -> Mapping[str, object]:
+        prompt: Final = {"input": "hi"} if url == "/v1/responses" else {"messages": [{"role": "user", "content": "hi"}]}
+        return {
+            "custom_id": "nova-tier-1",
+            "method": "POST",
+            "url": url,
+            "body": {"model": model, **prompt, **body_params},
+        }
+
+    @pytest.mark.parametrize("tier", [None, "auto", "AUTO"])
+    def test_nova_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(body_params={"service_tier": tier})]
+        )
+
+        assert "serviceTier" not in result[0]["modelInput"]
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved", "priority", "standard_only"])
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_nova_row_with_a_service_tier_fails_the_row_without_drop_params(self, url: str, tier: str):
+        with pytest.raises(litellm.UnsupportedParamsError, match=f"service_tier='{tier}'"):
+            BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+                [self._nova_row(url, body_params={"service_tier": tier})]
+            )
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved"])
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_nova_row_level_drop_params_drops_the_service_tier(self, url: str, tier: str):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(url, body_params={"service_tier": tier, "drop_params": True})]
+        )
+
+        assert "serviceTier" not in result[0]["modelInput"]
+        assert "drop_params" not in json.dumps(result[0]["modelInput"])
+
+    def test_nova_row_service_tier_drops_under_global_drop_params(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(body_params={"service_tier": "reserved"})]
+        )
+
+        assert "serviceTier" not in result[0]["modelInput"]
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved"])
+    def test_deployment_drop_params_drops_the_service_tier_from_the_uploaded_nova_rows(self, tier: str):
+        request: Final = BedrockFilesConfig().transform_create_file_request(
+            model="us.amazon.nova-pro-v1:0",
+            create_file_data={
+                "file": (
+                    "batch.jsonl",
+                    json.dumps(self._nova_row(body_params={"service_tier": tier})).encode(),
+                    "application/jsonl",
+                ),
+                "purpose": "batch",
+            },
+            optional_params={
+                "aws_access_key_id": "test-key-id",
+                "aws_secret_access_key": "test-secret",
+                "aws_region_name": "us-west-2",
+            },
+            litellm_params={"s3_bucket_name": "litellm-batch-bucket", "drop_params": True},
+        )
+
+        assert isinstance(request, dict)
+        uploaded_row: Final = json.loads(request["data"])
+        assert uploaded_row["modelInput"]["messages"]
+        assert "serviceTier" not in uploaded_row["modelInput"]
+
+    @pytest.mark.parametrize("drop_params, drops", [(False, False), ("false", False), (True, True), ("true", True)])
+    def test_deployment_drop_params_decides_whether_a_claude_row_tier_fails_or_drops(
+        self, drop_params: bool | str, drops: bool
+    ):
+        claude_model: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        row: Final = {
+            "custom_id": "claude-tier-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": claude_model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 10,
+                "service_tier": "ultrafast",
+            },
+        }
+
+        def upload() -> Mapping[str, object]:
+            request: Final = BedrockFilesConfig().transform_create_file_request(
+                model=claude_model,
+                create_file_data={
+                    "file": ("batch.jsonl", json.dumps(row).encode(), "application/jsonl"),
+                    "purpose": "batch",
+                },
+                optional_params={
+                    "aws_access_key_id": "test-key-id",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-west-2",
+                },
+                litellm_params={"s3_bucket_name": "litellm-batch-bucket", "drop_params": drop_params},
+            )
+            assert isinstance(request, dict)
+            return json.loads(request["data"])
+
+        if not drops:
+            with pytest.raises(BedrockError, match="service_tier"):
+                upload()
+            return
+
+        model_input: Final = upload()["modelInput"]
+        assert model_input["messages"]
+        assert "service_tier" not in json.dumps(model_input)
+        assert "serviceTier" not in model_input
+
+    @pytest.mark.parametrize("tier", [None, "auto", "AUTO"])
+    def test_claude_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                self._nova_row(
+                    model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    body_params={"service_tier": tier, "max_tokens": 10},
+                )
+            ]
+        )
+
+        assert result[0]["modelInput"]["messages"]
+        assert "service_tier" not in json.dumps(result[0]["modelInput"])
+
+    @pytest.mark.parametrize("drop_params, drops", [(True, True), ("true", True), (False, False), ("false", False)])
+    @pytest.mark.parametrize(
+        "model", ["us.anthropic.claude-haiku-4-5-20251001-v1:0", "openai.gpt-oss-120b-1:0", "us.amazon.nova-pro-v1:0"]
+    )
+    def test_row_level_drop_params_decides_whether_a_rejected_tier_fails_or_drops_for_every_row_format(
+        self, model: str, drop_params: bool | str, drops: bool
+    ):
+        rows: Final = [
+            self._nova_row(
+                model=model, body_params={"service_tier": "ultrafast", "drop_params": drop_params, "max_tokens": 10}
+            )
+        ]
+
+        if not drops:
+            with pytest.raises(litellm.UnsupportedParamsError, match="service_tier='ultrafast'"):
+                BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(rows)
+            return
+
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(rows)
+        assert result[0]["modelInput"]["messages"]
+        assert "ultrafast" not in json.dumps(result[0]["modelInput"])
+
+    @pytest.mark.parametrize(
+        "tier, bedrock_tier",
+        [("priority", "priority"), ("Flex", "flex"), ("standard", "default"), ("default", "default")],
+    )
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_openai_format_row_forwards_a_tier_its_invoke_body_takes(self, url: str, tier: str, bedrock_tier: str):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(url, model="openai.gpt-oss-120b-1:0", body_params={"service_tier": tier})]
+        )
+
+        assert result[0]["modelInput"]["service_tier"] == bedrock_tier
+
+    @pytest.mark.parametrize("tier", [None, "auto", "AUTO"])
+    def test_openai_format_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(model="openai.gpt-oss-120b-1:0", body_params={"service_tier": tier})]
+        )
+
+        assert "service_tier" not in result[0]["modelInput"]
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved", "scale"])
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_openai_format_row_with_a_tier_bedrock_rejects_fails_without_drop_params(self, url: str, tier: str):
+        with pytest.raises(litellm.UnsupportedParamsError, match=f"service_tier='{tier}'"):
+            BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+                [self._nova_row(url, model="openai.gpt-oss-120b-1:0", body_params={"service_tier": tier})]
+            )
+
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_passthrough_row_keeps_row_level_drop_params_out_of_the_model_input(self, url: str):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(url, "openai.gpt-oss-120b-1:0", {"drop_params": True})]
+        )
+
+        assert "drop_params" not in result[0]["modelInput"]
+
+    @pytest.mark.parametrize(
+        "row_drop_params, deployment_drop_params, drops",
+        [(True, False, True), ("true", False, True), (None, True, True), (None, False, False), ("false", False, False)],
+    )
+    def test_drop_params_decides_whether_a_param_nova_rejects_fails_or_drops_from_an_uploaded_nova_row(
+        self, row_drop_params: bool | str | None, deployment_drop_params: bool, drops: bool
+    ):
+        tool: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
+        row_params: Final = {
+            "tools": [tool],
+            "tool_choice": "none",
+            **({} if row_drop_params is None else {"drop_params": row_drop_params}),
+        }
+        row_bytes: Final = json.dumps(self._nova_row(body_params=row_params)).encode()
+
+        def upload() -> Mapping[str, object]:
+            request: Final = BedrockFilesConfig().transform_create_file_request(
+                model="us.amazon.nova-pro-v1:0",
+                create_file_data={"file": ("batch.jsonl", row_bytes, "application/jsonl"), "purpose": "batch"},
+                optional_params={
+                    "aws_access_key_id": "test-key-id",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-west-2",
+                },
+                litellm_params={"s3_bucket_name": "litellm-batch-bucket", "drop_params": deployment_drop_params},
+            )
+            assert isinstance(request, dict)
+            return json.loads(request["data"])
+
+        if not drops:
+            with pytest.raises(BedrockError, match="tool_choice"):
+                upload()
+            return
+
+        tool_config: Final = upload()["modelInput"]["toolConfig"]
+        assert tool_config["tools"]
+        assert "toolChoice" not in tool_config
 
     def test_nova_text_only_uses_converse_format(self):
         """
@@ -408,9 +634,9 @@ class TestBedrockFilesTransformation:
     def test_batch_object_name_sanitizes_model_path(self):
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
-        config = BedrockFilesConfig()
-        object_name = config._get_s3_object_name_from_batch_jsonl(
-            [{"body": {"model": "bedrock/../../secret:model"}}]
+        object_name: Final = BedrockFilesConfig().get_object_name(
+            {"content": json.dumps({"body": {"model": "bedrock/../../secret:model"}}).encode(), "filename": "b.jsonl"},
+            purpose="batch",
         )
 
         assert object_name.startswith("litellm-bedrock-files-")
@@ -1760,6 +1986,23 @@ class TestBedrockBatchNonChatEndpointRecords:
         assert "metadata" not in model_input
         assert "requestMetadata" not in model_input
 
+    def test_nova_record_request_metadata_stays_out_of_the_bedrock_body(self):
+        model_input = self._transform(
+            {
+                "custom_id": "4d",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": self.NOVA_MODEL,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "requestMetadata": {"ticket": "b\u00a0c"},
+                },
+            }
+        )
+
+        assert "requestMetadata" not in model_input
+        assert model_input["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
+
     @pytest.mark.parametrize(
         "body",
         [
@@ -2029,6 +2272,101 @@ class TestBedrockBatchAnthropicRowParams:
         assert "json_mode" not in model_input
         assert "response_format" not in model_input
         assert ("output_config" in model_input) == (response_format["type"] == "json_schema")
+
+    @pytest.mark.parametrize(
+        ("model", "native_output"),
+        [("bedrock/us.anthropic.claude-sonnet-5-5", False), (MODEL, True)],
+        ids=["opt_in_native_output_model", "native_output_model"],
+    )
+    def test_thinking_json_schema_rows_use_native_output_only_on_models_that_always_take_it(
+        self, local_model_cost_map, model, native_output
+    ):
+        model_input: Final = self._transform(
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "Weather in Paris?"}],
+                "thinking": {"type": "adaptive"},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "weather", "schema": self.PARAMETERS},
+                },
+            },
+            model=model,
+        )
+        tool_names: Final = frozenset(tool["name"] for tool in model_input.get("tools", []))
+
+        assert ("format" in model_input.get("output_config", {})) is native_output
+        assert (tool_names == {"json_tool_call"}) is not native_output
+
+    @pytest.mark.parametrize(
+        ("model", "native_over_the_limit"),
+        [(MODEL, True), ("bedrock/us.anthropic.claude-opus-5-5", False)],
+        ids=["already_native_model", "native_by_default_model"],
+    )
+    @pytest.mark.parametrize("over_the_limit", [False, True], ids=["at_the_limit", "over_the_limit"])
+    def test_only_native_by_default_models_send_json_schemas_wider_than_the_limit_through_the_json_tool(
+        self, local_model_cost_map, model, native_over_the_limit, over_the_limit
+    ):
+        native_output: Final = native_over_the_limit or not over_the_limit
+        field_names: Final = tuple(
+            f"field_{index:03d}" for index in range(BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES + over_the_limit)
+        )
+        wide_schema: Final = {
+            "type": "object",
+            "properties": {name: {"type": "string"} for name in field_names},
+            "required": list(field_names),
+            "additionalProperties": False,
+        }
+        model_input: Final = self._transform(
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "Describe a ceramic coffee mug"}],
+                "response_format": {"type": "json_schema", "json_schema": {"name": "wide", "schema": wide_schema}},
+            },
+            model=model,
+        )
+        tool_names: Final = frozenset(tool["name"] for tool in model_input.get("tools", []))
+
+        assert ("format" in model_input.get("output_config", {})) is native_output
+        assert (tool_names == {"json_tool_call"}) is not native_output
+
+    def test_a_deployment_opt_out_sends_uploaded_json_schema_rows_through_the_json_tool(self, local_model_cost_map):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        record: Final = {
+            "custom_id": "row-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": self.MODEL,
+                "messages": [{"role": "user", "content": "Weather in Paris?"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "weather", "schema": self.PARAMETERS},
+                },
+            },
+        }
+        request: Final = BedrockFilesConfig().transform_create_file_request(
+            model=self.MODEL,
+            create_file_data={
+                "file": ("batch.jsonl", json.dumps(record).encode(), "application/jsonl"),
+                "purpose": "batch",
+            },
+            optional_params={
+                "aws_access_key_id": "test-key-id",
+                "aws_secret_access_key": "test-secret",
+                "aws_region_name": "us-west-2",
+            },
+            litellm_params={
+                "s3_bucket_name": "litellm-batch-bucket",
+                "litellm_metadata": {"model_info": {"supports_bedrock_native_structured_output": False}},
+            },
+        )
+        assert isinstance(request, dict)
+        model_input: Final = json.loads(request["data"].splitlines()[0])["modelInput"]
+
+        assert "format" not in model_input.get("output_config", {})
+        assert [tool["name"] for tool in model_input["tools"]] == ["json_tool_call"]
 
     def test_provider_native_params_still_pass_through(self):
         model_input = self._transform(
@@ -2311,7 +2649,7 @@ class TestBedrockFileContentTransformation:
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
         monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
-        litellm_params: Final = _trusted_bucket_snapshot(
+        litellm_params: Final = _deployment_bucket_params(
             s3_bucket_name="in-bucket/pfx",
             s3_output_bucket_name="out-bucket/outpfx",
         )
@@ -2501,7 +2839,7 @@ class TestBedrockFileContentTransformation:
     def test_transform_file_content_request_requires_configured_bucket(
         self, monkeypatch
     ):
-        """Without a server-configured bucket (env or snapshot), the request must fail
+        """Without a bucket (on the call or in env), the request must fail
         before any S3 call rather than guessing a bucket from the file id."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
@@ -2526,30 +2864,24 @@ class TestBedrockFileContentTransformation:
                 litellm_params=self._litellm_params(),
             )
 
-    def _trusted(self, **deployment_litellm_params) -> dict:
-        """Build the trusted snapshot the way the proxy does: deployment
-        litellm_params funneled through ``CredentialLiteLLMParams`` (the strict
-        allowlist ``get_deployment_credentials_with_provider`` applies) before
-        retrieval ever sees them. Injecting a raw ``MappingProxyType`` would
-        bypass that filter and hide whether a bucket field actually survives
-        into the snapshot in production."""
-        from types import MappingProxyType
-
+    def _deployment_params(self, **deployment_litellm_params) -> dict:
+        """Deployment litellm_params funneled through ``CredentialLiteLLMParams``
+        (the strict allowlist ``get_deployment_credentials_with_provider`` applies)
+        the way the proxy hands them to retrieval, so a bucket field dropped from
+        that allowlist fails these tests."""
         from litellm.types.router import CredentialLiteLLMParams
 
-        snapshot = CredentialLiteLLMParams(**deployment_litellm_params).model_dump(
+        credentials = CredentialLiteLLMParams(**deployment_litellm_params).model_dump(
             exclude_none=True
         )
-        params = self._litellm_params()
-        params["_litellm_internal_model_credentials"] = MappingProxyType(snapshot)
-        return params
+        return {**self._litellm_params(), **credentials}
 
     def test_retrieves_from_distinct_output_bucket(self, monkeypatch):
         """Batch outputs can land in a separate s3_output_bucket_name. Retrieval
         must validate the file id against the output bucket too, not just the
         input bucket, or the very outputs the feature serves are unreachable.
-        The snapshot is built through the production credential filter, so this
-        fails if s3_output_bucket_name is dropped from that allowlist."""
+        The params go through the production credential filter, so this fails
+        if s3_output_bucket_name is dropped from that allowlist."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
@@ -2560,7 +2892,7 @@ class TestBedrockFileContentTransformation:
                 "file_id": "s3://out-bucket/litellm-batch-outputs/job/in.jsonl.out"
             },
             optional_params={},
-            litellm_params=self._trusted(
+            litellm_params=self._deployment_params(
                 s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
             ),
         )
@@ -2571,8 +2903,8 @@ class TestBedrockFileContentTransformation:
         )
 
     def test_output_bucket_falls_back_to_env(self, monkeypatch):
-        """The output bucket resolves from AWS_S3_OUTPUT_BUCKET_NAME when not in
-        the trusted snapshot, mirroring the input-bucket env fallback."""
+        """The output bucket resolves from AWS_S3_OUTPUT_BUCKET_NAME when the
+        call has none, mirroring the input-bucket env fallback."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.setenv("AWS_S3_BUCKET_NAME", "in-bucket")
@@ -2604,7 +2936,7 @@ class TestBedrockFileContentTransformation:
                 "file_id": "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out"
             },
             optional_params={},
-            litellm_params=self._trusted(
+            litellm_params=self._deployment_params(
                 s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
             ),
         )
@@ -2629,7 +2961,7 @@ class TestBedrockFileContentTransformation:
                     "file_id": "s3://other-bucket/litellm-batch-outputs/job/x.jsonl.out"
                 },
                 optional_params={},
-                litellm_params=self._trusted(
+                litellm_params=self._deployment_params(
                     s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
                 ),
             )
@@ -2654,22 +2986,16 @@ class TestBedrockFileContentTransformation:
                 litellm_params=self._litellm_params(),
             )
 
-    def test_bucket_resolved_from_trusted_model_credentials(self, monkeypatch):
-        """Per-model s3_bucket_name must be honored via the server-side credential snapshot."""
-        from types import MappingProxyType
-
+    def test_bucket_resolved_from_call_s3_bucket_name(self, monkeypatch):
+        """An s3_bucket_name on the call is honored without AWS_S3_BUCKET_NAME."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
-        litellm_params = self._litellm_params()
-        litellm_params["_litellm_internal_model_credentials"] = MappingProxyType(
-            {"s3_bucket_name": "my-bucket"}
-        )
 
         url, _ = BedrockFilesConfig().transform_file_content_request(
             file_content_request={"file_id": self.S3_URI},
             optional_params={},
-            litellm_params=litellm_params,
+            litellm_params={**self._litellm_params(), "s3_bucket_name": "my-bucket"},
         )
 
         assert url == self.EXPECTED_URL
@@ -2829,6 +3155,88 @@ class TestBedrockFileContentTransformation:
             .startswith("AWS4-HMAC-SHA256")
         )
         assert response.content == b'{"recordId": "x"}'
+
+
+class TestBedrockFileContentFromTheStoredBucket:
+    TEAM_OUTPUT_URI: Final = "s3://team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+    TEAM_OUTPUT_URL: Final = "https://s3.us-west-2.amazonaws.com/team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+    CREDENTIALS: Final = {
+        "aws_access_key_id": "AKIAEXAMPLE",
+        "aws_secret_access_key": "secret",
+        "aws_region_name": "us-west-2",
+    }
+
+    def test_file_in_another_bucket_is_refused_without_the_stored_bucket(self) -> None:
+        with pytest.raises(Exception, match="does not match the configured storage bucket"):
+            litellm.file_content(
+                file_id=self.TEAM_OUTPUT_URI,
+                custom_llm_provider="bedrock",
+                s3_bucket_name="model-bucket",
+                **self.CREDENTIALS,
+            )
+
+    def test_file_in_the_stored_bucket_is_read_from_that_bucket(self) -> None:
+        import httpx
+        import respx
+
+        with respx.mock:
+            route: Final = respx.get(self.TEAM_OUTPUT_URL).mock(return_value=httpx.Response(200, content=b"{}"))
+            response: Final = litellm.file_content(
+                file_id=self.TEAM_OUTPUT_URI,
+                custom_llm_provider="bedrock",
+                s3_bucket_name="model-bucket",
+                stored_s3_bucket_name="team-a-bucket",
+                **self.CREDENTIALS,
+            )
+
+        assert route.call_count == 1
+        assert response.content == b"{}"
+
+    @pytest.mark.parametrize(
+        "stored_file_id",
+        [
+            "s3://team-a-bucket/tenant/litellm-batch-outputs/job-1/input.jsonl.out",
+            "s3://team-a-bucket/tenant/litellm-bedrock-files-nova-1.jsonl",
+            "s3://team-a-bucket/tenant/deeper/litellm-bedrock-files/nova-1.jsonl",
+        ],
+    )
+    def test_file_written_under_a_prefixed_request_bucket_is_read_back_from_it(self, stored_file_id: str) -> None:
+        import httpx
+        import respx
+
+        from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
+
+        url: Final = f"https://s3.us-west-2.amazonaws.com/{stored_file_id.removeprefix('s3://')}"
+        with respx.mock:
+            route: Final = respx.get(url).mock(return_value=httpx.Response(200, content=b"{}"))
+            litellm.file_content(
+                file_id=stored_file_id,
+                custom_llm_provider="bedrock",
+                s3_bucket_name="model-bucket",
+                **stored_s3_bucket_kwargs(stored_file_id),
+                **self.CREDENTIALS,
+            )
+
+        assert route.call_count == 1
+
+    def test_file_under_the_model_bucket_prefix_keeps_its_url_when_a_stored_bucket_is_passed(self) -> None:
+        import httpx
+        import respx
+
+        prefixed_url: Final = (
+            "https://s3.us-west-2.amazonaws.com/model-bucket/tenant/litellm-batch-outputs/job-1/input.jsonl.out"
+        )
+        with respx.mock:
+            route: Final = respx.get(prefixed_url).mock(return_value=httpx.Response(200, content=b"{}"))
+            litellm.file_content(
+                file_id="s3://model-bucket/tenant/litellm-batch-outputs/job-1/input.jsonl.out",
+                custom_llm_provider="bedrock",
+                s3_bucket_name="model-bucket/tenant",
+                stored_s3_bucket_name="model-bucket",
+                **self.CREDENTIALS,
+            )
+
+        assert route.call_count == 1
 
 
 class TestBedrockFilesS3SignatureEncoding:
@@ -3186,13 +3594,13 @@ def _bedrock_s3_params() -> dict:
     }
 
 
-def _trusted_bucket_snapshot(**deployment_litellm_params) -> dict:
-    from types import MappingProxyType
-
+def _deployment_bucket_params(**deployment_litellm_params: object) -> dict[str, object]:
     from litellm.types.router import CredentialLiteLLMParams
 
-    snapshot = CredentialLiteLLMParams(**deployment_litellm_params).model_dump(exclude_none=True)
-    return {**_bedrock_s3_params(), "_litellm_internal_model_credentials": MappingProxyType(snapshot)}
+    credentials: Final = CredentialLiteLLMParams.model_validate(deployment_litellm_params).model_dump(
+        exclude_none=True
+    )
+    return {**_bedrock_s3_params(), **credentials}
 
 
 class TestBedrockFileDeletionTransformation:
@@ -3247,7 +3655,7 @@ class TestBedrockFileDeletionTransformation:
 
         assert url == self.EXPECTED_URL
 
-    def test_transform_delete_file_request_uses_trusted_snapshot_bucket(self, monkeypatch):
+    def test_transform_delete_file_request_uses_call_bucket(self, monkeypatch):
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
@@ -3255,7 +3663,7 @@ class TestBedrockFileDeletionTransformation:
         url, _ = BedrockFilesConfig().transform_delete_file_request(
             file_id=self.S3_URI,
             optional_params={},
-            litellm_params=_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+            litellm_params=_deployment_bucket_params(s3_bucket_name="my-bucket"),
         )
 
         assert url == self.EXPECTED_URL
@@ -3555,7 +3963,7 @@ class TestBedrockFileListTransformation:
             "GET", f"{url}?list-type=2&prefix=LLM%20AI%20Projects%2Flitellm-b", signed_headers
         )
 
-    def test_transform_list_files_request_uses_trusted_snapshot_bucket(self, monkeypatch):
+    def test_transform_list_files_request_uses_call_bucket(self, monkeypatch):
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
@@ -3563,7 +3971,7 @@ class TestBedrockFileListTransformation:
         url, params = BedrockFilesConfig().transform_list_files_request(
             purpose=None,
             optional_params={},
-            litellm_params=_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+            litellm_params=_deployment_bucket_params(s3_bucket_name="my-bucket"),
         )
 
         assert url == self.BUCKET_URL
@@ -3656,7 +4064,7 @@ class TestBedrockFileListTransformation:
         assert _sent_signature(request.headers) == _s3_signature_for("GET", str(request.url), request.headers)
         assert [file.id for file in files] == list(self.BATCH_IDS)
 
-    def test_file_list_uses_trusted_snapshot_bucket_without_env(self, monkeypatch):
+    def test_file_list_uses_call_bucket_without_env(self, monkeypatch):
         import httpx
         import respx
 
@@ -3671,7 +4079,7 @@ class TestBedrockFileListTransformation:
 
             files = litellm.file_list(
                 custom_llm_provider="bedrock",
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket"),
             )
 
         assert route.called
@@ -3726,7 +4134,7 @@ class TestBedrockFileListTransformation:
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
         monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
-        litellm_params = _trusted_bucket_snapshot(
+        litellm_params = _deployment_bucket_params(
             s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket/team-a"
         )
 
@@ -3812,7 +4220,7 @@ class TestBedrockFileListTransformation:
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
         monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
-        litellm_params = _trusted_bucket_snapshot(s3_output_bucket_name="my-output-bucket")
+        litellm_params = _deployment_bucket_params(s3_output_bucket_name="my-output-bucket")
 
         url, params = BedrockFilesConfig().transform_list_files_request(
             purpose="batch_output", optional_params={}, litellm_params=litellm_params
@@ -3839,7 +4247,7 @@ class TestBedrockFileListTransformation:
             raw_response=httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING),
             logging_obj=MagicMock(),
             litellm_params={
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
                 LIST_FILES_PURPOSE_PARAM: "batch_output",
             },
         )
@@ -3863,7 +4271,7 @@ class TestBedrockFileListTransformation:
             files = litellm.file_list(
                 custom_llm_provider="bedrock",
                 purpose="batch_output",
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
             )
 
         assert route.called
@@ -3890,7 +4298,7 @@ class TestBedrockFileListTransformation:
 
             files = litellm.file_list(
                 custom_llm_provider="bedrock",
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
             )
 
         assert (input_route.call_count, output_route.call_count) == (1, 1)
@@ -3922,7 +4330,7 @@ class TestBedrockFileListTransformation:
 
             files = litellm.file_list(
                 custom_llm_provider="bedrock",
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
             )
             requested_urls = [str(call.request.url) for call in respx.calls]
 
@@ -3935,7 +4343,7 @@ class TestBedrockFileListTransformation:
         assert [file.id for file in files] == [*self.PAGED_IDS, self.OUTPUT_BUCKET_ID]
 
     @pytest.mark.parametrize(
-        ("purpose", "bucket_snapshot"),
+        ("purpose", "bucket_params"),
         [
             pytest.param(None, {"s3_bucket_name": "my-bucket"}, id="outputs-share-the-input-bucket"),
             pytest.param(
@@ -3946,7 +4354,7 @@ class TestBedrockFileListTransformation:
         ],
     )
     def test_file_list_leaves_the_output_bucket_alone_unless_an_unfiltered_list_needs_it(
-        self, monkeypatch, purpose, bucket_snapshot
+        self, monkeypatch, purpose, bucket_params
     ):
         import httpx
         import respx
@@ -3963,7 +4371,7 @@ class TestBedrockFileListTransformation:
             )
 
             files = litellm.file_list(
-                custom_llm_provider="bedrock", purpose=purpose, **_trusted_bucket_snapshot(**bucket_snapshot)
+                custom_llm_provider="bedrock", purpose=purpose, **_deployment_bucket_params(**bucket_params)
             )
 
         assert (input_route.call_count, output_route.call_count) == (1, 0)
@@ -3979,7 +4387,7 @@ class TestBedrockFileListTransformation:
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
         monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
-        litellm_params = _trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-bucket/out")
+        litellm_params = _deployment_bucket_params(s3_bucket_name="my-bucket", s3_output_bucket_name="my-bucket/out")
         config = BedrockFilesConfig()
         config.transform_list_files_request(purpose=None, optional_params={}, litellm_params=litellm_params)
         litellm_params.pop(S3_SIGNED_REQUEST_HEADERS_PARAM)
@@ -4090,7 +4498,7 @@ class TestBedrockFileListTransformation:
                 custom_llm_provider="bedrock",
                 purpose="batch",
                 timeout=12,
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket"),
             )
 
         self._assert_paged_listing(first_page, last_page, files)
@@ -4112,7 +4520,7 @@ class TestBedrockFileListTransformation:
                 custom_llm_provider="bedrock",
                 purpose="batch",
                 timeout=12,
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket"),
             )
 
         self._assert_paged_listing(first_page, last_page, files)
@@ -4169,7 +4577,7 @@ class TestBedrockFileListTransformation:
             files = litellm.file_list(
                 custom_llm_provider="bedrock",
                 purpose="batch",
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket"),
             )
 
         self._assert_capped_listing(route, files)
@@ -4190,7 +4598,7 @@ class TestBedrockFileListTransformation:
             files = await litellm.afile_list(
                 custom_llm_provider="bedrock",
                 purpose="batch",
-                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+                **_deployment_bucket_params(s3_bucket_name="my-bucket"),
             )
 
         self._assert_capped_listing(route, files)
@@ -4281,7 +4689,7 @@ def test_transform_file_content_request_signs_with_the_s3_pair_from_litellm_para
 
     litellm_params = {
         **_SPLIT_IDENTITY_PARAMS,
-        "_litellm_internal_model_credentials": MappingProxyType({"s3_bucket_name": "safe-bucket"}),
+        "s3_bucket_name": "safe-bucket",
     }
     BedrockFilesConfig().transform_file_content_request(
         file_content_request={"file_id": "s3://safe-bucket/litellm-bedrock-files-model-id-abc.jsonl"},
@@ -4334,3 +4742,305 @@ async def test_async_create_file(
         "s3://litellm-proxy-941277531214/litellm-bedrock-files-"
     )
     assert file_obj.filename.endswith(".jsonl")
+
+
+_VALID_BATCH_LINE: Final = json.dumps(
+    {
+        "custom_id": "req-1",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "bedrock/amazon.nova-pro-v1:0",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 10,
+        },
+    }
+)
+_MALFORMED_BATCH_JSONL: Final = f"{_VALID_BATCH_LINE}\n\n{{not json\n".encode()
+
+
+class TestMalformedBatchJsonl:
+    """A malformed line in a batch input file is the client's mistake, so it must come back as a 400 that names the
+    line, not escape as a JSONDecodeError the proxy reports as a 500 (#45060)."""
+
+    def test_create_file_request_rejects_a_malformed_line_with_a_400(self):
+        from litellm.llms.bedrock.common_utils import BedrockError
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        with pytest.raises(BedrockError) as exc_info:
+            BedrockFilesConfig().transform_create_file_request(
+                model="amazon.nova-pro-v1:0",
+                create_file_data={
+                    "file": ("batch.jsonl", _MALFORMED_BATCH_JSONL, "application/jsonl"),
+                    "purpose": "batch",
+                },
+                optional_params={
+                    "aws_access_key_id": "test-key-id",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-west-2",
+                },
+                litellm_params={"s3_bucket_name": "litellm-batch-bucket"},
+            )
+        assert exc_info.value.status_code == 400
+        assert "line 3" in exc_info.value.message
+
+    def test_file_content_conversion_rejects_a_malformed_line_with_a_400(self):
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        with pytest.raises(BedrockError) as exc_info:
+            BedrockJsonlFilesTransformation().transform_openai_file_content_to_bedrock_file_content(
+                _MALFORMED_BATCH_JSONL
+            )
+        assert exc_info.value.status_code == 400
+        assert "line 3" in exc_info.value.message
+
+    @pytest.mark.parametrize("content_type", ["application/jsonl", "application/x-jsonl"])
+    @pytest.mark.parametrize(
+        "file_content",
+        [_MALFORMED_BATCH_JSONL, f"{_VALID_BATCH_LINE}\n\n[1, 2]\n".encode()],
+        ids=["invalid-json", "array-line"],
+    )
+    def test_create_file_rejects_a_malformed_line_before_uploading(self, content_type: str, file_content: bytes):
+        """application/x-jsonl is not on the batch MIME allowlist, so the upload skips conversion for it; the line
+        check must still run so the broken file is rejected instead of landing in S3 unchanged."""
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        with respx.mock as router:
+            any_request: Final = router.route()
+            with pytest.raises(BedrockError) as exc_info:
+                litellm.create_file(
+                    file=("batch.jsonl", file_content, content_type),
+                    purpose="batch",
+                    custom_llm_provider="bedrock",
+                    model="bedrock/amazon.nova-pro-v1:0",
+                    s3_bucket_name="litellm-batch-bucket",
+                    aws_region_name="us-west-2",
+                    aws_access_key_id="test-key-id",
+                    aws_secret_access_key="test-secret",
+                )
+        assert exc_info.value.status_code == 400
+        assert "line 3" in exc_info.value.message
+        assert not any_request.called
+
+
+_VALID_BATCH_RECORD: Final = json.loads(_VALID_BATCH_LINE)
+
+
+def test_file_content_conversion_keeps_a_line_whose_json_holds_unicode_line_separators() -> None:
+    text: Final = "Hello\u2028from\u2029batch"
+    body: Final = {**_VALID_BATCH_RECORD["body"], "messages": [{"role": "user", "content": text}]}
+    record: Final = {**_VALID_BATCH_RECORD, "body": body}
+    file_content: Final = f"{json.dumps(record, ensure_ascii=False)}\n".encode()
+
+    bedrock_jsonl, _ = BedrockJsonlFilesTransformation().transform_openai_file_content_to_bedrock_file_content(
+        file_content
+    )
+
+    (bedrock_record,) = (json.loads(line) for line in bedrock_jsonl.split("\n"))
+    assert bedrock_record["modelInput"]["messages"] == [{"role": "user", "content": [{"text": text}]}]
+
+
+_CLAUDE_BODY_WITH_A_LIST_ROLE_BEFORE_A_SYSTEM_MESSAGE: Final = {
+    "model": "bedrock/us.anthropic.claude-haiku-5-5",
+    "max_tokens": 20,
+    "messages": [
+        {"role": "user", "content": "hi"},
+        {"role": ["user"], "content": "ok"},
+        {"role": "system", "content": "Be terse."},
+    ],
+}
+
+
+def _batch_line(body: object) -> str:
+    return json.dumps({**_VALID_BATCH_RECORD, "body": body})
+
+
+def _batch_line_with_body(field: str, value: object) -> str:
+    return _batch_line({**_VALID_BATCH_RECORD["body"], field: value})
+
+
+_BATCH_S3_IMAGE: Final = "s3://media-bucket/dir/cat.png"
+_BATCH_S3_MEDIA_REFUSAL: Final = (
+    f"Batch input file line 2 has s3:// media URLs ({_BATCH_S3_IMAGE}). "
+    "LiteLLM does not accept s3:// media URLs in Bedrock batch files, so send the media inline as base64 data"
+)
+_CHAT_BATCH_LINE_WITH_AN_S3_IMAGE: Final = _batch_line_with_body(
+    "messages",
+    [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": _BATCH_S3_IMAGE}}]}],
+)
+_S3_IMAGE_PART: Final = {"type": "image_url", "image_url": {"url": _BATCH_S3_IMAGE}}
+_CHAT_BATCH_LINE_WITH_THE_SAME_S3_IMAGE_TWICE: Final = _batch_line_with_body(
+    "messages", [{"role": "user", "content": [_S3_IMAGE_PART, _S3_IMAGE_PART]}]
+)
+_RESPONSES_BATCH_LINE_WITH_AN_S3_IMAGE: Final = json.dumps(
+    {
+        "custom_id": "req-2",
+        "method": "POST",
+        "url": "/v1/responses",
+        "body": {
+            "model": "bedrock/amazon.nova-pro-v1:0",
+            "input": [{"role": "user", "content": [{"type": "input_image", "image_url": _BATCH_S3_IMAGE}]}],
+        },
+    }
+)
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("file_content", "expected_message"),
+    [
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n[1, 2]\n".encode(), "Batch input file line 2 is not a JSON object", id="array-line"
+        ),
+        pytest.param(
+            f"[1, 2]\n{_VALID_BATCH_LINE}\n".encode(), "Batch input file line 1 is not a JSON object", id="array-first"
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_batch_line(None)}\n".encode(),
+            "Batch input file line 2 has a body that is missing or not a JSON object",
+            id="null-body",
+        ),
+        pytest.param(
+            f"{_batch_line('hello')}\n".encode(),
+            "Batch input file line 1 has a body that is missing or not a JSON object",
+            id="string-body",
+        ),
+        pytest.param(
+            f"{_batch_line_with_body('model', 123)}\n".encode(),
+            "Batch input file line 1 has a body.model that is not a string",
+            id="int-model",
+        ),
+        pytest.param(
+            f"{_batch_line_with_body('model', None)}\n".encode(),
+            "Batch input file line 1 has a body.model that is not a string",
+            id="null-model",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_batch_line_with_body('messages', 'hi')}\n".encode(),
+            "Batch input file line 2 could not be converted to a Bedrock batch record",
+            id="string-messages",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_batch_line(_CLAUDE_BODY_WITH_A_LIST_ROLE_BEFORE_A_SYSTEM_MESSAGE)}\n".encode(),
+            "Batch input file line 2 could not be converted to a Bedrock batch record",
+            id="claude-list-role-before-a-system-message",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_CHAT_BATCH_LINE_WITH_AN_S3_IMAGE}\n".encode(),
+            _BATCH_S3_MEDIA_REFUSAL,
+            id="chat-s3-image",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_RESPONSES_BATCH_LINE_WITH_AN_S3_IMAGE}\n".encode(),
+            _BATCH_S3_MEDIA_REFUSAL,
+            id="responses-s3-image",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_CHAT_BATCH_LINE_WITH_THE_SAME_S3_IMAGE_TWICE}\n".encode(),
+            _BATCH_S3_MEDIA_REFUSAL,
+            id="chat-repeated-s3-image",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{'[' * 1_000_000}{']' * 1_000_000}\n".encode(),
+            "Batch input file line 2 could not be parsed",
+            id="deep-nesting",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n".encode() + b'{"custom_id": "\xff"}\n',
+            "Batch input file line 2 is not valid UTF-8",
+            id="non-utf8",
+        ),
+    ],
+)
+async def test_create_file_rejects_a_malformed_batch_line_with_a_400_before_uploading(
+    respx_mock: respx.MockRouter, file_content: bytes, expected_message: str
+) -> None:
+    put_route: Final = respx_mock.put(url__regex=r"https://s3\..+").respond(status_code=200)
+
+    with pytest.raises(BedrockError) as exc_info:
+        await litellm.acreate_file(
+            file=("batch.jsonl", file_content, "application/jsonl"),
+            purpose="batch",
+            custom_llm_provider="bedrock",
+            s3_bucket_name="litellm-batch-bucket",
+            aws_region_name="us-west-2",
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.message.startswith(expected_message)
+    assert not put_route.called
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+async def test_create_file_uploads_s3_values_that_no_converse_record_sends_as_an_s3_source(
+    respx_mock: respx.MockRouter,
+) -> None:
+    put_route: Final = respx_mock.put(url__regex=r"https://s3\..+").respond(status_code=200)
+    passthrough_messages: Final = [{"role": "user", "content": [_S3_IMAGE_PART]}]
+    passthrough_line: Final = _batch_line(
+        {"model": "bedrock/openai.gpt-oss-120b-1:0", "max_tokens": 10, "messages": passthrough_messages}
+    )
+    metadata_only_line: Final = _batch_line_with_body("metadata", {"url": _BATCH_S3_IMAGE})
+
+    await litellm.acreate_file(
+        file=("batch.jsonl", f"{passthrough_line}\n{metadata_only_line}\n".encode(), "application/jsonl"),
+        purpose="batch",
+        custom_llm_provider="bedrock",
+        s3_bucket_name="litellm-batch-bucket",
+        aws_region_name="us-west-2",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+    )
+
+    passthrough_record, metadata_only_record = (
+        json.loads(line) for line in put_route.calls.last.request.content.decode().split("\n")
+    )
+    assert passthrough_record["modelInput"]["messages"] == passthrough_messages
+    assert metadata_only_record["recordId"] == _VALID_BATCH_RECORD["custom_id"]
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+async def test_create_file_accepts_a_batch_file_with_a_utf8_byte_order_mark(respx_mock: respx.MockRouter) -> None:
+    put_route: Final = respx_mock.put(url__regex=r"https://s3\..+").respond(status_code=200)
+
+    await litellm.acreate_file(
+        file=("batch.jsonl", f"\ufeff{_VALID_BATCH_LINE}\n".encode(), "application/jsonl"),
+        purpose="batch",
+        custom_llm_provider="bedrock",
+        s3_bucket_name="litellm-batch-bucket",
+        aws_region_name="us-west-2",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+    )
+
+    uploaded_record: Final = json.loads(put_route.calls.last.request.content)
+    assert uploaded_record["recordId"] == _VALID_BATCH_RECORD["custom_id"]
+    assert "/litellm-bedrock-files-amazon.nova-pro-v1-0-" in str(put_route.calls.last.request.url)
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+async def test_create_file_uploads_a_bedrock_format_batch_file_unchanged_when_its_mime_type_skips_conversion(
+    respx_mock: respx.MockRouter,
+) -> None:
+    put_route: Final = respx_mock.put(url__regex=r"https://s3\..+").respond(status_code=200)
+    bedrock_line: Final = json.dumps(
+        {"recordId": "req-1", "modelInput": {"messages": [{"role": "user", "content": [{"text": "Hello"}]}]}}
+    )
+
+    await litellm.acreate_file(
+        file=("batch.jsonl", f"{bedrock_line}\n".encode(), "application/x-jsonl"),
+        purpose="batch",
+        custom_llm_provider="bedrock",
+        s3_bucket_name="litellm-batch-bucket",
+        aws_region_name="us-west-2",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+    )
+
+    assert put_route.calls.last.request.content == f"{bedrock_line}\n".encode()

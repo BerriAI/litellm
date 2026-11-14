@@ -15,7 +15,7 @@ import json
 import time
 import uuid
 from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast  # noqa: TID251  # see kwargs-ok / cast-ok markers
+from typing import TYPE_CHECKING, Final, TypeAlias, cast  # noqa: TID251  # see cast-ok markers
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -45,7 +45,7 @@ class FileSearchToolCallArgs(TypedDict):
 
 
 def should_use_emulated_file_search(
-    tools: Iterable[ToolParam] | None,
+    tools: Iterable[object] | None,
     provider_config: "BaseResponsesAPIConfig | None",
 ) -> bool:
     """Return True when there is a file_search tool and the provider can't handle it natively."""
@@ -105,7 +105,7 @@ def _build_function_tool(vector_store_ids: list[str]) -> dict[str, object]:
     }
 
 
-def _replace_file_search_tools(
+def replace_file_search_tools(
     tools: Iterable[ToolParam] | None,
 ) -> tuple[list[object], list[str]]:
     """
@@ -517,7 +517,7 @@ async def aresponses_with_emulated_file_search(
     model: str,
     tools: Iterable[ToolParam] | None = None,
     # Pass-through params — forwarded as-is to the underlying aresponses call
-    **kwargs: Any,  # kwargs-ok: `object` would surface the caller's partially-unknown dict at its call site
+    **kwargs: object,  # kwargs-ok: pass-through params forwarded as-is to the underlying aresponses call
 ) -> ResponsesAPIResponse:
     """
     Emulated file_search for providers that don't support it natively.
@@ -529,7 +529,7 @@ async def aresponses_with_emulated_file_search(
     _include_search_results, call_kwargs = _prepare_emulated_file_search_call(kwargs=kwargs)
 
     # 1. Replace file_search tools with function tool
-    transformed_tools, all_vs_ids = _replace_file_search_tools(tools)
+    transformed_tools, all_vs_ids = replace_file_search_tools(tools)
 
     # 2. First provider call — provider will call the file_search function.
     # Mark as an internal sub-call so wrapper_async skips billing callbacks;

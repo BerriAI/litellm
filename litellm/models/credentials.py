@@ -10,6 +10,7 @@ from typing import Literal, TypeAlias
 
 from pydantic import ConfigDict, Field, model_validator
 
+from litellm.constants import GITHUB_COPILOT_DEFAULT_HOST
 from litellm.types.llms.base import LiteLLMBaseModel
 
 CredentialSource: TypeAlias = Literal["db", "config"]
@@ -101,6 +102,7 @@ class UserConnectionFlowHandle(LiteLLMBaseModel):
 
     user_id: str
     credential_name: str
+    github_host: str = GITHUB_COPILOT_DEFAULT_HOST
     device_code: str = Field(repr=False)
     interval: int
     expires_at: float

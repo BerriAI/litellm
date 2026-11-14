@@ -422,7 +422,7 @@ class TestInteractionOperationUrls:
             (
                 "transform_cancel_interaction_request",
                 "interaction-789",
-                "interaction-789:cancel",
+                "interaction-789/cancel",
             ),
         ],
     )
@@ -450,7 +450,7 @@ class TestInteractionOperationUrls:
 
         assert (
             url
-            == "https://generativelanguage.googleapis.com/v1beta/interactions/..%2F..%2Finteractions%2Fother%3Fx%3D1%23frag:cancel"
+            == "https://generativelanguage.googleapis.com/v1beta/interactions/..%2F..%2Finteractions%2Fother%3Fx%3D1%23frag/cancel"
         )
         assert params == {}
 
@@ -598,3 +598,14 @@ class TestTransformRequestSchemaCoalescing:
         )
         assert len(optional_params["response_format"]) == 1
         assert body_retry["response_format"] == body["response_format"]
+
+    def test_image_config_that_is_not_a_mapping_is_rejected(self, config):
+        with pytest.raises(TypeError, match=r"^'str' object is not a mapping$"):
+            config.transform_request(
+                model="gemini/gemini-2.5-flash",
+                agent=None,
+                input="draw a sunset",
+                optional_params={"generation_config": {"image_config": "1:1"}},
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )

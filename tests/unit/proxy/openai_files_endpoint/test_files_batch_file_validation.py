@@ -1,4 +1,5 @@
 import io
+import sys
 
 import pytest
 
@@ -90,6 +91,15 @@ def test_non_utf8_line_rejected_as_invalid_json():
     assert check_batch_file_upload("batch.jsonl", b"\xff\xfe\x00\x01\n", None) == BatchFileInvalidJsonLine(
         line_number=1
     )
+
+
+@pytest.mark.parametrize(
+    "unparseable_line",
+    [b"[" * 1_000_000, b'{"n": ' + b"9" * (sys.get_int_max_str_digits() + 1) + b"}"],
+)
+def test_line_too_deep_or_too_long_to_parse_rejected_as_invalid_json(unparseable_line: bytes):
+    content = VALID_LINE + b"\n" + unparseable_line + b"\n"
+    assert check_batch_file_upload("batch.jsonl", content, None) == BatchFileInvalidJsonLine(line_number=2)
 
 
 def test_non_object_line_rejected():

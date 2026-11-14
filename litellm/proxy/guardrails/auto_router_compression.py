@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
-from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
+from litellm.router_strategy.auto_router.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -92,7 +92,7 @@ def policy_for_model(
     """
     if llm_router is None:
         return None
-    deployments: Final = llm_router.deployments_for_request(model_alias, request_kwargs)
+    deployments: Final = llm_router.registry().deployments(model_alias, source="for_request", request=request_kwargs)
     markers: Final = tuple(
         litellm_params
         for deployment in deployments
@@ -156,15 +156,13 @@ async def arm_pre_call(
     if not isinstance(model_alias, str) or not model_alias:
         return
 
-    from litellm.router_strategy.tag_based_routing import (
-        get_tags_from_request_kwargs,
-    )
+    from litellm.router_strategy.tag_based_routing import get_routing_tags_from_request_kwargs
 
     policy: Final = policy_for_model(
         llm_router=llm_router,
         model_alias=model_alias,
         request_kwargs=data,
-        request_tags=get_tags_from_request_kwargs(data),
+        request_tags=get_routing_tags_from_request_kwargs(data),
     )
     if policy is None:
         return

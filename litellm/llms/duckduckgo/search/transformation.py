@@ -12,6 +12,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
@@ -91,7 +92,7 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
         if data and isinstance(data, dict) and "_duckduckgo_params" in data:
             params: Final = data["_duckduckgo_params"]
             query_string: Final = urlencode(params, doseq=True)
-            return f"{api_base}/?{query_string}"
+            return f"{join_api_base(api_base, '')}?{query_string}"
 
         return api_base
 

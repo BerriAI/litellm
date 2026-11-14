@@ -20,7 +20,10 @@ from collections.abc import Iterator, Mapping, Sequence
 from itertools import islice
 from typing import Final, NamedTuple
 
+from pydantic import TypeAdapter
+
 _ARGUMENTS_PARSE_FAILED: Final = object()
+_DECODED_ARGUMENTS: Final = TypeAdapter(object)
 
 
 class _ToolCallEvent(NamedTuple):
@@ -31,7 +34,7 @@ class _ToolCallEvent(NamedTuple):
 
 def _json_arguments(raw: str) -> object:
     try:
-        return json.loads(raw)
+        return _DECODED_ARGUMENTS.validate_python(json.loads(raw))
     except (TypeError, ValueError):
         return _ARGUMENTS_PARSE_FAILED
 

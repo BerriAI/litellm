@@ -13,6 +13,8 @@ from integration._support.process import owned_proxy
 from integration._support.upstream import JsonResponse, SseResponse, delete_scenario, register_scenario
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
@@ -118,6 +120,18 @@ def _assert_budget_refusal(response: httpx.Response, end_user: str) -> None:
     ]
 
 
+def _assert_messages_budget_refusal(response: httpx.Response, end_user: str) -> None:
+    assert response.status_code == 422, response.text
+    body: Final = _json_object(response.content)
+    assert body["type"] == "error", response.text
+    error: Final = object_value(body["error"])
+    assert error["type"] == "invalid_request_error"
+    assert "param" not in error and "code" not in error, response.text
+    assert str(error["message"]).startswith(f"ExceededBudget: End User={end_user} over budget. Spend="), error[
+        "message"
+    ]
+
+
 def _json_object(raw: bytes) -> dict[str, JsonValue]:
     return _JSON_OBJECT.validate_json(raw)
 
@@ -173,7 +187,7 @@ def test_streamed_end_user_spelling_is_charged_and_budget_enforced(gateway: Gate
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
         _new_customer(gateway, end_user, max_budget=0.05)
         scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
@@ -208,6 +222,7 @@ def test_streamed_end_user_spelling_is_charged_and_budget_enforced(gateway: Gate
         assert spend == pytest.approx(20 * 0.001 + 20 * 0.002)
         _assert_daily_row(end_user, model)
 
+        upstream.delete("/__observations").raise_for_status()
         denied: Final = _chat_request(
             gateway,
             model,
@@ -229,7 +244,7 @@ def test_anthropic_messages_metadata_user_id_is_charged_and_budget_enforced(gate
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
         _new_customer(gateway, end_user, max_budget=0.05)
         scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
@@ -335,13 +350,14 @@ def test_anthropic_messages_metadata_user_id_is_charged_and_budget_enforced(gate
         assert spend == pytest.approx(20 * 0.001 + 20 * 0.002)
         _assert_daily_row(end_user, model, "anthropic/claude-sonnet-5-5")
 
+        upstream.delete("/__observations").raise_for_status()
         denied: Final = gateway.client.request(
             "POST",
             "/v1/messages",
             json={**body, "messages": [{"role": "user", "content": f"again {uuid.uuid4().hex}"}]},
             headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
         )
-        _assert_budget_refusal(denied, end_user)
+        _assert_messages_budget_refusal(denied, end_user)
         assert _observed(upstream) == []
 
 
@@ -351,7 +367,7 @@ def test_end_user_id_spelling_is_charged_and_budget_enforced(gateway: Gateway, s
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
         _new_customer(gateway, end_user, max_budget=0.05)
         scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
@@ -371,6 +387,7 @@ def test_end_user_id_spelling_is_charged_and_budget_enforced(gateway: Gateway, s
         assert spend == pytest.approx(20 * 0.001 + 20 * 0.002)
         _assert_daily_row(end_user, model)
 
+        upstream.delete("/__observations").raise_for_status()
         denied: Final = _chat_request(gateway, model, key, spelling, end_user, f"again {uuid.uuid4().hex}")
         _assert_budget_refusal(denied, end_user)
         assert _observed(upstream) == []
@@ -381,7 +398,7 @@ def test_safety_identifier_on_responses_is_charged_and_budget_enforced(gateway: 
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         scenario_id: Final = f"sc-{uuid.uuid4().hex}"
         handle: Final = register_scenario(
             scenario_id,
@@ -450,6 +467,7 @@ def test_safety_identifier_on_responses_is_charged_and_budget_enforced(gateway: 
         assert spend == pytest.approx(0.06)
         _assert_daily_row(end_user, model)
 
+        upstream.delete("/__observations").raise_for_status()
         denied: Final = call()
         _assert_budget_refusal(denied, end_user)
         assert _observed(upstream) == []
@@ -460,7 +478,7 @@ def test_end_user_header_wins_over_body_user(gateway: Gateway) -> None:
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         header_user: Final = f"integration-end-user-a-{uuid.uuid4().hex}"
         body_user: Final = f"integration-end-user-b-{uuid.uuid4().hex}"
         _new_customer(gateway, header_user, max_budget=0.05)
@@ -501,6 +519,7 @@ def test_end_user_header_wins_over_body_user(gateway: Gateway) -> None:
             == []
         )
 
+        upstream.delete("/__observations").raise_for_status()
         denied: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
@@ -540,7 +559,7 @@ def test_configured_end_user_header_is_charged_and_budget_enforced(
         candidate.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        _observed(upstream)
+        upstream.delete("/__observations").raise_for_status()
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
         _new_customer(candidate, end_user, max_budget=0.05)
         scenario.cleanups.callback(candidate.request, "POST", "/customer/delete", {"user_ids": [end_user]})
@@ -567,6 +586,7 @@ def test_configured_end_user_header_is_charged_and_budget_enforced(
         assert _charged_spend(end_user) == pytest.approx(0.06)
         _assert_daily_row(end_user, model)
 
+        upstream.delete("/__observations").raise_for_status()
         denied: Final = candidate.request(
             "POST",
             "/v1/chat/completions",

@@ -18,6 +18,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, NotFoundError, OpenAI
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _UPSTREAM_ERROR: Final[dict[str, JsonValue]] = {
     "error": {
         "code": 404,

@@ -40,6 +40,8 @@ class VertexSpeechToTextResponseMetadata(LiteLLMBaseModel):
 
 
 class VertexSpeechToTextRecognizeResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     results: list[VertexSpeechToTextResult] = Field(default=[])
     metadata: VertexSpeechToTextResponseMetadata | None = None
 

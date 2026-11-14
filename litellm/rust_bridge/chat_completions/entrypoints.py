@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
+from litellm.rust_bridge import execution
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.utils import ModelResponse
@@ -25,13 +26,15 @@ class NativeAcompletion(Protocol):
 def _completion_binding(value: object) -> NativeCompletion | None:
     if not callable(value):
         return None
-    return cast("NativeCompletion", value)  # cast-ok: callable validated at the native binding boundary
+    native: Final = execution.synchronous(value)
+    return cast("NativeCompletion", native)  # cast-ok: the execution adapter returns the route's result
 
 
 def _acompletion_binding(value: object) -> NativeAcompletion | None:
     if not callable(value):
         return None
-    return cast("NativeAcompletion", value)  # cast-ok: callable validated at the native binding boundary
+    native: Final = execution.asynchronous(value)
+    return cast("NativeAcompletion", native)  # cast-ok: the execution adapter returns the route's result
 
 
 NATIVE_COMPLETION: Final = NativeBinding("completion", validate=_completion_binding)

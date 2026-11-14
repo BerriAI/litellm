@@ -1,6 +1,6 @@
-"""``with_service_target`` and ``service_caller`` carry the purpose and the caller of a datastore call
-to code that cannot see them from its own frames, and every Redis producer on the proxy request path
-declares a key family so no request-path span renders as a bare ``redis.get``."""
+"""``with_service_target`` carries the purpose of a datastore call to code that cannot see it from its own
+frames, and every Redis producer on the proxy request path declares a key family so no request-path span renders
+as a bare ``redis.get``."""
 
 import ast
 import asyncio
@@ -11,13 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-import pytest
-
 from litellm._internal_context import (
-    current_service_caller,
+    current_request_parent_otel_span,
     current_service_target,
-    service_caller,
+    request_parent_otel_span,
     service_target,
+    set_request_parent_otel_span,
     with_service_target,
 )
 
@@ -25,13 +24,16 @@ _REPO: Final = Path(__file__).resolve().parents[2]
 
 _REDIS_PRODUCER_ROOTS: Final = ("litellm", "enterprise")
 # The cache implementations and facades: they emit the service events, their callers declare the family.
-_CACHE_LAYER_DIRS: Final = ("litellm/caching", "litellm/_v2/cache")
-# Helpers that act on a cache handed in by the declaring caller, or forward to the response-cache facade.
+_CACHE_LAYER_DIRS: Final = ("litellm/caching",)
+# Helpers that act on a cache handed in by the declaring caller, forward to the response-cache facade, or call a
+# ``litellm.redis.stores`` store, which declares its own family.
 _CACHE_PARAMETER_HELPERS: Final = frozenset(
     {
         "litellm/llms/anthropic/prompt_cache_prediction.py",
         "litellm/proxy/common_utils/cache_coordinator.py",
         "litellm/proxy/common_utils/user_api_key_cache.py",
+        "litellm/router_rust/routing_stores.py",
+        "litellm/router_utils/routing_prefetch.py",
         "litellm/utils.py",
     }
 )
@@ -54,29 +56,34 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/llms/azure/common_utils.py",
         "litellm/llms/bedrock/base_aws_llm.py",
         "litellm/llms/custom_httpx/http_handler.py",
+        "litellm/llms/databricks/common_utils.py",
         "litellm/llms/gigachat/authenticator.py",
         "litellm/llms/github_copilot/per_user_auth.py",
+        "litellm/llms/github_copilot/authenticator.py",
         "litellm/llms/litellm_proxy/skills/handler.py",
         "litellm/llms/openai/common_utils.py",
         "litellm/llms/openai_like/model_info.py",
         "litellm/llms/vertex_ai/vertex_ai_non_gemini.py",
         "litellm/llms/watsonx/common_utils.py",
-        "litellm/proxy/_experimental/mcp_server/byok_credential_cache.py",
-        "litellm/proxy/_experimental/mcp_server/catalog.py",
-        "litellm/proxy/_experimental/mcp_server/discoverable_endpoints.py",
-        "litellm/proxy/_experimental/mcp_server/oauth_identity_binding.py",
-        "litellm/proxy/_experimental/mcp_server/operations.py",
-        "litellm/proxy/_experimental/mcp_server/outbound_credentials/sso_assertion_store.py",
-        "litellm/proxy/_experimental/mcp_server/outbound_credentials/token_endpoint.py",
+        "litellm/proxy/mcp_server/byok_credential_cache.py",
+        "litellm/proxy/mcp_server/catalog.py",
+        "litellm/proxy/mcp_server/discoverable_endpoints.py",
+        "litellm/proxy/mcp_server/oauth_identity_binding.py",
+        "litellm/proxy/mcp_server/operations.py",
+        "litellm/proxy/mcp_server/outbound_credentials/sso_assertion_store.py",
+        "litellm/proxy/mcp_server/outbound_credentials/token_endpoint.py",
         "litellm/proxy/agent_endpoints/databricks_oauth.py",
         "litellm/proxy/common_utils/registry_read_through.py",
         "litellm/proxy/container_endpoints/ownership.py",
         "litellm/proxy/discovery_endpoints/agent_skills_endpoints.py",
         "litellm/proxy/guardrails/guardrail_hooks/straiker/straiker.py",
+        "litellm/proxy/hooks/model_budget_shared_windows.py",
         "litellm/proxy/spend_tracking/key_metadata_recovery.py",
         "litellm/proxy/ui_crud_endpoints/latest_release_endpoints.py",
         "litellm/responses/litellm_completion_transformation/transformation.py",
+        "litellm/router_rust/surface/model_info.py",
         "litellm/router_utils/client_initalization_utils.py",
+        "litellm/router_utils/pre_call_checks/prompt_caching_deployment_check.py",
         "litellm/router_utils/router_callbacks/track_deployment_metrics.py",
         "litellm/secret_managers/cyberark_secret_manager.py",
         "litellm/secret_managers/google_secret_manager.py",
@@ -86,11 +93,10 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
 )
 
 _CACHE_CALL: Final = re.compile(
-    r"\.(?:async_)?(?:get_cache|set_cache|batch_get_cache|batch_get_cache_shared|increment_cache|increment"
+    r"\.(?:async_)?(?:get_cache|set_cache|batch_get_cache|batch_get_cache_shared|increment_cache|increment_if_present|increment"
     r"|set_cache_pipeline|set_cache_pipeline_with_ttls|set_cache_sadd|delete_cache|batch_set_cache|increment_pipeline"
     r"|rpush|lpop|scan_iter|get_ttl|mget)\("
-    r"|\b(?:reserve_redis_batch_reads|declare_batch_get|_prepare_batch_get)\("
-    r"|\bbatch\.(?:set|delete|script|increment)\("
+    r"|\b_prepare_batch_get\("
 )
 _DECLARES_TARGET: Final = re.compile(r"\b(?:with_service_target|service_target|response_cache_phase)\(")
 _BUILDS_A_REDIS_CACHE: Final = re.compile(r"\bRedisCache\(|\bredis_cache=(?!None\b)")
@@ -162,30 +168,32 @@ def test_with_service_target_keeps_the_wrapped_signature_and_coroutine_ness() ->
     assert hook.__name__ == "hook"
 
 
-def test_service_caller_is_inherited_by_a_task_spawned_inside_it_and_cleared_after() -> None:
-    async def spawned() -> str | None:
-        return current_service_caller()
-
-    async def main() -> tuple[str | None, str | None]:
-        with service_caller("prefetch <- auth"):
-            task = asyncio.create_task(spawned())
-        return await task, current_service_caller()
-
-    assert asyncio.run(main()) == ("prefetch <- auth", None)
-
-
-@pytest.mark.parametrize("value", [None, "x"])
-def test_service_caller_restores_the_outer_value(value: str | None) -> None:
-    with service_caller(value):
-        with service_caller("inner"):
-            assert current_service_caller() == "inner"
-        assert current_service_caller() == value
-    assert current_service_caller() is None
-
-
 class _Suspend:
     def __await__(self) -> Generator[None]:
         yield
+
+
+def test_an_sdk_callers_span_anchors_the_block_and_the_tasks_it_starts_and_nothing_after() -> None:
+    sdk_span: Final = object()
+
+    async def sdk_call() -> tuple[object, object, object]:
+        with request_parent_otel_span(sdk_span):  # pyright: ignore[reportArgumentType]  # any object stands in for a span
+            inside: Final = current_request_parent_otel_span()
+            background: Final = asyncio.create_task(asyncio.to_thread(current_request_parent_otel_span))
+        return inside, await background, current_request_parent_otel_span()
+
+    assert asyncio.run(sdk_call()) == (sdk_span, sdk_span, None)
+
+
+def test_a_request_that_anchored_its_own_span_keeps_it_over_one_an_sdk_caller_passes() -> None:
+    proxy_span: Final = object()
+
+    def proxy_request() -> object:
+        set_request_parent_otel_span(proxy_span)  # pyright: ignore[reportArgumentType]  # any object stands in for a span
+        with request_parent_otel_span(object()):  # pyright: ignore[reportArgumentType]  # any object stands in for a span
+            return current_request_parent_otel_span()
+
+    assert contextvars.copy_context().run(proxy_request) is proxy_span
 
 
 def test_a_targeted_coroutine_closed_from_another_context_does_not_raise() -> None:

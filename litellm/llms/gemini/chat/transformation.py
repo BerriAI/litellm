@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Final, cast
+from typing import ClassVar, Final, cast
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -49,6 +49,8 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     Note: Please make sure to modify the default parameters as required for your use case.
     """
 
+    _route: ClassVar[str] = "gemini"
+
     temperature: float | None = None
     max_output_tokens: int | None = None
     top_p: float | None = None
@@ -82,9 +84,9 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         return "tts" in model
 
     def get_supported_openai_params(self, model: str) -> list[str]:
+        sampling_params: Final = ("temperature", "top_p") if self.supports_sampling_params(model) else ()
         supported_params: Final = [
-            "temperature",
-            "top_p",
+            *sampling_params,
             "max_tokens",
             "max_completion_tokens",
             "stream",

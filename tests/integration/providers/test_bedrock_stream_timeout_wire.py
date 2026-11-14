@@ -22,6 +22,8 @@ _CONVERSE_MODEL_ID: Final = "global.moonshotai.kimi-k3"
 _CONVERSE_MODEL: Final = f"bedrock/converse/{_CONVERSE_MODEL_ID}"
 _INVOKE_MODEL_ID: Final = "anthropic.claude-3-haiku-20240307-v1:0"
 _INVOKE_MODEL: Final = f"bedrock/invoke/{_INVOKE_MODEL_ID}"
+_FAKED_MODEL_ID: Final = "ai21.jamba-1-5-mini-v1:0"
+_FAKED_MODEL: Final = f"bedrock/converse/{_FAKED_MODEL_ID}"
 _EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
 _ANSWER_HEAD: Final = "scripted answer part one "
 _ANSWER_TAIL: Final = "scripted answer part two"
@@ -31,6 +33,9 @@ _USER_TURN: Final[dict[str, JsonValue]] = {"role": "user", "content": _PROMPT}
 _TIMEOUT_SECONDS: Final = 1
 _PAUSE_SECONDS: Final = 3.0
 _HOLD_SECONDS: Final = 40.0
+_GENERATION_SECONDS: Final = 3.0
+_LONG_TIMEOUT_SECONDS: Final = 6
+_BOTH_LIMITS_TIMEOUT_SECONDS: Final = 2
 _CLIENT_WINDOW: Final = 10.0
 _RETRY_WINDOW: Final = 25.0
 _SHORT_WINDOW: Final = 3.0
@@ -65,8 +70,8 @@ _INVOKE_RESPONSE: Final = json.dumps(
     }
 ).encode()
 
-Endpoint = Literal["chat", "messages", "responses"]
-Mode = Literal["fast", "stall", "pause", "cut"]
+Endpoint = Literal["chat", "messages", "responses", "completions"]
+Mode = Literal["fast", "stall", "pause", "cut", "slow"]
 
 
 def _frame(event_type: str, payload: Mapping[str, JsonValue]) -> bytes:
@@ -136,6 +141,8 @@ class _Peer:
         target: Final = unquote(request.target)
         if self.mode == "stall":
             self.release.wait(timeout=_HOLD_SECONDS)
+        if self.mode == "slow":
+            self.release.wait(timeout=_GENERATION_SECONDS)
         if not _is_stream(target):
             return Reply(body=_json_for(target))
         frames: Final = _frames_for(target)
@@ -161,6 +168,10 @@ def _peer(mode: Mode) -> Iterator[Wire]:
 
 def _converse(scenario: Scenario, wire: Wire, **extra: JsonValue) -> str:
     return scenario.model(model=_CONVERSE_MODEL, api_base=wire.url, **_AWS, **extra)
+
+
+def _faked(scenario: Scenario, wire: Wire, **extra: JsonValue) -> str:
+    return scenario.model(model=_FAKED_MODEL, api_base=wire.url, **_AWS, **extra)
 
 
 def _invoke(scenario: Scenario, wire: Wire, **extra: JsonValue) -> str:
@@ -205,6 +216,8 @@ def _path(endpoint: Endpoint) -> str:
             return "/v1/messages"
         case "responses":
             return "/v1/responses"
+        case "completions":
+            return "/v1/completions"
 
 
 def _body(endpoint: Endpoint, model: str, *, stream: bool = True, **extra: JsonValue) -> dict[str, JsonValue]:
@@ -215,6 +228,8 @@ def _body(endpoint: Endpoint, model: str, *, stream: bool = True, **extra: JsonV
             return {"model": model, "messages": [_USER_TURN], "max_tokens": 16, "stream": stream, **_EXTRA, **extra}
         case "responses":
             return {"model": model, "input": _PROMPT, "stream": stream, **_EXTRA, **extra}
+        case "completions":
+            return {"model": model, "prompt": _PROMPT, "stream": stream, **_EXTRA, **extra}
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,6 +331,11 @@ def _failure_rows(model: str, expected: int) -> list[dict[str, JsonValue]]:
 def _received(wire: Wire, expected: int) -> None:
     eventually(wire.received.qsize, lambda size: size == expected, 10)
     assert len(wire.drain()) == expected
+
+
+def _received_targets(wire: Wire, expected: int) -> tuple[str, ...]:
+    eventually(wire.received.qsize, lambda size: size == expected, 10)
+    return tuple(unquote(request.target) for request in wire.drain())
 
 
 def _model_identity(gateway: Gateway, model: str) -> str:
@@ -439,6 +459,39 @@ def test_h13_an_invoke_stream_cut_off_mid_answer_reports_the_timeout_in_band(gat
         model: Final = _invoke(scenario, wire, timeout=_TIMEOUT_SECONDS)
         _assert_cut_off_mid_answer(_streamed(gateway, "chat", _body("chat", model)))
         _received(wire, 1)
+
+
+@pytest.mark.parametrize("endpoint", ("chat", "messages", "responses", "completions"))
+def test_f1_to_f4_a_faked_stream_slower_than_its_stream_timeout_is_answered_within_the_deployment_timeout(
+    gateway: Gateway, endpoint: Endpoint
+) -> None:
+    with _peer("slow") as wire, gateway.scenario() as scenario:
+        model: Final = _faked(scenario, wire, timeout=_LONG_TIMEOUT_SECONDS, stream_timeout=_TIMEOUT_SECONDS)
+        _assert_answered(_streamed(gateway, endpoint, _body(endpoint, model)))
+        (target,) = _received_targets(wire, 1)
+        assert target.endswith("/converse"), target
+
+
+def test_f5_a_faked_stream_slower_than_both_limits_times_out_at_the_deployment_timeout(gateway: Gateway) -> None:
+    with _peer("stall") as wire, gateway.scenario() as scenario:
+        model: Final = _faked(scenario, wire, timeout=_BOTH_LIMITS_TIMEOUT_SECONDS, stream_timeout=_TIMEOUT_SECONDS)
+        served: Final = _streamed(gateway, "chat", _body("chat", model))
+        _assert_timed_out(served.status, served.text, _BOTH_LIMITS_TIMEOUT_SECONDS)
+        assert served.headers.get("x-litellm-timeout") == f"{_BOTH_LIMITS_TIMEOUT_SECONDS:.1f}", served.headers
+        _received(wire, 1)
+        _failure_rows(model, 1)
+
+
+@pytest.mark.parametrize("endpoint", ("chat", "messages", "responses"))
+def test_c11_to_c13_a_live_stream_slower_than_its_stream_timeout_still_fails_at_the_stream_timeout(
+    gateway: Gateway, endpoint: Endpoint
+) -> None:
+    with _peer("slow") as wire, gateway.scenario() as scenario:
+        model: Final = _converse(scenario, wire, timeout=_LONG_TIMEOUT_SECONDS, stream_timeout=_TIMEOUT_SECONDS)
+        served: Final = _streamed(gateway, endpoint, _body(endpoint, model))
+        _assert_timed_out(served.status, served.text)
+        (target,) = _received_targets(wire, 1)
+        assert _is_stream(target), target
 
 
 def test_c1_chat_without_streaming_already_fails_at_the_deployment_timeout(gateway: Gateway) -> None:

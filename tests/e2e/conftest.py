@@ -17,7 +17,6 @@ import functools
 import os
 from collections.abc import Generator, Iterator
 from datetime import datetime, timezone
-from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
@@ -29,7 +28,6 @@ from e2e_config import (
     FIXTURE_DIR,
     FIXTURE_MODE_RAW,
     MANAGED_FILES_OPT_IN_ENV,
-    MCP_OAUTH_LIVE_OPT_IN_ENV,
     OTEL_TLS_OPT_IN_ENV,
     OTEL_V2_OPT_IN_ENV,
     OWNED_GATEWAY_OPT_IN_ENV,
@@ -37,9 +35,9 @@ from e2e_config import (
     PROMPT_CACHING_OPT_IN_ENV,
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
+    PROXY_WIDE_CONFIG_OPT_IN_ENV,
     SAGEMAKER_NOVA2_LITE_OPT_IN_ENV,
     SAGEMAKER_NOVA_OPT_IN_ENV,
-    SECRET_MANAGER_OPT_IN_ENV,
     WEEKLY_ANOMALY_OPT_IN_ENV,
     unique_marker,
 )
@@ -56,7 +54,6 @@ from models import TeamNewBody, UserNewBody, UserNewResponse
 from provider_cache_routing import LIVE_PROVIDER_REQUIRED
 from provider_edge import replay_leftover_error
 from proxy_client import ProxyClient, build_proxy_client
-from stack_lock import stack_lock
 
 _E2E_TEST_RAN = pytest.StashKey[bool]()
 _CALL_PASSED = pytest.StashKey[bool]()
@@ -72,14 +69,13 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "redis_chaos": PERF_TESTS_OPT_IN_ENV,
         "perf": PERF_TESTS_OPT_IN_ENV,
         "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
-        "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
         "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,
         "owned_gateway": OWNED_GATEWAY_OPT_IN_ENV,
         "otel_v2": OTEL_V2_OPT_IN_ENV,
         "otel_tls": OTEL_TLS_OPT_IN_ENV,
-        "secret_manager": SECRET_MANAGER_OPT_IN_ENV,
         "sagemaker_nova": SAGEMAKER_NOVA_OPT_IN_ENV,
         "sagemaker_nova2_lite": SAGEMAKER_NOVA2_LITE_OPT_IN_ENV,
+        "proxy_wide_config": PROXY_WIDE_CONFIG_OPT_IN_ENV,
     }
 )
 
@@ -167,16 +163,6 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
-        "quiet_stack: measures the proxy itself, so it runs while no other test on this host is hitting the stack; "
-        "every other test waits for it to finish",
-    )
-    config.addinivalue_line(
-        "markers",
-        "mcp_oauth_live: real Linear OAuth consent via a captured browser session; deselected unless "
-        "E2E_MCP_OAUTH_LIVE is set",
-    )
-    config.addinivalue_line(
-        "markers",
         "provider_edge_host: routes provider traffic through the pytest host's edge in every fixture mode, so the "
         "gateway must reach the pytest host; deselected unless E2E_PROVIDER_EDGE_HOST_REACHABLE is set",
     )
@@ -195,11 +181,6 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
-        "secret_manager: needs a proxy booted from gateway/secret_manager_<system>_ci_config.yml against that live "
-        "secret manager; deselected unless E2E_SECRET_MANAGER names the backend (see secret_manager/secret_backends.py)",
-    )
-    config.addinivalue_line(
-        "markers",
         "sagemaker_nova: needs a deployed SageMaker Nova endpoint the proxy's AWS credentials can invoke; "
         "deselected unless SAGEMAKER_NOVA_ENDPOINT names it",
     )
@@ -207,6 +188,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "sagemaker_nova2_lite: needs a deployed SageMaker Nova 2 Lite endpoint the proxy's AWS credentials can invoke; "
         "deselected unless SAGEMAKER_NOVA2_LITE_ENDPOINT names it",
+    )
+    config.addinivalue_line(
+        "markers",
+        "proxy_wide_config: turns on a proxy-wide setting through /config/update, so it runs on a stack no other suite "
+        "is driving; deselected unless E2E_PROXY_WIDE_CONFIG_STACK is set",
     )
 
 
@@ -277,7 +263,7 @@ def pytest_collection_finish(session: pytest.Session) -> None:
     ahead of xdist's own collection-finish report, and the controller schedules no
     test until every worker has reported, so this is the idle footprint of a stack
     that just passed its readiness gate. The fixture hands the capture to the
-    idle-budget test in router/test_reliability_memory_e2e.py."""
+    idle-budget test in perf/test_reliability_memory_e2e.py."""
     if session.config.getoption("collectonly") or not any(_uses_idle_rss(item) for item in session.items):
         return
     session.config.stash[_IDLE_RSS] = read_rss_everywhere(build_proxy_client(), timeout=IDLE_RSS_READ_TIMEOUT_SECONDS)
@@ -307,12 +293,6 @@ def _proxy_fail_reason() -> str | None:
     return None
 
 
-@pytest.hookimpl(wrapper=True)
-def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> Generator[None, object, object]:
-    with stack_lock(exclusive=item.get_closest_marker("quiet_stack") is not None):
-        return (yield)
-
-
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item: pytest.Item) -> None:
     """Hard-fail `e2e`-marked tests unless a proxy answers its liveness probe.
@@ -330,8 +310,6 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     if _uses_idle_rss(item):
         item.user_properties.extend(item.config.stash[_IDLE_RSS].junit_properties)
     if not _reaches_proxy(item):
-        return
-    if isinstance(item, pytest.Function) and "oauth_gateway" in item.fixturenames:
         return
     reason = _proxy_fail_reason()
     if reason is not None:
@@ -376,12 +354,6 @@ def pytest_runtest_makereport(
     report = yield
     if report.when in ("setup", "call"):
         attach_step_properties(item)
-    if item.get_closest_marker("mcp_oauth_live") is not None and call.excinfo is not None:
-        # Publish code locations only, never exception messages, source text or locals.
-        item.user_properties.append(("oauth_failure_phase", report.when))
-        item.user_properties.append(("oauth_exception_type", call.excinfo.type.__name__))
-        for entry in call.excinfo.traceback:
-            item.user_properties.append(("oauth_frame", f"{Path(entry.path).name}:{entry.lineno + 1}:{entry.name}"))
     if report.when == "call":
         item.stash[_CALL_PASSED] = report.passed
     report.user_properties = list(item.user_properties)

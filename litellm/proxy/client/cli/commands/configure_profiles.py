@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.private_json import (
     ensure_private_dir,
     stage_private_json,
 )
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .agents import codex_config_path
 from .claude_settings import claude_settings_path, configure_state_path

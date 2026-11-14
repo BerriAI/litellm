@@ -30,7 +30,15 @@ Decision: Final = configuration.Decision
     ("rollout", "process", "environment", "expected"),
     (
         (Rollout.PYTHON_ONLY, True, True, Decision.PYTHON),
+        (Rollout.RUST_REQUIRED, None, None, Decision.RUST_REQUIRED),
+        (Rollout.RUST_REQUIRED, None, False, Decision.RUST_REQUIRED),
+        (Rollout.RUST_REQUIRED, None, True, Decision.RUST_REQUIRED),
+        (Rollout.RUST_REQUIRED, False, None, Decision.RUST_REQUIRED),
         (Rollout.RUST_REQUIRED, False, False, Decision.RUST_REQUIRED),
+        (Rollout.RUST_REQUIRED, False, True, Decision.RUST_REQUIRED),
+        (Rollout.RUST_REQUIRED, True, None, Decision.RUST_REQUIRED),
+        (Rollout.RUST_REQUIRED, True, False, Decision.RUST_REQUIRED),
+        (Rollout.RUST_REQUIRED, True, True, Decision.RUST_REQUIRED),
         (Rollout.RUST_OPT_IN, None, None, Decision.PYTHON),
         (Rollout.RUST_OPT_IN, None, True, Decision.RUST_WITH_FALLBACK),
         (Rollout.RUST_OPT_IN, True, None, Decision.RUST_WITH_FALLBACK),
@@ -98,14 +106,23 @@ def test_process_override_applies_when_environment_is_unset() -> None:
     assert configuration.rust_enabled() is True
 
 
-@pytest.mark.parametrize("value", ("", " ", "sometimes", "2"))
-def test_invalid_environment_value_is_ignored(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+@pytest.mark.parametrize("value", ("", " ", "sometimes", "2", "enabled"))
+def test_blank_or_invalid_environment_value_leaves_the_switch_unset(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
     monkeypatch.setenv("LITELLM_RUST", value)
 
     assert configuration.rust_enabled() is False
     assert configuration.decision(Rollout.RUST_OPT_OUT) is Decision.RUST_WITH_FALLBACK
     configuration.rust(True)
     assert configuration.rust_enabled() is True
+
+
+def test_environment_is_read_on_every_decision(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    assert configuration.rust_enabled() is True
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    assert configuration.rust_enabled() is False
 
 
 def test_process_override_and_reset_apply_to_existing_threads() -> None:

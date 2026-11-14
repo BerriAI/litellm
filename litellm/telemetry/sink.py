@@ -17,23 +17,6 @@ class TelemetrySink(Protocol):
     async def flush(self) -> None: ...
 
 
-class NoopSink:
-    def set_instance(self, info: InstanceInfo) -> None:
-        return None
-
-    def record_request(self, record: RequestRecord) -> None:
-        return None
-
-    def record_attempt(self, record: AttemptRecord) -> None:
-        return None
-
-    def record_ui_event(self, event: UIEvent) -> None:
-        return None
-
-    async def flush(self) -> None:
-        return None
-
-
 class ExportOutcome(str, Enum):
     SENT = "sent"
     REJECTED = "rejected"

@@ -28,6 +28,9 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
         self.mock_logging_obj = MagicMock()
         self.mock_logging_obj.post_call = MagicMock()
 
+    async def _hop_headers(self):
+        return self.mock_headers
+
     @patch(
         "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.get_async_httpx_client"
     )
@@ -36,8 +39,8 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
         # Create a mock response with status code 201
         mock_response = MagicMock()
         mock_response.status_code = 201
-        mock_response.aiter_lines = MagicMock()
-        mock_response.aiter_lines.return_value = ["test response"]
+        mock_response.aiter_text = MagicMock()
+        mock_response.aiter_text.return_value = ["test response"]
 
         # Setup mock client
         mock_client = MagicMock()
@@ -51,6 +54,8 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
             api_base="https://mock-vertex-ai-api.com",
             headers=self.mock_headers,
             data=self.mock_data,
+            request_body=json.loads(self.mock_data),
+            hop_headers=self._hop_headers,
             model=self.mock_model,
             messages=self.messages,
             logging_obj=self.mock_logging_obj,
@@ -71,8 +76,8 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
         # Create a mock response with status code 201
         mock_response = MagicMock()
         mock_response.status_code = 201
-        mock_response.iter_lines = MagicMock()
-        mock_response.iter_lines.return_value = ["test response"]
+        mock_response.iter_text = MagicMock()
+        mock_response.iter_text.return_value = ["test response"]
         mock_post.return_value = mock_response
 
         # Call the make_sync_call function
@@ -82,6 +87,8 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
             api_base="https://mock-vertex-ai-api.com",
             headers=self.mock_headers,
             data=self.mock_data,
+            request_body=json.loads(self.mock_data),
+            hop_headers=lambda: self.mock_headers,
             model=self.mock_model,
             messages=self.messages,
             logging_obj=self.mock_logging_obj,
@@ -111,6 +118,8 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
                 api_base="https://mock-vertex-ai-api.com",
                 headers=self.mock_headers,
                 data=self.mock_data,
+                request_body=json.loads(self.mock_data),
+                hop_headers=lambda: self.mock_headers,
                 model=self.mock_model,
                 messages=self.messages,
                 logging_obj=self.mock_logging_obj,

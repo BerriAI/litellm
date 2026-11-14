@@ -7,9 +7,13 @@ are normalized to match the OpenAI streaming spec:
 - Deduplication of "closing" chunks with repeated id/name
 """
 
+from pathlib import Path
+from typing import Final
+
 import pytest
 
 from litellm.llms.chatgpt.chat.streaming_utils import ChatGPTToolCallNormalizer
+from litellm.llms.chatgpt.chat.transformation import ChatGPTConfig
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     Delta,
@@ -201,3 +205,17 @@ class TestChatGPTToolCallNormalizer:
 
         normalizer = ChatGPTToolCallNormalizer(FakeStream())
         assert normalizer.custom_attr == "test_value"
+
+
+def test_chatgpt_config_streams_parallel_tool_calls_with_distinct_indices(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    chunks: Final = (
+        _make_chunk(tool_calls=[_make_tc(index=0, id="call_aaa", name="get_weather")]),
+        _make_chunk(tool_calls=[_make_tc(index=0, id="call_bbb", name="get_time")]),
+    )
+
+    results: Final = list(ChatGPTConfig().post_stream_processing(iter(chunks)))
+
+    assert [result.choices[0].delta.tool_calls[0].index for result in results] == [0, 1]

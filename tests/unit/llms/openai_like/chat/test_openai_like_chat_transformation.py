@@ -1,5 +1,11 @@
+from typing import Final
+from unittest.mock import MagicMock
+
+import httpx
 import pytest
+
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
+from litellm.types.utils import ModelResponse
 
 
 def test_sanitize_usage_obj_handles_null_tokens():
@@ -47,3 +53,32 @@ def test_sanitize_usage_obj_valid_usage():
 
     # Assert
     assert sanitized_json == original_json  # The object should be unchanged
+
+
+def test_transform_response_surfaces_provider_headers_as_llm_provider_headers():
+    raw_response: Final = httpx.Response(
+        status_code=200,
+        headers={"x-amzn-requestid": "req_abc123", "content-type": "application/json"},
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "google.gemma-4-31b",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+    response: Final = OpenAILikeChatConfig().transform_response(
+        model="google.gemma-4-31b",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert response._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req_abc123"

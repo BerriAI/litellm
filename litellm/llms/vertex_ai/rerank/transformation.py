@@ -6,17 +6,17 @@ Why separate file? Make it easy to see how transformation works
 
 import math
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
-from litellm.llms.vertex_ai.common_utils import (
-    vertex_request_labels_from_litellm_params,
-)
+from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
+from litellm.llms.vertex_ai.request_labels import without_caller_labels_header
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
@@ -25,6 +25,17 @@ from litellm.types.rerank import (
     RerankResponseMeta,
     RerankResponseResult,
 )
+
+
+class _VertexRankedRecord(TypedDict):
+    id: ReadOnly[str]
+    score: NotRequired[ReadOnly[float]]
+    title: NotRequired[ReadOnly[str]]
+    content: NotRequired[ReadOnly[str]]
+
+
+class _VertexRankResponse(TypedDict, total=False):
+    records: ReadOnly[Sequence[_VertexRankedRecord]]
 
 
 class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
@@ -75,7 +86,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
@@ -107,7 +118,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
             default_headers["Authorization"] = headers["Authorization"]
 
         # Merge other headers, overriding any default ones except Authorization
-        return {**default_headers, **headers}
+        return {**default_headers, **without_caller_labels_header(headers)}
 
     def transform_rerank_request(
         self,
@@ -151,7 +162,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         # When return_documents is False, we want to ignore record details (return only IDs)
         request_data["ignoreRecordDetailsInResponse"] = not return_documents
 
-        user_labels: Final = vertex_request_labels_from_litellm_params(litellm_params)
+        user_labels: Final = pop_vertex_request_labels(None, litellm_params)
         if user_labels:
             request_data["userLabels"] = user_labels
 
@@ -172,7 +183,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         Transform Vertex AI Discovery Engine response to Cohere format
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final[_VertexRankResponse] = raw_response.json()
         except Exception as e:
             raise ValueError(f"Failed to parse response: {e}")
 

@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.integrations.otel.model.spans import PG_CATALOG, PRISMA_RELATIONS
 
 
@@ -34,6 +36,7 @@ class PrismaQuery:
 
 
 UNKNOWN_PRISMA_QUERY: Final = PrismaQuery("prisma_query", None, None)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _ROOT_FIELD: Final = re.compile(r"result:\s*(\w+)")
 _RAW_SQL: Final = re.compile(r'query:\s*"((?:[^"\\]|\\.)*)"')
@@ -111,7 +114,7 @@ def sql_operation(sql: str) -> tuple[str | None, str | None]:
 
 def _query_text(content: str) -> str:
     try:
-        payload: Final[object] = json.loads(content)
+        payload: Final = _DECODED_JSON.validate_python(json.loads(content))
     except ValueError:
         return content
     query: Final = payload.get("query") if isinstance(payload, dict) else None

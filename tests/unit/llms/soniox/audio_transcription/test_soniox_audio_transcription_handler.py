@@ -339,6 +339,65 @@ class TestPollLimitsClamping:
     a worker on tight poll loops.
     """
 
+    def test_should_raise_400_when_form_bool_param_is_invalid(self):
+        handler = SonioxAudioTranscriptionHandler()
+        with pytest.raises(SonioxException) as exc_info:
+            handler._prepare(
+                audio_file=None,
+                optional_params={
+                    "enable_speaker_diarization": "maybe",
+                    "audio_url": "https://example.com/a.wav",
+                },
+                litellm_params={},
+                api_key="sk-test",
+                api_base=None,
+                provider_config=SonioxAudioTranscriptionConfig(),
+                headers={},
+            )
+        assert exc_info.value.status_code == 400
+        assert "enable_speaker_diarization" in str(exc_info.value)
+
+    def test_should_raise_400_when_poll_interval_is_not_a_number(self):
+        with pytest.raises(SonioxException) as exc_info:
+            SonioxAudioTranscriptionHandler()._prepare(
+                audio_file=None,
+                optional_params={"soniox_polling_interval": "abc", "audio_url": "https://example.com/a.wav"},
+                litellm_params={},
+                api_key="sk-test",
+                api_base=None,
+                provider_config=SonioxAudioTranscriptionConfig(),
+                headers={},
+            )
+        assert exc_info.value.status_code == 400
+        assert "soniox_polling_interval" in str(exc_info.value)
+
+    def test_should_use_default_poll_interval_for_bad_value_when_drop_params_is_set(self):
+        from litellm.llms.soniox.common_utils import SONIOX_DEFAULT_POLL_INTERVAL
+
+        _, _, _, opts = SonioxAudioTranscriptionHandler()._prepare(
+            audio_file=None,
+            optional_params={"soniox_polling_interval": "abc", "audio_url": "https://example.com/a.wav"},
+            litellm_params={"drop_params": True},
+            api_key="sk-test",
+            api_base=None,
+            provider_config=SonioxAudioTranscriptionConfig(),
+            headers={},
+        )
+        assert opts["poll_interval"] == SONIOX_DEFAULT_POLL_INTERVAL
+
+    @pytest.mark.parametrize("raw, expected", [(10.0, 10), (10, 10), ("10", 10)])
+    def test_should_keep_numeric_max_polling_attempts(self, raw: object, expected: int):
+        _, _, _, opts = SonioxAudioTranscriptionHandler()._prepare(
+            audio_file=None,
+            optional_params={"soniox_max_polling_attempts": raw, "audio_url": "https://example.com/a.wav"},
+            litellm_params={},
+            api_key="sk-test",
+            api_base=None,
+            provider_config=SonioxAudioTranscriptionConfig(),
+            headers={},
+        )
+        assert opts["max_attempts"] == expected
+
     def test_should_clamp_poll_interval_to_minimum(self):
         from litellm.llms.soniox.common_utils import SONIOX_MIN_POLL_INTERVAL
 
@@ -707,6 +766,112 @@ class TestCleanupNormalization:
         assert "https://api.soniox.com/v1/transcriptions/tx_1" in deletes
 
 
+    def test_should_skip_non_string_cleanup_entries(self):
+        _, _, _, opts = SonioxAudioTranscriptionHandler()._prepare(
+            audio_file=None,
+            optional_params={"soniox_cleanup": ["transcription", 1, None], "audio_url": "https://example.com/a.wav"},
+            litellm_params={},
+            api_key="sk-test",
+            api_base=None,
+            provider_config=SonioxAudioTranscriptionConfig(),
+            headers={},
+        )
+        assert opts["cleanup"] == ("transcription",)
+
+    @pytest.mark.parametrize(
+        "language_hints, expected",
+        [("en,es", ["en", "es"]), (["es"], ["es"]), (None, ["de"])],
+    )
+    def test_should_use_language_only_without_language_hints(self, language_hints, expected, monkeypatch):
+        import litellm
+
+        monkeypatch.setattr("time.sleep", lambda *_: None)
+        client = _MockSyncClient(
+            {
+                "POST https://api.soniox.com/v1/transcriptions": [_make_response({"id": "tx_1"})],
+                "GET https://api.soniox.com/v1/transcriptions/tx_1": [_make_response({"status": "completed"})],
+                "GET https://api.soniox.com/v1/transcriptions/tx_1/transcript": [
+                    _make_response({"text": "hallo", "tokens": []})
+                ],
+                "DELETE https://api.soniox.com/v1/transcriptions/tx_1": [_make_response({})],
+            }
+        )
+        litellm.transcription(
+            model="soniox/stt-async-v4",
+            file=("a.wav", b"RIFF", "audio/wav"),
+            language="de",
+            api_key="sk-test",
+            client=client,
+            audio_url="https://example.com/a.wav",
+            **({} if language_hints is None else {"language_hints": language_hints}),
+        )
+        body = next(c for c in client.calls if c["method"] == "POST")["json"]
+        assert list(body["language_hints"]) == expected
+        assert "language" not in body
+
+
+class TestProxyFormFields:
+    def test_should_send_soniox_types_for_fields_the_proxy_parsed_from_an_sdk_form(self, monkeypatch):
+        import litellm
+        from starlette.requests import Request
+
+        from litellm.proxy.common_utils.http_parsing_utils import get_form_data
+
+        monkeypatch.setattr("time.sleep", lambda *_: None)
+        multipart = httpx.Request(
+            "POST",
+            "http://proxy/v1/audio/transcriptions",
+            data={
+                "model": "soniox/stt-async-v4",
+                "audio_url": "https://example.com/a.wav",
+                "context[terms][]": ["Celebrex"],
+                "context[general][][key]": "domain",
+                "context[general][][value]": "Healthcare",
+                "translation[type]": "one_way",
+                "translation[target_language]": "de",
+                "enable_speaker_diarization": "true",
+                "language_hints[]": ["en", "es"],
+            },
+            files={"file": ("a.wav", b"RIFF", "audio/wav")},
+        )
+        multipart_body = multipart.read()
+
+        async def receive():
+            return {"type": "http.request", "body": multipart_body, "more_body": False}
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/audio/transcriptions",
+                "headers": [(b"content-type", multipart.headers["content-type"].encode())],
+            },
+            receive,
+        )
+        form = asyncio.run(get_form_data(request))
+        client = _MockSyncClient(
+            {
+                "POST https://api.soniox.com/v1/transcriptions": [_make_response({"id": "tx_1"})],
+                "GET https://api.soniox.com/v1/transcriptions/tx_1": [_make_response({"status": "completed"})],
+                "GET https://api.soniox.com/v1/transcriptions/tx_1/transcript": [
+                    _make_response({"text": "hello", "tokens": []})
+                ],
+                "DELETE https://api.soniox.com/v1/transcriptions/tx_1": [_make_response({})],
+            }
+        )
+        litellm.transcription(
+            file=("a.wav", b"RIFF", "audio/wav"),
+            api_key="sk-test",
+            client=client,
+            **{key: value for key, value in form.items() if key != "file"},
+        )
+        body = json.loads(json.dumps(next(c for c in client.calls if c["method"] == "POST")["json"]))
+        assert body["context"] == {"terms": ["Celebrex"], "general": [{"key": "domain", "value": "Healthcare"}]}
+        assert body["translation"] == {"type": "one_way", "target_language": "de"}
+        assert body["enable_speaker_diarization"] is True
+        assert body["language_hints"] == ["en", "es"]
+
+
 class TestErrorResponses:
     def test_should_raise_on_4xx_during_create_with_json_error(self, monkeypatch):
         monkeypatch.setattr("time.sleep", lambda *_: None)
@@ -779,6 +944,51 @@ class TestPassthroughBodyBuilding:
         )
         post_call = next(c for c in client.calls if c["method"] == "POST")
         assert "context" not in post_call["json"]
+
+    def test_should_send_form_string_params_to_soniox_as_json_types(self, monkeypatch):
+        """Simulates the proxy path, where every multipart form field is a string."""
+        monkeypatch.setattr("time.sleep", lambda *_: None)
+        responses = {
+            "POST https://api.soniox.com/v1/transcriptions": [
+                _make_response({"id": "tx_1"}),
+            ],
+            "GET https://api.soniox.com/v1/transcriptions/tx_1": [
+                _make_response({"status": "completed"}),
+            ],
+            "GET https://api.soniox.com/v1/transcriptions/tx_1/transcript": [
+                _make_response({"text": "ok", "tokens": []}),
+            ],
+            "DELETE https://api.soniox.com/v1/transcriptions/tx_1": [
+                _make_response({}),
+            ],
+        }
+        client = _MockSyncClient(responses)
+        form_params = {
+            "audio_url": "https://example.com/a.wav",
+            "context": '{"terms": ["Celebrex"], "general": [{"key": "domain", "value": "Healthcare"}]}',
+            "translation": '{"type": "one_way", "target_language": "es"}',
+            "language_hints": "en,es",
+            "language_hints_strict": "true",
+            "enable_speaker_diarization": "true",
+            "enable_language_identification": "false",
+            "soniox_polling_interval": "0.5",
+        }
+        SonioxAudioTranscriptionHandler().audio_transcriptions(
+            audio_file=None,
+            optional_params=form_params,
+            litellm_params={},
+            atranscription=False,
+            **_common_call_kwargs(client),
+        )
+        body = next(c for c in client.calls if c["method"] == "POST")["json"]
+        assert body["context"] == {"terms": ["Celebrex"], "general": [{"key": "domain", "value": "Healthcare"}]}
+        assert body["translation"] == {"type": "one_way", "target_language": "es"}
+        assert list(body["language_hints"]) == ["en", "es"]
+        assert body["language_hints_strict"] is True
+        assert body["enable_speaker_diarization"] is True
+        assert body["enable_language_identification"] is False
+        assert "soniox_polling_interval" not in body
+        assert form_params["context"].startswith("{"), "caller's params must not be mutated"
 
 
 class TestSecretRedaction:

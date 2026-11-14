@@ -3,8 +3,8 @@ Streaming iterator for transforming Responses API stream to Interactions API str
 """
 
 from collections import deque
-from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final, cast
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import Final, cast
 
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
@@ -44,7 +44,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         request_input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
         custom_llm_provider: str | None = None,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
     ):
         self.model = model
         self.responses_stream_iterator = litellm_custom_stream_wrapper

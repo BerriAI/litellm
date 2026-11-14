@@ -9,6 +9,7 @@ from typing import Final
 import httpx
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -58,8 +59,7 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        api_base = "https://api.scaleway.ai/v1" if api_base is None else api_base.rstrip("/")
-        return f"{api_base}/audio/transcriptions"
+        return join_api_base("https://api.scaleway.ai/v1" if api_base is None else api_base, "audio/transcriptions")
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return ScalewayAudioTranscriptionException(
@@ -134,7 +134,7 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             response_json: Final = raw_response.json()
         except Exception:
             raise ScalewayAudioTranscriptionException(
-                message=raw_response.text,
+                message="Received non-JSON response from Scaleway audio transcription",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )

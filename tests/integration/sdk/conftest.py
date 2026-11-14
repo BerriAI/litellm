@@ -1,7 +1,11 @@
+from collections.abc import AsyncIterator
 from typing import Final
 
-import litellm
 import pytest
+import pytest_asyncio
+
+import litellm
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
 CALLBACK_LISTS: Final = (
     "callbacks",
@@ -14,7 +18,12 @@ CALLBACK_LISTS: Final = (
 )
 
 
-@pytest.fixture(autouse=True)
-def isolate_litellm_callback_lists(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest_asyncio.fixture(autouse=True, loop_scope="function")
+async def isolate_litellm_callback_lists(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[None]:
     for name in CALLBACK_LISTS:
         monkeypatch.setattr(litellm, name, list(getattr(litellm, name)))
+    try:
+        yield
+    finally:
+        await GLOBAL_LOGGING_WORKER.flush()
+        await GLOBAL_LOGGING_WORKER.stop()

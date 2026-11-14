@@ -13,13 +13,16 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.langgraph.chat.sse_iterator import LangGraphSSEStreamIterator
+from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
@@ -35,6 +38,8 @@ else:
     HTTPHandler = Any
     AsyncHTTPHandler = Any
     CustomStreamWrapper = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class LangGraphError(BaseLLMException):
@@ -116,14 +121,11 @@ class LangGraphConfig(BaseConfig):
                 "api_base is required for LangGraph. Set it via LANGGRAPH_API_BASE env var or api_base parameter."
             )
 
-        # Remove trailing slash if present
-        api_base = api_base.rstrip("/")
-
         # Choose endpoint based on streaming mode
         if stream:
-            return f"{api_base}/runs/stream"
+            return join_api_base(api_base, "runs/stream")
         else:
-            return f"{api_base}/runs/wait"
+            return join_api_base(api_base, "runs/wait")
 
     def _get_assistant_id(self, model: str, optional_params: dict) -> str:
         """
@@ -235,7 +237,7 @@ class LangGraphConfig(BaseConfig):
         verbose_logger.debug("LangGraph request payload: %s", payload)
         return payload
 
-    def _extract_content_from_response(self, response_json: dict) -> str:
+    def _extract_content_from_response(self, response_json: Mapping[str, object]) -> str:
         """
         Extract content from LangGraph non-streaming response.
 
@@ -436,10 +438,10 @@ class LangGraphConfig(BaseConfig):
         Transform the LangGraph response to LiteLLM ModelResponse format.
         """
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
             verbose_logger.debug("LangGraph response: %s", response_json)
 
-            content: Final = self._extract_content_from_response(response_json)
+            content: Final = self._extract_content_from_response(decoded_json_object(response_json))
 
             # Create the message
             message: Final = Message(content=content, role="assistant")

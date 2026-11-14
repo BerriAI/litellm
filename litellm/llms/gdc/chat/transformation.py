@@ -10,11 +10,16 @@ from collections.abc import Callable
 from typing import Final, Protocol
 from urllib.parse import urlsplit
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, Unpack
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.types.llms.openai import AllMessageValues
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _OpenAIGPTConfigOptions(TypedDict, total=False):
@@ -140,7 +145,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         project = self._validate_path_id(project, "vertex_project", model)
         location = self._validate_path_id(location, "vertex_location", model)
 
-        return f"{api_base}/v1/projects/{project}/locations/{location}/chat/completions"
+        return join_api_base(api_base, f"v1/projects/{project}/locations/{location}/chat/completions")
 
     def _read_env_bool(self, val: bool | str | None, env_var: str, default: bool = True) -> bool | str:
         def _parse(s: str) -> bool | str:
@@ -202,10 +207,10 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         import google.auth
 
         try:
-            json_obj: Final = json.loads(api_key)
+            json_obj: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(api_key)))
         except json.JSONDecodeError:
             return None, False
-        if not isinstance(json_obj, dict) or json_obj.get("type") != self._GDCH_CREDENTIAL_TYPE:
+        if json_obj is None or json_obj.get("type") != self._GDCH_CREDENTIAL_TYPE:
             raise ValueError(
                 "GDC only accepts a GDCH service account credential as a JSON api_key "
                 '(expected "type": "gdch_service_account"). Other Google credential types are '

@@ -91,6 +91,7 @@ TOOL_PARAMS: Final = tuple(
         ),
     )
     for p in PROVIDERS
+    if p.id != "bedrock"
 )
 
 AUDIO_OUTPUT_PARAMS: Final = tuple(
@@ -109,6 +110,7 @@ AUDIO_OUTPUT_PARAMS: Final = tuple(
         ),
     )
     for p in PROVIDERS
+    if p.id != "bedrock"
 )
 
 AUDIO_INPUT_PARAMS: Final = tuple(
@@ -127,6 +129,7 @@ AUDIO_INPUT_PARAMS: Final = tuple(
         ),
     )
     for p in PROVIDERS
+    if p.id != "bedrock"
 )
 
 # PCM16 24 kHz mono WAV of "What is the weather in Paris?" (generated via macOS
@@ -338,7 +341,7 @@ async def _run_audio_input_pipeline(
                 "When asked about the weather, always call the get_weather tool. "
                 "Never guess temperatures."
             ),
-            session_properties=SERVER_VAD_SETTINGS,
+            session_properties=SERVER_VAD_SETTINGS.model_copy(update={"tools": WEATHER_TOOL}),
         ),
     )
 

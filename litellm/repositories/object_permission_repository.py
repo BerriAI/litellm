@@ -2,27 +2,19 @@
 ObjectPermission repository for database operations on LiteLLM_ObjectPermissionTable.
 """
 
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 
-class _ObjectPermissionDb(Protocol):
-    @property
-    def litellm_objectpermissiontable(self) -> TableActions["prisma_models.LiteLLM_ObjectPermissionTable"]: ...
-
-
-class _PrismaClientView(Protocol):
-    @property
-    def db(self) -> _ObjectPermissionDb: ...
-
-    @property
-    def writer_db(self) -> _ObjectPermissionDb: ...
+class _ObjectPermissionTable(PrismaTableRepository["prisma_models.LiteLLM_ObjectPermissionTable"]):
+    table_name = "litellm_objectpermissiontable"
 
 
 class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
@@ -34,9 +26,7 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_ObjectPermissionTable"]:
-        client: Final[_PrismaClientView] = self.prisma_client
-        database: Final = client.writer_db if self._use_writer else client.db
-        return database.litellm_objectpermissiontable
+        return _ObjectPermissionTable(self._prisma_client, use_writer=self._use_writer).table
 
     @property
     def model_class(self) -> type[LiteLLM_ObjectPermissionTable]:

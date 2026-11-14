@@ -419,9 +419,6 @@ def test_vector_store_create_translates_managed_file_ids(gateway: Gateway) -> No
 
 
 def test_vector_store_create_forwards_only_caller_metadata(gateway: Gateway) -> None:
-    pytest.skip(
-        "BUG: vector store create forwards proxy-internal metadata (user_api_key_hash, endpoint, api_base, ...) to the provider"
-    )
 
     provider_key: Final = f"provider-create-metadata-{uuid.uuid4().hex}"
     provider_id: Final = f"vs-metadata-{uuid.uuid4().hex}"

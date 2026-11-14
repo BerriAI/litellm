@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.router import GenericLiteLLMParams
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 WORKSPACE_ALIASES: Final = ("workspace_id", "aws_workspace_id", "anthropic_workspace_id", "anthropic-workspace-id")
 
@@ -204,6 +205,26 @@ def test_claude_platform_api_key_auth_sets_workspace_and_key_headers():
     assert headers["x-api-key"] == "fake-platform-key"
     assert headers["anthropic-workspace-id"] == "wrkspc_test"
     assert headers["anthropic-beta"] == "skills-2025-10-02"
+
+
+def test_claude_platform_chat_sends_the_binding_beta_when_thinking_carries_block_binding():
+    from litellm.llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig,
+    )
+
+    headers: Final = BedrockClaudePlatformConfig().validate_environment(
+        api_key="fake-platform-key",
+        headers={},
+        model="claude-opus-5-5",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={
+            "workspace_id": "wrkspc_test",
+            "thinking": {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}},
+        },
+        litellm_params={},
+    )
+
+    assert "thinking-binding-controls-2026-08-01" in headers["anthropic-beta"].split(",")
 
 
 def test_claude_platform_does_not_use_standard_anthropic_api_key(monkeypatch):
@@ -683,6 +704,32 @@ async def test_anthropic_messages_claude_platform_sends_exact_body_through_stric
     _assert_gateway_accepted(requests[0], auth_kwargs)
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_claude_platform_workspace_and_region_lookups_leave_the_event_loop_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+
+    monkeypatch.setenv("ANTHROPIC_AWS_WORKSPACE_ID", "wrkspc_test")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    vault: Final = host_in_loop_probing_vault(monkeypatch, "ANTHROPIC_AWS_WORKSPACE_ID", "AWS_REGION_NAME")
+    sigv4_without_region: Final = {key: value for key, value in SIGV4_KWARGS.items() if key != "aws_region_name"}
+    requests: list[dict] = []
+
+    response = await litellm.anthropic_messages(
+        model="bedrock/claude_platform/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=10,
+        client=_async_gateway_client(requests),
+        **sigv4_without_region,
+    )
+
+    assert vault.read.is_set()
+    assert not vault.read_on_loop.is_set()
+    assert response["content"][0]["text"] == "ok"
+    _assert_gateway_accepted(requests[0], sigv4_without_region)
+
+
 def test_chat_completion_claude_platform_drops_context_management_and_gateway_accepts():
     import litellm
 
@@ -880,3 +927,30 @@ def test_sigv4_no_duplicate_content_type_when_caller_sets_lowercase():
         "Duplicate keys produce 'application/json, application/json' in the "
         "SigV4 canonical string and cause a 401."
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "thread",
+    ({"type": "create"}, {"type": "continue", "previous_message_id": "msg_01previous"}),
+    ids=("create", "continue"),
+)
+async def test_anthropic_messages_bedrock_claude_platform_forwards_a_message_thread(thread: dict[str, str]) -> None:
+    import litellm
+
+    requests: list[dict] = []
+
+    await litellm.anthropic_messages(
+        model="bedrock/claude_platform/claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "what did I just say"}],
+        max_tokens=10,
+        api_base="https://aws-external-anthropic.us-west-2.api.aws",
+        api_key="fake-platform-key",
+        workspace_id="wrkspc_test",
+        thread=dict(thread),
+        client=_async_gateway_client(requests, lambda url, headers, data: _anthropic_response(url)),
+    )
+
+    assert len(requests) == 1
+    assert requests[0]["body"]["thread"] == thread
+    assert requests[0]["headers"]["anthropic-beta"] == "message-threads-2026-08-12"

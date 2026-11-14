@@ -4,7 +4,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.rust_bridge import _native
+from litellm.rust_bridge import _native, execution
 from litellm.rust_bridge.public_call import NativeCall
 from tests.test_litellm_rust.responses.data import REQUEST
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
@@ -38,7 +38,7 @@ async def test_unstarted_call_has_no_provider_or_callback_effects(
         "extra_headers": None,
     }
 
-    pending: Final = _native.aresponses(NativeCall(args=(), kwargs=kwargs, base=base))
+    pending: Final = execution.asynchronous(_native.aresponses)(NativeCall(args=(), kwargs=kwargs, base=base))
     assert asyncio.iscoroutine(pending)
     pending.close()
 

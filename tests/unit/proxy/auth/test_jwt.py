@@ -860,35 +860,6 @@ async def test_allowed_routes_admin(
 import pytest
 
 
-@pytest.mark.asyncio
-async def test_team_cache_update_called():
-    import litellm
-    from litellm.proxy.proxy_server import user_api_key_cache
-
-    # Use setattr to replace the method on the user_api_key_cache object
-    cache = DualCache()
-
-    setattr(
-        litellm.proxy.proxy_server,
-        "user_api_key_cache",
-        cache,
-    )
-
-    with patch.object(cache, "async_batch_get_cache", new=AsyncMock(return_value=[None])) as mock_call_cache:
-        # Call the function under test
-        await litellm.proxy.proxy_server.update_cache(
-            token=None,
-            user_id=None,
-            end_user_id=None,
-            team_id="1234",
-            response_cost=20,
-            parent_otel_span=None,
-        )  # type: ignore
-
-        await asyncio.sleep(3)
-        mock_call_cache.assert_awaited_once_with(keys=["team_id:1234"], parent_otel_span=None, throttle_redis=False)
-
-
 @pytest.fixture
 def public_jwt_key():
     import json

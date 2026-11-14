@@ -1,11 +1,9 @@
-import os
 import re
 import uuid
 from pathlib import Path
 from typing import Final
 
 import pytest
-from redis import Redis
 from _s3_v2_support import (
     BUCKET,
     PREFIX,
@@ -21,6 +19,9 @@ from _s3_v2_support import (
 from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy
 from integration._support.wire import wire_server
+from integration.caching.response_cache_case import entry_keys, redis_store
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 PER_REQUEST_KEY: Final = re.compile(rf"^/{BUCKET}/{PREFIX}/\d{{4}}-\d{{2}}-\d{{2}}/.+\.json$")
 BATCH_KEY: Final = re.compile(
@@ -115,13 +116,14 @@ def test_s3_v2_cache_hit_twins_log_one_object_per_request(gateway: Gateway, tmp_
                 model="anthropic/claude-sonnet-4-5-20250929", api_base=provider.url, api_key="synthetic-provider-key"
             )
             key: Final = scenario.key(models=[openai_model, anthropic_model])
-            cache: Final = Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]))
-            keys_before: Final = cache.dbsize()
             warmed: Final = tuple(
                 call_surface(candidate, surface, openai_model, anthropic_model, key, f"{marker}-{surface}")
                 for surface in SURFACES
             )
-            eventually(cache.dbsize, lambda size: size >= keys_before + len(SURFACES), seconds=30)
+            with redis_store() as cache:
+                eventually(
+                    lambda: frozenset(entry_keys(cache, marker)), lambda owned: len(owned) >= len(SURFACES), seconds=30
+                )
             repeated: Final = tuple(
                 call_surface(candidate, surface, openai_model, anthropic_model, key, f"{marker}-{surface}", False)
                 for surface in SURFACES

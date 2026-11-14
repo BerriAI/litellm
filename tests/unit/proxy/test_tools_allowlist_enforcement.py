@@ -145,6 +145,21 @@ class TestExtractRequestToolNames:
         data = {"tools": [{"type": "function", "function": {"name": "x"}}]}
         assert extract_request_tool_names("/v1/embeddings", data) == []
 
+    @pytest.mark.parametrize(
+        ("route", "data"),
+        [
+            ("/v1/chat/completions", {"tools": 5}),
+            ("/v1/chat/completions", {"functions": 5}),
+            ("/v1/responses", {"tools": 5}),
+            ("/v1/messages", {"tools": 5}),
+            ("/generate_content", {"tools": 5}),
+            ("/generate_content", {"tools": [{"functionDeclarations": 5}]}),
+        ],
+        ids=["chat_tools", "chat_functions", "responses", "messages", "generate_content", "function_declarations"],
+    )
+    def test_malformed_tool_lists_yield_no_names(self, route: str, data: dict[str, object]) -> None:
+        assert extract_request_tool_names(route, data) == []
+
 
 class TestCheckToolsAllowlist:
     """Test allowlist enforcement in auth (no DB in hot path)."""
@@ -226,6 +241,125 @@ class TestCheckToolsAllowlist:
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "restricted_tool" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("allowed_tools", "denied"),
+        [
+            pytest.param(["get_weather"], True, id="forbidden"),
+            pytest.param(["get_weather", "delete_user"], False, id="allowed"),
+        ],
+    )
+    async def test_tool_defined_in_an_additional_tools_input_item_is_checked_on_responses_route(
+        self, allowed_tools: list[str], denied: bool
+    ) -> None:
+        body = {
+            "model": "fireworks_ai/glm-5p3",
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [{"type": "function", "name": "delete_user", "parameters": {"type": "object"}}],
+                },
+                {"type": "message", "role": "user", "content": "Delete user 42"},
+            ],
+        }
+        check = check_tools_allowlist(
+            request_body=body,
+            valid_token=_token(metadata={"allowed_tools": allowed_tools}),
+            team_object=None,
+            route="/v1/responses",
+        )
+        if not denied:
+            await check
+            return
+        with pytest.raises(ProxyException) as exc_info:
+            await check
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "delete_user" in str(exc_info.value.message)
+
+    @pytest.mark.parametrize(
+        "loaded_tool",
+        [
+            {"type": "function", "name": "run_shell", "parameters": {"type": "object"}},
+            {
+                "type": "namespace",
+                "name": "ops",
+                "tools": [{"type": "function", "name": "run_shell", "parameters": {"type": "object"}}],
+            },
+        ],
+        ids=["function", "namespace_member"],
+    )
+    @pytest.mark.asyncio
+    async def test_disallowed_tool_loaded_by_a_replayed_tool_search_raises_on_chat_route(self, loaded_tool):
+        token = _token(metadata={"allowed_tools": ["get_weather"]})
+        body = {
+            "tools": [{"type": "function", "function": {"name": "get_weather"}}, {"type": "tool_search"}],
+            "messages": [
+                {"role": "user", "content": "clean up the disk"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "provider_specific_fields": {
+                        "tool_search_items": [
+                            {"type": "tool_search_call", "call_id": "ts_1", "execution": "client"},
+                            {
+                                "type": "tool_search_output",
+                                "call_id": "ts_1",
+                                "tools": [{"type": "function", "name": "get_weather"}, loaded_tool],
+                            },
+                        ]
+                    },
+                },
+            ],
+        }
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/chat/completions",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "run_shell" in str(exc_info.value.message)
+        assert "get_weather" not in str(exc_info.value.message)
+
+    @pytest.mark.parametrize(
+        "search_tools",
+        [{"extra_body": {"tools": [{"type": "tool_search"}]}}, {}],
+        ids=["extra_body_tool_search", "deployment_adds_tool_search"],
+    )
+    @pytest.mark.asyncio
+    async def test_disallowed_tool_loaded_by_a_replayed_tool_search_raises_without_tool_search_in_tools(
+        self, search_tools
+    ):
+        token = _token(metadata={"allowed_tools": ["get_weather"]})
+        body = {
+            "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+            **search_tools,
+            "messages": [
+                {"role": "user", "content": "clean up the disk"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "provider_specific_fields": {
+                        "tool_search_items": [
+                            {"type": "tool_search_call", "call_id": "ts_1", "execution": "client"},
+                            {"type": "tool_search_output", "call_id": "ts_1", "tools": [{"name": "run_shell"}]},
+                        ]
+                    },
+                },
+            ],
+        }
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/chat/completions",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "run_shell" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
     async def test_team_allowlist_used_when_key_empty(self):

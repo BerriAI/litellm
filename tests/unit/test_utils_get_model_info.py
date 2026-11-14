@@ -13,7 +13,8 @@ from litellm import get_model_info
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import ModelInfoBase
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.utils import supports_native_structured_output
+from litellm.litellm_core_utils.model_cost_table import publish
 import os
 from unittest.mock import MagicMock, patch
 
@@ -23,7 +24,7 @@ def isolate_model_info_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     monkeypatch.setattr(litellm, "custom_provider_map", list(litellm.custom_provider_map))
     yield
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def test_get_model_info_simple_model_name():
@@ -61,6 +62,30 @@ def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
     assert model_info["input_cost_per_token"] == 0.0
 
 
+def test_get_model_info_passes_through_gemini_tiered_audio_rates() -> None:
+    model: Final = "gemini-tiered-audio-rates-test"
+    prices: Final = {
+        "input_cost_per_audio_token_flex": 1e-6,
+        "input_cost_per_audio_token_priority": 2e-6,
+        "cache_read_input_audio_token_cost_flex": 3e-7,
+        "cache_read_input_audio_token_cost_priority": 4e-7,
+        "cache_read_input_audio_token_cost_batches": 5e-7,
+    }
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "gemini",
+                "mode": "chat",
+                **prices,
+            }
+        }
+    )
+
+    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="gemini")
+
+    assert {key: model_info[key] for key in prices} == prices
+
+
 def test_get_model_info_ollama_chat():
     from litellm.llms.ollama.completion.transformation import OllamaConfig
 
@@ -95,7 +120,7 @@ def test_get_model_info_bedrock_region(monkeypatch):
         key: value for key, value in litellm.get_model_cost_map(url="").items() if key != regional_model
     }
     monkeypatch.setattr(litellm, "model_cost", model_cost_without_regional_entry)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     info = litellm.get_model_info(model=regional_model, custom_llm_provider="bedrock")
     print("info", info)
     assert info["key"] == "anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -136,6 +161,7 @@ def _enforce_bedrock_converse_models(
             info.get("litellm_provider") == "bedrock"
             and info.get("mode") == "chat"
             and model not in whitelist_models
+            and BedrockModelInfo.get_bedrock_route(model) != "claude_platform"
             and not (
                 (base_model := BedrockModelInfo.get_base_model(model)) != model
                 and model_cost.get(base_model, {}).get("litellm_provider") == "bedrock_converse"
@@ -146,7 +172,7 @@ def _enforce_bedrock_converse_models(
 
 
 def _read_whitelisted_bedrock_models() -> tuple[str, ...]:
-    path: Final = Path(__file__).resolve().parents[2] / "whitelisted_bedrock_models.txt"
+    path: Final = Path(__file__).with_name("whitelisted_bedrock_models.txt")
     return tuple(path.read_text().splitlines())
 
 
@@ -165,7 +191,7 @@ def test_model_info_bedrock_converse(monkeypatch):
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         # Load whitelist models from file
-        with open("whitelisted_bedrock_models.txt", "r") as file:
+        with open(Path(__file__).with_name("whitelisted_bedrock_models.txt"), "r") as file:
             whitelist_models = [line.strip() for line in file.readlines()]
     except FileNotFoundError:
         pytest.skip("whitelisted_bedrock_models.txt not found")
@@ -191,7 +217,7 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
 
     try:
         # Load whitelist models from file
-        with open("whitelisted_bedrock_models.txt", "r") as file:
+        with open(Path(__file__).with_name("whitelisted_bedrock_models.txt"), "r") as file:
             whitelist_models = [line.strip() for line in file.readlines()]
 
         # Check for unwhitelisted models
@@ -224,9 +250,20 @@ def test_regional_bedrock_alias_requires_canonical_converse_metadata(
     _enforce_bedrock_converse_models(model_cost, ())
 
 
+GOVCLOUD_LAGGING_CAPABILITIES: Final = frozenset({"supports_bedrock_native_structured_output"})
+
+
+def _govcloud_may_lag(model_key: str, capability: str) -> bool:
+    is_govcloud: Final = model_key.startswith("us-gov.") or any(
+        part.startswith("us-gov-") for part in model_key.split("/")
+    )
+    return is_govcloud and capability in GOVCLOUD_LAGGING_CAPABILITIES
+
+
 def test_get_model_info_bedrock_models():
     """
     Check for drift in base model info for bedrock models and regional model info for bedrock models.
+    GovCloud regions may lag their commercial base on Bedrock native structured output, never lead it.
     """
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
@@ -261,6 +298,9 @@ def test_get_model_info_bedrock_models():
                     assert (
                         base_model_key in v
                     ), f"{base_model_key} is not in model cost map for {k}"
+                    if _govcloud_may_lag(k, base_model_key):
+                        assert base_model_value or not v[base_model_key], f"{base_model_key} is on {k} but not its base"
+                        continue
                     assert (
                         v[base_model_key] == base_model_value
                     ), f"{base_model_key} is not equal to {base_model_value} for model {k}"
@@ -293,10 +333,24 @@ def _cross_region_profiles(
     )
 
 
+_BEDROCK_PROFILE_ONLY_NATIVE_OUTPUT_MODELS: Final = frozenset(
+    {
+        "anthropic.claude-opus-5-5",
+        "anthropic.claude-fable-5-1",
+        "anthropic.claude-sonnet-5",
+        "anthropic.claude-haiku-5-5",
+        "anthropic.claude-opus-5",
+        "anthropic.claude-opus-4-8",
+    }
+)
+
+
 def test_get_model_info_bedrock_cross_region_capability_parity():
     """
     Cross-region inference profiles carry litellm_provider "bedrock_converse", so the
     regional drift check above (which filters on "bedrock") never reaches them.
+    GovCloud is a separate AWS partition that gets features later, so a us-gov profile
+    may lack Bedrock native structured output its commercial base has, never the reverse.
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -318,11 +372,44 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
             if not cap.startswith("supports_"):
                 continue
             assert cap in v, f"{cap} is on {base_model_key} but missing from {k}"
+            if _govcloud_may_lag(k, cap):
+                assert base_value or not v[cap], f"{cap} is on {k} but not on {base_model_key}"
+                continue
+            if (
+                cap == "supports_native_structured_output"
+                and base_model_key in _BEDROCK_PROFILE_ONLY_NATIVE_OUTPUT_MODELS
+                and v[cap] is True
+            ):
+                assert base_value is False, f"{cap} is already enabled on bare model {base_model_key}"
+                continue
             assert (
                 v[cap] == base_value
             ), f"{cap} is {v[cap]} on {k} but {base_value} on {base_model_key}"
 
     assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
+
+
+def test_bedrock_native_output_default_reaches_only_versions_that_read_its_key(local_model_cost_map):
+    flagged: Final = tuple(
+        key for key, row in litellm.model_cost.items() if row.get("supports_bedrock_native_structured_output_by_default")
+    )
+
+    assert flagged
+    assert [key for key in flagged if litellm.model_cost[key].get("supports_native_structured_output")] == []
+    assert [key for key in flagged if not get_model_info(key)["supports_native_structured_output"]] == []
+
+
+@pytest.mark.parametrize(
+    ("registered", "native"),
+    [({"supports_bedrock_native_structured_output": False}, False), ({"max_output_tokens": 1024}, True)],
+    ids=["bedrock-opt-out", "unrelated-override"],
+)
+def test_a_registered_bedrock_opt_out_beats_the_native_output_default(local_model_cost_map, registered, native):
+    model: Final = "us.anthropic.claude-sonnet-5"
+    litellm.register_model({model: registered}, persist_across_reloads=False)
+
+    assert get_model_info(f"bedrock/{model}")["supports_native_structured_output"] is native
+    assert supports_native_structured_output(f"bedrock/{model}") is native
 
 
 def _is_positive_cost(value: object) -> bool:

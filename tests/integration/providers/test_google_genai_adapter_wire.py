@@ -1,10 +1,12 @@
 import json
 import uuid
 from collections.abc import Mapping
+from hashlib import sha256
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway
+from integration._support.client import Gateway, eventually, held
+from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -437,6 +439,7 @@ def test_stream_generate_content_adapts_openai_sse_to_gemini_frames(gateway: Gat
             "model": "gpt-4o-mini",
             "messages": _expected_openai_messages(marker),
             "stream": True,
+            "stream_options": {"include_usage": True},
             "tools": _EXPECTED_TOOLS,
             "tool_choice": "required",
         }
@@ -526,9 +529,6 @@ def test_generate_content_adapter_accepts_snake_case_generation_config(gateway: 
 @pytest.mark.parametrize("prefix", _PREFIXES)
 @pytest.mark.parametrize("backend", ["openai", "anthropic"])
 def test_stream_generate_content_adapter_reports_upstream_usage(gateway: Gateway, prefix: str, backend: str) -> None:
-    pytest.skip(
-        "BUG: native Google stream served by an openai or anthropic deployment ends with usageMetadata 0/0/0 although the upstream sent usage 20/9/29"
-    )
     frames: Final = _openai_stream_frames() if backend == "openai" else _anthropic_stream_frames()
 
     def respond(request: Request) -> Reply:
@@ -778,3 +778,280 @@ def test_generate_content_adapter_keeps_camel_case_inline_data(gateway: Gateway)
         body: Final = JSON_OBJECT.validate_json(response.content)
         assert body["candidates"] == _EXPECTED_CANDIDATES, response.text
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1/chat/completions")], response.text
+
+
+_TEXT_BASE: Final = {
+    "id": "chatcmpl-wire3",
+    "object": "chat.completion.chunk",
+    "created": 1700000000,
+    "model": "gpt-4o-mini",
+}
+_TEXT_USAGE: Final = {"prompt_tokens": 13, "completion_tokens": 4, "total_tokens": 17}
+_ZERO_USAGE: Final = {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0}
+
+
+def _text_frame(chunk: Mapping[str, JsonValue], response_id: str = "chatcmpl-wire3") -> bytes:
+    return f"data: {json.dumps({**_TEXT_BASE, 'id': response_id, **chunk})}\n\n".encode()
+
+
+_DELTA_CHUNK: Final = {
+    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hello"}, "finish_reason": None}]
+}
+_FINISH_CHUNK: Final = {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+_USAGE_CHUNK: Final = {"choices": [], "usage": _TEXT_USAGE}
+_TEXT_DELTA: Final = _text_frame(_DELTA_CHUNK)
+_TEXT_FINISH: Final = _text_frame(_FINISH_CHUNK)
+_TEXT_USAGE_FRAME: Final = _text_frame(_USAGE_CHUNK)
+_TEXT_DONE: Final = b"data: [DONE]\n\n"
+
+
+def _billed_text_frames(include_usage: bool) -> tuple[bytes, ...]:
+    response_id: Final = f"chatcmpl-{uuid.uuid4().hex}"
+    chunks: Final = (_DELTA_CHUNK, _FINISH_CHUNK, *((_USAGE_CHUNK,) if include_usage else ()))
+    return (*(_text_frame(chunk, response_id) for chunk in chunks), _TEXT_DONE)
+
+
+def _text_stream_request(marker: str, **fields: JsonValue) -> dict[str, JsonValue]:
+    return {"contents": [{"role": "user", "parts": [{"text": f"say hello {marker}"}]}], **fields}
+
+
+def _gemini_frames(response_text: str) -> list[dict]:
+    parts: Final = [part for part in response_text.split("\n\n") if part.strip()]
+    assert all(part.startswith("data: ") for part in parts), response_text
+    return [json.loads(part.removeprefix("data: ")) for part in parts]
+
+
+def _stop_frames(frames: list[dict]) -> list[dict]:
+    return [frame for frame in frames if any(c.get("finishReason") for c in frame.get("candidates", []))]
+
+
+def _openai_text_model(scenario, wire) -> str:
+    return scenario.model(model="openai/gpt-4o-mini", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key")
+
+
+def _stream_text(gateway: Gateway, model: str, key: str, body: Mapping[str, JsonValue]):
+    return gateway.client.post(
+        f"/v1beta/models/{model}:streamGenerateContent?alt=sse",
+        json=dict(body),
+        headers={"Authorization": f"Bearer {key}"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("caller_options", "forwarded"),
+    [
+        pytest.param(None, {"include_usage": True}, id="caller_sends_none"),
+        pytest.param({"include_usage": True}, {"include_usage": True}, id="caller_opts_in"),
+        pytest.param({"include_usage": False}, None, id="caller_opts_out"),
+        pytest.param({}, None, id="caller_sends_empty_object"),
+    ],
+)
+def test_stream_generate_content_adapter_forwards_the_callers_stream_options(
+    gateway: Gateway, caller_options: dict | None, forwarded: dict | None
+) -> None:
+    def respond(request: Request) -> Reply:
+        body: Final = json.loads(request.body)
+        asks: Final = body.get("stream_options", {}).get("include_usage") is True
+        frames: Final = (_TEXT_DELTA, _TEXT_FINISH, *((_TEXT_USAGE_FRAME,) if asks else ()), _TEXT_DONE)
+        return Reply(content_type="text/event-stream", chunks=frames)
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _openai_text_model(scenario, wire)
+        key: Final = scenario.key(models=[model])
+        options: Final = {} if caller_options is None else {"stream_options": caller_options}
+        response: Final = _stream_text(gateway, model, key, _text_stream_request(uuid.uuid4().hex, **options))
+        assert response.status_code == 200, response.text
+        frames: Final = _gemini_frames(response.text)
+        stops: Final = _stop_frames(frames)
+        assert len(stops) == 1 and stops[0] is frames[-1], response.text
+        expected_usage: Final = (
+            {"promptTokenCount": 13, "candidatesTokenCount": 4, "totalTokenCount": 17} if forwarded else _ZERO_USAGE
+        )
+        assert frames[-1]["usageMetadata"] == expected_usage, response.text
+        received: Final = wire.drain()
+        assert len(received) == 1
+        assert json.loads(received[0].body).get("stream_options") == forwarded, received[0].body
+
+
+_BILLED_SELECT: Final = 'SELECT prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE api_key=%s'
+
+
+def test_stream_generate_content_adapter_without_upstream_usage_reports_the_billed_tokens(gateway: Gateway) -> None:
+    def respond(_request: Request) -> Reply:
+        return Reply(content_type="text/event-stream", chunks=_billed_text_frames(include_usage=False))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _openai_text_model(scenario, wire)
+        key: Final = scenario.key(models=[model])
+        response: Final = _stream_text(gateway, model, key, _text_stream_request(uuid.uuid4().hex))
+        assert response.status_code == 200, response.text
+        frames: Final = _gemini_frames(response.text)
+        assert frames[0]["candidates"][0]["content"]["parts"] == [{"text": "hello"}], response.text
+        stops: Final = _stop_frames(frames)
+        assert len(stops) == 1 and stops[0] is frames[-1], response.text
+        digest: Final = sha256(key.encode()).hexdigest()
+        eventually(lambda: read_rows(_BILLED_SELECT, (digest,)), lambda rows: len(rows) >= 1, seconds=70)
+        rows: Final = held(lambda: read_rows(_BILLED_SELECT, (digest,)), lambda found: len(found) == 1, holding=3)
+        usage: Final = frames[-1]["usageMetadata"]
+        assert (usage["promptTokenCount"], usage["candidatesTokenCount"]) == (
+            rows[0]["prompt_tokens"],
+            rows[0]["completion_tokens"],
+        ), (response.text, rows)
+        assert usage["promptTokenCount"] > 0, response.text
+        assert len(wire.drain()) == 1
+
+
+def test_stream_generate_content_adapter_usage_before_finish_keeps_the_real_usage_last(gateway: Gateway) -> None:
+    def respond(_request: Request) -> Reply:
+        return Reply(
+            content_type="text/event-stream", chunks=(_TEXT_DELTA, _TEXT_USAGE_FRAME, _TEXT_FINISH, _TEXT_DONE)
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _openai_text_model(scenario, wire)
+        key: Final = scenario.key(models=[model])
+        response: Final = _stream_text(gateway, model, key, _text_stream_request(uuid.uuid4().hex))
+        assert response.status_code == 200, response.text
+        frames: Final = _gemini_frames(response.text)
+        assert len(_stop_frames(frames)) == 1, response.text
+        assert [frame["usageMetadata"] for frame in frames if "usageMetadata" in frame][-1] == {
+            "promptTokenCount": 13,
+            "candidatesTokenCount": 4,
+            "totalTokenCount": 17,
+        }, response.text
+        assert len(wire.drain()) == 1
+
+
+def test_stream_generate_content_adapter_slow_usage_after_finish_still_arrives(gateway: Gateway) -> None:
+    def respond(_request: Request) -> Reply:
+        return Reply(
+            content_type="text/event-stream",
+            chunks=(_TEXT_DELTA, _TEXT_FINISH, _TEXT_USAGE_FRAME, _TEXT_DONE),
+            pause_between_chunks=1.5,
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _openai_text_model(scenario, wire)
+        key: Final = scenario.key(models=[model])
+        response: Final = _stream_text(gateway, model, key, _text_stream_request(uuid.uuid4().hex))
+        assert response.status_code == 200, response.text
+        frames: Final = _gemini_frames(response.text)
+        stops: Final = _stop_frames(frames)
+        assert len(stops) == 1 and stops[0] is frames[-1], response.text
+        assert frames[-1]["usageMetadata"] == {
+            "promptTokenCount": 13,
+            "candidatesTokenCount": 4,
+            "totalTokenCount": 17,
+        }, response.text
+        assert len(wire.drain()) == 1
+
+
+def test_stream_generate_content_adapter_upstream_drop_after_finish_still_sends_stop(gateway: Gateway) -> None:
+    def respond(_request: Request) -> Reply:
+        return Reply(
+            content_type="text/event-stream",
+            chunks=(_TEXT_DELTA, _TEXT_FINISH, _TEXT_USAGE_FRAME, _TEXT_DONE),
+            abort_after=2,
+            pause_between_chunks=1.5,
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _openai_text_model(scenario, wire)
+        key: Final = scenario.key(models=[model])
+        response: Final = _stream_text(gateway, model, key, _text_stream_request(uuid.uuid4().hex))
+        assert response.status_code == 200, response.text
+        frames: Final = _gemini_frames(response.text)
+        assert frames[0]["candidates"][0]["content"]["parts"] == [{"text": "hello"}], response.text
+        assert len(_stop_frames(frames)) == 1, response.text
+        assert len(wire.drain()) == 1
+        healthy: Final = gateway.request("GET", "/health/liveliness")
+        assert healthy.status_code == 200, healthy.text
+
+
+_ATTRIBUTION_SELECT: Final = (
+    "SELECT request_tags, team_id, metadata->>'user_api_key_alias' AS alias, model_group, prompt_tokens,"
+    ' completion_tokens FROM "LiteLLM_SpendLogs" WHERE api_key=%s'
+)
+_STATUS_SELECT: Final = 'SELECT status FROM "LiteLLM_SpendLogs" WHERE api_key=%s'
+
+
+@pytest.mark.parametrize("streamed", [False, True], ids=["generate", "stream"])
+@pytest.mark.parametrize("status", [400, 401, 429])
+def test_generate_content_adapter_upstream_error_keeps_the_provider_status(
+    gateway: Gateway, status: int, streamed: bool
+) -> None:
+    message: Final = f"scripted openai rejection {uuid.uuid4().hex}"
+
+    def respond(_request: Request) -> Reply:
+        error: Final = {"message": message, "type": "invalid_request_error", "code": str(status)}
+        return Reply(status=status, body=json.dumps({"error": error}).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/gpt-4o-mini",
+            api_base=f"{wire.url}/v1",
+            api_key="synthetic-openai-key",
+            num_retries=0,
+            max_retries=0,
+        )
+        key: Final = scenario.key(models=[model])
+        method: Final = "streamGenerateContent?alt=sse" if streamed else "generateContent"
+        response: Final = gateway.client.post(
+            f"/v1beta/models/{model}:{method}",
+            json=_text_stream_request(uuid.uuid4().hex),
+            headers={"Authorization": f"Bearer {key}"},
+        )
+        assert response.status_code == status, response.text
+        assert message in response.text, response.text
+        digest: Final = sha256(key.encode()).hexdigest()
+        eventually(lambda: read_rows(_STATUS_SELECT, (digest,)), lambda rows: len(rows) >= 1, seconds=70)
+        rows: Final = held(lambda: read_rows(_STATUS_SELECT, (digest,)), lambda found: len(found) == 1, holding=3)
+        assert rows[0]["status"] == "failure", rows
+        assert len(wire.drain()) == 1
+        healthy: Final = gateway.request("GET", "/health/liveliness")
+        assert healthy.status_code == 200, healthy.text
+
+
+@pytest.mark.parametrize("streamed", [False, True], ids=["generate", "stream"])
+def test_generate_content_adapter_spend_row_keeps_key_team_and_tag_attribution(
+    gateway: Gateway, streamed: bool
+) -> None:
+    def respond(request: Request) -> Reply:
+        if json.loads(request.body).get("stream") is True:
+            return Reply(content_type="text/event-stream", chunks=_billed_text_frames(include_usage=True))
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": f"chatcmpl-{uuid.uuid4().hex}",
+                    "object": "chat.completion",
+                    "created": 1700000000,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}
+                    ],
+                    "usage": _TEXT_USAGE,
+                }
+            ).encode()
+        )
+
+    marker: Final = uuid.uuid4().hex
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _openai_text_model(scenario, wire)
+        team: Final = scenario.team(models=[model])
+        alias: Final = f"adapter-alias-{marker}"
+        key: Final = scenario.key(models=[model], team_id=team, key_alias=alias)
+        method: Final = "streamGenerateContent?alt=sse" if streamed else "generateContent"
+        response: Final = gateway.client.post(
+            f"/v1beta/models/{model}:{method}",
+            json=_text_stream_request(marker),
+            headers={"Authorization": f"Bearer {key}", "x-litellm-tags": f"adapter-tag-{marker}"},
+        )
+        assert response.status_code == 200, response.text
+        digest: Final = sha256(key.encode()).hexdigest()
+        eventually(lambda: read_rows(_ATTRIBUTION_SELECT, (digest,)), lambda rows: len(rows) >= 1, seconds=70)
+        rows: Final = held(lambda: read_rows(_ATTRIBUTION_SELECT, (digest,)), lambda found: len(found) == 1, holding=3)
+        row: Final = rows[0]
+        assert (row["team_id"], row["alias"], row["model_group"]) == (team, alias, model), row
+        assert f"adapter-tag-{marker}" in json.dumps(row["request_tags"]), row
+        assert (row["prompt_tokens"], row["completion_tokens"]) == (13, 4), row
+        assert len(wire.drain()) == 1

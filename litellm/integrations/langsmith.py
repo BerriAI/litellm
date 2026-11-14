@@ -7,10 +7,11 @@ import random
 import traceback
 import types
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import Final
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -27,6 +28,12 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.integrations.langsmith import *
 from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
+
+_RUN_RESPONSE: Final = TypeAdapter(object)
+
+
+class _DynamicParamsKwargs(TypedDict, total=False):
+    standard_callback_dynamic_params: ReadOnly[StandardCallbackDynamicParams | None]
 
 
 def is_serializable(value):
@@ -472,7 +479,7 @@ class LangsmithLogger(CustomBatchLogger):
 
         return log_queue_by_credentials
 
-    def _get_sampling_rate_to_use_for_request(self, kwargs: dict[str, Any]) -> float:
+    def _get_sampling_rate_to_use_for_request(self, kwargs: _DynamicParamsKwargs) -> float:
         standard_callback_dynamic_params: Final[StandardCallbackDynamicParams | None] = kwargs.get(
             "standard_callback_dynamic_params", None
         )
@@ -483,7 +490,7 @@ class LangsmithLogger(CustomBatchLogger):
                 sampling_rate = float(_sampling_rate)
         return sampling_rate
 
-    def _get_credentials_to_use_for_request(self, kwargs: dict[str, Any]) -> LangsmithCredentialsObject:
+    def _get_credentials_to_use_for_request(self, kwargs: _DynamicParamsKwargs) -> LangsmithCredentialsObject:
         """
         Handles key/team based logging
 
@@ -524,7 +531,7 @@ class LangsmithLogger(CustomBatchLogger):
             # If we can't get an event loop, create a new one
             asyncio.run(self.async_send_batch())
 
-    def get_run_by_id(self, run_id):
+    def get_run_by_id(self, run_id) -> object:
         langsmith_api_key: Final = self.default_credentials["LANGSMITH_API_KEY"]
         langsmith_api_base: Final = self.default_credentials["LANGSMITH_BASE_URL"]
         langsmith_tenant_id: Final = self.default_credentials.get("LANGSMITH_TENANT_ID")
@@ -538,7 +545,7 @@ class LangsmithLogger(CustomBatchLogger):
             headers=headers,
         )
 
-        return response.json()
+        return _RUN_RESPONSE.validate_python(response.json())
 
     def make_dot_order(self, run_id: str):
         st: Final = datetime.now(timezone.utc)
