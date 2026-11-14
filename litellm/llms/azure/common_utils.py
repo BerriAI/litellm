@@ -578,7 +578,10 @@ class BaseAzureLLM(BaseOpenAILLM):
                 v1_api_key = _async_v1_api_key
 
             v1_base: Final = httpx.URL(api_base or "")
-            v1_root: Final = add_path_to_api_base(api_base=str(v1_base.copy_with(query=None)), ending_path="openai/v1")
+            v1_trimmed: Final = str(v1_base.copy_with(query=None)).rstrip("/")
+            v1_root: Final = (
+                v1_trimmed if v1_trimmed.endswith("/openai/v1") else f"{v1_trimmed.removesuffix('/openai')}/openai/v1"
+            )
             v1_params: Final[_AzureV1ClientParams] = {
                 "api_key": v1_api_key,
                 "base_url": f"{v1_root}/",
