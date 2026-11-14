@@ -2001,17 +2001,39 @@ class HostRegistry(HostModelInfo):
     def _core_get_model_ids(
         self, model_name: str | None = None, exclude_team_models: bool = False
     ) -> list[str]:  # mutable-ok: a fresh list
+        """The ids of every deployment, or of the deployments ``model_name`` routes to: it may be any
+        name the router serves (see ``_resolve_to_deployment_model_names``)."""
         with self._deployment_index_lock:
             if model_name is not None and _index_key(model_name) is None:
                 return []
-            ids, raw = self._lookup().lookup_model_ids(model_name, exclude_team_models)
-            self._raise_at(raw)
+            names: Final = (None,) if model_name is None else self._resolve_to_deployment_model_names(model=model_name)
+            ids: Final[list[str]] = []  # mutable-ok: a fresh list
+            for name in names:
+                found, raw = self._lookup().lookup_model_ids(name, exclude_team_models)
+                self._raise_at(raw)
+                ids.extend(found)
             return ids
 
     # -- resolving a name -------------------------------------------------------------------------
 
     def _core_get_model_from_alias(self, model: str) -> str | None:
         return resolve_model_group_alias(self._core_model_group_alias, model)
+
+    def _resolve_to_deployment_model_names(self, model: str) -> tuple[str, ...]:
+        """
+        The deployment ``model_name``s behind a requested name, so lookups keyed by a served name
+        reach the deployments the router would route to:
+
+        - a ``model_group_alias`` resolves to its target
+        - a callable routing group resolves to its member ``model_name``s
+        - any other name resolves to itself
+
+        Team-scoped deployments keep their own internal ``model_name``, so they are reached only
+        when that name is requested, as is already the case for a plain ``model_name`` lookup.
+        """
+        resolved: Final = self._core_get_model_from_alias(model=model) or model
+        group: Final = self.get_routing_group(resolved)
+        return tuple(group.models) if group is not None else (resolved,)
 
     def _core_routable_model_group(self, model_name: str) -> str:
         target: Final = self._core_get_model_from_alias(model_name)
