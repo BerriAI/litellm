@@ -30,6 +30,7 @@ from litellm.integrations.custom_logger_v2.selection import RequestSelection
 from litellm.integrations.s3_v2 import S3Logger
 from litellm.integrations.s3_v3 import S3LoggerV3, native_s3_v2_enabled, new_s3_v2_logger
 from litellm.litellm_core_utils.litellm_logging import LOGGING_KEYS, V2_ASYNC_LOGGING_LINE
+from litellm.llms.bedrock import base_aws_llm
 from litellm.rust_bridge import _native
 from litellm.types.integrations.custom_logger_v2 import Outcome
 
@@ -745,6 +746,49 @@ async def test_web_identity_assumes_the_role_with_the_same_session_policy(
         assert put.headers["authorization"] == _botocore_authorization(
             put, bucket.port, credentials=("AKIDSTS", "sts-secret", "sts-token")
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token", [True, 7, "abc", ""])
+async def test_a_web_identity_token_botocore_rejects_fails_both_before_sts(
+    buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, sts: FakeSts, token: object
+) -> None:
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_EXTERNAL_ID"):
+        monkeypatch.delenv(name, raising=False)
+    reference: Final = "s3-v3-test/oidc-token"
+
+    def secret(name: str, default_value: object = None) -> object:
+        return token if name == reference else default_value
+
+    monkeypatch.setattr(base_aws_llm, "get_secret", secret)
+    monkeypatch.setattr(s3_v3, "get_secret", secret)
+    identity: Final = {
+        "s3_aws_access_key_id": None,
+        "s3_aws_secret_access_key": None,
+        "s3_aws_session_token": None,
+        "s3_aws_web_identity_token": reference,
+        "s3_aws_role_name": "arn:aws:iam::123456789012:role/logs",
+        "s3_aws_session_name": f"s3-rejected-{sts.port}",
+        "s3_aws_sts_endpoint": f"http://127.0.0.1:{sts.port}",
+    }
+    python_logger, rust_logger = await _loggers(monkeypatch, buckets, identity)
+    with (
+        patch.object(S3Logger, "handle_callback_failure") as python_failures,
+        patch.object(s3_v3._Host, "callback_failed") as rust_failures,
+        patch.object(s3_v2.verbose_logger, "exception") as python_errors,
+    ):
+        await _log(python_logger, rust_logger, _payload())
+        await _flush(python_logger, rust_logger)
+    assert sts.calls == []
+    assert buckets[0].puts() == buckets[1].puts() == []
+    assert python_failures.call_count == rust_failures.call_count == 1
+    assert rust_logger.sink.queued_keys() == [element.s3_object_key for element in python_logger.log_queue]
+    python_error: Final = next(
+        call.args[1] for call in python_errors.call_args_list if call.args[0] == "Error uploading to s3: %s"
+    )
+    with pytest.raises(ValueError, match=r"^Parameter validation failed:") as rust_error:
+        s3_v3._Host().web_identity_token(reference)
+    assert str(rust_error.value) == str(python_error)
 
 
 @pytest.mark.asyncio

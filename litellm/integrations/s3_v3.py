@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from functools import cache
 from typing import TYPE_CHECKING, ClassVar, Final
 
@@ -24,7 +24,7 @@ from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 from litellm.integrations.custom_logger_v2.rust import RustLogger, rust_logger
 from litellm.integrations.s3_v2 import S3Logger
 from litellm.llms.bedrock.web_identity_session_policy import S3_LOGGING_SESSION_POLICY, session_policy_document
-from litellm.secret_managers.main import get_secret_str
+from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity
 from litellm.types.utils import StandardAuditLogPayload, StandardBatchLineItemsPayload, StandardLoggingPayload
 
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
 NATIVE_S3_V2_FLAG: Final = "LITELLM_NATIVE_S3_V2"
 CALLBACK_NAME: Final = "s3_v2"
+_WEB_IDENTITY_TOKEN_MIN_LENGTH: Final = 4
 
 
 @cache
@@ -58,10 +59,24 @@ class _Host:
     def web_identity_token(self, reference: str) -> str:
         if reference.startswith("os.environ/") or reference in os.environ:
             raise ValueError("Invalid web identity token reference.")
-        token: Final = get_secret_str(reference)
+        token: Final = _read_secret(get_secret, reference)
         if token is None:
             raise ValueError("OIDC token could not be retrieved from secret manager.")
+        if not isinstance(token, str):
+            raise ValueError(
+                "Parameter validation failed:\nInvalid type for parameter WebIdentityToken, "
+                f"value: {token}, type: {type(token)}, valid types: {str}"
+            )
+        if len(token) < _WEB_IDENTITY_TOKEN_MIN_LENGTH:
+            raise ValueError(
+                "Parameter validation failed:\nInvalid length for parameter WebIdentityToken, "
+                f"value: {len(token)}, valid min length: {_WEB_IDENTITY_TOKEN_MIN_LENGTH}"
+            )
         return token
+
+
+def _read_secret(read: Callable[[str], object], reference: str) -> object:
+    return read(reference)
 
 
 def _resolved_params(params_source: Mapping[str, object] | None) -> dict[str, object]:  # mutable-ok: handed to Rust
