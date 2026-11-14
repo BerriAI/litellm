@@ -12,6 +12,7 @@ Run with: pytest tests/unit/interactions/test_openapi_compliance.py -v
 
 import json
 import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -66,7 +67,7 @@ def _interaction_resource_path(spec_dict: Dict[str, Any], method: str) -> str | 
         (
             path
             for path, methods in spec_dict["paths"].items()
-            if re.search(r"/interactions/\{[^}]+\}$", path) and method in methods
+            if re.fullmatch(r"/\{api_version\}/interactions/\{[^/{}]+\}", path) and method in methods
         ),
         None,
     )
@@ -341,17 +342,9 @@ class TestEndpointCompliance:
 
     def test_create_endpoint_exists(self, spec_dict):
         """Verify POST /interactions endpoint exists."""
-        paths = spec_dict["paths"]
-
-        # Find the create interactions endpoint
-        create_path = None
-        for path, methods in paths.items():
-            if "interactions" in path and "post" in methods:
-                create_path = path
-                break
-
-        assert create_path is not None, "POST /interactions endpoint not found"
-        print(f"✓ Create endpoint: POST {create_path}")
+        assert any(
+            path == "/{api_version}/interactions" and "post" in methods for path, methods in spec_dict["paths"].items()
+        ), "POST /interactions endpoint not found"
 
     def test_get_endpoint_exists(self, spec_dict):
         """Verify GET /interactions/{id} endpoint exists."""
@@ -366,6 +359,33 @@ class TestEndpointCompliance:
 
         assert delete_path is not None, "DELETE /interactions/{id} endpoint not found"
         print(f"✓ Delete endpoint: DELETE {delete_path}")
+
+
+@pytest.mark.parametrize(
+    ("check", "suffix"),
+    (
+        (TestEndpointCompliance().test_create_endpoint_exists, ""),
+        (TestEndpointCompliance().test_get_endpoint_exists, "/{id}"),
+        (TestEndpointCompliance().test_delete_endpoint_exists, "/{id}"),
+    ),
+)
+@pytest.mark.parametrize("prefix", ("/unrelated/nested", "/other", "/{api_version}/nested", ""))
+def test_endpoint_checks_reject_unrelated_paths(
+    check: Callable[[Mapping[str, Mapping[str, Mapping[str, object]]]], None], suffix: str, prefix: str
+) -> None:
+    spec: Final = {"paths": {f"{prefix}/interactions{suffix}": {"post": {}, "get": {}, "delete": {}}}}
+
+    with pytest.raises(AssertionError, match="endpoint not found"):
+        check(spec)
+
+
+@pytest.mark.parametrize("parameter", ("id", "interactionsId", "interaction_id"))
+@pytest.mark.parametrize("method", ("get", "delete"))
+def test_resource_checks_accept_different_parameter_names(parameter: str, method: str) -> None:
+    path: Final = f"/{{api_version}}/interactions/{{{parameter}}}"
+    spec: Final = {"paths": {path: {"get": {}, "delete": {}}}}
+
+    assert _interaction_resource_path(spec, method) == path
 
 
 if __name__ == "__main__":
