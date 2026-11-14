@@ -2783,6 +2783,48 @@ async def test_bulk_user_spend_reset_clears_every_users_spend_counters(
 
 
 @pytest.mark.asyncio
+async def test_bulk_user_update_that_expires_inside_the_transaction_changes_no_user(mocker: MockerFixture) -> None:
+    from prisma.errors import TransactionExpiredError
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
+
+    saved_users: Final = tuple(_user_with_windows(user_id) for user_id in ("user-spruce", "user-fir"))
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=list(saved_users))
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_users[0])
+    prisma_client.update_data = mocker.AsyncMock(
+        return_value={"user_id": saved_users[0].user_id, "data": saved_users[0]}
+    )
+    transaction_db: Final = SimpleNamespace(
+        litellm_usertable=SimpleNamespace(
+            find_many=mocker.AsyncMock(return_value=list(saved_users)),
+            update_many=mocker.AsyncMock(side_effect=TransactionExpiredError("transaction expired")),
+        )
+    )
+    prisma_client.tx = lambda: _transaction_over(transaction_db)
+    mocker.patch(
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    )  # test-quality-ok: substitute the database dependency
+    mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        new_callable=mocker.AsyncMock,
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        await bulk_user_update(
+            data=BulkUpdateUserRequest(
+                all_users=True, user_updates={"budget_limits": list(_RESENT_WINDOWS), "max_budget": 50.0}
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_changed_by=None,
+        )
+
+    assert caught.value.status_code == 500
+    prisma_client.update_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocker: MockerFixture) -> None:
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache

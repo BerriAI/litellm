@@ -2182,11 +2182,7 @@ async def bulk_user_update(
 
         except Exception as e:
             verbose_proxy_logger.exception("Failed to perform bulk update: %s", e)
-            # Fall back to individual updates if bulk update fails
-            for user in all_users_in_db:
-                user_update_request = data.user_updates.model_copy()
-                user_update_request.user_id = user.user_id
-                users_to_update.append(user_update_request)
+            raise HTTPException(status_code=500, detail={"error": str(e)}) from e
 
         if successful_updates > 0:
             return BulkUpdateUserResponse(
