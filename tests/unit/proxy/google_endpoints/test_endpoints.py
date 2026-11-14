@@ -143,6 +143,8 @@ _CONTENTS: Final = {"contents": [_TURN]}
             {"systemInstruction": {"parts": {"text": None, "mediaResolution": {"level": "MEDIA_RESOLUTION_LOW"}}}},
             _NO_SYSTEM_PARTS,
         ),
+        ({"systemInstruction": {"parts": {"text": None, "media_processing": {"fps": 1}}}}, _NO_SYSTEM_PARTS),
+        ({"systemInstruction": {"parts": {"text": None, "speechMetadata": {"speaker": "narrator"}}}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {"parts": [{"thoughtSignature": "c2ln"}, {"text": "Follow these rules"}]}}, _SYSTEM),
         ({"systemInstruction": {"parts": [{}]}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {}}, _NO_SYSTEM_PARTS),
@@ -200,6 +202,9 @@ _NON_TEXT_PART_DATA: Final[tuple[tuple[str, JsonValue], ...]] = (
     ("executable_code", {"language": "PYTHON", "code": "print(1)"}),
     ("codeExecutionResult", {"outcome": "OUTCOME_OK", "output": "1"}),
     ("code_execution_result", {"outcome": "OUTCOME_OK", "output": "1"}),
+    ("toolCall", {"id": "call-1", "toolType": "GOOGLE_SEARCH_WEB"}),
+    ("toolResponse", {"id": "call-1", "toolType": "GOOGLE_SEARCH_WEB"}),
+    ("unknownFuturePartData", {"value": 1}),
 )
 
 
