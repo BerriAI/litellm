@@ -8,10 +8,12 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.common_utils import context_management_betas, tools_without_custom_field
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, context_management_betas, tools_without_custom_field
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, AnthropicCountTokensConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError, build_mantle_messages_url
+from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensRequestError
+from litellm.llms.bedrock.count_tokens.transformation import count_tokens_messages_problem
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 
 MANTLE_COUNT_TOKENS_SUFFIX: Final = "/count_tokens"
@@ -58,6 +60,9 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
     ) -> dict[str, JsonValue]:
         try:
             request: Final = _COUNT_REQUEST.validate_python(request_data)
+            problem: Final = count_tokens_messages_problem(request["messages"])
+            if problem is not None:
+                raise BedrockCountTokensRequestError(problem)
             aws_region_name: Final = await run_aws_signing(
                 self.get_aws_region_name, optional_params=litellm_params, model=resolved_model, model_id=None
             )
@@ -77,7 +82,10 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
                 ),
                 context_management=request.get("context_management"),
             )
-            betas: Final = context_management_betas(request.get("context_management"))
+            betas: Final = (
+                *context_management_betas(request.get("context_management")),
+                *AnthropicModelInfo().thinking_betas(request_data.get("thinking")),
+            )
             verbose_logger.debug("Making bedrock-mantle count_tokens request to: %s", endpoint_url)
             api_key: Final = litellm_params.get("api_key")
             signed_headers, signed_body = await run_aws_signing(

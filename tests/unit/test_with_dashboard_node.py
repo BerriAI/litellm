@@ -4,11 +4,11 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts" / "with_dashboard_node.sh"
+SCRIPT = ROOT / "litellm/scripts" / "with_dashboard_node.sh"
 
 
 def _floor() -> str:
-    pkg = json.loads((ROOT / "ui" / "litellm-dashboard" / "package.json").read_text())
+    pkg = json.loads((ROOT / "litellm" / "ui" / "litellm-dashboard" / "package.json").read_text())
     return pkg["engines"]["node"].removeprefix(">=")
 
 

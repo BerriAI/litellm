@@ -7,7 +7,7 @@ from typing import Final
 
 import pytest
 
-_SCRIPT: Final = Path(__file__).resolve().parents[2] / "ci_cd" / "spend_logs_guard.py"
+_SCRIPT: Final = Path(__file__).resolve().parents[2] / "litellm/scripts" / "ci_cd" / "spend_logs_guard.py"
 _SPEC: Final = importlib.util.spec_from_file_location("spend_logs_guard", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
 guard: Final = importlib.util.module_from_spec(_SPEC)
@@ -56,6 +56,20 @@ def _blocks(path: str, base: str = SCHEMA, head: str = SCHEMA) -> dict[str, guar
 def _with_line(schema: str, after: int, line: str) -> str:
     lines: Final = schema.splitlines(keepends=True)
     return "".join(lines[:after]) + f"{line}\n" + "".join(lines[after:])
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "schema.prisma",
+        "litellm/schema.prisma",
+        "litellm/proxy/schema.prisma",
+        "litellm/proxy-extras/litellm_proxy_extras/schema.prisma",
+    ),
+)
+def test_spend_log_changes_in_every_schema_copy_require_review(path: str) -> None:
+    assert guard.watched(path)
+    assert guard.spend_log_hits(_added(path, "  tokens Int", start=11), _blocks(path)) == (f"{path}: +tokens Int",)
 
 
 class TestModelBlock:
@@ -108,7 +122,7 @@ class TestSpendLogHits:
         assert guard.spend_log_hits(diff, _blocks("schema.prisma", head=head)) == ("schema.prisma: +new_col String?",)
 
     def test_an_added_migration_line_is_a_hit_in_any_case_and_a_removed_one_is_not(self):
-        path: Final = "litellm-proxy-extras/litellm_proxy_extras/migrations/20260101000000_x/migration.sql"
+        path: Final = "litellm/proxy-extras/litellm_proxy_extras/migrations/20260101000000_x/migration.sql"
         diff: Final = _diff(
             path,
             _hunk(
@@ -125,7 +139,7 @@ class TestSpendLogHits:
         )
 
     def test_another_table_in_a_migration_or_an_unwatched_file_is_not_a_hit(self):
-        path: Final = "litellm-proxy-extras/litellm_proxy_extras/migrations/20260101000000_x/migration.sql"
+        path: Final = "litellm/proxy-extras/litellm_proxy_extras/migrations/20260101000000_x/migration.sql"
         other: Final = _added(
             path, 'ALTER TABLE "LiteLLM_TeamTable" ADD COLUMN "x" TEXT; -- not MyLiteLLM_SpendLogs', 5
         )

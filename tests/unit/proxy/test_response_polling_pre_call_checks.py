@@ -92,7 +92,7 @@ class TestSkipPreCallLogic:
                     proxy_logging_obj=mock_proxy_logging,
                     llm_router=MagicMock(),
                     general_settings={},
-                    proxy_config=MagicMock(),
+                    proxy_config=MagicMock(get_hierarchical_router_settings=AsyncMock(return_value=None)),
                 )
             except Exception:
                 pass

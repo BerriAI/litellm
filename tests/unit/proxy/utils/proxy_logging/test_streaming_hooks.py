@@ -1236,8 +1236,8 @@ async def test_native_azure_moderates_split_reasoning_in_both_streams(
         if path == "common_request_processing":
             assert output[1] is chunks[1]
         else:
-            assert isinstance(output[1], str)
-            assert json.loads(output[1].removeprefix("data: "))["choices"] == chunks[1].model_dump(exclude_none=True)["choices"]
+            assert isinstance(output[1], bytes)
+            assert json.loads(output[1].removeprefix(b"data: "))["choices"] == chunks[1].model_dump(exclude_none=True)["choices"]
 
 
 @pytest.mark.asyncio
@@ -1306,5 +1306,5 @@ async def test_reasoning_stream_preserves_opaque_items_without_optional_plaintex
         assert output[:2] == chunks
     else:
         for chunk, frame in zip(chunks, output[:2]):
-            assert isinstance(frame, str)
-            assert json.loads(frame.removeprefix("data: "))["choices"] == chunk.model_dump(exclude_none=True)["choices"]
+            assert isinstance(frame, bytes)
+            assert json.loads(frame.removeprefix(b"data: "))["choices"] == chunk.model_dump(exclude_none=True)["choices"]

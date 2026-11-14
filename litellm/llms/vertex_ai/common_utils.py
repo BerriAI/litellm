@@ -7,7 +7,7 @@ from enum import Enum
 from functools import lru_cache
 from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypeVar, cast, get_type_hints
+from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast, get_type_hints
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -32,6 +32,9 @@ from litellm.types.llms.vertex_ai import (
 )
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
+
+if TYPE_CHECKING:
+    from litellm.llms.anthropic.count_tokens.transformation import AnthropicCountFields
 
 GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
     {"fps": "fps", "start_offset": "startOffset", "end_offset": "endOffset"}
@@ -97,6 +100,7 @@ class VertexAILyriaModelInfo(TypedDict):
 
 
 _VERTEX_AI_LYRIA_MODEL_INFO_ADAPTER: Final = TypeAdapter(VertexAILyriaModelInfo)
+_JSON_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
 def _validate_vertex_ai_lyria_model_info(raw_model_info: object) -> VertexAILyriaModelInfo | None:
@@ -1384,6 +1388,13 @@ class VertexAIModelInfo(BaseLLMModelInfo):
         raise NotImplementedError("Vertex AI models are not supported yet")
 
 
+_COUNT_TOKENS_REQUEST_FIELDS: Final = frozenset({"model", "contents", "system_instruction", "tools"})
+
+
+class _ForwardedCountTokensParams(TypedDict, total=False, extra_items=object):
+    pass
+
+
 class VertexAITokenCounter(BaseTokenCounter):
     """Token counter implementation for Google AI Studio provider."""
 
@@ -1395,21 +1406,17 @@ class VertexAITokenCounter(BaseTokenCounter):
 
         return custom_llm_provider == LlmProviders.VERTEX_AI.value
 
-    async def _count_translated_claude_request(
+    async def _translated_claude_request(
         self,
         model_to_use: str,
         messages: Sequence[Mapping[str, object]] | None,
-        deployment: Mapping[str, object],
         request_model: str,
         tools: Sequence[Mapping[str, object]] | None,
         system: object | None,
         messages_format: TokenCountMessagesFormat,
-        output_format: JsonValue,
-        context_management: CountContextManagement | None,
         chat_params: Mapping[str, JsonValue],
-    ) -> TokenCountResponse | None:
+    ) -> "TokenCountResponse | AnthropicCountFields | None":
         from litellm.llms.anthropic.count_tokens.transformation import (
-            AnthropicCountFields,
             ChatCountTranslationError,
             anthropic_count_fields,
         )
@@ -1419,34 +1426,50 @@ class VertexAITokenCounter(BaseTokenCounter):
             return None
         from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
 
-        match translated := await anthropic_count_fields(
+        translated: Final = await anthropic_count_fields(
             model_to_use, messages or [], system, tools, messages_format, VertexAIAnthropicConfig(), chat_params
-        ):
-            case ChatCountTranslationError():
-                return translated.response(request_model, model_to_use, "vertex_ai_partner_models")
-            case AnthropicCountFields():
-                return await self.count_tokens(
-                    model_to_use=model_to_use,
-                    messages=[dict(message) for message in translated.messages],
-                    contents=None,
-                    deployment=dict(deployment),
-                    request_model=request_model,
-                    tools=[dict(tool) for tool in translated.tools] if translated.tools is not None else None,
-                    system=translated.system,
-                    messages_format="anthropic",
-                    output_format=output_format,
-                    context_management=context_management,
-                    count_options=translated.options,
-                )
-            case None:
-                return None
+        )
+        if isinstance(translated, ChatCountTranslationError):
+            return translated.response(request_model, model_to_use, "vertex_ai_partner_models")
+        return translated
+
+    async def _claude_count_options(
+        self,
+        model_to_use: str,
+        messages: Sequence[Mapping[str, object]],
+        request_model: str,
+        count_options: Mapping[str, JsonValue],
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, JsonValue] | TokenCountResponse:
+        from litellm.litellm_core_utils.asyncify import asyncify
+        from litellm.llms.anthropic.count_tokens.transformation import (
+            ChatCountTranslationError,
+            messages_count_options,
+        )
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
+            VertexAIPartnerModelsAnthropicMessagesConfig,
+        )
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_publisher
+
+        if count_tokens_publisher(model_to_use) != "anthropic":
+            return count_options
+        options: Final = await asyncify(messages_count_options)(
+            VertexAIPartnerModelsAnthropicMessagesConfig(),
+            model_to_use,
+            _JSON_MESSAGES.validate_python(messages),
+            count_options,
+            litellm_params,
+        )
+        if isinstance(options, ChatCountTranslationError):
+            return options.response(request_model, model_to_use, "vertex_ai_partner_models")
+        return options
 
     async def count_tokens(
         self,
         model_to_use: str,
         messages: list[dict[str, object]] | None,
         contents: list[dict[str, object]] | None,
-        deployment: dict[str, Any] | None = None,
+        deployment: dict[str, object] | None = None,
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
@@ -1458,6 +1481,7 @@ class VertexAITokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         import copy
 
+        from litellm.litellm_core_utils.core_helpers import decoded_json_object
         from litellm.llms.anthropic.common_utils import context_management_with_edits
         from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_publisher
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
@@ -1467,19 +1491,19 @@ class VertexAITokenCounter(BaseTokenCounter):
             VertexAIPartnerModels,
         )
 
-        deployment = deployment or {}
-        count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
+        resolved_deployment: Final = deployment or {}
+        raw_litellm_params: Final = copy.deepcopy(resolved_deployment.get("litellm_params", {}))
 
         if not VertexAIPartnerModels.is_vertex_partner_model(model_to_use) and not uses_vertex_gemini_api(
-            model_to_use, count_tokens_params_request
+            model_to_use, decoded_json_object(raw_litellm_params) if raw_litellm_params else None
         ):
             return None
 
         without_count_route: Final = (
             VertexAIPartnerModels.is_vertex_partner_model(model_to_use) and count_tokens_publisher(model_to_use) is None
         )
-        model_info: Final[Mapping[str, object]] = deployment.get("model_info") or {}
-        if without_count_route and messages and model_info.get("custom_tokenizer") is not None:
+        model_info: Final[object] = resolved_deployment.get("model_info") or {}
+        if without_count_route and messages and decoded_json_object(model_info).get("custom_tokenizer") is not None:
             return None
         if without_count_route:
             return TokenCountResponse(
@@ -1494,26 +1518,32 @@ class VertexAITokenCounter(BaseTokenCounter):
 
         # Check if this is a partner model (Claude, Mistral, etc.)
         if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):
-            translated_count: Final = await self._count_translated_claude_request(
+            translated: Final = await self._translated_claude_request(
                 model_to_use=model_to_use,
                 messages=messages,
-                deployment=deployment,
                 request_model=request_model,
                 tools=tools,
                 system=system,
                 messages_format=messages_format,
-                output_format=output_format,
-                context_management=context_management,
                 chat_params=chat_params,
             )
-            if translated_count is not None:
-                return translated_count
+            if isinstance(translated, TokenCountResponse):
+                return translated
+            partner_litellm_params: Final = dict(decoded_json_object(raw_litellm_params))
+            partner_count_options: Final = (
+                translated.options
+                if translated is not None
+                else await self._claude_count_options(
+                    model_to_use, messages or [], request_model, count_options, partner_litellm_params
+                )
+            )
+            if isinstance(partner_count_options, TokenCountResponse):
+                return partner_count_options
 
             # Use partner models token counter
             partner_models_handler: Final = VertexAIPartnerModels()
 
             # Extract vertex-specific params from litellm_params
-            partner_litellm_params: Final[dict[str, object]] = count_tokens_params_request
             vertex_project = partner_litellm_params.get("vertex_project") or partner_litellm_params.get(
                 "vertex_ai_project"
             )
@@ -1532,14 +1562,22 @@ class VertexAITokenCounter(BaseTokenCounter):
             try:
                 result = await partner_models_handler.count_tokens(
                     model=model_to_use,
-                    messages=messages or [],
+                    messages=(
+                        (messages or []) if translated is None else [dict(message) for message in translated.messages]
+                    ),
                     litellm_params=partner_litellm_params,
                     vertex_project=vertex_project,
                     vertex_location=vertex_location,
                     vertex_credentials=vertex_credentials,
-                    system=system,
-                    tools=tools,
-                    count_options=count_options,
+                    system=system if translated is None else translated.system,
+                    tools=(
+                        tools
+                        if translated is None
+                        else None
+                        if translated.tools is None
+                        else [dict(tool) for tool in translated.tools]
+                    ),
+                    count_options=partner_count_options,
                     context_management=(
                         None if context_management is None else context_management_with_edits(context_management.spec)
                     ),
@@ -1585,11 +1623,12 @@ class VertexAITokenCounter(BaseTokenCounter):
             )
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
 
+            gemini_litellm_params: Final = decoded_json_object(raw_litellm_params)
             request_view: Final = await inference_request_view(
                 messages or [],
                 system,
                 messages_format,
-                count_context_edits(context_management, tools, count_tokens_params_request, model_to_use),
+                count_context_edits(context_management, tools, gemini_litellm_params, model_to_use),
             )
             if isinstance(request_view, InferenceRequestViewError):
                 return count_context_error_response(request_view, request_model, model_to_use)
@@ -1600,7 +1639,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 return count_context_error_response(count_context, request_model, model_to_use)
             blocks_error: Final = unconvertible_messages_error(
                 request_view.messages, messages_format
-            ) or malformed_tool_result_text_count_error(messages, messages_format, deployment)
+            ) or malformed_tool_result_text_count_error(messages, messages_format, resolved_deployment)
             if blocks_error is not None:
                 return count_context_error_response(blocks_error, request_model, model_to_use)
 
@@ -1608,22 +1647,21 @@ class VertexAITokenCounter(BaseTokenCounter):
                 contents
                 if contents is not None
                 else await gemini_count_contents(
-                    request_view.messages, messages_format, model_to_use, "vertex_ai", count_tokens_params_request
+                    request_view.messages, messages_format, model_to_use, "vertex_ai", gemini_litellm_params
                 )
             )
             if isinstance(resolved_contents, VertexGeminiCountContextError):
                 return count_context_error_response(resolved_contents, request_model, model_to_use)
 
-            count_tokens_params: Final = {
-                "model": model_to_use,
-                "contents": resolved_contents,
-                "system_instruction": count_context.system_instruction,
-                "tools": count_context.tools,
-            }
-            count_tokens_params_request.update(count_tokens_params)
             try:
                 result = await VertexAITokenCounter().acount_tokens(
-                    **count_tokens_params_request,
+                    **_ForwardedCountTokensParams(
+                        **{k: v for k, v in gemini_litellm_params.items() if k not in _COUNT_TOKENS_REQUEST_FIELDS}
+                    ),
+                    model=model_to_use,
+                    contents=resolved_contents,
+                    system_instruction=count_context.system_instruction,
+                    tools=count_context.tools,
                 )
             except litellm.APIError as error:
                 return provider_error_response(error, request_model, model_to_use)

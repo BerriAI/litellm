@@ -9,7 +9,7 @@
   - provider execution, which is Rust core
   - CPython runtime mechanics, which is `litellm-host-python`
   - legacy callback sharing and dispatch policy, which is `callbacks-legacy-python`
-- `host/` holds the modules Rust imports by name to read Python-owned state. `host/AGENTS.md` states that contract
+- `host/` holds the modules Rust imports by name to reach Python-owned state and behavior. Only Rust calls them, and Rust reaches Python nowhere else. `host/AGENTS.md` states that contract
 
 # Routing
 
@@ -21,8 +21,11 @@
   - `tests/test_litellm_rust/test_public_entries.py` marks such a route `python=None`, so dropping a route's Python changes its entries, its rules and that field together
 - A detector reads the same inputs the legacy Python path reads, so the catalog and the fallback agree on which requests need Python
   - A route's context, its target as well as its features, reads `NativeCall.resolved`, so an argument counts the same whether it came by position, by keyword or as a signature default
-  - A route's sync and async dispatches read different detector maps when the legacy handlers differ: Messages runs pre-request hooks, web search interception and interceptors only on async calls, and the sync Responses handler runs the deployment hook itself
+  - A route's sync and async dispatches read different detector maps when the legacy handlers differ, as the sync Responses handler runs the deployment hook itself. Messages reads one map for both, since Rust serves its async-only pre-request hooks, web search short-circuit and interceptors through host calls
 - A detector that raises keeps the call on Python. `PublicDispatch` logs it and never fails the call over routing
+- Messages for provider `anthropic` is `RUST_REQUIRED` and has no Python path
+  - a call the rules would send to Python (a `MESSAGES_PYTHON_FEATURES` feature or a raising detector) raises `UnsupportedParamsError` from the Python fallback in `litellm/messages/dispatch.py`, which names the detected features
+  - other Messages providers keep the Python fallback
 - `catalog.RULES` is rollout policy with no tests of its own. Tests pass the rules they need, so check these invariants by review whenever `RULES` changes
 
 # Public entries
@@ -45,6 +48,11 @@
 - Native admission may pick Python before execution starts
 - A failure after execution starts is terminal and never triggers fallback
 - Creating an unstarted native coroutine acquires no clients or credentials and captures no execution context
+
+# The `LITELLM_RUST` switch
+
+- `decision` treats a blank or invalid `LITELLM_RUST` as unset and caches the parse by raw value. It runs inside SDK calls, so it never fails one over a switch and never validates per call
+- It does not put the Rust gateway in front of Python. That is `LITELLM_RUST_FIRST`, which `litellm/proxy/rust_forward/mode.py` reads strictly at startup with this same `RustSwitch` type, stopping the CLI with one line naming the variable
 
 # Native extension
 
