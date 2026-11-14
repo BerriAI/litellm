@@ -107,10 +107,14 @@ def _handler(bucket: ScriptedBucket) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+class _BucketServer(ThreadingHTTPServer):
+    request_queue_size = 256
+
+
 @contextmanager
 def scripted_bucket() -> Iterator[ScriptedBucket]:
     bucket: Final = ScriptedBucket()
-    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), _handler(bucket))
+    server: Final = _BucketServer(("127.0.0.1", 0), _handler(bucket))
     bucket.port = server.server_address[1]
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
