@@ -1,5 +1,5 @@
 """Share math and the active-team registry behind
-``priority_reservation_settings.priority_class_share_splits_equally_among_active_teams``."""
+``priority_reservation_settings.priority_class_share_config``."""
 
 from typing import Final
 

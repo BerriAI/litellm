@@ -5393,6 +5393,37 @@ class PriorityReservationDict(TypedDict, total=False):
     value: float
 
 
+ClassShareEntity: TypeAlias = Literal["team", "key", "customer_organization", "customer_member"]
+
+
+ModelLimitBorrowingEntity: TypeAlias = Literal["team", "key", "customer_organization"]
+
+
+class ModelLimitBorrowingConfig(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    borrow_idle_capacity: tuple[ModelLimitBorrowingEntity, ...] = Field(
+        default=(),
+        description="Entity types whose model_tpm_limit and model_rpm_limit on a model this limiter covers stop being ceilings. Each may run past them on capacity other callers are not using while the model is below saturation_threshold, up to its borrow cap when one is set, and is held to them once the model saturates. A customer organization's usage counts across every key its requests use.",
+    )
+    max_borrow_multiple: float | None = Field(
+        default=None,
+        ge=1,
+        le=1_000_000,
+        allow_inf_nan=False,
+        description="Most a borrower may use on a model while it borrows idle capacity, as a multiple of its model_tpm_limit or model_rpm_limit. It applies to every listed entity type. A team or key that sets model_limit_max_borrow_multiple in its metadata uses that value instead. None lets a borrower without its own value use everything up to the model limit.",
+    )
+
+
+class PriorityClassShareConfig(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    split_equally_among_active: tuple[ClassShareEntity, ...] = Field(
+        default=(),
+        description="Entity types that each take an equal slice of their priority class's share of a model, renormalized over the classes active on the model in the current window. Once the model saturates each is held to its own slice instead of the class pool. A request that matches several listed types counts under one of them: its team first, so customer headers cannot move a team's key off the team's slice, then customer_member, then customer_organization, then key.",
+    )
+
+
 class PriorityReservationSettings(LiteLLMBaseModel):
     """
     Settings for priority-based rate limiting reservation.
@@ -5410,14 +5441,22 @@ class PriorityReservationSettings(LiteLLMBaseModel):
         default=0.50,
         description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits.",
     )
-    team_model_limit_borrows_idle_capacity_from_other_teams: bool = Field(
-        default=False,
-        description="When true, a team's model_tpm_limit and model_rpm_limit on a model this limiter covers stop being ceilings. The team may run past them on capacity other teams are not using while the model is below saturation_threshold, and is held to them once the model saturates.",
+    model_limit_borrowing_config: ModelLimitBorrowingConfig = Field(
+        default_factory=ModelLimitBorrowingConfig,
+        description="Which callers have their per-model limits treated as guaranteed shares that borrow idle capacity.",
     )
-    priority_class_share_splits_equally_among_active_teams: bool = Field(
-        default=False,
-        description="When true, a priority class's share of a model is renormalized over the classes whose teams used the model in the current window and split equally among that class's active teams, and once the model saturates each team is held to its own share instead of the class pool. Keys without a team keep the class pool.",
+    priority_class_share_config: PriorityClassShareConfig = Field(
+        default_factory=PriorityClassShareConfig,
+        description="Which callers take their own equal slice of a priority class's share of a model, instead of sharing the class pool.",
     )
+
+    @property
+    def model_limit_borrowing_entities(self) -> frozenset[ModelLimitBorrowingEntity]:
+        return frozenset(self.model_limit_borrowing_config.borrow_idle_capacity)
+
+    @property
+    def class_share_split_entities(self) -> frozenset[ClassShareEntity]:
+        return frozenset(self.priority_class_share_config.split_equally_among_active)
 
     saturation_check_cache_ttl: int = Field(
         default=60,

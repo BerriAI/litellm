@@ -21,6 +21,7 @@ from litellm.constants import (
     EMPTY_MAPPING,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
 from litellm.litellm_core_utils.clientside_credential_handler import (
@@ -1921,7 +1922,21 @@ class BatchLimitRequest(Protocol):
     def model_fields_set(self) -> Collection[str]: ...
 
 
-_ADMIN_ONLY_METADATA_KEYS: Final = (*ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY)
+_ADMIN_ONLY_METADATA_KEYS: Final = (
+    *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
+    TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
+)
+_ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: (
+            "It lets the holder read and write those buckets with the proxy's AWS credentials."
+        ),
+        MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: (
+            "It caps how far the holder borrows idle model capacity, so the holder cannot raise or remove it."
+        ),
+    }
+)
 
 
 def enforce_batch_limits_are_admin_only(
@@ -1950,10 +1965,8 @@ def enforce_batch_limits_are_admin_only(
     )
     if changed is None:
         return
-    reason: Final = (
-        "It lets the holder read and write those buckets with the proxy's AWS credentials."
-        if changed == TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY
-        else "It limits what the holder can do with batches, so the holder cannot raise it."
+    reason: Final = _ADMIN_ONLY_METADATA_REASONS.get(
+        changed, "It limits what the holder can do with batches, so the holder cannot raise it."
     )
     raise HTTPException(
         status_code=403,

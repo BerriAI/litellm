@@ -41,6 +41,7 @@ from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import (
     DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
     NO_MAX_TOKENS_TPM_RESERVATION_FRACTION,
     RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY,
 )
@@ -118,6 +119,7 @@ from litellm.types.extraction import ExtractionResponse
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+from litellm.types.proxy.auth.customer_hierarchy import CustomerScopeAuth
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
@@ -200,7 +202,7 @@ def inherited_team_model_limit(
     return team_limit
 
 
-TEAM_MODEL_LIMIT_MAX_BORROW_MULTIPLE: Final = "team_model_limit_max_borrow_multiple"
+MODEL_LIMIT_MAX_BORROW_MULTIPLE: Final = MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY
 MAX_BORROW_MULTIPLE_CEILING: Final = 1_000_000
 _MAX_BORROW_MULTIPLE: Final[TypeAdapter[float]] = TypeAdapter(
     Annotated[float, Field(ge=1, le=MAX_BORROW_MULTIPLE_CEILING, allow_inf_nan=False)]
@@ -231,30 +233,48 @@ class BorrowingTeamModelLimits:
 NO_BORROWING: Final = BorrowingTeamModelLimits(tpm=None, rpm=None)
 
 
-def team_model_limit_max_borrow_multiple(user_api_key_dict: UserAPIKeyAuth) -> float | None:
-    raw: Final[object] = (user_api_key_dict.team_metadata or {}).get(TEAM_MODEL_LIMIT_MAX_BORROW_MULTIPLE)
+BorrowerKind: TypeAlias = Literal["team", "key", "customer_org"]
+BORROWER_KINDS: Final[tuple[BorrowerKind, ...]] = ("team", "key", "customer_org")
+_METADATA: Final = TypeAdapter(Mapping[str, object])
+
+
+@dataclass(frozen=True, slots=True)
+class ModelLimitBorrower:
+    """Who holds a per-model limit the dynamic rate limiter enforces at saturation, and that limit."""
+
+    kind: BorrowerKind
+    entity_id: str
+    alias: str | None
+    limits: BorrowingTeamModelLimits
+
+
+def _max_borrow_multiple(raw: object, setting: str, owner: str) -> float | None:
     if raw is None:
         return None
     try:
         return _MAX_BORROW_MULTIPLE.validate_python(raw)
     except ValidationError:
         verbose_proxy_logger.warning(
-            "Ignoring %s=%r on team %s: expected a number from 1 to %d, so the team borrows up to the model limit",
-            TEAM_MODEL_LIMIT_MAX_BORROW_MULTIPLE,
+            "Ignoring %s=%r on %s: expected a number from 1 to %d, so the value is not used",
+            setting,
             raw,
-            user_api_key_dict.team_id,
+            owner,
             MAX_BORROW_MULTIPLE_CEILING,
         )
         return None
 
 
+def team_model_limit_max_borrow_multiple(user_api_key_dict: UserAPIKeyAuth) -> float | None:
+    return _max_borrow_multiple(
+        _METADATA.validate_python(user_api_key_dict.team_metadata or {}).get(MODEL_LIMIT_MAX_BORROW_MULTIPLE),
+        MODEL_LIMIT_MAX_BORROW_MULTIPLE,
+        f"team {user_api_key_dict.team_id}",
+    )
+
+
 def borrowing_team_model_limits(user_api_key_dict: UserAPIKeyAuth, model: RateLimitedModel) -> BorrowingTeamModelLimits:
     settings: Final = litellm.priority_reservation_settings
-    if (
-        settings is None
-        or not settings.team_model_limit_borrows_idle_capacity_from_other_teams
-        or user_api_key_dict.team_id is None
-    ):
+    if settings is None or "team" not in settings.model_limit_borrowing_entities or user_api_key_dict.team_id is None:
         return NO_BORROWING
     limits: Final = BorrowingTeamModelLimits(
         tpm=inherited_team_model_limit(user_api_key_dict, model, "model_tpm_limit"),
@@ -263,8 +283,88 @@ def borrowing_team_model_limits(user_api_key_dict: UserAPIKeyAuth, model: RateLi
     if limits == NO_BORROWING or not dynamic_rate_limiter_covers(model.group):
         return NO_BORROWING
     return BorrowingTeamModelLimits(
-        tpm=limits.tpm, rpm=limits.rpm, max_borrow_multiple=team_model_limit_max_borrow_multiple(user_api_key_dict)
+        tpm=limits.tpm,
+        rpm=limits.rpm,
+        max_borrow_multiple=team_model_limit_max_borrow_multiple(user_api_key_dict)
+        or settings.model_limit_borrowing_config.max_borrow_multiple,
     )
+
+
+def borrowing_key_model_limits(user_api_key_dict: UserAPIKeyAuth, model: RateLimitedModel) -> BorrowingTeamModelLimits:
+    """The key's own per-model limits when keys are listed to borrow idle capacity."""
+    settings: Final = litellm.priority_reservation_settings
+    if settings is None or "key" not in settings.model_limit_borrowing_entities or user_api_key_dict.api_key is None:
+        return NO_BORROWING
+    limits: Final = BorrowingTeamModelLimits(
+        tpm=model.limit_in(get_key_own_model_rate_limit(user_api_key_dict, "model_tpm_limit")),
+        rpm=model.limit_in(get_key_own_model_rate_limit(user_api_key_dict, "model_rpm_limit")),
+    )
+    if limits == NO_BORROWING or not dynamic_rate_limiter_covers(model.group):
+        return NO_BORROWING
+    return BorrowingTeamModelLimits(
+        tpm=limits.tpm,
+        rpm=limits.rpm,
+        max_borrow_multiple=_max_borrow_multiple(
+            _METADATA.validate_python(
+                user_api_key_dict.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # validates the untyped key metadata
+            ).get(MODEL_LIMIT_MAX_BORROW_MULTIPLE),
+            MODEL_LIMIT_MAX_BORROW_MULTIPLE,
+            "a key",
+        )
+        or settings.model_limit_borrowing_config.max_borrow_multiple,
+    )
+
+
+def _customer_org_scope(user_api_key_dict: UserAPIKeyAuth) -> CustomerScopeAuth | None:
+    hierarchy: Final = user_api_key_dict.customer_hierarchy
+    if hierarchy is None:
+        return None
+    return next((scope for scope in hierarchy.scopes if scope.key == "customer_org"), None)
+
+
+def borrowing_customer_org_model_limits(
+    user_api_key_dict: UserAPIKeyAuth, model: RateLimitedModel
+) -> BorrowingTeamModelLimits:
+    """The customer organization's per-model limits when customer organizations are listed to borrow idle
+    capacity. The share is one counter per organization and model, across every key the customer calls."""
+    settings: Final = litellm.priority_reservation_settings
+    scope: Final = _customer_org_scope(user_api_key_dict)
+    if settings is None or "customer_organization" not in settings.model_limit_borrowing_entities or scope is None:
+        return NO_BORROWING
+    limits: Final = BorrowingTeamModelLimits(
+        tpm=model.limit_in(scope.model_tpm_limit), rpm=model.limit_in(scope.model_rpm_limit)
+    )
+    if limits == NO_BORROWING or not dynamic_rate_limiter_covers(model.group):
+        return NO_BORROWING
+    return BorrowingTeamModelLimits(
+        tpm=limits.tpm, rpm=limits.rpm, max_borrow_multiple=settings.model_limit_borrowing_config.max_borrow_multiple
+    )
+
+
+def model_limit_borrowers(user_api_key_dict: UserAPIKeyAuth, model: RateLimitedModel) -> tuple[ModelLimitBorrower, ...]:
+    """Every level of the request whose per-model limit on ``model`` is a share that borrows idle capacity."""
+    org_scope: Final = _customer_org_scope(user_api_key_dict)
+    candidates: Final = (
+        ModelLimitBorrower(
+            kind="team",
+            entity_id=str(user_api_key_dict.team_id),
+            alias=user_api_key_dict.team_alias,
+            limits=borrowing_team_model_limits(user_api_key_dict, model),
+        ),
+        ModelLimitBorrower(
+            kind="key",
+            entity_id=str(user_api_key_dict.api_key),
+            alias=user_api_key_dict.key_alias,
+            limits=borrowing_key_model_limits(user_api_key_dict, model),
+        ),
+        ModelLimitBorrower(
+            kind="customer_org",
+            entity_id="" if org_scope is None else org_scope.entity_id,
+            alias=None if org_scope is None else org_scope.alias,
+            limits=borrowing_customer_org_model_limits(user_api_key_dict, model),
+        ),
+    )
+    return tuple(borrower for borrower in candidates if borrower.limits != NO_BORROWING)
 
 
 def _resolve_media_models(router: "Router | None", model: str, team_id: str | None) -> tuple[str, ...]:
@@ -588,6 +688,34 @@ class BorrowingTeamModelHold:
 
 
 @dataclass(slots=True)
+class BorrowingShareState:
+    """One borrower's share on the admitting model for this request: what was enforced, what was held on it, and the
+    holds taken on router fallback targets."""
+
+    limit: RateLimitDescriptor | None = None
+    reserved_tokens: int = 0
+    reserved_window: ReservationWindowIdentity | None = None
+    share: RateLimitDescriptor | None = None
+    cap: RateLimitDescriptor | None = None
+    cap_reserved_tokens: int = 0
+    cap_reserved_window: ReservationWindowIdentity | None = None
+    fallback_limits: Mapping[str, BorrowingTeamModelHold] = field(default_factory=lambda: MappingProxyType({}))
+
+    def clear_reservation(self) -> None:
+        self.reserved_tokens = 0
+        self.cap_reserved_tokens = 0
+        self.reserved_window = None
+        self.cap_reserved_window = None
+
+    def hold_fallback(self, names: tuple[str, ...], hold: BorrowingTeamModelHold) -> None:
+        self.fallback_limits = MappingProxyType({**self.fallback_limits, **dict.fromkeys(names, hold)})
+
+    def drop_fallback_hold(self, hold: BorrowingTeamModelHold | None) -> None:
+        if hold is not None:
+            self.fallback_limits = MappingProxyType({k: h for k, h in self.fallback_limits.items() if h is not hold})
+
+
+@dataclass(slots=True)
 class RequestRateLimiterStash:
     """
     Per-request bookkeeping the pre-call hook hands to the success/failure/
@@ -631,17 +759,11 @@ class RequestRateLimiterStash:
     otpm_reserved_window_identities: frozenset[ReservationWindowIdentity] = field(default_factory=frozenset)
     batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
     batch_tpd_refund_ops: tuple[ReservationOperation, ...] = ()
-    borrowing_team_model_limit: RateLimitDescriptor | None = None
-    borrowing_team_model_reserved_tokens: int = 0
-    borrowing_team_model_reserved_window: ReservationWindowIdentity | None = None
-    borrowing_team_model_share: RateLimitDescriptor | None = None
-    borrowing_team_model_cap: RateLimitDescriptor | None = None
-    borrowing_team_model_cap_reserved_tokens: int = 0
-    borrowing_team_model_cap_reserved_window: ReservationWindowIdentity | None = None
-    borrowing_team_model_fallback_limits: Mapping[str, BorrowingTeamModelHold] = field(
-        default_factory=lambda: MappingProxyType({})
+    borrowing_shares: Mapping[BorrowerKind, BorrowingShareState] = field(
+        default_factory=lambda: MappingProxyType({kind: BorrowingShareState() for kind in BORROWER_KINDS})
     )
     priority_class_share: RateLimitDescriptor | None = None
+    priority_class_share_holder: str | None = None
     dynamic_limiter_priority: str | None = None
     reservation_released: bool = False
     io_reservation_released: bool = False
@@ -2718,8 +2840,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         model: Final = self._rate_limited_model(requested_model)
         if model is None or user_api_key_dict.customer_hierarchy is None:
             return ()
+        org_borrowing: Final = borrowing_customer_org_model_limits(user_api_key_dict, model)
         limits: Final = tuple(
-            (scope, model.limit_in(scope.model_tpm_limit), model.limit_in(scope.model_rpm_limit))
+            (
+                scope,
+                None
+                if scope.key == "customer_org" and org_borrowing.tpm is not None
+                else model.limit_in(scope.model_tpm_limit),
+                None
+                if scope.key == "customer_org" and org_borrowing.rpm is not None
+                else model.limit_in(scope.model_rpm_limit),
+            )
             for scope in user_api_key_dict.customer_hierarchy.scopes
         )
         return tuple(
@@ -2779,14 +2910,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if model is None:
             return
         borrowing: Final = borrowing_team_model_limits(user_api_key_dict, model)
+        key_borrowing: Final = borrowing_key_model_limits(user_api_key_dict, model)
         model_specific_tpm_limit: Final = (
             None
-            if borrowing.tpm is not None
+            if borrowing.tpm is not None or key_borrowing.tpm is not None
             else model.limit_in(get_key_model_tpm_limit(user_api_key_dict, model_name=model.group))
         )
         model_specific_rpm_limit: Final = (
             None
-            if borrowing.rpm is not None
+            if borrowing.rpm is not None or key_borrowing.rpm is not None
             else model.limit_in(get_key_model_rpm_limit(user_api_key_dict, model_name=model.group))
         )
         if model_specific_tpm_limit is None and model_specific_rpm_limit is None:
