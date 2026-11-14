@@ -196,7 +196,7 @@ class AzureAIGPT5Config(OpenAIGPT5Config):
 azureAIGPT5Config: Final = AzureAIGPT5Config()
 
 _REASONING_EFFORT: Final = "reasoning_effort"
-_DEFAULT_REASONING_EFFORT: Final = "default"
+_LEVELS_LEFT_TO_THE_MODEL: Final = frozenset(("default", "auto"))
 
 
 def _catalog_row(key: str) -> Mapping[str, object] | None:
@@ -250,7 +250,7 @@ def _foundry_reasoning_effort(
 ) -> _SendReasoningEffort | _LeaveReasoningEffortToModel | _UnsendableReasoningEffort:
     fields: Final = as_str_mapping(requested)
     level: Final = fields.get("effort") if fields is not None else requested
-    if accepted_levels is not None and level == _DEFAULT_REASONING_EFFORT:
+    if isinstance(level, str) and level in _LEVELS_LEFT_TO_THE_MODEL:
         return _LeaveReasoningEffortToModel()
     if isinstance(level, str) and (accepted_levels is None or level in accepted_levels):
         return _SendReasoningEffort(level, {key: value for key, value in (fields or {}).items() if key != "effort"})
@@ -271,13 +271,11 @@ def _reasoning_effort_params(
 ) -> Mapping[str, str]:
     if _REASONING_EFFORT not in non_default_params:
         return {}
+    catalog_levels: Final = _catalog_reasoning_efforts(model, base_model)
+    if catalog_levels is None:
+        return {}
     requested: Final = non_default_params[_REASONING_EFFORT]
-    accepted_levels: Final = (
-        None
-        if level_check_waived
-        else _catalog_reasoning_efforts(model, base_model) or REASONING_EFFORT_ADVERTISEMENT_ORDER
-    )
-    outcome: Final = _foundry_reasoning_effort(requested, accepted_levels)
+    outcome: Final = _foundry_reasoning_effort(requested, None if level_check_waived else catalog_levels)
     match outcome:
         case _SendReasoningEffort(level=level, dropped_fields=dropped_fields):
             if dropped_fields:

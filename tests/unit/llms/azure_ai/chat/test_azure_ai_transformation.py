@@ -444,6 +444,23 @@ def test_azure_ai_sends_a_level_the_deployment_declares_whatever_the_catalog_say
 
 
 @pytest.mark.usefixtures("foundry_catalog")
+@pytest.mark.parametrize(
+    "requested",
+    [
+        pytest.param("auto", id="auto"),
+        pytest.param("default", id="default"),
+        pytest.param({"effort": "high", "summary": "auto"}, id="effort-with-summary"),
+    ],
+)
+def test_azure_ai_sends_reasoning_effort_unchanged_for_a_model_the_catalog_lists_no_levels_for(
+    respx_mock: respx.MockRouter, requested: object
+) -> None:
+    body: Final = _foundry_request_body(respx_mock, "o3-mini", reasoning_effort=requested)
+
+    assert body["reasoning_effort"] == requested
+
+
+@pytest.mark.usefixtures("foundry_catalog")
 def test_azure_ai_refuses_reasoning_effort_for_a_foundry_model_without_reasoning(respx_mock: respx.MockRouter) -> None:
     with pytest.raises(litellm.UnsupportedParamsError):
         _foundry_request_body(respx_mock, "qa-chat-only", reasoning_effort="high")
@@ -686,11 +703,19 @@ def test_a_foundry_reasoner_named_with_its_provider_prefix_advertises_reasoning_
     assert "reasoning_effort" in AzureAIStudioConfig().get_supported_openai_params(f"azure_ai/{foundry_reasoner}")
 
 
-@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    "request_options",
+    [
+        pytest.param(MappingProxyType({}), id="checked"),
+        pytest.param(MappingProxyType({"drop_params": True}), id="drop-params"),
+        pytest.param(MappingProxyType({"allowed_openai_params": ["reasoning_effort"]}), id="check-waived"),
+    ],
+)
+@pytest.mark.parametrize("requested", ["default", "auto"])
 @pytest.mark.usefixtures("foundry_reasoner")
 @pytest.mark.asyncio
-async def test_foundry_reasoning_effort_default_leaves_the_level_to_the_model(
-    respx_mock: respx.MockRouter, drop_params: bool
+async def test_foundry_reasoning_effort_default_or_auto_leaves_the_level_to_the_model(
+    respx_mock: respx.MockRouter, request_options: Mapping[str, object], requested: str
 ) -> None:
     route: Final = respx_mock.post(FOUNDRY_MODELS_CHAT_URL).mock(
         return_value=Response(200, json=dict(FOUNDRY_CHAT_COMPLETION))
@@ -701,8 +726,8 @@ async def test_foundry_reasoning_effort_default_leaves_the_level_to_the_model(
         api_key="azure-ai-test-key",
         api_base="https://example-resource.services.ai.azure.com",
         messages=[{"role": "user", "content": "What is 17*23?"}],
-        reasoning_effort="default",
-        drop_params=drop_params,
+        reasoning_effort=requested,
+        **request_options,
     )
 
     assert "reasoning_effort" not in json.loads(route.calls.last.request.content)
@@ -734,7 +759,6 @@ def test_foundry_reasoning_effort_object_sends_its_level_and_warns_about_the_res
 UNSENDABLE_FOUNDRY_EFFORT: Final = (
     pytest.param("medium", id="level-the-row-does-not-list"),
     pytest.param("none", id="none-the-row-does-not-list"),
-    pytest.param("auto", id="auto"),
     pytest.param("High", id="level-in-another-case"),
     pytest.param("ultra", id="unknown-level"),
     pytest.param({"summary": "detailed"}, id="object-without-a-level"),
