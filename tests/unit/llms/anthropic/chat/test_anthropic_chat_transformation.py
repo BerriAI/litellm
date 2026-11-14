@@ -18,6 +18,7 @@ import litellm
 from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.constants import (
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+    DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
@@ -2711,6 +2712,48 @@ def test_transform_request_uses_deployment_max_output_tokens_before_catalog() ->
     assert catalog_default["max_tokens"] == catalog_max_output_tokens
     assert non_mapping_model_info["max_tokens"] == catalog_max_output_tokens
     assert requested["max_tokens"] == 654
+
+
+@pytest.mark.parametrize(
+    "config_class",
+    (AnthropicConfig, AzureAnthropicConfig, BedrockClaudePlatformConfig),
+    ids=("anthropic", "azure_ai", "bedrock_claude_platform"),
+)
+@pytest.mark.parametrize(
+    ("cost_map_rows", "expected_max_tokens"),
+    (
+        pytest.param({"{provider}/claude-unit-test@20990101": 1234}, 1234, id="provider-row-fills-unmapped-id"),
+        pytest.param(
+            {"claude-unit-test": 4321, "{provider}/claude-unit-test@20990101": 1234},
+            4321,
+            id="unversioned-row-before-provider-row",
+        ),
+        pytest.param({}, DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, id="no-row-keeps-default"),
+    ),
+)
+def test_default_max_tokens_reads_unversioned_and_provider_rows_on_every_route(
+    monkeypatch: pytest.MonkeyPatch,
+    config_class: type[AnthropicConfig],
+    cost_map_rows: Mapping[str, int],
+    expected_max_tokens: int,
+) -> None:
+    config: Final = config_class()
+    for key, max_output_tokens in cost_map_rows.items():
+        monkeypatch.setitem(
+            litellm.model_cost,
+            key.format(provider=config.custom_llm_provider),
+            {"max_output_tokens": max_output_tokens},
+        )
+
+    result: Final = config.transform_request(
+        model="claude-unit-test@20990101",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["max_tokens"] == expected_max_tokens
 
 
 def test_get_config_without_model_uses_fallback():
