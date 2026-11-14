@@ -300,12 +300,12 @@ class NativeStore:
         self.forwarding: Final = forwarding
 
     @classmethod
-    def open(cls, logger: PrometheusLogger, admissions: object) -> NativeStore:
+    def open(cls, logger: PrometheusLogger, admissions: SharedPrometheusSeriesAdmissions | None) -> NativeStore:
         limits: Final = logger._series_limits  # pyright: ignore[reportPrivateUsage]  # the logger's resolved caps
         store: Final = _native.NativePrometheusStore(
             limits.max_series, limits.ttl_seconds, limits.cleanup_interval_seconds
         )
-        if not isinstance(admissions, SharedPrometheusSeriesAdmissions):
+        if admissions is None:
             return cls(store)
         forwarding: Final = ForwardingStore(admissions, limits.max_series)
         store.forward(forwarding)
