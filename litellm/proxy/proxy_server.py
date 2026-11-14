@@ -12414,6 +12414,7 @@ class ProxyStartupEvent:
                 cache=proxy_logging_obj.internal_usage_cache.dual_cache,
                 email_logger=expiry_email_logger,
                 default_days=default_expiry_days,
+                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
             )
         except Exception:  # noqa: BLE001  # a setup failure must not stop later background jobs registering
             verbose_proxy_logger.exception("Failed to set up key expiry alert job")

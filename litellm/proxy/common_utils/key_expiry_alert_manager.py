@@ -8,8 +8,9 @@ from typing import Final, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._internal_context import with_service_target
-from litellm.constants import KEY_EXPIRY_ALERT_MAX_DAYS
+from litellm.constants import KEY_EXPIRY_ALERT_JOB_NAME, KEY_EXPIRY_ALERT_MAX_DAYS
 from litellm.proxy.common_utils.key_expiry_alerts import key_expiry_alert_days
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.user_repository import UserRepository
@@ -78,14 +79,32 @@ class KeyExpiryAlertManager:
         email_logger: KeyExpiryEmailLogger,
         clock: Callable[[], datetime] = utc_now,
         default_days: int | None = None,
+        pod_lock_manager: PodLockManager | None = None,
     ) -> None:
         self.prisma_client = prisma_client
         self.default_days = default_days
         self.cache = cache
         self.email_logger = email_logger
         self.clock = clock
+        self.pod_lock_manager = pod_lock_manager
 
     async def process_alerts(self) -> None:
+        """Entry point for the scheduled job. Uses PodLockManager so only one pod scans keys per cycle in
+        multi-pod deployments; the per-key Redis claim still guards each email."""
+        lock: Final = self.pod_lock_manager if self.pod_lock_manager and self.pod_lock_manager.redis_cache else None
+        if lock is not None and not await lock.acquire_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME):
+            logger.debug(
+                "Key expiry alerts: another pod is already running this cycle "
+                "or Redis lock acquisition failed - skipping this cycle."
+            )
+            return
+        try:
+            await self._send_due_alerts()
+        finally:
+            if lock is not None:
+                await lock.release_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME)
+
+    async def _send_due_alerts(self) -> None:
         try:
             from litellm_enterprise.enterprise_callbacks.send_emails.endpoints import (
                 get_email_settings,  # pyright: ignore[reportUnknownVariableType]  # litellm_enterprise is absent from the type-check venv

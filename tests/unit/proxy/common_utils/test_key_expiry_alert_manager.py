@@ -10,8 +10,10 @@ import pytest
 from litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger
 
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import KEY_EXPIRY_ALERT_MAX_DAYS
+from litellm.caching.redis_cache import RedisCache
+from litellm.constants import KEY_EXPIRY_ALERT_JOB_NAME, KEY_EXPIRY_ALERT_MAX_DAYS
 from litellm.proxy.common_utils.key_expiry_alert_manager import KeyExpiryAlertManager
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 
 NOW: Final = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
@@ -184,6 +186,42 @@ async def test_key_created_without_metadata_follows_global_default(
 
 
 @pytest.mark.asyncio
+async def test_another_pod_holding_the_job_lock_skips_the_scan(router_redis: tuple[RedisCache, object]) -> None:
+    redis, _ = router_redis
+    assert await PodLockManager(redis_cache=redis).acquire_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME)
+    db: Final = _database((_key(),))
+    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
+    manager: Final = KeyExpiryAlertManager(
+        db, DualCache(), email, lambda: NOW, pod_lock_manager=PodLockManager(redis_cache=redis)
+    )
+    await manager.process_alerts()
+    db.db.query_raw.assert_not_awaited()
+    email.send_key_expiring_email.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_lock_holder_scans_then_releases_the_job_lock(router_redis: tuple[RedisCache, object]) -> None:
+    redis, _ = router_redis
+    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
+    manager: Final = KeyExpiryAlertManager(
+        _database((_key(),)), DualCache(), email, lambda: NOW, pod_lock_manager=PodLockManager(redis_cache=redis)
+    )
+    await manager.process_alerts()
+    assert email.send_key_expiring_email.await_count == 1
+    assert await PodLockManager(redis_cache=redis).acquire_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME)
+
+
+@pytest.mark.asyncio
+async def test_without_redis_the_job_runs_unlocked() -> None:
+    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
+    manager: Final = KeyExpiryAlertManager(
+        _database((_key(),)), DualCache(), email, lambda: NOW, pod_lock_manager=PodLockManager(redis_cache=None)
+    )
+    await manager.process_alerts()
+    assert email.send_key_expiring_email.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_global_default_widens_query_to_keys_without_metadata() -> None:
     db: Final = _database(())
     email: Final = MagicMock(send_key_expiring_email=AsyncMock())
@@ -277,17 +315,19 @@ def _email_enabled_proxy(monkeypatch: pytest.MonkeyPatch, settings: dict[str, ob
     monkeypatch.setattr(proxy_server.proxy_logging_obj, "email_logging_instance", _EmailTransport())
 
 
-def test_startup_builds_expiry_job_with_global_default_on_a_six_hour_interval(
+def test_startup_builds_expiry_job_with_global_default_shared_pod_lock_and_twelve_hour_interval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.constants import LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS
+    from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import ProxyStartupEvent
 
     _email_enabled_proxy(monkeypatch, {"key_expiry_alert_days": 7})
     manager: Final = ProxyStartupEvent._build_key_expiry_alert_manager()
     assert manager is not None
     assert manager.default_days == 7
-    assert LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS == 6 * 60 * 60
+    assert manager.pod_lock_manager is proxy_server.proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+    assert LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS == 12 * 60 * 60
 
 
 @pytest.mark.parametrize("value", [0, [7], "7"])
