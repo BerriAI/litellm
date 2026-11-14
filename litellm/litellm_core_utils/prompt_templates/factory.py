@@ -2959,6 +2959,25 @@ def _recorded_content_block_order(order: object) -> tuple[AnthropicContentBlockO
         return None
 
 
+class _PlainTextPart(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["text"]
+    text: str
+
+
+_PLAIN_TEXT_PARTS: Final = TypeAdapter(tuple[_PlainTextPart, ...])
+
+
+def _plain_text(content: object) -> str | None:
+    if content is None or isinstance(content, str):
+        return content or ""
+    try:
+        return "".join(part.text for part in _PLAIN_TEXT_PARTS.validate_python(content))
+    except ValidationError:
+        return None
+
+
 def _block_field(block: Mapping[str, object], key: str) -> object:
     return block.get(key)
 
@@ -3079,14 +3098,14 @@ def _replay_in_recorded_order(
 ) -> tuple[_ReplayedBlock, ...] | None:
     fields: Final = as_str_mapping(message.get("provider_specific_fields")) or {}
     order: Final = _recorded_content_block_order(fields.get("content_block_order"))
-    content: Final = message.get("content")
-    if order is None or not isinstance(content, (str, type(None))):
+    text: Final = _plain_text(message.get("content"))
+    if order is None or text is None:
         return None
     return _blocks_in_recorded_order(
         order,
         message.get("thinking_blocks") or (),
         tool_invokes,
-        content or "",
+        text,
         drop_params=drop_params,
         message=message,
     )
@@ -3422,7 +3441,7 @@ def anthropic_messages_pt(
             elif (
                 thinking_blocks is not None
                 and _has_server_tool_calls
-                and isinstance(assistant_content_block.get("content", None), (str, type(None)))
+                and _plain_text(assistant_content_block.get("content", None)) is not None
             ):
                 # INTERLEAVED MODE: When we have both thinking blocks and server
                 # tool calls (e.g. web search), Anthropic's original response
@@ -3456,7 +3475,7 @@ def anthropic_messages_pt(
 
                 # Build the text block if content is a non-empty string
                 text_element = None
-                _acb_content = assistant_content_block.get("content")
+                _acb_content = _plain_text(assistant_content_block.get("content"))
                 if isinstance(_acb_content, str) and _acb_content:
                     _anthropic_text_content_element = AnthropicMessagesTextParam(
                         type="text",
@@ -3632,6 +3651,9 @@ def anthropic_messages_pt(
             for content in new_messages[-1]["content"]:
                 if isinstance(content, dict) and content["type"] == "text":
                     content["text"] = content["text"].rstrip()  # no trailing whitespace for final assistant message
+            new_messages[-1]["content"] = [
+                block for block in new_messages[-1]["content"] if not _is_empty_text_block(block)
+            ]
 
     return new_messages
 
