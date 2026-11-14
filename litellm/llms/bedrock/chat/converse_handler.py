@@ -290,7 +290,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         control_options: Final = stored_control_options(litellm_params)
         stream_chunk_size: Final = control_options.stream_chunk_size if stream is True else None
         unencoded_model_id: Final = optional_params.pop("model_id", None)
-        fake_stream = optional_params.pop("fake_stream", False) or control_options.fake_stream is True
+        requested_fake_stream: Final = optional_params.pop("fake_stream", False) or control_options.fake_stream is True
         json_mode: Final = optional_params.get("json_mode", False)
         if unencoded_model_id is not None:
             modelId = self.encode_model_id(model_id=unencoded_model_id)
@@ -319,8 +319,8 @@ class BedrockConverseLLM(BaseAWSLLM):
             if _region_from_model is not None and "aws_region_name" not in optional_params:
                 optional_params["aws_region_name"] = _region_from_model
 
-        fake_stream = litellm.AmazonConverseConfig().should_fake_stream(
-            fake_stream=fake_stream,
+        fake_stream: Final = litellm.AmazonConverseConfig().should_fake_stream(
+            fake_stream=requested_fake_stream,
             model=model,
             stream=stream,
             custom_llm_provider="bedrock",
