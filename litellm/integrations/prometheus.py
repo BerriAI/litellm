@@ -670,7 +670,9 @@ class PrometheusLogger(CustomLogger):
             )
             self._series_limits = self._configured_series_limits(multiprocess_mode=_multiproc_dir is not None)
             self._native_store = (
-                native_store.NativeStore.open(self) if native_store.native_prometheus_enabled() else None
+                native_store.NativeStore.open(self, self._series_cap_tracker)
+                if native_store.native_prometheus_enabled()
+                else None
             )
 
             # Create metric factory functions

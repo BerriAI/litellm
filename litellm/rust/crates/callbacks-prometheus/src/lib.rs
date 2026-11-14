@@ -17,7 +17,10 @@ use serde_json::Value;
 pub use crate::{
     attempt::{AttemptFacts, Residual},
     callback::{Attempt, Event, LogSink, Prometheus, Stop, StopKind},
-    store::{Clock, FamilySpec, Kind, ManualClock, Op, Store, StoreError, SystemClock, Target},
+    store::{
+        Action, Clock, FamilySpec, Forwarded, Kind, ManualClock, Op, Store, StoreError,
+        SystemClock, Target,
+    },
     success::{Level, LogLine, exception_text},
     tracker::SeriesLimits,
 };

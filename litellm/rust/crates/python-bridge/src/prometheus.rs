@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use litellm_callbacks_prometheus::{
-    FamilySpec, Kind, LogLine, LogSink, ManualClock, Op, Prometheus, SeriesLimits, Store,
+    Action, FamilySpec, Kind, LogLine, LogSink, ManualClock, Op, Prometheus, SeriesLimits, Store,
     StoreError, SystemClock, Target,
     ops::{self, ErrorKind, OpError},
     store::{Clock, FamilyId},
@@ -41,10 +41,37 @@ fn op_error(error: OpError) -> PyErr {
     }
 }
 
+type Sink = Arc<OnceLock<Py<PyAny>>>;
+type ForwardedRow = (String, Option<Vec<String>>, &'static str, f64);
+
+fn forwarded_row(forwarded: litellm_callbacks_prometheus::Forwarded) -> ForwardedRow {
+    let (action, amount) = match forwarded.action {
+        Action::Apply(Op::Inc(amount)) => ("inc", amount),
+        Action::Apply(Op::Dec(amount)) => ("dec", amount),
+        Action::Apply(Op::Set(value)) => ("set", value),
+        Action::Apply(Op::Observe(amount)) => ("observe", amount),
+        Action::Remove => ("remove", 0.0),
+        Action::Clear => ("clear", 0.0),
+    };
+    (forwarded.family, forwarded.values, action, amount)
+}
+
+fn flush(py: Python<'_>, store: &Store, sink: &Sink) -> PyResult<()> {
+    let Some(sink) = sink.get() else {
+        return Ok(());
+    };
+    let rows: Vec<ForwardedRow> = store.drain().into_iter().map(forwarded_row).collect();
+    if !rows.is_empty() {
+        sink.call1(py, (rows,))?;
+    }
+    Ok(())
+}
+
 #[pyclass(frozen, name = "NativePrometheusStore")]
 pub struct NativePrometheusStore {
     store: Arc<Store>,
     clock: Option<Arc<ManualClock>>,
+    sink: Sink,
 }
 
 #[pymethods]
@@ -70,6 +97,7 @@ impl NativePrometheusStore {
         Self {
             store: Arc::new(Store::new(limits, boxed)),
             clock,
+            sink: Arc::new(OnceLock::new()),
         }
     }
 
@@ -80,6 +108,18 @@ impl NativePrometheusStore {
             .ok_or_else(|| PyRuntimeError::new_err("this store reads the system clock"))?;
         clock.set(monotonic, wall);
         Ok(())
+    }
+
+    fn forward(&self, sink: Py<PyAny>) -> PyResult<()> {
+        self.sink
+            .set(sink)
+            .map_err(|_| PyRuntimeError::new_err("this store already forwards its ops"))?;
+        self.store.forward();
+        Ok(())
+    }
+
+    fn flush(&self, py: Python<'_>) -> PyResult<()> {
+        flush(py, &self.store, &self.sink)
     }
 
     fn declare_labels(&self, metric: &str, labels: Vec<String>) {
@@ -119,6 +159,7 @@ impl NativePrometheusStore {
             .map_err(store_error)?;
         Ok(NativePrometheusMetric {
             store: Arc::clone(&self.store),
+            sink: Arc::clone(&self.sink),
             id,
             kind,
             declared,
@@ -131,14 +172,15 @@ impl NativePrometheusStore {
     #[pyo3(signature = (metric, values, max_series=None, ttl_seconds=None, cleanup_interval_seconds=None))]
     fn track_end_user(
         &self,
+        py: Python<'_>,
         metric: &str,
         values: Vec<Option<String>>,
         max_series: Option<i64>,
         ttl_seconds: Option<f64>,
         cleanup_interval_seconds: Option<f64>,
-    ) {
+    ) -> PyResult<()> {
         let Some(id) = self.store.family(metric) else {
-            return;
+            return Ok(());
         };
         self.store.track_end_user(
             id,
@@ -149,10 +191,13 @@ impl NativePrometheusStore {
                 cleanup_interval_seconds,
             },
         );
+        flush(py, &self.store, &self.sink)
     }
 
-    fn op(&self, name: &str, facts: &str) -> PyResult<()> {
-        ops::apply(&self.store, name, facts).map_err(op_error)
+    fn op(&self, py: Python<'_>, name: &str, facts: &str) -> PyResult<()> {
+        let applied = ops::apply(&self.store, name, facts).map_err(op_error);
+        flush(py, &self.store, &self.sink)?;
+        applied
     }
 
     fn callback(&self, log: Py<PyAny>) -> PyResult<RustCallback> {
@@ -189,6 +234,7 @@ type FamilyRow = (
 #[pyclass(frozen, name = "NativePrometheusMetric")]
 pub struct NativePrometheusMetric {
     store: Arc<Store>,
+    sink: Sink,
     id: FamilyId,
     kind: Kind,
     declared: String,
@@ -208,6 +254,7 @@ impl NativePrometheusMetric {
     fn with_target(&self, target: Target) -> Self {
         Self {
             store: Arc::clone(&self.store),
+            sink: Arc::clone(&self.sink),
             id: self.id,
             kind: self.kind,
             declared: self.declared.clone(),
@@ -228,10 +275,11 @@ impl NativePrometheusMetric {
         format!("{}:{name}", <&str>::from(self.kind))
     }
 
-    fn apply(&self, op: Op) -> PyResult<()> {
+    fn apply(&self, py: Python<'_>, op: Op) -> PyResult<()> {
         self.store
             .apply(self.id, &self.target, op)
-            .map_err(store_error)
+            .map_err(store_error)?;
+        flush(py, &self.store, &self.sink)
     }
 
     fn wrapped_values(
@@ -333,7 +381,7 @@ impl NativePrometheusMetric {
             Some(amount) => to_float(py, &amount)?,
             None => 1.0,
         };
-        self.apply(Op::Inc(amount))
+        self.apply(py, Op::Inc(amount))
     }
 
     #[pyo3(signature = (amount=None))]
@@ -342,15 +390,15 @@ impl NativePrometheusMetric {
             Some(amount) => to_float(py, &amount)?,
             None => 1.0,
         };
-        self.apply(Op::Dec(amount))
+        self.apply(py, Op::Dec(amount))
     }
 
     fn set(&self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
-        self.apply(Op::Set(to_float(py, &value)?))
+        self.apply(py, Op::Set(to_float(py, &value)?))
     }
 
     fn observe(&self, py: Python<'_>, amount: Bound<'_, PyAny>) -> PyResult<()> {
-        self.apply(Op::Observe(to_float(py, &amount)?))
+        self.apply(py, Op::Observe(to_float(py, &amount)?))
     }
 
     #[pyo3(signature = (*values))]
@@ -370,7 +418,7 @@ impl NativePrometheusMetric {
             )));
         }
         match self.store.remove(self.id, &strings) {
-            Ok(()) => Ok(()),
+            Ok(()) => flush(values.py(), &self.store, &self.sink),
             Err(StoreError::Missing) => Err(PyKeyError::new_err(
                 PyTuple::new(values.py(), strings)?.unbind(),
             )),
@@ -378,8 +426,9 @@ impl NativePrometheusMetric {
         }
     }
 
-    fn clear(&self) {
+    fn clear(&self, py: Python<'_>) -> PyResult<()> {
         self.store.clear(self.id);
+        flush(py, &self.store, &self.sink)
     }
 
     fn collect(&self) -> FamilyRow {

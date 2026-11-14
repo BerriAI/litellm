@@ -79,6 +79,20 @@ pub enum Op {
     Observe(f64),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Action {
+    Apply(Op),
+    Remove,
+    Clear,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Forwarded {
+    pub family: String,
+    pub values: Option<Vec<String>>,
+    pub action: Action,
+}
+
 struct Family {
     spec: FamilySpec,
     name: String,
@@ -161,6 +175,8 @@ struct Inner {
     declared: HashMap<String, Vec<String>>,
     caps: Tracker<String>,
     end_users: Tracker<Option<String>>,
+    forwarding: bool,
+    pending: Vec<Forwarded>,
 }
 
 pub struct Store {
@@ -211,6 +227,8 @@ impl Store {
                 declared: HashMap::new(),
                 caps: Tracker::default(),
                 end_users: Tracker::default(),
+                forwarding: false,
+                pending: Vec::new(),
             }),
             limits,
             clock,
@@ -225,6 +243,14 @@ impl Store {
 
     pub fn limits(&self) -> &SeriesLimits {
         &self.limits
+    }
+
+    pub fn forward(&self) {
+        self.lock().forwarding = true;
+    }
+
+    pub fn drain(&self) -> Vec<Forwarded> {
+        std::mem::take(&mut self.lock().pending)
     }
 
     pub fn register(&self, spec: FamilySpec) -> Result<FamilyId, StoreError> {
@@ -326,7 +352,7 @@ impl Store {
         if kept.is_empty() {
             return Ok(Target::Parent);
         }
-        if !self.limits.enabled() {
+        if !self.limits.enabled() || inner.forwarding {
             return self.child(inner, id, kept);
         }
         let now = self.clock.monotonic();
@@ -352,11 +378,12 @@ impl Store {
         id: FamilyId,
         values: Vec<String>,
     ) -> Result<Target, StoreError> {
+        let forwarding = inner.forwarding;
         let family = &mut inner.families[id.0];
         if values.len() != family.kept_names.len() {
             return Err(StoreError::LabelCount);
         }
-        if !family.series.contains_key(&values) {
+        if !(forwarding && family.spec.wrapped) && !family.series.contains_key(&values) {
             let fresh = family.fresh(self.clock.wall());
             family.series.insert(values.clone(), fresh);
         }
@@ -387,6 +414,23 @@ impl Store {
                 return Err(StoreError::MostRecent("dec"));
             }
             _ => {}
+        }
+        if inner.forwarding {
+            let values = match target {
+                Target::NoOp => return Ok(()),
+                Target::Parent if family.unlabeled.is_none() => {
+                    return Err(StoreError::MissingLabels(kind.into()));
+                }
+                Target::Parent => None,
+                Target::Child(values) => Some(values.clone()),
+            };
+            let forwarded = Forwarded {
+                family: family.spec.declared.clone(),
+                values,
+                action: Action::Apply(op),
+            };
+            inner.pending.push(forwarded);
+            return Ok(());
         }
         let bounds = family.spec.buckets.clone();
         let series = match target {
@@ -428,6 +472,19 @@ impl Store {
 
     fn remove_locked(inner: &mut Inner, id: FamilyId, values: &[String]) -> Result<(), StoreError> {
         let family = &inner.families[id.0];
+        if inner.forwarding {
+            if family.spec.wrapped {
+                return Ok(());
+            }
+            let forwarded = Forwarded {
+                family: family.spec.declared.clone(),
+                values: Some(values.to_vec()),
+                action: Action::Remove,
+            };
+            Self::remove_child(&mut inner.families[id.0], values)?;
+            inner.pending.push(forwarded);
+            return Ok(());
+        }
         if !family.spec.wrapped {
             return Self::remove_child(&mut inner.families[id.0], values);
         }
@@ -438,7 +495,16 @@ impl Store {
     }
 
     pub fn clear(&self, id: FamilyId) {
-        self.lock().families[id.0].series.clear();
+        let mut inner = self.lock();
+        inner.families[id.0].series.clear();
+        if inner.forwarding {
+            let family = inner.families[id.0].spec.declared.clone();
+            inner.pending.push(Forwarded {
+                family,
+                values: None,
+                action: Action::Clear,
+            });
+        }
     }
 
     pub fn track_end_user(&self, id: FamilyId, values: &[Option<String>], limits: &SeriesLimits) {
@@ -592,6 +658,68 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{error}"));
         }
         assert_eq!(values(&capped.snapshot(id)), expected);
+    }
+
+    #[rstest]
+    fn a_forwarding_store_hands_every_op_on_and_leaves_the_cap_to_the_host(capped: Store) {
+        capped.forward();
+        let id = capped
+            .register(spec(Kind::Counter, "m_total", &["a"], &[]))
+            .unwrap_or_else(|error| panic!("{error}"));
+        for value in ["first", "second"] {
+            capped
+                .record(id, &label(value), Op::Inc(2.0))
+                .unwrap_or_else(|error| panic!("{error}"));
+        }
+        assert_eq!(capped.remove(id, &label("first")), Ok(()));
+        capped.clear(id);
+        let forwarded = |values: Option<Vec<String>>, action: Action| Forwarded {
+            family: "m_total".to_owned(),
+            values,
+            action,
+        };
+        assert_eq!(
+            capped.drain(),
+            vec![
+                forwarded(Some(label("first")), Action::Apply(Op::Inc(2.0))),
+                forwarded(Some(label("second")), Action::Apply(Op::Inc(2.0))),
+                forwarded(None, Action::Clear),
+            ]
+        );
+        assert!(capped.drain().is_empty());
+        assert!(capped.snapshot(id).series.is_empty());
+    }
+
+    #[rstest]
+    fn a_forwarding_store_removes_a_plain_series_it_has_seen_and_refuses_an_unknown_one() {
+        let store = Store::new(SeriesLimits::default(), Box::new(ManualClock::default()));
+        store.forward();
+        let id = store
+            .register(FamilySpec {
+                wrapped: false,
+                ..spec(Kind::Gauge, "g", &["a"], &[])
+            })
+            .unwrap_or_else(|error| panic!("{error}"));
+        store
+            .record(id, &label("x"), Op::Set(3.0))
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(store.remove(id, &label("x")), Ok(()));
+        assert_eq!(store.remove(id, &label("x")), Err(StoreError::Missing));
+        assert_eq!(
+            store.drain(),
+            vec![
+                Forwarded {
+                    family: "g".to_owned(),
+                    values: Some(label("x")),
+                    action: Action::Apply(Op::Set(3.0)),
+                },
+                Forwarded {
+                    family: "g".to_owned(),
+                    values: Some(label("x")),
+                    action: Action::Remove,
+                },
+            ]
+        );
     }
 
     #[rstest]

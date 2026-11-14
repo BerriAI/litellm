@@ -28,6 +28,10 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger_v2.call import CallContext
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
 from litellm.integrations.custom_logger_v2.rust import RustLogger, rust_logger
+from litellm.integrations.prometheus_helpers.forwarding_store import ForwardingStore, PrometheusKind, forwarded_metric
+from litellm.integrations.prometheus_helpers.shared_prometheus_series_admissions import (
+    SharedPrometheusSeriesAdmissions,
+)
 from litellm.litellm_core_utils.core_helpers import env_flag
 from litellm.rust_bridge import _native
 from litellm.types.integrations.prometheus import DEFINED_PROMETHEUS_METRICS, NoOpMetric, PrometheusMetricLabels
@@ -36,7 +40,6 @@ if TYPE_CHECKING:
     from litellm.integrations.prometheus import PrometheusLogger
 
 _Parsed: Final = TypeVar("_Parsed")
-PrometheusKind: TypeAlias = Literal["counter", "gauge", "histogram"]
 NativeStep: TypeAlias = Literal["success_head", "success_limits", "success_latency", "success_tail", "failure"]
 NativeEvent: TypeAlias = Literal["success", "failure"]
 NativeOp: TypeAlias = Literal[
@@ -89,7 +92,7 @@ _KINDS: Final[Mapping[str, PrometheusKind]] = {"counter": "counter", "gauge": "g
 
 
 def native_prometheus_enabled() -> bool:
-    return env_flag(os.environ, NATIVE_PROMETHEUS_ENV, verbose_logger) and "PROMETHEUS_MULTIPROC_DIR" not in os.environ
+    return env_flag(os.environ, NATIVE_PROMETHEUS_ENV, verbose_logger)
 
 
 def _parsed(adapter: TypeAdapter[_Parsed], value: object) -> _Parsed | None:
@@ -199,6 +202,7 @@ def native_metric_factory(
     exclude_labels: frozenset[str],
     limits_enabled: bool,
     shares_overflow_series: bool,
+    forwarding: ForwardingStore | None = None,
 ) -> Callable[..., _native.NativePrometheusMetric | NoOpMetric]:
     def factory(
         *args: object,
@@ -229,7 +233,12 @@ def native_metric_factory(
             wrapped,
             shares_overflow_series,
         )
-        REGISTRY.register(NativeFamilyCollector(metric))
+        if forwarding is None:
+            REGISTRY.register(NativeFamilyCollector(metric))
+        else:
+            forwarding.add(
+                name, forwarded_metric(kind, name, documentation, kept, buckets, mode), wrapped, shares_overflow_series
+            )
         return metric
 
     return factory
@@ -288,17 +297,26 @@ def _family(
 
 
 class NativeStore:
-    __slots__ = ("store",)
+    __slots__ = ("forwarding", "store")
 
-    def __init__(self, store: _native.NativePrometheusStore) -> None:
+    def __init__(self, store: _native.NativePrometheusStore, forwarding: ForwardingStore | None = None) -> None:
         self.store: Final = store
+        self.forwarding: Final = forwarding
 
     @classmethod
-    def open(cls, logger: PrometheusLogger) -> NativeStore:
+    def open(cls, logger: PrometheusLogger, admissions: object) -> NativeStore:
         limits: Final = logger._series_limits  # pyright: ignore[reportPrivateUsage]  # the logger's resolved caps
-        return cls(
-            _native.NativePrometheusStore(limits.max_series, limits.ttl_seconds, limits.cleanup_interval_seconds)
+        store: Final = _native.NativePrometheusStore(
+            limits.max_series, limits.ttl_seconds, limits.cleanup_interval_seconds
         )
+        if not isinstance(admissions, SharedPrometheusSeriesAdmissions):
+            return cls(store)
+        forwarding: Final = ForwardingStore(admissions, limits.max_series)
+        store.forward(forwarding)
+        return cls(store, forwarding)
+
+    def flush(self) -> None:
+        self.store.flush()
 
     def factory(
         self, metric_class: type[prometheus_metrics.MetricWrapperBase], logger: PrometheusLogger, shares: bool
@@ -310,6 +328,7 @@ class NativeStore:
             logger.exclude_labels,
             logger._series_limits.enabled,  # pyright: ignore[reportPrivateUsage]  # the logger's resolved caps
             shares,
+            self.forwarding,
         )
 
     def attach(self, logger: PrometheusLogger) -> None:
@@ -493,10 +512,16 @@ async def _settle_failure(ticket: NativeTicket, stopped: Stopped | None) -> None
 
 
 class PrometheusCompanion(RustLogger):
-    def __init__(self, native: _native._NativePrometheusCallback, owner: PrometheusLogger) -> None:  # pyright: ignore[reportPrivateUsage]  # the stub's callback protocol
+    def __init__(
+        self,
+        native: _native._NativePrometheusCallback,  # pyright: ignore[reportPrivateUsage]  # the stub's callback protocol
+        owner: PrometheusLogger,
+        flush: Callable[[], None],
+    ) -> None:
         super().__init__(native)
         self.owner: Final = weakref.ref(owner)
         self.serial: Final = next(_COMPANIONS)
+        self.flush: Final = flush
 
     async def on_attempt_ended(self, view: object, ctx: CallContext[object]) -> None:
         ticket: Final = _TICKET.get()
@@ -515,6 +540,8 @@ class PrometheusCompanion(RustLogger):
             _ = await self.run_rust(Hook.attempt_ended, self.subscriptions[Hook.attempt_ended].reads, ticket.view, ctx)
         except RuntimeError as error:
             return ticket.stopped(error)
+        finally:
+            self.flush()
         return None
 
 
@@ -522,4 +549,4 @@ def companion(logger: PrometheusLogger, store: NativeStore) -> PrometheusCompani
     handle: Final = store.store.callback(replay_log)
     generated: Final = type(rust_logger(handle))
     built: Final = type(generated.__name__, (PrometheusCompanion, generated), {})
-    return built(handle, logger)
+    return built(handle, logger, store.flush)
