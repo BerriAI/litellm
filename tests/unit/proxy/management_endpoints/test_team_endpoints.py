@@ -14,7 +14,7 @@ from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_error, stat
 import pytest
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
@@ -17326,6 +17326,147 @@ async def test_team_member_update_skips_invalidation_when_no_budget_fields_sent(
 
     assert await real_cache.async_get_cache(key="team-1_member-1") == "still-fresh-membership"
     assert real_spend_counter_store.get_local("spend:team_member:member-1:team-1") == 1.5
+
+
+class _StoredMemberBudget(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    budget_id: str
+    max_budget: float | None = None
+    tpm_limit: int | None = None
+    budget_duration: str | None = None
+    budget_reset_at: datetime | None = None
+    temp_budget_increase: float | None = None
+    temp_budget_expiry: datetime | None = None
+    allowed_models: list[str] = Field(default_factory=list)
+
+
+class _MemberBudgetTable:
+    def __init__(self, rows: dict[str, _StoredMemberBudget]) -> None:
+        self.rows: Final = rows
+
+    async def find_unique(self, where: Mapping[str, str]) -> _StoredMemberBudget | None:
+        return self.rows.get(where["budget_id"])
+
+    async def update(self, where: Mapping[str, str], data: Mapping[str, object]) -> _StoredMemberBudget:
+        updated: Final = self.rows[where["budget_id"]].model_copy(update=dict(data))
+        self.rows[where["budget_id"]] = updated
+        return updated
+
+    async def create(self, data: Mapping[str, object], include: object = None) -> _StoredMemberBudget:
+        created: Final = _StoredMemberBudget.model_validate({**data, "budget_id": f"created-{len(self.rows)}"})
+        self.rows[created.budget_id] = created
+        return created
+
+
+class _MembershipBudgetLinks:
+    def __init__(self, team_id: str, budget_id_of: dict[str, str | None]) -> None:
+        self.team_id: Final = team_id
+        self.budget_id_of: Final = budget_id_of
+
+    def rows(self) -> list[LiteLLM_TeamMembership]:
+        return [
+            LiteLLM_TeamMembership(user_id=user_id, team_id=self.team_id, budget_id=budget_id)
+            for user_id, budget_id in self.budget_id_of.items()
+        ]
+
+    async def find_many(self, where: Mapping[str, Mapping[str, Sequence[str]]]) -> list[LiteLLM_TeamMembership]:
+        wanted: Final = frozenset(where["budget_id"]["in"])
+        return [row for row in self.rows() if row.budget_id in wanted]
+
+    async def update(self, where: Mapping[str, Mapping[str, str]], data: Mapping[str, object]) -> None:
+        self.budget_id_of[where["user_id_team_id"]["user_id"]] = None
+
+    async def upsert(self, where: Mapping[str, Mapping[str, str]], data: Mapping[str, Mapping[str, object]]) -> None:
+        link: Final = data["update"]["litellm_budget_table"]
+        assert isinstance(link, Mapping)
+        self.budget_id_of[where["user_id_team_id"]["user_id"]] = link["connect"]["budget_id"]
+
+
+async def _update_member_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    budgets: _MemberBudgetTable,
+    memberships: _MembershipBudgetLinks,
+    request: TeamMemberUpdateRequest,
+) -> None:
+    team_row: Final = LiteLLM_TeamTable(team_id=memberships.team_id, metadata={}, members_with_roles=[])
+    tx: Final = SimpleNamespace(litellm_budgettable=budgets, litellm_teammembership=memberships)
+
+    @asynccontextmanager
+    async def _tx():
+        yield tx
+
+    prisma_client: Final = SimpleNamespace(
+        db=SimpleNamespace(litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=team_row))),
+        tx=_tx,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    with patch(  # test-quality-ok: team_info is a separate endpoint; the membership rows it returns come from the same in-memory tables
+        "litellm.proxy.management_endpoints.team_endpoints.team_info",
+        AsyncMock(return_value={"team_info": team_row, "team_memberships": memberships.rows()}),
+    ):
+        await team_member_update(
+            data=request,
+            http_request=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"),
+        )
+
+
+_SHARED_RESET_AT: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+_TEMP_EXPIRY: Final = datetime(2030, 2, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_team_member_update_on_a_shared_non_default_budget_row_gives_only_that_member_new_limits(monkeypatch):
+    shared: Final = _StoredMemberBudget(
+        budget_id="shared-b", max_budget=100.0, tpm_limit=900, budget_duration="30d", budget_reset_at=_SHARED_RESET_AT
+    )
+    budgets: Final = _MemberBudgetTable({"shared-b": shared})
+    memberships: Final = _MembershipBudgetLinks("team-1", {"member-1": "shared-b", "member-2": "shared-b"})
+
+    await _update_member_budget(
+        monkeypatch,
+        budgets,
+        memberships,
+        TeamMemberUpdateRequest(
+            team_id="team-1",
+            user_id="member-1",
+            max_budget_in_team=5.0,
+            temp_budget_increase=20.0,
+            temp_budget_expiry=_TEMP_EXPIRY,
+        ),
+    )
+
+    assert memberships.budget_id_of["member-2"] == "shared-b"
+    assert budgets.rows["shared-b"] == shared
+    edited_budget_id: Final = memberships.budget_id_of["member-1"]
+    assert edited_budget_id not in (None, "shared-b")
+    edited: Final = budgets.rows[edited_budget_id]
+    assert (edited.max_budget, edited.temp_budget_increase, edited.temp_budget_expiry) == (5.0, 20.0, _TEMP_EXPIRY)
+    assert (edited.tpm_limit, edited.budget_duration, edited.budget_reset_at) == (900, "30d", _SHARED_RESET_AT)
+
+
+@pytest.mark.asyncio
+async def test_team_member_update_on_a_budget_row_only_that_member_points_at_updates_it_in_place(monkeypatch):
+    budgets: Final = _MemberBudgetTable(
+        {
+            "own-b": _StoredMemberBudget(budget_id="own-b", max_budget=100.0, tpm_limit=900),
+            "other-b": _StoredMemberBudget(budget_id="other-b", max_budget=100.0),
+        }
+    )
+    memberships: Final = _MembershipBudgetLinks("team-1", {"member-1": "own-b", "member-2": "other-b"})
+
+    await _update_member_budget(
+        monkeypatch,
+        budgets,
+        memberships,
+        TeamMemberUpdateRequest(team_id="team-1", user_id="member-1", max_budget_in_team=5.0),
+    )
+
+    assert memberships.budget_id_of == {"member-1": "own-b", "member-2": "other-b"}
+    assert set(budgets.rows) == {"own-b", "other-b"}
+    assert (budgets.rows["own-b"].max_budget, budgets.rows["own-b"].tpm_limit) == (5.0, 900)
+    assert budgets.rows["other-b"].max_budget == 100.0
 
 
 @pytest.mark.asyncio

@@ -168,6 +168,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     _update_metadata_fields,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    budget_ids_shared_by_memberships,
     check_disable_global_guardrails_caller_permission,
     check_passthrough_routes_caller_permission,
     check_require_trace_id_caller_permission,
@@ -4242,9 +4243,6 @@ async def team_member_update(
             identified_budget_id = tm.budget_id
             break
 
-    # If this membership still points at the team's shared default member
-    # budget, _upsert_budget_and_membership will clone-on-write so that the
-    # update only touches this user (not every member sharing the default).
     team_default_budget_id: str | None = None
     if team_table.metadata is not None:
         raw_default_budget_id: Final = team_table.metadata.get("team_member_budget_id")
@@ -4274,6 +4272,9 @@ async def team_member_update(
             user_api_key_dict=user_api_key_dict,
             budget_patch=budget_patch,
             team_default_budget_id=team_default_budget_id,
+            shared_budget_ids=await budget_ids_shared_by_memberships(
+                tx, frozenset({identified_budget_id} if identified_budget_id is not None else ())
+            ),
         )
     if budget_patch:
         await invalidate_team_member_spend_state(
