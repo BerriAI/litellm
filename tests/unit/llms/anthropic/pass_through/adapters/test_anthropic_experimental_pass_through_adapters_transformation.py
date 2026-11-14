@@ -5562,6 +5562,23 @@ def test_cloud_storage_url_pdf_document_keeps_its_image_url_part_for_providers_t
     ]
 
 
+_CHAT_BRIDGE_MODEL: Final = "azure/gpt-5.6"
+_CHAT_BRIDGE_API_BASE: Final = "https://tool-result-text.openai.azure.com"
+_CHAT_BRIDGE_URL: Final = r".*tool-result-text\.openai\.azure\.com/openai/deployments/gpt-5\.6/chat/completions.*"
+_CHAT_BRIDGE_REPLY: Final = {
+    "id": "chatcmpl-tool-result-text",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "gpt-5.6",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "build passed"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
+}
+
+
+def _chat_bridge_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(url__regex=_CHAT_BRIDGE_URL).mock(return_value=httpx.Response(200, json=_CHAT_BRIDGE_REPLY))
+
+
 @pytest.fixture
 def _chat_bridge_httpx(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
