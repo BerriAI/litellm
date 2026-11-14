@@ -22,7 +22,7 @@ from urllib.parse import urlencode, urlparse
 
 import jwt
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -222,6 +222,28 @@ async def _byok_session_auth(request: Request) -> UserAPIKeyAuth:
     if not await _session_key_is_live(session_key):
         raise HTTPException(status_code=401, detail="login_required")
     return UserAPIKeyAuth(api_key="byok_session_cookie", user_id=user_id)
+
+
+async def _byok_session_user_id_or_none(request: Request) -> str | None:
+    """Same check as ``_byok_session_auth``, but returns ``None`` instead of
+    raising, so the authorize GET can send a signed-out browser to the login
+    page before the user types an API key the POST would then reject."""
+    user_id, session_key = _session_identity_from_cookie(request)
+    if not user_id or not await _session_key_is_live(session_key):
+        return None
+    return user_id
+
+
+def _redirect_to_ui_login(request: Request) -> RedirectResponse:
+    """Send the browser through the UI login and back to this authorize request.
+
+    ``return_to`` is the request's own relative path and query, so it is
+    same-origin by construction; the login endpoints only honor relative
+    same-origin paths (or the configured control-plane origin)."""
+    from litellm.proxy.mcp_server.gateway_dcr_flow import relative_request_url
+
+    return_to: Final = urlencode({"return_to": relative_request_url(request)})
+    return RedirectResponse(f"{get_request_base_url(request)}/sso/key/generate?{return_to}", status_code=303)
 
 
 def _build_authorize_html(
@@ -752,16 +774,18 @@ async def byok_authorize_get(
     code_challenge_method: str | None = None,
     state: str | None = None,
     server_id: str | None = None,
-) -> HTMLResponse:
+    session_user_id: str | None = Depends(_byok_session_user_id_or_none),
+) -> Response:
     """
     Show the BYOK API-key entry form.
 
     The MCP client navigates the user here; the user types their API key and
     clicks "Connect & Authorize", which POSTs back to this same path.
 
-    This GET is intentionally unauthenticated: it only renders HTML with no
-    state change. The POST handler enforces ``user_api_key_auth`` and pins
-    the stored credential to the authenticated session.
+    This GET makes no state change. The POST handler requires the UI session
+    and pins the stored credential to it, so a browser without a valid UI
+    session is first redirected to the UI login, which returns here after
+    sign-in instead of letting the user type a key the POST would reject.
     """
     if response_type != "code":
         raise HTTPException(status_code=400, detail="response_type must be 'code'")
@@ -772,6 +796,8 @@ async def byok_authorize_get(
     validate_loopback_redirect_uri(redirect_uri)
     if not code_challenge:
         raise HTTPException(status_code=400, detail="code_challenge is required")
+    if session_user_id is None:
+        return _redirect_to_ui_login(request)
 
     # Resolve server metadata (name, description items, help URL).
     server_name = "MCP Server"
