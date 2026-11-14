@@ -5833,6 +5833,22 @@ _ROUTING_HINTS: Final = pytest.mark.parametrize(
     ids=["x-litellm-model header", "model query param"],
 )
 
+_MANAGED_ID_ROUTING_HINTS: Final = pytest.mark.parametrize(
+    ("routing_headers", "routing_query"),
+    [
+        ({"x-litellm-model": "gpt-3.5-turbo"}, ""),
+        ({}, "?model=gpt-3.5-turbo"),
+        ({"x-litellm-model": "azure-gpt-3-5-turbo"}, ""),
+        ({}, "?model=azure-gpt-3-5-turbo"),
+    ],
+    ids=[
+        "header naming the file's model",
+        "query naming the file's model",
+        "header naming another model",
+        "query naming another model",
+    ],
+)
+
 
 @pytest.fixture
 def stored_managed_file_table(monkeypatch: pytest.MonkeyPatch, llm_router: Router):
@@ -5883,7 +5899,7 @@ def _openai_answering_404_for(upstream: respx.MockRouter, file_id: str) -> respx
     )
 
 
-@_ROUTING_HINTS
+@_MANAGED_ID_ROUTING_HINTS
 def test_retrieve_managed_file_ignores_a_model_routing_hint(
     stored_managed_file_table: _ManagedFileTableOverRows, routing_headers: dict[str, str], routing_query: str
 ):
@@ -5910,7 +5926,7 @@ def test_retrieve_managed_file_ignores_a_model_routing_hint(
     assert managed_id_upstream.call_count == 0
 
 
-@_ROUTING_HINTS
+@_MANAGED_ID_ROUTING_HINTS
 def test_get_managed_file_content_ignores_a_model_routing_hint(
     stored_managed_file_table: _ManagedFileTableOverRows, routing_headers: dict[str, str], routing_query: str
 ):
@@ -5931,7 +5947,7 @@ def test_get_managed_file_content_ignores_a_model_routing_hint(
     assert managed_id_upstream.call_count == 0
 
 
-@_ROUTING_HINTS
+@_MANAGED_ID_ROUTING_HINTS
 def test_delete_managed_file_ignores_a_model_routing_hint(
     stored_managed_file_table: _ManagedFileTableOverRows, routing_headers: dict[str, str], routing_query: str
 ):
