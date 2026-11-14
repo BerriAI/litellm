@@ -62,7 +62,7 @@ from litellm.proxy.auth.auth_exception_handler import (
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
-    _LLM_CALL_ONLY_BANNED_PARAMS,  # pyright: ignore[reportPrivateUsage]  # model_id pins a deployment, it is not a credential
+    VERTEX_TARGET_PARAMS,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils import http_parsing_utils
@@ -157,6 +157,11 @@ _CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
 )
 
 
+_BANNED_CONNECTION_PARAMS: Final[tuple[str, ...]] = tuple(
+    param for param in _BANNED_REQUEST_BODY_PARAMS if param not in VERTEX_TARGET_PARAMS
+)
+
+
 def _request_inherits_config_credentials(
     config_params: Mapping[str, object],
     request_params: Mapping[str, object],
@@ -173,7 +178,7 @@ def _request_inherits_config_credentials(
     bringing its own ``api_key`` describes its own connection when matched only by
     model name. A blank name or key is no name or key: ``load_credentials_from_list``
     resolves nothing from it, so it must not cost the request the credentials it
-    would otherwise be probed with. A deployment-pinned ``model_id`` names no credential either.
+    would otherwise be probed with.
     """
     requested_credential: Final = request_params.get("litellm_credential_name")
     if requested_credential and requested_credential != config_params.get("litellm_credential_name"):
@@ -182,9 +187,7 @@ def _request_inherits_config_credentials(
         return False
     if allow_client_side_credentials:
         return True
-    return not any(
-        param in request_params for param in _BANNED_REQUEST_BODY_PARAMS if param not in _LLM_CALL_ONLY_BANNED_PARAMS
-    )
+    return not any(param in request_params for param in _BANNED_CONNECTION_PARAMS)
 
 
 def _admin_api_key_from_request(
@@ -2692,7 +2695,10 @@ async def test_model_connection(
         stored_model: Final = _OBJECT_MAPPING.validate_python(config_litellm_params).get("model")
         litellm_params = update_litellm_params_for_health_check(
             model_info=dict(probe_model_info),
-            litellm_params=litellm_params,
+            litellm_params={
+                **litellm_params,
+                "model_info": _OBJECT_MAPPING.validate_python(resolved_model_info or {}),
+            },
             deployment_model=stored_model if isinstance(stored_model, str) else None,
         )
 

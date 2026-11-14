@@ -89,23 +89,13 @@ shows as `redis.incr router_cooldowns` followed by `redis.ttl router_cooldowns` 
 way (`pod_lock`, `budget_reset`, `spend_queue`, `health_check`, `scheduler_queue`,
 `managed_files`, `mcp_servers`, ...), so a job tick renders `redis.set pod_lock`
 rather than a bare `redis.set`; `tests/unit/test_internal_context.py` scans every
-module under `litellm/` and `enterprise/` that calls a shared cache or declares a
-read or write on the request batch (`reserve_redis_batch_reads`,
-`batch.mget`, `batch.set`, `batch.script`) and fails when
+module under `litellm/` and `enterprise/` that calls a shared cache and fails when
 one has no declared family, with the process-local `InMemoryCache` callers listed
 as the only exemptions. A batch op carries the family that was active when it was
 declared, so the routing prefetch armed before deployment selection
 (`RoutingPrefetch.arm`) is `router_cooldowns` when only cooldown keys go out,
 `router_usage` when only usage counters do, and `router_cooldowns_usage` when both
-ride the same MGET, whichever pipeline or standalone read later settles it. A
-per-request pipeline (`RedisBatch`) that carries ops of
-one family is `"redis.pipeline auth_objects"`; one that carries several owners'
-ops is `"redis.pipeline mixed"` with the sorted family list on
-`litellm.redis.families` and the op count on `litellm.metadata.op_count` (an int,
-never stringified). A cluster client cannot pipeline across slots, so there every
-batch op settles on its own and one write-back of three auth objects shows as three
-parallel `redis.set auth_objects` spans with the same caller, not one pipeline
-span. Every `call_type` the Redis cache layer emits maps to a verb,
+ride the same MGET, whichever pipeline or standalone read later settles it. Every `call_type` the Redis cache layer emits maps to a verb,
 so the `{service} {call_type}` fallback is unreachable for Redis (a test asserts
 it). Postgres helpers are `postgres.{verb} {table}`
 (`"postgres.select LiteLLM_VerificationToken"`, `"postgres.update LiteLLM_TeamTable"`,
@@ -130,12 +120,9 @@ Redis it is also `db.operation.name`), the target lands on
 `litellm.service.target`, and the litellm call chain that issued the call
 (`_retrieve_from_cache <- _async_get_cache`) travels as
 `ServiceLoggerPayload.caller` onto `litellm.service.caller`, with the forwarding
-frames (cache facades, circuit-breaker guards, batch retry wrappers, the native
-execution's `lifecycle`/`streams` drivers) skipped so it names the code that wanted
-the call. A call whose own frames are all forwarders
-(a batch op settled in a task of its own, on a cluster client or a NOSCRIPT retry)
-reports the chain its declaring code captured and threaded through
-`service_caller(...)`, never the forwarders, and `unknown` when there is none.
+frames (cache facades, circuit-breaker guards, the native execution's
+`lifecycle`/`streams` drivers) skipped so it names the code that wanted the call,
+and `unknown` when its own frames are all forwarders.
 The cache key itself is never on the span: it is unbounded and carries key hashes
 and session ids, and the span is already named by key family. Like every other
 span they parent to the
@@ -325,7 +312,13 @@ nothing here imports outside it:
   on `langfuse_otel`, `arize`, `weave_otel` and `newrelic` callbacks.
 - [`baggage.py`](./model/baggage.py) — the single definition of which request-identity
   values are promoted into Baggage (so child spans inherit them) and under which
-  attribute keys.
+  attribute keys. A team or key destination can list extra `requester_metadata.<key>`
+  paths in `baggage_metadata_keys` in its own `callback_vars`. They are never written
+  into Baggage: the tenant fan-out adds them as `litellm.metadata.<key>` to that
+  destination's view of each span, on top of the global list, so the operator's
+  exporter and other destinations never see them. A key the span already carries
+  wins, and names of proxy identity fields and `requester_metadata.headers.*` (the
+  request headers the proxy copies there) are rejected when saved.
 - [`utils.py`](./model/utils.py) — value coercion, JSON serialization, and
   extractor-table application, shared across the package.
 

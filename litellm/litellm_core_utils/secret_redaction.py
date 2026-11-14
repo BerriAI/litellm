@@ -14,11 +14,13 @@ from litellm.rust_bridge import diagnostics
 
 REDACTED: Final = "REDACTED"
 
+_PEM_PRIVATE_KEY_BLOCK: Final = r"-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----"
+
 
 def _build_secret_patterns() -> "re.Pattern[str]":
     patterns: Final[list[str]] = [
         # PEM private key / certificate blocks
-        r"-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----",
+        _PEM_PRIVATE_KEY_BLOCK,
         # GCP OAuth2 access tokens (ya29.*)
         r"\bya29\.[A-Za-z0-9_.~+/-]+",
         # Credential %s formatting (space separator, no key= prefix)
@@ -98,6 +100,57 @@ _python_redact_string = python_redact_string
 def redact_string(value: str) -> str:
     """Scrub known secret/credential patterns from *value* and return the result."""
     return diagnostics.run(lambda native: native.redact_text(value), lambda: python_redact_string(value))
+
+
+_TOKEN_SHAPES: Final = (
+    r"ya29\.[A-Za-z0-9_.~+/-]{20,}",
+    r"(?:AKIA|ASIA)[0-9A-Z]{16}\b",
+    rf"sk-[A-Za-z0-9\-_]{{{MINIMUM_CUSTOM_KEY_LENGTH - len('sk-')},}}",
+    r"(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{24,}",
+    r"AIza[0-9A-Za-z\-_]{35}",
+    r"dapi[0-9a-f]{32}\b",
+    r"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}",
+    r"github_pat_[A-Za-z0-9_]{82}",
+    r"glpat-[A-Za-z0-9\-_]{20,}",
+    r"lin_api_[A-Za-z0-9]{40}\b",
+    r"xox[abposr]-[A-Za-z0-9-]{10,}",
+    r"hf_[A-Za-z0-9]{34,}",
+    r"npm_[A-Za-z0-9]{36}\b",
+    r"pypi-AgEIcHlwaS5vcmc[A-Za-z0-9\-_]{50,}",
+    r"SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])",
+    r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+)
+# Tokens start at a word boundary or right after a JSON escape like "\n", since tool output is often serialized JSON
+_TOKEN_START: Final = r"(?:(?<!\w)|(?<=\\[nrt])|(?<=\\u[0-9A-Fa-f]{4}))"
+_TOKEN_PEM_PRIVATE_KEY_BLOCK: Final = (
+    r"-----BEGIN(?:[A-Z ]|-(?!----))*?PRIVATE KEY-----"
+    r"(?:[^-]|-(?!----))*?-----END(?:[A-Z ]|-(?!----))*?PRIVATE KEY-----"
+)
+_NON_JWT_TOKEN_RE: Final = re.compile(
+    f"{_TOKEN_PEM_PRIVATE_KEY_BLOCK}|{_TOKEN_START}(?:{'|'.join(_TOKEN_SHAPES[:-1])})"
+)
+_DOTTED_TOKEN: Final = f"{_TOKEN_START}(?:{_TOKEN_SHAPES[0]}|{_TOKEN_SHAPES[-2]})"
+# Consume failed JWT headers once, including dotted keys and their boundary so the second pass sees them whole.
+_UNMATCHED_JWT: Final = (
+    rf"(?P<unmatched_jwt>eyJ(?:(?!-----BEGIN|{_DOTTED_TOKEN})[A-Za-z0-9_-])*"
+    rf"(?:{_DOTTED_TOKEN})?[^A-Za-z0-9_-]?)"
+)
+_TOKEN_RE: Final = re.compile(f"{_NON_JWT_TOKEN_RE.pattern}|{_TOKEN_START}(?:{_TOKEN_SHAPES[-1]}|{_UNMATCHED_JWT})")
+
+
+def redact_tokens(value: str, replacement: str = REDACTED) -> str:
+    """Replace substrings shaped like a credential (provider key prefixes, JWTs, PEM private keys).
+
+    Unlike redact_string() this never matches on surrounding words such as ``password:`` or ``Basic``,
+    so it is safe to run over free-form prompt and tool content.
+    """
+
+    def replace(match: re.Match[str]) -> str:
+        if match.lastgroup == "unmatched_jwt":
+            return _NON_JWT_TOKEN_RE.sub(replacement, match.group())
+        return match.expand(replacement)
+
+    return _TOKEN_RE.sub(replace, value)
 
 
 _UNIX_SYSTEM_PATH: Final = r"/(?:etc|var|opt|usr|home|root|private|Users|tmp|mnt|srv)/[^\s'\"\)\]}>,]+"

@@ -76,6 +76,7 @@ ignored_function_names = [
     "_acreate_batch",
     "_acreate_file",
     "__init__",
+    "_router_init",  # Never run: it carries Router.__init__'s signature and docstring
     "avector_store_create",  # Tested via proxy vector_store_endpoints (files lack "router" in name)
     "_override_vector_store_methods_for_router",  # No-op placeholder, called during Router init
     "_merge_tools_from_deployment",  # Tested indirectly via _update_kwargs_with_deployment (test files lack "router" in name)
@@ -176,6 +177,15 @@ ignored_function_names = [
     "_deployment_field",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
     "_deployment_provider",  # Read by without_deployments_that_cannot_batch, tested through the mixed-group tests in test_router.py
     "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
+    "job_cost_of_poll",  # Read by job_to_charge_once and charged_video_id, tested through the guardrail-priced poll tests in test_batch_utils.py
+    "charged_video_id",  # Read by job_to_charge_once and get_spend_logs_id, tested through both in test_batch_utils.py and test_spend_tracking_utils.py
+    "_requested_video_id",  # Read by charged_video_id, tested through the polled-id video test in test_batch_utils.py
+    "_guardrail_cost_of_poll",  # Read by job_cost_of_poll and repeat_poll_cost, tested through the guardrail-priced poll tests
+    "repeat_poll_cost",  # Read by job_to_charge_once and _charge_request_cost, tested through every limiter's guardrail poll test
+    "pays_only_its_guardrail",  # Read by get_spend_logs_id, tested through its guardrail-only poll test in test_spend_tracking_utils.py
+    "charged_poll_cost",  # Read by get_spend_logs_id, tested through the finished job guardrail poll tests in test_db_spend_update_writer.py
+    "_polled_batch",  # Read by defers_batch_cost and _charged_batch, tested through the redacted batch retrieve tests
+    "_charged_batch",  # Read by job_to_charge_once, tested through the batch charge identity tests in test_batch_utils.py
     "_responses_continuation",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_responses_continuation_ceilings",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
