@@ -186,7 +186,7 @@ _NATIVE_CALL_TYPES: Final = frozenset(
 _NATIVE_ROUTES: Final = frozenset(
     {"/realtime/client_secrets", "/v1/realtime/client_secrets", "/openai/v1/realtime/client_secrets"}
 )
-_NATIVE_ROUTE_PREFIXES: Final = ("/azure/",)
+_NATIVE_ROUTE_PREFIXES: Final = ("/azure/", "/gemini/")
 
 
 class _BudgetExceededFields(BaseModel):

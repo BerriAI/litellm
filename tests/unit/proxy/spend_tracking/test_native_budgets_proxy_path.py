@@ -85,9 +85,9 @@ def _request(path: str = "/v1/chat/completions", body: Mapping[str, object] = BO
         {
             "type": "http",
             "method": "POST",
-            "path": path,
+            "path": path.partition("?")[0],
             "root_path": "",
-            "query_string": b"",
+            "query_string": path.partition("?")[2].encode(),
             "headers": [(b"authorization", f"Bearer {API_KEY}".encode()), (b"content-type", b"application/json")],
             "client": ("127.0.0.1", 1),
             "server": ("proxy", 4000),
@@ -784,12 +784,18 @@ FAMILIES: Final[Mapping[str, Family]] = {
     "azure_pass_through": Family(
         "/azure/openai/deployments/gpt-4o/chat/completions", BODY, call_type="pass_through_endpoint"
     ),
+    "gemini_pass_through": Family(
+        f"/gemini/v1beta/models/gemini-2.5-pro:generateContent?key={API_KEY}",
+        {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+        call_type="pass_through_endpoint",
+    ),
 }
 
 
 def _route_the_family_models(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AZURE_API_BASE", "https://upstream.openai.azure.com")
     monkeypatch.setenv("AZURE_API_KEY", "sk-upstream")
+    monkeypatch.setenv("GEMINI_API_KEY", "sk-upstream")
     model_list: Final = [
         {"model_name": name, "litellm_params": {"model": model, "api_key": "sk-upstream"}}
         for name, model in ROUTED_MODELS
@@ -829,7 +835,7 @@ async def test_a_widened_route_family_reserves_and_settles_like_python(
     native: Final = await _family_run(proxy, True, family, exit_path)
 
     assert python.entries_after_pre_call, "the Python engine must hold a reservation on this route"
-    assert native_budgets.native_budget_route(family.path)
+    assert native_budgets.native_budget_route(family.path.partition("?")[0])
     assert native == python
 
 
