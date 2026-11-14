@@ -1900,6 +1900,50 @@ def test_transform_request_json_object_keeps_system_prompt_where_the_json_word_c
     assert (result["input"], result.get("instructions")) == (expected_input, expected_instructions), result
 
 
+def _system_input_item(system_prompt: str) -> dict:
+    return {
+        "type": "message",
+        "role": "system",
+        "content": [{"type": "input_text", "text": system_prompt}],
+    }
+
+
+@pytest.mark.parametrize(
+    ("system_prompt", "expected_input", "expected_instructions"),
+    [
+        ("You are a helpful assistant.", [_PLAIN_USER_ITEM], "You are a helpful assistant."),
+        ("a" * 1_048_576, [_PLAIN_USER_ITEM], "a" * 1_048_576),
+        ("a" * 1_048_577, [_system_input_item("a" * 1_048_577), _PLAIN_USER_ITEM], None),
+        ("é" * 524_289, [_system_input_item("é" * 524_289), _PLAIN_USER_ITEM], None),
+    ],
+    ids=[
+        "short_system_stays_in_instructions",
+        "system_at_cap_stays_in_instructions",
+        "system_over_cap_moves_to_input",
+        "multibyte_system_over_cap_in_bytes_moves_to_input",
+    ],
+)
+def test_transform_request_overlong_system_prompt_moves_to_input(system_prompt, expected_input, expected_instructions):
+    """Overlong system prompts go in input, since OpenAI caps instructions at 1,048,576 (#50243).
+
+    The cap is measured in UTF-8 bytes, so a prompt under the cap in characters still moves
+    to input when its byte length is over it.
+    """
+    result = LiteLLMResponsesTransformationHandler().transform_request(
+        model="openai/gpt-6.1-terra",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "List three colors."},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert (result["input"], result.get("instructions")) == (expected_input, expected_instructions), result
+
+
 def test_transform_request_single_char_keys_not_matched():
     """Test that single-character keys are not incorrectly matched to 'metadata' or 'previous_response_id'
 

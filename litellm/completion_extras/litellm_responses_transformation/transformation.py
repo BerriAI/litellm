@@ -122,6 +122,7 @@ _CHAT_COMPLETION_FIELDS: Final = frozenset((*ModelResponse.model_fields, "usage"
 _RESPONSES_API_ONLY_FIELDS: Final = frozenset((*Response.model_fields, *ResponsesAPIResponse.model_fields)) - frozenset(
     ChatCompletion.model_fields
 )
+_RESPONSES_INSTRUCTIONS_MAX_LENGTH: Final = 1_048_576
 
 
 def _bridged_prompt_cache_breakpoint(marker: object, drop_params: bool, target_trims_breakpoints: bool) -> object:
@@ -1344,9 +1345,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
         # Keep the system text in input instead of instructions when the Responses API needs it there.
         # It rejects an empty input, and json_object requires the word "json" in input, ignoring instructions.
+        # It also caps instructions at 1,048,576 characters, counted here in UTF-8 bytes to stay on the safe side.
         typed_optional_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
         system_goes_in_input: Final = converted_instructions is not None and (
-            not converted_input_items or _payload_type(typed_optional_params.get("response_format")) == "json_object"
+            not converted_input_items
+            or _payload_type(typed_optional_params.get("response_format")) == "json_object"
+            or len(converted_instructions.encode("utf-8")) > _RESPONSES_INSTRUCTIONS_MAX_LENGTH
         )
         target_input_items: Final = (
             _without_audio_input_parts(converted_input_items)
