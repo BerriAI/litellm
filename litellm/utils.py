@@ -10378,6 +10378,7 @@ class ProviderConfigManager:
             LlmProviders.AZURE_AI,
             LlmProviders.EU_JEV,
             LlmProviders.PARALLEL_AI,
+            LlmProviders.DECISIONMODELS,
         ):
             configs: Final = {
                 LlmProviders.EMPIRIOLABS: litellm.EmpirioLabsDecisionsConfig,
@@ -10386,6 +10387,7 @@ class ProviderConfigManager:
                 LlmProviders.AZURE_AI: litellm.AzureAIDecisionsConfig,
                 LlmProviders.EU_JEV: litellm.EuJevDecisionsConfig,
                 LlmProviders.PARALLEL_AI: litellm.ParallelAIDecisionsConfig,
+                LlmProviders.DECISIONMODELS: litellm.DecisionModelsDecisionsConfig,
             }
             return configs[provider]()
         return None

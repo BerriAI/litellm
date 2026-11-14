@@ -116,6 +116,10 @@ LITELLM_ATTRIBUTES: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
         "NaceDecisionsConfig": (".llms.nace.decisions.transformation", "NaceDecisionsConfig"),
         "TypeSafeDecisionsConfig": (".llms.typesafe.decisions.transformation", "TypeSafeDecisionsConfig"),
         "ParallelAIDecisionsConfig": (".llms.parallel_ai.decisions.transformation", "ParallelAIDecisionsConfig"),
+        "DecisionModelsDecisionsConfig": (
+            ".llms.decisionmodels.decisions.transformation",
+            "DecisionModelsDecisionsConfig",
+        ),
         "OpenRouterDecisionsConfig": (".llms.openrouter.decisions.transformation", "OpenRouterDecisionsConfig"),
         "FireworksAIDecisionsConfig": (".llms.fireworks_ai.decisions.transformation", "FireworksAIDecisionsConfig"),
         "CloudflareDecisionsConfig": (".llms.cloudflare.decisions.transformation", "CloudflareDecisionsConfig"),
