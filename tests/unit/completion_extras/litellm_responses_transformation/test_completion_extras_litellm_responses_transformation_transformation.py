@@ -5834,7 +5834,7 @@ _RESPONSES_BODY_METADATA: Final = {
     "prompt_cache_options": {"mode": "implicit", "ttl": "30m"},
     "prompt_cache_diagnostics": {"type": "cache_hit"},
 }
-_RESPONSES_REQUEST_ECHOES: Final = {
+_HIDDEN_RESPONSES_FIELDS: Final = {
     "metadata": {"trace": "abc"},
     "background": False,
     "completed_at": 1760144905,
@@ -5848,7 +5848,7 @@ _RESPONSES_REQUEST_ECHOES: Final = {
 }
 
 
-def test_non_stream_response_keeps_provider_metadata_and_drops_request_echoes() -> None:
+def test_non_stream_response_keeps_provider_metadata_and_hides_responses_fields() -> None:
     from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
     from litellm.types.llms.openai import ResponsesAPIResponse
@@ -5873,7 +5873,7 @@ def test_non_stream_response_keeps_provider_metadata_and_drops_request_echoes() 
         tool_choice="auto",
         tools=[],
         **_RESPONSES_BODY_METADATA,
-        **_RESPONSES_REQUEST_ECHOES,
+        **_HIDDEN_RESPONSES_FIELDS,
     )
 
     result: Final = handler.transform_response(
@@ -5892,10 +5892,10 @@ def test_non_stream_response_keeps_provider_metadata_and_drops_request_echoes() 
 
     dumped: Final = result.model_dump()
     assert {key: dumped.get(key) for key in _RESPONSES_BODY_METADATA} == _RESPONSES_BODY_METADATA
-    assert not set(_RESPONSES_REQUEST_ECHOES) & set(dumped)
+    assert not set(_HIDDEN_RESPONSES_FIELDS) & set(dumped)
 
 
-def test_streaming_final_chunk_keeps_provider_metadata_and_drops_request_echoes() -> None:
+def test_streaming_final_chunk_keeps_provider_metadata_and_hides_responses_fields() -> None:
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
     )
@@ -5911,14 +5911,14 @@ def test_streaming_final_chunk_keeps_provider_metadata_and_drops_request_echoes(
                 "output": [{"type": "message"}],
                 "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
                 **_RESPONSES_BODY_METADATA,
-                **_RESPONSES_REQUEST_ECHOES,
+                **_HIDDEN_RESPONSES_FIELDS,
             },
         }
     )
 
     provider_fields: Final = final_chunk.provider_specific_fields or {}
     assert {key: provider_fields.get(key) for key in _RESPONSES_BODY_METADATA} == _RESPONSES_BODY_METADATA
-    assert not set(_RESPONSES_REQUEST_ECHOES) & set(provider_fields)
+    assert not set(_HIDDEN_RESPONSES_FIELDS) & set(provider_fields)
 
 
 def _system_input_item(text: str) -> dict[str, object]:
