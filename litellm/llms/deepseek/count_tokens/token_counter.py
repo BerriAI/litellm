@@ -25,7 +25,7 @@ from litellm.llms.base_llm.base_utils import (
     deployment_timeout,
     optional_str,
 )
-from litellm.llms.deepseek.chat.transformation import deepseek_reasoning_params
+from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig, deepseek_reasoning_params
 from litellm.llms.deepseek.common_utils import DeepSeekModelInfo
 from litellm.llms.deepseek.messages.transformation import (
     DeepSeekAnthropicMessagesConfig,
@@ -57,6 +57,19 @@ def _count_timeout(litellm_params: Mapping[str, object]) -> float | httpx.Timeou
             return timeout
         case _:
             return min(timeout, DEEPSEEK_COUNT_TIMEOUT_SECONDS)
+
+
+def _chat_request_inference_sends(
+    tools: Sequence[Mapping[str, JsonValue]] | None, chat_params: Mapping[str, JsonValue]
+) -> tuple[list[dict[str, JsonValue]] | None, Mapping[str, JsonValue]]:
+    sent: Final = _OPTIONS.validate_python(
+        DeepSeekChatConfig.drop_unsupported_tools({**chat_params, **({} if tools is None else {"tools": list(tools)})})
+    )
+    sent_tools: Final = sent.get("tools")
+    return (
+        None if sent_tools is None else _TOOLS.validate_python(sent_tools),
+        MappingProxyType({name: value for name, value in sent.items() if name != "tools"}),
+    )
 
 
 def _chat_reasoning_options(chat_params: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
@@ -120,14 +133,17 @@ class DeepSeekTokenCounter(BaseTokenCounter):
 
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
+        chat_tools, sent_chat_params = (
+            _chat_request_inference_sends(tools, chat_params) if messages_format == "openai" else (tools, chat_params)
+        )
         match translated := await anthropic_count_fields(
             model_to_use,
             messages,
             system,
-            tools,
+            chat_tools,
             messages_format,
             AnthropicConfig(),
-            {name: value for name, value in chat_params.items() if name not in _CHAT_REASONING_PARAMS},
+            {name: value for name, value in sent_chat_params.items() if name not in _CHAT_REASONING_PARAMS},
         ):
             case ChatCountTranslationError():
                 return translated.response(request_model, model_to_use, DEEPSEEK_TOKENIZER_TYPE)
@@ -140,7 +156,7 @@ class DeepSeekTokenCounter(BaseTokenCounter):
                     request_model=request_model,
                     tools=translated.tools,
                     system=translated.system,
-                    count_options=_with_chat_reasoning(translated.options, _chat_reasoning_options(chat_params)),
+                    count_options=_with_chat_reasoning(translated.options, _chat_reasoning_options(sent_chat_params)),
                 )
             case None:
                 pass
@@ -152,9 +168,9 @@ class DeepSeekTokenCounter(BaseTokenCounter):
                 litellm_params=litellm_params,
                 api_base=api_base,
                 request_model=request_model,
-                tools=tools,
+                tools=chat_tools,
                 system=system,
-                count_options=_chat_reasoning_options(chat_params),
+                count_options=_chat_reasoning_options(sent_chat_params),
             )
 
         match options := await asyncify(messages_count_options)(

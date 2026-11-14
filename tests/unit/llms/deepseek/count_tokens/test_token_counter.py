@@ -21,6 +21,15 @@ _GET_WEATHER: Final[dict[str, JsonValue]] = {
     "name": "get_weather",
     "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
 }
+_GET_WEATHER_FUNCTION: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": _GET_WEATHER["input_schema"]},
+}
+_SPAWN_AGENT_NAMESPACE: Final[dict[str, JsonValue]] = {
+    "type": "namespace",
+    "name": "multi_agent_v1",
+    "tools": [{"type": "function", "name": "spawn_agent", "parameters": {"type": "object", "properties": {}}}],
+}
 
 
 @pytest.fixture(autouse=True)
@@ -135,6 +144,27 @@ async def test_count_sends_tools_without_the_custom_type_deepseek_refuses(
     )
 
     assert json.loads(route.calls.last.request.content)["tools"] == [_GET_WEATHER]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tools", "chat_params", "expected_tool_fields"),
+    (
+        ([_GET_WEATHER_FUNCTION, _SPAWN_AGENT_NAMESPACE], {}, {"tools": [_GET_WEATHER]}),
+        ([_SPAWN_AGENT_NAMESPACE], {"tool_choice": "required"}, {}),
+    ),
+)
+async def test_chat_count_leaves_out_the_tools_deepseek_chat_inference_drops(
+    tools: list[dict[str, JsonValue]],
+    chat_params: Mapping[str, JsonValue],
+    expected_tool_fields: Mapping[str, JsonValue],
+) -> None:
+    _, route = await _count(
+        httpx.Response(200, json={"input_tokens": 91}), messages_format="openai", tools=tools, chat_params=chat_params
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert {name: sent[name] for name in ("tools", "tool_choice") if name in sent} == expected_tool_fields
 
 
 @pytest.mark.asyncio
