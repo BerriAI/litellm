@@ -3535,6 +3535,129 @@ async def test_a_failing_metrics_sink_never_changes_admission(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
+async def test_saturation_check_cache_ttl_configuration(monkeypatch):
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_check_cache_ttl", 5)
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    model = "test-saturation-ttl"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": 100,
+                    "tpm": 1000,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    get_cache_calls = []
+    counter = RateLimitScope("model_saturation_check", model).counter("requests")
+    rate_limits = handler.v3_limiter.rate_limits
+    read_through = rate_limits.get_from_redis
+
+    async def recorded(entry: RateLimitCounter, backfill_ttl: float | None = None) -> LocalValue | None:
+        if entry == counter:
+            get_cache_calls.append({"entry": entry, "ttl": backfill_ttl})
+        return await read_through(entry, backfill_ttl=backfill_ttl)
+
+    monkeypatch.setattr(rate_limits, "get_from_redis", recorded)
+
+    await handler.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), {"model": model}, "acompletion")
+
+    assert len(get_cache_calls) == 1, "Expected 1 cache call"
+    assert get_cache_calls[0]["entry"] == counter
+    assert get_cache_calls[0]["ttl"] == 5, f"Expected TTL of 5 seconds, got {get_cache_calls[0]['ttl']}"
+
+    get_cache_calls.clear()
+    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_check_cache_ttl", 30)
+
+    await handler.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), {"model": model}, "acompletion")
+
+    assert get_cache_calls[0]["ttl"] == 30, f"TTL should update to 30 seconds, got {get_cache_calls[0]['ttl']}"
+
+
+class _SharedRedisRateLimits(FakeRateLimits):
+    """One Redis behind several workers, each with its own memory."""
+
+    def __init__(self, redis: dict[RateLimitEntry, LocalValue]) -> None:
+        super().__init__()
+        self.redis = redis
+
+    def read_counters(self, counters: Sequence[RateLimitCounter], send: object) -> Resolved[list[str | None]]:
+        async def reply() -> list[str | None]:
+            return counter_pairs(counters, self._redis_text)
+
+        return Resolved(reply, send, "read_counters")
+
+    def _redis_text(self, counter: RateLimitCounter) -> str | None:
+        value: Final = self.redis.get(counter)
+        return None if value is None or isinstance(value, dict) else str(value)
+
+
+async def _model_saturation_at_the_hook(handler: PROXY_DynamicRateLimitHandlerV3) -> str:
+    with pytest.raises(ProxyRateLimitError) as refused:
+        await handler.async_pre_call_hook(_team_key(), DualCache(), _prompt(words=400), "acompletion")
+    return str(refused.value.detail).split("Model saturation: ")[1].split("%")[0]
+
+
+@pytest.mark.asyncio
+async def test_every_worker_reads_the_models_saturation_from_redis_not_from_what_it_served_itself(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    redis: Final[dict[RateLimitEntry, LocalValue]] = {}
+    busy, idle = (_borrowing_handler(monkeypatch, borrows=True) for _ in range(2))
+    for worker in (busy, idle):
+        worker.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+            worker.internal_usage_cache, rate_limit_store=_SharedRedisRateLimits(redis).store()
+        )
+    counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
+    redis[counter] = 700
+    busy.v3_limiter.rate_limits.set_local(counter, 700, 60)
+    idle.v3_limiter.rate_limits.set_local(counter, 30, 60)
+    assert float(await _model_saturation_at_the_hook(busy)) / 100 == pytest.approx(0.7)
+    assert float(await _model_saturation_at_the_hook(idle)) / 100 == pytest.approx(0.7)
+
+
+class _FailingRedisRateLimits(FakeRateLimits):
+    def read_counters(self, counters: Sequence[RateLimitCounter], send: object) -> Resolved[list[str | None]]:
+        raise ConnectionError("redis down")
+
+
+@pytest.mark.asyncio
+async def test_a_worker_whose_redis_read_fails_reads_the_models_saturation_from_its_own_memory(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache, rate_limit_store=_FailingRedisRateLimits().store()
+    )
+    counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
+    handler.v3_limiter.rate_limits.set_local(counter, 700, 60)
+    assert float(await _model_saturation_at_the_hook(handler)) / 100 == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
+async def test_a_worker_without_redis_reads_the_models_saturation_from_its_own_memory(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    fakes: Final = FakeRateLimits(connected=False)
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache, rate_limit_store=fakes.store()
+    )
+    counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
+    fakes.set_local(counter, 700, 60)
+    assert float(await _model_saturation_at_the_hook(handler)) / 100 == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
 async def test_the_limiter_loads_and_admits_requests_without_redis_installed(
     monkeypatch: pytest.MonkeyPatch, import_without_redis_installed: Callable[[str], ModuleType]
 ):
