@@ -1,0 +1,30 @@
+{
+  "selection": {
+    "name": "rust_example",
+    "aliases": [],
+    "activation": "required",
+    "opt_out_by": ["admin"],
+    "honors_no_log": false
+  },
+  "subscriptions": [
+    {
+      "hook": "pre_call",
+      "reads": ["model"],
+      "writes": ["model"],
+      "may_abort": true,
+      "parallel": false,
+      "awaited": false,
+      "activation": null
+    },
+    {
+      "hook": "attempt_ended",
+      "reads": ["model"],
+      "writes": [],
+      "may_abort": false,
+      "parallel": false,
+      "awaited": false,
+      "activation": null
+    }
+  ],
+  "has_request_state": true
+}

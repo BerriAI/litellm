@@ -3,6 +3,8 @@
 import re
 import traceback
 from collections.abc import AsyncGenerator, Mapping, Sequence
+from functools import cache
+from itertools import takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
@@ -36,6 +38,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.anthropic_messages.transformation import (
         BaseAnthropicMessagesConfig,
     )
+    from litellm.types.integrations.customer_budget import CustomerBudgetEvent
     from litellm.types.mcp import (
         MCPPostCallResponseObject,
         MCPPreCallRequestObject,
@@ -66,6 +69,7 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
     server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset()
+    wants_failed_prompt_token_estimate: ClassVar[bool] = False
 
     enforces_request_content: bool = False
     """
@@ -195,6 +199,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_log_audit_log_event(self, audit_log: "StandardAuditLogPayload"):
         """Called when an audit log is created. Override in subclasses to handle."""
+
+    async def async_on_customer_budget_event(self, event: "CustomerBudgetEvent") -> None:
+        pass
 
     async def async_log_batch_line_items(self, payload: StandardBatchLineItemsPayload) -> None:
         """Called once per part of a finished batch's lines, when this logger is listed in batch_line_item_callbacks."""
@@ -433,7 +440,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """Runs on the model listing routes (`/v1/models`, `/v1/models/{id}`, `/model/info`,
         `/model_group/info`) with the public model names the route would otherwise return, so a
         lookup of one model may offer just that name: decide per name, never by position in the
-        sequence. Return the names to keep as a sequence of strings; a name left out disappears
+        sequence. The names also include each unlisted model that a key alias, a team alias, or
+        `litellm.model_alias_map` sends a listed name to without checking the caller's access to that
+        model, and the model a `model_group_alias` of that name resolves to, and the listed name's row
+        carries that model's info only while the callback keeps all of them. Leaving one out hides
+        no listed name. Alias names a key or team maps without listing them are not offered. Return
+        the names to keep as a sequence of strings; a name left out disappears
         from every listing, any alias of it offered in the same call goes with it, and
         `/v1/models/{id}` answers 404 for it, exactly as for a model that does not exist. Names
         outside `model_names` are ignored, so a callback can only narrow the listing, never widen
@@ -759,7 +771,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         response: object,
         plan: AgenticLoopPlan,
         kwargs: dict,
-    ) -> Any:
+    ) -> object:
         """
         Post-process the response returned by the agentic-loop follow-up call.
 
@@ -1115,3 +1127,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     msg[key] = self._redact_base64(value=val, max_depth=max_depth)
             filtered_messages.append(msg)
         return filtered_messages
+
+
+@cache
+def subclass_overrides_hook(cls: type, hook_name: str, base: type = CustomLogger) -> bool:
+    below_base: Final = takewhile(lambda klass: klass is not base, cls.__mro__)
+    return any(hook_name in vars(klass) for klass in below_base)

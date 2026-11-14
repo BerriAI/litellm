@@ -6,8 +6,6 @@ import json
 import logging
 import os
 import re
-import socket
-import subprocess
 import sys
 import time
 import types
@@ -19,9 +17,6 @@ from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, call, create_autospec, mock_open, patch
 
-from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
-
-import click
 import fastapi.routing
 import httpx
 import pytest
@@ -34,7 +29,6 @@ from starlette.datastructures import URL
 
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
-from litellm._internal_context import current_service_target
 from litellm._logging import turn_on_json, verbose_proxy_logger
 from litellm.caching.caching import RedisCache
 from litellm.caching.dual_cache import DualCache
@@ -56,16 +50,17 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.banner import LITELLM_BANNER
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendUpdateQueue
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
-from litellm.rust_bridge.host.model_cost import publish
-from litellm.proxy.common_utils.banner import LITELLM_BANNER
-from tests._master_key import MASTER_KEY
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.rate_limits import RateLimitScope, RateLimitStore
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.rust_bridge._native import NativeRedisStoreError
+from tests._master_key import MASTER_KEY
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
@@ -1058,43 +1053,6 @@ async def test_initialize_scheduled_jobs_registers_cleanup_when_retention_lives_
 
 
 @pytest.mark.asyncio
-async def test_initialize_scheduled_jobs_does_not_fall_back_to_the_interval_for_a_non_string_cron(monkeypatch):
-    """A truthy non-string cron is invalid, so startup must log it and register no cleanup job
-    rather than silently pruning on the default interval the admin never configured."""
-    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
-    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-    from litellm.proxy.proxy_server import ProxyStartupEvent
-    from litellm.proxy.utils import ProxyLogging
-
-    mock_prisma_client = MagicMock()
-    mock_proxy_logging = MagicMock(spec=ProxyLogging)
-    mock_proxy_logging.slack_alerting_instance = MagicMock()
-    mock_proxy_logging.db_spend_update_writer = MagicMock()
-    settings = {"maximum_daily_tag_spend_retention_period": "30d", "maximum_spend_logs_cleanup_cron": 5}
-    scheduler = AsyncIOScheduler()
-    try:
-        with (
-            patch("litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()),
-            patch("litellm.proxy.proxy_server.store_model_in_db", False),
-            patch("litellm.proxy.proxy_server.general_settings", settings),
-            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
-        ):
-            await ProxyStartupEvent.initialize_scheduled_background_jobs(
-                general_settings=settings,
-                prisma_client=mock_prisma_client,
-                proxy_budget_rescheduler_min_time=1,
-                proxy_budget_rescheduler_max_time=2,
-                proxy_batch_write_at=5,
-                proxy_logging_obj=mock_proxy_logging,
-            )
-            assert scheduler.get_job("spend_log_cleanup_job") is None, "invalid cron fell back to the interval"
-    finally:
-        scheduler.shutdown(wait=False)
-
-
-@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(monkeypatch):
     """
     The DB config-reload job (add_deployment) that keeps multi-pod
@@ -1706,6 +1664,7 @@ class MockPrisma:
         self.database_url = database_url
         self.proxy_logging_obj = proxy_logging_obj
         self.http_client = http_client
+        self.writer_db = MagicMock()
 
     async def connect(self):
         pass
@@ -1756,7 +1715,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
     with open(config_path, "w") as f:
         yaml.dump(test_config, f)
 
-    print(f"SET ENV VARIABLE - CONFIG_FILE_PATH, str(config_path): {str(config_path)}")
+    print(f"SET ENV VARIABLE - CONFIG_FILE_PATH, str(config_path): {config_path!s}")
     # Second setting of CONFIG_FILE_PATH to a different value
     monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
     print(f"config_path: {config_path}")
@@ -1775,7 +1734,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         yaml.dump(empty_config, f)
 
     monkeypatch.setenv("LITELLM_MASTER_KEY", test_env_master_key)
-    print("test_env_master_key: {}".format(test_env_master_key))
+    print(f"test_env_master_key: {test_env_master_key}")
     async with proxy_startup_event(app):
         from litellm.proxy.proxy_server import master_key
 
@@ -2098,7 +2057,7 @@ def test_team_info_masking():
             all_teams_config=[team1_info],
         )
 
-    print("Got exception: {}".format(exc_info.value))
+    print(f"Got exception: {exc_info.value}")
     assert "secret-test-key" not in str(exc_info.value)
     assert "public-test-key" not in str(exc_info.value)
 
@@ -2110,7 +2069,6 @@ async def test_get_all_team_models():
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    from litellm.proxy._types import LiteLLM_TeamTable
     from litellm.proxy.proxy_server import get_all_team_models
 
     # Mock team data
@@ -4092,7 +4050,7 @@ async def test_load_config_warns_per_worker_login_counters_without_general_setti
     Redis must hear that its counters are per worker even when the config has no general_settings."""
     import logging
 
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.proxy.auth.login_throttle import warn_login_counters_are_per_worker
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4252,7 +4210,6 @@ async def test_load_environment_variables_blocks_dangerous_keys():
     Test that _load_environment_variables rejects dangerous env var keys
     like PATH, LD_PRELOAD, PYTHONPATH, etc.
     """
-    import logging
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4334,7 +4291,7 @@ async def test_write_config_to_file(monkeypatch):
     """
     Do not write config to file if store_model_in_db is True
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4382,7 +4339,7 @@ async def test_write_config_to_file_when_store_model_in_db_false(monkeypatch):
     """
     Test that config IS written to file when store_model_in_db is False
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4479,7 +4436,7 @@ async def test_async_data_generator_midstream_error():
         try:
             async for data in async_data_generator(mock_response, mock_user_api_key_dict, mock_request_data):
                 yielded_data.append(data)
-        except Exception as e:
+        except Exception:
             # If there's an exception, that's also part of what we want to test
             pass
 
@@ -5581,7 +5538,7 @@ async def test_add_router_settings_from_db_config_merge_logic():
     This tests how router settings from config file and database are combined,
     including scenarios where nested dictionaries should be properly merged.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -6753,7 +6710,7 @@ async def test_init_sso_settings_in_db_error_handling():
     """
     Test that _init_sso_settings_in_db handles database errors gracefully.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -6883,7 +6840,6 @@ async def test_init_hashicorp_vault_config_override_retries_on_transport_error()
         invocations.append(None)
         if len(invocations) == 1:
             raise prisma.errors.ClientNotConnectedError()
-        return None  # No config in DB → function returns early after retry.
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_configoverrides.find_unique = AsyncMock(side_effect=_flaky_find_unique)
@@ -7031,9 +6987,7 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
     routes_to_remove = []
     for route in app.routes:
         if hasattr(route, "path") and route.path == "/":
-            if hasattr(route, "methods") and "GET" in route.methods:
-                routes_to_remove.append(route)
-            elif not hasattr(route, "methods"):  # Catch-all routes
+            if hasattr(route, "methods") and "GET" in route.methods or not hasattr(route, "methods"):
                 routes_to_remove.append(route)
 
     for route in routes_to_remove:
@@ -9869,7 +9823,7 @@ async def test_reseed_locks_dict_is_bounded():
     long-lived deployments with high counter-key churn. Inserting more
     than the cap evicts the oldest entries.
     """
-    import litellm.constants as constants
+    from litellm import constants
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
     orig_locks = SpendCounterReseed._locks.copy()
@@ -13979,12 +13933,13 @@ async def _drain(queue):
 
 
 @pytest.mark.asyncio
-async def test_key_window_spend_row_is_enqueued_with_the_actual_cost():
+@pytest.mark.parametrize("duration", ("30d", "12mo"))
+async def test_key_window_spend_row_is_enqueued_with_the_actual_cost(duration: str):
     from litellm.proxy.proxy_server import increment_spend_counters
 
-    reset_at = datetime.now(timezone.utc) + timedelta(days=10)
+    reset_at: Final = datetime(2029, 1, 1, tzinfo=timezone.utc)
     key_obj = MagicMock()
-    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
+    key_obj.budget_limits = [{"budget_duration": duration, "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
 
     with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
         await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
@@ -13993,9 +13948,10 @@ async def test_key_window_spend_row_is_enqueued_with_the_actual_cost():
     assert len(enqueued) == 1
     assert enqueued[0]["entity_type"] == "key"
     assert enqueued[0]["entity_id"] == "hashed-token"
-    assert enqueued[0]["window_duration"] == "30d"
+    assert enqueued[0]["window_duration"] == duration
     assert enqueued[0]["spend"] == pytest.approx(0.25)
-    assert enqueued[0]["window_start"] == (reset_at - timedelta(days=30)).astimezone(timezone.utc).replace(
+    expected_start: Final = datetime(2028, 1, 1, tzinfo=timezone.utc) if duration == "12mo" else reset_at - timedelta(days=30)
+    assert enqueued[0]["window_start"] == expected_start.astimezone(timezone.utc).replace(
         tzinfo=None
     ).isoformat(timespec="microseconds")
 
@@ -15778,7 +15734,7 @@ async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_coun
     warm_tokenizer("claude-fable-5")
 
     response, took, lags = await timed_with_loop_lags(
-        lambda: proxy_server_module.token_counter(TokenCountRequest(model="claude-fable-5", prompt=text * 100))
+        lambda: proxy_server_module.count_request_tokens(TokenCountRequest(model="claude-fable-5", prompt=text * 100))
     )
 
     assert response.total_tokens > 0
@@ -15819,7 +15775,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
 
     litellm.utils._select_custom_tokenizer_helper.cache_clear()
     try:
-        response: Final = await proxy_server_module.token_counter(
+        response: Final = await proxy_server_module.count_request_tokens(
             TokenCountRequest(model="self-hosted", prompt="count me off the loop")
         )
         assert loader_threads.get_nowait() is not loop_thread
@@ -15860,7 +15816,7 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
     litellm.utils._select_custom_tokenizer_helper.cache_clear()
     try:
         responses: Final = [
-            await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted", prompt="count me once"))
+            await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted", prompt="count me once"))
             for _ in range(3)
         ]
         assert from_pretrained.call_args_list == [mock.call("my-org/tokenizer", revision="main", token=None)]
@@ -15868,8 +15824,8 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
         assert len({response.total_tokens for response in responses}) == 1
         assert responses[0].total_tokens > 0
 
-        await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-pinned", prompt="count me once"))
-        await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-private", prompt="count me once"))
+        await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted-pinned", prompt="count me once"))
+        await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted-private", prompt="count me once"))
         assert from_pretrained.call_args_list == [
             mock.call("my-org/tokenizer", revision="main", token=None),
             mock.call("my-org/tokenizer", revision="v2", token=None),

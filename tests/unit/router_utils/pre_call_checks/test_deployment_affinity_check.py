@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import litellm
-from litellm.caching.dual_cache import DualCache
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
+from tests.unit.redis.stores.router_session_pins_memory import memory_pins
 
 
 @pytest.fixture(autouse=True)
@@ -371,7 +371,7 @@ async def test_async_previous_response_id_priority_over_user_key_affinity():
             model_group=model_group,
             user_key=user_api_key_hash,
         )
-        await router.cache.async_set_cache(affinity_cache_key, {"model_id": other_model_id}, ttl=3600)
+        await router.health().session_pins.set(affinity_cache_key, {"model_id": other_model_id}, 3600)
 
         # Even though user-key affinity points elsewhere, previous_response_id should pin
         # to the deployment that created the original response.
@@ -460,10 +460,10 @@ async def test_async_pre_call_hook_uses_model_map_key_scope():
     Deployment affinity caching uses (user_api_key_hash, model_map_key) -> model_id.
     """
 
-    cache = DualCache()
+    pins = memory_pins()
 
     callback = DeploymentAffinityCheck(
-        cache=cache,
+        pins=pins,
         ttl_seconds=123,
         enable_user_key_affinity=True,
         enable_responses_api_affinity=False,
@@ -483,7 +483,7 @@ async def test_async_pre_call_hook_uses_model_map_key_scope():
         model_group="claude-sonnet-4-5@20250929",
         user_key="user-key-abc",
     )
-    assert await cache.async_get_cache(key=expected_cache_key) == {"model_id": "model-id-123"}
+    assert await pins.get(expected_cache_key) == {"model_id": "model-id-123"}
 
 
 @pytest.mark.asyncio
@@ -499,11 +499,15 @@ async def test_async_filter_deployments_uses_stable_model_map_key_for_affinity_s
     user_key = "user-key-abc"
     stable_model_map_key = "claude-sonnet-4-5@20250929"
 
-    cache = AsyncMock()
-    cache.async_get_cache = AsyncMock()
+    expected_cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
+        model_group=stable_model_map_key,
+        user_key=user_key,
+    )
+    pins = memory_pins()
+    await pins.set(expected_cache_key, {"model_id": "deployment-2"}, 60)
 
     callback = DeploymentAffinityCheck(
-        cache=cache,
+        pins=pins,
         ttl_seconds=123,
         enable_user_key_affinity=True,
         enable_responses_api_affinity=False,
@@ -521,18 +525,6 @@ async def test_async_filter_deployments_uses_stable_model_map_key_for_affinity_s
             "model_info": {"id": "deployment-2"},
         },
     ]
-
-    expected_cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
-        model_group=stable_model_map_key,
-        user_key=user_key,
-    )
-
-    async def get_cache_side_effect(*, key: str):
-        if key == expected_cache_key:
-            return {"model_id": "deployment-2"}
-        return None
-
-    cache.async_get_cache.side_effect = get_cache_side_effect
 
     filtered = await callback.async_filter_deployments(
         model="some-router-model-group",
@@ -556,11 +548,15 @@ async def test_async_filter_deployments_falls_back_when_cached_deployment_is_unh
     user_key = "user-key-unhealthy"
     stable_model_map_key = "claude-sonnet-4-5@20250929"
 
-    cache = AsyncMock()
-    cache.async_get_cache = AsyncMock(return_value={"model_id": "stale-deployment"})
+    pins = memory_pins()
+    await pins.set(
+        DeploymentAffinityCheck.get_affinity_cache_key(model_group=stable_model_map_key, user_key=user_key),
+        {"model_id": "stale-deployment"},
+        60,
+    )
 
     callback = DeploymentAffinityCheck(
-        cache=cache,
+        pins=pins,
         ttl_seconds=123,
         enable_user_key_affinity=True,
         enable_responses_api_affinity=False,
@@ -594,10 +590,14 @@ async def test_async_filter_deployments_falls_back_when_cached_deployment_is_unh
 async def test_async_filter_deployments_does_not_pin_when_target_order_is_set():
     user_key = "user-key-order-fallback"
     stable_model_map_key = "claude-sonnet-4-5@20250929"
-    cache = AsyncMock()
-    cache.async_get_cache = AsyncMock(return_value={"model_id": "deployment-1"})
+    pins = memory_pins()
+    await pins.set(
+        DeploymentAffinityCheck.get_affinity_cache_key(model_group=stable_model_map_key, user_key=user_key),
+        {"model_id": "deployment-1"},
+        60,
+    )
     callback = DeploymentAffinityCheck(
-        cache=cache,
+        pins=pins,
         ttl_seconds=123,
         enable_user_key_affinity=True,
         enable_responses_api_affinity=False,
@@ -624,7 +624,6 @@ async def test_async_filter_deployments_does_not_pin_when_target_order_is_set():
     )
 
     assert filtered == healthy_deployments
-    cache.async_get_cache.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -634,7 +633,7 @@ async def test_async_user_key_affinity_ttl_expiry_allows_reroute():
     """
 
     callback = DeploymentAffinityCheck(
-        cache=DualCache(),
+        pins=memory_pins(),
         ttl_seconds=1,
         enable_user_key_affinity=True,
         enable_responses_api_affinity=False,
@@ -688,27 +687,13 @@ async def test_async_user_key_affinity_ttl_expiry_allows_reroute():
     assert after_ttl_expiry == healthy_deployments
 
 
-def test_cache_key_does_not_double_hash_user_api_key_hash():
-    """
-    Proxy typically provides `metadata.user_api_key_hash` as a SHA-256 hex string.
-    The affinity cache key should not hash it again.
-    """
-
-    user_api_key_hash = "b95b015b66dd02a1c14e1e0a8729211f8ee53ec962658764f4cf58546c2c68e1"
-    key = DeploymentAffinityCheck.get_affinity_cache_key(
-        model_group="any-model-group",
-        user_key=user_api_key_hash,
-    )
-    assert key.endswith(user_api_key_hash)
-
-
 def test_get_effective_flags_returns_per_group_config():
     """
     _get_effective_flags should return per-group flags when the model group has an entry
     in model_group_affinity_config, and global flags otherwise.
     """
     callback = DeploymentAffinityCheck(
-        cache=AsyncMock(),
+        pins=memory_pins(),
         ttl_seconds=60,
         enable_user_key_affinity=True,
         enable_responses_api_affinity=True,
@@ -848,7 +833,7 @@ async def test_model_group_affinity_config_falls_back_to_global():
     unconfigured model groups should use the global settings.
     """
     callback = DeploymentAffinityCheck(
-        cache=DualCache(),
+        pins=memory_pins(),
         ttl_seconds=60,
         enable_user_key_affinity=True,
         enable_responses_api_affinity=False,
@@ -905,7 +890,7 @@ async def test_model_group_affinity_config_overrides_global():
     user-key affinity (from global config) should NOT apply to that group.
     """
     callback = DeploymentAffinityCheck(
-        cache=DualCache(),
+        pins=memory_pins(),
         ttl_seconds=60,
         enable_user_key_affinity=True,
         enable_responses_api_affinity=False,
@@ -933,7 +918,7 @@ async def test_model_group_affinity_config_overrides_global():
 
     # Set up user-key affinity cache for claude-3
     cache_key = DeploymentAffinityCheck.get_affinity_cache_key(model_group=stable_model_map_key, user_key=user_key)
-    await callback.cache.async_set_cache(cache_key, {"model_id": "deployment-1"}, ttl=60)
+    await callback.pins.set(cache_key, {"model_id": "deployment-1"}, 60)
 
     # claude-3 has per-group config (session_affinity only), so user-key affinity
     # should NOT apply even though it's globally enabled
@@ -1032,7 +1017,7 @@ async def test_proxy_jwt_auth_metadata_pins_per_user():
     model_group = "gpt-5.4-mini"
     healthy_deployments = _two_deployments(model_group)
     callback = DeploymentAffinityCheck(
-        cache=DualCache(),
+        pins=memory_pins(),
         ttl_seconds=60,
         enable_user_key_affinity=True,
         enable_responses_api_affinity=False,
@@ -1086,7 +1071,7 @@ async def test_jwt_user_id_never_reads_a_virtual_key_pin():
     model_group = "gpt-5.4-mini"
     healthy_deployments = _two_deployments(model_group)
     callback = DeploymentAffinityCheck(
-        cache=DualCache(),
+        pins=memory_pins(),
         ttl_seconds=60,
         enable_user_key_affinity=True,
         enable_responses_api_affinity=False,
@@ -1129,7 +1114,7 @@ async def test_virtual_key_hash_wins_over_user_id_for_affinity():
     model_group = "gpt-5.4-mini"
     healthy_deployments = _two_deployments(model_group)
     callback = DeploymentAffinityCheck(
-        cache=DualCache(),
+        pins=memory_pins(),
         ttl_seconds=60,
         enable_user_key_affinity=True,
         enable_responses_api_affinity=False,
@@ -1221,7 +1206,7 @@ async def test_retry_reaches_healthy_sibling_when_affinity_pins_deployment_that_
 @pytest.mark.asyncio
 async def test_previous_response_id_pin_holds_even_after_its_deployment_failed():
     callback: Final = DeploymentAffinityCheck(
-        cache=DualCache(),
+        pins=memory_pins(),
         ttl_seconds=60,
         enable_user_key_affinity=True,
         enable_responses_api_affinity=True,

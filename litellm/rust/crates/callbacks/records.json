@@ -1,0 +1,472 @@
+{
+  "key_identity": {
+    "rejected": [
+      "member"
+    ],
+    "key_hash": 42,
+    "api_key": 42,
+    "key_alias": 42,
+    "key_name": 42,
+    "user_id": 42,
+    "user_email": 42,
+    "team_id": 42,
+    "team_alias": 42,
+    "org_id": 42,
+    "org_alias": 42,
+    "project_id": 42,
+    "project_alias": 42,
+    "end_user_id": 42,
+    "agent_id": 42,
+    "invoked_agent_id": 42,
+    "team_priority": 42,
+    "key_priority": 42
+  },
+  "deployment": {
+    "rejected": [
+      "member"
+    ],
+    "model_info": {
+      "rejected": [
+        "member"
+      ],
+      "id": 42,
+      "tpm": 42,
+      "rpm": 42
+    },
+    "provider": 42,
+    "tpm": 42,
+    "rpm": 42,
+    "original_model_group": "text",
+    "params_present": true
+  },
+  "request_tags": [
+    42
+  ],
+  "guardrail_info": [
+    {
+      "rejected": [
+        "member"
+      ],
+      "mapping": true,
+      "modes": [
+        42
+      ],
+      "duration": 42
+    }
+  ],
+  "outcome": "fallback_failure",
+  "usage": {
+    "rejected": [
+      "member"
+    ],
+    "response": {
+      "rejected": [
+        "member"
+      ],
+      "prompt_tokens": 42,
+      "completion_tokens": 42,
+      "total_tokens": 42,
+      "cached_tokens": 42,
+      "prompt_audio_tokens": 42,
+      "cache_write_tokens": 42,
+      "cache_creation_tokens": 42,
+      "reasoning_tokens": 42,
+      "completion_audio_tokens": 42,
+      "cache_read_input_tokens": 42,
+      "cache_creation_input_tokens": 42,
+      "duration_seconds": 42,
+      "output_image_count": 42
+    },
+    "streamed": {
+      "rejected": [
+        "member"
+      ],
+      "prompt_tokens": 42,
+      "completion_tokens": 42,
+      "total_tokens": 42,
+      "cached_tokens": 42,
+      "prompt_audio_tokens": 42,
+      "cache_write_tokens": 42,
+      "cache_creation_tokens": 42,
+      "reasoning_tokens": 42,
+      "completion_audio_tokens": 42,
+      "cache_read_input_tokens": 42,
+      "cache_creation_input_tokens": 42,
+      "duration_seconds": 42,
+      "output_image_count": 42
+    },
+    "combined": {
+      "rejected": [
+        "member"
+      ],
+      "prompt_tokens": 42,
+      "completion_tokens": 42,
+      "total_tokens": 42,
+      "cached_tokens": 42,
+      "prompt_audio_tokens": 42,
+      "cache_write_tokens": 42,
+      "cache_creation_tokens": 42,
+      "reasoning_tokens": 42,
+      "completion_audio_tokens": 42,
+      "cache_read_input_tokens": 42,
+      "cache_creation_input_tokens": 42,
+      "duration_seconds": 42,
+      "output_image_count": 42
+    },
+    "upstream": {
+      "rejected": [
+        "member"
+      ],
+      "prompt_tokens": 42,
+      "completion_tokens": 42,
+      "total_tokens": 42,
+      "cached_tokens": 42,
+      "prompt_audio_tokens": 42,
+      "cache_write_tokens": 42,
+      "cache_creation_tokens": 42,
+      "reasoning_tokens": 42,
+      "completion_audio_tokens": 42,
+      "cache_read_input_tokens": 42,
+      "cache_creation_input_tokens": 42,
+      "duration_seconds": 42,
+      "output_image_count": 42
+    },
+    "socket_session": {
+      "rejected": [
+        "member"
+      ],
+      "prompt_tokens": 42,
+      "completion_tokens": 42,
+      "total_tokens": 42,
+      "cached_tokens": 42,
+      "prompt_audio_tokens": 42,
+      "cache_write_tokens": 42,
+      "cache_creation_tokens": 42,
+      "reasoning_tokens": 42,
+      "completion_audio_tokens": 42,
+      "cache_read_input_tokens": 42,
+      "cache_creation_input_tokens": 42,
+      "duration_seconds": 42,
+      "output_image_count": 42
+    },
+    "logged": {
+      "rejected": [
+        "member"
+      ],
+      "prompt_tokens": 42,
+      "completion_tokens": 42,
+      "total_tokens": 42,
+      "cached_tokens": 42,
+      "prompt_audio_tokens": 42,
+      "cache_write_tokens": 42,
+      "cache_creation_tokens": 42,
+      "reasoning_tokens": 42,
+      "completion_audio_tokens": 42,
+      "cache_read_input_tokens": 42,
+      "cache_creation_input_tokens": 42,
+      "duration_seconds": 42,
+      "output_image_count": 42
+    }
+  },
+  "cost": {
+    "rejected": [
+      "member"
+    ],
+    "response_cost": 42,
+    "zero_cost": {
+      "rejected": [
+        "member"
+      ],
+      "reason": 42,
+      "reason_present": true
+    }
+  },
+  "key_limits": {
+    "rejected": [
+      "member"
+    ],
+    "rpm_limit": 42,
+    "tpm_limit": 42,
+    "max_parallel_requests": 42,
+    "budget_throttle_pct": 42,
+    "user_rpm_limit": 42,
+    "user_tpm_limit": 42,
+    "team_rpm_limit": 42,
+    "team_tpm_limit": 42,
+    "team_member_rpm_limit": 42,
+    "team_member_tpm_limit": 42,
+    "end_user_rpm_limit": 42,
+    "end_user_tpm_limit": 42,
+    "organization_rpm_limit": 42,
+    "organization_tpm_limit": 42,
+    "rpm_limit_type": "text",
+    "tpm_limit_type": "text",
+    "estimated_output_tokens": {
+      "rejected": [
+        "member"
+      ],
+      "key_per_model": 7,
+      "key_default": 7,
+      "team_per_model": 7,
+      "team_default": 7
+    },
+    "managed_agent_policy": {
+      "rejected": [
+        "member"
+      ],
+      "rpm_limit": 42,
+      "tpm_limit": 42,
+      "session_rpm_limit": 42,
+      "session_tpm_limit": 42
+    },
+    "invoked_agent_policy": {
+      "rejected": [
+        "member"
+      ],
+      "rpm_limit": 42,
+      "tpm_limit": 42,
+      "session_rpm_limit": 42,
+      "session_tpm_limit": 42
+    }
+  },
+  "budget_plan": {
+    "rejected": [
+      "member"
+    ],
+    "counters": [
+      {
+        "counter_key": "text",
+        "max_budget": 1.5,
+        "fallback_spend": 1.5,
+        "entity_type": "text",
+        "entity_id": "text",
+        "spend_log_entity_id": "text"
+      }
+    ],
+    "reservation_cost": 1.5,
+    "input_cost": 1.5,
+    "input_tokens": 7,
+    "throttle_counter": "text",
+    "fail_closed": true,
+    "status_code": 7,
+    "reservation_id": "text"
+  },
+  "budget_reservation": {
+    "rejected": [
+      "member"
+    ],
+    "reserved_cost": 1.5,
+    "entries": [
+      {
+        "rejected": [
+          "member"
+        ],
+        "counter_key": "text",
+        "entity_type": "text",
+        "entity_id": "text",
+        "reserved_cost": 1.5,
+        "applied_adjustment": 1.5
+      }
+    ],
+    "entries_is_list": true,
+    "finalized": true,
+    "callback_bound": true,
+    "input_cost": 1.5,
+    "input_tokens": 7,
+    "not_a_mapping": 42
+  },
+  "rate_limit_statuses": {
+    "rejected": [
+      "member"
+    ],
+    "overall_code": "text",
+    "statuses": [
+      {
+        "code": "text",
+        "current_limit": 7,
+        "limit_remaining": 7,
+        "rate_limit_type": "text",
+        "descriptor_key": "text",
+        "descriptor_value": "text"
+      }
+    ]
+  },
+  "output_cap": {
+    "rejected": [
+      "member"
+    ],
+    "explicit": 42
+  },
+  "attempt_timing": {
+    "rejected": [
+      "member"
+    ],
+    "start": {
+      "year": 2026,
+      "month": 11,
+      "day": 13,
+      "hour": 9,
+      "minute": 30,
+      "second": 15,
+      "microsecond": 250,
+      "utc_offset_seconds": -18000
+    },
+    "end": {
+      "year": 2026,
+      "month": 11,
+      "day": 13,
+      "hour": 9,
+      "minute": 30,
+      "second": 15,
+      "microsecond": 250,
+      "utc_offset_seconds": -18000
+    },
+    "api_call_start": {
+      "year": 2026,
+      "month": 11,
+      "day": 13,
+      "hour": 9,
+      "minute": 30,
+      "second": 15,
+      "microsecond": 250,
+      "utc_offset_seconds": -18000
+    },
+    "completion_start": {
+      "year": 2026,
+      "month": 11,
+      "day": 13,
+      "hour": 9,
+      "minute": 30,
+      "second": 15,
+      "microsecond": 250,
+      "utc_offset_seconds": -18000
+    },
+    "completion_start_present": true,
+    "queue_seconds": 42,
+    "overhead_ms": 42,
+    "logged_start": {
+      "year": 2026,
+      "month": 11,
+      "day": 13,
+      "hour": 9,
+      "minute": 30,
+      "second": 15,
+      "microsecond": 250,
+      "utc_offset_seconds": -18000
+    },
+    "logged_end": {
+      "year": 2026,
+      "month": 11,
+      "day": 13,
+      "hour": 9,
+      "minute": 30,
+      "second": 15,
+      "microsecond": 250,
+      "utc_offset_seconds": -18000
+    }
+  },
+  "rate_limit_state": {
+    "rejected": [
+      "member"
+    ],
+    "key_model_group": 42,
+    "key_remaining_requests": 42,
+    "key_remaining_tokens": 42,
+    "limiter_headers": {
+      "x-ratelimit-key-remaining-requests": 42
+    },
+    "provider_remaining_requests": 42,
+    "provider_remaining_tokens": 42,
+    "hidden_params_present": true,
+    "additional_headers_present": true
+  },
+  "logged_request": {
+    "rejected": [
+      "member"
+    ],
+    "client_ip": 42,
+    "user_agent": 42,
+    "service_tier": "text",
+    "stream": 42
+  },
+  "mcp_tool_call": {
+    "rejected": [
+      "member"
+    ],
+    "name": 42,
+    "server_name": 42
+  },
+  "log_id": "text",
+  "cold_storage_object_key": "text",
+  "logged_key_identity": {
+    "rejected": [
+      "member"
+    ],
+    "metadata_kind": "other",
+    "missing_keys": [
+      "member"
+    ],
+    "key_hash": 42,
+    "key_alias": 42,
+    "key_spend": 42,
+    "key_max_budget": 42,
+    "key_budget_reset_at": 42,
+    "user_id": 42,
+    "user_email": 42,
+    "user_spend": 42,
+    "user_max_budget": 42,
+    "team_id": 42,
+    "team_alias": 42,
+    "team_spend": 42,
+    "team_max_budget": 42,
+    "org_id": 42,
+    "org_alias": 42,
+    "project_id": 42,
+    "project_alias": 42,
+    "end_user_id": 42,
+    "request_route": 42,
+    "auth_metadata_priority": 42,
+    "agent_id": 42,
+    "request_user": 42,
+    "cost_tracking_end_user_id": 42
+  },
+  "logged_model_group": {
+    "rejected": [
+      "member"
+    ],
+    "value": 42,
+    "error_type": "text",
+    "error_text": "text"
+  },
+  "metadata_labels": [
+    {
+      "name": "text",
+      "value": "text"
+    }
+  ],
+  "input_sequence_length": {
+    "rejected": [
+      "member"
+    ],
+    "bucket": "text",
+    "error_type": "text",
+    "error_text": "text"
+  },
+  "limiter_request": {
+    "rejected": [
+      "member"
+    ],
+    "session_id": "text",
+    "session_id_error_type": "text",
+    "session_id_error_text": "text",
+    "tags": [
+      "member"
+    ],
+    "resolved_agent_id": 42,
+    "resolved_agent_id_error_type": "text",
+    "resolved_agent_id_error_text": "text",
+    "fallback_on_saturation": true,
+    "fallback_on_saturation_invalid": "text",
+    "fallback_walk_armed": true
+  }
+}

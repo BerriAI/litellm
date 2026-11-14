@@ -4,6 +4,16 @@ description: >-
   by a job nor listed here, so every entry below is a decision on the record.
 
 test_paths:
+  - reason: ran only in CircleCI, removed
+    paths:
+      - tests/e2e/migrations/test_legacy.py
+      - tests/e2e/migrations/test_pooling.py
+      - tests/e2e/migrations/test_recovery.py
+      - tests/e2e/migrations/test_rolling_upgrade.py
+      - tests/e2e/migrations/test_shaped_database.py
+      - tests/e2e/migrations/test_startup.py
+      - tests/e2e/migrations/test_upgrade.py
+      - tests/integration/database/test_roi_observed.py
   - reason: >-
       litellm.agent() end-to-end suite. It drives the real claude, codex, opencode and pi CLIs and
       deepagents against a live LiteLLM AI Gateway, so it needs those binaries on PATH plus
@@ -19,7 +29,7 @@ test_paths:
       - tests/rust-python-harness
   - reason: >-
       Owned by the open pull request that moves the Rust/Python parity checks (#45135). It ran in
-      the CircleCI build_and_test job that globbed tests/test_*.py, which this migration deletes,
+      the retired build_and_test job that globbed tests/test_*.py,
       and that pull request gives it a new home
     paths:
       - tests/test_rust_python_harness.py
@@ -58,18 +68,9 @@ test_paths:
 
 dockerfiles:
   - reason: >-
-      The dashboard container is a static Next.js export served by nginx, and the dashboard build
-      and lint workflows already exercise that output, so building the image adds no signal about it
-    paths:
-      - ui/Dockerfile
-  - reason: >-
-      An example image under cookbook/ that is documentation rather than a shipped artifact
-    paths:
-      - cookbook/litellm-ollama-docker-image/Dockerfile
-  - reason: >-
       The Rust gateway image compiles the whole workspace in release mode, which is too slow for
       a per-pull-request job while the gateway binary is still being assembled; the Rust lint,
       clippy, and compile jobs already cover the code it packages. Revisit when the gateway is
       published
     paths:
-      - litellm-rust/crates/gateway/Dockerfile
+      - litellm/rust/crates/gateway/Dockerfile
