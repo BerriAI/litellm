@@ -779,12 +779,13 @@ def setup_and_teardown():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [True, False])
 @pytest.mark.parametrize(
     ("user_api_key_hash", "counts_tokens"),
     [(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, False), ("hashed-user-key", True)],
 )
 async def test_a_health_check_probe_does_not_count_toward_its_deployment_usage(
-    user_api_key_hash: str, counts_tokens: bool
+    user_api_key_hash: str, counts_tokens: bool, use_async: bool
 ) -> None:
     from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
@@ -800,20 +801,20 @@ async def test_a_health_check_probe_does_not_count_toward_its_deployment_usage(
         "metadata": {**base["metadata"], "user_api_key_hash": user_api_key_hash},
     }
 
-    minute_before: Final = get_utc_datetime().strftime("%H-%M")
-    await logger.async_log_success_event(
-        kwargs={
-            "litellm_params": {
-                "model": "openai/gpt-4o",
-                "metadata": {"model_group": "plain"},
-                "model_info": {"id": "primary"},
-            },
-            "standard_logging_object": payload,
+    kwargs: Final = {
+        "litellm_params": {
+            "model": "openai/gpt-4o",
+            "metadata": {"model_group": "plain"},
+            "model_info": {"id": "primary"},
         },
-        response_obj={"usage": {"total_tokens": 50}},
-        start_time=None,
-        end_time=None,
-    )
+        "standard_logging_object": payload,
+    }
+    response: Final = {"usage": {"total_tokens": 50}}
+    minute_before: Final = get_utc_datetime().strftime("%H-%M")
+    if use_async:
+        await logger.async_log_success_event(kwargs=kwargs, response_obj=response, start_time=None, end_time=None)
+    else:
+        logger.log_success_event(kwargs=kwargs, response_obj=response, start_time=None, end_time=None)
     minute_after: Final = get_utc_datetime().strftime("%H-%M")
 
     counted: Final = [

@@ -833,29 +833,29 @@ class TestDailyResetTime:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [True, False])
 @pytest.mark.parametrize(
     ("user_api_key_hash", "expected_tpm"),
     [(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, None), ("hashed-user-key", 50)],
 )
 async def test_a_health_check_probe_does_not_count_toward_its_deployment_tpm_limit(
-    user_api_key_hash: str, expected_tpm: int | None
+    user_api_key_hash: str, expected_tpm: int | None, use_async: bool
 ) -> None:
     usage: Final = _memory_usage()
     check: Final = _check(usage, clock=lambda: datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc))
+    kwargs: Final = {
+        "standard_logging_object": {
+            "model_id": "replica-test-id",
+            "total_tokens": 50,
+            "hidden_params": {"litellm_model_name": "gpt-4"},
+            "metadata": {"user_api_key_hash": user_api_key_hash},
+        }
+    }
 
-    await check.async_log_success_event(
-        kwargs={
-            "standard_logging_object": {
-                "model_id": "replica-test-id",
-                "total_tokens": 50,
-                "hidden_params": {"litellm_model_name": "gpt-4"},
-                "metadata": {"user_api_key_hash": user_api_key_hash},
-            }
-        },
-        response_obj=None,
-        start_time=None,
-        end_time=None,
-    )
+    if use_async:
+        await check.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
+    else:
+        check.log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
 
     tpm: Final = usage.get_local(UsageCounter.for_deployment("replica-test-id", "gpt-4", "tpm", "03-04"))
     assert tpm == expected_tpm, f"{user_api_key_hash} left the deployment tpm counter at {tpm}"
