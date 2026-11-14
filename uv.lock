@@ -5102,6 +5102,7 @@ mlflow = [
     { name = "mlflow" },
 ]
 proxy = [
+    { name = "alembic" },
     { name = "apscheduler" },
     { name = "azure-identity" },
     { name = "azure-storage-blob" },
@@ -5128,6 +5129,8 @@ proxy = [
     { name = "opentelemetry-sdk" },
     { name = "orjson" },
     { name = "polars" },
+    { name = "psycopg" },
+    { name = "psycopg-binary" },
     { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.15'" },
     { name = "pydantic", version = "2.14.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.15'" },
     { name = "pyjwt" },
@@ -5140,6 +5143,7 @@ proxy = [
     { name = "rq" },
     { name = "semver" },
     { name = "soundfile" },
+    { name = "sqlalchemy" },
     { name = "starlette" },
     { name = "tomlkit" },
     { name = "tzdata" },
@@ -5294,6 +5298,7 @@ healthcheck = [
 ]
 proxy-dev = [
     { name = "a2a-sdk" },
+    { name = "alembic" },
     { name = "azure-identity" },
     { name = "backports-zstd", marker = "python_full_version < '3.14'" },
     { name = "httptools" },
@@ -5306,14 +5311,17 @@ proxy-dev = [
     { name = "opentelemetry-sdk" },
     { name = "prisma" },
     { name = "prometheus-client" },
+    { name = "pynacl" },
     { name = "semver" },
     { name = "sentry-sdk" },
+    { name = "sqlalchemy" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "a2a-sdk", marker = "extra == 'extra-proxy'", specifier = ">=1.1.0,<2.0" },
     { name = "aiohttp", specifier = ">=3.14.2,<4.0" },
+    { name = "alembic", marker = "extra == 'proxy'", specifier = ">=1.18.4,<2.0" },
     { name = "anthropic", extras = ["vertex"], marker = "extra == 'proxy-runtime'", specifier = ">=0.84.0,<1.0" },
     { name = "anyio", specifier = ">=4.14.0,<5.0" },
     { name = "apscheduler", marker = "extra == 'proxy'", specifier = ">=3.11.2,<4.0" },
@@ -5395,7 +5403,9 @@ requires-dist = [
     { name = "prometheus-client", marker = "extra == 'proxy-runtime'", specifier = ">=0.20.0,<1.0" },
     { name = "protobuf", marker = "extra == 'stt-nvidia-riva'", specifier = ">=5.26.1,<7.0" },
     { name = "psycopg", marker = "extra == 'extra-proxy'", specifier = ">=3.2,<4.0" },
+    { name = "psycopg", marker = "extra == 'proxy'", specifier = ">=3.2,<4.0" },
     { name = "psycopg-binary", marker = "extra == 'extra-proxy'", specifier = ">=3.2,<4.0" },
+    { name = "psycopg-binary", marker = "extra == 'proxy'", specifier = ">=3.2,<4.0" },
     { name = "pydantic", marker = "python_full_version < '3.14'", specifier = ">=2.11.0,<3.0.0" },
     { name = "pydantic", marker = "python_full_version == '3.14.*'", specifier = ">=2.12.0,<3.0.0" },
     { name = "pydantic", marker = "python_full_version >= '3.15'", specifier = ">=2.14.0,<3.0.0" },
@@ -5424,6 +5434,7 @@ requires-dist = [
     { name = "sentry-sdk", marker = "extra == 'proxy-runtime'", specifier = ">=2.21.0,<3.0" },
     { name = "soundfile", marker = "extra == 'proxy'", specifier = ">=0.12.1,<1.0" },
     { name = "soundfile", marker = "extra == 'stt-nvidia-riva'", specifier = ">=0.12.1" },
+    { name = "sqlalchemy", marker = "extra == 'proxy'", specifier = ">=2.0.49,<2.1" },
     { name = "starlette", marker = "extra == 'proxy'", specifier = ">=1.0.1,<2.0" },
     { name = "tiktoken", marker = "python_full_version < '3.14'", specifier = ">=0.8.0,<1.0" },
     { name = "tiktoken", marker = "python_full_version == '3.14.*'", specifier = ">=0.12.0,<1.0" },
@@ -5537,6 +5548,7 @@ healthcheck = [
 ]
 proxy-dev = [
     { name = "a2a-sdk", specifier = "==1.1.0" },
+    { name = "alembic", specifier = "==1.18.4" },
     { name = "azure-identity", specifier = "==1.25.2" },
     { name = "backports-zstd", marker = "python_full_version < '3.14'", specifier = "==1.8.0" },
     { name = "httptools", specifier = ">=0.7.1,<0.8" },
@@ -5549,8 +5561,10 @@ proxy-dev = [
     { name = "opentelemetry-sdk", specifier = "==1.45.1" },
     { name = "prisma", specifier = "==0.11.0" },
     { name = "prometheus-client", specifier = "==0.20.0" },
+    { name = "pynacl", specifier = "==1.6.2" },
     { name = "semver", specifier = ">=3.0.4,<4" },
     { name = "sentry-sdk", specifier = "==2.21.0" },
+    { name = "sqlalchemy", specifier = "==2.0.49" },
 ]
 
 [[package]]

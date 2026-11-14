@@ -15,6 +15,9 @@ from litellm.proxy.control_plane.auth.jwt import SessionTokenCodec
 from litellm.proxy.control_plane.auth.rbac import USAGE_VIEWER_ROLE, VIEWER_ROLE, RolePolicy, build_principal
 from litellm.proxy.control_plane.container import build_container
 from litellm.proxy.control_plane.settings import ControlPlaneSettings, read_dataplanes_file
+from tests.unit.proxy.control_plane.store.support import MemoryStore, MemoryStream
+from tests.unit.proxy.control_plane.store.support import container as runtime_container
+from tests.unit.proxy.control_plane.support import RoutedTransport, response
 
 MASTER_KEY: Final = "01234567890123456789012345678901"
 DATAPLANES: Final = {
@@ -90,6 +93,7 @@ def test_list_shows_only_the_dataplanes_the_caller_is_bound_to() -> None:
         "name": "US East",
         "url": "https://us.test",
         "credentials": ["service_token"],
+        "source": "config",
     }
     bound: Final = client.get("/api/v1/dataplanes", headers=_viewer(codec, "us")).json()
     assert [item["id"] for item in bound["items"]] == ["us"]
@@ -199,3 +203,137 @@ def test_malformed_user_info_body_is_a_502_error_not_a_crash() -> None:
     for _ in range(2):
         malformed: Final = client.get("/api/v1/dataplanes/eu/whoami", headers=_viewer(codec))
         assert malformed.status_code == 502 and "malformed" in malformed.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_dataplane_is_secret_free_and_live_for_list_get_fanout_proxy_and_audit() -> None:
+    dataplane_id: Final = "sk-" + "r" * 40
+    store: Final = MemoryStore()
+    stream: Final = MemoryStream()
+    transport: Final = RoutedTransport(
+        {"https://runtime.test/model/info": iter((response(200, {"data": []}), response(200, {"data": []})))}
+    )
+    rig: Final = runtime_container(store, stream, transport=transport)
+    await rig.runtime_config.start()
+    headers: Final = {"Authorization": f"Bearer {MASTER_KEY}"}
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(rig, Licensed())), base_url="http://cp"
+        ) as client:
+            put: Final = await client.put(
+                f"/api/v1/dataplanes/{dataplane_id}",
+                headers=headers,
+                json={"url": "https://runtime.test/", "service_token": {"token": "private-service-credential"}},
+            )
+            assert put.status_code == 200, put.text
+            assert put.json() == {
+                "id": dataplane_id,
+                "name": dataplane_id,
+                "url": "https://runtime.test",
+                "credentials": ["service_token"],
+                "source": "runtime",
+            }
+            await stream.consumed(stream.entries[-1].revision)
+            listed: Final = await client.get("/api/v1/dataplanes", headers=headers)
+            fetched: Final = await client.get(f"/api/v1/dataplanes/{dataplane_id}", headers=headers)
+            fleet: Final = await client.get("/api/v1/fleet/models", headers=headers)
+            proxied: Final = await client.get(f"/api/v1/dataplanes/{dataplane_id}/proxy/model/info", headers=headers)
+            assert listed.json() == {"items": [put.json()]}
+            assert fetched.json() == put.json()
+            assert fleet.status_code == proxied.status_code == 200
+            assert len(transport.calls) == 2
+            assert rig.audit_log.recent(1)[0].dataplane_id == dataplane_id
+            persisted: Final = " ".join(row.model_dump_json() for row in store.rows)
+            published: Final = " ".join(entry.model_dump_json() for entry in stream.entries)
+            assert "private-service-credential" not in persisted + published + put.text + listed.text + fetched.text
+            deleted: Final = await client.delete(f"/api/v1/dataplanes/{dataplane_id}", headers=headers)
+            assert deleted.status_code == 204, deleted.text
+            await stream.consumed(stream.entries[-1].revision)
+            assert rig.registry.get(dataplane_id) is None
+            assert (await client.get(f"/api/v1/dataplanes/{dataplane_id}", headers=headers)).status_code == 404
+            assert store.rows == ()
+    finally:
+        await rig.runtime_config.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["PUT", "DELETE"])
+@pytest.mark.parametrize("gate", ["scope", "binding"])
+async def test_runtime_dataplane_write_scope_and_fleet_binding_are_required_and_audited(method: str, gate: str) -> None:
+    stream: Final = MemoryStream()
+    rig: Final = runtime_container(MemoryStore(), stream, roles={"writer": {"scopes": ["dataplanes:write"]}})
+    rig.runtime_config.ready = True
+    codec: Final = SessionTokenCodec(MASTER_KEY, rig.settings.session_issuer, timedelta(minutes=5), rig.policy)
+    actor: Final = build_principal(
+        rig.policy,
+        "operator",
+        None,
+        frozenset({"viewer" if gate == "scope" else "writer"}),
+        None,
+        frozenset() if gate == "scope" else frozenset({"eu"}),
+        "session",
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(rig, Licensed())), base_url="http://cp"
+    ) as client:
+        result: Final = await client.request(
+            method,
+            "/api/v1/dataplanes/new",
+            headers={"Authorization": f"Bearer {codec.mint(actor)}"},
+            **(
+                {"json": {"url": "https://runtime.test", "service_token": {"token": "private"}}}
+                if method == "PUT"
+                else {}
+            ),
+        )
+    assert result.status_code == 403, result.text
+    assert stream.entries == ()
+    event: Final = rig.audit_log.recent(1)[0]
+    assert (event.actor, event.status, event.decision) == ("operator", 403, "denied")
+
+
+@pytest.mark.asyncio
+async def test_config_dataplanes_are_read_only_and_unconfigured_writes_are_unavailable() -> None:
+    configured: Final = runtime_container(MemoryStore(), MemoryStream(), dataplanes=DATAPLANES)
+    configured.runtime_config.ready = True
+    unconfigured: Final = runtime_container()
+    for rig, name, expected in ((configured, "eu", 409), (unconfigured, "new", 503)):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(rig, Licensed())), base_url="http://cp"
+        ) as client:
+            put: Final = await client.put(
+                f"/api/v1/dataplanes/{name}",
+                headers={"Authorization": f"Bearer {MASTER_KEY}"},
+                json={"url": "https://runtime.test", "service_token": {"token": "private"}},
+            )
+            delete: Final = await client.delete(
+                f"/api/v1/dataplanes/{name}", headers={"Authorization": f"Bearer {MASTER_KEY}"}
+            )
+        assert put.status_code == delete.status_code == expected
+        assert len(rig.audit_log.recent(10)) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("spec", "status"),
+    [
+        ({"url": "https://user:password@runtime.test", "service_token": {"token": "private"}}, 422),
+        ({"url": "http://runtime.test", "service_token": {"token": "private"}}, 422),
+        ({"url": "https://runtime.test"}, 400),
+    ],
+)
+async def test_invalid_runtime_dataplanes_are_rejected_and_audited_before_publication(
+    spec: dict[str, object], status: int
+) -> None:
+    stream: Final = MemoryStream()
+    rig: Final = runtime_container(MemoryStore(), stream)
+    rig.runtime_config.ready = True
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(rig, Licensed())), base_url="http://cp"
+    ) as client:
+        result: Final = await client.put(
+            "/api/v1/dataplanes/new", headers={"Authorization": f"Bearer {MASTER_KEY}"}, json=spec
+        )
+    assert result.status_code == status, result.text
+    assert stream.entries == ()
+    assert rig.audit_log.recent(1)[0].status == status

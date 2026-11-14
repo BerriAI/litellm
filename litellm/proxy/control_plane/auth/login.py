@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Final, TypeAlias
 
 from litellm.proxy.control_plane.auth.jwt import SessionTokenCodec
-from litellm.proxy.control_plane.auth.rbac import ADMIN_ROLE, RolePolicy, build_principal
+from litellm.proxy.control_plane.auth.rbac import ADMIN_ROLE, Policy, build_principal
 from litellm.types.proxy.control_plane.auth import SessionTokenResponse
 
 LOCKOUT_FAILURES: Final = 5
@@ -85,7 +85,7 @@ class LoginService:
     def __init__(
         self,
         sessions: SessionTokenCodec,
-        policy: RolePolicy,
+        policy: Policy,
         ttl_seconds: int,
         admin_username: str | None,
         admin_password: str | None,

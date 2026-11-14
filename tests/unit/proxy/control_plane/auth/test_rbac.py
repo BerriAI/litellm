@@ -97,6 +97,39 @@ def test_inheritance_cycles_terminate() -> None:
     assert policy.scopes_for("a") == policy.scopes_for("b") == frozenset({Scope.USAGE_READ, Scope.FLEET_READ})
 
 
+@pytest.mark.parametrize("cycle", [False, True])
+def test_deep_inheritance_resolves_without_recursion_and_preserves_cycle_grants(cycle: bool) -> None:
+    count: Final = 1500
+    definitions: Final = {
+        str(index): RoleDefinition(
+            frozenset({Scope.USAGE_READ}) if index == 0 else frozenset({Scope.FLEET_READ}),
+            frozenset({str(index - 1)}) if index else frozenset({str(count - 1)}) if cycle else frozenset(),
+        )
+        for index in range(count)
+    }
+    policy: Final = build_policy(definitions, include_defaults=False)
+    assert isinstance(policy, RolePolicy)
+    assert policy.scopes_for(str(count - 1)) == frozenset({Scope.USAGE_READ, Scope.FLEET_READ})
+    assert policy.scopes_for("0") == (
+        frozenset({Scope.USAGE_READ, Scope.FLEET_READ}) if cycle else frozenset({Scope.USAGE_READ})
+    )
+
+
+def test_dense_inheritance_resolves_every_ancestor_grant() -> None:
+    scopes: Final = tuple(Scope)
+    definitions: Final = {
+        str(index): RoleDefinition(
+            frozenset({scopes[index % len(scopes)]}), frozenset(str(parent) for parent in range(index))
+        )
+        for index in range(14)
+    }
+    policy: Final = build_policy(definitions, include_defaults=False)
+    assert isinstance(policy, RolePolicy)
+    assert tuple(policy.scopes_for(str(index)) for index in range(14)) == tuple(
+        frozenset(scopes[: min(index + 1, len(scopes))]) for index in range(14)
+    )
+
+
 def test_role_definition_rejects_unknown_scopes() -> None:
     assert parse_role_definition("r", ("usage:read", "nope"), ()) == UnknownScope(role="r", scope="nope")
     parsed: Final = parse_role_definition("r", ("usage:read",), ("viewer",))
