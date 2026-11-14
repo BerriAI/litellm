@@ -4489,6 +4489,9 @@ class Logging(LiteLLMLoggingBaseClass):
         row is built from this response rather than re-parsed from the served body."""
         self.bridged_model_response = response
 
+    def clear_bridged_model_response(self) -> None:
+        self.bridged_model_response = None
+
     def record_bridged_responses_api_response(self, response: ResponsesAPIResponse) -> None:
         self.record_bridged_model_response(self._translate_responses_api_response_to_model_response(response))
 
