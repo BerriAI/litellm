@@ -1274,6 +1274,7 @@ def sync_transform_request_body(
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints: Final = ContextCachingEndpoints()
+    request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
     (
         messages,
@@ -1294,6 +1295,7 @@ def sync_transform_request_body(
         vertex_project=vertex_project,
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
+        drop_params=drops_unsupported_params(request_settings.get("drop_params")),
     )
 
     return transform_request_body(
@@ -1346,6 +1348,7 @@ async def async_transform_request_body(
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints: Final = ContextCachingEndpoints()
+    request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
     (
         messages,
@@ -1366,6 +1369,7 @@ async def async_transform_request_body(
         vertex_project=vertex_project,
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
+        drop_params=drops_unsupported_params(request_settings.get("drop_params")),
     )
 
     inlined_messages: Final = await async_inline_remote_media(

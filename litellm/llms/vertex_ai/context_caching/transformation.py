@@ -165,6 +165,7 @@ def transform_openai_messages_to_gemini_context_caching(
     cache_key: str,
     vertex_project: str | None,
     vertex_location: str | None,
+    drop_params: bool = False,
 ) -> CachedContentRequestBody:
     # Extract TTL from cached messages BEFORE system message transformation
     ttl: Final = extract_ttl_from_cached_messages(messages)
@@ -178,6 +179,7 @@ def transform_openai_messages_to_gemini_context_caching(
     transformed_messages: Final = gemini_convert_messages_with_history(
         messages=new_messages,
         model=model,
+        litellm_params={"drop_params": drop_params},
         custom_llm_provider=custom_llm_provider,
     )
 
