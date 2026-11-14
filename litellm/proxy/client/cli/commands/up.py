@@ -19,7 +19,15 @@ from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 from litellm.litellm_core_utils.private_json import ensure_private_dir
 
 from .agents import AgentRunError, resolve_api_key, verify_proxy_key
-from .auth import CliContextObj, cli_context_obj, context_secret_vault, get_stored_api_key, load_token, login
+from .auth import (
+    CliContextObj,
+    cli_context_obj,
+    context_secret_vault,
+    get_stored_api_key,
+    is_pkce_login,
+    load_token,
+    login,
+)
 from .claude_settings import (
     BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
@@ -120,11 +128,6 @@ def _key_resolved_on_the_way_in(ctx_obj: CliContextObj, base_url: str, vault: Se
     return get_stored_api_key(expected_base_url=base_url, vault=vault)
 
 
-def _stored_login_is_pkce(vault: SecretVault) -> bool:
-    token_data: Final = load_token(vault=vault)
-    return token_data is not None and token_data.get("refresh_token") is not None
-
-
 def ensure_fresh_login(ctx: click.Context) -> None:
     ctx_obj: Final = cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"].rstrip("/")
@@ -132,7 +135,7 @@ def ensure_fresh_login(ctx: click.Context) -> None:
     if _usable_login(_key_resolved_on_the_way_in(ctx_obj, base_url, vault), vault):
         return
 
-    pkce: Final = _stored_login_is_pkce(vault) or pkce_default()
+    pkce: Final = is_pkce_login(load_token(vault=vault), base_url) or pkce_default()
     login_command: Final = "lite login --pkce" if pkce else "lite login"
     if not sys.stdin.isatty():
         raise UpError(f"No fresh LiteLLM login found for this proxy. Run `{login_command}` first.")

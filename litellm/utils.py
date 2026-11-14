@@ -49,7 +49,6 @@ from openai.types.chat.completion_create_params import ResponseFormat
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 
 import litellm
-import litellm.litellm_core_utils
 
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
@@ -551,7 +550,7 @@ from litellm.integrations.custom_logger_v2.legacy import (
     run_subscribers,
 )
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
-from litellm.integrations.custom_logger_v2.outcomes import Patch
+from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -767,6 +766,15 @@ def _is_same_registered_custom_logger(existing: object, callback_class: CustomLo
     """
     return type(existing) is type(callback_class) and getattr(existing, "callback_name", None) == getattr(
         callback_class, "callback_name", None
+    )
+
+
+def _same_v2_callback(existing: object, callback: object) -> bool:
+    return (
+        isinstance(existing, CustomLoggerV2)
+        and isinstance(callback, CustomLoggerV2)
+        and litellm.logging_callback_manager.get_custom_logger_key(existing)
+        == litellm.logging_callback_manager.get_custom_logger_key(callback)
     )
 
 
@@ -1326,13 +1334,16 @@ def function_setup(
                 for callback in all_callbacks:
                     # check if callback is a string - e.g. "lago", "openmeter"
                     if isinstance(callback, str):
-                        callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
+                        from litellm.litellm_core_utils.litellm_logging import init_custom_logger_compatible_class
+
+                        callback = init_custom_logger_compatible_class(
                             callback,
                             internal_usage_cache=None,
                             llm_router=None,
                         )
                         if callback is None or any(
-                            type(cb) is type(callback) for cb in litellm._async_success_callback
+                            type(cb) is type(callback) or _same_v2_callback(cb, callback)
+                            for cb in litellm._async_success_callback
                         ):  # don't double add a callback
                             continue
                     if callback not in litellm.input_callback:
@@ -2037,11 +2048,16 @@ async def async_post_call_failure_deployment_hook(
         and (subscribers := hook_subscribers(Hook.post_deployment_failure, callbacks, admit=Admit.every_logger)).has_v2
     ):
         fields: Final = ResultFields(safe_request_data, PROXY_REQUEST_KEYS, Field.error, safe_exception)
-        _ = kwargs_after(
-            await run_subscribers(
-                subscribers, fields, partial(_start_post_deployment_failure, fields, typed_call_type, fallback_depth)
-            )
+        result: Final = await run_subscribers(
+            subscribers, fields, partial(_start_post_deployment_failure, fields, typed_call_type, fallback_depth)
         )
+        if isinstance(result.outcome, Abort):
+            verbose_logger.debug(
+                "async_post_call_failure_deployment_hook: a v2 abort keeps the original failure: %s",
+                result.outcome.message,
+            )
+            return
+        _ = kwargs_after(result)
         return
     for callback in callbacks:
         if isinstance(callback, CustomLogger):
@@ -5546,6 +5562,7 @@ def _map_params_with_provider_config(
     drop_params: bool,
     model_info: Mapping[str, object] | None,
     reasoning_drop_logger: WarningLogger,
+    base_model: str | None,
 ) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
     if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig):
         return provider_config.map_openai_params(
@@ -5555,6 +5572,7 @@ def _map_params_with_provider_config(
             drop_params=drop_params,
             declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
             reasoning_drop_logger=reasoning_drop_logger,
+            base_model=base_model,
         )
     if isinstance(provider_config, (litellm.ChatGPTConfig, litellm.GithubCopilotConfig)):
         return provider_config.map_openai_params(
@@ -6231,6 +6249,7 @@ def get_optional_params(
             drop_params=bool(drop_params),
             model_info=model_info,
             reasoning_drop_logger=_litellm_reasoning_drop_logger,
+            base_model=base_model,
         )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
@@ -10836,6 +10855,10 @@ class ProviderConfigManager:
             return litellm.AnthropicModelInfo()
         elif LlmProviders.XAI == provider:
             return litellm.XAIModelInfo()
+        elif LlmProviders.MISTRAL == provider:
+            from litellm.llms.mistral.chat.transformation import MistralConfig
+
+            return MistralConfig()
         elif LlmProviders.OLLAMA == provider or LlmProviders.OLLAMA_CHAT == provider:
             # Dynamic model listing for Ollama server
             from litellm.llms.ollama.common_utils import OllamaModelInfo
@@ -10863,6 +10886,10 @@ class ProviderConfigManager:
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
             return AzureFoundryModelInfo(model=model)
+        elif LlmProviders.DEEPSEEK == provider:
+            from litellm.llms.deepseek.common_utils import DeepSeekModelInfo
+
+            return DeepSeekModelInfo()
         elif LlmProviders.OPENROUTER == provider:
             from litellm.llms.openrouter.common_utils import OpenRouterModelInfo
 
@@ -11007,10 +11034,10 @@ class ProviderConfigManager:
     def _get_vertex_ai_vector_stores_config(api_type: str | None) -> BaseVectorStoreConfig | None:
         if api_type == "rag_api" or api_type is None:
             from litellm.llms.vertex_ai.vector_stores.rag_api.transformation import (
-                VertexVectorStoreConfig,
+                vertex_rag_api_vector_store_config,
             )
 
-            return VertexVectorStoreConfig()
+            return vertex_rag_api_vector_store_config
         if api_type == "search_api":
             from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
                 vertex_search_api_vector_store_config,
