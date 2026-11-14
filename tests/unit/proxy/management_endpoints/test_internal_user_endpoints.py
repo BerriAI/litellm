@@ -1063,8 +1063,9 @@ async def test_new_user_license_over_limit(mocker):
 
     # Verify the exception details
     assert exc_info.value.code == 403 or exc_info.value.code == "403"
-    assert "License is over limit" in str(exc_info.value.message)
-    assert "support@berri.ai" in str(exc_info.value.message)
+    assert (
+        exc_info.value.message == "User count limit reached for your LiteLLM License. Please contact your administrator"
+    )
 
     # Verify that the license check was called with the correct user count
     mock_license_check.is_over_limit.assert_called_once_with(total_users=1000)
@@ -1117,7 +1118,7 @@ async def test_new_user_license_gate_counts_only_billable_users(mocker):
     with pytest.raises(ProxyException) as passed:
         await new_user(data=request, user_api_key_dict=admin)
     assert key_gen.call_count == 1
-    assert "License is over limit" not in str(passed.value.message)
+    assert "User count limit reached" not in str(passed.value.message)
 
     # 3 active, 0 deactivated -> billable 3, over max_users 2: gate blocks
     key_gen.reset_mock()
@@ -1125,7 +1126,7 @@ async def test_new_user_license_gate_counts_only_billable_users(mocker):
     with pytest.raises(ProxyException) as blocked:
         await new_user(data=request, user_api_key_dict=admin)
     assert blocked.value.code == 403 or blocked.value.code == "403"
-    assert "License is over limit" in str(blocked.value.message)
+    assert "User count limit reached" in str(blocked.value.message)
     assert key_gen.call_count == 0
 
 

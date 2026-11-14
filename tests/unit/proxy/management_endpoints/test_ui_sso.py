@@ -26,6 +26,7 @@ from litellm.proxy._types import (
     ProxyException,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
@@ -1524,6 +1525,11 @@ class _UserTable:
     async def find_unique(self, where: dict[str, str]) -> LiteLLM_UserTable | None:
         return self.rows.get(where["user_id"])
 
+    async def count(self, where: Mapping[str, object] | None = None) -> int:
+        if where is None:
+            return len(self.rows)
+        return sum((row.metadata or {}).get("scim_active") is False for row in self.rows.values())
+
 
 def _users_db(table: _UserTable) -> SimpleNamespace:
     database: Final = SimpleNamespace(litellm_usertable=table)
@@ -1566,6 +1572,45 @@ async def test_first_sign_in_does_not_sign_in_to_another_account_holding_the_ema
 
     with pytest.raises(ProxyException, match=r"User with email Person@example\.com already exists"):
         await _first_sign_in(_UserTable(other))
+
+
+@pytest.mark.parametrize("premium", [False, True], ids=["free", "premium"])
+@pytest.mark.asyncio
+async def test_sso_upsert_propagates_license_rejection_without_creating_the_user(premium: bool) -> None:
+    license_check: Final = LicenseCheck()
+    license_check.airgapped_license_data = {"max_users": 1}
+    occupants: Final = tuple(LiteLLM_UserTable(user_id=f"licensed-seat-{index}") for index in range(2))
+    table: Final = _UserTable(*occupants)
+    prisma: Final = _users_db(table)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server._license_check", license_check),
+        patch("litellm.proxy.proxy_server.premium_user", premium),
+        pytest.raises(ProxyException) as rejected,
+    ):
+        await SSOAuthenticationHandler.upsert_sso_user(
+            result=CustomOpenID(id="sso-subject", email="person@example.com", team_ids=[]),
+            user_info=None,
+            user_email="person@example.com",
+            user_defined_values={
+                "user_id": "sso-subject",
+                "user_email": "person@example.com",
+                "user_role": None,
+                "max_budget": None,
+                "budget_duration": None,
+                "models": [],
+            },
+            prisma_client=prisma,
+        )
+
+    assert rejected.value.to_dict() == {
+        "message": "User count limit reached for your LiteLLM License. Please contact your administrator",
+        "type": "auth_error",
+        "param": None,
+        "code": "403",
+    }
+    assert table.rows == {row.user_id: row for row in occupants}
 
 
 @pytest.mark.asyncio
