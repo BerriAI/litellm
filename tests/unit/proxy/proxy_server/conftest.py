@@ -697,7 +697,7 @@ def azure_stream_cut(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRout
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     for name, value in (
         ("llm_router", router),
-        ("llm_model_list", router.model_list),
+        ("llm_model_list", router.registry().all()),
         ("prisma_client", None),
         ("general_settings", {}),
         ("user_model", None),
