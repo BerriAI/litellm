@@ -80,7 +80,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     apply_team_provider_credentials,
     authorize_model_for_key,
-    deployment_drop_params,
+    configured_drop_params,
     encode_file_id_with_model,
     extract_file_creation_params,
     get_authorized_credentials_for_model,
@@ -471,7 +471,7 @@ async def route_create_file(
         # Merge credentials into the request
         prepare_data_with_credentials(
             data=_create_file_request,
-            credentials={**credentials, **deployment_drop_params(llm_router, model, _create_file_request)},
+            credentials={**credentials, **configured_drop_params(llm_router, model, _create_file_request)},
             keep_request_buckets=True,
         )
 

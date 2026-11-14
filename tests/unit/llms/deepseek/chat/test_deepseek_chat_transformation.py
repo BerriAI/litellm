@@ -1000,6 +1000,21 @@ def test_deepseek_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(mo
     assert "parallel_tool_calls" not in result
 
 
+def test_deepseek_clears_a_tool_choice_naming_the_hosted_mcp_tool_drop_params_dropped(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    result: Final = DeepSeekChatConfig().map_openai_params(
+        {
+            "tools": [_HOSTED_MCP_TOOL, _function_tool("shell")],
+            "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        },
+        {},
+        "deepseek-v4-flash",
+        True,
+    )
+    assert result["tools"] == [_function_tool("shell")]
+    assert "tool_choice" not in result
+
+
 def _budget_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
     return tuple(
         r.getMessage()

@@ -34,6 +34,7 @@ from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
     ManagedObjectRepository,
 )
+from litellm.router_api import RoutingContext
 from litellm.types.llms.openai import OpenAIFilesPurpose
 from litellm.types.utils import SpecialEnums
 
@@ -639,15 +640,20 @@ async def get_authorized_credentials_for_model(
     )
 
 
-def deployment_drop_params(
+def _deployment_drop_params(llm_router: "Router", model_id: str) -> bool | str | None:
+    deployment: Final = llm_router.registry().credentials(model_id, form="deployment")
+    return deployment.litellm_params.drop_params if deployment is not None else None
+
+
+def configured_drop_params(
     llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
 ) -> Mapping[str, bool | str]:
-    deployment: Final = (
-        llm_router.registry().credentials(model_id, form="deployment")
-        if llm_router is not None and "drop_params" not in request
-        else None
+    if llm_router is None or request.get("drop_params") is not None:
+        return MappingProxyType({})
+    router_default: Final = RoutingContext(llm_router).default_litellm_params().get("drop_params")
+    drop_params: Final = (
+        router_default if isinstance(router_default, (bool, str)) else _deployment_drop_params(llm_router, model_id)
     )
-    drop_params: Final = deployment.litellm_params.drop_params if deployment is not None else None
     return MappingProxyType({}) if drop_params is None else MappingProxyType({"drop_params": drop_params})
 
 

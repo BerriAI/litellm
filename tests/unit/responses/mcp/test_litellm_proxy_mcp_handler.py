@@ -1176,6 +1176,26 @@ async def test_gateway_served_names_matches_alias_server_name_name_access_group_
 
 
 @pytest.mark.asyncio
+async def test_gateway_served_names_leaves_out_a_name_whose_toolset_read_fails() -> None:
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import _gateway_served_names
+
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_mcptoolsettable.find_first = AsyncMock(side_effect=RuntimeError("toolset table unavailable"))
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+        patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", MCPServerManager()),
+    ):
+        served: Final = await _gateway_served_names({"research"}, servers=lambda: ())
+
+    assert served == frozenset()
+
+
+@pytest.mark.asyncio
 async def test_gateway_served_names_matches_server_id_short_prefix_and_alias_case_like_the_gateway():
     from litellm.proxy.mcp_server.utils import compute_short_server_prefix
     from litellm.responses.mcp.litellm_proxy_mcp_handler import _gateway_served_names

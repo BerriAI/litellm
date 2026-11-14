@@ -99,7 +99,7 @@ def _registry_serves(name: str, servers: Collection[MCPServer]) -> bool:
     )
 
 
-async def _toolset_exists(name: str) -> bool:
+async def read_saved_toolset(name: str) -> bool | Exception:
     try:
         from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -110,8 +110,15 @@ async def _toolset_exists(name: str) -> bool:
             return False
         return await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name) is not None
     except Exception as e:
-        verbose_logger.debug("Could not resolve '%s' as toolset: %s", name, e)
+        return e
+
+
+async def _toolset_exists(name: str) -> bool:
+    found: Final = await read_saved_toolset(name)
+    if isinstance(found, Exception):
+        verbose_logger.debug("Could not resolve '%s' as toolset: %s", name, found)
         return False
+    return found
 
 
 @catalog_operation(global_manager)

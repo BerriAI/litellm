@@ -707,8 +707,9 @@ BATCH_JSONL_LINE = (
 )
 
 
-def _router_with_executed_batch_model() -> Router:
+def _router_with_executed_batch_model(default_litellm_params: dict[str, object] | None = None) -> Router:
     return Router(
+        default_litellm_params=default_litellm_params,
         model_list=[
             {
                 "model_name": "my-vllm",
@@ -1012,6 +1013,21 @@ def test_batch_upload_for_a_provider_model_without_deployment_drop_params_sends_
 
     assert response.status_code == 200, response.text
     assert "drop_params" not in provider_upload.call_args.kwargs
+
+
+@pytest.mark.parametrize("model", ["vertex-batch-keep", "gemini-2.0-flash"])
+def test_batch_upload_carries_the_router_default_drop_params_over_the_deployment(
+    batch_upload_seams, monkeypatch, model: str
+):
+    _, provider_upload, _ = batch_upload_seams
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router", _router_with_executed_batch_model({"drop_params": True})
+    )
+
+    response = _upload_batch_file({"x-litellm-model": model}, {})
+
+    assert response.status_code == 200, response.text
+    assert provider_upload.call_args.kwargs["drop_params"] is True
 
 
 def test_batch_upload_keeps_the_callers_drop_params_over_the_deployment(batch_upload_seams):

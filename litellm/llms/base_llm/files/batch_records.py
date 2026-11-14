@@ -3,11 +3,17 @@ from functools import cache
 from types import MappingProxyType
 from typing import Final, cast, get_type_hints
 
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
 
 
 def _frozen_mapping(items: Iterable[tuple[str, object]]) -> Mapping[str, object]:
     return MappingProxyType(dict(items))
+
+
+def row_or_deployment_drop_params(openai_request_body: Mapping[str, object], deployment_drop_params: object) -> bool:
+    row_drop_params: Final = openai_request_body.get("drop_params")
+    return drops_unsupported_params(deployment_drop_params if row_drop_params is None else row_drop_params)
 
 
 @cache
@@ -48,12 +54,17 @@ def responses_batch_body_to_chat_body(
         ResponsesAPIOptionalRequestParams,
         _frozen_mapping((key, value) for key, value in openai_request_body.items() if key in responses_request_keys()),
     )
-    return LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformer declares a bare dict return
-        model=model if isinstance(model, str) else "",
-        input=chat_input,
-        responses_api_request=responses_request,
-        custom_llm_provider=custom_llm_provider,
-        drop_params=drop_params,
-        caller_input=caller_input,
-        metadata=openai_request_body.get("metadata"),
+    row_drop_params: Final = openai_request_body.get("drop_params")
+    chat_body: Final = cast(  # cast-ok: the transformer declares a bare dict return
+        dict[str, object],
+        LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(  # pyright: ignore[reportUnknownMemberType]  # transformer declares a bare dict return
+            model=model if isinstance(model, str) else "",
+            input=chat_input,
+            responses_api_request=responses_request,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=row_drop_params if drop_params is None else drop_params,
+            caller_input=caller_input,
+            metadata=openai_request_body.get("metadata"),
+        ),
     )
+    return chat_body if row_drop_params is None else {**chat_body, "drop_params": row_drop_params}

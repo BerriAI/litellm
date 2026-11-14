@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 from unittest.mock import MagicMock
 
 import litellm
+from litellm.litellm_core_utils.tool_fields import HOSTED_MCP_BATCH_ROW_REMEDY
 from litellm.llms.base_llm.files.transformation import BaseFileUploadStream
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
@@ -2480,3 +2481,80 @@ def test_batch_row_for_an_unflagged_gemini_model_keeps_the_knobs(monkeypatch: py
     monkeypatch.setattr(litellm, "drop_params", False)
     (row,) = _wrap_entries([_chat_entry("gemini-2.5-flash", _SAMPLING_KNOBS)])
     assert _generation_config(row) == {"max_output_tokens": 5, **_SAMPLING_KNOBS}
+
+
+@pytest.mark.parametrize("model", ["gemini-2.5-flash", "claude-sonnet-4-6"])
+def test_batch_row_with_a_hosted_mcp_tool_is_refused_with_advice_a_batch_row_can_follow(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = _claude_chat_entry(
+        "r1",
+        "hi",
+        model=model,
+        max_tokens=10,
+        tools=[{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}],
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        _uploaded_rows(config, {"gcs_bucket_name": "my-bucket", "model": f"vertex_ai/{model}"}, [entry])
+
+    assert exc_info.value.status_code == 400
+    assert "`deepwiki`" in exc_info.value.message
+    assert HOSTED_MCP_BATCH_ROW_REMEDY in exc_info.value.message
+    assert "litellm_proxy/mcp" not in exc_info.value.message
+
+
+@pytest.mark.parametrize("model", ["gemini-2.5-flash", "claude-sonnet-4-6"])
+def test_batch_responses_row_drops_a_hosted_mcp_tool_under_its_own_drop_params(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = {
+        "custom_id": "r1",
+        "method": "POST",
+        "url": "/v1/responses",
+        "body": {
+            "model": model,
+            "input": "hi",
+            "max_output_tokens": 10,
+            "drop_params": True,
+            "tools": [
+                {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"},
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+            ],
+        },
+    }
+
+    (row,) = _uploaded_rows(config, {"gcs_bucket_name": "my-bucket", "model": f"vertex_ai/{model}"}, [entry])
+
+    assert "get_weather" in json.dumps(row)
+    assert "deepwiki" not in json.dumps(row)
+    assert "drop_params" not in json.dumps(row)
+
+
+@pytest.mark.parametrize("model", ["gemini-2.5-flash", "claude-sonnet-4-6"])
+def test_batch_row_with_a_null_drop_params_takes_its_deployments_drop_params(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = _claude_chat_entry(
+        "r1",
+        "hi",
+        model=model,
+        max_tokens=10,
+        drop_params=None,
+        tools=[
+            {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"},
+            {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}},
+        ],
+    )
+
+    (row,) = _uploaded_rows(
+        config, {"gcs_bucket_name": "my-bucket", "model": f"vertex_ai/{model}", "drop_params": True}, [entry]
+    )
+
+    assert "get_weather" in json.dumps(row)
+    assert "deepwiki" not in json.dumps(row)

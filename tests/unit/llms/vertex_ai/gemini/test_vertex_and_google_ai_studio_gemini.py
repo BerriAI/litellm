@@ -11284,6 +11284,22 @@ def test_gemini_keeps_tool_choice_none_for_legacy_functions_after_dropping_every
     assert mapped["tool_choice"] == {"functionCallingConfig": {"mode": "NONE"}}
 
 
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_clears_a_tool_choice_naming_the_hosted_mcp_tool_drop_params_dropped(monkeypatch, config_class, route):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={
+            "tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL],
+            "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=True,
+    )
+    assert "get_weather" in json.dumps(mapped["tools"])
+    assert "deepwiki" not in json.dumps(mapped)
+
+
 class _BodyInChunks(httpx.SyncByteStream, httpx.AsyncByteStream):
     def __init__(self, chunks: tuple[bytes, ...]) -> None:
         self._chunks: Final = chunks
