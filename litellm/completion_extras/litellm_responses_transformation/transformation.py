@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     thinking_blocks_from_reasoning_items,
     with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.tool_fields import qualified_member_name
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
@@ -429,6 +430,19 @@ def replayed_tool_search_tools(request: object) -> tuple[object, ...]:
 
 def replayed_tool_search_tool_names(request: object) -> tuple[str, ...]:
     return tuple(chain.from_iterable(_tool_definition_name(tool) for tool in replayed_tool_search_tools(request)))
+
+
+def _qualified_member_names(tool: object) -> tuple[str, ...]:
+    namespace: Final = _json_field(tool, "name") if _json_field(tool, "type") == "namespace" else None
+    if not isinstance(namespace, str):
+        return ()
+    names: Final = chain.from_iterable(_tool_definition_name(member) for member in _namespace_members(tool))
+    return tuple(qualified_member_name(namespace, name) for name in names)
+
+
+def namespace_member_qualified_names(request: object) -> tuple[str, ...]:
+    tools: Final = _json_list(_json_field(request, "tools")) or ()
+    return tuple(chain.from_iterable(_qualified_member_names(tool) for tool in tools))
 
 
 def _loads_any_tool(message: object, names: frozenset[str]) -> bool:

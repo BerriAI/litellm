@@ -27,7 +27,10 @@ from pydantic import TypeAdapter
 from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
-from litellm.completion_extras.litellm_responses_transformation.transformation import replayed_tool_search_tool_names
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    namespace_member_qualified_names,
+    replayed_tool_search_tool_names,
+)
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -146,11 +149,12 @@ class ToolPolicyGuardrail(CustomGuardrail):
                 if isinstance(t, dict) and isinstance(t.get("function"), dict) and t["function"].get("name")
             ]
             route: Final = _get_request_route_from_data(request_data)
-            replayed_tool_names: Final = replayed_tool_search_tool_names(_REQUEST_DATA.validate_python(request_data))
+            request: Final = _REQUEST_DATA.validate_python(request_data)
+            replayed_tool_names: Final = replayed_tool_search_tool_names(request)
             tool_names = (
                 extract_request_tool_names(route, request_data)
                 if route and not function_tool_names
-                else [*function_tool_names, *replayed_tool_names]
+                else [*function_tool_names, *replayed_tool_names, *namespace_member_qualified_names(request)]
             )
         else:
             tool_calls: Final = inputs.get("tool_calls") or []

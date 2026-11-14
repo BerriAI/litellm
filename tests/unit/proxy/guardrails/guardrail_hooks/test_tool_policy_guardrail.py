@@ -2,7 +2,8 @@
 Unit tests for ToolPolicyGuardrail.
 """
 
-from typing import Any
+from itertools import chain
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -222,3 +223,32 @@ async def test_blocked_tool_loaded_by_a_replayed_tool_search_raises_next_to_allo
             )
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["blocked_tools"] == ["run_shell"]
+
+
+@pytest.mark.asyncio
+async def test_policy_on_a_qualified_member_name_over_64_characters_still_blocks(guardrail):
+    from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
+
+    namespace: Final = "mcp__codex_apps__github_enterprise_connector_prod"
+    tools: Final = [
+        {
+            "type": "namespace",
+            "name": namespace,
+            "description": "GitHub",
+            "tools": [{"type": "function", "name": "delete_repository", "parameters": {"type": "object"}}],
+        }
+    ]
+    blocked: Final = f"{namespace}__delete_repository"
+    chat_forms: Final = LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(tools)
+    inputs: Final = {"tools": list(chain.from_iterable(form.chat_tools for form in chat_forms))}
+    with patch(
+        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
+        return_value=_registry_mock({blocked: "blocked"}),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={"user_api_key_request_route": "/v1/responses", "tools": tools},
+                input_type="request",
+            )
+    assert exc_info.value.detail["blocked_tools"] == [blocked]
