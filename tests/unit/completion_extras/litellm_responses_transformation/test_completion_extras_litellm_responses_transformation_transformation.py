@@ -6475,6 +6475,21 @@ def _foreground_responses_body(model: str) -> Mapping[str, object]:
     }
 
 
+def _foreground_responses_sse(model: str) -> str:
+    body: Final = _foreground_responses_body(model)
+    events: Final = (
+        {"type": "response.created", "response": {**body, "status": "in_progress", "output": [], "usage": None}},
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_foreground",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "pong",
+        },
+        {"type": "response.completed", "response": body},
+    )
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
 def _background_chat_request(
     model: str, provider_kwargs: Mapping[str, object], background_kwargs: Mapping[str, object]
 ) -> Mapping[str, object]:
@@ -6557,3 +6572,26 @@ def test_bridged_chat_serves_a_foreground_run_when_background_is_dropped_or_off(
     assert isinstance(response, litellm.ModelResponse)
     assert response.choices[0].message.content == "pong"
     assert "background" not in json.loads(upstream.calls.last.request.content)
+
+
+@_BACKGROUND_BRIDGED_PROVIDERS
+def test_bridged_chat_stream_forwards_background_and_streams_the_run(
+    monkeypatch: pytest.MonkeyPatch, model: str, url: str, provider_kwargs: Mapping[str, object]
+) -> None:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    request: Final = {**_background_chat_request(model, provider_kwargs, {"background": True}), "stream": True}
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=url).mock(
+            return_value=httpx.Response(
+                200, text=_foreground_responses_sse(model), headers={"content-type": "text/event-stream"}
+            )
+        )
+        stream: Final = litellm.completion(**request)
+        assert isinstance(stream, CustomStreamWrapper)
+        text: Final = "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices)
+
+    assert text == "pong"
+    assert json.loads(upstream.calls.last.request.content)["background"] is True

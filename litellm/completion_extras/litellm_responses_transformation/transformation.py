@@ -222,7 +222,8 @@ def without_background_run(
             llm_provider=custom_llm_provider,
             message=(
                 f"/chat/completions does not support parameters: ['background'], for model={model}. "
-                "A background run answers with a response id that /chat/completions has no way to retrieve. "
+                "Without `stream: true`, a background run answers with a response id that /chat/completions "
+                "has no way to retrieve. "
                 "To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
             ),
         )

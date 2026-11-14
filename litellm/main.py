@@ -6000,7 +6000,9 @@ def completion(
                 api_base=api_base,
                 acompletion=acompletion,
                 logging_obj=logging,
-                optional_params=without_background_run(
+                optional_params=optional_params
+                if stream
+                else without_background_run(
                     cast("Mapping[str, object]", optional_params),  # cast-ok: completion's untyped optional_params
                     drop_policy(cast("Mapping[str, object]", kwargs)),  # cast-ok: kwargs is the untyped request dict
                     model,
