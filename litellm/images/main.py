@@ -829,6 +829,7 @@ def image_variation(
 _IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
 _DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
 _ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
+_PASSTHROUGH_EDIT_PROVIDERS: Final = frozenset({litellm.LlmProviders.TENCENT.value, litellm.LlmProviders.MINIMAX.value})
 
 
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
@@ -838,7 +839,7 @@ def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
         return ()
 
 
-def _tokenhub_passthrough_edit_params(
+def _passthrough_edit_params(
     non_default_params: Mapping[str, object],
     extra_body: Mapping[str, object] | None,
     mapped_params: Collection[str],
@@ -1092,13 +1093,13 @@ def image_edit(
             image_edit_optional_request_params={
                 **image_edit_request_params,
                 **(
-                    _tokenhub_passthrough_edit_params(
+                    _passthrough_edit_params(
                         non_default_params,
                         extra_body if isinstance(extra_body, dict) else None,
                         provider_supported_params,
                         additional_drop_params,
                     )
-                    if custom_llm_provider == litellm.LlmProviders.TENCENT.value
+                    if custom_llm_provider in _PASSTHROUGH_EDIT_PROVIDERS
                     else {}
                 ),
             },
