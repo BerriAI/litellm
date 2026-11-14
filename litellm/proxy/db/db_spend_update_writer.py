@@ -566,6 +566,7 @@ class DBSpendUpdateWriter:
                 hashed_token = token
 
             ## CREATE SPEND LOG PAYLOAD ##
+            from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
             from litellm.proxy.spend_tracking.spend_tracking_utils import (
                 get_logging_payload,
                 get_request_model_access_groups,
@@ -578,6 +579,7 @@ class DBSpendUpdateWriter:
                 start_time=start_time,
                 end_time=end_time,
                 llm_router=llm_router,
+                agent_names=global_agent_registry,
             )
             payload["spend"] = response_cost or 0.0
             if isinstance(payload["startTime"], datetime):

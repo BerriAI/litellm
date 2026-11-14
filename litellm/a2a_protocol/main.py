@@ -217,7 +217,7 @@ def _get_a2a_model_info(
     Sets model info on the litellm_logging_obj if available.
     Returns the logged agent name, agent_name when given, else the remote agent card's name.
     """
-    logged_agent_name: Final = agent_name or _get_a2a_agent_card_name(a2a_client)
+    logged_agent_name: Final = agent_name if agent_name is not None else _get_a2a_agent_card_name(a2a_client)
 
     # Build model string
     model: Final = f"a2a_agent/{logged_agent_name}"
