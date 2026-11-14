@@ -31,6 +31,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import (
     CallerCredentialAuthenticationError,
+    DeploymentCredentialAuthenticationError,
     MalformedRequestFieldError,
     validate_rate_limit_category,
     validate_rate_limit_type,
@@ -555,7 +556,11 @@ def _is_deployment_failure(exception: openai.APIError, logged_call: Mapping[str,
     return not (
         isinstance(exception, CallerCredentialAuthenticationError)
         or bool(logged_call.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL))
-        or (logged_call.get("api_call_start_time") is None and not caused_by_entra_rejection(exception))
+        or (
+            logged_call.get("api_call_start_time") is None
+            and not isinstance(exception, DeploymentCredentialAuthenticationError)
+            and not caused_by_entra_rejection(exception)
+        )
         or _used_a_caller_credential(logged_call)
     )
 

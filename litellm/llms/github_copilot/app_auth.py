@@ -13,7 +13,12 @@ from typing import Final, NoReturn, cast  # noqa: TID251  # runtime Mapping keys
 import httpx
 from pydantic import AwareDatetime, BaseModel, ConfigDict, SecretStr, ValidationError
 
-from litellm.exceptions import AuthenticationError, BadRequestError, RateLimitError, ServiceUnavailableError
+from litellm.exceptions import (
+    BadRequestError,
+    DeploymentCredentialAuthenticationError,
+    RateLimitError,
+    ServiceUnavailableError,
+)
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.secret_managers.main import get_secret_str
@@ -171,7 +176,7 @@ def _raise_failure(failure: _Failure, now: float) -> NoReturn:
             headers={"retry-after": str(max(1, math.ceil(failure.deadline - now)))},
         )
     if failure.status in (401, 403, 404):
-        raise AuthenticationError(message=failure.message, llm_provider="github_copilot", model="")
+        raise DeploymentCredentialAuthenticationError(message=failure.message, llm_provider="github_copilot", model="")
     if failure.status == 422:
         raise BadRequestError(message=failure.message, llm_provider="github_copilot", model="")
     raise ServiceUnavailableError(message=failure.message, llm_provider="github_copilot", model="")
