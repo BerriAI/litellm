@@ -405,6 +405,7 @@ def sanitize_for_log(value: object) -> str:
     return _sanitize_for_log(value)
 
 
+from litellm.litellm_core_utils.pricing_currency import PRICING_SNAPSHOT
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
@@ -420,6 +421,7 @@ from litellm.types.utils import (
     OTEL_DESTINATION_VARS,
     CustomPricingLiteLLMParams,
     LlmProviders,
+    PricingCurrencyParams,
     ProviderSpecificHeader,
     StandardCallbackDynamicParams,
     StandardLoggingUserAPIKeyMetadata,
@@ -613,10 +615,14 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_mess
 # reach the call path. Built from the Pydantic model so newly-added pricing
 # fields are covered automatically. ``base_model`` selects which cost-map entry
 # prices the row, so a caller naming a cheaper model lowers their own spend.
-_CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys()) | {"base_model"}
+_CLIENT_PRICING_CONTROL_FIELDS: Final = (
+    frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+    | frozenset(PricingCurrencyParams.model_fields)
+    | {"base_model"}
+)
 # ``model_info`` carries the same pricing fields when read by
 # ``use_custom_pricing_for_model``; strip from metadata for the same reason.
-_CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
+_CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", PRICING_SNAPSHOT})
 # ``attempted_fallbacks`` and ``original_model_group`` are written by the router
 # and read by spend logs as fact; a client value has no legitimate meaning and no
 # key or team setting keeps it, so the strip is never gated.

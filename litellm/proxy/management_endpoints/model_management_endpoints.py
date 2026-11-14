@@ -33,6 +33,14 @@ from litellm.constants import LITELLM_PROXY_ADMIN_NAME, TEAM_DELETE_TRANSACTION_
 from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.pricing_currency import (
+    PRICING_CURRENCY,
+    USD_PER_CURRENCY_UNIT,
+    configures_pricing_currency,
+    pricing_configuration_error,
+    source_currency_view,
+    without_pricing_projection,
+)
 from litellm.litellm_core_utils.ptu_pricing import (
     CUSTOM_PRICING_FIELDS,
     PTU_EMPTIED_PRICING_FIELDS,
@@ -219,7 +227,9 @@ class KubernetesPodsResponse(BaseModel):
     error: str | None
 
 
-CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points", "litellm_credential_name"})
+CLEARABLE_LITELLM_PARAMS: Final = frozenset(
+    {"cache_control_injection_points", "litellm_credential_name", PRICING_CURRENCY, USD_PER_CURRENCY_UNIT}
+)
 NULL_CLEARABLE_LITELLM_PARAMS: Final = frozenset((*SPECIAL_MODEL_INFO_PARAMS, *CLEARABLE_LITELLM_PARAMS))
 _STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
 
@@ -1516,9 +1526,12 @@ def update_db_model(
     if updated_patch.model_info is not None:
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
-    stored_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True, exclude_unset=True)
+    stored_litellm_params, configured_model_info = source_currency_view(
+        db_model.litellm_params.model_dump(exclude_none=True, exclude_unset=True),
+        _dump_without_none(db_model.model_info),
+    )
     merged_litellm_params: Final = dict(stored_litellm_params)
-    stored_model_info: Final = _dump_without_none(db_model.model_info)
+    stored_model_info: Final = dict(without_pricing_projection(configured_model_info))
     echoed_pricing: Final = echoed_cost_map_pricing_fields(stored_model_info)
     merged_model_info: Final[dict[str, object]] = {
         k: v for k, v in stored_model_info.items() if k not in echoed_pricing
@@ -1537,7 +1550,9 @@ def update_db_model(
 
     # update model info
     if updated_patch.model_info:
-        incoming_model_info: Final = updated_patch.model_info.model_dump(exclude_none=True)
+        incoming_model_info: Final = dict(
+            without_pricing_projection(updated_patch.model_info.model_dump(exclude_none=True))
+        )
         listed_row: Final = _ListedRow(listed_name or updated_patch.model_name, llm_router, caller_aliases)
         echoed_fields: Final = echoed_cost_map_fields(
             incoming_model_info,
@@ -1545,7 +1560,11 @@ def update_db_model(
             _routed_cost_map_entry(db_model, listed_row),
             _loaded_catalog_entry(incoming_model_info, loaded_catalog),
         )
-        stored_model_info_fields: Final[Mapping[str, object]] = without_server_derived_pricing(incoming_model_info)
+        stored_model_info_fields: Final[Mapping[str, object]] = (
+            incoming_model_info
+            if configures_pricing_currency(merged_litellm_params, {**stored_model_info, **incoming_model_info})
+            else without_server_derived_pricing(incoming_model_info)
+        )
         merged_model_info.update(
             MappingProxyType(dict((k, v) for k, v in stored_model_info_fields.items() if k not in echoed_fields))
         )
@@ -1589,6 +1608,9 @@ def update_db_model(
             merged_model_info.pop(field, None)
 
     _validate_ptu_model_info(merged_model_info)
+    pricing_error: Final = pricing_configuration_error(merged_litellm_params, merged_model_info)
+    if pricing_error is not None:
+        raise HTTPException(status_code=400, detail={"error": pricing_error})
     ptu_pricing, ptu_released = _ptu_pricing_delta(
         stored_model_info=db_model.model_info.model_dump(exclude_none=True)
         if db_model.model_info
@@ -3249,9 +3271,26 @@ async def add_new_model(
             written_params=_written_routing_params(model_params.litellm_params, None),
         )
 
-        clean_model_info: Final = ModelInfo.model_validate(
-            dict(without_server_derived_pricing(model_params.model_info.model_dump(exclude_none=True)))
+        configured_params, configured_info = source_currency_view(
+            model_params.litellm_params.model_dump(exclude_none=True),
+            model_params.model_info.model_dump(exclude_none=True),
         )
+        configured_model_info: Final = without_pricing_projection(configured_info)
+        clean_model_info: Final = ModelInfo.model_validate(
+            dict(
+                configured_model_info
+                if configures_pricing_currency(configured_params, configured_model_info)
+                else without_server_derived_pricing(configured_model_info)
+            )
+        )
+        pricing_error: Final = pricing_configuration_error(
+            configured_params, clean_model_info.model_dump(exclude_none=True)
+        )
+        if pricing_error is not None:
+            raise HTTPException(status_code=400, detail={"error": pricing_error})
+        model_params.litellm_params = LiteLLM_Params.model_validate(
+            dict(configured_params)
+        )  # rebind-ok: stored as typed
         model_params.model_info = (  # rebind-ok: downstream team-model handling mutates this same object
             clean_model_info.model_copy(update=MappingProxyType({"member_auto_router": True}))
             if member_write is not None

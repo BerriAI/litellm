@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, without
 from litellm.litellm_core_utils.get_litellm_params import SUPPLEMENTAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, inferred_provider
+from litellm.litellm_core_utils.pricing_currency import PRICING_SNAPSHOT
 from litellm.litellm_core_utils.request_timeout_resolver import get_service_tier_timeout
 from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, metadata_defaults_under_request
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
@@ -395,6 +396,20 @@ def _clientside_deployment(
 # --- the deployment --------------------------------------------------------------------------
 
 
+def _stamp_pricing_snapshot(
+    metadata: MutableMapping[str, object],  # mutable-ok: the request's metadata bucket, shaped in place
+    deployment: Mapping[str, object],
+) -> None:
+    from litellm.router_python_host import PythonHost
+    from litellm.router_rust.surface.registry import selected_pricing_snapshot
+
+    snapshot: Final = selected_pricing_snapshot(PythonHost(), deployment)
+    if snapshot is None:
+        metadata.pop(PRICING_SNAPSHOT, None)
+    else:
+        metadata[PRICING_SNAPSHOT] = snapshot
+
+
 def update_kwargs_with_deployment(
     shaping: Shaping,
     deployment: Mapping[str, object],
@@ -458,6 +473,7 @@ def update_kwargs_with_deployment(
             KUBERNETES_POD_ROUTING_KEY: routing,
         }
     )
+    _stamp_pricing_snapshot(metadata, deployment)
     other_bucket: Final = "metadata" if metadata_variable_name == "litellm_metadata" else "litellm_metadata"
     other_bucket_metadata: Final = kwargs.get(other_bucket)
     if isinstance(other_bucket_metadata, Mapping) and KUBERNETES_POD_ROUTING_KEY in other_bucket_metadata:

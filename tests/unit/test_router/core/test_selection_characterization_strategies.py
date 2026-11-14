@@ -226,6 +226,33 @@ async def test_a_cost_based_request_override_picks_the_cheapest(make_core: MakeC
 
 
 @pytest.mark.asyncio
+async def test_cost_based_routing_compares_currency_priced_deployments_in_usd(make_core: MakeCore) -> None:
+    core: Final = make_core(
+        model_list=[
+            deployment(
+                "g",
+                "eur",
+                pricing_currency="EUR",
+                usd_per_currency_unit="1.25",
+                input_cost_per_token=1.8e-06,
+                output_cost_per_token=1.8e-06,
+            ),
+            deployment("g", "usd", input_cost_per_token=2e-06, output_cost_per_token=2e-06),
+            deployment(
+                "g",
+                "huf",
+                pricing_currency="HUF",
+                usd_per_currency_unit="0.0025",
+                input_cost_per_token=0.00096,
+                output_cost_per_token=0.00096,
+            ),
+        ],
+        routing_strategy="cost-based-routing",
+    )
+    assert await picked_ids(core, "g", messages=MESSAGES) == {"usd"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("override", ["bogus", "lar1", "provider-budget-routing", 5])
 async def test_an_unsupported_request_routing_strategy_is_ignored(make_core: MakeCore, override: object) -> None:
     core: Final = make_core(model_list=_two())

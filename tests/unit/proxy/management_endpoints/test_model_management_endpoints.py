@@ -11678,3 +11678,111 @@ async def test_rename_rewrites_only_in_a_transaction_holding_every_locked_teams_
     assert len(rewrites) == 1
     advisory = [params[0] for sql, params in rewrites[0] if "pg_advisory_xact_lock" in sql]
     assert advisory == ["team-1", "team-2"]
+
+
+def _huf_db_model() -> Deployment:
+    return Deployment(
+        model_name="huf-model",
+        litellm_params=LiteLLM_Params.model_validate(
+            {
+                "model": "openai/huf-currency-demo",
+                "pricing_currency": "HUF",
+                "usd_per_currency_unit": "0.0025",
+                "input_cost_per_token": 0.0008,
+            }
+        ),
+        model_info=ModelInfo(id="huf-model", output_cost_per_second=400),
+    )
+
+
+def _stored(result: Mapping[str, object]) -> tuple[dict[str, object], dict[str, object]]:  # mutable-ok: parsed JSON
+    params = result["litellm_params"]
+    info = result["model_info"]
+    assert isinstance(params, str) and isinstance(info, str)
+    return json.loads(params), json.loads(info)
+
+
+def test_an_unrelated_edit_to_a_currency_priced_model_stores_the_prices_as_configured():
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    params, info = _stored(
+        update_db_model(
+            db_model=_huf_db_model(), updated_patch=updateDeployment.model_validate({"litellm_params": {"rpm": 7}})
+        )
+    )
+
+    assert (params["input_cost_per_token"], params["pricing_currency"], params["usd_per_currency_unit"]) == (
+        0.0008,
+        "HUF",
+        "0.0025",
+    )
+    assert params["rpm"] == 7
+    assert info["output_cost_per_second"] == 400
+    assert "pricing_source" not in info and "usd_pricing" not in info
+
+
+def test_a_price_edit_on_a_currency_priced_model_is_read_in_its_currency_and_echoed_projection_is_dropped():
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    params, info = _stored(
+        update_db_model(
+            db_model=_huf_db_model(),
+            updated_patch=updateDeployment.model_validate(
+                {
+                    "litellm_params": {"input_cost_per_token": 0.0012},
+                    "model_info": {
+                        "output_cost_per_second": 800,
+                        "pricing_source": {"currency": "EUR", "usd_per_currency_unit": "9"},
+                        "usd_pricing": {"input_cost_per_token": 1.0},
+                    },
+                }
+            ),
+        )
+    )
+
+    rebuilt: Final = Deployment(model_name="huf-model", litellm_params=params, model_info=info)  # pyright: ignore[reportArgumentType]  # a stored row
+    assert rebuilt.litellm_params.input_cost_per_token == pytest.approx(0.0012 * 0.0025, rel=1e-15)
+    assert rebuilt.model_info["output_cost_per_second"] == 2.0
+    assert "usd_pricing" not in info and info.get("pricing_source") is None
+
+
+@pytest.mark.parametrize(
+    "patch_params",
+    [
+        {"usd_per_currency_unit": 0},
+        {"pricing_currency": "GBP"},
+        {"input_cost_per_token": -1.0},
+        {"usd_per_currency_unit": "1e999999", "input_cost_per_token": 10},
+    ],
+)
+def test_an_invalid_currency_edit_is_refused_with_a_400(patch_params: dict[str, object]):
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    with pytest.raises(HTTPException) as raised:
+        update_db_model(
+            db_model=_huf_db_model(), updated_patch=updateDeployment.model_validate({"litellm_params": patch_params})
+        )
+    assert raised.value.status_code == 400
+
+
+def test_switching_a_model_back_to_usd_clears_the_rate():
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    params, _ = _stored(
+        update_db_model(
+            db_model=_huf_db_model(),
+            updated_patch=updateDeployment.model_validate(
+                {
+                    "litellm_params": {
+                        "pricing_currency": "USD",
+                        "usd_per_currency_unit": None,
+                        "input_cost_per_token": 2e-6,
+                    }
+                }
+            ),
+        )
+    )
+
+    assert "usd_per_currency_unit" not in params
+    rebuilt: Final = Deployment(model_name="huf-model", litellm_params=params)  # pyright: ignore[reportArgumentType]  # a stored row
+    assert rebuilt.litellm_params.input_cost_per_token == 2e-6

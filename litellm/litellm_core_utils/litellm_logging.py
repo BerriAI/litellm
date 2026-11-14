@@ -179,6 +179,7 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages_async,
 )
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+from litellm.litellm_core_utils.pricing_currency import pricing_source_of, routed_pricing_snapshot
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
@@ -2385,6 +2386,13 @@ class Logging(LiteLLMLoggingBaseClass):
             self.cost_breakdown["margin_fixed_amount"] = margin_fixed_amount
         if margin_total_amount is not None:
             self.cost_breakdown["margin_total_amount"] = margin_total_amount
+        pricing_source: Final = pricing_source_of(_deployment_model_info(getattr(self, "litellm_params", None)))
+        if pricing_source is not None:
+            self.cost_breakdown = self.cost_breakdown | CostBreakdown(
+                pricing_currency=pricing_source.currency.value,
+                usd_per_currency_unit=pricing_source.usd_per_currency_unit,
+                pricing_revision=pricing_source.revision,
+            )
 
     def response_cost_calculator(
         self,
@@ -2487,7 +2495,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "custom_pricing": custom_pricing,
                 "custom_cost_per_token": self.custom_cost_per_token if custom_pricing else None,
                 "custom_cost_per_second": self.custom_cost_per_second if custom_pricing else None,
-                "requested_model_info_override": self.custom_model_info if custom_pricing else None,
+                "requested_model_info_override": self.call_model_info() if custom_pricing else None,
                 "prompt": prompt,
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
@@ -2683,8 +2691,9 @@ class Logging(LiteLLMLoggingBaseClass):
         if usage is None or self.model_call_details.get("response_cost_failure_debug_information") is not None:
             return False
         custom_pricing: Final = self.custom_pricing_for(result)
-        if custom_pricing and self.custom_model_info is not None:
-            return is_explicitly_free_usage(usage, self.custom_model_info)
+        call_model_info: Final = self.call_model_info() if custom_pricing else None
+        if call_model_info is not None:
+            return is_explicitly_free_usage(usage, call_model_info)
         if custom_pricing and self.custom_cost_per_token is not None:
             return is_explicitly_free_usage(usage, self.custom_cost_per_token)
         custom_llm_provider: Final = self.model_call_details.get("custom_llm_provider")
@@ -2721,6 +2730,13 @@ class Logging(LiteLLMLoggingBaseClass):
     def set_per_call_pricing(self, custom_model_info: ModelInfo | None) -> None:
         """Price this call from its own full price entry instead of ``litellm.model_cost``."""
         self.custom_model_info = custom_model_info
+
+    def call_model_info(self) -> ModelInfo | None:
+        """The call's own price entry, else the one captured when its currency-priced deployment was selected."""
+        if self.custom_model_info is not None:
+            return self.custom_model_info
+        routed: Final = routed_pricing_snapshot(getattr(self, "litellm_params", None))
+        return cast(ModelInfo, routed) if routed is not None else None  # cast-ok: the deployment's registered entry
 
     def custom_pricing_for(self, result: object) -> bool:
         if self.spilled_over_ptu_for(result):
@@ -8661,7 +8677,7 @@ def get_standard_logging_object_payload(
             init_response_obj=init_response_obj,
             api_base=litellm_params.get("api_base"),
             router_model_id=logging_obj.get_router_model_id(),
-            custom_model_info=logging_obj.custom_model_info if custom_pricing else None,
+            custom_model_info=logging_obj.call_model_info() if custom_pricing else None,
         )
 
         error_information, error_str = StandardLoggingPayloadSetup.get_error_information_for_logging_payload(

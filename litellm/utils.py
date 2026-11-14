@@ -127,6 +127,7 @@ from litellm.litellm_core_utils.model_cost_table import (
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
+from litellm.litellm_core_utils.pricing_currency import request_pricing_currency_error
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.litellm_core_utils.tool_fields import (
@@ -1301,6 +1302,12 @@ def _ocr_document_summary(document: object) -> str:
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 
 
+def _raise_on_request_pricing_currency(kwargs: Mapping[str, object]) -> None:
+    pricing_currency_error: Final = request_pricing_currency_error(kwargs)
+    if pricing_currency_error is not None:
+        raise ValueError(pricing_currency_error)
+
+
 def function_setup(
     original_function: str,
     rules_obj: Rules,
@@ -2291,6 +2298,7 @@ def client(original_function):
             kwargs["litellm_call_id"] = str(uuid.uuid4())
 
         model: Final[str | None] = args[0] if len(args) > 0 else kwargs.get("model", None)
+        _raise_on_request_pricing_currency(kwargs)
 
         try:
             if logging_obj is None:
@@ -2562,6 +2570,7 @@ def client(original_function):
         kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
         _is_litellm_internal_call: Final = is_internal_call.get()
         _deployment_call_end_time: datetime.datetime | None = None
+        _raise_on_request_pricing_currency(kwargs)
 
         try:
             if logging_obj is None:

@@ -64,6 +64,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     select_cost_metric_for_model,
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
+from litellm.litellm_core_utils.pricing_currency import routed_pricing_snapshot
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
@@ -2716,12 +2717,22 @@ def _deployment_model_info(
 ) -> ModelInfo | None:
     if not custom_pricing:
         return None
+    routed_snapshot: Final = routed_pricing_snapshot(
+        litellm_logging_obj.litellm_params if litellm_logging_obj is not None else None
+    )
+    if routed_snapshot is not None:
+        return cast(ModelInfo, routed_snapshot)  # cast-ok: the entry captured when the deployment was selected
+    stamped_model_info: Final = _stamped_deployment_model_info(litellm_logging_obj)
     registered_deployment_info: Final = _raw_cost_map_entry(router_model_id) if router_model_id is not None else None
     if registered_deployment_info is not None:
         return cast(ModelInfo, registered_deployment_info)  # cast-ok: router registers deployment prices under its id
-    if litellm_logging_obj is None:
+    if stamped_model_info is None:
         return None
-    litellm_params: Final = litellm_logging_obj.litellm_params
+    return cast(ModelInfo, stamped_model_info)  # cast-ok: the model_info the router stamped on the call
+
+
+def _stamped_deployment_model_info(litellm_logging_obj: LitellmLoggingObject | None) -> Mapping[str, object] | None:
+    litellm_params: Final = litellm_logging_obj.litellm_params if litellm_logging_obj is not None else None
     if not litellm_params:
         return None
     return next(

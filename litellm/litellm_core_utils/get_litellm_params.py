@@ -9,7 +9,7 @@ from litellm.constants import CONTROL_OPTIONS_KEY, SESSION_ID_FROM_TRACE_ID_PARA
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.litellm_params import MAX_CONTROL_INT_DIGITS, ControlOptions
-from litellm.types.router import CustomPricingLiteLLMParams
+from litellm.types.router import CustomPricingLiteLLMParams, PricingCurrencyParams
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
@@ -106,6 +106,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
     | OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS
     | AGENTIC_LOOP_CONTROL_KWARGS_KEYS
     | frozenset(CustomPricingLiteLLMParams.model_fields)
+    | frozenset(PricingCurrencyParams.model_fields)
 )
 
 # Backward-compatible alias for existing imports/tests.

@@ -72,6 +72,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
+from litellm.litellm_core_utils.pricing_currency import frozen_pricing_snapshot, pricing_source_of
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     declares_ptu,
@@ -566,6 +567,24 @@ def register_deployment_pricing(host: "PythonHost", deployment: Deployment) -> N
         custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         pricing_provider=deployment.model_info.pricing_provider,
     )
+
+
+def selected_pricing_snapshot(host: "PythonHost", deployment: Mapping[str, object]) -> str | None:
+    """The full price entry of a currency-priced deployment the router just selected, frozen for the call. The
+    registered entry is used while it is still that deployment's revision; once an edit registered a newer one, the
+    selected record's own entry is rebuilt, so the call never bills at prices it was not routed under."""
+    model_info: Final = _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
+    source: Final = pricing_source_of(model_info)
+    model_id: Final = model_info.get("id")
+    if source is None or not isinstance(model_id, str):
+        return None
+    registered: Final[object] = host.dynamic().model_cost.get(model_id)
+    registered_entry: Final = _MODEL_INFO_ADAPTER.validate_python(registered) if isinstance(registered, dict) else None
+    registered_source: Final = pricing_source_of(registered_entry)
+    if registered_entry is not None and registered_source is not None and registered_source.revision == source.revision:
+        return frozen_pricing_snapshot(registered_entry)
+    selected: Final = Deployment(**deployment)  # pyright: ignore[reportArgumentType]  # a router record
+    return frozen_pricing_snapshot(deployment_model_cost_payload(host, selected))
 
 
 def _entry_section(entry: Mapping[str, object], section: str) -> Mapping[str, object]:

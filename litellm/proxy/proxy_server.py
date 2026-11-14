@@ -115,6 +115,12 @@ from litellm.litellm_core_utils.litellm_logging import (
     initialize_sentry,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
+from litellm.litellm_core_utils.pricing_currency import (
+    PRICING_PROJECTION_KEYS,
+    pricing_configuration_error,
+    source_currency_view,
+    without_pricing_projection,
+)
 from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
     ChatTemplateToolSection,
     chat_template_tool_choice_tokens,
@@ -1544,6 +1550,7 @@ class _WebsearchInterceptionLitellmSettings(TypedDict, total=False):
 
 
 _LOGIN_REQUEST_BODY: Final = TypeAdapter(_LoginRequestBody)
+_CONFIG_SECTION: Final = TypeAdapter(Mapping[str, object])
 _LOGIN_EXCHANGE_REQUEST_BODY: Final = TypeAdapter(_LoginExchangeRequestBody)
 _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeadersReloadConfig)
 _LITELLM_PARAMS_COPY: Final = TypeAdapter(dict[str, object])
@@ -5768,6 +5775,22 @@ def validate_deployment_complexity_router_placement(model: Mapping[str, object])
         raise ValueError(f"model {model.get('model_name', '')!r}: {violation}")
 
 
+def validate_deployment_pricing_currency(
+    model: MutableMapping[str, object],  # mutable-ok: the config entry, normalized in place like its other fields
+) -> None:
+    """Drop a currency record the config file carries, since only a deployment build writes one, and refuse a
+    currency setting the deployment build would reject, naming the model."""
+    configured_info: Final = model.get("model_info")
+    if isinstance(configured_info, dict):
+        model["model_info"] = dict(without_pricing_projection(configured_info))
+    pricing_error: Final = pricing_configuration_error(
+        _CONFIG_SECTION.validate_python(model.get("litellm_params") or {}),
+        _CONFIG_SECTION.validate_python(model.get("model_info") or {}),
+    )
+    if pricing_error is not None:
+        raise ValueError(f"Invalid pricing for model '{model.get('model_name', '')}': {pricing_error}")
+
+
 def validate_deployment_access_windows(model: Mapping[str, object]) -> None:
     """
     Reject a malformed `model_info.access_windows` instead of silently dropping the deployment.
@@ -7766,6 +7789,7 @@ class ProxyConfig:
                 validate_deployment_max_agentic_loops(model)
                 validate_deployment_complexity_router_placement(model)
                 validate_deployment_access_windows(model)
+                validate_deployment_pricing_currency(model)
                 pin_complexity_router_model_id(model)
                 complexity_router_config = model["litellm_params"].get("complexity_router_config")
                 if isinstance(complexity_router_config, dict):
@@ -8135,7 +8159,13 @@ class ProxyConfig:
             if echoed_pricing:
                 _log_ignored_cost_map_copy(str(model.model_info["id"]), echoed_pricing)
             _model_info = RouterModelInfo(
-                **MappingProxyType({k: v for k, v in model.model_info.items() if k not in echoed_pricing})
+                **MappingProxyType(
+                    {
+                        k: v
+                        for k, v in model.model_info.items()
+                        if k not in echoed_pricing and k not in PRICING_PROJECTION_KEYS
+                    }
+                )
             )
 
         else:
@@ -17282,8 +17312,12 @@ def _enrich_model_info_with_litellm_data(
     Returns:
         Enriched model dictionary with sensitive info removed
     """
-    # provided model_info in config.yaml
-    model_info: Final = model.get("model_info", {})
+    configured_params, configured_info = source_currency_view(
+        model.get("litellm_params") or {}, model.get("model_info") or {}
+    )
+    model["litellm_params"] = dict(configured_params)
+    model["model_info"] = dict(configured_info)
+    model_info: Final = model["model_info"]
     if debug is True:
         _openai_client = "None"
         if llm_router is not None:

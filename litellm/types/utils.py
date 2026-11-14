@@ -48,10 +48,14 @@ from pydantic import (
     JsonValue,
     PrivateAttr,
     SkipValidation,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
     TypeAdapter,
     ValidationError,
     field_serializer,
     field_validator,
+    model_validator,
 )
 from pydantic.main import IncEx
 from pydantic_core import core_schema
@@ -3883,6 +3887,9 @@ class CostBreakdown(TypedDict, total=False):
     margin_percent: float  # Margin percentage applied (e.g., 0.10 = 10%) (optional)
     margin_fixed_amount: float  # Fixed margin amount in USD (optional)
     margin_total_amount: float  # Total margin added in USD (optional)
+    pricing_currency: ReadOnly[str]
+    usd_per_currency_unit: ReadOnly[str]
+    pricing_revision: ReadOnly[str]
 
 
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):
@@ -4407,6 +4414,44 @@ SERVER_DERIVED_PRICING_FIELDS: Final[frozenset[str]] = (
     frozenset(CustomPricingLiteLLMParams.model_fields) - _PRICING_FIELD_EXEMPTIONS
 )
 
+NON_MONETARY_PRICING_FIELDS: Final = frozenset(
+    {
+        "regional_processing_uplift_multiplier_eu",
+        "regional_processing_uplift_multiplier_us",
+        "fedramp_uplift_multiplier",
+        "regional_endpoint_uplift_multiplier",
+    }
+)
+MONETARY_PRICING_FIELDS: Final[frozenset[str]] = (
+    (SERVER_DERIVED_PRICING_FIELDS - NON_MONETARY_PRICING_FIELDS)
+    | DEPLOYMENT_SCOPED_PRICING_FIELDS
+    | {"cost_per_ptu_per_hour"}
+)
+_PRICING_CURRENCY_SETTINGS: Final = ("pricing_currency", "usd_per_currency_unit")
+_RAW_SECTION: Final = TypeAdapter(Mapping[str, object])
+
+
+class PricingCurrencyParams(LiteLLMBaseModel):
+    pricing_currency: StrictStr | None = None
+    usd_per_currency_unit: StrictFloat | StrictInt | StrictStr | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _numeric_prices_with_currency(cls, data: object) -> object:
+        """A float field reads ``true`` as 1.0, so a boolean price in a currency-priced section is refused here,
+        before validation hides it."""
+        if not isinstance(data, dict):
+            return data
+        section: Final = _RAW_SECTION.validate_python(data)
+        if all(section.get(setting) is None for setting in _PRICING_CURRENCY_SETTINGS):
+            return data
+        booleans: Final = sorted(
+            field for field, value in section.items() if isinstance(value, bool) and field in MONETARY_PRICING_FIELDS
+        )
+        if booleans:
+            raise ValueError(f"prices must be numbers, got a boolean for {', '.join(booleans)}")
+        return data
+
 
 def is_server_derived_pricing_key(key: str) -> bool:
     """Whether ``/model/info`` can fill ``key`` into ``model_info`` from the cost map.
@@ -4621,6 +4666,7 @@ all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-
     *KWARG_ARTIFACTS,
     *StandardCallbackDynamicParams.__annotations__,
     *CustomPricingLiteLLMParams.model_fields,
+    *PricingCurrencyParams.model_fields,
 ]
 
 

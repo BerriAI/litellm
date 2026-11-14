@@ -45,6 +45,11 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.pricing_currency import (
+    PricingCurrencyError,
+    needs_pricing_normalization,
+    normalize_deployment_pricing,
+)
 from litellm.litellm_core_utils.provider_affinity import validate_provider_affinity_header_name
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
@@ -73,6 +78,7 @@ from .utils import (
     CustomPricingLiteLLMParams,
     MirroredPricingParams,
     ModelResponse,
+    PricingCurrencyParams,
     StandardLoggingRoutingDecision,
 )
 from .utils import (
@@ -295,7 +301,7 @@ def _whole_float_as_int(value: object) -> object:
     return int(value) if isinstance(value, float) and value.is_integer() else value
 
 
-class ModelInfo(MirroredPricingParams):
+class ModelInfo(MirroredPricingParams, PricingCurrencyParams):
     enforce_supported_endpoints: bool | None = None
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
@@ -593,7 +599,7 @@ def parse_daily_reset_time(value: str | None) -> datetime.timedelta:
     return datetime.timedelta(hours=parsed.hour, minutes=parsed.minute)
 
 
-class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
+class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams, PricingCurrencyParams):
     """
     LiteLLM Params without 'model' arg (used across completion / assistants api)
     """
@@ -915,6 +921,24 @@ class DeploymentTypedDict(TypedDict, total=False):
 SPECIAL_MODEL_INFO_PARAMS = tuple(MirroredPricingParams.model_fields)
 
 
+def _usd_priced(
+    litellm_params: "LiteLLM_Params | Mapping[str, object]", model_info: "ModelInfo"
+) -> "tuple[LiteLLM_Params | Mapping[str, object], ModelInfo]":
+    params: Final[Mapping[str, object]] = dict(litellm_params)
+    info: Final[Mapping[str, object]] = dict(model_info)
+    if not needs_pricing_normalization(params, info):
+        return litellm_params, model_info
+    normalized: Final = normalize_deployment_pricing(params, info)
+    if isinstance(normalized, PricingCurrencyError):
+        raise ValueError(normalized.message)
+    return (
+        litellm_params
+        if normalized.litellm_params is params
+        else LiteLLM_Params.model_validate(dict(normalized.litellm_params)),
+        model_info if normalized.model_info is info else ModelInfo.model_validate(dict(normalized.model_info)),
+    )
+
+
 class Deployment(LiteLLMBaseModel):
     model_name: str
     litellm_params: LiteLLM_Params
@@ -936,6 +960,7 @@ class Deployment(LiteLLMBaseModel):
             model_info = ModelInfo()
         elif isinstance(model_info, dict):
             model_info = ModelInfo(**model_info)
+        litellm_params, model_info = _usd_priced(litellm_params, model_info)  # rebind-ok: the USD projection
 
         for key in SPECIAL_MODEL_INFO_PARAMS:  # ensures custom pricing info is consistently in 'model_info'
             field = getattr(litellm_params, key, None)

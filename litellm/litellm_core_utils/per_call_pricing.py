@@ -6,6 +6,7 @@ from typing import Final, Literal
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.pricing_currency import routed_pricing_snapshot
 from litellm.litellm_core_utils.ptu_pricing import zeroed_ptu_pricing
 from litellm.types.utils import CustomPricingLiteLLMParams, ModelInfo
 
@@ -35,7 +36,11 @@ def per_call_model_info(
     The entry travels on the logging object and is never written into ``litellm.model_cost``, so the next call for the
     same model name is priced from the cost map again."""
     deployment: Final = _router_deployment_model_info(kwargs)
-    registered: Final = litellm.model_cost.get(str(deployment["id"])) if deployment is not None else None
+    registered: Final = (
+        routed_pricing_snapshot(kwargs) or litellm.model_cost.get(str(deployment["id"]))
+        if deployment is not None
+        else None
+    )
     custom: Final = {
         field: kwargs[field]
         for field in CustomPricingLiteLLMParams.model_fields
