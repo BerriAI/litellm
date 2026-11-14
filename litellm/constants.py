@@ -2007,7 +2007,7 @@ APSCHEDULER_REPLACE_EXISTING: Final = os.getenv("APSCHEDULER_REPLACE_EXISTING", 
 DEFAULT_STAGGER_WINDOW_SECONDS: Final = 300
 
 # The number of tag entries are higher than number of user, team entries. This leads to a higher QPS.
-# This will run tag spcific tasks at a later time to smooth QPS
+# This will run tag specific tasks at a later time to smooth QPS
 DAILY_TAG_SPEND_BATCH_MULTIPLIER: Final = 2.3
 
 DEFAULT_HEALTH_CHECK_INTERVAL: Final = get_env_int("DEFAULT_HEALTH_CHECK_INTERVAL", 300)  # 5 minutes
