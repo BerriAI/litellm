@@ -125,7 +125,7 @@ class LowestCostLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                "litellm.router_strategy.lowest_cost.py::log_success_event(): Exception occured - %s", e
+                "litellm.router_strategy.lowest_cost.py::log_success_event(): Exception occurred - %s", e
             )
 
     @with_service_target(ROUTER_USAGE_TARGET)
