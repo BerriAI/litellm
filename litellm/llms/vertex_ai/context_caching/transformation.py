@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal
 
+from litellm.litellm_core_utils.prompt_templates.factory import convert_to_gemini_tool_call_invoke
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import CachedContentRequestBody
 from litellm.utils import is_cached_message
@@ -143,6 +144,19 @@ def cached_messages_end_on_supported_turn(cached_messages: Sequence[AllMessageVa
     return non_system_messages[-1].get("role") not in ("assistant", "tool", "function")
 
 
+def reject_unusable_tool_call_arguments(
+    cached_messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    drop_params: bool,
+) -> None:
+    if drop_params:
+        return
+    for message in cached_messages:
+        if message["role"] == "assistant":
+            convert_to_gemini_tool_call_invoke(message, model=model, custom_llm_provider=custom_llm_provider)
+
+
 def transform_openai_messages_to_gemini_context_caching(
     model: str,
     messages: list[AllMessageValues],
@@ -150,6 +164,7 @@ def transform_openai_messages_to_gemini_context_caching(
     cache_key: str,
     vertex_project: str | None,
     vertex_location: str | None,
+    drop_params: bool = False,
 ) -> CachedContentRequestBody:
     # Extract TTL from cached messages BEFORE system message transformation
     ttl: Final = extract_ttl_from_cached_messages(messages)
@@ -163,6 +178,7 @@ def transform_openai_messages_to_gemini_context_caching(
     transformed_messages: Final = gemini_convert_messages_with_history(
         messages=new_messages,
         model=model,
+        litellm_params={"drop_params": drop_params},
         custom_llm_provider=custom_llm_provider,
     )
 

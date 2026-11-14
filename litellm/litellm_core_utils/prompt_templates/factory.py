@@ -1215,23 +1215,40 @@ def infer_protocol_value(
     return "unknown"
 
 
+def _parsed_gemini_function_call(name: str, arguments: object) -> VertexFunctionCall:
+    text: Final = arguments.decode() if isinstance(arguments, (bytes, bytearray)) else arguments
+    if text == "":  # pass empty dict, if arguments is empty string - prevents call from failing
+        return VertexFunctionCall(name=name, args={"type": "object"})
+    if text is not None and not isinstance(text, str):
+        raise ValueError(f"Tool call arguments for tool '{name}' must be a JSON string, got {type(text).__name__}")
+    args: Final = _DECODED_JSON.validate_python(
+        parse_tool_call_arguments(text, tool_name=name, context="Gemini tool invoke")
+    )
+    mapping: Final = as_str_mapping(args)
+    if args is not None and mapping is None:
+        raise ValueError(f"Tool call arguments for tool '{name}' must be a JSON object, got {type(args).__name__}")
+    return VertexFunctionCall(name=name, args=None if mapping is None else dict(mapping))
+
+
+def _gemini_function_call(name: str, arguments: object, *, drop_params: bool) -> VertexFunctionCall:
+    try:
+        return _parsed_gemini_function_call(name, arguments)
+    except ValueError:
+        if not drop_params:
+            raise
+        return VertexFunctionCall(name=name, args={})
+
+
 def _gemini_tool_call_invoke_helper(
     function_call_params: ChatCompletionToolCallFunctionChunk,
     tool_call_id: str | None = None,
+    *,
+    drop_params: bool = False,
 ) -> VertexFunctionCall | None:
-    name: Final = function_call_params.get("name", "") or ""
-    arguments: Final = function_call_params.get("arguments", "")
-    if (
-        isinstance(arguments, str) and len(arguments) == 0
-    ):  # pass empty dict, if arguments is empty string - prevents call from failing
-        arguments_dict = {
-            "type": "object",
-        }
-    else:
-        arguments_dict = json.loads(arguments)
-    function_call: Final = VertexFunctionCall(
-        name=name,
-        args=arguments_dict,
+    function_call: Final = _gemini_function_call(
+        function_call_params.get("name", "") or "",
+        function_call_params.get("arguments", ""),
+        drop_params=drop_params,
     )
     if tool_call_id:
         clean_id: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
@@ -1357,6 +1374,8 @@ def convert_to_gemini_tool_call_invoke(
     message: ChatCompletionAssistantMessage,
     model: str | None = None,
     forward_function_call_id: bool = False,
+    custom_llm_provider: str | None = None,
+    drop_params: bool = False,
 ) -> list[VertexPartType]:
     """
     OpenAI tool invokes:
@@ -1414,6 +1433,7 @@ def convert_to_gemini_tool_call_invoke(
                     gemini_function_call: VertexFunctionCall | None = _gemini_tool_call_invoke_helper(
                         function_call_params=tool["function"],
                         tool_call_id=(tool.get("id") if forward_function_call_id else None),
+                        drop_params=drop_params,
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {"function_call": gemini_function_call}
@@ -1433,7 +1453,9 @@ def convert_to_gemini_tool_call_invoke(
                             f"function_call missing. Received tool call with 'type': 'function'. No function call in argument - {tool}"
                         )
         elif function_call is not None:
-            gemini_function_call = _gemini_tool_call_invoke_helper(function_call_params=function_call)
+            gemini_function_call = _gemini_tool_call_invoke_helper(
+                function_call_params=function_call, drop_params=drop_params
+            )
             if gemini_function_call is not None:
                 part_dict_function: Final[VertexPartType] = {"function_call": gemini_function_call}
 
@@ -1459,7 +1481,11 @@ def convert_to_gemini_tool_call_invoke(
                 )
         return _parts_list
     except Exception as e:
-        raise Exception(f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}")
+        raise litellm.BadRequestError(
+            message=f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}",
+            model=model or "",
+            llm_provider=custom_llm_provider or "vertex_ai",
+        ) from e
 
 
 def _json_children(node: object) -> Iterable[object]:

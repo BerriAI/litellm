@@ -485,3 +485,71 @@ def test_image_only_user_content_logs_the_blank_text_fixup_at_debug(caplog: pyte
     fixups: Final = tuple(r for r in caplog.records if "No text in user content" in r.getMessage())
     assert tuple(r.levelno for r in fixups) == (logging.DEBUG,)
     assert contents[0]["parts"][-1] == {"text": " "}
+
+
+@pytest.mark.parametrize("custom_llm_provider, expected_provider", [("gemini", "gemini"), (None, "vertex_ai")])
+def test_tool_call_conversion_error_names_the_calling_provider(
+    custom_llm_provider: str | None, expected_provider: str
+) -> None:
+    messages: Final = [
+        {"role": "user", "content": "weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": ["Boston"]}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+    ]
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        transformation.gemini_convert_messages_with_history(messages, custom_llm_provider=custom_llm_provider)
+
+    assert exc_info.value.llm_provider == expected_provider
+
+
+def test_tool_call_arguments_gemini_cannot_use_are_dropped_when_drop_params_is_set() -> None:
+    messages: Final = [
+        {"role": "user", "content": "weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": ["Boston"]}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+    ]
+
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        messages, litellm_params={"drop_params": True}, custom_llm_provider="gemini"
+    )
+
+    assert contents[1]["parts"] == [{"function_call": {"name": "get_weather", "args": {}}}]
+
+
+def test_gemini_completion_reports_a_tool_call_it_cannot_convert_as_a_gemini_bad_request() -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model="gemini/gemini-flash-latest",
+            api_key="test-key",
+            messages=[
+                {"role": "user", "content": "weather?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": {"location": "Boston"}},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            ],
+        )
+
+    assert exc_info.value.llm_provider == "gemini"
+    assert "must be a JSON string, got dict" in str(exc_info.value)

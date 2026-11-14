@@ -1,4 +1,5 @@
 import json
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2510,11 +2511,23 @@ def test_check_and_create_cache_clamps_negative_creation_tokens() -> None:
     assert logging_obj.vertex_ai_cache_creation_input_tokens == 0
 
 
-def _recording_gemini_client(calls: list[httpx.Request]) -> HTTPHandler:
+def _caches_created_so_far(calls: list[httpx.Request]) -> dict[str, list[dict[str, str]]]:
+    return {
+        "cachedContents": [
+            {"name": "cachedContents/created", "displayName": json.loads(call.content)["displayName"]}
+            for call in calls
+            if call.method == "POST" and call.url.path.endswith("/cachedContents")
+        ]
+    }
+
+
+def _recording_gemini_route(calls: list[httpx.Request]) -> Callable[[httpx.Request], httpx.Response]:
     def route(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         if request.url.path.endswith("/cachedContents"):
-            return httpx.Response(200, json={} if request.method == "GET" else _created_cache_body(3000))
+            return httpx.Response(
+                200, json=_caches_created_so_far(calls) if request.method == "GET" else _created_cache_body(3000)
+            )
         return httpx.Response(
             200,
             json={
@@ -2523,7 +2536,11 @@ def _recording_gemini_client(calls: list[httpx.Request]) -> HTTPHandler:
             },
         )
 
-    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(route)))
+    return route
+
+
+def _recording_gemini_client(calls: list[httpx.Request]) -> HTTPHandler:
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_recording_gemini_route(calls))))
 
 
 def test_a_plain_system_prompt_goes_into_the_gemini_cache_instead_of_beside_it(local_model_cost_map) -> None:
@@ -2551,3 +2568,73 @@ def test_a_plain_system_prompt_goes_into_the_gemini_cache_instead_of_beside_it(l
     assert created["system_instruction"] == {"parts": [{"text": "You are terse."}]}
     assert generated["cachedContent"] == "cachedContents/created"
     assert "system_instruction" not in generated
+
+
+def _cached_conversation_with_tool_arguments(arguments: str) -> list[Mapping[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "cached prefix " * 3000, "cache_control": {"type": "ephemeral"}}],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": arguments}}
+            ],
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "Sunny", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": [{"type": "text", "text": "Thanks.", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "user", "content": "Reply with OK only."},
+    ]
+
+
+async def _complete_sync(request: Mapping[str, object], calls: list[httpx.Request]) -> None:
+    litellm.completion(**request, client=_recording_gemini_client(calls))
+
+
+async def _complete_async(request: Mapping[str, object], calls: list[httpx.Request]) -> None:
+    await litellm.acompletion(
+        **request, client=AsyncHTTPHandler(transport=httpx.MockTransport(_recording_gemini_route(calls)))
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [_complete_sync, _complete_async])
+async def test_cache_creation_drops_tool_call_arguments_gemini_cannot_use_when_drop_params_is_set(
+    local_model_cost_map: None, complete: Callable[[Mapping[str, object], list[httpx.Request]], Awaitable[None]]
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    await complete(
+        {
+            "model": "gemini/gemini-flash-latest",
+            "messages": _cached_conversation_with_tool_arguments('["Boston"]'),
+            "api_key": "test-key",
+            "drop_params": True,
+        },
+        calls,
+    )
+
+    created: Final = next(
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    function_call: Final = created["contents"][1]["parts"][0]["function_call"]
+    assert (function_call["name"], function_call["args"]) == ("get_weather", {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [_complete_sync, _complete_async])
+async def test_a_strict_request_rejects_tool_call_arguments_even_when_a_lenient_request_cached_that_history(
+    local_model_cost_map: None, complete: Callable[[Mapping[str, object], list[httpx.Request]], Awaitable[None]]
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    request: Final = {
+        "model": "gemini/gemini-flash-latest",
+        "messages": _cached_conversation_with_tool_arguments('["Boston"]'),
+        "api_key": "test-key",
+    }
+    await complete({**request, "drop_params": True}, calls)
+
+    with pytest.raises(litellm.BadRequestError, match="get_weather"):
+        await complete({**request, "drop_params": False}, calls)
