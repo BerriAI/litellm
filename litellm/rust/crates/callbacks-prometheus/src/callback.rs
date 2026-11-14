@@ -12,7 +12,7 @@ use crate::{
     attempt::AttemptFacts,
     emit::named_error,
     ops::{ErrorKind, OpError},
-    record, router_remaining,
+    record,
     store::Store,
 };
 
@@ -93,7 +93,7 @@ const SUCCESS_STEPS: [Step; 4] = [
     Step::SuccessTail,
 ];
 const FAILURE_STEPS: [Step; 1] = [Step::Failure];
-const READS: [Field; 17] = [
+const READS: [Field; 16] = [
     Field::DeprecatedKwargs,
     Field::Model,
     Field::Outcome,
@@ -110,7 +110,6 @@ const READS: [Field; 17] = [
     Field::LoggedModelGroup,
     Field::MetadataLabels,
     Field::InputSequenceLength,
-    Field::RouterRef,
 ];
 
 pub struct Prometheus {
@@ -173,7 +172,7 @@ impl Prometheus {
         Ok(())
     }
 
-    async fn attempt_ended(&self, input: &HookInput) -> HookOutput {
+    fn attempt_ended(&self, input: &HookInput) -> HookOutput {
         let Some((outcome, facts)) = AttemptFacts::read(input)? else {
             return Ok(None);
         };
@@ -182,19 +181,7 @@ impl Prometheus {
             Outcome::Failure => Event::Failure,
             Outcome::FallbackSuccess | Outcome::FallbackFailure => return Ok(None),
         };
-        let attempt = Attempt { event, facts };
-        let ran = self.run(&attempt);
-        let tail_ran = ran
-            .as_ref()
-            .err()
-            .is_none_or(|stop| stop.step == Step::SuccessTail);
-        if event == Event::Success && tail_ran {
-            let router = input.fields.router()?;
-            for line in router_remaining(&self.store, &attempt.facts, router).await {
-                self.sink.log(&line);
-            }
-        }
-        ran.map_err(|stop| {
+        self.run(&Attempt { event, facts }).map_err(|stop| {
             CallbackError::Failed(serde_json::to_string(&stop).unwrap_or(stop.message))
         })?;
         Ok(None)
@@ -215,7 +202,7 @@ impl Callback for Prometheus {
     ) -> BoxFuture<'a, HookOutput> {
         Box::pin(async move {
             match input.hook {
-                Hook::AttemptEnded => self.attempt_ended(input).await,
+                Hook::AttemptEnded => self.attempt_ended(input),
                 _ => Ok(None),
             }
         })
@@ -227,14 +214,14 @@ mod tests {
     use std::sync::Mutex;
 
     use futures_util::FutureExt;
-    use litellm_callbacks::{FieldValues, RemainingUsage, RouterRef, RouterUsage, UsageAmount};
+    use litellm_callbacks::FieldValues;
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
 
     use super::*;
     use crate::{FamilySpec, Kind, ManualClock, SeriesLimits};
 
-    const FAMILIES: [(&str, Kind); 9] = [
+    const FAMILIES: [(&str, Kind); 7] = [
         ("litellm_requests_metric", Kind::Counter),
         ("litellm_spend_metric", Kind::Counter),
         ("litellm_total_tokens_metric", Kind::Counter),
@@ -242,67 +229,10 @@ mod tests {
         ("litellm_output_tokens_metric", Kind::Counter),
         ("litellm_llm_api_failed_requests_metric", Kind::Counter),
         ("litellm_proxy_total_requests_metric", Kind::Counter),
-        ("litellm_remaining_tokens_metric", Kind::Gauge),
-        ("litellm_remaining_requests_metric", Kind::Gauge),
     ];
 
     #[derive(Default)]
     struct Lines(Mutex<Vec<LogLine>>);
-
-    struct Router {
-        answer: Result<Vec<(&'static str, UsageAmount)>, String>,
-        asked: Mutex<Vec<String>>,
-    }
-
-    impl Router {
-        fn answering(answer: Result<Vec<(&'static str, UsageAmount)>, String>) -> Arc<Self> {
-            Arc::new(Self {
-                answer,
-                asked: Mutex::default(),
-            })
-        }
-
-        fn asked(&self) -> Vec<String> {
-            self.asked
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone()
-        }
-    }
-
-    impl RouterUsage for Router {
-        fn remaining(
-            &self,
-            model_group: &str,
-        ) -> BoxFuture<'static, Result<RemainingUsage, String>> {
-            self.asked
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(model_group.to_owned());
-            let answer = self.answer.clone().map(|headers| RemainingUsage {
-                headers: headers
-                    .into_iter()
-                    .map(|(name, amount)| (name.to_owned(), amount))
-                    .collect(),
-            });
-            Box::pin(async move { answer })
-        }
-    }
-
-    fn limits() -> Vec<(&'static str, UsageAmount)> {
-        vec![
-            ("x-ratelimit-remaining-tokens", UsageAmount::Int(75)),
-            ("x-ratelimit-limit-tokens", UsageAmount::Int(100)),
-            ("x-ratelimit-remaining-requests", UsageAmount::Int(9)),
-            ("x-ratelimit-limit-requests", UsageAmount::Int(10)),
-        ]
-    }
-
-    fn with_provider_headers(headers: Value) -> Vec<(Field, Value)> {
-        let mut values = attempt("success", json!(10), false);
-        values.push((Field::RateLimitState, headers));
-        values
-    }
 
     impl LogSink for Lines {
         fn log(&self, line: &LogLine) {
@@ -313,7 +243,8 @@ mod tests {
         }
     }
 
-    fn logging() -> (Prometheus, Arc<Lines>) {
+    #[fixture]
+    fn prometheus() -> Prometheus {
         let store = Store::new(SeriesLimits::default(), Box::new(ManualClock::default()));
         for (name, kind) in FAMILIES {
             store
@@ -330,25 +261,7 @@ mod tests {
                 })
                 .unwrap_or_else(|error| panic!("{error}"));
         }
-        let lines = Arc::new(Lines::default());
-        let sink: Arc<dyn LogSink> = Arc::clone(&lines) as Arc<dyn LogSink>;
-        (Prometheus::new(Arc::new(store), sink), lines)
-    }
-
-    #[fixture]
-    fn prometheus() -> Prometheus {
-        logging().0
-    }
-
-    impl Lines {
-        fn taken(&self) -> Vec<LogLine> {
-            std::mem::take(
-                &mut *self
-                    .0
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-            )
-        }
+        Prometheus::new(Arc::new(store), Arc::new(Lines::default()))
     }
 
     fn attempt(event: &str, completion_tokens: Value, failed: bool) -> Vec<(Field, Value)> {
@@ -400,21 +313,9 @@ mod tests {
     }
 
     fn handled(prometheus: &Prometheus, hook: Hook, values: Vec<(Field, Value)>) -> HookOutput {
-        handled_with(prometheus, hook, values, None)
-    }
-
-    fn handled_with(
-        prometheus: &Prometheus,
-        hook: Hook,
-        values: Vec<(Field, Value)>,
-        router: Option<RouterRef>,
-    ) -> HookOutput {
         let mut fields = FieldValues::new(FieldSet::of(&READS));
         for (field, value) in values {
             fields.insert(field, value);
-        }
-        if let Some(router) = router {
-            fields.set_router(router);
         }
         let input = HookInput {
             hook,
@@ -573,214 +474,5 @@ mod tests {
         assert!(
             matches!(output, Err(CallbackError::Failed(text)) if text.starts_with("prometheus attempt: "))
         );
-    }
-
-    const NO_GAUGES: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
-
-    fn gauges(prometheus: &Prometheus) -> [Vec<f64>; 2] {
-        [
-            total(prometheus, "litellm_remaining_tokens_metric"),
-            total(prometheus, "litellm_remaining_requests_metric"),
-        ]
-    }
-
-    #[rstest]
-    fn a_success_sets_both_router_gauges_from_the_remaining_usage(prometheus: Prometheus) {
-        let router = Router::answering(Ok(limits()));
-        let output = handled_with(
-            &prometheus,
-            Hook::AttemptEnded,
-            attempt("success", json!(10), false),
-            Some(RouterRef::new(router.clone())),
-        );
-        assert!(matches!(output, Ok(None)));
-        assert_eq!(router.asked(), vec!["group".to_owned()]);
-        assert_eq!(gauges(&prometheus), [vec![75.0], vec![9.0]]);
-    }
-
-    #[rstest]
-    #[case::tokens_only(json!({"x-ratelimit-remaining-tokens": 12345}), [vec![12345.0], vec![]])]
-    #[case::float(json!({"x-ratelimit-remaining-requests": 2.5}), [vec![], vec![2.5]])]
-    #[case::empty(json!({}), [vec![], vec![]])]
-    fn only_the_gauges_the_router_reports_are_set(
-        prometheus: Prometheus,
-        #[case] answer: Value,
-        #[case] expected: [Vec<f64>; 2],
-    ) {
-        let headers = answer
-            .as_object()
-            .map(|map| {
-                map.iter()
-                    .map(|(name, value)| {
-                        let name: &'static str = if name.ends_with("tokens") {
-                            "x-ratelimit-remaining-tokens"
-                        } else {
-                            "x-ratelimit-remaining-requests"
-                        };
-                        let amount = value.as_i64().map_or_else(
-                            || UsageAmount::Float(value.as_f64().unwrap_or_default()),
-                            |int| UsageAmount::Int(i128::from(int)),
-                        );
-                        (name, amount)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let router = Router::answering(Ok(headers));
-        let output = handled_with(
-            &prometheus,
-            Hook::AttemptEnded,
-            attempt("success", json!(10), false),
-            Some(RouterRef::new(router)),
-        );
-        assert!(matches!(output, Ok(None)));
-        assert_eq!(gauges(&prometheus), expected);
-    }
-
-    #[rstest]
-    fn both_provider_headers_skip_the_router_read(prometheus: Prometheus) {
-        let router = Router::answering(Ok(limits()));
-        let output = handled_with(
-            &prometheus,
-            Hook::AttemptEnded,
-            with_provider_headers(json!({
-                "provider_remaining_tokens": 999,
-                "provider_remaining_requests": 99,
-            })),
-            Some(RouterRef::new(router.clone())),
-        );
-        assert!(matches!(output, Ok(None)));
-        assert!(router.asked().is_empty());
-        assert_eq!(gauges(&prometheus), NO_GAUGES);
-    }
-
-    #[rstest]
-    #[case::requests_header(json!({"provider_remaining_requests": 7}), [vec![75.0], vec![]])]
-    #[case::tokens_header(json!({"provider_remaining_tokens": 7}), [vec![], vec![9.0]])]
-    #[case::unreadable_tokens_header(json!({"rejected": ["provider_remaining_tokens"]}), [vec![], vec![9.0]])]
-    fn one_provider_header_leaves_only_the_missing_gauge_to_the_router(
-        prometheus: Prometheus,
-        #[case] state: Value,
-        #[case] expected: [Vec<f64>; 2],
-    ) {
-        let router = Router::answering(Ok(limits()));
-        let output = handled_with(
-            &prometheus,
-            Hook::AttemptEnded,
-            with_provider_headers(state),
-            Some(RouterRef::new(router.clone())),
-        );
-        assert!(matches!(output, Ok(None)));
-        assert_eq!(router.asked(), vec!["group".to_owned()]);
-        assert_eq!(gauges(&prometheus), expected);
-    }
-
-    #[rstest]
-    fn no_router_sets_no_router_gauge(prometheus: Prometheus) {
-        let output = handled(
-            &prometheus,
-            Hook::AttemptEnded,
-            attempt("success", json!(10), false),
-        );
-        assert!(matches!(output, Ok(None)));
-        assert_eq!(gauges(&prometheus), NO_GAUGES);
-    }
-
-    #[rstest]
-    #[case::none(Value::Null)]
-    #[case::empty(json!(""))]
-    fn a_request_without_a_model_group_is_not_read(
-        prometheus: Prometheus,
-        #[case] model_group: Value,
-    ) {
-        let router = Router::answering(Ok(limits()));
-        let mut values = attempt("success", json!(10), false);
-        for (field, value) in &mut values {
-            if *field == Field::DeprecatedKwargs {
-                value["payload_labels"]["model_group"] = model_group.clone();
-            }
-        }
-        let output = handled_with(
-            &prometheus,
-            Hook::AttemptEnded,
-            values,
-            Some(RouterRef::new(router.clone())),
-        );
-        assert!(matches!(output, Ok(None)));
-        assert!(router.asked().is_empty());
-        assert_eq!(gauges(&prometheus), NO_GAUGES);
-    }
-
-    #[rstest]
-    fn a_failed_read_is_logged_and_is_not_a_callback_failure() {
-        let (prometheus, lines) = logging();
-        let router = Router::answering(Err("router boom".to_owned()));
-        let output = handled_with(
-            &prometheus,
-            Hook::AttemptEnded,
-            attempt("success", json!(10), false),
-            Some(RouterRef::new(router)),
-        );
-        assert!(matches!(output, Ok(None)));
-        assert_eq!(gauges(&prometheus), NO_GAUGES);
-        assert_eq!(
-            lines.taken().pop(),
-            Some(LogLine::new(
-                crate::Level::Error,
-                "Prometheus: get_remaining_model_group_usage failed for model_group=%s: %s",
-                vec!["group".to_owned(), "router boom".to_owned()],
-            ))
-        );
-    }
-
-    #[rstest]
-    fn a_failure_never_reads_the_router(prometheus: Prometheus) {
-        let router = Router::answering(Ok(limits()));
-        let output = handled_with(
-            &prometheus,
-            Hook::AttemptEnded,
-            attempt("failure", json!(10), false),
-            Some(RouterRef::new(router.clone())),
-        );
-        assert!(matches!(output, Ok(None)));
-        assert!(router.asked().is_empty());
-    }
-
-    #[rstest]
-    fn a_stop_before_the_tail_skips_the_router_read(prometheus: Prometheus) {
-        let router = Router::answering(Ok(limits()));
-        let output = handled_with(
-            &prometheus,
-            Hook::AttemptEnded,
-            attempt("success", json!("ten"), false),
-            Some(RouterRef::new(router.clone())),
-        );
-        assert_eq!(stop(output).map(|stop| stop.step), Some(Step::SuccessHead));
-        assert!(router.asked().is_empty());
-        assert_eq!(gauges(&prometheus), NO_GAUGES);
-    }
-
-    #[rstest]
-    fn a_stop_in_the_tail_still_reads_the_router_before_it_is_reported(prometheus: Prometheus) {
-        let router = Router::answering(Ok(limits()));
-        let mut values = attempt("success", json!(10), false);
-        for (field, value) in &mut values {
-            if *field == Field::Cost {
-                *value = json!({"response_cost": "0.5"});
-            }
-        }
-        values.push((
-            Field::McpToolCall,
-            json!({"name": "tool", "server_name": "server"}),
-        ));
-        let output = handled_with(
-            &prometheus,
-            Hook::AttemptEnded,
-            values,
-            Some(RouterRef::new(router.clone())),
-        );
-        assert_eq!(stop(output).map(|stop| stop.step), Some(Step::SuccessTail));
-        assert_eq!(router.asked(), vec!["group".to_owned()]);
-        assert_eq!(gauges(&prometheus), [vec![75.0], vec![9.0]]);
     }
 }

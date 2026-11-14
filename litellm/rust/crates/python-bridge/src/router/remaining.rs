@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
-use litellm_callbacks::{RemainingUsage, RouterUsage, UsageAmount};
-use litellm_callbacks_python::router::PyRouterRef;
+use litellm_callbacks::{RemainingUsage, RouterReadError, RouterUsage, UsageAmount};
+use litellm_callbacks_python::router::{PyRouterRef, headers as usage_headers};
 use litellm_router_core::remaining::{
-    Amount, GroupLimits, Limit, RemainingReads, Totals, remaining_usage, usage_totals,
+    Amount, GroupLimits, Limit, RemainingError, RemainingReads, Totals, remaining_usage,
+    usage_totals,
 };
+use num_bigint::BigInt;
 use pyo3::{
-    exceptions::PyTypeError,
+    exceptions::{PyOverflowError, PyTypeError},
     prelude::*,
     types::{PyBool, PyDict, PyFloat, PyInt},
 };
@@ -17,9 +19,9 @@ fn limit(value: &Bound<'_, PyAny>) -> PyResult<Option<Limit>> {
         return Ok(None);
     }
     if value.is_instance_of::<PyBool>() {
-        return Ok(Some(Limit::Amount(Amount::Int(i128::from(
+        return Ok(Some(Limit::Amount(Amount::Int(BigInt::from(u8::from(
             value.extract::<bool>()?,
-        )))));
+        ))))));
     }
     if value.is_instance_of::<PyInt>() {
         return Ok(Some(Limit::Amount(Amount::Int(value.extract()?))));
@@ -30,9 +32,9 @@ fn limit(value: &Bound<'_, PyAny>) -> PyResult<Option<Limit>> {
     Ok(Some(Limit::Other(value.get_type().name()?.to_string())))
 }
 
-fn counted(value: &Bound<'_, PyAny>) -> PyResult<Option<i128>> {
+fn counted(value: &Bound<'_, PyAny>) -> PyResult<Option<BigInt>> {
     if value.is_instance_of::<PyBool>() {
-        return Ok(Some(i128::from(value.extract::<bool>()?)));
+        return Ok(Some(BigInt::from(u8::from(value.extract::<bool>()?))));
     }
     if value.is_instance_of::<PyInt>() {
         return value.extract().map(Some);
@@ -45,11 +47,11 @@ fn totals(value: &Bound<'_, PyAny>) -> PyResult<Option<Totals>> {
         return Ok(None);
     }
     let (first, second): (Bound<'_, PyAny>, Bound<'_, PyAny>) = value.extract()?;
-    let total = |value: &Bound<'_, PyAny>| -> PyResult<Option<i128>> {
+    let total = |value: &Bound<'_, PyAny>| -> PyResult<Option<BigInt>> {
         if value.is_none() {
             Ok(None)
         } else {
-            value.extract().map(Some)
+            counted(value)
         }
     };
     Ok(Some((total(&first)?, total(&second)?)))
@@ -82,22 +84,29 @@ fn reads(value: &Bound<'_, PyAny>) -> PyResult<RemainingReads> {
     })
 }
 
-fn headers(reads: &RemainingReads) -> PyResult<Vec<(&'static str, Amount)>> {
-    remaining_usage(reads).map_err(|error| PyTypeError::new_err(error.to_string()))
-}
-
-const fn usage_amount(amount: Amount) -> UsageAmount {
-    match amount {
-        Amount::Int(value) => UsageAmount::Int(value),
-        Amount::Float(value) => UsageAmount::Float(value),
+fn raised(error: &RemainingError) -> PyErr {
+    match error {
+        RemainingError::Unsubtractable(_) => PyTypeError::new_err(error.to_string()),
+        RemainingError::IntTooLarge => PyOverflowError::new_err(error.to_string()),
     }
 }
 
-fn python_text(py: Python<'_>, error: &PyErr) -> String {
-    error
-        .value(py)
-        .str()
-        .map_or_else(|_| error.to_string(), |text| text.to_string())
+fn remaining(reads: &RemainingReads) -> PyResult<RemainingUsage> {
+    let headers = remaining_usage(reads).map_err(|error| raised(&error))?;
+    Ok(RemainingUsage {
+        headers: headers
+            .into_iter()
+            .map(|(name, amount)| {
+                (
+                    name.to_owned(),
+                    match amount {
+                        Amount::Int(value) => UsageAmount::Int(value),
+                        Amount::Float(value) => UsageAmount::Float(value),
+                    },
+                )
+            })
+            .collect(),
+    })
 }
 
 struct HostedRouterUsage {
@@ -117,24 +126,18 @@ impl HostedRouterUsage {
 }
 
 impl RouterUsage for HostedRouterUsage {
-    fn remaining(&self, model_group: &str) -> BoxFuture<'static, Result<RemainingUsage, String>> {
+    fn remaining(
+        &self,
+        model_group: &str,
+    ) -> BoxFuture<'static, Result<RemainingUsage, RouterReadError>> {
         let read = self.read(model_group.to_owned());
         Box::pin(async move {
             let answered = match read {
                 Ok(read) => read.await,
                 Err(error) => Err(error),
             };
-            Python::attach(|py| {
-                answered
-                    .and_then(|answered| headers(&reads(answered.bind(py))?))
-                    .map(|headers| RemainingUsage {
-                        headers: headers
-                            .into_iter()
-                            .map(|(name, amount)| (name.to_owned(), usage_amount(amount)))
-                            .collect(),
-                    })
-                    .map_err(|error| python_text(py, &error))
-            })
+            Python::attach(|py| answered.and_then(|answered| remaining(&reads(answered.bind(py))?)))
+                .map_err(|error| Box::new(error) as RouterReadError)
         })
     }
 }
@@ -149,22 +152,14 @@ pub(crate) fn router_remaining_usage<'py>(
     py: Python<'py>,
     reads: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let headers = headers(&self::reads(reads)?)?;
-    let answer = PyDict::new(py);
-    for (name, amount) in headers {
-        match amount {
-            Amount::Int(value) => answer.set_item(name, value)?,
-            Amount::Float(value) => answer.set_item(name, value)?,
-        }
-    }
-    Ok(answer)
+    usage_headers(py, &remaining(&self::reads(reads)?)?)
 }
 
 #[pyfunction]
 pub(crate) fn router_usage_totals(
     values: &Bound<'_, PyAny>,
     tpm_count: usize,
-) -> PyResult<(Option<i128>, Option<i128>)> {
+) -> PyResult<(Option<BigInt>, Option<BigInt>)> {
     let counted = values
         .try_iter()?
         .map(|value| counted(&value?))
@@ -203,6 +198,16 @@ mod tests {
             .collect()
     }
 
+    fn python_error(source: &str) -> (String, String) {
+        let error = remaining(source).unwrap_err();
+        Python::attach(|py| {
+            (
+                error.get_type(py).name().unwrap().to_string(),
+                error.value(py).str().unwrap().to_string(),
+            )
+        })
+    }
+
     #[rstest]
     #[case::tpm_and_rpm(
         "((1100, 15, None, None), None, (30, 3), 0)",
@@ -231,6 +236,20 @@ mod tests {
             ("x-ratelimit-limit-tokens", "10.5"),
         ],
     )]
+    #[case::bool_limit(
+        "((True, None, None, None), None, (None, None), 0)",
+        &[
+            ("x-ratelimit-remaining-tokens", "1"),
+            ("x-ratelimit-limit-tokens", "1"),
+        ],
+    )]
+    #[case::past_any_machine_int(
+        "((10**40, None, None, None), None, (10**39, None), 0)",
+        &[
+            ("x-ratelimit-remaining-tokens", "9000000000000000000000000000000000000000"),
+            ("x-ratelimit-limit-tokens", "10000000000000000000000000000000000000000"),
+        ],
+    )]
     #[case::no_group("(None, None, None, 0)", &[])]
     fn the_headers_are_the_python_dict_in_its_order(
         #[case] source: &str,
@@ -240,31 +259,51 @@ mod tests {
     }
 
     #[rstest]
-    fn a_limit_python_cannot_subtract_raises_a_type_error() {
-        let error = remaining("(('100', None, None, None), None, (None, None), 0)").unwrap_err();
-        Python::attach(|py| {
-            assert!(error.is_instance_of::<PyTypeError>(py));
-            assert_eq!(
-                python_text(py, &error),
-                "unsupported operand type(s) for -: 'str' and 'int'"
-            );
-        });
+    #[case::unsubtractable(
+        "(('100', None, None, None), None, (None, None), 0)",
+        "TypeError",
+        "unsupported operand type(s) for -: 'str' and 'int'"
+    )]
+    #[case::int_too_large_for_a_float(
+        "((10.5, None, None, None), None, (10**400, None), 0)",
+        "OverflowError",
+        "int too large to convert to float"
+    )]
+    fn what_python_cannot_compute_raises_its_error(
+        #[case] source: &str,
+        #[case] kind: &str,
+        #[case] message: &str,
+    ) {
+        assert_eq!(python_error(source), (kind.to_owned(), message.to_owned()));
     }
 
     #[rstest]
     #[case::ints("[30, 4, 1, None]", 2, (Some(34), Some(1)))]
     #[case::floats_are_not_counted("[1.5, 2, None, 3.0]", 2, (Some(2), None))]
+    #[case::bools_count_as_ints("[True, 2, False]", 2, (Some(3), Some(0)))]
     #[case::nothing("[]", 0, (None, None))]
     fn totals_count_only_the_ints_python_sums(
         #[case] source: &str,
         #[case] tpm_count: usize,
-        #[case] expected: (Option<i128>, Option<i128>),
+        #[case] expected: (Option<i64>, Option<i64>),
     ) {
         Python::initialize();
         Python::attach(|py| {
             assert_eq!(
                 router_usage_totals(&evaluated(py, source), tpm_count).unwrap(),
-                expected
+                (expected.0.map(BigInt::from), expected.1.map(BigInt::from))
+            );
+        });
+    }
+
+    #[rstest]
+    fn a_total_past_any_machine_int_stays_exact() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (tpm, _) = router_usage_totals(&evaluated(py, "[10**40, 1]"), 2).unwrap();
+            assert_eq!(
+                tpm.unwrap().to_string(),
+                "10000000000000000000000000000000000000001"
             );
         });
     }

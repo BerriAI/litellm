@@ -271,8 +271,10 @@ mod tests {
         fn remaining(
             &self,
             _model_group: &str,
-        ) -> futures_util::future::BoxFuture<'static, Result<crate::RemainingUsage, String>>
-        {
+        ) -> futures_util::future::BoxFuture<
+            'static,
+            Result<crate::RemainingUsage, crate::RouterReadError>,
+        > {
             Box::pin(async { Ok(crate::RemainingUsage::default()) })
         }
     }

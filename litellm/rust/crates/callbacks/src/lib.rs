@@ -32,6 +32,6 @@ pub use record::{
     MetadataLabel, ModelInfo, Moment, Outcome, OutputCap, RateLimitState, RateLimitStatus,
     RateLimitStatuses, ReservationEntry, Usage, UsageRecord, ZeroCost,
 };
-pub use router::{RemainingUsage, RouterRef, RouterUsage, UsageAmount};
+pub use router::{RemainingUsage, RouterReadError, RouterRef, RouterUsage, UsageAmount};
 pub use scalar::Scalar;
 pub use verdict::{Abort, AbortError, Patch, PatchOp, Verdict};
