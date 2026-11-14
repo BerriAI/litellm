@@ -17336,6 +17336,7 @@
         "number": "Number"
       },
       "numberHint": "Value must be between 0 and 1",
+      "langfuseSpanScopeHint": "Leave empty to use the proxy default (LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE, full if unset).",
       "disabledCallbacks": {
         "title": "Disabled Callbacks",
         "tooltip": "Select callbacks to disable for this key. Disabled callbacks will not receive any logging data.",

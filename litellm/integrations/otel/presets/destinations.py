@@ -171,10 +171,12 @@ def _resource_defaults(callback_name: str) -> Mapping[str, str]:
     return backend() if backend is not None else _NO_ATTRS
 
 
-def _span_scope(callback_name: str, params: StandardCallbackDynamicParams) -> OtelSpanScope:
+def _span_scope(
+    callback_name: str, params: StandardCallbackDynamicParams, langfuse_destination_span_scope: OtelSpanScope
+) -> OtelSpanScope:
     if callback_name != "langfuse_otel":
         return "full"
-    return params.get("langfuse_span_scope") or "full"
+    return params.get("langfuse_span_scope") or langfuse_destination_span_scope
 
 
 def destination_capable_backends() -> frozenset[str]:
@@ -209,6 +211,7 @@ def destination_for(
     capture_message_content: str | None = None,
     excluded_db_systems: frozenset[str] | None = None,
     metadata_keys: tuple[str, ...] | None = None,
+    langfuse_destination_span_scope: OtelSpanScope = "full",
 ) -> OtelDestination | None:
     """The destination ``params`` names for ``callback_name``, or ``None``.
 
@@ -238,7 +241,7 @@ def destination_for(
         resource_defaults=_resource_defaults(callback_name),
         callback_name=callback_name,
         protocol=protocol,
-        span_scope=_span_scope(callback_name, params),
+        span_scope=_span_scope(callback_name, params, langfuse_destination_span_scope),
         capture_message_content=capture_message_content,
         excluded_db_systems=excluded_db_systems,
         metadata_keys=metadata_keys or (),
