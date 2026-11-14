@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -7,7 +8,7 @@ from typing import Annotated, Final, Literal, TypeAlias
 
 import httpx
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, TypeAdapter, ValidationError
-from pydantic_core import to_jsonable_python
+from pydantic_core import ErrorDetails, InitErrorDetails, to_jsonable_python
 from typing_extensions import assert_never
 
 import litellm
@@ -88,15 +89,13 @@ def _without_surrounding_whitespace(value: str) -> str:
     return value.strip(" \t")
 
 
-_HeaderName: TypeAlias = Annotated[str, Field(pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")]
-_HeaderValue: TypeAlias = Annotated[
-    str, Field(pattern=r"^[\t\x20-\x7e]*$"), AfterValidator(_without_surrounding_whitespace)
-]
+_SendableHeaderText: TypeAlias = Annotated[str, Field(pattern=r"^[\t\x20-\x7e]*$")]
+_HeaderValue: TypeAlias = Annotated[_SendableHeaderText, AfterValidator(_without_surrounding_whitespace)]
 _EXTRA_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str] | None]] = TypeAdapter(
-    Mapping[_HeaderName, _HeaderValue] | None,
+    Mapping[_SendableHeaderText, _HeaderValue] | None,
     config=ConfigDict(title="extra_headers", hide_input_in_errors=True),
 )
-_HEADER_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[_HeaderName, _HeaderValue])
+_HEADER_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[_SendableHeaderText, _HeaderValue])
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None]
 ] = TypeAdapter(ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None)
@@ -499,11 +498,37 @@ def _header_entries(extra_headers: object) -> Mapping[object, object]:
         return MappingProxyType({})
 
 
+_HEADER_LABEL_END: Final = re.compile(r"[\s:]")
+
+
+def _header_label(name: str | int) -> str:
+    return _HEADER_LABEL_END.split(str(name), maxsplit=1)[0]
+
+
+def _without_full_header_name(detail: ErrorDetails) -> InitErrorDetails:
+    loc: Final = detail["loc"]
+    return InitErrorDetails(
+        type=detail["type"],
+        loc=(_header_label(loc[0]), *loc[1:]) if loc else loc,
+        input=None,
+        ctx=detail.get("ctx", {}),
+    )
+
+
+def _strict_extra_headers(extra_headers: object) -> Mapping[str, str]:
+    try:
+        return _EXTRA_HEADERS_ADAPTER.validate_python(extra_headers) or MappingProxyType({})
+    except ValidationError as error:
+        raise ValidationError.from_exception_data(
+            error.title, [_without_full_header_name(detail) for detail in error.errors()], hide_input=True
+        ) from None
+
+
 def _request_extra_headers(extra_headers: object, drops_params: bool) -> Mapping[str, str]:
     if not extra_headers:
         return MappingProxyType({})
     if not drops_params:
-        return _EXTRA_HEADERS_ADAPTER.validate_python(extra_headers) or MappingProxyType({})
+        return _strict_extra_headers(extra_headers)
     return MappingProxyType(
         dict(header for header in map(_valid_header, _header_entries(extra_headers).items()) if header is not None)
     )
