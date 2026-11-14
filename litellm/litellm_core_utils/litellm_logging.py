@@ -229,6 +229,7 @@ from litellm.types.utils import (
     AgenticLoopParams,
     CachingDetails,
     CallTypes,
+    Choices,
     CostBreakdown,
     CostPerToken,
     CustomPricingLiteLLMParams,
@@ -260,6 +261,7 @@ from litellm.types.utils import (
     StandardLoggingZeroCostDiagnostic,
     TextCompletionResponse,
     TranscriptionResponse,
+    UnreportedUsage,
     Usage,
     batch_chat_usage,
 )
@@ -2472,10 +2474,11 @@ class Logging(LiteLLMLoggingBaseClass):
             str | None, provider_value
         )
         base_model: Final = get_base_model_from_metadata(model_call_details=self.model_call_details)
+        billed_result: Final = self._with_counted_usage_if_unreported(priced_result, base_model)
 
         try:
             response_cost_calculator_kwargs: Final = {
-                "response_object": priced_result,
+                "response_object": billed_result,
                 "model": model_value,
                 "cache_hit": cost_cache_hit,
                 "custom_llm_provider": cost_custom_llm_provider,
@@ -2536,7 +2539,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 else response_cost
             )
             self._record_zero_cost_diagnostic(
-                priced_result,
+                billed_result,
                 total_response_cost,
                 litellm_model_name=litellm_model_name,
                 router_model_id=router_model_id,
@@ -2556,7 +2559,7 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.debug("response_cost_failure_debug_information: %s", debug_info)
             self.model_call_details["response_cost_failure_debug_information"] = debug_info
             self._record_zero_cost_diagnostic(
-                priced_result,
+                billed_result,
                 None,
                 calculation_failed=True,
                 litellm_model_name=litellm_model_name,
@@ -2566,6 +2569,69 @@ class Logging(LiteLLMLoggingBaseClass):
         return None
 
     _response_cost_calculator = response_cost_calculator
+
+    def _with_counted_usage_if_unreported(self, result: object, base_model: str | None) -> object:
+        if not isinstance(result, ModelResponse):
+            return result
+        usage: Final[object] = getattr(result, "usage", None)
+        if usage is not None and not isinstance(usage, UnreportedUsage):
+            return result
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # untyped dict param
+        )
+        from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
+        from litellm.utils import (
+            token_counter,  # pyright: ignore[reportUnknownVariableType]  # messages param accepts an untyped sequence
+        )
+
+        def counted_or_zero(count: Callable[[], int]) -> int:
+            try:
+                return count()
+            except Exception as e:  # noqa: BLE001  # a failed count must not break cost tracking
+                verbose_logger.debug("Could not count tokens for a reply without usage: %s", e)
+                return 0
+
+        def reasoning_texts() -> Iterator[str]:
+            for choice in result.choices:
+                if not isinstance(choice, Choices):
+                    continue
+                reasoning: Final = getattr(choice.message, "reasoning_content", None)
+                if isinstance(reasoning, str) and reasoning:
+                    yield reasoning
+
+        model: Final = usage_tokenizer_model(self.model, base_model)
+        optional_params: Final[Mapping[str, object]] = getattr(self, "optional_params", None) or {}
+        raw_tools: Final = optional_params.get("tools")
+        raw_tool_choice: Final = optional_params.get("tool_choice")
+        prompt_tokens: Final = counted_or_zero(
+            lambda: token_counter(
+                model=model,
+                messages=self.messages or [],  # pyright: ignore[reportUnknownMemberType]  # untyped on Logging
+                tools=raw_tools if isinstance(raw_tools, list) else None,
+                tool_choice=raw_tool_choice if isinstance(raw_tool_choice, (str, Mapping)) else None,
+                use_default_image_token_count=True,
+            )
+        )
+        completion_tokens: Final = counted_or_zero(
+            lambda: token_counter(model=model, text=get_content_from_model_response(result), count_response_tokens=True)
+        ) + counted_or_zero(
+            lambda: sum(token_counter(model=model, text=text, count_response_tokens=True) for text in reasoning_texts())
+        )
+        verbose_logger.warning(
+            "%s returned no token usage, so it is priced from locally counted tokens (%d prompt, %d completion)",
+            single_log_line(self.model),
+            prompt_tokens,
+            completion_tokens,
+        )
+        return result.model_copy(
+            update={
+                "usage": Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                )
+            }
+        )
 
     def _recorded_response_cost(self, cost: float | None) -> float | None:
         if cost is None or finite_cost(cost) is not None:

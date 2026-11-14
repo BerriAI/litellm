@@ -4678,7 +4678,7 @@ def test_logging_preserves_missing_usage_without_accepting_request_metadata(
         status="success",
     )
     assert payload is not None
-    assert payload["metadata"]["usage_object"] == (response.usage.model_dump() if usage is not None else {})
+    assert payload["metadata"]["usage_object"] == response.usage.model_dump()
     assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (0, 0, 0)
 
 
@@ -15058,6 +15058,169 @@ async def test_a_response_discarded_after_its_success_log_was_parked_is_billed_o
     assert kwargs["response_cost"] == pytest.approx(both_attempts)
     assert prepared is not None
     assert prepared.amount == pytest.approx(both_attempts)
+
+
+_INPUT_RATE: Final = 3e-06
+_OUTPUT_RATE: Final = 7e-06
+_BUDGET_MESSAGES: Final = ({"role": "user", "content": "Write one line about budgets"},)
+_BUDGET_REPLY: Final = "A budget is a promise you keep to yourself"
+
+
+def _locally_counted_cost() -> float:
+    from litellm.utils import token_counter
+
+    prompt_tokens: Final = token_counter(model="gpt-5.4-nano", messages=list(_BUDGET_MESSAGES))
+    completion_tokens: Final = token_counter(model="gpt-5.4-nano", text=_BUDGET_REPLY, count_response_tokens=True)
+    assert prompt_tokens > 0 and completion_tokens > 0
+    return prompt_tokens * _INPUT_RATE + completion_tokens * _OUTPUT_RATE
+
+
+def _price_converted_reply(
+    usage: Mapping[str, object] | None,
+    *,
+    messages: Sequence[object] | None = None,
+    optional_params: Mapping[str, object] | None = None,
+    assistant_message: Mapping[str, object] | None = None,
+) -> tuple[float | None, ModelResponse]:
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        convert_to_model_response_object,
+    )
+    from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
+
+    rates: Final = {"input_cost_per_token": _INPUT_RATE, "output_cost_per_token": _OUTPUT_RATE}
+    prompt_messages: Final = list(_BUDGET_MESSAGES if messages is None else messages)
+    logging_obj: Final = LitellmLogging(
+        model="gpt-5.4-nano",
+        messages=prompt_messages,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime_unit_test(2026, 1, 1, 12, 0, 0),
+        litellm_call_id="reply-without-usage",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        user="",
+        optional_params=dict(optional_params or {}),
+        litellm_params=rates,
+        custom_llm_provider="openai",
+    )
+    logging_obj.set_per_call_pricing(per_call_model_info("gpt-5.4-nano", "openai", rates, "chat"))
+    body: Final = {
+        "id": "chatcmpl-budget",
+        "model": "gpt-5.4-nano",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "index": 0,
+                "message": dict(assistant_message or {"role": "assistant", "content": _BUDGET_REPLY}),
+                "finish_reason": "stop",
+            }
+        ],
+        **({"usage": usage} if usage is not None else {}),
+    }
+    response: Final = convert_to_model_response_object(response_object=body, model_response_object=ModelResponse())
+    assert isinstance(response, ModelResponse)
+    return logging_obj.response_cost_calculator(result=response), response
+
+
+def test_a_reply_without_usage_is_priced_from_locally_counted_tokens(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        cost, response = _price_converted_reply(None)
+
+    assert cost == pytest.approx(_locally_counted_cost())
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (0, 0)
+    assert any("returned no token usage" in record.getMessage() for record in caplog.records)
+
+
+def test_a_reply_with_malformed_usage_is_priced_from_locally_counted_tokens() -> None:
+    cost, response = _price_converted_reply({"prompt_tokens": "oops", "completion_tokens": None, "total_tokens": 0})
+
+    assert cost == pytest.approx(_locally_counted_cost())
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (0, 0)
+
+
+def test_a_reply_whose_provider_reports_zero_tokens_stays_at_zero() -> None:
+    cost, _response = _price_converted_reply({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+    assert cost == 0.0
+
+
+def test_a_reply_with_empty_usage_is_priced_from_locally_counted_tokens() -> None:
+    cost, response = _price_converted_reply({})
+    assert cost == pytest.approx(_locally_counted_cost())
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (0, 0)
+
+
+def test_a_reply_with_null_token_counts_is_priced_from_locally_counted_tokens() -> None:
+    cost, response = _price_converted_reply({"prompt_tokens": None, "completion_tokens": None})
+    assert cost == pytest.approx(_locally_counted_cost())
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (0, 0)
+
+
+_LOOKUP_BUDGET_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "lookup_budget",
+        "description": "Look up the remaining budget for a workspace key",
+        "parameters": {"type": "object", "properties": {"key_id": {"type": "string"}}},
+    },
+}
+_NAMED_TOOL_CHOICE: Final = {"type": "function", "function": {"name": "lookup_budget"}}
+
+
+def test_tool_definitions_are_included_in_the_fallback_prompt_count() -> None:
+    from litellm.utils import token_counter
+
+    prompt_tokens: Final = token_counter(
+        model="gpt-5.4-nano",
+        messages=list(_BUDGET_MESSAGES),
+        tools=[_LOOKUP_BUDGET_TOOL],
+        tool_choice=_NAMED_TOOL_CHOICE,
+    )
+    completion_tokens: Final = token_counter(model="gpt-5.4-nano", text=_BUDGET_REPLY, count_response_tokens=True)
+    cost, _response = _price_converted_reply(
+        None, optional_params={"tools": [_LOOKUP_BUDGET_TOOL], "tool_choice": _NAMED_TOOL_CHOICE}
+    )
+    assert cost == pytest.approx(prompt_tokens * _INPUT_RATE + completion_tokens * _OUTPUT_RATE)
+    assert cost > _locally_counted_cost()
+
+
+def test_a_prompt_the_counter_rejects_still_charges_completion_tokens() -> None:
+    from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError
+    from litellm.utils import token_counter
+
+    messages: Final = (
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Write one line about budgets"},
+                {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+            ],
+        },
+    )
+    with pytest.raises(UnsupportedContentTypeError):
+        token_counter(model="gpt-5.4-nano", messages=list(messages), use_default_image_token_count=True)
+    completion_tokens: Final = token_counter(model="gpt-5.4-nano", text=_BUDGET_REPLY, count_response_tokens=True)
+    cost, _response = _price_converted_reply(None, messages=messages)
+    assert cost == pytest.approx(completion_tokens * _OUTPUT_RATE)
+    assert cost > 0
+
+
+_REASONING: Final = "I weighed the monthly vs yearly plan."
+
+
+def test_reasoning_content_is_included_in_the_fallback_completion_count() -> None:
+    from litellm.utils import token_counter
+
+    prompt_tokens: Final = token_counter(model="gpt-5.4-nano", messages=list(_BUDGET_MESSAGES))
+    completion_tokens: Final = token_counter(model="gpt-5.4-nano", text=_BUDGET_REPLY, count_response_tokens=True)
+    reasoning_tokens: Final = token_counter(model="gpt-5.4-nano", text=_REASONING, count_response_tokens=True)
+    cost, _response = _price_converted_reply(
+        None, assistant_message={"role": "assistant", "content": _BUDGET_REPLY, "reasoning_content": _REASONING}
+    )
+    assert cost == pytest.approx(prompt_tokens * _INPUT_RATE + (completion_tokens + reasoning_tokens) * _OUTPUT_RATE)
+    assert reasoning_tokens > 0
+    assert cost > _locally_counted_cost()
 
 
 class _FailureKwargsRecorder(CustomLogger):
