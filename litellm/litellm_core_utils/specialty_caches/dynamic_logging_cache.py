@@ -27,7 +27,7 @@ class LangfuseInMemoryCache(InMemoryCache):
     (https://github.com/BerriAI/litellm/issues/11169).
     """
 
-    def _remove_key(self, key: str) -> None:
+    def _remove_key(self, key: object) -> None:
         from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
         evicted: Final = self.cache_dict.pop(key, None)
