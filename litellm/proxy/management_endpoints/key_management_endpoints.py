@@ -5257,7 +5257,7 @@ async def info_key_fn(
         if (
             await _can_user_query_key_info(
                 user_api_key_dict=user_api_key_dict,
-                key=key,
+                key=hashed_key,
                 key_info=key_info,
             )
             is not True
@@ -8508,8 +8508,8 @@ async def _can_user_query_key_info(
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
         )
-        or user_api_key_dict.api_key == key
-        or key_info.user_id == user_api_key_dict.user_id
+        or (bool(user_api_key_dict.api_key) and user_api_key_dict.api_key == key)
+        or (bool(user_api_key_dict.user_id) and key_info.user_id == user_api_key_dict.user_id)
         or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
             user_api_key_dict=user_api_key_dict,
             existing_key_row=key_info,
