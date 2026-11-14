@@ -287,6 +287,13 @@ def test_deepseek_anthropic_messages_keeps_other_output_config_fields_when_dropp
     assert request["output_config"] == {"format": output_format}
 
 
+def test_deepseek_anthropic_messages_adds_reasoning_effort_beside_other_output_config_fields() -> None:
+    output_format: Final = {"type": "json_schema", "schema": {"type": "object"}}
+    request: Final = _deepseek_messages_request({"output_config": {"format": output_format}, "reasoning_effort": "max"})
+
+    assert request["output_config"] == {"format": output_format, "effort": "max"}
+
+
 def test_deepseek_anthropic_messages_drops_unknown_reasoning_effort_but_keeps_output_config_effort() -> None:
     request: Final = _deepseek_messages_request(
         {"output_config": {"effort": "high"}, "reasoning_effort": "turbo"}, drop_params=True
