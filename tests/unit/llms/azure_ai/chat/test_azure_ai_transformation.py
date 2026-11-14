@@ -378,6 +378,7 @@ def foundry_reasoner(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         pytest.param("FW-Reasoner", "none", "none", id="none"),
         pytest.param("FW-Reasoner", {"effort": "low", "summary": "detailed"}, "low", id="effort-with-summary"),
         pytest.param("fw-reasoner", "high", "high", id="model-named-in-another-case"),
+        pytest.param("FW-Reasoner", "auto", "auto", id="auto"),
     ],
 )
 @pytest.mark.usefixtures("foundry_reasoner")
@@ -398,6 +399,50 @@ async def test_foundry_model_declaring_reasoning_efforts_sends_the_level_as_a_st
     )
 
     assert json.loads(route.calls.last.request.content)["reasoning_effort"] == sent
+
+
+@pytest.mark.usefixtures("foundry_reasoner")
+@pytest.mark.asyncio
+async def test_a_renamed_foundry_deployment_sends_the_level_its_base_model_declares(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(FOUNDRY_MODELS_CHAT_URL).mock(
+        return_value=Response(200, json=dict(FOUNDRY_CHAT_COMPLETION))
+    )
+
+    await litellm.acompletion(
+        model="azure_ai/reasoner-prod",
+        base_model="FW-Reasoner",
+        api_key="azure-ai-test-key",
+        api_base="https://example-resource.services.ai.azure.com",
+        messages=[{"role": "user", "content": "What is 17*23?"}],
+        reasoning_effort="high",
+    )
+
+    assert json.loads(route.calls.last.request.content)["reasoning_effort"] == "high"
+
+
+@pytest.mark.usefixtures("foundry_reasoner")
+@pytest.mark.asyncio
+async def test_a_renamed_foundry_deployment_refuses_a_level_its_base_model_does_not_take(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(FOUNDRY_MODELS_CHAT_URL).mock(
+        return_value=Response(200, json=dict(FOUNDRY_CHAT_COMPLETION))
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        await litellm.acompletion(
+            model="azure_ai/reasoner-prod",
+            base_model="FW-Reasoner",
+            api_key="azure-ai-test-key",
+            api_base="https://example-resource.services.ai.azure.com",
+            messages=[{"role": "user", "content": "What is 17*23?"}],
+            reasoning_effort="bogus",
+        )
+    assert not route.called
+
+
+def test_a_foundry_reasoner_named_with_its_provider_prefix_advertises_reasoning_effort(foundry_reasoner: str) -> None:
+    assert "reasoning_effort" in AzureAIStudioConfig().get_supported_openai_params(f"azure_ai/{foundry_reasoner}")
 
 
 @pytest.mark.parametrize("drop_params", [False, True])
@@ -870,14 +915,20 @@ def test_azure_ai_strips_non_openai_spec_message_fields():
 
 
 @pytest.mark.parametrize(
-    ("model", "replayed"),
+    ("model", "base_model", "replayed"),
     [
-        pytest.param("FW-Kimi-K3", "I will pick the code word ZEBRAFINCH-42.", id="fireworks"),
-        pytest.param("fw-kimi-k3", "I will pick the code word ZEBRAFINCH-42.", id="fireworks-lowercase"),
-        pytest.param("Mistral-Large-3", None, id="not-fireworks"),
+        pytest.param("FW-Kimi-K3", None, "I will pick the code word ZEBRAFINCH-42.", id="fireworks"),
+        pytest.param("fw-kimi-k3", None, "I will pick the code word ZEBRAFINCH-42.", id="fireworks-lowercase"),
+        pytest.param(
+            "kimi-k3-prod", "FW-Kimi-K3", "I will pick the code word ZEBRAFINCH-42.", id="fireworks-base-model"
+        ),
+        pytest.param("Mistral-Large-3", None, None, id="not-fireworks"),
+        pytest.param("kimi-k3-prod", "Mistral-Large-3", None, id="not-fireworks-base-model"),
     ],
 )
-def test_azure_ai_replays_reasoning_content_only_to_fireworks_models(model: str, replayed: str | None) -> None:
+def test_azure_ai_replays_reasoning_content_only_to_fireworks_models(
+    model: str, base_model: str | None, replayed: str | None
+) -> None:
     request: Final = AzureAIStudioConfig().transform_request(
         model=model,
         messages=[
@@ -893,7 +944,7 @@ def test_azure_ai_replays_reasoning_content_only_to_fireworks_models(model: str,
             {"role": "tool", "tool_call_id": "call_1", "content": "72F"},
         ],
         optional_params={},
-        litellm_params={},
+        litellm_params={"base_model": base_model} if base_model else {},
         headers={},
     )
 
