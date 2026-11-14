@@ -504,7 +504,12 @@ class Refusal:
 
 
 def _refused_over_http(
-    proxy: Proxy, native: bool, monkeypatch: pytest.MonkeyPatch, path: str, body: Mapping[str, object]
+    proxy: Proxy,
+    native: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    body: Mapping[str, object],
+    upstream_token: str | None = None,
 ) -> Refusal:
     _use_native(proxy, native)
 
@@ -560,7 +565,11 @@ def _refused_over_http(
 
     monkeypatch.setattr(proxy.logging, "post_call_failure_hook", recording)
     response: Final = TestClient(proxy_server.app, raise_server_exceptions=False).post(
-        path, json=body, headers={"Authorization": f"Bearer {API_KEY}"}
+        path,
+        json=body,
+        headers={"Authorization": f"Bearer {API_KEY}"}
+        if upstream_token is None
+        else {"x-litellm-api-key": API_KEY, "Authorization": f"Bearer {upstream_token}"},
     )
     return Refusal(
         status=response.status_code,
@@ -757,6 +766,7 @@ class Family:
     path: str
     body: Mapping[str, object]
     call_type: CallTypesLiteral
+    upstream_token: str | None = None
 
 
 FAMILIES: Final[Mapping[str, Family]] = {
@@ -788,6 +798,12 @@ FAMILIES: Final[Mapping[str, Family]] = {
         f"/gemini/v1beta/models/gemini-2.5-pro:generateContent?key={API_KEY}",
         {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
         call_type="pass_through_endpoint",
+    ),
+    "vertex_pass_through": Family(
+        "/vertex_ai/v1/projects/p/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent",
+        {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+        call_type="pass_through_endpoint",
+        upstream_token="ya29.upstream",
     ),
 }
 
@@ -844,8 +860,8 @@ def test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_re
     proxy: Proxy, monkeypatch: pytest.MonkeyPatch, family: Family
 ) -> None:
     _route_the_family_models(monkeypatch)
-    python: Final = _refused_over_http(proxy, False, monkeypatch, family.path, family.body)
-    native: Final = _refused_over_http(proxy, True, monkeypatch, family.path, family.body)
+    python: Final = _refused_over_http(proxy, False, monkeypatch, family.path, family.body, family.upstream_token)
+    native: Final = _refused_over_http(proxy, True, monkeypatch, family.path, family.body, family.upstream_token)
 
     assert python.status == 422
     assert native == python
