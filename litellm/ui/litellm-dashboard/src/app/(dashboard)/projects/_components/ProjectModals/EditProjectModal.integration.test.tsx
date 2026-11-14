@@ -10,8 +10,9 @@ vi.mock("@/app/(dashboard)/hooks/projects/useUpdateProject", () => ({
   useUpdateProject: () => ({ mutate, isPending: false }),
 }));
 
+const mockUseAuthorized = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
-  default: () => ({ accessToken: "test-token", userId: "u-1", userRole: "Admin" }),
+  default: () => mockUseAuthorized(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
@@ -79,6 +80,7 @@ const variables = () => mutate.mock.calls.at(-1)?.[0] as { projectId: string; pa
 describe("EditProjectModal submit payload", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userId: "u-1", userRole: "Admin" });
   });
 
   it("sends exactly the antd payload for an untouched save", async () => {
@@ -227,6 +229,45 @@ describe("EditProjectModal submit payload", () => {
 
     await waitFor(() => expect(mutate).toHaveBeenCalled());
     expect(variables().params.metadata).toStrictEqual({ owner: "platform" });
+  });
+
+  it("blocks the save when the per-model batch enqueued limit is not a whole number above 0", async () => {
+    const user = setup();
+    renderModal({
+      ...project,
+      metadata: { ...project.metadata, model_batch_enqueued_token_limit: { "gpt-4": 1000 } },
+    } as unknown as ProjectResponse);
+    await screen.findByDisplayValue("My Project");
+
+    await user.click(screen.getByText("Advanced Settings"));
+    const batchLimit = await screen.findByLabelText("Batch Enqueued Token Limit");
+    fireEvent.change(batchLimit, { target: { value: "0" } });
+    await save(user);
+
+    expect(await screen.findByText("Enter a whole number above 0")).toBeInTheDocument();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("keeps the stored per-model batch enqueued limit when a team admin removes its model limit row", async () => {
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userId: "u-2", userRole: "Internal User" });
+    const user = setup();
+    renderModal({
+      ...project,
+      metadata: { ...project.metadata, model_batch_enqueued_token_limit: { "gpt-4": 1000 } },
+    } as unknown as ProjectResponse);
+    await screen.findByDisplayValue("My Project");
+
+    await user.click(screen.getByText("Advanced Settings"));
+    expect(await screen.findByLabelText("Batch Enqueued Token Limit")).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Remove model limit 1" }));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params).toMatchObject({ model_tpm_limit: {}, model_rpm_limit: {} });
+    expect(variables().params.metadata).toStrictEqual({
+      owner: "platform",
+      model_batch_enqueued_token_limit: { "gpt-4": 1000 },
+    });
   });
 
   it("blocks the save when the project name is cleared", async () => {

@@ -6,6 +6,7 @@ import { useFieldArray, useWatch, type UseFormReturn } from "react-hook-form";
 import { ChevronDown, CircleAlert, Minus, Plus } from "lucide-react";
 
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { isProxyAdminRole } from "@/utils/roles";
 import { ALL_TEAM_MODELS, type ProjectFormValues, type ProjectSubmitValues } from "./projectFormSchema";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Team } from "@/components/key_team_helpers/key_list";
@@ -44,6 +45,7 @@ export type { ProjectFormValues } from "./projectFormSchema";
 export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: ProjectBaseFormProps) {
   const { t } = useTranslation();
   const { accessToken, userId, userRole } = useAuthorized();
+  const canEditBatchLimit = isProxyAdminRole(userRole ?? "");
   const { data: teams } = useTeams();
 
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
@@ -387,7 +389,9 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
                     {...control}
                     ref={ref}
                     type="number"
-                    min={0}
+                    min={1}
+                    step={1}
+                    disabled={!canEditBatchLimit}
                     placeholder={t("projects.form.modelLimits.batchEnqueuedTokens")}
                     value={value ?? ""}
                     onChange={(event) => onChange(toOptionalNumber(event.target.value))}

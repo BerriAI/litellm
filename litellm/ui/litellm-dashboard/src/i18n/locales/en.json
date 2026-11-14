@@ -3285,7 +3285,8 @@
         "missingKey": "Missing key",
         "missingValue": "Missing value",
         "duplicateModel": "Duplicate model",
-        "duplicateKey": "Duplicate key"
+        "duplicateKey": "Duplicate key",
+        "batchEnqueuedTokens": "Enter a whole number above 0"
       }
     },
     "createModal": {

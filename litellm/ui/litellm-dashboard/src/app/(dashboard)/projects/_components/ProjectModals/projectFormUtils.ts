@@ -27,6 +27,19 @@ const withBatchEnqueuedTokenLimit = (
   return clearsRemovedLimits ? { ...metadata } : metadata;
 };
 
+const BATCH_ENQUEUED_TOKEN_LIMIT_KEY = "model_batch_enqueued_token_limit";
+
+export const withStoredBatchEnqueuedTokenLimit = (
+  metadata: Record<string, unknown>,
+  storedMetadata: Record<string, unknown> | null,
+): Record<string, unknown> => {
+  const withoutLimit = Object.fromEntries(
+    Object.entries(metadata).filter(([key]) => key !== BATCH_ENQUEUED_TOKEN_LIMIT_KEY),
+  );
+  const storedLimit = storedMetadata?.[BATCH_ENQUEUED_TOKEN_LIMIT_KEY];
+  return storedLimit === undefined ? withoutLimit : { ...withoutLimit, [BATCH_ENQUEUED_TOKEN_LIMIT_KEY]: storedLimit };
+};
+
 const roundBudget = (value: number): number => {
   const rounded = Math.round(value * 100) / 100;
   return Number.isFinite(rounded) ? rounded : value;
