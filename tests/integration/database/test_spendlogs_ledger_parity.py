@@ -1994,6 +1994,8 @@ async def test_worker_keeps_budgeted_spend_when_the_database_cannot_index_a_long
         "request_id": "oversized",
         "startTime": _NOW.isoformat(),
         "api_key": token,
+        "user": "user",
+        "team_id": "team",
         "model": "projection-model",
         "model_group": "projection-model",
         "custom_llm_provider": "openai",
