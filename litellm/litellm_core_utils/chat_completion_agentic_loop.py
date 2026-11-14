@@ -1,7 +1,7 @@
 # this is a patch to allow for agentic loops covering llm_http_handler.py and openai sdk based calling flows for the .completion() api
 
 import json
-from collections.abc import Awaitable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Iterable, Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, TypeVar
@@ -18,7 +18,12 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    parse_allowed_tools_tool_choice,
+    tool_calls_the_choice_excludes,
+)
 from litellm.litellm_core_utils.core_helpers import qualify_agentic_followup_model
+from litellm.litellm_core_utils.get_litellm_params import AGENTIC_LOOP_TOOL_CHOICE_KEY
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict, object_items
@@ -34,7 +39,11 @@ from litellm.types.integrations.custom_logger import (
     is_interception_internal_key,
     stashed_stream_options,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import (
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
+    ModelResponse,
+)
 from litellm.utils import CustomStreamWrapper
 
 _DispatchResult: Final = TypeVar("_DispatchResult")
@@ -90,6 +99,11 @@ def _post_hook_overridden(callback: CustomLogger) -> bool:
 
 
 _STREAM_OPTIONS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_HOOK_RESPONSE: Final = TypeAdapter(object)
+
+
+def _plan_response_override(plan: AgenticLoopPlan) -> object | None:
+    return plan.response_override
 
 
 def _stashed_stream_options(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -181,6 +195,40 @@ def _end_refused_turn(
     return finalized if replay is None else replay
 
 
+def _tool_call_name(call: ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall) -> str:
+    match call:
+        case ChatCompletionMessageCustomToolCall():
+            return call.custom.name
+        case ChatCompletionMessageToolCall():
+            return call.function.name or ""
+
+
+def _called_tool_names(response: ModelResponse) -> tuple[str, ...]:
+    calls: Final = chain.from_iterable(choice.message.tool_calls or () for choice in response.choices)
+    return tuple(map(_tool_call_name, calls))
+
+
+def _server_fulfilled_tool_names(callbacks: Iterable[CustomLogger]) -> frozenset[str]:
+    return frozenset(chain.from_iterable(callback.server_fulfilled_tool_names for callback in callbacks))
+
+
+def holds_a_call_the_choice_excludes(
+    tool_names: Iterable[str], kwargs: Mapping[str, object], callbacks: Iterable[CustomLogger]
+) -> bool:
+    server_fulfilled: Final = _server_fulfilled_tool_names(callbacks)
+    client_tool_names: Final = (name for name in tool_names if name not in server_fulfilled)
+    return bool(tool_calls_the_choice_excludes(kwargs.get(AGENTIC_LOOP_TOOL_CHOICE_KEY), client_tool_names))
+
+
+def with_caller_tool_choice(
+    kwargs: Mapping[str, object], optional_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    tool_choice: Final = optional_params.get("tool_choice")
+    if AGENTIC_LOOP_TOOL_CHOICE_KEY in kwargs or parse_allowed_tools_tool_choice(tool_choice) is None:
+        return kwargs
+    return {**kwargs, AGENTIC_LOOP_TOOL_CHOICE_KEY: tool_choice}
+
+
 def _request_tools(optional_params: Mapping[str, object]) -> list[dict[str, object]]:
     return [tool for tool in object_items(optional_params.get("tools")) if is_str_keyed_dict(tool)]
 
@@ -236,6 +284,35 @@ async def _refused_chat_turn(
 
     claimed: Final = await every_claimed_tool_call(refused_tool_calls, other_gates())
     return finalize_refused_chat_turn(response, claimed)
+
+
+def _fingerprint_of_a_turn_to_run(
+    *,
+    response: ModelResponse,
+    request_kwargs: Mapping[str, object],
+    callbacks: Sequence[CustomLogger],
+    tool_calls: object,
+    fingerprints: Sequence[str],
+    depth: int,
+    max_loops: int,
+    model: str,
+    stream: bool,
+) -> str | None:
+    if holds_a_call_the_choice_excludes(_called_tool_names(response), request_kwargs, callbacks):
+        return None
+    try:
+        return _check_agentic_loop_safety(
+            tool_calls=tool_calls,
+            fingerprints=fingerprints,
+            depth=depth,
+            max_loops=max_loops,
+            model=model,
+        )
+    except AgenticLoopSafetyError as e:
+        if stream:
+            raise
+        verbose_logger.warning("LiteLLM.AgenticLoopRefused: ending turn [rail=%s]", type(e).__name__)
+        return None
 
 
 def _with_agentic_loop_metadata(kwargs_for_followup: Mapping[str, object]) -> Mapping[str, object]:
@@ -324,8 +401,10 @@ async def _execute_chat_completion_agentic_plan(
             )
         if _post_hook_overridden(callback):
             try:
-                response_followup = await callback.async_post_agentic_loop_response_hook(
-                    response=response_followup, plan=plan, kwargs=kwargs
+                response_followup = _HOOK_RESPONSE.validate_python(
+                    await callback.async_post_agentic_loop_response_hook(
+                        response=response_followup, plan=plan, kwargs=kwargs
+                    )
                 )
             except Exception as e:
                 _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
@@ -371,7 +450,8 @@ async def maybe_run_chat_completion_agentic_loop(
     stream: bool,
 ) -> ModelResponse | CustomStreamWrapper | None:
     callbacks: Final = _custom_loggers(logging_obj)
-    depth, max_loops, fingerprints = _agentic_loop_settings(kwargs)
+    request_kwargs: Final = with_caller_tool_choice(kwargs, optional_params)
+    depth, max_loops, fingerprints = _agentic_loop_settings(request_kwargs)
     tools: Final = _request_tools(optional_params)
 
     for callback in callbacks:
@@ -379,7 +459,7 @@ async def maybe_run_chat_completion_agentic_loop(
             continue
 
         hook_kwargs = {
-            **kwargs,
+            **request_kwargs,
             "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
             "custom_llm_provider": custom_llm_provider,
         }
@@ -403,18 +483,18 @@ async def maybe_run_chat_completion_agentic_loop(
         if not should_run:
             continue
 
-        try:
-            fingerprint = _check_agentic_loop_safety(
-                tool_calls=tool_calls,
-                fingerprints=fingerprints,
-                depth=depth,
-                max_loops=max_loops,
-                model=model,
-            )
-        except AgenticLoopSafetyError as e:
-            if stream:
-                raise
-            verbose_logger.warning("LiteLLM.AgenticLoopRefused: ending turn [rail=%s]", type(e).__name__)
+        fingerprint = _fingerprint_of_a_turn_to_run(
+            response=response,
+            request_kwargs=request_kwargs,
+            callbacks=callbacks,
+            tool_calls=tool_calls,
+            fingerprints=fingerprints,
+            depth=depth,
+            max_loops=max_loops,
+            model=model,
+            stream=stream,
+        )
+        if fingerprint is None:
             return _end_refused_turn(
                 await _refused_chat_turn(
                     callbacks,
@@ -425,9 +505,9 @@ async def maybe_run_chat_completion_agentic_loop(
                     messages=messages,
                     tools=tools,
                     custom_llm_provider=custom_llm_provider,
-                    kwargs=kwargs,
+                    kwargs=request_kwargs,
                 ),
-                kwargs=kwargs,
+                kwargs=request_kwargs,
                 depth=depth,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -471,7 +551,7 @@ async def maybe_run_chat_completion_agentic_loop(
             callback=callback,
             model=model,
             optional_params=optional_params,
-            kwargs=kwargs,
+            kwargs=dict(request_kwargs),
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
             depth=depth,
@@ -482,7 +562,7 @@ async def maybe_run_chat_completion_agentic_loop(
 
     return _converted_stream_replay(
         response,
-        kwargs=kwargs,
+        kwargs=request_kwargs,
         depth=depth,
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -526,18 +606,18 @@ async def run_chat_completion_agentic_hooks(
         if not should_run:
             continue
 
-        try:
-            fingerprint = _check_agentic_loop_safety(
-                tool_calls=tool_calls,
-                fingerprints=fingerprints,
-                depth=depth,
-                max_loops=max_loops,
-                model=model,
-            )
-        except AgenticLoopSafetyError as e:
-            if stream:
-                raise
-            verbose_logger.warning("LiteLLM.AgenticLoopRefused: ending turn [rail=%s]", type(e).__name__)
+        fingerprint = _fingerprint_of_a_turn_to_run(
+            response=response,
+            request_kwargs=kwargs,
+            callbacks=callbacks,
+            tool_calls=tool_calls,
+            fingerprints=fingerprints,
+            depth=depth,
+            max_loops=max_loops,
+            model=model,
+            stream=stream,
+        )
+        if fingerprint is None:
             return await _refused_chat_turn(
                 callbacks,
                 callback,
@@ -573,8 +653,8 @@ async def run_chat_completion_agentic_hooks(
             kwargs=hook_kwargs,
         )
 
-        if plan.response_override is not None:
-            return plan.response_override
+        if (response_override := _plan_response_override(plan)) is not None:
+            return response_override
         if plan.terminate:
             verbose_logger.debug(
                 "Agentic chat loop terminated by callback=%s reason=%s", type(callback).__name__, plan.stop_reason

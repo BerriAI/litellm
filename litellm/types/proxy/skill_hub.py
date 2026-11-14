@@ -7,6 +7,17 @@ from pydantic import ConfigDict, Field
 from litellm.models.skill_submission import SubmissionOperation, SubmissionStatus
 from litellm.types.llms.base import LiteLLMBaseModel
 
+SkillSortField: TypeAlias = Literal[
+    "name",
+    "download_count",
+    "updated_at",
+    "created_at",
+    "created_by",
+    "published_by",
+    "approved_by",
+    "security_scan_passed",
+]
+
 
 class SkillHubSkill(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
@@ -16,6 +27,11 @@ class SkillHubSkill(LiteLLMBaseModel):
     description: str | None = None
     version: str | None = None
     updated_at: datetime | None = None
+    created_at: datetime | None = None
+    created_by: str | None = None
+    approved_by: str | None = None
+    published_by: str | None = None
+    security_scan_passed: bool = False
     visibility: Literal["public", "private"]
     source: Mapping[str, str]
     download_url: str | None = None
@@ -23,12 +39,11 @@ class SkillHubSkill(LiteLLMBaseModel):
     domain: str | None = None
     namespace: str | None = None
     keywords: tuple[str, ...] | None = None
-    download_count: int | None = Field(
-        None, description="Gateway ZIP downloads, included in proxy-admin catalog listings"
-    )
+    download_count: int | None = Field(None, description="Gateway ZIP downloads, including repeat downloads")
 
 
 class SkillHubList(LiteLLMBaseModel):
+    tags: tuple[str, ...] = ()
     model_config = ConfigDict(frozen=True)
 
     skills: tuple[SkillHubSkill, ...]
@@ -61,6 +76,14 @@ class SkillHubMetadata(LiteLLMBaseModel):
 
 class SkillHubPublication(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class SkillHubRestore(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_skill_id: str = Field(description="Current skill ID read by the editor")
+    expected_updated_at: datetime | None = Field(description="Current updated_at read by the editor, including null")
+    version: str | None = Field(None, description="Higher semantic version, or omit/null for an automatic patch bump")
 
 
 class SkillHubVersion(LiteLLMBaseModel):
@@ -133,6 +156,8 @@ class SkillHubSubmission(LiteLLMBaseModel):
     reviewed_by: str | None
     reviewed_at: datetime | None
     rejection_reason: str | None
+    revision: int = Field(0, ge=0, description="Proposal revision used to prevent stale edits and reviews")
+    can_edit: bool = Field(False, description="Whether the caller may edit or withdraw this pending submission")
 
 
 class SkillHubSubmissionList(LiteLLMBaseModel):
@@ -150,6 +175,16 @@ class SkillHubSubmissionDetail(LiteLLMBaseModel):
     current_skill: SkillHubSkill | None
 
 
+class SkillHubSubmissionRevision(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_revision: int = Field(ge=0, description="Revision read from the submission detail")
+
+
+class SkillHubSubmissionEdit(SkillHubMetadata):
+    expected_revision: int = Field(ge=0, description="Revision read from the submission detail")
+
+
 class SkillHubReviewResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -163,3 +198,4 @@ class SkillHubRejection(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     reason: str | None = Field(None, max_length=2000)
+    expected_revision: int | None = Field(None, ge=0)

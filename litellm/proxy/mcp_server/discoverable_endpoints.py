@@ -6,7 +6,18 @@ import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    SupportsIndex,
+    SupportsInt,
+    overload,
+    runtime_checkable,
+)
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
@@ -15,6 +26,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from mcp.client.auth.utils import get_client_metadata_scopes, union_scopes
 from mcp.shared.auth import OAuthMetadata
 from pydantic import ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+from typing_extensions import Buffer
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -99,15 +111,18 @@ from litellm.proxy.mcp_server.oauth_identity_binding import (
 from litellm.proxy.mcp_server.oauth_utils import (
     CIMD_METADATA_PATH,
     TOKEN_NO_CACHE_HEADERS,
+    asks_for_wildcard,
     build_upstream_authorize_url,
     build_upstream_oauth2_token_request,
     configured_proxy_base_url,
     get_cimd_client_id,
     get_cimd_document_url,
     get_request_base_url,
+    grant_covers_scopes,
     needs_cimd_discovery,
     oauth_client_registration_matches,
     resolve_upstream_resource,
+    server_scope_names,
     validate_trusted_redirect_uri,
     well_known_root_suffix,
 )
@@ -671,10 +686,24 @@ def _validate_token_response(
             )
 
 
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+class _OAuthTokenResponseFields(Protocol):
+    @overload
+    def get(self, key: Literal["access_token", "refresh_token"], /) -> str | None: ...
+    @overload
+    def get(self, key: Literal["expires_in"], /) -> object: ...
+    @overload
+    def get(self, key: Literal["scope"], default: str | None, /) -> object: ...
+
+
 async def _store_per_user_token_server_side(
     server: MCPServer,
     user_id: str,
-    token_response: dict[str, Any],
+    token_response: _OAuthTokenResponseFields,
     identity_binding_proof: str | None = None,
     cimd_client_id: str | None = None,
     requested_scope: str | None = None,
@@ -697,7 +726,11 @@ async def _store_per_user_token_server_side(
 
     raw_expires: Final = token_response.get("expires_in")
     try:
-        expires_in: int | None = int(raw_expires) if raw_expires is not None else None
+        expires_in: int | None = (
+            int(raw_expires)
+            if isinstance(raw_expires, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc))
+            else None
+        )
     except (TypeError, ValueError):
         expires_in = None
 
@@ -1035,7 +1068,10 @@ async def _managed_authorization_scope(
         if scope_user_id and prisma_client is not None
         else None
     )
-    merged_scope: Final = union_scopes(" ".join(prior_grant.get("scopes") or ()) if prior_grant else None, scope)
+    kept_scope: Final = (
+        None if prior_grant is None or asks_for_wildcard(scope) else " ".join(prior_grant.get("scopes") or ())
+    )
+    merged_scope: Final = union_scopes(kept_scope, scope)
     selected_scope: Final = (
         get_client_metadata_scopes(
             merged_scope,
@@ -2537,6 +2573,9 @@ async def _vendor_credential_state(
         get_user_oauth_credential,
         oauth_grant_state,
     )
+    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import at module load
+        global_mcp_server_manager,
+    )
     from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # circular import at module load
 
     if prisma_client is None:
@@ -2548,7 +2587,12 @@ async def _vendor_credential_state(
     if oauth_grant_state(credential) == "absent":
         return "absent"
     granted_scopes: Final = credential.get("scopes") if credential else None
-    return "present" if set(requested_scopes).issubset(granted_scopes or ()) else "absent"
+    covered: Final = grant_covers_scopes(
+        tuple(granted_scopes or ()),
+        requested_scopes,
+        lambda: server_scope_names(global_mcp_server_manager.get_mcp_server_by_id(server_id)),
+    )
+    return "present" if covered else "absent"
 
 
 @router.get("/authorize/flow")
@@ -2571,14 +2615,19 @@ async def authorize_complete(
     delivery: str | None = Form(None),
     team_id: str | None = Form(None),
     decision: str | None = Form(None),
+    server: Annotated[tuple[str, ...], Form()] = (),
 ) -> Response:
     """Finish an aggregate connect flow: mint the gateway authorization code for the
     signed-in user and hand it back to the DCR client, by 303 redirect (default) or, for
     a loopback client on a different machine, as a copyable callback URL
     (``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an
     anonymous or bad-flow request just 400s. The native-client consent page adds
-    ``decision`` (approve or deny) and the ``team_id`` the credential is attributed to."""
-    from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415  # circular import at module load
+    ``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.
+    Each ``server`` field is the id of a server the connect page shows as on."""
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
+        master_key,
+        user_api_key_cache,
+    )
 
     return await complete_connect_flow(
         request=request,
@@ -2590,6 +2639,8 @@ async def authorize_complete(
         decision=decision,
         lookup_vendor_credential=_vendor_credential_state,
         lookup_server_reachability=_user_can_reach_mcp_server,
+        selected_server_ids=server,
+        master_key=master_key,
     )
 
 
