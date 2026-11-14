@@ -5528,6 +5528,8 @@ async def generate_key_helper_fn(
         }
         if teams is not None:
             user_data["teams"] = teams
+        if request_type == "user" and budget_limits_json is not None:
+            user_data["budget_limits"] = budget_limits_json
         if model_max_budget:
             # Only when supplied: the SSO and default-key callers reach this with the
             # empty default, and writing that would clear an existing user's budgets.
@@ -5559,7 +5561,7 @@ async def generate_key_helper_fn(
             "organization_id": organization_id,
             "budget_id": budget_id,
             "blocked": blocked,
-            "budget_limits": budget_limits_json,
+            "budget_limits": None if request_type == "user" and team_id is None else budget_limits_json,
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],

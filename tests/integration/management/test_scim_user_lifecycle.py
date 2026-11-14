@@ -13,6 +13,7 @@ SCIM_HEADERS: Final = {"Content-Type": "application/scim+json"}
 SCIM_CORE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:User"
 SCIM_ENTERPRISE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
 SCIM_LIST_RESPONSE_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+SCIM_PATCH_OP_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 
 
 class ScimResponseModel(BaseModel):
@@ -461,6 +462,84 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
         assert object_value(refused.json()) == expected_refusal, refused.text
         key_b: Final = _key_with_cleanup(scenario, user_id=user_name, team_id=team_b, models=[model_b])
         _assert_serving(gateway, model_b, key_b)
+
+
+def test_a_group_with_no_team_does_not_hold_back_a_deactivation(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        team: Final = scenario.team(models=[model])
+        team_info: Final = object_value(gateway.get("/team/info", {"team_id": team})["team_info"])
+        expected_group: Final = ScimGroupRef(value=team, display=string_value(team_info["team_alias"]), type="direct")
+        no_such_team: Final = f"no-such-team-{uuid.uuid4().hex}"
+        user_name: Final = f"scim-leaver-{uuid.uuid4().hex}@example.com"
+        profile: Final[dict[str, JsonValue]] = {
+            "schemas": [SCIM_CORE_USER_SCHEMA],
+            "userName": user_name,
+            "name": {"givenName": "Group", "familyName": "Leaver"},
+            "emails": [{"value": user_name, "primary": True, "type": "work"}],
+            "active": True,
+        }
+        created: Final = _scim_request(gateway, "POST", "/scim/v2/Users", profile)
+        scenario.cleanups.callback(_delete_user_if_present, gateway, user_name)
+        assert created.status_code == 201, created.text
+        key: Final = _key_with_cleanup(scenario, user_id=user_name, models=[model])
+        _assert_serving(gateway, model, key)
+
+        deactivated: Final = _scim_request(
+            gateway,
+            "PATCH",
+            f"/scim/v2/Users/{user_name}",
+            {
+                "schemas": [SCIM_PATCH_OP_SCHEMA],
+                "Operations": [
+                    {"op": "replace", "path": "active", "value": False},
+                    {"op": "replace", "path": "groups", "value": [{"value": no_such_team}]},
+                    {"op": "add", "path": "groups", "value": [{"value": team}]},
+                ],
+            },
+        )
+
+        assert deactivated.status_code == 200, deactivated.text
+        readback: Final = _scim_request(gateway, "GET", f"/scim/v2/Users/{user_name}")
+        assert readback.status_code == 200, readback.text
+        readback_user: Final = ScimUserResponse.model_validate(readback.json())
+        assert readback_user.active is False, readback.text
+        assert readback_user.groups == [expected_group], readback.text
+        assert _has_team_member(gateway, team, user_name), _team_members(gateway, team)
+        assert read_rows('SELECT teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (user_name,)) == [
+            {"teams": [team]}
+        ], readback.text
+        blocked: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "SCIM deactivated user"}]},
+            key=key,
+        )
+        assert blocked.status_code == 401, blocked.text
+
+        reactivated: Final = _scim_request(
+            gateway,
+            "PUT",
+            f"/scim/v2/Users/{user_name}",
+            {**profile, "groups": [{"value": team}, {"value": no_such_team}]},
+        )
+        assert reactivated.status_code == 200, reactivated.text
+        reactivated_user: Final = ScimUserResponse.model_validate(reactivated.json())
+        assert reactivated_user.active is True, reactivated.text
+        assert reactivated_user.groups == [expected_group], reactivated.text
+        _assert_serving(gateway, model, key)
+
+        deactivated_by_put: Final = _scim_request(
+            gateway,
+            "PUT",
+            f"/scim/v2/Users/{user_name}",
+            {**profile, "active": False, "groups": [{"value": no_such_team}]},
+        )
+        assert deactivated_by_put.status_code == 200, deactivated_by_put.text
+        deactivated_user: Final = ScimUserResponse.model_validate(deactivated_by_put.json())
+        assert deactivated_user.active is False, deactivated_by_put.text
+        assert deactivated_user.groups == [], deactivated_by_put.text
+        assert not _has_team_member(gateway, team, user_name), _team_members(gateway, team)
 
 
 def test_scim_create_persists_external_id_as_the_sso_user_id(gateway: Gateway) -> None:

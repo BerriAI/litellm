@@ -76,6 +76,9 @@ from .utils import (
     StandardLoggingRoutingDecision,
 )
 from .utils import (
+    github_copilot_oauth_litellm_params as _github_copilot_oauth_litellm_params,
+)
+from .utils import (
     server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
 )
 
@@ -496,6 +499,10 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     token_exchange_profile: str | None = None
     token_exchange_scope: str | None = None
     token_exchange_audience: str | None = None
+    github_copilot_app_id: str | int | None = None
+    github_copilot_app_installation_id: str | int | None = None
+    github_copilot_app_private_key_ref: str | None = None
+    github_copilot_app_private_key: str | None = None
 
 
 def _api_key_secret_reference(fields: Mapping[str, object]) -> tuple[str, ...]:
@@ -1588,8 +1595,13 @@ def reject_server_owned_wif_fields(body: Mapping[str, object]) -> None:
     for param in _server_owned_wif_litellm_params:
         if param in submitted_names:
             raise ValueError(
-                f"Rejected Request: {param} is a server-owned workload identity federation or OAuth token exchange "
-                "parameter "
+                f"Rejected Request: {param} is a server-owned {server_owned_param_kind(param)} parameter "
                 "and cannot be set in a request body. A proxy admin configures it on the deployment "
                 "or on a stored credential."
             )
+
+
+def server_owned_param_kind(param: str) -> str:
+    if param in _github_copilot_oauth_litellm_params:
+        return "GitHub Copilot authentication"
+    return "workload identity federation or OAuth token exchange"

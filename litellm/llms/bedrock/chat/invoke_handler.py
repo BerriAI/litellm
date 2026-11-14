@@ -1,7 +1,7 @@
 import json
 import types
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeVar
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -32,6 +32,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported, aiter_bytes_then_close
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
@@ -61,6 +62,7 @@ from ..common_utils import (
     get_bedrock_stream_event_statuses,
     get_bedrock_tool_name,
     parse_bedrock_event_stream,
+    served_service_tier,
 )
 
 bedrock_tool_name_mappings: Final[InMemoryCache] = InMemoryCache(max_size_in_memory=50, default_ttl=600)
@@ -218,6 +220,15 @@ def _stream_decoder(
     return AWSEventStreamDecoder(model=model, json_mode=json_mode)
 
 
+_StreamChunk: Final = TypeVar("_StreamChunk")
+
+
+def _with_served_service_tier(chunk: _StreamChunk, served_tier: str | None) -> _StreamChunk:
+    if served_tier is None or not isinstance(chunk, ModelResponseStream):
+        return chunk
+    return chunk.model_copy(update={"service_tier": served_tier})
+
+
 async def make_call(
     client: AsyncHTTPHandler | None,
     api_base: str,
@@ -289,7 +300,7 @@ async def make_call(
                 response_format_schema=response_format_schema_from_request(data, json_mode),
             )
             completion_stream = decoder.aiter_bytes(
-                response.aiter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
+                aiter_bytes_then_close(response, chunk_size=stream_chunk_size), response_headers=response.headers
             )
 
         # LOGGING
@@ -851,6 +862,7 @@ class AWSEventStreamDecoder:
         event_stream_buffer: Final = EventStreamBuffer()
         tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
+        served_tier: Final = served_service_tier(response_headers)
         for chunk in iterator:
             event_stream_buffer.add_data(chunk)
             tally.add_chunk(chunk)
@@ -859,7 +871,7 @@ class AWSEventStreamDecoder:
                 if message:
                     # sse_event = ServerSentEvent(data=message, event="completion")
                     _data = json.loads(message)
-                    yield self.chunk_parser(chunk_data=_data)
+                    yield _with_served_service_tier(self.chunk_parser(chunk_data=_data), served_tier)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
@@ -876,14 +888,18 @@ class AWSEventStreamDecoder:
         event_stream_buffer: Final = EventStreamBuffer()
         tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
-        async for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            tally.add_chunk(chunk)
-            for event in event_stream_buffer:
-                message = self._decode_event(event, tally, request_id_headers)
-                if message:
-                    _data = json.loads(message)
-                    yield self.chunk_parser(chunk_data=_data)
+        served_tier: Final = served_service_tier(response_headers)
+        try:
+            async for chunk in iterator:
+                event_stream_buffer.add_data(chunk)
+                tally.add_chunk(chunk)
+                for event in event_stream_buffer:
+                    message = self._decode_event(event, tally, request_id_headers)
+                    if message:
+                        _data = json.loads(message)
+                        yield _with_served_service_tier(self.chunk_parser(chunk_data=_data), served_tier)
+        finally:
+            await aclose_if_supported(iterator)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
