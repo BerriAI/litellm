@@ -6,7 +6,7 @@ import math
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_fo
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     get_annual_budget_window_start,
+    get_budget_window_start_from_reset,
     is_annual_budget_duration,
 )
 from litellm.litellm_core_utils.duration_parser import (
@@ -1403,23 +1404,25 @@ def get_budget_window_start(window: object, reset_settings: BudgetResetSettings 
     budget_duration: Final = window_dict.get("budget_duration")
     if budget_duration is None:
         return None
+    duration: Final = str(budget_duration)
     try:
-        if is_annual_budget_duration(str(budget_duration)):
+        if is_annual_budget_duration(duration):
             annual_reset_at: Final = _coerce_datetime(window_dict.get("reset_at"))
             if annual_reset_at is not None:
                 return get_annual_budget_window_start(
                     annual_reset_at, (reset_settings or get_budget_reset_settings()).timezone
                 )
-        duration_seconds: Final = duration_in_seconds(str(budget_duration))
+        duration_in_seconds(duration)  # rejects a duration the reset job could never apply
+        timezone_str: Final = (reset_settings or get_budget_reset_settings()).timezone
     except Exception:
         return None
 
     reset_at = _coerce_datetime(window_dict.get("reset_at"))
     if reset_at is None:
-        return datetime.now(timezone.utc) - timedelta(seconds=duration_seconds)
+        return get_budget_window_start_from_reset(datetime.now(timezone.utc), duration, timezone_str)
     if reset_at.tzinfo is None:
         reset_at = reset_at.replace(tzinfo=timezone.utc)
-    return reset_at - timedelta(seconds=duration_seconds)
+    return get_budget_window_start_from_reset(reset_at, duration, timezone_str)
 
 
 def _coerce_datetime(value: object) -> datetime | None:

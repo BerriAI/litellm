@@ -176,6 +176,37 @@ def get_annual_budget_window_start(reset_at: datetime, timezone_str: str) -> dat
     return _shift_months(boundary, -12).astimezone(timezone.utc)
 
 
+def budget_duration_in_months(duration: str) -> int | None:
+    """Calendar months `duration` spans: `Nmo`, plus `30d`, which `_handle_day_reset`
+    resets on the 1st and `get_budget_window_start` already counts as one month."""
+    value, unit = _parse_duration(normalize_duration(duration))
+    if not value:
+        return None
+    if unit == "mo":
+        return value
+    if unit == "d" and value == 30:
+        return 1
+    return None
+
+
+def get_budget_window_start_from_reset(reset_at: datetime, duration: str, timezone_str: str = "UTC") -> datetime:
+    """Start of the `duration` window that ends at `reset_at`.
+
+    `Nmo` intervals — and `30d`, which the scheduler resets on the 1st — are counted on
+    the calendar in `timezone_str` from the stored boundary, the same rule
+    `get_next_standardized_reset_time` used to pick it, so a `2mo` window ending
+    1 September opens on 1 July no matter when it is read. Measuring months with
+    `duration_in_seconds` counts them from *now*, which puts that start on 2 July and
+    leaves 1 July's spend outside the window it belongs to; for `30d` it lands on
+    whatever day the closed month's length leaves, opening a window ending 1 March on
+    31 January. Fixed-length units are subtracted as seconds either way."""
+    months: Final = budget_duration_in_months(duration)
+    if months is None:
+        return reset_at - timedelta(seconds=duration_in_seconds(duration))
+    boundary: Final = _setup_timezone(reset_at, timezone_str)[0]
+    return _shift_months(boundary, -months).astimezone(timezone.utc)
+
+
 def get_budget_window_start(duration: str, reset_at: datetime) -> datetime:
     """Start of the budget period that ends at `reset_at`, under the same rules
     `get_next_standardized_reset_time` used to pick it: `30d` and `Nmo` span calendar
@@ -259,13 +290,6 @@ def _next_occurrence(
     if candidate <= current_time:
         return candidate + period
     return candidate
-
-
-def _first_of_next_month(first_of_month: datetime) -> datetime:
-    """Given the 1st of some month, return the 1st of the following month."""
-    if first_of_month.month == 12:
-        return first_of_month.replace(year=first_of_month.year + 1, month=1)
-    return first_of_month.replace(month=first_of_month.month + 1)
 
 
 def _handle_day_reset(
@@ -398,7 +422,9 @@ def _handle_month_reset(
 ) -> datetime:
     """
     Handle monthly reset times. Resets land on the 1st at `reset_time_of_day`; if the
-    1st of the current month at that time has already passed, roll to the 1st of next month.
+    1st of the current month at that time has already passed, roll `value` months ahead
+    so `Nmo` windows stay aligned with the calendar the way `_shift_months` and
+    `get_budget_window_start` already treat them.
 
     Args:
         current_time: Current datetime
@@ -417,11 +443,11 @@ def _handle_month_reset(
             if annual_candidate <= current_time
             else annual_candidate
         )
-    if value != 1:
-        raise ValueError("Calendar resets support 1 month or 12 month intervals")
+    if value < 1:
+        raise ValueError("Calendar resets require a positive number of months")
 
     first_of_this_month: Final = base_midnight.replace(day=1)
     candidate: Final = _apply_time_of_day(first_of_this_month, reset_time_of_day)
     if candidate <= current_time:
-        return _apply_time_of_day(_first_of_next_month(first_of_this_month), reset_time_of_day)
+        return _apply_time_of_day(_shift_months(first_of_this_month, value), reset_time_of_day)
     return candidate

@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds_from,
     get_annual_budget_window_start,
     get_budget_window_start,
+    get_budget_window_start_from_reset,
     get_next_standardized_reset_time,
     is_annual_budget_duration,
 )
@@ -364,6 +365,36 @@ class TestResetTimeOfDay(unittest.TestCase):
         result = get_next_standardized_reset_time("1mo", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
 
+    def test_multi_month_reset_rolls_the_requested_number_of_months(self):
+        # `Nmo` is calendar-aware everywhere else in this module (duration_in_seconds,
+        # duration_in_seconds_from, get_budget_window_start), so the reset time has to
+        # roll N months too instead of rejecting anything but 1mo.
+        now = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time("2mo", now, "UTC"),
+            datetime(2023, 7, 1, 0, 0, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            get_next_standardized_reset_time(
+                "3mo", datetime(2023, 5, 15, 15, 0, 0, tzinfo=timezone.utc), "UTC", reset_time_of_day=time(12, 0)
+            ),
+            datetime(2023, 8, 1, 12, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_multi_month_reset_crosses_the_year_boundary(self):
+        now = datetime(2023, 12, 15, 9, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time("2mo", now, "UTC"),
+            datetime(2024, 2, 1, 0, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_multi_month_reset_before_this_months_offset_stays_this_month(self):
+        now = datetime(2023, 6, 1, 9, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time("2mo", now, "UTC", reset_time_of_day=time(12, 0)),
+            datetime(2023, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+        )
+
     def test_custom_day_reset_applies_offset(self):
         now = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
         result = get_next_standardized_reset_time("3d", now, "UTC", reset_time_of_day=time(12, 0))
@@ -480,6 +511,25 @@ class TestGetBudgetWindowStart(unittest.TestCase):
             get_budget_window_start("1y", datetime(2024, 1, 16, tzinfo=timezone.utc)),
             datetime(2024, 1, 15, tzinfo=timezone.utc),
         )
+
+    def test_window_start_from_reset_agrees_with_the_scheduler(self):
+        """The helper the proxy's read and roll paths use has to land on the boundary
+        `get_budget_window_start` documents, or the two paths count different windows
+        for the same stored reset_at. Durations the scheduler does not recognise are
+        left out: the helper subtracts them as seconds and raises on the ones that
+        cannot be parsed."""
+        created_at: Final = datetime(2024, 10, 1, 0, 30, tzinfo=timezone.utc)
+        durations: Final = (
+            "1d", "24h", "daily", "7d", "weekly", "2w", "10d", "30d", "monthly",
+            "1mo", "2mo", "3mo", "4h", "5h", "30m", "45s",
+        )
+        for duration in durations:
+            with self.subTest(duration=duration):
+                reset_at = get_next_standardized_reset_time(duration, created_at, "UTC")
+                window_start = get_budget_window_start_from_reset(reset_at, duration, "UTC")
+                self.assertEqual(window_start, get_budget_window_start(duration, reset_at))
+                self.assertLessEqual(window_start, created_at)
+                self.assertEqual(get_next_standardized_reset_time(duration, window_start, "UTC"), reset_at)
 
 
 @pytest.mark.parametrize(
