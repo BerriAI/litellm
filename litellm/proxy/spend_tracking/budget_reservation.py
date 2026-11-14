@@ -7,7 +7,7 @@ import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from itertools import chain
+from itertools import chain, product
 from types import MappingProxyType
 from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
 
@@ -77,7 +77,7 @@ from litellm.router import Router
 from litellm.types.proxy.auth.customer_hierarchy import CustomerScopeKey
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, LlmProviders
 
 
 @dataclass
@@ -1523,6 +1523,13 @@ def _estimate_request_max_cost_for_model(
     llm_router: Router | None,
     input_tokens: int | None = None,
 ) -> float | None:
+    model_infos: Final = _get_model_cost_infos(model=model, llm_router=llm_router)
+    modes: Final = _completion_max_output_token_modes(
+        route=route,
+        model=model,
+        llm_router=llm_router,
+        model_infos=model_infos,
+    )
     estimates: Final = [
         _max_cost_for_cost_info(
             request_body=request_body,
@@ -1530,8 +1537,9 @@ def _estimate_request_max_cost_for_model(
             model=model,
             model_info=model_info,
             input_tokens=input_tokens,
+            include_max_output_tokens=include_max_output_tokens,
         )
-        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+        for model_info, include_max_output_tokens in product(model_infos, modes)
     ]
     valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
     return max(valid_estimates) if valid_estimates else None
@@ -1543,6 +1551,8 @@ def _max_cost_for_cost_info(
     model: str,
     model_info: Mapping[str, object],
     input_tokens: int | None = None,
+    *,
+    include_max_output_tokens: bool | None = None,
 ) -> float | None:
     image_cost: Final = _estimate_image_generation_cost(
         request_body=request_body,
@@ -1562,6 +1572,7 @@ def _max_cost_for_cost_info(
         request_body=request_body,
         route=route,
         model_info=model_info,
+        include_max_output_tokens=include_max_output_tokens,
     )
     if estimated_input_tokens is None or output_tokens is None:
         return None
@@ -1794,11 +1805,22 @@ def _estimate_output_tokens(
     request_body: dict,
     route: str,
     model_info: Mapping[str, object],
+    *,
+    include_max_output_tokens: bool | None = None,
 ) -> int | None:
     if _is_input_only_route(route=route):
         return 0
 
-    requested: Final = _requested_output_tokens(request_body)
+    resolved_include_max_output: Final = (
+        _backend_supports_chat_max_output_tokens(model=None, model_info=model_info)
+        if include_max_output_tokens is None
+        else include_max_output_tokens
+    )
+    requested: Final = _requested_output_tokens(
+        request_body,
+        route=route,
+        include_completion_max_output_tokens=resolved_include_max_output,
+    )
 
     # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
     # (1) Without an explicit cap we still need a finite reservation so the
@@ -1808,20 +1830,170 @@ def _estimate_output_tokens(
     #     the reservation up to remaining team headroom and pin the counter
     #     at the cap — the model can only physically emit max_output_tokens
     #     anyway, so reserving more is both wasteful and a DoS surface.
-    model_ceiling: Final = _to_int(model_info.get("max_output_tokens")) or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+    raw_model_ceiling: Final = _to_int(model_info.get("max_output_tokens"))
+    model_ceiling: Final = (
+        raw_model_ceiling
+        if raw_model_ceiling is not None and raw_model_ceiling > 0
+        else DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+    )
     return min(DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK if requested is None else requested, model_ceiling)
 
 
+_RESPONSES_CALL_TYPES: Final = frozenset({CallTypes.aresponses, CallTypes.responses})
+_ANTHROPIC_MESSAGES_CALL_TYPES: Final = frozenset({CallTypes.anthropic_messages, CallTypes.aanthropic_messages})
+_COMPLETION_CALL_TYPES: Final = frozenset(
+    {CallTypes.acompletion, CallTypes.completion, CallTypes.atext_completion, CallTypes.text_completion}
+)
+_COMPLETION_OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens")
+_RESPONSES_OUTPUT_TOKEN_FIELDS: Final = ("max_output_tokens",)
 _OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_output_tokens")
+_GEMINI_MODEL_INFO_PROVIDERS: Final = frozenset(
+    {
+        "gemini",
+        "vertex_ai_beta",
+        "vertex_ai-language-models",
+        "vertex_ai-chat-models",
+        "vertex_ai-code-chat-models",
+        "vertex_ai-text-models",
+        "vertex_ai-code-text-models",
+        "vertex_ai-vision-models",
+    }
+)
 
 
-def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
+def _string_field(obj: object, key: str) -> str | None:
+    value: Final = _get_value(obj, key)
+    return value if isinstance(value, str) and value else None
+
+
+def _resolve_model_and_provider(
+    model: str | None,
+    custom_llm_provider: str | None,
+) -> tuple[str | None, str | None]:
+    if not model:
+        return model, custom_llm_provider
+    from litellm.utils import get_llm_provider
+
+    try:
+        provider_info: Final = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    except (ValueError, litellm.BadRequestError):
+        return model, custom_llm_provider
+    return provider_info[0], provider_info[1]
+
+
+def _resolve_llm_provider_enum(provider: str) -> LlmProviders | None:
+    try:
+        return LlmProviders(provider)
+    except ValueError:
+        return None
+
+
+def _backend_supports_chat_max_output_tokens(
+    model: str | None,
+    custom_llm_provider: str | None = None,
+    model_info: object = None,
+) -> bool:
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+    from litellm.utils import ProviderConfigManager
+
+    resolved_model, resolved_provider = _resolve_model_and_provider(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+    )
+    if resolved_model and resolved_provider:
+        if resolved_provider == "vertex_ai_beta":
+            return True
+        provider_enum: Final = _resolve_llm_provider_enum(resolved_provider)
+        if provider_enum is not None:
+            chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+                model=resolved_model,
+                provider=provider_enum,
+            )
+            if isinstance(chat_config, VertexGeminiConfig):
+                return True
+
+    info_provider: Final = _string_field(model_info, "litellm_provider")
+    return info_provider in _GEMINI_MODEL_INFO_PROVIDERS if info_provider else False
+
+
+def _deployment_supports_chat_max_output_tokens(deployment: object, fallback_model: str) -> bool:
+    litellm_params: Final = _get_value(deployment, "litellm_params")
+    return _backend_supports_chat_max_output_tokens(
+        model=_string_field(litellm_params, "model") or fallback_model,
+        custom_llm_provider=_string_field(litellm_params, "custom_llm_provider"),
+        model_info=_get_value(deployment, "model_info"),
+    )
+
+
+def _completion_max_output_token_modes(
+    route: str,
+    model: str,
+    llm_router: Router | None,
+    model_infos: Sequence[Mapping[str, object]],
+) -> tuple[bool | None, ...]:
+    call_types: Final = get_call_types_for_route(route) if route else None
+    if not call_types or not any(call_type in _COMPLETION_CALL_TYPES for call_type in call_types):
+        return (None,)
+
+    deployments: Final = llm_router.registry().deployments(model) if llm_router is not None else ()
+    if deployments:
+        supported_modes: Final = frozenset(
+            _deployment_supports_chat_max_output_tokens(deployment=deployment, fallback_model=model)
+            for deployment in deployments
+        )
+        return tuple(sorted(supported_modes))
+
+    info_modes: Final = frozenset(
+        _backend_supports_chat_max_output_tokens(model=model, model_info=info) for info in model_infos
+    )
+    return tuple(sorted(info_modes)) or (_backend_supports_chat_max_output_tokens(model=model),)
+
+
+def _output_token_fields_for_route(
+    route: str | None,
+    *,
+    include_completion_max_output_tokens: bool = False,
+) -> tuple[tuple[str, ...], bool]:
+    if not route:
+        return _OUTPUT_TOKEN_FIELDS, True
+    call_types: Final = get_call_types_for_route(route)
+    if not call_types:
+        return _OUTPUT_TOKEN_FIELDS, True
+    if any(call_type in _RESPONSES_CALL_TYPES for call_type in call_types):
+        return _RESPONSES_OUTPUT_TOKEN_FIELDS, False
+    if any(call_type in _ANTHROPIC_MESSAGES_CALL_TYPES for call_type in call_types):
+        return _COMPLETION_OUTPUT_TOKEN_FIELDS, False
+    if any(call_type in _COMPLETION_CALL_TYPES for call_type in call_types):
+        return (
+            (_OUTPUT_TOKEN_FIELDS if include_completion_max_output_tokens else _COMPLETION_OUTPUT_TOKEN_FIELDS),
+            False,
+        )
+    return _OUTPUT_TOKEN_FIELDS, True
+
+
+def _requested_output_tokens(
+    request_body: Mapping[str, object],
+    route: str | None = None,
+    *,
+    include_completion_max_output_tokens: bool = False,
+) -> int | None:
+    fields, allow_inference_config = _output_token_fields_for_route(
+        route,
+        include_completion_max_output_tokens=include_completion_max_output_tokens,
+    )
     inference_config: Final = request_body.get("inferenceConfig")
     candidates: Final = (
-        *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
-        inference_config.get("maxTokens") if isinstance(inference_config, Mapping) else None,
+        *(request_body.get(field) for field in fields),
+        (
+            inference_config.get("maxTokens")
+            if allow_inference_config and isinstance(inference_config, Mapping)
+            else None
+        ),
     )
-    return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
+    parsed: Final[tuple[int, ...]] = tuple(
+        tokens for tokens in map(_non_negative_int, candidates) if tokens is not None
+    )
+    return max(parsed) if parsed else None
 
 
 def _get_output_multiplier(request_body: dict) -> int:
@@ -1853,12 +2025,19 @@ def _to_float(value: object) -> float | None:
         return None
 
 
+def _non_negative_int(value: object) -> int | None:
+    parsed: Final = _to_int(value)
+    return parsed if parsed is not None and parsed >= 0 else None
+
+
 def _to_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
     if not isinstance(value, (SupportsInt, SupportsIndex, str, bytes, bytearray)):
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
