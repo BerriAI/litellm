@@ -12908,3 +12908,46 @@ async def test_admin_dashboard_session_keeps_the_whole_mcp_registry(
     assert set(await global_mcp_server_manager.get_allowed_mcp_servers(dashboard_session)) == set(
         global_mcp_server_manager.get_registry()
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("setting", "fresh"), [(None, True), (True, True), (False, False)])
+async def test_catalog_refresh_reads_the_user_policy_fresh_unless_the_proxy_opts_out(monkeypatch, setting, fresh):
+    from litellm.proxy import proxy_server
+
+    settings: Final = {} if setting is None else {"mcp_catalog_fresh_policy": setting}
+    monkeypatch.setattr(proxy_server, "general_settings", settings)
+    reload_user = AsyncMock(return_value=UserAPIKeyAuth(user_id="catalog-user", user_role="internal_user"))
+    monkeypatch.setattr(MCPRequestHandler, "reload_admitted_user", reload_user)
+    caller = UserAPIKeyAuth(user_id="catalog-user")
+    caller.mcp_admitted_user_subject = True
+    refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
+    reload_user.assert_awaited_once_with("catalog-user", requires_fresh_policy=fresh)
+    assert refreshed.requires_fresh_policy is fresh
+
+
+@pytest.mark.asyncio
+async def test_catalog_refresh_opt_out_reads_the_virtual_key_through_the_cache(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"mcp_catalog_fresh_policy": False})
+    reload_key = AsyncMock(return_value=UserAPIKeyAuth(team_id="current-team"))
+    monkeypatch.setattr(MCPRequestHandler, "_reload_admitted_key", reload_key)
+    caller = UserAPIKeyAuth(api_key="owned-key-hash")
+    caller.via_virtual_key = True
+    refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
+    reload_key.assert_awaited_once_with("owned-key-hash", check_db_only=False)
+    assert refreshed.team_id == "current-team"
+    assert refreshed.requires_fresh_policy is False
+
+
+@pytest.mark.asyncio
+async def test_catalog_refresh_opt_out_keeps_a_caller_that_already_requires_fresh_policy(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"mcp_catalog_fresh_policy": False})
+    caller = UserAPIKeyAuth(api_key="custom-subject")
+    caller.authenticated_by_custom_auth = True
+    caller.requires_fresh_policy = True
+    refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
+    assert refreshed.requires_fresh_policy is True

@@ -3120,6 +3120,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Request header whose value names the calling MCP client application (for example 'x-mcp-client') for callers that did not authenticate with a JWT, used only while mcp_allowed_clients is set. The client picks this value itself, so it is a policy control rather than a security boundary; prefer litellm_jwtauth.mcp_client_id_jwt_field where callers use JWTs.",
     )
+    mcp_catalog_fresh_policy: bool | None = Field(
+        None,
+        description="When false, MCP tool listings read the caller's user, team and grant policy through the management-object cache instead of the database, so a revoked grant leaves the listing within user_api_key_cache_ttl, the same bound as every other authenticated request. Default true: every listing re-reads the policy from the database, which serializes parallel listings on a single worker.",
+    )
     mcp_trusted_proxy_ranges: list[str] | None = Field(
         None,
         description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For and X-Forwarded-* origin headers are only trusted from these IPs.",

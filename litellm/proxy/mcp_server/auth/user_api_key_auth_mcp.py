@@ -1560,17 +1560,18 @@ class MCPRequestHandler:
 
         if auth is None:
             return None
-        refreshed: Final = auth.model_copy(update={"requires_fresh_policy": True})
+        fresh: Final = MCPRequestHandler._catalog_requires_fresh_policy()
+        refreshed: Final = auth.model_copy(update={"requires_fresh_policy": fresh or auth.requires_fresh_policy})
         if (auth.mcp_admitted_user_subject or auth.is_session_token) and auth.user_id:
             # A session credential (``lite login`` or a redeemed ID-JAG) has no key row, its authority is
             # sealed in the token: refresh the live user policy and keep the token's team, routes and models.
-            current = await MCPRequestHandler.reload_admitted_user(auth.user_id, requires_fresh_policy=True)
+            current = await MCPRequestHandler.reload_admitted_user(auth.user_id, requires_fresh_policy=fresh)
             refreshed.object_permission = current.object_permission
             refreshed.object_permission_id = current.object_permission_id
             refreshed.user_role = current.user_role
             refreshed.org_id = current.org_id
         elif auth.via_virtual_key and auth.api_key and auth.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS:
-            current = await MCPRequestHandler._reload_admitted_key(auth.api_key, check_db_only=True)
+            current = await MCPRequestHandler._reload_admitted_key(auth.api_key, check_db_only=fresh)
             refreshed.object_permission = current.object_permission
             refreshed.object_permission_id = current.object_permission_id
             refreshed.team_id = current.team_id
@@ -1585,6 +1586,19 @@ class MCPRequestHandler:
 
             return await apply_toolset_scope(refreshed, refreshed.mcp_toolset_id)
         return refreshed
+
+    @staticmethod
+    def _catalog_requires_fresh_policy() -> bool:
+        """Whether a catalog listing re-reads the caller's policy from the database.
+
+        On by default, so a revoked grant leaves the listing at once. Every listing then reads the
+        user, each team and each grant past the cache, which on a single worker serializes parallel
+        listings (a client opening several MCP servers at once). ``general_settings.mcp_catalog_fresh_policy:
+        false`` reads them through the management-object cache instead, so a revoked grant leaves the
+        listing within ``user_api_key_cache_ttl``, the same bound as every other authenticated request."""
+        from litellm.proxy.proxy_server import general_settings
+
+        return general_settings.get("mcp_catalog_fresh_policy", True) is not False
 
     @staticmethod
     async def _reload_admitted_key(key_hash: str, *, check_db_only: bool = False) -> UserAPIKeyAuth:
