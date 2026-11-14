@@ -623,3 +623,43 @@ async def test_a_queued_stream_the_client_leaves_before_its_first_chunk_gives_ba
     assert auth.budget_reservation.get("finalized") is True
     assert provider_closed.is_set()
     assert not isinstance(response, StreamingResponse)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_a_queued_call_cancelled_before_it_answers_gives_back_its_budget_hold(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    waiting: Final = asyncio.Event()
+
+    async def wait_for_a_worker(**_: object) -> object:
+        waiting.set()
+        await asyncio.Event().wait()
+        return dict(HAPPY_RESPONSE)
+
+    router: Final = MagicMock()
+    router.health.return_value.split_priority.return_value = (0, {})
+    router.health.return_value.priority_header_fields.return_value = {}
+    router.registry.return_value.deployments.return_value = []
+    router.schedule_acompletion = wait_for_a_worker
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=MagicMock()))
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-queue", budget_reservation={"reserved_cost": 0.01, "input_cost": 0.0, "entries": []}
+    )
+    body: Final = json.dumps({"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": stream})
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": body.encode(), "more_body": False}
+
+    queued: Final = asyncio.ensure_future(
+        proxy_server.async_queue_request(
+            request=Request(_QUEUED_STREAM_SCOPE, receive), fastapi_response=Response(), user_api_key_dict=auth
+        )
+    )
+    await waiting.wait()
+    queued.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await queued
+
+    assert auth.budget_reservation is not None
+    assert auth.budget_reservation.get("finalized") is True

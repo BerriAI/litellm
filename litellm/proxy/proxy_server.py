@@ -1005,6 +1005,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     BudgetCounter,
     customer_window_counters,
     get_budget_window_start,
+    release_budget_reservation_on_cancel,
     release_unbound_budget_reservation,
     stamp_budget_reservation_actual_cost,
 )
@@ -19593,10 +19594,18 @@ async def async_queue_request(
         )
         queued_priority, _ = router.health().split_priority(data["model"], data)
         queued_headers: Final = {"x-litellm-priority": str(queued_priority), LITELLM_CALL_ID_HEADER: litellm_call_id}
+
+        async def schedule_queued_call() -> object:
+            try:
+                return _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
+            except asyncio.CancelledError:
+                await release_budget_reservation_on_cancel(user_api_key_dict.budget_reservation)
+                raise
+
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
             async def produce_queue_stream() -> StreamingResponse | JSONResponse:
-                queued_stream: Final = _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
+                queued_stream: Final = await schedule_queued_call()
                 data["litellm_logging_obj"] = getattr(queued_stream, "logging_obj", None)
                 return await create_response(
                     generator=async_data_generator(
@@ -19622,7 +19631,7 @@ async def async_queue_request(
                 on_late_failure=audit_late_failure,
             )
 
-        response: Final = _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
+        response: Final = await schedule_queued_call()
         fastapi_response.headers.update(queued_headers)
         return response
     except Exception as e:
