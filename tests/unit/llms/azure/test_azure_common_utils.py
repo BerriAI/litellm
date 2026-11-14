@@ -2992,3 +2992,49 @@ def test_image_generation_with_an_api_key_ignores_a_non_callable_azure_ad_token_
 
     assert image_route.calls.last.request.headers["api-key"] == "configured-key"
     assert response.data[0].b64_json == "aGk="
+
+
+_FOUNDRY_PROJECT_ROOT: Final = "https://r.services.ai.azure.com/api/projects/p"
+_CHAT_COMPLETION_BODY: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-5-nano",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    ("api_base", "api_version", "expected_url"),
+    [
+        (f"{_FOUNDRY_PROJECT_ROOT}/openai/v1", None, f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/chat/completions"),
+        (
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/",
+            "2025-04-01-preview",
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/chat/completions",
+        ),
+        (
+            _FOUNDRY_PROJECT_ROOT,
+            "2025-11-15-preview",
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/deployments/model-router/chat/completions?api-version=2025-11-15-preview",
+        ),
+    ],
+)
+def test_chat_on_a_foundry_project_v1_base_sends_no_api_version(
+    respx_mock, api_base: str, api_version: str | None, expected_url: str
+) -> None:
+    route: Final = respx_mock.post(host="r.services.ai.azure.com").mock(
+        return_value=httpx.Response(200, json=_CHAT_COMPLETION_BODY)
+    )
+
+    response: Final = litellm.completion(
+        model="azure/model-router",
+        api_base=api_base,
+        api_key="project-key",
+        api_version=api_version,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert route.calls.last.request.url == httpx.URL(expected_url)
+    assert response.choices[0].message.content == "ok"

@@ -222,6 +222,18 @@ def test_foundry_project_v1_responses_url_never_carries_an_api_version(
     assert httpx.URL(get_url).params == httpx.URL(expected_url).params
 
 
+@pytest.mark.parametrize(
+    ("api_base", "expected_url"),
+    [
+        (f"{_FOUNDRY_PROJECT}/openai/v1", "wss://x.services.ai.azure.com/api/projects/proj/openai/v1/responses"),
+        (f"{_FOUNDRY_PROJECT}/openai/v1/", "wss://x.services.ai.azure.com/api/projects/proj/openai/v1/responses"),
+        ("https://x.services.ai.azure.com/openai/v1", "wss://x.services.ai.azure.com/openai/v1/responses"),
+    ],
+)
+def test_websocket_url_on_an_openai_v1_base_dials_v1_responses_once(api_base: str, expected_url: str) -> None:
+    assert AzureOpenAIResponsesAPIConfig().get_websocket_url(api_base=api_base, litellm_params={}) == expected_url
+
+
 @pytest.mark.serial
 @pytest.mark.parametrize(
     ("api_base", "api_version", "expected_url"),

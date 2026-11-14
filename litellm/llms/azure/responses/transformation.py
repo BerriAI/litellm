@@ -73,7 +73,11 @@ def _v1_responses_url(api_base: str) -> httpx.URL:
     parsed_url: Final = httpx.URL(api_base)
     path: Final = parsed_url.path.rstrip("/")
     root: Final = next(
-        (path.removesuffix(route) for route in ("/openai/v1/responses", "/openai/responses") if path.endswith(route)),
+        (
+            path.removesuffix(route)
+            for route in ("/openai/v1/responses", "/openai/responses", "/openai/v1")
+            if path.endswith(route)
+        ),
         path,
     )
     return parsed_url.copy_with(path=f"{root}/openai/v1/responses", query=None)

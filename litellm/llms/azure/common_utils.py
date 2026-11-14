@@ -34,6 +34,7 @@ from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
 _LAST_OPENAI_PATH_SEGMENT: Final = re.compile(r"^(.*/openai)(?=/|$)")
+_FOUNDRY_PROJECT_V1_BASE_PATH: Final = re.compile(r"/api/projects/[^/]+/openai/v1/?$")
 
 
 class _AzureAdTokenJson(TypedDict, total=False):
@@ -798,7 +799,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         # For Azure v1 API, use standard OpenAI client instead of AzureOpenAI
         # See: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#api-specs
-        if self.is_azure_v1_api_version(api_version):
+        if self.is_azure_v1_api_version(api_version) or self.is_foundry_project_v1_base(api_base):
             # Extract only params that OpenAI client accepts
             # Always use /openai/v1/ regardless of whether user passed "v1", "latest", or "preview"
             # The OpenAI client accepts a callable for `api_key` and re-invokes it
@@ -1151,6 +1152,10 @@ class BaseAzureLLM(BaseOpenAILLM):
         if api_version is None:
             return False
         return api_version in {"preview", "latest", "v1"}
+
+    @staticmethod
+    def is_foundry_project_v1_base(api_base: str | None) -> bool:
+        return api_base is not None and _FOUNDRY_PROJECT_V1_BASE_PATH.search(httpx.URL(api_base).path) is not None
 
     def _resolve_env_var(
         self, litellm_params: Mapping[str, str | None], param_key: str, env_var_key: str
