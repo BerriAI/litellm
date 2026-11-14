@@ -2838,7 +2838,9 @@ def test_build_json_schema_declares_a_required_name_from_every_branch_keyword(ke
         ({"properties": {"a": {"items": {"properties": {"b": _UNION}}}}}, ("properties", "a", "items", "properties", "b")),
     ],
 )
-def test_build_json_schema_reaches_every_schema_position(schema: dict, path: tuple[str | int, ...]) -> None:
+def test_build_json_schema_reaches_every_schema_position(
+    schema: dict[str, JsonValue], path: tuple[str | int, ...]
+) -> None:
     assert reduce(getitem, path, build_json_schema(schema))["properties"] == {"name": _NAME_AS_ENUMS}
 
 
@@ -2880,6 +2882,16 @@ def test_build_json_schema_follows_local_refs_into_branches(defs_keyword: str) -
     }
 
     assert build_json_schema(schema)["properties"] == {"name": _NAME_AS_ENUMS}
+
+
+def test_build_json_schema_follows_refs_to_definition_names_with_escaped_characters() -> None:
+    schema: Final = {
+        "$defs": {"kind/a~b": _NAME_BRANCHES[0]},
+        "anyOf": [{"$ref": "#/$defs/kind~1a~0b"}],
+        "required": ["name"],
+    }
+
+    assert build_json_schema(schema)["properties"] == {"name": {"enum": ["People"]}}
 
 
 def test_build_json_schema_stops_at_a_ref_cycle() -> None:
@@ -2988,6 +3000,14 @@ def test_build_json_schema_declares_names_inside_the_hoisted_copy() -> None:
         pytest.param(
             {"additionalProperties": False, "anyOf": list(_NAME_BRANCHES), "required": ["name"]}, id="closed-node"
         ),
+        pytest.param(
+            {
+                "additionalProperties": {"type": "integer"},
+                "anyOf": [{"properties": {"name": {"type": "number"}}}],
+                "required": ["name"],
+            },
+            id="constrained-extra-properties",
+        ),
         pytest.param({"anyOf": [{"properties": {"name": True}}], "required": ["name"]}, id="boolean-definition"),
         pytest.param({"anyOf": list(_NAME_BRANCHES), "required": [{"name": 1}]}, id="non-string-name"),
         pytest.param({"anyOf": list(_NAME_BRANCHES), "required": True}, id="required-not-a-list"),
@@ -3022,12 +3042,12 @@ def test_build_json_schema_declares_names_inside_the_hoisted_copy() -> None:
         ),
     ],
 )
-def test_build_json_schema_leaves_schemas_with_nothing_to_hoist_as_sent(schema: dict) -> None:
+def test_build_json_schema_leaves_schemas_with_nothing_to_hoist_as_sent(schema: dict[str, JsonValue]) -> None:
     assert build_json_schema(schema) == schema
 
 
-@pytest.mark.parametrize("additional_properties", [True, {"type": "string"}], ids=["true", "schema"])
-def test_build_json_schema_declares_names_beside_open_additional_properties(additional_properties: object) -> None:
+@pytest.mark.parametrize("additional_properties", [True, {}], ids=["true", "empty-schema"])
+def test_build_json_schema_declares_names_beside_open_additional_properties(additional_properties: JsonValue) -> None:
     built: Final = build_json_schema(
         {"additionalProperties": additional_properties, "anyOf": list(_NAME_BRANCHES), "required": ["name"]}
     )
@@ -3056,8 +3076,8 @@ def test_build_json_schema_stops_descending_at_the_recursion_limit(levels: int, 
     assert ("properties" in reduce(getitem, ("properties", "item") * levels, built)) is declared
 
 
-def _nested_hoists(levels: int) -> dict:
-    innermost: Final = {"anyOf": [{"properties": {"x": {"type": "string"}}}], "required": ["x"]}
+def _nested_hoists(levels: int) -> dict[str, JsonValue]:
+    innermost: Final[dict[str, JsonValue]] = {"anyOf": [{"properties": {"x": {"type": "string"}}}], "required": ["x"]}
     return reduce(
         lambda inner, _: {"anyOf": [{"properties": {"x": inner}}], "required": ["x"]}, range(levels - 1), innermost
     )
@@ -3078,7 +3098,7 @@ def test_build_json_schema_hoists_up_to_the_limit_on_one_path(levels: int, decla
     assert ("properties" in reduce(getitem, ("properties", "x") * (levels - 1), built)) is declared
 
 
-def _recursive_fan_out(names: int) -> dict:
+def _recursive_fan_out(names: int) -> dict[str, JsonValue]:
     required: Final = [f"p{index}" for index in range(names)]
     node_property: Final = {"anyOf": [{"$ref": "#/$defs/Node"}], "required": required}
     return {
@@ -3093,7 +3113,7 @@ def test_build_json_schema_output_stays_within_the_budget_on_a_recursive_fan_out
     assert len(json.dumps(build_json_schema(schema))) < len(json.dumps(schema)) + 2 * _JSON_SCHEMA_HOIST_BUDGET
 
 
-def _union_with_description(size: int) -> dict:
+def _union_with_description(size: int) -> dict[str, JsonValue]:
     return {"anyOf": [{"properties": {"name": {"description": "x" * size}}}], "required": ["name"]}
 
 

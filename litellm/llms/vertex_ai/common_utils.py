@@ -1,7 +1,6 @@
 import json
 import math
 import re
-from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -931,6 +930,12 @@ class _DeclaredJsonSchema:
     budget_left: int
 
 
+@dataclass(frozen=True, slots=True)
+class _JsonSchemaBranchLevel:
+    branches: tuple[Mapping[str, JsonValue], ...]
+    seen_refs: frozenset[str]
+
+
 def _json_schema_branches(schema: Mapping[str, JsonValue]) -> Iterator[Mapping[str, JsonValue]]:
     branch_lists: Final = (schema.get(keyword) for keyword in ("anyOf", "oneOf", "allOf"))
     branches: Final = chain.from_iterable(branches for branches in branch_lists if isinstance(branches, list))
@@ -941,25 +946,35 @@ def _local_ref_target(ref: str, root: Mapping[str, JsonValue]) -> Mapping[str, J
     match ref.split("/"):
         case ["#", "$defs" | "definitions" as defs_keyword, name]:
             definitions: Final = root.get(defs_keyword)
-            target: Final = definitions.get(name) if isinstance(definitions, dict) else None
+            unescaped: Final = name.replace("~1", "/").replace("~0", "~")
+            target: Final = definitions.get(unescaped) if isinstance(definitions, dict) else None
             return target if isinstance(target, dict) else None
         case _:
             return None
 
 
+def _next_json_schema_branch_level(
+    level: _JsonSchemaBranchLevel, root: Mapping[str, JsonValue]
+) -> _JsonSchemaBranchLevel:
+    refs: Final = (branch.get("$ref") for branch in level.branches)
+    new_refs: Final = tuple(dict.fromkeys(ref for ref in refs if isinstance(ref, str) and ref not in level.seen_refs))
+    targets: Final = (_local_ref_target(ref, root) for ref in new_refs)
+    children: Final = chain.from_iterable(map(_json_schema_branches, level.branches))
+    return _JsonSchemaBranchLevel(
+        tuple(chain(children, (target for target in targets if target is not None))),
+        level.seen_refs | frozenset(new_refs),
+    )
+
+
 def _reachable_json_schema_branches(
     schema: Mapping[str, JsonValue], root: Mapping[str, JsonValue]
 ) -> Iterator[Mapping[str, JsonValue]]:
-    pending: Final = deque(_json_schema_branches(schema))
-    seen_refs: Final = set[str]()
-    while pending:
-        yield (branch := pending.popleft())
-        pending.extend(_json_schema_branches(branch))
-        if not isinstance(ref := branch.get("$ref"), str) or ref in seen_refs:
-            continue
-        seen_refs.add(ref)
-        if (target := _local_ref_target(ref, root)) is not None:
-            pending.append(target)
+    def next_level(level: _JsonSchemaBranchLevel, _: None) -> _JsonSchemaBranchLevel:
+        return _next_json_schema_branch_level(level, root)
+
+    first: Final = _JsonSchemaBranchLevel(tuple(_json_schema_branches(schema)), frozenset())
+    levels: Final = accumulate(repeat(None), next_level, initial=first)
+    return chain.from_iterable(level.branches for level in takewhile(lambda level: bool(level.branches), levels))
 
 
 def _branch_property_definitions(
@@ -986,11 +1001,15 @@ def _merged_definition(definitions: Iterable[JsonValue]) -> tuple[JsonValue, int
     return (unique[0] if len(unique) == 1 else {"anyOf": list(unique)}), sum(map(len, by_content))
 
 
+def _allows_any_extra_property(schema: Mapping[str, JsonValue]) -> bool:
+    return schema.get("additionalProperties", True) in (True, {})
+
+
 def _hoisted_properties(
     schema: Mapping[str, JsonValue], root: Mapping[str, JsonValue], budget: int
 ) -> tuple[Mapping[str, JsonValue], int]:
     required: Final = schema.get("required")
-    if budget <= 0 or "$ref" in schema or schema.get("additionalProperties") is False or not isinstance(required, list):
+    if budget <= 0 or "$ref" in schema or not _allows_any_extra_property(schema) or not isinstance(required, list):
         return {}, 0
     declared: Final = schema.get("properties")
     missing: Final = frozenset(name for name in required if isinstance(name, str)) - frozenset(
@@ -1079,8 +1098,8 @@ def build_json_schema(parameters: Mapping[str, JsonValue]) -> JsonValue:
     node's own `properties`. So those definitions are copied up to the node, with
     `const` as a one-value `enum` because Gemini enforces `enum` and ignores
     `const`. The branches stay as sent. A name no branch defines stays undeclared,
-    and a node with `additionalProperties: false` stays as sent because no object
-    can satisfy it. Each hoist copies a subtree that can hold more hoists, so a
+    and a node whose `additionalProperties` is `false` or a non-empty schema stays
+    as sent, because a copied name would escape that constraint. Each hoist copies a subtree that can hold more hoists, so a
     path stops after _MAX_JSON_SCHEMA_HOISTS_PER_PATH nodes, keeping a recursive
     schema shallow enough for Google to name its own error, and one schema shares
     _JSON_SCHEMA_HOIST_BUDGET, spent on each branch checked per missing name and
