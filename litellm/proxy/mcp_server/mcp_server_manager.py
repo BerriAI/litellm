@@ -159,6 +159,7 @@ from litellm.proxy.mcp_server.outbound_credentials.token_exchange_provider impor
 )
 from litellm.proxy.mcp_server.outbound_credentials.types import (
     DEFAULT_CREDENTIAL_HEADER,
+    ApiKeyConfig,
     AuthResolution,
     IdJagConfig,
     PassthroughConfig,
@@ -1344,6 +1345,15 @@ def _server_auth_header_for(
         else None
     )
     return mcp_auth_header if server_specific is None else server_specific
+
+
+def _server_key_occupies_authorization(server: MCPServer) -> bool:
+    spec: Final = to_server_spec(server)
+    return (
+        spec is not None
+        and isinstance(spec.config, ApiKeyConfig)
+        and spec.config.header_name.lower() == "authorization"
+    )
 
 
 def listed_tools_caller_for(
@@ -4604,6 +4614,7 @@ class MCPServerManager:
                     and not has_static_authorization
                     and not mcp_auth_header
                     and not has_extra_authorization
+                    and not _server_key_occupies_authorization(server)
                 ):
                     extra_headers = await inject_mcp_jwt_headers_for_upstream(
                         user_api_key_dict=user_api_key_auth,
@@ -6891,7 +6902,7 @@ class MCPServerManager:
                 any(k.lower() == "authorization" for k in server_auth_header)
                 if isinstance(server_auth_header, dict)
                 else server_auth_header is not None and mcp_server.auth_type != MCPAuth.api_key
-            )
+            ) or _server_key_occupies_authorization(mcp_server)
             if hook_has_authorization and (existing_has_authorization or server_auth_occupies_authorization):
                 # Mirror the tools/list signer guard: an upstream credential (user OAuth,
                 # static header, or configured authentication_token) already occupies the

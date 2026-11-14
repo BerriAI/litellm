@@ -17382,6 +17382,111 @@ async def test_tools_list_signed_by_the_gateway_jwt_signer_is_fetched_every_time
     assert sum(method == "tools/list" for method, _auth in upstream.requests) == 2
 
 
+_GATEWAY_JWT: Final = "Bearer signed-by-the-gateway"
+
+_SERVER_KEY_CASES: Final = (
+    pytest.param(MCPAuth.bearer_token, "server-key", None, "Bearer server-key", id="bearer_token"),
+    pytest.param(MCPAuth.token, "server-key", None, "token server-key", id="token"),
+    pytest.param(MCPAuth.authorization, "server-key", None, "server-key", id="authorization"),
+    pytest.param(MCPAuth.basic, "user:pass", None, "Basic dXNlcjpwYXNz", id="basic"),
+    pytest.param(MCPAuth.api_key, "server-key", None, _GATEWAY_JWT, id="api_key-keeps-signer"),
+    pytest.param(MCPAuth.bearer_token, "server-key", "X-Upstream-Key", _GATEWAY_JWT, id="custom-header-keeps-signer"),
+    pytest.param(MCPAuth.bearer_token, None, None, _GATEWAY_JWT, id="no-key-keeps-signer"),
+)
+
+
+def _keyed_server(base: MCPServer, auth_type: MCPAuth, key: str | None, token_header: str | None) -> MCPServer:
+    return base.model_copy(
+        update={"auth_type": auth_type, "authentication_token": key, "upstream_token_header": token_header}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("auth_type", "key", "token_header", "expected_authorization"), _SERVER_KEY_CASES)
+async def test_tools_list_keeps_the_server_key_in_authorization_when_the_jwt_signer_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+    auth_type: MCPAuth,
+    key: str | None,
+    token_header: str | None,
+    expected_authorization: str,
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer import mcp_jwt_signer
+
+    class _Signer:
+        async def async_pre_call_hook(
+            self, user_api_key_dict: UserAPIKeyAuth | None, cache: object, data: object, call_type: str
+        ) -> Mapping[str, object]:
+            return {"extra_headers": {"Authorization": _GATEWAY_JWT}}
+
+    monkeypatch.setattr(mcp_jwt_signer, "_mcp_jwt_signer_instance", _Signer(), raising=False)
+    upstream: Final = _DiscoveryUpstream()
+    caller: Final = UserAPIKeyAuth(api_key="hashed-caller", user_id="caller")
+    with _mcp_upstream(upstream.respond):
+        await _list_discovery_tools(
+            MCPServerManager(discovery_clock=_DiscoveryClock()),
+            server=_keyed_server(_server_with_tools_list_ttl(300), auth_type, key, token_header),
+            user_api_key_auth=caller,
+        )
+    assert {auth for method, auth in upstream.requests if method == "tools/list"} == {expected_authorization}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("auth_type", "key", "token_header", "expected_authorization"), _SERVER_KEY_CASES)
+async def test_tools_call_keeps_the_server_key_in_authorization_when_the_jwt_signer_is_on(
+    auth_type: MCPAuth, key: str | None, token_header: str | None, expected_authorization: str
+) -> None:
+    from mcp.types import JSONRPCRequest
+
+    tool_call_authorizations: list[str] = []  # mutable-ok: the mock upstream appends what each tools/call carried
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        payload: Final = _JSONRPC_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        if payload.method == "tools/call":
+            tool_call_authorizations.append(request.headers.get("authorization", ""))
+            return httpx2.Response(
+                200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"content": [], "isError": False}}
+            )
+        if payload.method == "tools/list":
+            return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"tools": []}})
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "upstream", "version": "1"},
+                    "capabilities": {"tools": {}},
+                },
+            },
+        )
+
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
+    await manager._call_regular_mcp_tool(
+        mcp_server=_keyed_server(
+            MCPServer(server_id="keyed", name="keyed", url="https://keyed.example/mcp", transport=MCPTransport.http),
+            auth_type,
+            key,
+            token_header,
+        ),
+        original_tool_name="example",
+        arguments={},
+        tasks=[],
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers=None,
+        raw_headers=None,
+        proxy_logging_obj=None,
+        hook_extra_headers={"Authorization": _GATEWAY_JWT},
+        user_api_key_auth=UserAPIKeyAuth(api_key="hashed-caller", user_id="caller"),
+    )
+    assert tool_call_authorizations == [expected_authorization]
+
+
 @pytest.mark.asyncio
 async def test_tools_list_cache_keeps_two_litellm_callers_apart_behind_one_upstream_credential() -> None:
     manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
