@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use litellm_secret_value::SecretValue;
+use litellm_secret_value::{Redacted, SecretValue};
 use litellm_secrets::hashicorp::{HashicorpVault, RawOperationError};
 
 use litellm_secrets_types::{HashicorpOperationContext, SecretWriteContext};
@@ -13,16 +13,15 @@ pub(crate) enum FailureStage {
     Replacement(String),
 }
 
-#[derive(veil::Redact)]
+#[derive(Debug)]
 pub(crate) enum FailureKind {
     Native(RawOperationError),
-    UnsafeName(#[redact] String),
-    Json(#[redact] Vec<u8>),
-    MissingGet(#[redact] Vec<u8>),
+    UnsafeName(Redacted<String>),
+    Json(Redacted<Vec<u8>>),
+    MissingGet(Redacted<Vec<u8>>),
     ValueMismatch {
         expected: SecretValue,
-        #[redact]
-        actual: Vec<u8>,
+        actual: Redacted<Vec<u8>>,
     },
 }
 
@@ -53,7 +52,7 @@ impl Failure {
 
 fn native_failure(name: &str, error: RawOperationError) -> Failure {
     if error.is_unsafe_secret_name() {
-        return FailureKind::UnsafeName(name.to_owned()).into();
+        return FailureKind::UnsafeName(Redacted::new(name.to_owned())).into();
     }
     FailureKind::Native(error).into()
 }
@@ -106,8 +105,8 @@ pub(crate) async fn rotate(
         },
     )
     .await?;
-    let parsed: &RawValue =
-        serde_json::from_slice(&response).map_err(|_| FailureKind::Json(response.clone()))?;
+    let parsed: &RawValue = serde_json::from_slice(&response)
+        .map_err(|_| FailureKind::Json(Redacted::new(response.clone())))?;
     let status = raw_object_field(parsed, "status")
         .ok()
         .flatten()
@@ -119,7 +118,7 @@ pub(crate) async fn rotate(
         native_failure(new_name, error).during(FailureStage::Replacement(new_name.to_owned()))
     })?;
     let parsed: &RawValue = serde_json::from_slice(&verification).map_err(|_| {
-        Failure::from(FailureKind::Json(verification.clone()))
+        Failure::from(FailureKind::Json(Redacted::new(verification.clone())))
             .during(FailureStage::Replacement(new_name.to_owned()))
     })?;
     let data_key = context
@@ -135,7 +134,7 @@ pub(crate) async fn rotate(
     if actual_string.as_deref() != Some(value.expose()) {
         return Err(FailureKind::ValueMismatch {
             expected: value.clone(),
-            actual: actual.get().as_bytes().to_vec(),
+            actual: Redacted::new(actual.get().as_bytes().to_vec()),
         }
         .into());
     }
@@ -160,6 +159,6 @@ fn raw_object_field<'a>(
     key: &str,
 ) -> Result<Option<&'a RawValue>, FailureKind> {
     let object: HashMap<String, &RawValue> = serde_json::from_slice(document.get().as_bytes())
-        .map_err(|_| FailureKind::MissingGet(document.get().as_bytes().to_vec()))?;
+        .map_err(|_| FailureKind::MissingGet(Redacted::new(document.get().as_bytes().to_vec())))?;
     Ok(object.get(key).copied())
 }

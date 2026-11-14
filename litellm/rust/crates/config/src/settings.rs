@@ -1,6 +1,4 @@
-use std::fmt;
-
-use litellm_secret_value::SecretValue;
+use litellm_secret_value::{Redacted, SecretValue};
 use serde::Deserialize;
 
 use crate::{
@@ -13,7 +11,7 @@ pub enum TracingStoreKind {
     Clickhouse,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClickHouseStoreSettings {
     #[serde(rename = "type")]
@@ -21,17 +19,6 @@ pub struct ClickHouseStoreSettings {
     pub url: Option<SecretValue>,
     pub database: Option<String>,
     pub retention_days: Option<Spelled<f64>>,
-}
-
-impl fmt::Debug for ClickHouseStoreSettings {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ClickHouseStoreSettings")
-            .field("kind", &self.kind)
-            .field("database", &self.database)
-            .field("retention_days", &self.retention_days)
-            .finish()
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -48,7 +35,7 @@ pub struct TracingSettings {
     pub additional_fields: AdditionalFields,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct GeneralSettings {
     pub completion_model: Option<String>,
@@ -77,7 +64,7 @@ pub struct GeneralSettings {
     pub infer_model_from_keys: Option<bool>,
     pub enable_public_model_hub: bool,
     pub dangerously_permit_weak_or_unset_master_key: Option<bool>,
-    pub plugins: Option<Box<[Object]>>,
+    pub plugins: Option<Redacted<Box<[Object]>>>,
     pub coordination_redis: Option<RedisSettings>,
     pub mcp_allowed_hosts: Option<Box<[String]>>,
     pub mcp_allowed_origins: Box<[String]>,
@@ -118,38 +105,12 @@ impl Default for GeneralSettings {
             coordination_redis: None,
             mcp_allowed_hosts: None,
             mcp_allowed_origins: Box::default(),
-            additional_fields: AdditionalFields::new(),
+            additional_fields: AdditionalFields::default(),
         }
     }
 }
 
-impl fmt::Debug for GeneralSettings {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("GeneralSettings")
-            .field("completion_model", &self.completion_model)
-            .field(
-                "max_in_flight_requests_per_worker",
-                &self.max_in_flight_requests_per_worker,
-            )
-            .field(
-                "max_queued_requests_per_worker",
-                &self.max_queued_requests_per_worker,
-            )
-            .field(
-                "admission_queue_timeout_seconds",
-                &self.admission_queue_timeout_seconds,
-            )
-            .field("master_key", &self.master_key)
-            .field("database_url", &self.database_url)
-            .field("tracing", &self.tracing)
-            .field("store_model_in_db", &self.store_model_in_db)
-            .field("additional_fields", &self.additional_fields.keys())
-            .finish_non_exhaustive()
-    }
-}
-
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Debug, Deserialize)]
 #[serde(default)]
 pub struct RouterSettings {
     pub routing_strategy: Option<String>,
@@ -175,38 +136,7 @@ pub struct RouterSettings {
     pub additional_fields: AdditionalFields,
 }
 
-impl fmt::Debug for RouterSettings {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RouterSettings")
-            .field("routing_strategy", &self.routing_strategy)
-            .field("routing_strategy_args", &self.routing_strategy_args)
-            .field("routing_groups", &self.routing_groups)
-            .field("retry_policy", &self.retry_policy)
-            .field("model_group_retry_policy", &self.model_group_retry_policy)
-            .field(
-                "model_group_affinity_config",
-                &self.model_group_affinity_config,
-            )
-            .field("allowed_fails", &self.allowed_fails)
-            .field("cooldown_time", &self.cooldown_time)
-            .field("num_retries", &self.num_retries)
-            .field("timeout", &self.timeout)
-            .field("max_retries", &self.max_retries)
-            .field("retry_after", &self.retry_after)
-            .field("fallbacks", &self.fallbacks)
-            .field("context_window_fallbacks", &self.context_window_fallbacks)
-            .field("model_group_alias", &self.model_group_alias)
-            .field("enable_tag_filtering", &self.enable_tag_filtering)
-            .field("weights", &self.weights)
-            .field("tag_routing_prefix", &self.tag_routing_prefix)
-            .field("optional_pre_call_checks", &self.optional_pre_call_checks)
-            .field("additional_fields", &self.additional_fields.keys())
-            .finish()
-    }
-}
-
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Debug, Deserialize)]
 #[serde(default)]
 pub struct LiteLlmSettings {
     pub ssl_verify: Option<Spelled<bool>>,
@@ -224,47 +154,44 @@ pub struct LiteLlmSettings {
     pub cache: Option<bool>,
     pub cache_params: Option<CacheSettings>,
     #[serde(deserialize_with = "one_or_many")]
-    pub callbacks: Option<Vec<Value>>,
+    pub callbacks: Option<Redacted<Vec<Value>>>,
     #[serde(deserialize_with = "one_or_many")]
-    pub success_callback: Option<Vec<Value>>,
+    pub success_callback: Option<Redacted<Vec<Value>>>,
     #[serde(deserialize_with = "one_or_many")]
-    pub failure_callback: Option<Vec<Value>>,
+    pub failure_callback: Option<Redacted<Vec<Value>>>,
     pub json_logs: Option<bool>,
     pub set_verbose: Option<bool>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }
 
-impl fmt::Debug for LiteLlmSettings {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("LiteLlmSettings")
-            .field("drop_params", &self.drop_params)
-            .field("request_timeout", &self.request_timeout)
-            .field("num_retries", &self.num_retries)
-            .field("cache", &self.cache)
-            .field("cache_params", &self.cache_params)
-            .field(
-                "callbacks",
-                &self.callbacks.as_ref().map(|callbacks| callbacks.len()),
-            )
-            .field(
-                "success_callback",
-                &self
-                    .success_callback
-                    .as_ref()
-                    .map(|callbacks| callbacks.len()),
-            )
-            .field(
-                "failure_callback",
-                &self
-                    .failure_callback
-                    .as_ref()
-                    .map(|callbacks| callbacks.len()),
-            )
-            .field("json_logs", &self.json_logs)
-            .field("set_verbose", &self.set_verbose)
-            .field("additional_fields", &self.additional_fields.keys())
-            .finish()
+#[cfg(test)]
+mod tests {
+    use super::{
+        ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, RouterSettings, TracingSettings,
+    };
+    use rstest::rstest;
+    use serde::de::DeserializeOwned;
+    use std::fmt::Debug;
+
+    fn debug_of<T: DeserializeOwned + Debug>(value: serde_json::Value) -> String {
+        format!("{:?}", serde_json::from_value::<T>(value).unwrap())
+    }
+
+    #[rstest]
+    #[case::general_master_key(debug_of::<GeneralSettings>(serde_json::json!({"master_key": "credential-value"})))]
+    #[case::general_database_url(debug_of::<GeneralSettings>(serde_json::json!({"database_url": "credential-value"})))]
+    #[case::general_plugins(debug_of::<GeneralSettings>(serde_json::json!({"plugins": [{"api_key": "credential-value"}]})))]
+    #[case::general_unknown(debug_of::<GeneralSettings>(serde_json::json!({"alerting_secret": "credential-value"})))]
+    #[case::router_unknown(debug_of::<RouterSettings>(serde_json::json!({"redis_password": "credential-value"})))]
+    #[case::litellm_callbacks(debug_of::<LiteLlmSettings>(serde_json::json!({"callbacks": {"api_key": "credential-value"}})))]
+    #[case::litellm_unknown(debug_of::<LiteLlmSettings>(serde_json::json!({"langfuse_secret": "credential-value"})))]
+    #[case::tracing_unknown(debug_of::<TracingSettings>(serde_json::json!({"api_key": "credential-value"})))]
+    #[case::clickhouse_url(debug_of::<ClickHouseStoreSettings>(
+        serde_json::json!({"type": "clickhouse", "url": "credential-value"})
+    ))]
+    fn credentials_are_redacted(#[case] debug: String) {
+        assert!(!debug.contains("credential-value"), "{debug}");
+        assert!(debug.contains("[REDACTED]"), "{debug}");
     }
 }

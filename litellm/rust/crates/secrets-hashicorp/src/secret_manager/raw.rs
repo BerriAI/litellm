@@ -4,7 +4,7 @@ use vaultrs::api::kv2::requests::{
     DeleteLatestSecretVersionRequest, ReadSecretRequest, SetSecretRequest,
 };
 
-#[derive(thiserror::Error, veil::Redact)]
+#[derive(Debug, thiserror::Error)]
 pub enum RawOperationError {
     #[error(transparent)]
     Local(Error),
@@ -17,28 +17,19 @@ pub enum RawOperationError {
     #[error("HashiCorp Vault {} request returned HTTP {}", .0.method, .0.status)]
     Http(HttpFailure),
     #[error("HashiCorp Vault request failed")]
-    Transport(
-        #[source]
-        #[redact]
-        litellm_http::Error,
-    ),
+    Transport(#[source] Redacted<litellm_http::Error>),
     #[error("HashiCorp Vault client failed")]
-    Client(
-        #[source]
-        #[redact]
-        RustifyClientError,
-    ),
+    Client(#[source] Redacted<RustifyClientError>),
     #[error("HashiCorp Vault {method} request timed out")]
     Timeout { method: String, elapsed: Duration },
 }
 
-#[derive(veil::Redact)]
+#[derive(Debug)]
 pub struct HttpFailure {
     pub method: String,
     pub url: String,
     pub status: u16,
-    #[redact]
-    pub body: Vec<u8>,
+    pub body: Redacted<Vec<u8>>,
 }
 
 pub struct LoginFailure<'a> {
@@ -113,7 +104,7 @@ impl RawOperationError {
 
     pub fn transport(&self) -> Option<&litellm_http::Error> {
         match self {
-            Self::Transport(error) => Some(error),
+            Self::Transport(error) => Some(error.expose()),
             Self::Local(_)
             | Self::Authentication { .. }
             | Self::Http(_)
@@ -215,7 +206,7 @@ impl HashicorpVault {
         let request = endpoint
             .with_middleware(&client.middle)
             .request(client.http.base())
-            .map_err(RawOperationError::Client)?;
+            .map_err(|error| RawOperationError::Client(Redacted::new(error)))?;
         let method = request.method().to_string();
         let url = format!(
             "{}/v1/{}{}/data/{}",
@@ -239,15 +230,15 @@ impl HashicorpVault {
             None => client.http.send(request).await,
         }
         .map_err(|error| match crate::error::transport(error) {
-            Ok(error) => RawOperationError::Transport(error),
-            Err(error) => RawOperationError::Client(error),
+            Ok(error) => RawOperationError::Transport(Redacted::new(error)),
+            Err(error) => RawOperationError::Client(Redacted::new(error)),
         })?;
         if !response.status().is_success() {
             return Err(RawOperationError::Http(HttpFailure {
                 method,
                 url,
                 status: response.status().as_u16(),
-                body: response.into_body(),
+                body: Redacted::new(response.into_body()),
             }));
         }
         Ok(response.into_body())

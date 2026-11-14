@@ -63,7 +63,7 @@ async fn environment_sources_bypass_boolean_conversion_and_defaults() {
     );
     assert!(matches!(
         resolver
-            .get_secret("oidc/env/MISSING", Some(Secret::Bool(true)))
+            .get_secret("oidc/env/MISSING", Some(Secret::Bool(true.into())))
             .await,
         Err(Error::MissingEnvironment)
     ));
@@ -389,7 +389,7 @@ async fn google_oidc_failures_are_not_cached_or_hidden_by_defaults() {
     for _ in 0..2 {
         assert!(matches!(
             resolver
-                .get_secret("oidc/google/audience", Some(Secret::Bool(true)))
+                .get_secret("oidc/google/audience", Some(Secret::Bool(true.into())))
                 .await,
             Err(Error::OidcStatus(403))
         ));

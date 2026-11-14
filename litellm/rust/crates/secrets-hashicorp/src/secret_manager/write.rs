@@ -58,7 +58,7 @@ impl HashicorpVault {
         self.cache
             .invalidate_where(move |key| key.location == location);
         serde_json::to_value(metadata)
-            .map_err(|source| Error::Client(ClientError::JsonParseError { source }))
+            .map_err(|source| Error::Client(Redacted::new(ClientError::JsonParseError { source })))
     }
 
     pub async fn async_delete_secret(&self, secret_name: &str) -> Result<(), Error> {

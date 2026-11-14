@@ -71,7 +71,7 @@ impl CyberArkSecretManager {
                 .await
                 .map_err(|source| WriteFailure {
                     source,
-                    request_url: self.authentication_url().ok(),
+                    request_url: self.authentication_url().ok().map(Redacted::new),
                     authentication: true,
                 })?;
         with_timeout(

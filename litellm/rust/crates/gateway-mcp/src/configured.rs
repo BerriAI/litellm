@@ -9,7 +9,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::future::try_join_all;
 use http::{HeaderName, HeaderValue};
 use litellm_config::{McpAuth, McpServer, McpTransport};
-use litellm_secret_value::SecretValue;
+use litellm_secret_value::{Redacted, SecretValue};
 use litellm_secrets::source::SecretSource;
 use rmcp::{
     RoleClient, ServiceExt,
@@ -369,7 +369,7 @@ async fn connect_service<C: StreamableHttpClient>(
     };
     initialized.map_err(|source| ConnectError::Initialize {
         server: name.into(),
-        source: Box::new(source),
+        source: Redacted::new(Box::new(source)),
     })
 }
 

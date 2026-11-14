@@ -18,7 +18,6 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
-veil.workspace = true
 
 gcp_auth = "0.12.7"
 google-cloud-auth.workspace = true

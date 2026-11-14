@@ -1,4 +1,6 @@
-#[derive(thiserror::Error, veil::Redact)]
+use litellm_secret_value::Redacted;
+
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
     Operation(#[from] litellm_secrets_types::Error),
@@ -11,17 +13,9 @@ pub enum Error {
     #[error("Azure Key Vault credentials are not configured")]
     MissingCredentials,
     #[error(transparent)]
-    Auth(
-        #[from]
-        #[redact]
-        litellm_auth_types::Error,
-    ),
+    Auth(Redacted<litellm_auth_types::Error>),
     #[error("Azure Key Vault request failed")]
-    Http(
-        #[source]
-        #[redact]
-        litellm_http::Error,
-    ),
+    Http(#[source] Redacted<litellm_http::Error>),
     #[error("Azure Key Vault returned HTTP {0}")]
     Status(u16),
     #[error("Azure Key Vault response is missing the secret value")]
@@ -41,5 +35,11 @@ impl Error {
             | Self::Http(_)
             | Self::Status(_) => false,
         }
+    }
+}
+
+impl From<litellm_auth_types::Error> for Error {
+    fn from(error: litellm_auth_types::Error) -> Self {
+        Self::Auth(Redacted::new(error))
     }
 }

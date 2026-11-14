@@ -104,7 +104,7 @@ async fn primary_secret_values_other_than_strings_resolve_to_none(
     let text = value.as_str();
     assert_eq!(
         resolver
-            .get_secret("KEY", Some(Secret::Bool(true)))
+            .get_secret("KEY", Some(Secret::Bool(true.into())))
             .await
             .unwrap(),
         text.map(|text| Secret::String(SecretValue::new(text)))

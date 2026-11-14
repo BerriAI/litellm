@@ -29,6 +29,7 @@ use litellm_router_core::{
     health::CooldownValue, host::ModelInfoLookup, model_info::MergedModelInfo,
     precall::PreCallFacts,
 };
+use litellm_secret_value::Redacted;
 use pyo3::{PyResult, Python, types::PyAnyMethods};
 use serde_json::{Map, Value};
 
@@ -228,8 +229,8 @@ impl CacheOutcome {
 }
 
 /// A fallback chain's dict targets, which can carry an api key.
-#[derive(Clone, PartialEq, veil::Redact)]
-pub(crate) struct DictTargets(#[redact(with = "[REDACTED]")] pub(crate) Vec<Map<String, Value>>);
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DictTargets(pub(crate) Redacted<Vec<Map<String, Value>>>);
 
 /// What a call is blocked on, for Python to run.
 #[derive(Clone, Debug, PartialEq)]
@@ -1036,7 +1037,7 @@ impl Host for StepHost {
     async fn refuses_fallbacks(&self, level: u32, targets: &[Map<String, Value>]) -> bool {
         let call = HostCall::RefuseFallbacks {
             level,
-            targets: DictTargets(targets.to_vec()),
+            targets: DictTargets(Redacted::new(targets.to_vec())),
         };
         let HostCallResponse::RefuseFallbacks(refused) = call_host(call).await else {
             unreachable!("{CHECKED}");
@@ -1748,7 +1749,7 @@ mod tests {
         let Value::Object(target) = target else {
             unreachable!("a JSON object");
         };
-        let shown = format!("{:?}", DictTargets(vec![target]));
+        let shown = format!("{:?}", DictTargets(Redacted::new(vec![target])));
         assert!(!shown.contains("credential-value"));
         assert!(shown.contains("[REDACTED]"));
     }
@@ -1766,7 +1767,7 @@ mod tests {
             HostCallResponse::Attempt(Err(AttemptError::new(FailureKind::BadRequest, Some(400))));
         let step = store.resume(&mut driver, Some(bad_request));
         assert!(
-            matches!(&step, Step::HostCall(HostCall::RefuseFallbacks { level: 0, targets }) if targets.0.len() == 1),
+            matches!(&step, Step::HostCall(HostCall::RefuseFallbacks { level: 0, targets }) if targets.0.expose().len() == 1),
             "expected the chain's check, got {step:?}"
         );
         let Step::Failed(error) =

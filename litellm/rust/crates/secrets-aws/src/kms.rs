@@ -6,6 +6,7 @@ use aws_sdk_kms::{
     primitives::Blob,
 };
 use litellm_core_utils::settings::Lookup;
+use litellm_secret_value::Redacted;
 use litellm_secrets_types::KeyManagementSettings;
 
 use crate::{Error, auth};
@@ -27,7 +28,7 @@ impl AwsKms {
             .ciphertext_blob(Blob::new(ciphertext))
             .send()
             .await
-            .map_err(|error| Error::Decrypt(Box::new(error)))?;
+            .map_err(|error| Error::Decrypt(Redacted::new(Box::new(error))))?;
         Ok(response
             .plaintext
             .ok_or(Error::MissingPlaintext)?

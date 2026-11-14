@@ -67,8 +67,8 @@ impl CyberArkSecretManager {
         let client = pool
             .client(&config, ClientVariant::Provider)
             .map_err(|error| match error.tls_source() {
-                Some(TlsSource::ClientIdentity) => Error::ClientCertificate(error),
-                Some(TlsSource::CaBundle) | None => Error::Client(error),
+                Some(TlsSource::ClientIdentity) => Error::ClientCertificate(Redacted::new(error)),
+                Some(TlsSource::CaBundle) | None => Error::Client(Redacted::new(error)),
             })?;
         let endpoint = reqwest::Url::parse(
             &environment

@@ -1,8 +1,8 @@
 use std::sync::LazyLock;
 
+use litellm_secret_value::SecretValue;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use veil::Redact;
 
 use super::{ParamKind, ParamSpec};
 
@@ -22,16 +22,14 @@ const fn spec(
 }
 
 /// The `aws_*` fields of Python's `GenericLiteLLMParams`.
-#[derive(Redact, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AwsParams {
     #[serde(default)]
     pub aws_access_key_id: Option<String>,
     #[serde(default)]
-    #[redact(with = "[REDACTED]")]
-    pub aws_secret_access_key: Option<String>,
+    pub aws_secret_access_key: Option<SecretValue>,
     #[serde(default)]
-    #[redact(with = "[REDACTED]")]
-    pub aws_session_token: Option<String>,
+    pub aws_session_token: Option<SecretValue>,
     #[serde(default)]
     pub aws_region_name: Option<String>,
     #[serde(default)]
@@ -41,13 +39,11 @@ pub struct AwsParams {
     #[serde(default)]
     pub aws_role_name: Option<String>,
     #[serde(default)]
-    #[redact(with = "[REDACTED]")]
-    pub aws_web_identity_token: Option<String>,
+    pub aws_web_identity_token: Option<SecretValue>,
     #[serde(default)]
     pub aws_sts_endpoint: Option<String>,
     #[serde(default)]
-    #[redact(with = "[REDACTED]")]
-    pub aws_external_id: Option<String>,
+    pub aws_external_id: Option<SecretValue>,
     #[serde(default)]
     pub aws_bedrock_runtime_endpoint: Option<String>,
 }
@@ -195,15 +191,15 @@ impl AwsParams {
         };
         Self {
             aws_access_key_id: value("aws_access_key_id"),
-            aws_secret_access_key: value("aws_secret_access_key"),
-            aws_session_token: value("aws_session_token"),
+            aws_secret_access_key: value("aws_secret_access_key").map(SecretValue::new),
+            aws_session_token: value("aws_session_token").map(SecretValue::new),
             aws_region_name: value("aws_region_name"),
             aws_session_name: value("aws_session_name"),
             aws_profile_name: value("aws_profile_name"),
             aws_role_name: value("aws_role_name"),
-            aws_web_identity_token: value("aws_web_identity_token"),
+            aws_web_identity_token: value("aws_web_identity_token").map(SecretValue::new),
             aws_sts_endpoint: value("aws_sts_endpoint"),
-            aws_external_id: value("aws_external_id"),
+            aws_external_id: value("aws_external_id").map(SecretValue::new),
             aws_bedrock_runtime_endpoint: value("aws_bedrock_runtime_endpoint"),
         }
     }

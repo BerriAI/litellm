@@ -1,5 +1,7 @@
 use std::{error::Error, fmt, ops::Deref, sync::Arc};
 
+use litellm_secret_value::Redacted;
+
 pub struct Report<'a>(&'a (dyn Error + 'static));
 
 impl<'a> Report<'a> {
@@ -21,6 +23,13 @@ pub fn find<'a, T: Error + 'static>(error: &'a (dyn Error + 'static)) -> Option<
         cause
             .downcast_ref::<T>()
             .or_else(|| cause.downcast_ref::<Source>()?.downcast_ref::<T>())
+            .or_else(|| cause.downcast_ref::<Redacted<T>>().map(Redacted::expose))
+            .or_else(|| {
+                cause
+                    .downcast_ref::<Redacted<Source>>()?
+                    .expose()
+                    .downcast_ref::<T>()
+            })
     })
 }
 
@@ -60,6 +69,7 @@ impl Eq for Source {}
 mod tests {
     use std::io;
 
+    use litellm_secret_value::Redacted;
     use rstest::rstest;
 
     use super::{Report, Source, find};
@@ -72,6 +82,10 @@ mod tests {
         Parse(#[source] Source),
         #[error("config is empty")]
         Empty,
+        #[error("could not fetch the credential")]
+        Fetch(#[source] Redacted<io::Error>),
+        #[error("could not refresh the credential")]
+        Refresh(#[source] Redacted<Source>),
     }
 
     #[derive(Debug, thiserror::Error)]
@@ -100,6 +114,14 @@ mod tests {
         Outer::Nested(Leaf::Parse(Source::new(Leaf::Read(denied())))),
         "could not parse the config: could not read the config: permission denied"
     )]
+    #[case::redacted_cause_keeps_its_text(
+        Outer::Startup(Leaf::Fetch(Redacted::new(denied()))),
+        "startup failed: could not fetch the credential: permission denied"
+    )]
+    #[case::redacted_erased_cause_keeps_its_chain(
+        Outer::Nested(Leaf::Refresh(Redacted::new(Source::new(Leaf::Read(denied()))))),
+        "could not refresh the credential: could not read the config: permission denied"
+    )]
     fn report_renders_every_layer_once(#[case] error: Outer, #[case] expected: &str) {
         assert_eq!(Report::new(&error).to_string(), expected);
     }
@@ -113,6 +135,10 @@ mod tests {
         Box::<dyn std::error::Error + Send + Sync>::from(denied())
     ))))]
     #[case::behind_a_transparent_layer(Outer::Nested(Leaf::Parse(Source::new(denied()))))]
+    #[case::behind_a_redacted_source(Outer::Startup(Leaf::Fetch(Redacted::new(denied()))))]
+    #[case::behind_a_redacted_erased_source(Outer::Startup(Leaf::Refresh(Redacted::new(
+        Source::new(denied())
+    ))))]
     fn find_reaches_the_typed_cause_anywhere_in_the_chain(#[case] error: Outer) {
         let cause = find::<io::Error>(&error).expect("io cause");
         assert_eq!(cause.kind(), io::ErrorKind::PermissionDenied);

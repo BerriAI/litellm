@@ -3470,7 +3470,6 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "url",
- "veil",
 ]
 
 [[package]]
@@ -3513,7 +3512,6 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
- "veil",
 ]
 
 [[package]]
@@ -3527,7 +3525,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
- "veil",
 ]
 
 [[package]]
@@ -3751,7 +3748,6 @@ dependencies = [
  "strum",
  "tempfile",
  "thiserror 2.0.19",
- "veil",
 ]
 
 [[package]]
@@ -3824,6 +3820,7 @@ dependencies = [
 name = "litellm-error"
 version = "0.1.0"
 dependencies = [
+ "litellm-secret-value",
  "rstest",
  "thiserror 2.0.19",
 ]
@@ -3884,7 +3881,6 @@ dependencies = [
  "tower-sessions-moka-store",
  "tracing",
  "uuid",
- "veil",
 ]
 
 [[package]]
@@ -3906,7 +3902,6 @@ dependencies = [
  "tokio",
  "tower",
  "tower-sessions",
- "veil",
 ]
 
 [[package]]
@@ -4008,7 +4003,6 @@ dependencies = [
  "tower",
  "url",
  "uuid",
- "veil",
 ]
 
 [[package]]
@@ -4109,6 +4103,7 @@ dependencies = [
  "hyper-util",
  "litellm-core-utils",
  "litellm-error",
+ "litellm-secret-value",
  "rcgen",
  "reqwest",
  "rstest",
@@ -4124,7 +4119,6 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "url",
- "veil",
  "webpki-roots",
 ]
 
@@ -4484,7 +4478,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
- "veil",
  "wiremock",
 ]
 
@@ -4553,7 +4546,6 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
- "veil",
 ]
 
 [[package]]
@@ -4685,8 +4677,8 @@ version = "0.1.0"
 dependencies = [
  "rstest",
  "serde",
+ "serde_json",
  "subtle",
- "veil",
 ]
 
 [[package]]
@@ -4739,7 +4731,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
- "veil",
  "wiremock",
 ]
 
@@ -4762,7 +4753,6 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "url",
- "veil",
  "wiremock",
 ]
 
@@ -4787,7 +4777,6 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "url",
- "veil",
  "wiremock",
 ]
 
@@ -4815,7 +4804,6 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "url",
- "veil",
  "wiremock",
 ]
 
@@ -4838,7 +4826,6 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "vaultrs",
- "veil",
  "wiremock",
 ]
 
@@ -4854,7 +4841,6 @@ dependencies = [
  "strum",
  "thiserror 2.0.19",
  "tokio",
- "veil",
 ]
 
 [[package]]
@@ -8415,27 +8401,6 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
-
-[[package]]
-name = "veil"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7352f0bbf3ab98911b0c0277065094c1b1ec79bbc85fa3b7d16bf1859c3d96f"
-dependencies = [
- "once_cell",
- "veil-macros",
-]
-
-[[package]]
-name = "veil-macros"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47a3f4f06d904eb789b935253752ba6bcc1dfa61349f8d5341c66abe070b44e5"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "version_check"

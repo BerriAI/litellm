@@ -3,10 +3,8 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use veil::Redact;
-
 use crate::{Error, ResolvedCredential, TokenProviderHandle};
-use litellm_secret_value::SecretValue;
+use litellm_secret_value::{Redacted, SecretValue};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CredentialFileRef {
@@ -38,16 +36,16 @@ pub trait CredentialResolver: std::fmt::Debug + Send + Sync {
     fn resolve<'a>(&'a self, reference: &'a CredentialRef) -> CredentialLookupFuture<'a>;
 }
 
-#[derive(Clone, Redact)]
-pub struct CredentialResolverHandle(#[redact(with = "[REDACTED]")] Arc<dyn CredentialResolver>);
+#[derive(Clone, Debug)]
+pub struct CredentialResolverHandle(Redacted<Arc<dyn CredentialResolver>>);
 
 impl CredentialResolverHandle {
     pub fn new(resolver: Arc<dyn CredentialResolver>) -> Self {
-        Self(resolver)
+        Self(Redacted::new(resolver))
     }
 
     pub async fn resolve(&self, reference: &CredentialRef) -> Result<CredentialLookup, Error> {
-        self.0.resolve(reference).await
+        self.0.expose().resolve(reference).await
     }
 }
 

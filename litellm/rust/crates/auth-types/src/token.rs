@@ -3,10 +3,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use veil::Redact;
-
 use crate::Error;
-use litellm_secret_value::SecretValue;
+use litellm_secret_value::{Redacted, SecretValue};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolvedCredential {
@@ -32,12 +30,12 @@ pub trait TokenProvider: std::fmt::Debug + Send + Sync {
     fn acquire(&self) -> TokenFuture<'_>;
 }
 
-#[derive(Clone, Redact)]
-pub struct TokenProviderHandle(#[redact(with = "[REDACTED]")] Arc<dyn TokenProvider>);
+#[derive(Clone, Debug)]
+pub struct TokenProviderHandle(Redacted<Arc<dyn TokenProvider>>);
 
 impl TokenProviderHandle {
     pub fn new(caller: Arc<dyn TokenProvider>) -> Self {
-        Self(caller)
+        Self(Redacted::new(caller))
     }
 
     pub fn from_callback<F, Fut>(acquire: F) -> Self
@@ -49,7 +47,7 @@ impl TokenProviderHandle {
     }
 
     pub async fn acquire(&self) -> Result<ResolvedCredential, Error> {
-        self.0.acquire().await
+        self.0.expose().acquire().await
     }
 }
 

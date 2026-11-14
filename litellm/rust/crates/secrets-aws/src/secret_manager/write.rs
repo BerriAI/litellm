@@ -1,4 +1,5 @@
 use super::*;
+use litellm_secret_value::Redacted;
 
 impl AwsSecretsManagerV2 {
     pub async fn async_write_secret(
@@ -32,7 +33,7 @@ impl AwsSecretsManagerV2 {
             Err(error) => self
                 .restore_and_update_secret(client, name, value, description, tags)
                 .await?
-                .ok_or_else(|| Error::Create(Box::new(error)))?,
+                .ok_or_else(|| Error::Create(Redacted::new(Box::new(error))))?,
         };
         if let Some(regions) = &self.write_settings.replica_regions
             && !regions.is_empty()
@@ -68,7 +69,7 @@ impl AwsSecretsManagerV2 {
             .secret_id(name)
             .send()
             .await
-            .map_err(|error| Error::Restore(Box::new(error)))?;
+            .map_err(|error| Error::Restore(Redacted::new(Box::new(error))))?;
         match self
             .update_restored_secret(client, name, value, description, tags)
             .await
@@ -117,7 +118,7 @@ impl AwsSecretsManagerV2 {
             .set_kms_key_id(self.write_kms_key_id())
             .send()
             .await
-            .map_err(|error| Error::Update(Box::new(error)))?;
+            .map_err(|error| Error::Update(Redacted::new(Box::new(error))))?;
         if let Some(tags) = tags {
             client
                 .tag_resource()
@@ -125,7 +126,7 @@ impl AwsSecretsManagerV2 {
                 .set_tags(Some(tags))
                 .send()
                 .await
-                .map_err(|error| Error::Tag(Box::new(error)))?;
+                .map_err(|error| Error::Tag(Redacted::new(Box::new(error))))?;
         }
         Ok(CreateSecretOutput::builder()
             .set_arn(response.arn)
@@ -164,7 +165,7 @@ impl AwsSecretsManagerV2 {
             .send()
             .await
             .map(Some)
-            .map_err(|error| Error::Replicate(Box::new(error)))
+            .map_err(|error| Error::Replicate(Redacted::new(Box::new(error))))
     }
 
     pub async fn async_put_secret_value(
@@ -188,7 +189,7 @@ impl AwsSecretsManagerV2 {
             .secret_string(value.expose())
             .send()
             .await
-            .map_err(|error| Error::Put(Box::new(error)))
+            .map_err(|error| Error::Put(Redacted::new(Box::new(error))))
     }
 
     pub async fn async_delete_secret(
@@ -223,7 +224,7 @@ impl AwsSecretsManagerV2 {
             .set_recovery_window_in_days(recovery_window_in_days.map(i64::from))
             .send()
             .await
-            .map_err(|error| Error::Delete(Box::new(error)))
+            .map_err(|error| Error::Delete(Redacted::new(Box::new(error))))
     }
 
     pub async fn async_rotate_secret(

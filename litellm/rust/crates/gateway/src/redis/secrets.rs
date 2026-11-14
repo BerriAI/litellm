@@ -46,10 +46,14 @@ impl Lookup for SecretSnapshot {
 
 impl ConfiguredRedis {
     pub(crate) fn secret_names(&self) -> BTreeSet<String> {
-        let references = self.fields.values().filter_map(|value| match value {
-            Value::String(text) => text.strip_prefix("os.environ/").map(str::to_owned),
-            _ => None,
-        });
+        let references = self
+            .fields
+            .expose()
+            .values()
+            .filter_map(|value| match value {
+                Value::String(text) => text.strip_prefix("os.environ/").map(str::to_owned),
+                _ => None,
+            });
         let declared = SETTINGS.iter().flat_map(|setting| {
             setting
                 .environment_name()

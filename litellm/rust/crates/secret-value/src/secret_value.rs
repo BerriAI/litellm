@@ -1,18 +1,19 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
-use veil::Redact;
 
-#[derive(Redact, Clone, Deserialize)]
+use crate::Redacted;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct SecretValue(#[redact(with = "[REDACTED]")] String);
+pub struct SecretValue(Redacted<String>);
 
 impl SecretValue {
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        Self(Redacted::new(value.into()))
     }
 
     pub fn expose(&self) -> &str {
-        &self.0
+        self.0.expose()
     }
 }
 
@@ -30,7 +31,7 @@ impl From<&str> for SecretValue {
 
 impl PartialEq for SecretValue {
     fn eq(&self, other: &Self) -> bool {
-        subtle::ConstantTimeEq::ct_eq(self.0.as_bytes(), other.0.as_bytes()).into()
+        subtle::ConstantTimeEq::ct_eq(self.expose().as_bytes(), other.expose().as_bytes()).into()
     }
 }
 
@@ -38,7 +39,7 @@ impl Eq for SecretValue {}
 
 impl Hash for SecretValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
+        self.expose().hash(state);
     }
 }
 
