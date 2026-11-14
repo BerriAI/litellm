@@ -72,15 +72,13 @@ class JinaAIRerankConfig(BaseRerankConfig):
         model: str,
         optional_params: dict | None = None,
     ) -> str:
-        base_path: Final = "/v1/rerank"
-
         if api_base is None:
             return "https://api.jina.ai/v1/rerank"
         base: Final = URL(api_base)
-        # Reconstruct URL with cleaned path
-        cleaned_base: Final = str(base.copy_with(path=base_path))
-
-        return cleaned_base
+        path: Final = base.raw_path.partition(b"?")[0].decode("ascii").rstrip("/")
+        route: Final = "rerank" if path.endswith("/v1") else "v1/rerank"
+        complete_path: Final = path if path.endswith("/v1/rerank") else f"{path}/{route}"
+        return str(base.copy_with(path=complete_path))
 
     def transform_rerank_request(
         self,
