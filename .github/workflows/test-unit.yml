@@ -299,6 +299,7 @@ jobs:
               tests/unit/llms/langgraph
               tests/unit/llms/laya
               tests/unit/llms/lemonade
+              tests/unit/llms/keirolabs
               tests/unit/llms/linkup
               tests/unit/llms/litellm_proxy
               tests/unit/llms/llamafile

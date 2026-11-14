@@ -49989,6 +49989,14 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.14
     },
+    "keirolabs/search": {
+        "input_cost_per_query": 0.0001,
+        "litellm_provider": "keirolabs",
+        "mode": "search",
+        "metadata": {
+            "notes": "Keirolabs lite search. Pricing: $0.10/1k searches (Essential, $29.99/month for 300k), $0.06/1k (Pro), $0.03/1k (Startup). Flat per search, whatever the result count."
+        }
+    },
     "linkup/search": {
         "input_cost_per_query": 0.00587,
         "litellm_provider": "linkup",

@@ -21,6 +21,7 @@ SEARCH_PROVIDERS = [
     "apiserpent",
     "tinyfish",
     "nimble",
+    "keirolabs",
 ]
 
 ALLOWED_FILES_IN_LLMS_FOLDER = [
