@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -299,18 +300,30 @@ def claude_api_key_helper(
     return next((settings[API_KEY_HELPER_KEY] for settings in settings_files if API_KEY_HELPER_KEY in settings), None)
 
 
+def _claude_settings_blank_auth_token(
+    read_settings: Callable[[Path], Mapping[str, JsonValue]], environ: Mapping[str, str], project_dir: Path
+) -> bool:
+    """Whether the ANTHROPIC_AUTH_TOKEN Claude Code takes from its settings files is the blank one a
+    `lite login --pkce --config-claude` writes, which hides a key exported at launch."""
+    tokens: Final = (
+        _settings_env(settings).get(ANTHROPIC_AUTH_TOKEN_ENV)
+        for settings in _readable_settings_files(read_settings, environ, project_dir)
+    )
+    return next((token for token in tokens if token is not None), None) == ""
+
+
 def _launch_key_overlay_args(
     command: Sequence[str],
     base_url: str,
     api_key: str,
-    settings_helper: JsonValue,
-    renews: bool,
+    settings_hide_key: bool,
     environ: Mapping[str, str],
-    write_overlay: Callable[[str, Mapping[str, str]], Path],
+    write_overlay: Callable[[str, str, Mapping[str, str]], Path],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """A `--settings` overlay carrying the key this launch resolved, and the proxy it was issued for, when lite's
-    helper would send another one. It merges the user's last `--settings`, since Claude Code keeps only the last."""
-    if renews or not is_lite_api_key_helper(settings_helper):
+    """A `--settings` overlay carrying the key this launch resolved, and the proxy it was issued for, when Claude
+    Code's settings would hide it. It merges the user's last `--settings`, since Claude Code keeps only the last.
+    The file is named by its contents, so two launches share one only when they carry the same settings."""
+    if not settings_hide_key:
         return (), tuple(command[1:])
     user_value, rest = _split_settings_flags(tuple(command[1:]))
     base: Final[Mapping[str, JsonValue]] = _load_settings_override(user_value) if user_value is not None else {}
@@ -323,7 +336,9 @@ def _launch_key_overlay_args(
             **_settings_env(base),
         },
     }
-    return (_SETTINGS_FLAG, str(write_overlay(json.dumps(overlay, separators=(",", ":")), environ))), rest
+    text: Final = json.dumps(overlay, separators=(",", ":"))
+    name: Final = f"{LAUNCH_KEY_OVERLAY_PREFIX}{hashlib.sha256(text.encode()).hexdigest()[:16]}.json"
+    return (_SETTINGS_FLAG, str(write_overlay(name, text, environ))), rest
 
 
 def _readable_settings_files(
@@ -336,20 +351,17 @@ def _readable_settings_files(
 
 
 OVERLAY_FILE_NAME: Final = "litellm-subscription-overlay.json"
+LAUNCH_KEY_OVERLAY_PREFIX: Final = "litellm-launch-key-overlay-"
 
 
-def write_settings_overlay(text: str, environ: Mapping[str, str]) -> Path:
+def write_settings_overlay(name: str, text: str, environ: Mapping[str, str]) -> Path:
     """Write the overlay next to Claude Code's own settings.json (so under CLAUDE_CONFIG_DIR when set) and return
-    its path. One file per user, rewritten on every launch, mode 0600 whether or not it already existed. It carries
-    the LiteLLM key, which is why it is a private file and not an inline `--settings` argument that every local
-    user could read from the process list, and why it does not pile up in the temp dir."""
-    path: Final = claude_settings_path(environ).parent / OVERLAY_FILE_NAME
+    its path. The file is replaced in one step with mode 0600, so a Claude Code starting at the same time never
+    reads half of it. It carries the LiteLLM key, which is why it is a private file and not an inline `--settings`
+    argument that every local user could read from the process list, and why it does not pile up in the temp dir."""
+    path: Final = claude_settings_path(environ).parent / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd: Final = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    if os.name == "posix":
-        os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(text)
+    _replace_file(path, text)
     return path
 
 
@@ -358,7 +370,7 @@ def subscription_launch_args(
     api_key: str,
     environ: Mapping[str, str],
     settings_files: Sequence[Mapping[str, JsonValue]],
-    write_overlay: Callable[[str, Mapping[str, str]], Path],
+    write_overlay: Callable[[str, str, Mapping[str, str]], Path],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The `--settings` that keeps Claude Code on its claude.ai login, plus the user's remaining args.
 
@@ -374,7 +386,7 @@ def subscription_launch_args(
     inherited: Final = _inherited_custom_headers(settings_files, environ)
     user_value, rest = _split_settings_flags(tuple(command[1:]))
     base: Final[Mapping[str, JsonValue]] = _load_settings_override(user_value) if user_value is not None else {}
-    overlay: Final = write_overlay(_settings_json(base, api_key, inherited), environ)
+    overlay: Final = write_overlay(OVERLAY_FILE_NAME, _settings_json(base, api_key, inherited), environ)
     return (_SETTINGS_FLAG, str(overlay)), rest
 
 
@@ -1161,7 +1173,7 @@ def run_agent(
     reattach_terminal: Callable[[], None] | None = None,
     preparers: Mapping[str, _Preparer] = MappingProxyType(_PREPARERS),
     read_settings: Callable[[Path], Mapping[str, JsonValue]] = load_json_or_empty,
-    write_overlay: Callable[[str, Mapping[str, str]], Path] = write_settings_overlay,
+    write_overlay: Callable[[str, str, Mapping[str, str]], Path] = write_settings_overlay,
     project_dir: Path | None = None,
     key_from_stored_login: bool = False,
 ) -> None:
@@ -1197,6 +1209,14 @@ def run_agent(
         claude_api_key_helper((), read_settings, env_before_sync, project) if reads_helper else None
     )
     helper_renews_key: Final = key_from_stored_login and is_lite_api_key_helper_for(configured_helper, base_url)
+    settings_hide_key: Final = (
+        reads_helper
+        and not helper_renews_key
+        and (
+            is_lite_api_key_helper(settings_helper)
+            or _claude_settings_blank_auth_token(read_settings, env_before_sync, project)
+        )
+    )
     synced: Final = (
         _NO_EXTRA_ENV if subscription else sync_models(binary, env_before_sync, base_url, api_key, skip_verify)
     )
@@ -1234,9 +1254,7 @@ def run_agent(
             write_overlay,
         )
         if subscription and os.path.basename(command[0]) == "claude"
-        else _launch_key_overlay_args(
-            command, base_url, api_key, settings_helper, helper_renews_key, env_before_sync, write_overlay
-        )
+        else _launch_key_overlay_args(command, base_url, api_key, settings_hide_key, env_before_sync, write_overlay)
     )
     if reattach_terminal is not None:
         reattach_terminal()
@@ -1353,6 +1371,7 @@ def agent_commands() -> tuple[click.Command, ...]:
 
 
 __all__ = [
+    "LAUNCH_KEY_OVERLAY_PREFIX",
     "OVERLAY_FILE_NAME",
     "AgentRunError",
     "ListedModel",

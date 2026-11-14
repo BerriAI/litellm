@@ -224,7 +224,7 @@ LITE_HELPER: Final = f"/usr/local/bin/lite --base-url {PROXY} auth print-token"
 
 
 def _overlay_writer(tmp_path):
-    def write(text, environ):
+    def write(name, text, environ):
         target = tmp_path / "overlay.json"
         target.write_text(text)
         return target
@@ -1791,6 +1791,70 @@ class TestRunAgent:
             assert launched["args"][:2] == ("claude", "--settings") and len(launched["args"]) == 3
             assert _overlay(launched["args"]) == expected_overlay
 
+    @pytest.mark.parametrize("project_helper", ["", "/opt/project/helper"], ids=["disabled", "its-own"])
+    @pytest.mark.parametrize("key_from_stored_login", [True, False], ids=["stored-login", "api-key"])
+    def test_claude_sends_the_launch_key_when_a_project_helper_sits_over_a_pkce_login(
+        self, tmp_path, project_helper, key_from_stored_login
+    ):
+        files = {
+            tmp_path / "repo" / ".claude" / "settings.json": {"apiKeyHelper": project_helper},
+            tmp_path / "cfg" / "settings.json": {"apiKeyHelper": LITE_HELPER, "env": {"ANTHROPIC_AUTH_TOKEN": ""}},
+        }
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude"],
+            base_env={"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")},
+            which=lambda name: f"/usr/local/bin/{name}",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: launched.update(args=tuple(a)),
+            read_settings=lambda path: files.get(path, {}),
+            write_overlay=_overlay_writer(tmp_path),
+            project_dir=tmp_path / "repo",
+            key_from_stored_login=key_from_stored_login,
+        )
+        assert _overlay(launched["args"]) == {
+            "apiKeyHelper": "",
+            "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY},
+        }
+
+    def test_concurrent_key_launches_each_read_their_own_settings_file(self, tmp_path):
+        config_dir = tmp_path / "cfg"
+
+        def launch(base_url, api_key, *, subscription=False):
+            launched = {}
+            run_agent(
+                base_url,
+                api_key,
+                ["claude"],
+                subscription=subscription,
+                base_env={"CLAUDE_CONFIG_DIR": str(config_dir)},
+                which=lambda name: f"/usr/local/bin/{name}",
+                verify=lambda *a: None,
+                verify_subscription=lambda *a: None,
+                launcher=lambda p, a, e: launched.update(args=tuple(a)),
+                read_settings=lambda path: {"apiKeyHelper": LITE_HELPER, "env": {"ANTHROPIC_AUTH_TOKEN": ""}},
+                project_dir=tmp_path / "repo",
+            )
+            return Path(launched["args"][launched["args"].index("--settings") + 1])
+
+        first = launch(PROXY, "sk-a")
+        second = launch(OTHER_PROXY, "sk-b")
+        subscription = launch(PROXY, "sk-a", subscription=True)
+        assert len({first, second, subscription}) == 3
+        assert json.loads(first.read_text())["env"] == {"ANTHROPIC_AUTH_TOKEN": "sk-a", "ANTHROPIC_BASE_URL": PROXY}
+        assert json.loads(second.read_text())["env"] == {
+            "ANTHROPIC_AUTH_TOKEN": "sk-b",
+            "ANTHROPIC_BASE_URL": OTHER_PROXY,
+        }
+        assert launch(PROXY, "sk-a") == first
+        assert sorted(path.name for path in config_dir.iterdir()) == sorted(
+            path.name for path in (first, second, subscription)
+        )
+        if os.name == "posix":
+            assert {stat.S_IMODE(path.stat().st_mode) for path in (first, second, subscription)} == {0o600}
+
     def test_an_unreadable_settings_flag_beside_lites_helper_fails_before_launch(self, tmp_path):
         launched = {}
         with pytest.raises(AgentRunError, match="file not found"):
@@ -2204,7 +2268,7 @@ class TestRunAgent:
             verify_subscription=lambda *a: probed.append(("header", a)),
             sync_models=lambda *a: {},
             preparers={},
-            write_overlay=lambda text, environ: overlays.append(text),
+            write_overlay=lambda name, text, environ: overlays.append(text),
             launcher=lambda p, a, e: launched.update(path=p, args=tuple(a), env=dict(e)),
         )
         assert probed == [("header", ("http://localhost:4000", "sk-key"))]
