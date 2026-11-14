@@ -1,6 +1,7 @@
 """Shared MCP operation policy and dispatch."""
 
 import asyncio
+import json
 import time
 import traceback
 import types
@@ -91,6 +92,7 @@ from litellm.proxy.mcp_server.contracts import (
 )
 from litellm.proxy.mcp_server.db import OAuthCredentialPayload
 from litellm.proxy.mcp_server.exceptions import (
+    MCPOpenApiUpstreamError,
     MCPToolResultError,
     MCPUpstreamAuthError,
 )
@@ -3386,6 +3388,17 @@ async def _handle_local_mcp_tool(
             result = tool.handler(**arguments)
     except MCPUpstreamAuthError:
         raise
+    except MCPOpenApiUpstreamError as e:
+        if e.details is not None:
+            return CallToolResult(
+                content=[TextContent(type="text", text=json.dumps(e.details, separators=(",", ":")))],
+                is_error=True,
+            )
+        verbose_logger.exception("Error executing local tool %s: %s", name, e)
+        return CallToolResult(
+            content=[TextContent(text=f"Error: {e}", type="text")],
+            is_error=True,
+        )
     except Exception as e:
         verbose_logger.exception("Error executing local tool %s: %s", name, e)
         return CallToolResult(

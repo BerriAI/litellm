@@ -583,10 +583,121 @@ def _merge_openapi_tool_request_headers(
     return effective_headers
 
 
+MAX_UPSTREAM_ERROR_BODY_BYTES: Final = 65536
+MAX_UPSTREAM_ERROR_OUTPUT_CHARS: Final = 4096
+_UPSTREAM_ERROR_PAYLOAD_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+
+
+def _extract_allowed_error_details(
+    response: httpx.Response,
+    allowed_error_fields: Sequence[str] | None,
+) -> dict[str, object] | None:
+    """Extract permitted JSON error fields from an upstream non-2xx HTTP response.
+
+    Note on response buffering: Because AsyncHTTPHandler buffers non-streaming response bodies
+    into memory across all HTTP methods, the 64 KB processing limit enforced here applies post-buffering
+    to bound CPU overhead, string allocations, and memory during JSON parsing and extraction.
+    """
+    if not allowed_error_fields:
+        return None
+
+    content_length: Final = header_value(response.headers, "content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > MAX_UPSTREAM_ERROR_BODY_BYTES:
+                return None
+        except ValueError:
+            return None
+
+    raw_bytes: Final[bytes | None] = getattr(response, "content", None)
+    raw_content: Final[bytes] = raw_bytes if raw_bytes is not None else getattr(response, "text", "").encode("utf-8")
+    if not raw_content or len(raw_content) > MAX_UPSTREAM_ERROR_BODY_BYTES:
+        return None
+
+    try:
+        decoded: Final = raw_content.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+    if not decoded.strip():
+        return None
+
+    try:
+        parsed: Final[dict[str, object]] = _UPSTREAM_ERROR_PAYLOAD_ADAPTER.validate_json(decoded)
+    except (ValidationError, ValueError):
+        return None
+
+    allowed_set: Final = frozenset(allowed_error_fields)
+    matched_fields: Final[dict[str, object]] = {
+        key: parsed[key] for key in allowed_error_fields if key in parsed and key in allowed_set
+    }
+    if not matched_fields:
+        return None
+
+    initial_payload: Final[dict[str, object]] = {"upstream_status": response.status_code, **matched_fields}
+    try:
+        initial_serialized: Final = json.dumps(initial_payload, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None
+
+    if len(initial_serialized) <= MAX_UPSTREAM_ERROR_OUTPUT_CHARS:
+        return initial_payload
+
+    # Truncate individual permitted string values and serialize again
+    truncated_fields: Final[dict[str, object]] = {
+        key: value[:MAX_UPSTREAM_ERROR_OUTPUT_CHARS] if isinstance(value, str) else value
+        for key, value in matched_fields.items()
+    }
+    truncated_payload: Final[dict[str, object]] = {
+        "upstream_status": response.status_code,
+        **truncated_fields,
+    }
+    try:
+        truncated_serialized: Final = json.dumps(truncated_payload, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None
+
+    if len(truncated_serialized) <= MAX_UPSTREAM_ERROR_OUTPUT_CHARS:
+        return truncated_payload
+
+    non_string_dict: Final[dict[str, object]] = {k: v for k, v in truncated_payload.items() if not isinstance(v, str)}
+    try:
+        non_string_overhead: Final = len(json.dumps(non_string_dict, separators=(",", ":")))
+    except (TypeError, ValueError):
+        return None
+
+    string_keys: Final = [k for k, v in truncated_payload.items() if isinstance(v, str)]
+    if not string_keys:
+        return None
+
+    remaining_budget: Final = MAX_UPSTREAM_ERROR_OUTPUT_CHARS - non_string_overhead - (len(string_keys) * 16)
+    if remaining_budget <= 0:
+        return None
+
+    per_field_budget: Final = max(1, remaining_budget // len(string_keys))
+    fitted_fields: Final[dict[str, object]] = {
+        k: (
+            cast(str, truncated_payload[k])[:per_field_budget]
+            if isinstance(truncated_payload[k], str)
+            else truncated_payload[k]
+        )
+        for k in truncated_payload
+    }
+    try:
+        fitted_serialized: Final = json.dumps(fitted_fields, separators=(",", ":"))
+        if len(fitted_serialized) <= MAX_UPSTREAM_ERROR_OUTPUT_CHARS:
+            return fitted_fields
+    except (TypeError, ValueError):
+        return None
+
+    return None
+
+
 def _raise_for_upstream_failure(
     response: httpx.Response,
     upstream: str,
     relays_upstream_auth: bool,
+    allowed_error_fields: Sequence[str] | None = None,
 ) -> None:
     """Turn a non-2xx upstream response into the right typed failure, or return for a 2xx.
 
@@ -606,7 +717,8 @@ def _raise_for_upstream_failure(
             www_authenticate=header_value(response.headers, "www-authenticate"),
             server_name=upstream,
         )
-    raise MCPOpenApiUpstreamError(response.status_code, upstream)
+    details: Final = _extract_allowed_error_details(response, allowed_error_fields)
+    raise MCPOpenApiUpstreamError(response.status_code, upstream, details=details)
 
 
 def create_tool_function(
@@ -619,6 +731,7 @@ def create_tool_function(
     relays_upstream_auth: bool = False,
     auth_type: MCPAuthType = None,
     upstream_token_header: str | None = None,
+    allowed_error_fields: Sequence[str] | None = None,
 ):
     """Create a tool function for an OpenAPI operation.
 
@@ -727,12 +840,14 @@ def create_tool_function(
             else:
                 return TextResult(f"Unsupported HTTP method: {original_method}")
         except MaskedHTTPStatusError as e:
-            _raise_for_upstream_failure(e.response, upstream, relays_upstream_auth)
+            _raise_for_upstream_failure(
+                e.response, upstream, relays_upstream_auth, allowed_error_fields=allowed_error_fields
+            )
             raise
         finally:
             _request_upstream_url.reset(url_token)
 
-        _raise_for_upstream_failure(response, upstream, relays_upstream_auth)
+        _raise_for_upstream_failure(response, upstream, relays_upstream_auth, allowed_error_fields=allowed_error_fields)
         return parse_http_body(response.text)
 
     return tool_function
