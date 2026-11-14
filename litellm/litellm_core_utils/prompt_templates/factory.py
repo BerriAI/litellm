@@ -23,6 +23,7 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
@@ -4782,8 +4783,14 @@ def _with_text_when_document_only(message: BedrockMessageBlock) -> BedrockMessag
     return BedrockMessageBlock(role="user", content=[*blocks[:cut], placeholder, *blocks[cut:]])
 
 
-def _rstrip_text_block(block: BedrockContentBlock) -> BedrockContentBlock:
-    return BedrockContentBlock(text=block["text"].rstrip()) if "text" in block else block
+def _rstripped_text_block(block: BedrockContentBlock) -> BedrockContentBlock | None:
+    match block:
+        case {"text": str() as text}:
+            return BedrockContentBlock(text=text.rstrip())
+        case {"guardContent": {"text": {"text": str() as text}}}:
+            return BedrockContentBlock(guardContent={"text": {"text": text.rstrip()}})
+        case _:
+            return None
 
 
 def _assistant_turn_rstripped(message: BedrockMessageBlock) -> BedrockMessageBlock:
@@ -4791,11 +4798,13 @@ def _assistant_turn_rstripped(message: BedrockMessageBlock) -> BedrockMessageBlo
     if message["role"] != "assistant":
         return message
     blocks: Final = message["content"]
-    last_text_index: Final = max((index for index, block in enumerate(blocks) if "text" in block), default=None)
+    stripped: Final = tuple(_rstripped_text_block(block) for block in blocks)
+    last_text_index: Final = max((index for index, block in enumerate(stripped) if block is not None), default=None)
     return BedrockMessageBlock(
         role="assistant",
         content=[
-            _rstrip_text_block(block) if index == last_text_index else block for index, block in enumerate(blocks)
+            stripped_block if index == last_text_index and stripped_block is not None else block
+            for index, (block, stripped_block) in enumerate(zip(blocks, stripped, strict=True))
         ],
     )
 
@@ -5105,6 +5114,32 @@ def get_assistant_message_block_or_continue_message(
     raise ValueError(f"Unsupported content type: {type(content_block)}")
 
 
+def _non_string_guarded_text(item: object, model: str, llm_provider: str) -> BadRequestError:
+    return BadRequestError(
+        message=f"Bedrock Converse needs a string `text` in every guarded_text part, got {item!r}",
+        model=model,
+        llm_provider=llm_provider,
+    )
+
+
+def _guard_content_block(item: object, model: str, llm_provider: str) -> BedrockContentBlock | None:
+    match item:
+        case {"type": "guarded_text", "text": str() as text}:
+            return BedrockContentBlock(guardContent={"text": {"text": text}}) if text.strip() else None
+        case {"type": "guarded_text"} if message_field(item, "text"):
+            raise _non_string_guarded_text(item, model, llm_provider)
+        case _:
+            return None
+
+
+def _user_guard_content_block(item: object, model: str, llm_provider: str) -> BedrockContentBlock:
+    match item:
+        case {"text": str() as text}:
+            return BedrockContentBlock(guardContent={"text": {"text": text}})
+        case _:
+            raise _non_string_guarded_text(item, model, llm_provider)
+
+
 class BedrockConverseMessagesProcessor:
     @staticmethod
     def _initial_message_setup(
@@ -5187,9 +5222,7 @@ class BedrockConverseMessagesProcessor:
                                 _part = BedrockContentBlock(text=element["text"])
                                 _parts.append(_part)
                             elif element["type"] == "guarded_text":
-                                # Wrap guarded_text in guardContent block
-                                _part = BedrockContentBlock(guardContent={"text": {"text": element["text"]}})
-                                _parts.append(_part)
+                                _parts.append(_user_guard_content_block(element, model, llm_provider))
                             elif element["type"] in ("grounding_source", "query"):
                                 # Contextual grounding tags are guardrail metadata; the
                                 # model only needs the underlying text, so render them
@@ -5340,6 +5373,8 @@ class BedrockConverseMessagesProcessor:
                                 if element.get("text", "").strip():
                                     assistants_part = BedrockContentBlock(text=element["text"])
                                     assistants_parts.append(assistants_part)
+                            elif (guard_block := _guard_content_block(element, model, llm_provider)) is not None:
+                                assistants_parts.append(guard_block)
                             elif element["type"] == "image_url":
                                 if isinstance(element["image_url"], dict):
                                     image_url = element["image_url"]["url"]
@@ -5650,9 +5685,7 @@ def _bedrock_converse_messages_pt(
                             _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "guarded_text":
-                            # Wrap guarded_text in guardContent block
-                            _part = BedrockContentBlock(guardContent={"text": {"text": element["text"]}})
-                            _parts.append(_part)
+                            _parts.append(_user_guard_content_block(element, model, llm_provider))
                         elif element["type"] in ("grounding_source", "query"):
                             # Contextual grounding tags are guardrail metadata; the
                             # model only needs the underlying text, so render them as
@@ -5804,6 +5837,8 @@ def _bedrock_converse_messages_pt(
                             if element.get("text", "").strip():
                                 assistants_part = BedrockContentBlock(text=element["text"])
                                 assistants_parts.append(assistants_part)
+                        elif (guard_block := _guard_content_block(element, model, llm_provider)) is not None:
+                            assistants_parts.append(guard_block)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
                                 image_url = element["image_url"]["url"]
