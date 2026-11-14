@@ -9,7 +9,7 @@ get_deployment_failures_for_current_minute
 get_deployment_successes_for_current_minute
 """
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Final
 
 from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
@@ -26,17 +26,33 @@ def find_deployment_metadata(kwargs: Mapping[str, object]) -> dict[str, object] 
     return next((bucket for bucket in buckets if isinstance(bucket, dict) and "model_info" in bucket), None)
 
 
-def get_counted_usage_tokens(litellm_params: Mapping[str, object]) -> int | None:
+def get_counted_usage_tokens(
+    litellm_params: Mapping[str, object], marker: str = ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
+) -> int | None:
     buckets: Final = (litellm_params.get(channel) for channel in _METADATA_CHANNELS)
     counted: Final = next(
-        (
-            bucket[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY]
-            for bucket in buckets
-            if isinstance(bucket, dict) and ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY in bucket
-        ),
+        (bucket[marker] for bucket in buckets if isinstance(bucket, dict) and marker in bucket),
         None,
     )
     return counted if isinstance(counted, int) and not isinstance(counted, bool) else None
+
+
+async def count_before_callbacks(
+    deployment_metadata: dict[str, object],  # mutable-ok: the success callbacks read the marker off it
+    marker: str,
+    tokens: int,
+    count: Callable[[], Awaitable[object]],
+) -> None:
+    deployment_metadata[marker] = tokens  # rebind-ok: the success callbacks read the marker off this call's metadata
+    try:
+        await count()
+    except Exception:
+        _ = deployment_metadata.pop(marker, None)
+        raise
+
+
+def deployment_successes_key(deployment_id: str) -> str:
+    return f"{deployment_id}:successes"
 
 
 @renamed_router_param("litellm_router_instance")
@@ -47,7 +63,7 @@ def increment_deployment_successes_for_current_minute(
     """
     In-Memory: Increments the number of successes for the current minute for a deployment_id
     """
-    key: Final = f"{deployment_id}:successes"
+    key: Final = deployment_successes_key(deployment_id)
     ctx.health().store.increment_cache(
         local_only=True,
         key=key,
@@ -84,7 +100,7 @@ def get_deployment_successes_for_current_minute(
 
     Returns 0 if no value found
     """
-    key: Final = f"{deployment_id}:successes"
+    key: Final = deployment_successes_key(deployment_id)
     return (
         ctx.health().store.get_cache(
             local_only=True,

@@ -452,7 +452,7 @@ class LiteLLMExecutedBatchRunner:
     ) -> LiteLLMBatch:
         endpoint: Final = _validate_endpoint(create_request.get("endpoint"))
         content: Final = await self._download_input(unified_input_file_id, user_api_key_dict)
-        parsed: Final = parse_batch_input(content, endpoint, self._body_rejection(model))
+        parsed: Final = parse_batch_input(content, endpoint, self._body_rejection(model, user_api_key_dict.team_id))
         if isinstance(parsed, InvalidBatchInput):
             raise batch_error(400, f"Invalid batch input file: {parsed.describe()}")
         llm_batch_id: Final = f"{LITELLM_EXECUTED_BATCH_ID_PREFIX}{uuid_module.uuid4().hex}"
@@ -533,7 +533,7 @@ class LiteLLMExecutedBatchRunner:
             return failed
         return await self.batches.load_batch(batch.id) or batch
 
-    def _body_rejection(self, model: str) -> BodyRejection:
+    def _body_rejection(self, model: str, team_id: str | None) -> BodyRejection:
         def reject(body: Mapping[str, object]) -> str | None:
             try:
                 is_request_body_safe(
@@ -541,6 +541,7 @@ class LiteLLMExecutedBatchRunner:
                     general_settings=dict(self.general_settings),
                     llm_router=self.llm_router,
                     model=model,
+                    team_id=team_id,
                 )
             except ValueError as e:
                 return str(e)
@@ -658,6 +659,7 @@ class LiteLLMExecutedBatchRunner:
     def _row_metadata(self, run: _BatchRun) -> dict[str, object]:  # mutable-ok: router updates metadata in place
         return {
             **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(run.user_api_key_dict),
+            **LiteLLMProxyRequestSetup.get_tenant_logging_metadata(run.user_api_key_dict),
             "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(run.user_api_key_dict),
             "user_api_end_user_max_budget": run.user_api_key_dict.end_user_max_budget,
             "tags": list(run.request_tags),

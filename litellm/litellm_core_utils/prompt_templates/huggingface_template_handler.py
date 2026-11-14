@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -26,6 +26,10 @@ class _ChatTemplateFileResult(TypedDict):
 
     status: ReadOnly[Literal["success", "failure"]]
     chat_template: NotRequired[ReadOnly[str]]
+
+
+class _AddedToken(TypedDict, total=False, extra_items=object):
+    content: ReadOnly[str]
 
 
 def strftime_now(fmt: str) -> str:
@@ -159,7 +163,7 @@ async def aget_chat_template_file(hf_model_name: str) -> _ChatTemplateFileResult
 _aget_chat_template_file = aget_chat_template_file
 
 
-def extract_token_value(token_value: None | str | dict[str, Any]) -> str:
+def extract_token_value(token_value: None | str | _AddedToken) -> str:
     """
     Extract token string from various formats (string, dict, etc.)
 

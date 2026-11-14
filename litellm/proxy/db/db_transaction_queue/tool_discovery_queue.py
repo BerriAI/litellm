@@ -55,3 +55,10 @@ class ToolDiscoveryQueue:
         """Return and clear all pending rows."""
         items, self._pending = list(self._pending.values()), {}
         return items
+
+    def requeue(self, items: Iterable[ToolDiscoveryQueueItem]) -> None:
+        """Put rows from a failed write back, ahead of and merged with anything queued since the flush."""
+        since_flush: Final = self._pending
+        self._pending = {}
+        for item in (*items, *since_flush.values()):
+            self.add_update(item)

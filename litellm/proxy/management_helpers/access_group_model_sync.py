@@ -6,6 +6,7 @@ the arrays alone strands every group on a name nothing serves any more.
 """
 
 from collections.abc import Sequence
+from contextlib import AbstractAsyncContextManager
 from typing import Final, Protocol
 
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
@@ -51,6 +52,15 @@ _REMOVE_MODEL_NAME_SQL: Final = (
     'WHERE $1 = ANY("access_model_names") '
     'RETURNING "access_group_id"'
 )
+
+
+class RawTransactions(Protocol):
+    def tx(self) -> AbstractAsyncContextManager[RawExecutor]: ...
+
+
+def raw_transactions(prisma_client: object) -> RawTransactions:
+    db: Final = AccessGroupRepository(prisma_client).prisma_client.db  # pyright: ignore[reportAny]  # untyped Prisma client
+    return writer_wrapper(db)  # pyright: ignore[reportAny, reportReturnType]  # untyped Prisma client behind the pin
 
 
 def raw_executor(prisma_client: object) -> RawExecutor:

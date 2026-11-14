@@ -281,6 +281,36 @@ class TestSearchSkills:
         assert isinstance(outcome, SkillSearchNotConfigured)
         assert "skill_search_embedding_model" in outcome.reason
 
+    @pytest.mark.parametrize("embedding_model", ("", "   "), ids=("empty", "whitespace"))
+    @pytest.mark.asyncio
+    async def test_empty_embedding_model_is_not_configured(self, embedding_model: str) -> None:
+        router: Final = _embedding_router()
+        not_configured: Final = await search_skills(
+            "language translation",
+            SKILLS,
+            5,
+            router=router,
+            embedding_model=None,
+            index=SkillSearchIndex(),
+            user_api_key_dict=CALLER,
+            proxy_logging_obj=_pass_through_key_limits(),
+        )
+        outcome: Final = await search_skills(
+            "language translation",
+            SKILLS,
+            5,
+            router=router,
+            embedding_model=embedding_model,
+            index=SkillSearchIndex(),
+            user_api_key_dict=CALLER,
+            proxy_logging_obj=_pass_through_key_limits(),
+        )
+
+        assert isinstance(not_configured, SkillSearchNotConfigured)
+        assert isinstance(outcome, SkillSearchNotConfigured)
+        assert outcome.reason == not_configured.reason
+        router.aembedding.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_no_router_is_not_configured(self) -> None:
         outcome = await search_skills(

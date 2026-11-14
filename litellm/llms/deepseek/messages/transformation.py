@@ -16,6 +16,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
 _TOOL_LIST: Final = TypeAdapter(list[object])
+_REQUEST_FIELDS: Final = TypeAdapter(dict[str, object])
 _TOOL_FIELDS: Final = TypeAdapter(dict[object, object])
 
 
@@ -32,6 +33,20 @@ def _custom_tool_without_type(tool: object) -> Mapping[object, object] | None:
 def _sanitized_tool(tool: object) -> object:
     stripped: Final = _custom_tool_without_type(tool)
     return tool if stripped is None else stripped
+
+
+def sanitize_tools_for_deepseek(tools: Sequence[object]) -> Sequence[object]:
+    return [_sanitized_tool(tool) for tool in tools]
+
+
+def deepseek_anthropic_base(api_base: str | None) -> str:
+    configured: Final = DeepSeekAnthropicMessagesConfig.get_api_base(api_base=api_base).rstrip("/")
+    if configured.endswith("/v1/messages") and "/anthropic/" in configured:
+        return configured.removesuffix("/v1/messages")
+    stripped: Final = configured.removesuffix("/v1/messages").removesuffix("/v1").removesuffix("/beta")
+    if stripped.endswith("/anthropic") or "/anthropic/" in stripped:
+        return stripped
+    return join_api_base(stripped, "anthropic")
 
 
 class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -102,25 +117,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        base_url = self.get_api_base(api_base=api_base).rstrip("/")
-
-        if base_url.endswith("/v1/messages") and "/anthropic/" in base_url:
-            return base_url
-        base_url = base_url.removesuffix("/v1/messages")
-        base_url = base_url.removesuffix("/v1")
-        base_url = base_url.removesuffix("/beta")
-
-        if not base_url.endswith("/anthropic") and "/anthropic/" not in base_url:
-            base_url = join_api_base(base_url, "anthropic")
-
-        return join_api_base(base_url, "v1/messages")
-
-    @staticmethod
-    def _sanitize_tools_for_deepseek(tools: object) -> object:
-        if not isinstance(tools, list):
-            return tools
-
-        return [_sanitized_tool(tool) for tool in _TOOL_LIST.validate_python(tools)]
+        return join_api_base(deepseek_anthropic_base(api_base), "v1/messages")
 
     def transform_anthropic_messages_request(
         self,
@@ -130,13 +127,20 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
-        anthropic_messages_request: Final = super().transform_anthropic_messages_request(
-            model=model,
-            messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-            litellm_params=litellm_params,
-            headers=headers,
+        anthropic_messages_request: Final = _REQUEST_FIELDS.validate_python(
+            super().transform_anthropic_messages_request(
+                model=model,
+                messages=messages,
+                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
         )
-        if "tools" in anthropic_messages_request:
-            anthropic_messages_request["tools"] = self._sanitize_tools_for_deepseek(anthropic_messages_request["tools"])
-        return anthropic_messages_request
+        tools: Final = anthropic_messages_request.get("tools")
+        if not isinstance(tools, list):
+            return anthropic_messages_request
+        sanitized: Final = {
+            **anthropic_messages_request,
+            "tools": sanitize_tools_for_deepseek(_TOOL_LIST.validate_python(tools)),
+        }
+        return sanitized

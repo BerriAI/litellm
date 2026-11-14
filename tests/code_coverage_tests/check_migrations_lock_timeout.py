@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Final
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MIGRATIONS_DIR = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
+MIGRATIONS_DIR = REPO_ROOT / "litellm" / "proxy-extras" / "litellm_proxy_extras" / "migrations"
 GRANDFATHERED_THROUGH: Final = "20261009000000_add_credential_display_name"
 LOCK_TIMEOUT_LINE: Final = "SET LOCAL lock_timeout = '10s';"
 LOCK_TIMEOUT_RE: Final = re.compile(

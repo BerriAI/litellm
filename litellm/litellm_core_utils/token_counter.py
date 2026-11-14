@@ -17,7 +17,7 @@ import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 from tiktoken.model import MODEL_TO_ENCODING
 from typing_extensions import ParamSpec, TypeVar
 
@@ -31,6 +31,7 @@ from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
+    DEFAULT_MAX_RECURSE_DEPTH,
     MAX_IMAGE_URL_DOWNLOAD_SIZE_MB,
     MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
@@ -47,9 +48,12 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
+    OPENAI_TOOL_CHOICE_TOKENS,
     ChatTemplateToolSection,
+    ToolChoiceTokens,
+    chat_template_tool_choice_tokens,
     chat_template_tool_section,
 )
 from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
@@ -610,6 +614,127 @@ def estimate_image_tokens(
     return max(_image_policy_tokens(family, dimensions, detail) for family in families)
 
 
+_MEDIA_FILE_CHARS_PER_TOKEN: Final = 4
+_EmbeddingInputT: Final = TypeVar("_EmbeddingInputT")
+
+
+def _max_input_tokens(model: str) -> int | None:
+    try:
+        limit: Final = litellm.get_model_info(model).get("max_input_tokens")
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
+        return None
+    return limit if isinstance(limit, int) and limit > 0 else None
+
+
+def _media_file_tokens(data: str, models: Sequence[str]) -> int:
+    text_estimate: Final = len(data) // _MEDIA_FILE_CHARS_PER_TOKEN
+    ceilings: Final = tuple(map(_max_input_tokens, models))
+    known_ceilings: Final = tuple(ceiling for ceiling in ceilings if ceiling is not None)
+    if not known_ceilings or len(known_ceilings) != len(ceilings):
+        return text_estimate
+    return min(text_estimate, max(known_ceilings))
+
+
+def _block_str_field(block: Mapping[str, object], container: str, field: str) -> str | None:
+    inner: Final = as_str_mapping(block.get(container))
+    value: Final = inner.get(field) if inner is not None else None
+    return value if isinstance(value, str) else None
+
+
+def estimate_media_block_tokens(block: Mapping[str, object], models: Sequence[str], fallback_model: str | None) -> int:
+    from litellm.litellm_core_utils.audio_utils.utils import estimate_audio_tokens
+
+    match block.get("type"):
+        case "input_audio":
+            return estimate_audio_tokens(
+                _block_str_field(block, "input_audio", "data"), models, fallback_model=fallback_model
+            )
+        case "file":
+            return _media_file_tokens(_block_str_field(block, "file", "file_data") or "", models)
+        case _:
+            detail: Final = _block_str_field(block, "image_url", "detail")
+            return estimate_image_tokens(
+                models,
+                _block_str_field(block, "image_url", "url") or "",
+                "auto" if detail is None else detail,
+                fallback_model=fallback_model,
+            )
+
+
+_PER_ITEM_DATA_URI_EMBEDDING_PROVIDERS: Final = frozenset({"vertex_ai", "gemini", "azure_ai"})
+
+_DataUriMediaScope: TypeAlias = Literal["per_item", "whole_batch"]
+
+
+def _is_pdf_block(block: Mapping[str, object]) -> bool:
+    return (_block_str_field(block, "file", "file_data") or "").startswith("data:application/pdf")
+
+
+def _bedrock_data_uri_media_scope(
+    resolved_model: str, media: Sequence[Mapping[str, object]]
+) -> _DataUriMediaScope | None:
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+    from litellm.utils import supports_embedding_image_input
+
+    base_model: Final = BedrockModelInfo.get_base_model(resolved_model.removeprefix("async_invoke/"))
+    if not supports_embedding_image_input(f"bedrock/{base_model}"):
+        return None
+    match BaseAWSLLM.get_bedrock_embedding_provider(base_model):
+        case "cohere":
+            return "whole_batch"
+        case "twelvelabs":
+            return None
+        case "nova" if any(map(_is_pdf_block, media)):
+            return None
+        case _:
+            return "per_item"
+
+
+def _data_uri_media_scope(model: str, media: Sequence[Mapping[str, object]]) -> _DataUriMediaScope | None:
+    from litellm.utils import supports_embedding_image_input
+
+    try:
+        resolved_model, provider, _, _ = litellm.get_llm_provider(model=model)
+    except litellm.exceptions.BadRequestError:
+        return None
+    if provider == "bedrock":
+        return _bedrock_data_uri_media_scope(resolved_model, media)
+    if not supports_embedding_image_input(model):
+        return None
+    if provider == "cohere":
+        return "whole_batch"
+    return "per_item" if provider in _PER_ITEM_DATA_URI_EMBEDDING_PROVIDERS else None
+
+
+def split_embedding_input_tokens(
+    value: _EmbeddingInputT, media_models: Callable[[], Sequence[str]], fallback_model: str | None = None
+) -> tuple[_EmbeddingInputT, int]:
+    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+        embedding_input_is_all_media,
+        split_embedding_media_for_tpm,
+    )
+
+    text, media = split_embedding_media_for_tpm(value)
+    if not media:
+        return value, 0
+    models: Final = tuple(media_models())
+    scopes: Final = frozenset(_data_uri_media_scope(model, media) for model in models)
+    if not models or None in scopes or ("whole_batch" in scopes and not embedding_input_is_all_media(value)):
+        return value, 0
+    media_tokens: Final = sum(estimate_media_block_tokens(block, models, fallback_model) for block in media)
+    return cast(_EmbeddingInputT, text), media_tokens  # cast-ok: the projection keeps the input's container shape
+
+
+def embedding_aware_token_count(
+    messages: Sequence[Mapping[str, str]] | None,
+    text: str | list[str] | None,  # mutable-ok: litellm.token_counter only takes text as list[str]
+    media_models: Callable[[], Sequence[str]],
+) -> int:
+    embedding_text, media_tokens = split_embedding_input_tokens(text, media_models)
+    return litellm.token_counter(messages=messages, text=embedding_text) + media_tokens
+
+
 TokenCounterFunction = Callable[[str], int]
 """
 Type for a function that counts tokens in a string.
@@ -694,7 +819,7 @@ class _MessageCountParams:
         model: str,
         custom_tokenizer: dict | SelectTokenizerResponse | None,
     ):
-        from litellm.utils import print_verbose
+        from litellm.utils import huggingface_tokenizer_kind, print_verbose
 
         actual_model: Final = _fix_model_name(model)
         if uses_legacy_message_accounting(model):
@@ -709,11 +834,27 @@ class _MessageCountParams:
             self.tokens_per_name = 1
         self.count_function = _get_count_function(model, custom_tokenizer)
         self.tool_section = chat_template_tool_section(model)
+        self.tool_choice_tokens = _tool_choice_tokens(
+            model or "",
+            self.tool_section,
+            bills_no_tool_choice=huggingface_tokenizer_kind(model or "") == "deepseek"
+            or "gemini" in (model or "").lower(),
+        )
         self._model = model
 
     @cached_property
     def pdf_pricing(self) -> PdfPagePricing:
         return pdf_page_pricing(self._model)
+
+
+def _tool_choice_tokens(
+    model: str, tool_section: ChatTemplateToolSection | None, bills_no_tool_choice: bool
+) -> ToolChoiceTokens | None:
+    if tool_section is not None:
+        return chat_template_tool_choice_tokens(model, tool_section)
+    if bills_no_tool_choice:
+        return None
+    return OPENAI_TOOL_CHOICE_TOKENS
 
 
 def _is_openai_chat_model(model: str) -> bool:
@@ -807,7 +948,6 @@ def token_counter(
     if litellm.disable_token_counter is True:
         return 0
 
-    verbose_logger.debug("messages in token_counter: %s, text in token_counter: %s", messages, text)
     if text is not None and messages is not None:
         raise ValueError("text and messages cannot both be set")
     if use_default_image_token_count is None:
@@ -830,7 +970,12 @@ def token_counter(
         if count_response_tokens is False:
             includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
             num_tokens += _count_extra(
-                params.count_function, tools, tool_choice, includes_system_message, params.tool_section
+                params.count_function,
+                tools,
+                tool_choice,
+                includes_system_message,
+                params.tool_section,
+                params.tool_choice_tokens,
             )
 
     else:
@@ -866,7 +1011,9 @@ def messages_reach_token_count(
     )
     running_totals: Final = accumulate(
         per_message_counts,
-        initial=_count_extra(params.count_function, tools, None, includes_system_message, params.tool_section),
+        initial=_count_extra(
+            params.count_function, tools, None, includes_system_message, params.tool_section, params.tool_choice_tokens
+        ),
     )
     return any(total >= threshold for total in running_totals)
 
@@ -980,6 +1127,7 @@ def _count_extra(
     tool_choice: str | Mapping[str, object] | None,
     includes_system_message: bool,
     tool_section: ChatTemplateToolSection | None,
+    tool_choice_tokens: ToolChoiceTokens | None,
 ) -> int:
     """Count extra tokens for function definitions and tool choices.
     Args:
@@ -988,13 +1136,13 @@ def _count_extra(
         tool_choice (Optional[ChatCompletionNamedToolChoiceParam]): The tool choice.
         includes_system_message (bool): Whether the messages include a system message.
         tool_section (Optional[ChatTemplateToolSection]): How the model's chat template renders tools, if known.
+        tool_choice_tokens (Optional[ToolChoiceTokens]): What the model's chat template adds per tool choice, if any.
     """
     reply_primer_tokens: Final = 3
-    tool_choice_tokens: Final = 0 if tool_section is not None else _count_tool_choice(count_function, tool_choice)
     return (
         reply_primer_tokens
         + _count_tool_definitions(count_function, tools, includes_system_message, tool_section)
-        + tool_choice_tokens
+        + (_count_tool_choice(count_function, tool_choice, tool_choice_tokens) if tools else 0)
     )
 
 
@@ -1015,18 +1163,31 @@ def _count_tool_definitions(
 def _count_tool_choice(
     count_function: TokenCounterFunction,
     tool_choice: str | Mapping[str, object] | None,
+    tool_choice_tokens: ToolChoiceTokens | None,
 ) -> int:
+    if tool_choice_tokens is None:
+        return 0
     match tool_choice:
-        case "none":
-            return 1
-        case {"function": {"name": str() as name}}:
-            return 7 + count_function(name)
-        case {"type": "none"}:
-            return 1
-        case {"name": str() as name}:
-            return 7 + count_function(name)
+        case "none" | {"type": "none"}:
+            return tool_choice_tokens.none
+        case "required" | {"type": "any"}:
+            return tool_choice_tokens.required
+        case {"function": {"name": str() as name}} | {"name": str() as name}:
+            return tool_choice_tokens.named + count_function(name)
         case _:
             return 0
+
+
+def _named_function_definitions(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
+    return (function for function in _function_definitions(_tools_sent_as_functions(tools)) if function.get("name"))
+
+
+def sends_function_tools(tools: Sequence[object] | None) -> bool:
+    return tools is not None and any(_named_function_definitions(tools))
+
+
+def _without_false_strict(function: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in function.items() if key != "strict" or value}
 
 
 def _count_chat_template_tools(
@@ -1035,8 +1196,11 @@ def _count_chat_template_tools(
     includes_system_message: bool,
     tool_section: ChatTemplateToolSection,
 ) -> int:
-    functions: Final = tuple(
-        function for function in _function_definitions(_tools_sent_as_functions(tools)) if function.get("name")
+    named_functions: Final = tuple(_named_function_definitions(tools))
+    functions: Final = (
+        tuple(map(_without_false_strict, named_functions))
+        if tool_section.renders_strict_only_when_true
+        else named_functions
     )
     if not functions:
         return 0
@@ -1618,31 +1782,72 @@ def _count_file_tokens(
     )
 
 
+_ANTHROPIC_SERVER_TOOL_FIELDS: Final = MappingProxyType(
+    {
+        "server_tool_use": ("name", "input"),
+        "mcp_tool_use": ("name", "input"),
+        "web_search_tool_result": ("content",),
+        "web_fetch_tool_result": ("content",),
+        "code_execution_tool_result": ("content",),
+        "bash_code_execution_tool_result": ("content",),
+        "text_editor_code_execution_tool_result": ("content",),
+        "mcp_tool_result": ("content",),
+        "web_search_result": ("url", "title", "snippet"),
+        "web_fetch_result": ("url", "content"),
+        "code_execution_result": ("stdout", "stderr", "content"),
+        "bash_code_execution_result": ("stdout", "stderr", "content"),
+        "text_editor_code_execution_view_result": ("content",),
+        "text_editor_code_execution_str_replace_result": ("lines",),
+        "text_editor_code_execution_create_result": (),
+        "encrypted_code_execution_result": ("stderr", "content"),
+        "code_execution_output": (),
+        "bash_code_execution_output": (),
+        "web_search_tool_result_error": ("error_code",),
+        "web_fetch_tool_result_error": ("error_code",),
+        "code_execution_tool_result_error": ("error_code",),
+        "bash_code_execution_tool_result_error": ("error_code",),
+        "text_editor_code_execution_tool_result_error": ("error_code", "error_message"),
+    }
+)
+_ANTHROPIC_DOCUMENT: Final = TypeAdapter(AnthropicMessagesDocumentParam)
+
+
 def _count_anthropic_content(
     content: Mapping[str, object],
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
     default_token_count: int | None,
     pdf_pricing: PdfPagePricing = "claude",
+    *,
+    _content_depth: int = 0,
 ) -> int:
     """
     Count tokens in Anthropic-specific content blocks (tool_use, tool_result, etc.).
 
-    Uses TypedDict definitions from litellm.types.llms.anthropic to determine
-    what fields to count and how to handle nested structures.
-
-    Dynamically infers which fields to count based on the TypedDict definition,
-    avoiding hardcoded field names.
+    Uses readable server tool fields or the client tool TypedDict definitions.
     """
-    typeddict_cls: Final = _validate_anthropic_content(content)
-    type_hints: Final[Mapping[str, object]] = getattr(typeddict_cls, "__annotations__", {})
+    if _content_depth >= DEFAULT_MAX_RECURSE_DEPTH:
+        raise UnsupportedContentTypeError("Anthropic tool content nesting exceeds the token counter limit")
+    content_type: Final = content.get("type")
+    if content_type == "document":
+        return _count_document_tokens(
+            _ANTHROPIC_DOCUMENT.validate_python(content),
+            count_function,
+            use_default_image_token_count,
+            default_token_count,
+            pdf_pricing,
+        )
+    server_fields: Final = _ANTHROPIC_SERVER_TOOL_FIELDS.get(content_type) if isinstance(content_type, str) else None
+    fields: Final[Mapping[str, object]] = (
+        dict.fromkeys(server_fields)
+        if server_fields is not None
+        else getattr(_validate_anthropic_content(content), "__annotations__", {})
+    )
     tokens = 0
 
-    # Fields to skip (metadata/identifiers that don't contribute to prompt tokens)
     skip_fields: Final = {"type", "id", "tool_use_id", "cache_control", "is_error"}
 
-    # Iterate over all fields defined in the TypedDict
-    for field_name, field_type in type_hints.items():
+    for field_name in fields:
         if field_name in skip_fields:
             continue
 
@@ -1661,7 +1866,21 @@ def _count_anthropic_content(
                     pdf_pricing,
                 )
             elif isinstance(field_value, dict):
-                tokens += count_function(str(field_value))
+                if (
+                    server_fields is not None
+                    and field_name == "content"
+                    and (field_mapping := as_str_mapping(content[field_name])) is not None
+                ):
+                    tokens += _count_anthropic_content(
+                        field_mapping,
+                        count_function,
+                        use_default_image_token_count,
+                        default_token_count,
+                        pdf_pricing,
+                        _content_depth=_content_depth + 1,
+                    )
+                else:
+                    tokens += count_function(str(field_value))
         except Exception as e:
             if default_token_count is not None:
                 return default_token_count
@@ -1674,6 +1893,29 @@ def _count_anthropic_content(
 _TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
     {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
 )
+
+
+def _is_text_block(block: object) -> bool:
+    mapping: Final = as_str_mapping(block)
+    block_type: Final = mapping.get("type") if mapping is not None else None
+    return isinstance(block, str) or (isinstance(block_type, str) and block_type in _TEXT_FIELD_BY_BLOCK_TYPE)
+
+
+def _has_only_text_content(message: object) -> bool:
+    normalized: Final[object] = message.model_dump(exclude_none=True) if isinstance(message, BaseModel) else message
+    mapping: Final = as_str_mapping(normalized)
+    if mapping is None:
+        return False
+    content: Final = mapping.get("content")
+    if content is None or isinstance(content, str):
+        return True
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(_is_text_block(block) for block in blocks)
+
+
+def has_only_text_content(messages: Sequence[object]) -> bool:
+    """Whether counting ``messages`` stays on the tokenizer, never decoding images, files or documents."""
+    return all(_has_only_text_content(message) for message in messages)
 
 
 def _count_content_list(
@@ -1727,7 +1969,9 @@ def _count_content_list(
                     use_default_image_token_count,
                     pdf_pricing,
                 )
-            elif c["type"] in ("tool_use", "tool_result", "search_result"):
+            elif (
+                c["type"] in ("tool_use", "tool_result", "search_result") or c["type"] in _ANTHROPIC_SERVER_TOOL_FIELDS
+            ):
                 num_tokens += _count_anthropic_content(
                     c,
                     count_function,
@@ -1746,13 +1990,16 @@ def _count_content_list(
                 tool_name = str(c.get("tool_name") or "")
                 if tool_name:
                     num_tokens += count_function(tool_name)
+            elif (change := as_str_mapping(c)) is not None and change.get("type") in ("tool_addition", "tool_removal"):
+                num_tokens += _tool_change_tokens(count_function, as_str_mapping(change.get("tool")))
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise UnsupportedContentTypeError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"compaction, tool_reference, search_result)."
+                    f"compaction, tool_reference, tool_addition, tool_removal, search_result, "
+                    f"or Anthropic server tool blocks)."
                 )
         return num_tokens
     except Exception as e:
@@ -1762,6 +2009,24 @@ def _count_content_list(
         raise error_type(
             f"Error getting number of tokens from content list: {e}, default_token_count={default_token_count}"
         )
+
+
+def _tool_change_tokens(count_function: TokenCounterFunction, tool: Mapping[str, object] | None) -> int:
+    match tool:
+        case {"type": "tool_definition", "definition": definition} if (
+            function := as_str_mapping(definition)
+        ) is not None:
+            return count_function(_format_function_definitions((function,)))
+        case {"type": "tool_reference", "name": str() as name}:
+            return count_function(name)
+        case {"type": "mcp_tool_reference", "server_name": str() as server_name, "name": str() as name}:
+            return count_function(server_name) + count_function(name)
+        case {"type": "mcp_toolset_reference", "server_name": str() as server_name}:
+            return count_function(server_name)
+        case _:
+            raise UnsupportedContentTypeError(
+                f"Invalid tool change target type: {None if tool is None else tool.get('type')}"
+            )
 
 
 def _format_function_definitions(tools: Sequence[object]) -> str:

@@ -307,20 +307,12 @@ class TestBaseLLMAIOHTTPHandler:
         # Should not call aiohttp.ClientSession directly
         mock_client_session.assert_not_called()
 
-    @patch("aiohttp.ClientSession")
-    def test_create_client_session_with_connector(self, mock_client_session):
-        """Test session creation using connector"""
-        mock_connector = Mock(spec=aiohttp.BaseConnector)
-        mock_session_instance = Mock()
-        mock_client_session.return_value = mock_session_instance
-
-        handler = BaseLLMAIOHTTPHandler(connector=mock_connector)
-
-        result = handler._create_client_session_with_transport()
-
-        # Should create session with connector
-        mock_client_session.assert_called_once_with(connector=mock_connector)
-        assert result is mock_session_instance
+    @pytest.mark.asyncio
+    async def test_create_client_session_with_connector(self) -> None:
+        connector: Final = aiohttp.TCPConnector()
+        handler: Final = BaseLLMAIOHTTPHandler(connector=connector)
+        async with handler._create_client_session_with_transport() as session:
+            assert session.connector is connector
 
     @pytest.mark.asyncio
     async def test_create_client_session_default_honors_global_ssl_verify_false(

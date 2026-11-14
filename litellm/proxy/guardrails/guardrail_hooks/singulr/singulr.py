@@ -110,7 +110,7 @@ class SingulrGuardrail(CustomGuardrail):
         return SingulrGuardrailConfigModel
 
     @staticmethod
-    def _metadata_containers(request_data: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    def _metadata_containers(request_data: Mapping[str, Any]) -> tuple[Mapping[str, object], ...]:
         litellm_params: Final = request_data.get("litellm_params") or _EMPTY_MAPPING
         return tuple(
             container
@@ -124,7 +124,7 @@ class SingulrGuardrail(CustomGuardrail):
         )
 
     @classmethod
-    def _resolve_metadata_value(cls, request_data: Mapping[str, object], key: str) -> str | None:
+    def _resolve_metadata_value(cls, request_data: Mapping[str, object], key: str) -> object:
         for container in cls._metadata_containers(request_data=request_data):
             value = container.get(key)
             if value:
@@ -140,7 +140,7 @@ class SingulrGuardrail(CustomGuardrail):
         return None
 
     @classmethod
-    def _build_metadata(cls, request_data: Mapping[str, object]) -> Mapping[str, str] | None:
+    def _build_metadata(cls, request_data: Mapping[str, object]) -> Mapping[str, object] | None:
         fields: Final = (
             "user_api_key_alias",
             "user_api_key_user_id",
@@ -225,7 +225,7 @@ class SingulrGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         texts: Sequence[str],
         structured_messages: Sequence[AllMessageValues],
-        request_data: Mapping[str, Any],
+        request_data: Mapping[str, object],
     ) -> GenericGuardrailAPIInputs:
         messages: Final = (
             tuple(structured_messages)
@@ -242,14 +242,16 @@ class SingulrGuardrail(CustomGuardrail):
 
         metadata: Final = self._build_metadata(request_data=request_data)
 
-        singulr_req_obj = SingulrGuardrailPayload(
-            correlation_id=request_data.get("litellm_call_id"),
-            model_name=inputs.get("model"),
-            guardrail_scope="request",
-            messages=messages,
-            images=images,
-            tools=tools,
-            metadata=metadata,
+        singulr_req_obj = SingulrGuardrailPayload.model_validate(
+            {
+                "correlation_id": request_data.get("litellm_call_id"),
+                "model_name": inputs.get("model"),
+                "guardrail_scope": "request",
+                "messages": messages,
+                "images": images,
+                "tools": tools,
+                "metadata": metadata,
+            }
         )
         payload = singulr_req_obj.model_dump(mode="json")
         guardrail_resp = await self._call_api(payload)
@@ -267,7 +269,7 @@ class SingulrGuardrail(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def _mcp_tool_name(request_data: Mapping[str, Any]) -> str | None:
+    def _mcp_tool_name(request_data: Mapping[str, object]) -> object:
         return request_data.get("mcp_tool_name") or request_data.get("name")
 
     @staticmethod
@@ -283,15 +285,17 @@ class SingulrGuardrail(CustomGuardrail):
         model: Final = request_data.get("model")
         return "mcp_tool_name" in request_data or (isinstance(model, str) and model.startswith(_MCP_MODEL_PREFIX))
 
-    async def _apply_guardrail_on_mcp_request(self, request_data: Mapping[str, Any]) -> None:
+    async def _apply_guardrail_on_mcp_request(self, request_data: Mapping[str, object]) -> None:
         metadata: Final = self._build_metadata(request_data=request_data)
 
-        singulr_mcp_obj = SingulrMcpGuardrailPayload(
-            guardrail_scope="mcp_request",
-            tool_name=self._mcp_tool_name(request_data),
-            tool_arguments=self._mcp_arguments(request_data),
-            mcp_server_name=request_data.get("mcp_server_name"),
-            metadata=metadata,
+        singulr_mcp_obj = SingulrMcpGuardrailPayload.model_validate(
+            {
+                "guardrail_scope": "mcp_request",
+                "tool_name": self._mcp_tool_name(request_data),
+                "tool_arguments": self._mcp_arguments(request_data),
+                "mcp_server_name": request_data.get("mcp_server_name"),
+                "metadata": metadata,
+            }
         )
         payload = singulr_mcp_obj.model_dump(mode="json")
         guardrail_resp = await self._call_api(payload)
@@ -308,18 +312,20 @@ class SingulrGuardrail(CustomGuardrail):
             )
 
     async def _apply_guardrail_on_mcp_response(
-        self, inputs: GenericGuardrailAPIInputs, texts: Sequence[str], request_data: Mapping[str, Any]
+        self, inputs: GenericGuardrailAPIInputs, texts: Sequence[str], request_data: Mapping[str, object]
     ) -> GenericGuardrailAPIInputs:
         if not texts:
             return inputs
 
         metadata: Final = self._build_metadata(request_data=request_data)
 
-        singulr_mcp_obj = SingulrMcpGuardrailPayload(
-            model_name=request_data.get("model"),
-            guardrail_scope="mcp_response",
-            tool_result=texts,
-            metadata=metadata,
+        singulr_mcp_obj = SingulrMcpGuardrailPayload.model_validate(
+            {
+                "model_name": request_data.get("model"),
+                "guardrail_scope": "mcp_response",
+                "tool_result": texts,
+                "metadata": metadata,
+            }
         )
         payload = singulr_mcp_obj.model_dump(mode="json")
         guardrail_resp = await self._call_api(payload)
@@ -358,7 +364,7 @@ class SingulrGuardrail(CustomGuardrail):
         )
 
     async def _apply_guardrail_on_response(
-        self, inputs: GenericGuardrailAPIInputs, texts: Sequence[str], request_data: Mapping[str, Any]
+        self, inputs: GenericGuardrailAPIInputs, texts: Sequence[str], request_data: Mapping[str, object]
     ) -> GenericGuardrailAPIInputs:
         combined_texts: Final = "\n".join(texts) if texts else None
 
@@ -377,14 +383,16 @@ class SingulrGuardrail(CustomGuardrail):
 
         metadata: Final = self._build_metadata(request_data=request_data)
 
-        singulr_resp_obj = SingulrGuardrailPayload(
-            correlation_id=request_data.get("litellm_call_id"),
-            guardrail_scope="response",
-            model_name=request_data.get("model"),
-            messages=request_data.get("messages"),
-            images=inputs.get("images"),
-            response=assistant_message,
-            metadata=metadata,
+        singulr_resp_obj = SingulrGuardrailPayload.model_validate(
+            {
+                "correlation_id": request_data.get("litellm_call_id"),
+                "guardrail_scope": "response",
+                "model_name": request_data.get("model"),
+                "messages": request_data.get("messages"),
+                "images": inputs.get("images"),
+                "response": assistant_message,
+                "metadata": metadata,
+            }
         )
 
         payload = singulr_resp_obj.model_dump(mode="json")

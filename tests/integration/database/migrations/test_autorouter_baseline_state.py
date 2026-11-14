@@ -22,7 +22,7 @@ from tests.integration._support.timing import assert_enforced_within
 
 _PROJECTION_LOCK_TIMEOUT_SECONDS: Final = 1
 _MIGRATION: Final = Path(__file__).parents[4] / (
-    "litellm-proxy-extras/litellm_proxy_extras/migrations/20260915010000_add_autorouter_baseline_state/migration.sql"
+    "litellm/proxy-extras/litellm_proxy_extras/migrations/20260915010000_add_autorouter_baseline_state/migration.sql"
 )
 
 

@@ -8,6 +8,7 @@ parsing, and streaming chunk parsing for models served with
 
 import datetime
 import hashlib
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -363,7 +364,7 @@ def handle_generic_response(
     return model_response
 
 
-def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
+def handle_generic_stream_chunk(dict_chunk: Mapping) -> ModelResponseStream:
     """Parse a single GENERIC SSE chunk into a LiteLLM ModelResponseStream."""
     # OCI streams tool calls progressively — early chunks may omit required fields.
     if dict_chunk.get("message") and dict_chunk["message"].get("toolCalls"):

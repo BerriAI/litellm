@@ -1,6 +1,7 @@
 import base64
 import json
 from collections.abc import Mapping
+from io import BytesIO
 from typing import Final
 
 import httpx
@@ -142,6 +143,27 @@ def test_flux2_image_edit_rejects_too_many_references(model: str, reference_imag
             litellm_params={},
             headers={},
         )
+
+
+def _flux2_reference_request(image: object) -> dict[str, object]:
+    request, _ = AzureFoundryFlux2ImageEditConfig().transform_image_edit_request(
+        model="FLUX.2-pro",
+        prompt="Add a red hat",
+        image=image,
+        image_edit_optional_request_params={},
+        litellm_params={},
+        headers={},
+    )
+    return request
+
+
+def test_flux2_image_edit_reads_a_file_like_reference_image():
+    assert _flux2_reference_request(BytesIO(b"png-bytes"))["input_image"] == base64.b64encode(b"png-bytes").decode()
+
+
+def test_flux2_image_edit_rejects_a_reference_image_it_cannot_read():
+    with pytest.raises(ValueError, match="Unsupported image type: <class 'str'>"):
+        _flux2_reference_request("cat.png")
 
 
 @pytest.mark.parametrize("dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}, {"width": "2048", "height": "1024"}))

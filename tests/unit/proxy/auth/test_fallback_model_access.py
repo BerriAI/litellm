@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Final, NoReturn
 
 import pytest
 
@@ -50,14 +50,14 @@ async def test_is_model_authorized_for_token_follows_the_key_access_groups():
     assert await is_model_authorized_for_token(model="secret-model", valid_token=token, llm_router=router) is False
 
 
-class _RouterWithBrokenAccessGroupLookup(Router):
-    def get_model_access_groups(self, *args, **kwargs):
-        raise RuntimeError("access group store unavailable")
+def _broken_access_group_lookup(*args: object, **kwargs: object) -> NoReturn:
+    raise RuntimeError("access group store unavailable")
 
 
 @pytest.mark.asyncio
-async def test_is_model_authorized_for_token_fails_closed_when_the_lookup_breaks():
-    router = _RouterWithBrokenAccessGroupLookup(model_list=_router().model_list)
+async def test_is_model_authorized_for_token_fails_closed_when_the_lookup_breaks(monkeypatch: pytest.MonkeyPatch):
+    router = _router()
+    monkeypatch.setattr(type(router.registry()), "access_groups", _broken_access_group_lookup)
 
     assert (
         await is_model_authorized_for_token(
@@ -85,6 +85,19 @@ async def test_enforced_check_does_not_restrict_requests_without_a_key():
 @pytest.mark.asyncio
 async def test_check_allows_every_fallback_while_not_enforced():
     assert await NOT_ENFORCED(model="secret-model", request_kwargs=_request_with_key(), ctx=_router()._core_ctx)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("check", [ENFORCED, NOT_ENFORCED], ids=["enforced", "not-enforced"])
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+async def test_customer_scope_still_restricts_configured_fallbacks(
+    check: RouterFallbackAccessCheck, metadata_field: str
+) -> None:
+    router: Final = _router()
+    token: Final = UserAPIKeyAuth(models=["open-model", "secret-model"]).with_customer_model_scopes((("open-group",),))
+    request: Final = {metadata_field: {"user_api_key_auth": token}}
+    assert await check(model="open-model", request_kwargs=request, ctx=router._core_ctx)
+    assert not await check(model="secret-model", request_kwargs=request, ctx=router._core_ctx)
 
 
 @pytest.mark.asyncio
@@ -191,4 +204,6 @@ async def test_default_check_enforces_team_models_for_a_key_without_model_restri
     request_kwargs: Final = {metadata_field: {"user_api_key_auth": token}}
 
     assert await router_fallback_access_check(model="open-model", request_kwargs=request_kwargs, ctx=router._core_ctx)
-    assert not await router_fallback_access_check(model="secret-model", request_kwargs=request_kwargs, ctx=router._core_ctx)
+    assert not await router_fallback_access_check(
+        model="secret-model", request_kwargs=request_kwargs, ctx=router._core_ctx
+    )

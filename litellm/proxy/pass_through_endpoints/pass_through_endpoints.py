@@ -6,15 +6,26 @@ import posixpath
 import re
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Coroutine,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import chain, count, groupby
+from functools import reduce
+from itertools import chain, count, groupby, takewhile
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
-from urllib.parse import urlencode, urlparse
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
+import orjson
 from fastapi import (
     APIRouter,
     Depends,
@@ -24,6 +35,7 @@ from fastapi import (
     Response,
     UploadFile,
     WebSocket,
+    WebSocketDisconnect,
     status,
 )
 from fastapi.responses import StreamingResponse
@@ -34,7 +46,7 @@ from starlette.routing import BaseRoute, Match, Route
 from starlette.types import Scope
 from starlette.websockets import WebSocketState
 from typing_extensions import ReadOnly
-from websockets.asyncio.client import connect
+from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import (
     ConnectionClosedError,
     ConnectionClosedOK,
@@ -60,15 +72,19 @@ from litellm.integrations.custom_guardrail import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
     bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
+    require_attributes,
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import get_masked_values
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.realtime_errors import realtime_error_event
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.anthropic.common_utils import (
@@ -105,12 +121,20 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     log_llm_api_exception,
     open_sse_before_first_byte,
+    refuse_s3_media_the_key_may_not_read,
     resolve_litellm_call_id,
+)
+from litellm.proxy.common_utils.callback_utils import strip_callback_config
+from litellm.proxy.common_utils.customer_usage import (
+    CUSTOMER_USAGE_METADATA_KEY,
+    ResolvedCustomerUsage,
+    customer_usage_fields,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    is_opaque_pass_through_request,
     read_request_body,
     safe_get_request_headers,
 )
@@ -125,12 +149,15 @@ from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
 from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
+    ROUTER_RESERVED_METADATA_FIELDS,
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
+    check_customer_request_model_access,
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
     redact_credential_headers,
+    resolve_customer_request_usage,
     strip_client_guardrail_information,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
@@ -148,13 +175,18 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    DeploymentPricingResolver,
     EndpointType,
     PassthroughStandardLoggingPayload,
     WebSocketSessionMeter,
     WebSocketSessionUsage,
+    WebsocketUpstreamFrameKind,
 )
+from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, CallTypes, Usage
 
 from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
@@ -184,7 +216,18 @@ _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
 
 
 def _is_mergeable_client_metadata(key: str, value: object) -> bool:
-    return not key.startswith("user_api_key_") and (key != "model_info" or isinstance(value, Mapping))
+    return (
+        not key.startswith("user_api_key_")
+        and key not in ROUTER_RESERVED_METADATA_FIELDS
+        and (key != "model_info" or isinstance(value, Mapping))
+    )
+
+
+def _request_body_fields(parsed: object) -> Mapping[str, object]:
+    fields: Final = as_str_mapping(parsed)
+    if fields is None:
+        raise TypeError(f"unsupported operand type(s) for |: '{type(parsed).__name__}' and 'dict'")
+    return fields
 
 
 class _RegisteredPassThroughRoute(TypedDict):
@@ -254,6 +297,11 @@ async def set_env_variables_in_header(custom_headers: dict | None) -> dict | Non
     return headers
 
 
+class _AdapterCompletionRouter(Protocol):
+    @property
+    def aadapter_completion(self) -> Callable[..., Coroutine[object, object, object]]: ...
+
+
 async def chat_completion_pass_through_endpoint(
     fastapi_response: Response,
     request: Request,
@@ -280,11 +328,15 @@ async def chat_completion_pass_through_endpoint(
         body: Final = await request.body()
         body_str: Final = body.decode()
         try:
-            data = ast.literal_eval(body_str) | data
+            data = {**_request_body_fields(_DECODED_JSON.validate_python(ast.literal_eval(body_str))), **data}
         except Exception:
-            data = json.loads(body_str) | data
+            data = {**_request_body_fields(_DECODED_JSON.validate_python(json.loads(body_str))), **data}
 
         data["adapter_id"] = adapter_id
+
+        await refuse_s3_media_the_key_may_not_read(
+            data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
+        )
 
         verbose_proxy_logger.debug("Request received by LiteLLM:\n%s", data)
         data["model"] = (
@@ -344,7 +396,8 @@ async def chat_completion_pass_through_endpoint(
             and data["model"] is not None
             and llm_router.registry().resolve(data["model"], kind="recognized")
         ):
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data))
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
@@ -353,11 +406,13 @@ async def chat_completion_pass_through_endpoint(
                 or len(llm_router.registry().patterns().patterns) > 0
             )
         ):  # check for wildcard routes or default deployment before checking deployment_names
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data))
         elif llm_router is not None and data["model"] in llm_router.registry().names(
             kind="deployment_names"
         ):  # model in router deployments, calling a specific deployment on the router (lowest priority)
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data, specific_deployment=True))
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data, specific_deployment=True))
         elif user_model is not None:  # `litellm --model <your-model-name>`
             llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
         else:
@@ -405,6 +460,24 @@ async def chat_completion_pass_through_endpoint(
             headers=litellm_call_id_headers(litellm_call_id),
             code=error_status_code(e, 500),
         )
+
+
+_PASS_THROUGH_REQUEST_STATE_KEYS: Final = (
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
+)
+
+
+def _clear_pass_through_request_state(state: object) -> None:
+    for key in _PASS_THROUGH_REQUEST_STATE_KEYS:
+        if hasattr(state, key):
+            delattr(state, key)
+
+
+def _is_provider_payload(request: Request) -> bool:
+    return is_opaque_pass_through_request(get_request_route(request), request.headers.get("content-type", ""))
 
 
 class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
@@ -650,6 +723,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         logging_obj: LiteLLMLoggingObj,
         _parsed_body: dict | None = None,
         litellm_call_id: str | None = None,
+        customer_usage: ResolvedCustomerUsage | None = None,
     ) -> dict:
         """
         Filter out litellm params from the request body
@@ -715,6 +789,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
         _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
         _metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = user_api_key_dict.matched_model_access_groups
+        _metadata["user_api_key_metadata"] = _metadata["user_api_key_auth_metadata"]
+        _metadata["user_api_key_team_metadata"] = strip_callback_config(user_api_key_dict.team_metadata)
+        if customer_usage is not None:
+            _metadata[CUSTOMER_USAGE_METADATA_KEY] = customer_usage.attribution.model_dump_json()
         # The per-model budget counters are keyed off these. get_sanitized_user_information_from_key
         # returns StandardLoggingUserAPIKeyMetadata, which carries no budget field, so without this
         # the post-call increment finds nothing and every passthrough request goes untracked and
@@ -751,11 +829,20 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
         if isinstance(deployment_model_info, Mapping):
             _metadata["model_info"] = dict(deployment_model_info)
+        deployment_pricing: Final = getattr(_request_state, LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY, None)
+        priced_model_info: Final = (
+            deployment_pricing.resolve(server_marker_free_body)
+            if isinstance(deployment_pricing, DeploymentPricingResolver)
+            else None
+        )
+        if priced_model_info is not None:
+            _metadata["model_info"] = dict(priced_model_info)
 
         kwargs: Final = {
             "litellm_params": {
                 **litellm_params_in_body,
                 "metadata": _metadata,
+                COMMITTED_BUDGET_SPEND_PARAM: user_api_key_dict.committed_budget_spend or CommittedBudgetSpend(),
                 "proxy_server_request": {
                     "url": str(request.url),
                     "method": request.method,
@@ -938,11 +1025,16 @@ def _build_passthrough_failure_request_payload(
     model and provider. A user-defined route never gets that, since its URL
     names an upstream model rather than a LiteLLM-managed one.
     """
-    request_payload: Final[dict] = dict(cast(Mapping[str, object], parsed_body or {}))  # cast-ok: json body
+    request_payload: Final = dict(cast(Mapping[str, object], parsed_body or {}))  # cast-ok: json body
     if kwargs:
-        request_payload.update(kwargs)
+        request_payload.update(_json_object(_DECODED_JSON.validate_python(kwargs)))
     if logging_obj is not None:
         request_payload["litellm_logging_obj"] = logging_obj
+        logging_litellm_params: Final = _json_object(logging_obj.model_call_details.get("litellm_params"))
+        existing_litellm_params: Final = _json_object(request_payload.get("litellm_params"))
+        api_base: Final = logging_litellm_params.get("api_base")
+        if isinstance(api_base, str) and api_base and "api_base" not in existing_litellm_params:
+            request_payload["litellm_params"] = {**existing_litellm_params, "api_base": api_base}
     url_route: Final = str(url) if url is not None else ""
     google_provider: Final = (
         _passthrough_google_provider(url_route, custom_llm_provider) if builtin_provider_route else None
@@ -1191,8 +1283,81 @@ def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return headers
 
 
+UpstreamRequest: TypeAlias = tuple[Mapping[str, str], Mapping[str, object] | None]
+UpstreamRequestFilter: TypeAlias = Callable[
+    [Mapping[str, str], Mapping[str, object] | None, Mapping[str, object]], UpstreamRequest
+]
+
+
+def _unfiltered_request(
+    headers: Mapping[str, str], body: Mapping[str, object] | None, litellm_params: Mapping[str, object]
+) -> UpstreamRequest:
+    return headers, body
+
+
+def _filtered_upstream_request(
+    upstream_request_filter: UpstreamRequestFilter,
+    headers: Mapping[str, str],
+    body: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object],
+) -> tuple[dict[str, str], Mapping[str, object] | None]:  # mutable-ok: the relay helpers take a dict of headers
+    filtered_headers, filtered_body = upstream_request_filter(headers, body, litellm_params)
+    return dict(filtered_headers), filtered_body
+
+
+def _caller_query_source(
+    keep_target_query: bool, query_params: Mapping[str, object] | None, request: Request
+) -> Mapping[str, object]:
+    if keep_target_query:
+        return MappingProxyType({})
+    return query_params or request.query_params
+
+
 def _json_object(value: object) -> Mapping[str, object]:
     return cast("Mapping[str, object]", value) if isinstance(value, Mapping) else MappingProxyType({})  # cast-ok: json
+
+
+def _check_customer_passthrough_model_access(
+    request: Request, body: Mapping[str, object], auth: UserAPIKeyAuth, llm_router: litellm.Router | None
+) -> None:
+    if not auth.customer_model_scopes:
+        return
+    model: Final = get_model_from_request(
+        request_data=dict(body),
+        route=get_request_route(request),
+        request_headers=request.headers,
+        request_query_params=request.query_params,
+        llm_router=llm_router,
+        request=request,
+        team_id=auth.team_id,
+    )
+    check_customer_request_model_access({**body, "model": model}, auth, llm_router)
+
+
+@dataclass(frozen=True, slots=True)
+class _CustomerPassthroughAuth:
+    auth: UserAPIKeyAuth
+    usage: ResolvedCustomerUsage | None
+
+
+async def _customer_passthrough_request_auth(
+    request: Request, body: Mapping[str, object], auth: UserAPIKeyAuth
+) -> _CustomerPassthroughAuth:
+    from litellm.proxy.proxy_server import general_settings_view, llm_router
+
+    if request_dispatched_to_pass_through_endpoint(request):
+        return _CustomerPassthroughAuth(auth, None)
+    usage: Final = await resolve_customer_request_usage(
+        {
+            **customer_usage_fields(body.get("litellm_metadata")),
+            **customer_usage_fields(body.get("metadata")),
+        },
+        auth,
+        ledger_enabled=general_settings_view().get("use_spend_logs_ledger", True) is not False,
+    )
+    request_auth: Final = auth.with_customer_model_scopes(usage.model_scopes) if usage is not None else auth
+    _check_customer_passthrough_model_access(request, body, request_auth, llm_router)
+    return _CustomerPassthroughAuth(request_auth, usage)
 
 
 def _anthropic_user_id_to_forward(
@@ -1231,6 +1396,27 @@ def _eu_jev_scoped_model_override(eu_jev_client_body: Mapping[str, object] | Non
     return MappingProxyType({"model": eu_jev_scoped_model(eu_jev_client_body)})
 
 
+@dataclass(frozen=True, slots=True)
+class _PassthroughClientBody:
+    body: Mapping[str, object]
+    eu_jev_body: Mapping[str, object] | None
+
+
+def _prepare_passthrough_client_body(
+    body: Mapping[str, object], auth: UserAPIKeyAuth, custom_llm_provider: str | None
+) -> _PassthroughClientBody:
+    client_body: Final = dict(body)
+    strip_client_guardrail_information(client_body)
+    if not _key_or_team_allows_client_pricing_override(auth):
+        _strip_client_pricing_overrides(client_body)
+    eu_jev_body: Final = _eu_jev_client_body(custom_llm_provider, client_body)
+    scoped_body: Final = {**client_body, **_eu_jev_scoped_model_override(eu_jev_body)}
+    if custom_llm_provider in ("laya", "bespoke"):
+        checkpoint: Final = validate_oss_request(custom_llm_provider, scoped_body)
+        scoped_body["model"] = f"{custom_llm_provider}/{checkpoint}"
+    return _PassthroughClientBody(scoped_body, eu_jev_body)
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -1247,7 +1433,9 @@ async def pass_through_request(
     guardrails_config: dict | None = None,
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
+    upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
+    keep_target_query: bool = False,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1269,7 +1457,10 @@ async def pass_through_request(
         timeout: Optional per-endpoint timeout in seconds. Falls back to
             general_settings.pass_through_request_timeout, then 600s.
         upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
+        upstream_request_filter: Optional last rewrite of the headers and JSON body sent upstream, given the
+            litellm_params the request is logged with
         operation: Optional GenAI operation the route reports, unless the upstream names its own
+        keep_target_query: Send the target URL's query exactly as given, adding none of the caller's query params
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1277,7 +1468,7 @@ async def pass_through_request(
     from litellm.proxy.pass_through_endpoints.passthrough_guardrails import (
         PassthroughGuardrailHandler,
     )
-    from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
+    from litellm.proxy.proxy_server import llm_router, proxy_config, proxy_logging_obj
 
     #########################################################
     # Initialize variables
@@ -1308,7 +1499,10 @@ async def pass_through_request(
             parent_span=user_api_key_dict.parent_otel_span,
         )
 
-        requested_query_params: dict | None = query_params or dict(request.query_params) or None
+        requested_query_params: dict | None = (
+            dict(_caller_query_source(keep_target_query, query_params, request))  # pyright: ignore[reportUnknownArgumentType]  # query_params keeps its legacy untyped dict annotation
+            or None
+        )
 
         endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(
             str(url), custom_llm_provider
@@ -1346,20 +1540,13 @@ async def pass_through_request(
             _parsed_body,
         )
 
-        client_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
-        strip_client_guardrail_information(client_body)
-        if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
-            _strip_client_pricing_overrides(client_body)
-        eu_jev_client_body: Final = _eu_jev_client_body(custom_llm_provider, client_body)
-        scoped_client_body: Final = {
-            **client_body,
-            **_eu_jev_scoped_model_override(eu_jev_client_body),
-        }
-        _parsed_body = scoped_client_body
-        if custom_llm_provider in ("laya", "bespoke"):
-            decision_request: Final = TypeAdapter(Mapping[str, object]).validate_python(_parsed_body)
-            checkpoint: Final = validate_oss_request(custom_llm_provider, decision_request)
-            _parsed_body["model"] = f"{custom_llm_provider}/{checkpoint}"
+        client_body: Final = _prepare_passthrough_client_body(
+            TypeAdapter(Mapping[str, object]).validate_python(_parsed_body), user_api_key_dict, custom_llm_provider
+        )
+        _parsed_body = dict(client_body.body)
+
+        customer_request: Final = await _customer_passthrough_request_auth(request, client_body.body, user_api_key_dict)
+        user_api_key_dict = customer_request.auth  # rebind-ok: customer scopes stay request-local
 
         ### COLLECT GUARDRAILS FOR PASSTHROUGH ENDPOINT ###
         # Passthrough endpoints are opt-in only for guardrails
@@ -1426,6 +1613,9 @@ async def pass_through_request(
             call_type="pass_through_endpoint",
             endpoint_type=endpoint_type,
         )
+        _check_customer_passthrough_model_access(
+            request, TypeAdapter(Mapping[str, object]).validate_python(_parsed_body), user_api_key_dict, llm_router
+        )
         if custom_llm_provider in ("laya", "bespoke"):
             hook_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
             hook_model: Final = hook_body.get("model")
@@ -1439,10 +1629,10 @@ async def pass_through_request(
             )
             _ = validate_oss_request(custom_llm_provider, decision_body)
             _parsed_body = TypeAdapter(dict[str, object]).validate_python(decision_body)
-        if eu_jev_client_body is not None:
+        if client_body.eu_jev_body is not None:
             _parsed_body = TypeAdapter(dict[str, object]).validate_python(  # rebind-ok: body is rebound per stage
                 eu_jev_upstream_body(
-                    TypeAdapter(Mapping[str, object]).validate_python(_parsed_body), eu_jev_client_body
+                    TypeAdapter(Mapping[str, object]).validate_python(_parsed_body), client_body.eu_jev_body
                 )
             )
         resolved_timeout: Final = resolve_pass_through_request_timeout(timeout)
@@ -1468,6 +1658,7 @@ async def pass_through_request(
             litellm_call_id=litellm_call_id,
             request=request,
             logging_obj=logging_obj,
+            customer_usage=customer_request.usage,
         )
 
         # Store custom_llm_provider in kwargs and logging object if provided
@@ -1629,14 +1820,19 @@ async def pass_through_request(
                 logging_url = str(url) + "?" + requested_query_params_str
 
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
-        upstream_body: Final = _with_anthropic_user_id(outgoing_body, client_user_id)
+        outbound_headers, upstream_body = _filtered_upstream_request(
+            upstream_request_filter,
+            upstream_headers,
+            _with_anthropic_user_id(outgoing_body, client_user_id),
+            _METADATA_ADAPTER.validate_python(kwargs["litellm_params"]),
+        )
         logging_obj.pre_call(
             input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             api_key="",
             additional_args={
                 "complete_input_dict": upstream_body,
                 "api_base": str(logging_url),
-                "headers": redact_credential_headers(upstream_headers),
+                "headers": redact_credential_headers(outbound_headers),
             },
         )
         stream = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
@@ -1653,7 +1849,7 @@ async def pass_through_request(
                     request=request,
                     async_client=async_client,
                     url=url,
-                    headers=upstream_headers,
+                    headers=outbound_headers,
                     requested_query_params=requested_query_params,
                     stream=True,
                 )
@@ -1665,7 +1861,7 @@ async def pass_through_request(
                         request.method,
                         url,
                         params=requested_query_params,
-                        headers=upstream_headers,
+                        headers=outbound_headers,
                         content=state_raw_body,
                     )
                     if state_raw_body is not None
@@ -1673,7 +1869,7 @@ async def pass_through_request(
                         request.method,
                         url,
                         params=requested_query_params,
-                        headers=upstream_headers,
+                        headers=outbound_headers,
                         json=upstream_body,
                     )
                 )
@@ -1761,7 +1957,7 @@ async def pass_through_request(
             raw_body_request: Final = async_client.build_request(
                 request.method,
                 url,
-                headers=upstream_headers,
+                headers=outbound_headers,
                 params=requested_query_params,
                 content=state_raw_body,
             )
@@ -1771,7 +1967,7 @@ async def pass_through_request(
                 request=request,
                 async_client=async_client,
                 url=url,
-                headers=upstream_headers,
+                headers=outbound_headers,
                 requested_query_params=requested_query_params,
                 _parsed_body=upstream_body,
                 forward_multipart=is_multipart,
@@ -2230,15 +2426,13 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
     return restored_metadata
 
 
-class _PassThroughRequestEnvelope(TypedDict, total=False):
-    query_params: Mapping[str, object] | None
-    custom_body: Mapping[str, object] | None
-    stream: bool | None
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 async def _parse_request_data_by_content_type(
     request: Request,
-) -> tuple[object, object, None, bool | None]:
+) -> tuple[object, object, None, object]:
     """
     Parse request data based on content type.
 
@@ -2247,6 +2441,8 @@ async def _parse_request_data_by_content_type(
     Returns:
         Tuple of (query_params_data, custom_body_data, file_data, stream)
     """
+    if _is_provider_payload(request):
+        return None, None, None, None
     content_type: Final = request.headers.get("content-type", "")
 
     query_params_data = None
@@ -2257,10 +2453,12 @@ async def _parse_request_data_by_content_type(
     if "application/json" in content_type:
         # ✅ Handle JSON
         try:
-            body: _PassThroughRequestEnvelope = await request.json()
-            query_params_data = body.get("query_params")
-            custom_body_data = body.get("custom_body")
-            stream = body.get("stream")
+            json_body: Final = require_attributes(
+                _DECODED_JSON.validate_python(await request.json()), _SupportsGet, "get"
+            )
+            query_params_data = json_body.get("query_params")
+            custom_body_data = json_body.get("custom_body")
+            stream = json_body.get("stream")
         except json.JSONDecodeError:
             # Handle requests with no body (e.g., DELETE requests)
             pass
@@ -2268,14 +2466,16 @@ async def _parse_request_data_by_content_type(
         # ✅ Try to parse as JSON first (handles misconfigured clients sending JSON with multipart content-type)
         # If that fails, skip parsing - pass_through_request will handle actual multipart
         try:
-            body = await request.json()
+            multipart_json_body: Final = require_attributes(
+                _DECODED_JSON.validate_python(await request.json()), _SupportsGet, "get"
+            )
             # Successfully parsed as JSON - treat as JSON body
-            query_params_data = body.get("query_params")
-            custom_body_data = body.get("custom_body")
-            stream = body.get("stream")
+            query_params_data = multipart_json_body.get("query_params")
+            custom_body_data = multipart_json_body.get("custom_body")
+            stream = multipart_json_body.get("stream")
             # If custom_body is not set, use the entire body
-            if custom_body_data is None and body:
-                custom_body_data = body
+            if custom_body_data is None and multipart_json_body:
+                custom_body_data = multipart_json_body
         except (json.JSONDecodeError, Exception):
             # Not JSON - this is actual multipart data
             # Skip parsing here to avoid consuming the request body stream
@@ -2312,7 +2512,9 @@ def create_pass_through_route(
     config_file_path: str | None = None,
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
+    upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
+    keep_target_query: bool = False,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2461,15 +2663,12 @@ def create_pass_through_route(
                         guardrails_config=cast(dict | None, param_guardrails),
                         timeout=cast(float | None, param_timeout),
                         upstream_headers_filter=upstream_headers_filter,
+                        upstream_request_filter=upstream_request_filter,
                         operation=operation,
+                        keep_target_query=keep_target_query,
                     )
                 finally:
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY)
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY)
+                    _clear_pass_through_request_state(request.state)
 
             # The upstream withholds its response headers until its first token, so
             # the whole time-to-first-token is spent inside _relay with nothing on
@@ -2558,6 +2757,21 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})
 
 
+VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON: Final = "Rejected Request: binary messages must be UTF-8 encoded JSON"
+
+
+def _rewrite_vertex_live_binary_setup_model(
+    bytes_data: bytes, setup_model_rewriter: Callable[[str], str] | None
+) -> bytes | None:
+    if setup_model_rewriter is None:
+        return bytes_data
+    try:
+        text_data: Final = bytes_data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return _rewrite_vertex_live_setup_model(text_data, setup_model_rewriter).encode("utf-8")
+
+
 def _resolved_vertex_live_setup(
     setup_data: Mapping[str, object], setup_model_rewriter: Callable[[str], str] | None
 ) -> Mapping[str, object]:
@@ -2574,17 +2788,22 @@ def _resolved_vertex_live_setup(
     return {**setup_data, "model": setup_model_rewriter(setup_model)}
 
 
+def _decoded_frame(frame: str | bytes) -> object:
+    try:
+        return _DECODED_JSON.validate_python(orjson.loads(frame))
+    except orjson.JSONDecodeError:
+        return _DECODED_JSON.validate_python(json.loads(frame if isinstance(frame, str) else frame.decode("utf-8")))
+
+
 def _json_object_frame(frame: str | bytes) -> dict[str, object] | None:
     try:
-        decoded: Final[object] = _DECODED_JSON.validate_python(
-            json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
-        )
+        decoded: Final = _decoded_frame(frame)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     return decoded if isinstance(decoded, dict) else None
 
 
-def _truncated_close_reason(reason: str) -> str:
+def truncated_close_reason(reason: str) -> str:
     """
     Fit a close reason inside the byte budget a WebSocket close frame allows, without splitting a character
     """
@@ -2637,6 +2856,381 @@ def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict
     return inject_trace_context(headers, parent_span=parent_span)
 
 
+@dataclass(frozen=True, slots=True)
+class WebsocketFrameModelAllowed:
+    access_groups: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WebsocketFrameModelRefused:
+    message: str
+    error_type: str
+
+
+WebsocketFrameModelVerdict: TypeAlias = WebsocketFrameModelAllowed | WebsocketFrameModelRefused
+
+
+class WebsocketFrameModelGate(Protocol):
+    async def __call__(self, websocket: WebSocket, model: str, /) -> WebsocketFrameModelVerdict: ...
+
+
+WebsocketUpstreamFrameClassifier: TypeAlias = Callable[[Mapping[str, object]], WebsocketUpstreamFrameKind]
+_SESSION_FRAMES_EVERY_ROW_CARRIES: Final[frozenset[WebsocketUpstreamFrameKind]] = frozenset(
+    {"opens_session", "updates_session"}
+)
+_FrameT: Final = TypeVar("_FrameT", bound=Mapping[str, object])
+
+
+@dataclass(frozen=True, slots=True)
+class _TurnAuthorization:
+    requested_model: str | None
+    access_groups: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ForwardClientFrame:
+    starts_turn: bool
+    turn: _TurnAuthorization | None
+    lane: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _RefuseClientFrame:
+    refusal: WebsocketFrameModelRefused
+
+
+@dataclass(frozen=True, slots=True)
+class _ClientFrameRequests:
+    starts_turn: bool
+    lane: str | None
+    turn_model: str | None
+    models: tuple[str, ...]
+    unverifiable_model_refusal: str | None
+
+
+_NO_CLIENT_FRAME_REQUESTS: Final = _ClientFrameRequests(
+    starts_turn=False, lane=None, turn_model=None, models=(), unverifiable_model_refusal=None
+)
+_FORWARD_WITHOUT_TURN: Final = _ForwardClientFrame(starts_turn=False, turn=None, lane=None)
+_UNREADABLE_CLIENT_FRAME: Final = _RefuseClientFrame(
+    refusal=WebsocketFrameModelRefused(
+        message="The gateway cannot parse this frame, so it cannot check which model it asks for.",
+        error_type="invalid_request_error",
+    )
+)
+_TURN_STARTING_FRAME: Final = "response.create"
+_FRAME_TEXT_WORTH_PARSING: Final = (f'"{_TURN_STARTING_FRAME}"', '"model"', '"prompt"', '"tools"', "\\")
+_TURN_MODEL_PLACEMENTS: Final = (("model",), ("response", "model"), ("session", "model"))
+_TRANSCRIPTION_MODEL_PLACEMENTS: Final = (
+    ("session", "input_audio_transcription", "model"),
+    ("session", "audio", "input", "transcription", "model"),
+)
+_STORED_PROMPT_PLACEMENTS: Final = (("prompt",), ("response", "prompt"), ("session", "prompt"))
+_TOOL_LIST_PLACEMENTS: Final = (("tools",), ("response", "tools"), ("session", "tools"))
+_TOOL_THAT_RUNS_A_MODEL: Final = "image_generation"
+STORED_PROMPT_PROBE_MODEL: Final = "litellm-unverifiable-stored-prompt-model"
+_STORED_PROMPT_REFUSAL: Final = (
+    "This key is limited to specific models, so it cannot run a stored prompt. "
+    "The gateway cannot check which model a stored prompt runs."
+)
+_UNNAMED_TOOL_MODEL_REFUSAL: Final = (
+    "This key is limited to specific models, so an image_generation tool has to name its model. "
+    "The gateway cannot check which model an unnamed one runs."
+)
+_FIRST_SENTENCE: Final = re.compile(r".*?[.!?](?=\s|$)")
+_LANE_NAME: Final = re.compile(r"[A-Za-z0-9_.-]{1,256}")
+_UNROUTABLE_LANE_REFUSAL: Final = _RefuseClientFrame(
+    refusal=WebsocketFrameModelRefused(
+        message=(
+            "This stream_id is not a lane name the provider accepts. "
+            "The provider's error for it names no lane, so the gateway cannot tell which turn it refuses."
+        ),
+        error_type="invalid_request_error",
+    )
+)
+
+
+def _may_name_a_model(text_data: str) -> bool:
+    return any(marker in text_data for marker in _FRAME_TEXT_WORTH_PARSING)
+
+
+def _frame_lane(frame: Mapping[str, object]) -> str | None:
+    stream_id: Final = frame.get("stream_id")
+    return stream_id if isinstance(stream_id, str) else None
+
+
+def _names_an_unroutable_lane(frame: Mapping[str, object]) -> bool:
+    stream_id: Final = frame.get("stream_id")
+    return stream_id is not None and not (isinstance(stream_id, str) and _LANE_NAME.fullmatch(stream_id) is not None)
+
+
+def _frames_of_lane(lane: str | None) -> Callable[[Mapping[str, object]], bool]:
+    def in_lane(frame: Mapping[str, object]) -> bool:
+        return _frame_lane(frame) == lane
+
+    return in_lane
+
+
+def _every_frame(_frame: Mapping[str, object]) -> bool:
+    return True
+
+
+def _without_earlier_session_updates(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier,
+    frames: Sequence[_FrameT],
+    latest_update: _FrameT,
+) -> tuple[_FrameT, ...]:
+    return tuple(
+        frame
+        for index, frame in enumerate(frames)
+        if frame is latest_update
+        or upstream_frame_kind(frame) != "updates_session"
+        or _unbilled_usage_ran_under(map(upstream_frame_kind, frames[index + 1 :]))
+    )
+
+
+def _unbilled_usage_ran_under(later_kinds: Iterable[WebsocketUpstreamFrameKind]) -> bool:
+    return "bills_usage" in takewhile(lambda kind: kind != "updates_session", later_kinds)
+
+
+def _nested_frame(frame: Mapping[str, object] | None, key: str) -> Mapping[str, object] | None:
+    return None if frame is None else as_str_mapping(frame.get(key))
+
+
+def _placed_value(frame: Mapping[str, object], placement: Sequence[str]) -> object:
+    *parents, leaf = placement
+    container: Final = reduce(_nested_frame, parents, frame)
+    return None if container is None else container.get(leaf)
+
+
+def _placed_models(frame: Mapping[str, object], placements: Iterable[Sequence[str]]) -> tuple[str, ...]:
+    placed: Final = (_placed_value(frame, placement) for placement in placements)
+    return tuple(value for value in placed if isinstance(value, str))
+
+
+def _placed_tools(frame: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    tool_lists: Final = (_placed_value(frame, placement) for placement in _TOOL_LIST_PLACEMENTS)
+    tools: Final = chain.from_iterable(as_object_list(tool_list) or () for tool_list in tool_lists)
+    return tuple(tool for tool in map(as_str_mapping, tools) if tool is not None)
+
+
+def _unverifiable_model_refusal(frame: Mapping[str, object], tools: Sequence[Mapping[str, object]]) -> str | None:
+    prompts: Final = (_placed_value(frame, placement) for placement in _STORED_PROMPT_PLACEMENTS)
+    if any(isinstance(prompt, Mapping) for prompt in prompts):
+        return _STORED_PROMPT_REFUSAL
+    if any(tool.get("type") == _TOOL_THAT_RUNS_A_MODEL and not isinstance(tool.get("model"), str) for tool in tools):
+        return _UNNAMED_TOOL_MODEL_REFUSAL
+    return None
+
+
+def _client_frame_requests(frame_data: str | bytes) -> _ClientFrameRequests | _RefuseClientFrame:
+    if isinstance(frame_data, str) and not _may_name_a_model(frame_data):
+        return _NO_CLIENT_FRAME_REQUESTS
+    try:
+        frame: Final = _json_object_frame(frame_data)
+    except (RecursionError, ValueError):
+        return _UNREADABLE_CLIENT_FRAME
+    if frame is None:
+        return _NO_CLIENT_FRAME_REQUESTS
+    if _names_an_unroutable_lane(frame):
+        return _UNROUTABLE_LANE_REFUSAL
+    turn_models: Final = _placed_models(frame, _TURN_MODEL_PLACEMENTS)
+    tools: Final = _placed_tools(frame)
+    tool_models: Final = (model for model in (tool.get("model") for tool in tools) if isinstance(model, str))
+    return _ClientFrameRequests(
+        starts_turn=frame.get("type") == _TURN_STARTING_FRAME,
+        lane=_frame_lane(frame),
+        turn_model=next(iter(turn_models), None),
+        models=tuple(
+            dict.fromkeys((*turn_models, *_placed_models(frame, _TRANSCRIPTION_MODEL_PLACEMENTS), *tool_models))
+        ),
+        unverifiable_model_refusal=_unverifiable_model_refusal(frame, tools),
+    )
+
+
+def _unverifiable_model_probe_refusal(probe: WebsocketFrameModelRefused, message: str) -> WebsocketFrameModelRefused:
+    if probe.error_type.endswith("_model_access_denied"):
+        return WebsocketFrameModelRefused(message=message, error_type=probe.error_type)
+    return probe
+
+
+async def _client_frame_verdict(
+    websocket: WebSocket, frame_data: str | bytes, gate: WebsocketFrameModelGate | None
+) -> _ForwardClientFrame | _RefuseClientFrame:
+    if gate is None:
+        return _FORWARD_WITHOUT_TURN
+    requests: Final = _client_frame_requests(frame_data)
+    if isinstance(requests, _RefuseClientFrame):
+        return requests
+    verdicts: Final = tuple([await gate(websocket, model) for model in requests.models])
+    refusal: Final = next((verdict for verdict in verdicts if isinstance(verdict, WebsocketFrameModelRefused)), None)
+    if refusal is not None:
+        return _RefuseClientFrame(refusal=refusal)
+    if requests.unverifiable_model_refusal is not None and isinstance(
+        probe := await gate(websocket, STORED_PROMPT_PROBE_MODEL), WebsocketFrameModelRefused
+    ):
+        return _RefuseClientFrame(refusal=_unverifiable_model_probe_refusal(probe, requests.unverifiable_model_refusal))
+    allowed: Final = tuple(verdict for verdict in verdicts if isinstance(verdict, WebsocketFrameModelAllowed))
+    return _ForwardClientFrame(
+        starts_turn=requests.starts_turn,
+        lane=requests.lane,
+        turn=(
+            _TurnAuthorization(requested_model=requests.turn_model, access_groups=allowed[0].access_groups)
+            if requests.turn_model is not None and allowed
+            else None
+        ),
+    )
+
+
+def _refusal_close_reason(message: str) -> str:
+    first_sentence: Final = _FIRST_SENTENCE.match(message)
+    return truncated_close_reason(message if first_sentence is None else first_sentence.group(0))
+
+
+async def refuse_websocket(websocket: WebSocket, refusal: WebsocketFrameModelRefused) -> None:
+    await websocket.send_text(realtime_error_event(refusal.message, error_type=refusal.error_type))
+    await websocket.close(code=CloseCode.POLICY_VIOLATION, reason=_refusal_close_reason(refusal.message))
+
+
+def _stamp_billed_turn(kwargs: Mapping[str, object], turn: _TurnAuthorization) -> None:
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params"))
+    metadata: Final = None if litellm_params is None else litellm_params.get("metadata")
+    if not isinstance(metadata, MutableMapping):
+        return
+    metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = list(turn.access_groups)
+    if turn.requested_model is not None:
+        metadata["model_group"] = turn.requested_model
+
+
+def _opening_model(target: str) -> str | None:
+    return next(iter(parse_qs(urlparse(target).query).get("model", ())), None)
+
+
+class _WebsocketTurnLedger:
+    def __init__(self, opening: _TurnAuthorization, started: datetime) -> None:
+        self.opening = opening
+        self.queued_turns: Mapping[str | None, tuple[_TurnAuthorization | None, ...]] = MappingProxyType({})
+        self.session_opened = False
+        self.started = started
+        self.logged_turns = 0
+        self.unstarted_turns = 0
+
+    def current(self, lane: str | None) -> _TurnAuthorization:
+        oldest: Final = next(iter(self.queued_turns.get(lane, ())), None)
+        return self.opening if oldest is None else oldest
+
+    def queue_turn(self, lane: str | None, turn: _TurnAuthorization | None) -> None:
+        self.unstarted_turns += 1
+        if not self.session_opened:
+            self.queued_turns = MappingProxyType({**self.queued_turns, lane: (*self.queued_turns.get(lane, ()), turn)})
+
+    def open_session(self) -> None:
+        self.session_opened = True
+        self.queued_turns = MappingProxyType({})
+
+    def close_turn(self, lane: str | None, end_time: datetime) -> None:
+        self.logged_turns += 1
+        self.started = end_time
+        self._forget_turn(lane, 0)
+
+    def start_turn(self) -> None:
+        self.unstarted_turns = max(0, self.unstarted_turns - 1)
+
+    def drop_refused_turn(self, lane: str | None, lane_is_running_a_turn: bool) -> None:
+        self.start_turn()
+        self._forget_turn(lane, 1 if lane_is_running_a_turn else 0)
+
+    def _forget_turn(self, lane: str | None, position: int) -> None:
+        turns: Final = self.queued_turns.get(lane, ())
+        self.queued_turns = MappingProxyType({**self.queued_turns, lane: (*turns[:position], *turns[position + 1 :])})
+
+
+def _session_end_needs_a_row(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None,
+    unlogged_frames: Sequence[Mapping[str, object]],
+    ledger: _WebsocketTurnLedger,
+) -> bool:
+    if upstream_frame_kind is None:
+        return True
+    kinds: Final = frozenset(map(upstream_frame_kind, unlogged_frames))
+    return "starts_turn" in kinds or (ledger.logged_turns == 0 and bool(kinds - {"opens_session"}))
+
+
+def _turn_in_flight(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None, unlogged_frames: Sequence[Mapping[str, object]]
+) -> bool:
+    return upstream_frame_kind is not None and any(
+        upstream_frame_kind(frame) == "starts_turn" for frame in unlogged_frames
+    )
+
+
+def _turn_owed(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None,
+    unlogged_frames: Sequence[Mapping[str, object]],
+    ledger: _WebsocketTurnLedger,
+) -> bool:
+    return _turn_in_flight(upstream_frame_kind, unlogged_frames) or (
+        upstream_frame_kind is not None and ledger.unstarted_turns > 0
+    )
+
+
+def _lanes_in_flight(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier, unlogged_frames: Sequence[Mapping[str, object]]
+) -> tuple[str | None, ...]:
+    started: Final = (frame for frame in unlogged_frames if upstream_frame_kind(frame) == "starts_turn")
+    return tuple(dict.fromkeys(map(_frame_lane, started)))
+
+
+async def _relay_client_frame(
+    websocket: WebSocket,
+    upstream_ws: ClientConnection,
+    checked_frame: str | bytes,
+    forwarded_frame: str | bytes,
+    gate: WebsocketFrameModelGate | None,
+    ledger: _WebsocketTurnLedger,
+) -> _ForwardClientFrame | _RefuseClientFrame:
+    verdict: Final = await _client_frame_verdict(websocket, checked_frame, gate)
+    match verdict:
+        case _RefuseClientFrame(refusal=refusal):
+            await refuse_websocket(websocket, refusal)
+        case _ForwardClientFrame(starts_turn=True, turn=turn, lane=lane):
+            ledger.queue_turn(lane, turn)
+            await upstream_ws.send(forwarded_frame)
+        case _ForwardClientFrame():
+            await upstream_ws.send(forwarded_frame)
+    return verdict
+
+
+_UNDECODABLE_BINARY_CLIENT_FRAME: Final = _RefuseClientFrame(
+    refusal=WebsocketFrameModelRefused(
+        message=VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON, error_type="invalid_request_error"
+    )
+)
+
+
+async def _relay_client_binary_frame(
+    websocket: WebSocket,
+    upstream_ws: ClientConnection,
+    bytes_data: bytes,
+    setup_model_rewriter: Callable[[str], str] | None,
+    gate: WebsocketFrameModelGate | None,
+    ledger: _WebsocketTurnLedger,
+) -> _ForwardClientFrame | _RefuseClientFrame:
+    rewritten_bytes: Final = _rewrite_vertex_live_binary_setup_model(bytes_data, setup_model_rewriter)
+    if rewritten_bytes is None:
+        await websocket.close(code=CloseCode.POLICY_VIOLATION, reason=VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON)
+        return _UNDECODABLE_BINARY_CLIENT_FRAME
+    return await _relay_client_frame(websocket, upstream_ws, bytes_data, rewritten_bytes, gate, ledger)
+
+
+_EXPLICIT_SUCCESS_KWARGS: Final = frozenset({"logging_obj", "passthrough_logging_payload", "custom_llm_provider"})
+WALKOUT_TURN_DRAIN_SECONDS: Final = 600.0
+
+
+def _metered_client_text(meter: WebSocketSessionMeter | None, client_text: str) -> int:
+    return 0 if meter is None else meter.measure(client_text)
+
+
 def _log_session_usage(logging_obj: LiteLLMLoggingObj, usage: WebSocketSessionUsage) -> None:
     logging_obj.model = usage.model  # rebind-ok: the spend logger reads model and cost off the shared logging object
     logging_obj.model_call_details["model"] = usage.model  # rebind-ok: same shared logging object
@@ -2654,6 +3248,9 @@ async def websocket_passthrough_request(
     cost_per_request: float | None = None,
     accept_websocket: bool = True,
     setup_model_rewriter: Callable[[str], str] | None = None,
+    client_frame_model_gate: WebsocketFrameModelGate | None = None,
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None = None,
+    walkout_turn_drain_seconds: float = WALKOUT_TURN_DRAIN_SECONDS,
     builtin_provider_route: bool = False,
     model: str | None = None,
     meter: WebSocketSessionMeter | None = None,
@@ -2670,6 +3267,11 @@ async def websocket_passthrough_request(
         endpoint: The endpoint path (for logging purposes)
         cost_per_request: Optional field - cost per request to the target endpoint
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
+        client_frame_model_gate: Optional per-frame check of every model a client frame names
+        upstream_frame_kind: Optional sort of upstream frames into the one that ends a billable turn and the ones
+            that open the session, so each turn logs its own spend and keeps the session's provider-named model
+        walkout_turn_drain_seconds: How long to keep reading a turn the provider is still running after the client
+            left or was refused, so the provider's usage for it still reaches spend
         builtin_provider_route: Whether a built-in provider route serves the connection, so its URL names the provider
         model: The model the caller named before connecting, logged on a failure before the setup frame arrives
         meter: Prices the session from the client text frames delivered upstream, for an upstream that reports no usage
@@ -2709,26 +3311,31 @@ async def websocket_passthrough_request(
         proxy_config=proxy_config,
         route_description="websocket_passthrough",
     )
-    logging_obj: Final = Logging(
-        model="unknown",
-        messages=[{"role": "user", "content": "WebSocket connection"}],
-        stream=True,  # WebSockets are inherently streaming
-        call_type="pass_through_endpoint",
-        start_time=start_time,
-        litellm_call_id=litellm_call_id,
-        function_id="websocket_passthrough",
-        dynamic_success_callbacks=team_callbacks.success_callbacks,
-        dynamic_failure_callbacks=team_callbacks.failure_callbacks,
-        kwargs=team_callbacks.logging_kwargs,
-    )
 
-    # Create passthrough logging payload
-    passthrough_logging_payload: Final = PassthroughStandardLoggingPayload(
-        url=target,
-        request_body={},  # WebSocket doesn't have a traditional request body
-        request_method="WEBSOCKET",
-        cost_per_request=cost_per_request,
-    )
+    def new_call_logging(call_start: datetime, call_id: str) -> LiteLLMLoggingObj:
+        return Logging(
+            model="unknown",
+            messages=[{"role": "user", "content": "WebSocket connection"}],
+            stream=True,
+            call_type="pass_through_endpoint",
+            start_time=call_start,
+            litellm_call_id=call_id,
+            function_id="websocket_passthrough",
+            dynamic_success_callbacks=team_callbacks.success_callbacks,
+            dynamic_failure_callbacks=team_callbacks.failure_callbacks,
+            kwargs=team_callbacks.logging_kwargs,
+        )
+
+    def new_call_payload() -> PassthroughStandardLoggingPayload:
+        return PassthroughStandardLoggingPayload(
+            url=target,
+            request_body={},
+            request_method="WEBSOCKET",
+            cost_per_request=cost_per_request,
+        )
+
+    logging_obj: Final = new_call_logging(start_time, litellm_call_id)
+    passthrough_logging_payload: Final = new_call_payload()
 
     # Create a dummy request object for WebSocket connections to maintain compatibility
     # with the existing _init_kwargs_for_pass_through_endpoint function
@@ -2750,38 +3357,136 @@ async def websocket_passthrough_request(
     )
 
     # Initialize kwargs for logging using the same pattern as HTTP passthrough
-    kwargs: Final = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
-        user_api_key_dict=user_api_key_dict,
-        _parsed_body={},  # WebSocket doesn't have a traditional request body
-        passthrough_logging_payload=passthrough_logging_payload,
-        litellm_call_id=litellm_call_id,
-        request=dummy_request,
-        logging_obj=logging_obj,
+    def init_call_kwargs(
+        token: UserAPIKeyAuth,
+        call_payload: PassthroughStandardLoggingPayload,
+        call_id: str,
+        call_logging: LiteLLMLoggingObj,
+    ) -> dict[str, object]:  # mutable-ok: the Vertex relay stamps the model from setup frames into these kwargs
+        return HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
+            user_api_key_dict=token,
+            _parsed_body={},  # WebSocket doesn't have a traditional request body
+            passthrough_logging_payload=call_payload,
+            litellm_call_id=call_id,
+            request=dummy_request,
+            logging_obj=call_logging,
+        )
+
+    kwargs: Final = init_call_kwargs(user_api_key_dict, passthrough_logging_payload, litellm_call_id, logging_obj)
+
+    def start_call_logging(call_logging: LiteLLMLoggingObj, call_kwargs: Mapping[str, object]) -> None:
+        call_logging.update_environment_variables(
+            model="unknown",
+            user="unknown",
+            optional_params={},
+            litellm_params=dict(as_str_mapping(call_kwargs.get("litellm_params")) or {}),
+            call_type="pass_through_endpoint",
+        )
+        call_logging.pre_call(
+            input=[{"role": "user", "content": "WebSocket connection"}],
+            api_key="",
+            additional_args={
+                "complete_input_dict": {},
+                "api_base": target,
+                "headers": upstream_headers,
+            },
+        )
+
+    start_call_logging(logging_obj, kwargs)
+
+    class MockWebSocketRequest:
+        def __init__(self, target_url: str):
+            self.method = "WEBSOCKET"
+            self.url = target_url
+
+    class MockWebSocketResponse:
+        def __init__(self, target_url: str):
+            self.status_code = 200
+            self.text = "WebSocket connection successful"
+            self.headers: dict[str, str] = {}
+            self.request = MockWebSocketRequest(target_url)
+
+    ledger: Final = _WebsocketTurnLedger(
+        opening=_TurnAuthorization(
+            requested_model=_opening_model(target),
+            access_groups=tuple(user_api_key_dict.matched_model_access_groups or ()),
+        ),
+        started=start_time,
     )
 
-    # Update logging environment variables
-    logging_obj.update_environment_variables(
-        model="unknown",
-        user="unknown",
-        optional_params={},
-        litellm_params=dict(kwargs.get("litellm_params", {})),
-        call_type="pass_through_endpoint",
-    )
-    logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
+    def log_frames(
+        call_logging: LiteLLMLoggingObj,
+        call_payload: PassthroughStandardLoggingPayload,
+        call_kwargs: Mapping[str, object],
+        end_time: datetime,
+        lane: str | None,
+        in_row: Callable[[Mapping[str, object]], bool],
+    ) -> None:
+        all_frames: Final = list(websocket_messages)
+        frames: Final = [frame for frame in all_frames if in_row(frame)]
+        websocket_messages[:] = (
+            ()
+            if upstream_frame_kind is None
+            else (
+                frame
+                for frame in all_frames
+                if not in_row(frame) or upstream_frame_kind(frame) in _SESSION_FRAMES_EVERY_ROW_CARRIES
+            )
+        )
+        logged_payload: Final[PassthroughStandardLoggingPayload] = {
+            **call_payload,
+            "response_body": frames,
+            "end_time": end_time,
+        }
+        if client_frame_model_gate is not None:
+            _stamp_billed_turn(call_kwargs, ledger.current(lane))
+        success_kwargs: Final = {
+            key: value for key, value in call_kwargs.items() if key not in _EXPLICIT_SUCCESS_KWARGS
+        }
+        custom_llm_provider: Final = call_kwargs.get("custom_llm_provider")
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
+                httpx_response=MockWebSocketResponse(target),
+                response_body=frames,
+                url_route=endpoint or "",
+                result="websocket_connection_successful",
+                start_time=ledger.started,
+                end_time=end_time,
+                logging_obj=call_logging,
+                cache_hit=False,
+                request_body={},
+                passthrough_logging_payload=logged_payload,
+                custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+                finalize_before_dispatch=False,
+                **success_kwargs,
+            )
+        )
+        bind_budget_reservation_to_callbacks(call_logging.litellm_params)
 
-    # Pre-call logging
-    logging_obj.pre_call(
-        input=[{"role": "user", "content": "WebSocket connection"}],
-        api_key="",
-        additional_args={
-            "complete_input_dict": {},
-            "api_base": target,
-            "headers": upstream_headers,
-        },
-    )
+    def log_turn(lane: str | None, in_row: Callable[[Mapping[str, object]], bool]) -> None:
+        end_time: Final = datetime.now()
+        if upstream_frame_kind is None:
+            log_frames(logging_obj, passthrough_logging_payload, kwargs, end_time, lane, in_row)
+        else:
+            turn_call_id: Final = str(uuid.uuid4())
+            turn_logging: Final = new_call_logging(ledger.started, turn_call_id)
+            turn_payload: Final = new_call_payload()
+            turn_kwargs: Final = init_call_kwargs(
+                user_api_key_dict
+                if ledger.logged_turns == 0
+                else user_api_key_dict.model_copy(update={"budget_reservation": None}),
+                turn_payload,
+                turn_call_id,
+                turn_logging,
+            )
+            start_call_logging(turn_logging, turn_kwargs)
+            log_frames(turn_logging, turn_payload, turn_kwargs, end_time, lane, in_row)
+        ledger.close_turn(lane, end_time)
 
     ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-    websocket_hook_data: Final = guardrail_request_data_with_streaming(MappingProxyType({}), is_streaming=True)
+    websocket_hook_data: Final = guardrail_request_data_with_streaming(
+        MappingProxyType({"litellm_call_id": litellm_call_id}), is_streaming=True
+    )
     await proxy_logging_obj.pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         data=websocket_hook_data,
@@ -2808,7 +3513,6 @@ async def websocket_passthrough_request(
                         message = await websocket.receive()
                         message_type = message.get("type")
                         if message_type == "websocket.disconnect":
-                            await upstream_ws.close()
                             break
 
                         text_data: str | None = message.get("text")
@@ -2871,11 +3575,34 @@ async def websocket_passthrough_request(
                                     )
                                     # Not a JSON message or doesn't contain setup data
 
-                            await upstream_ws.send(_rewrite_vertex_live_setup_model(text_data, setup_model_rewriter))
-                            if meter is not None:
-                                metered_total += meter.measure(text_data)
+                            if isinstance(
+                                await _relay_client_frame(
+                                    websocket,
+                                    upstream_ws,
+                                    text_data,
+                                    _rewrite_vertex_live_setup_model(text_data, setup_model_rewriter),
+                                    client_frame_model_gate,
+                                    ledger,
+                                ),
+                                _RefuseClientFrame,
+                            ):
+                                break
+                            metered_total += _metered_client_text(meter, text_data)
                         elif bytes_data is not None:
-                            await upstream_ws.send(bytes_data)
+                            if isinstance(
+                                await _relay_client_binary_frame(
+                                    websocket,
+                                    upstream_ws,
+                                    bytes_data,
+                                    setup_model_rewriter,
+                                    client_frame_model_gate,
+                                    ledger,
+                                ),
+                                _RefuseClientFrame,
+                            ):
+                                break
+                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger):
+                        await upstream_ws.close()
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -2902,11 +3629,7 @@ async def websocket_passthrough_request(
             is_vertex_live: Final = bool(endpoint and "/vertex_ai/live" in endpoint)
             json_frame_ordinal: Final = count()
 
-            async def relay_upstream_frame(upstream_message: str | bytes) -> None:
-                if isinstance(upstream_message, bytes):
-                    await websocket.send_bytes(upstream_message)
-                else:
-                    await websocket.send_text(upstream_message)
+            def record_upstream_frame(upstream_message: str | bytes) -> None:
                 message_data: Final = _json_object_frame(upstream_message)
                 if message_data is None:
                     return
@@ -2914,6 +3637,43 @@ async def websocket_passthrough_request(
                     _extract_vertex_live_model_from_setup_response(message_data)
                     return
                 websocket_messages.append(message_data)
+                match None if upstream_frame_kind is None else upstream_frame_kind(message_data):
+                    case "opens_session":
+                        ledger.open_session()
+                    case "starts_turn":
+                        ledger.start_turn()
+                    case "updates_session" if upstream_frame_kind is not None:
+                        websocket_messages[:] = _without_earlier_session_updates(
+                            upstream_frame_kind, websocket_messages, message_data
+                        )
+                    case "ends_turn" if upstream_frame_kind is not None:
+                        if _frame_lane(message_data) not in _lanes_in_flight(upstream_frame_kind, websocket_messages):
+                            ledger.start_turn()
+                        log_turn(_frame_lane(message_data), _frames_of_lane(_frame_lane(message_data)))
+                    case "bills_usage" if not _turn_in_flight(upstream_frame_kind, websocket_messages):
+                        log_turn(_frame_lane(message_data), _frames_of_lane(_frame_lane(message_data)))
+                    case "refuses_turn" if upstream_frame_kind is not None:
+                        lane: Final = _frame_lane(message_data)
+                        ledger.drop_refused_turn(
+                            lane, lane in _lanes_in_flight(upstream_frame_kind, websocket_messages)
+                        )
+                    case _:
+                        pass
+
+            async def relay_upstream_frame(upstream_message: str | bytes) -> None:
+                record_upstream_frame(upstream_message)
+                if not _client_socket_is_open(websocket):
+                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger):
+                        await upstream_ws.close()
+                    return
+                try:
+                    if isinstance(upstream_message, bytes):
+                        await websocket.send_bytes(upstream_message)
+                    else:
+                        await websocket.send_text(upstream_message)
+                except WebSocketDisconnect:
+                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger):
+                        raise
 
             async def forward_upstream_to_client() -> Close | None:
                 try:
@@ -2922,6 +3682,11 @@ async def websocket_passthrough_request(
                 except (ConnectionClosedOK, ConnectionClosedError) as e:
                     verbose_proxy_logger.debug("Upstream WebSocket connection closed: %s", e)
                     return e.rcvd
+                except WebSocketDisconnect:
+                    verbose_proxy_logger.debug(
+                        "WebSocket passthrough (%s): client left while upstream was still sending", endpoint
+                    )
+                    return None
                 except asyncio.CancelledError:
                     verbose_proxy_logger.debug("asyncio.CancelledError in forward_upstream_to_client")
                     raise
@@ -2933,12 +3698,15 @@ async def websocket_passthrough_request(
                     raise
 
             # Create tasks for bidirectional message forwarding
-            tasks: Final = [
-                asyncio.create_task(forward_client_to_upstream()),
-                asyncio.create_task(forward_upstream_to_client()),
-            ]
+            client_task: Final = asyncio.create_task(forward_client_to_upstream())
+            upstream_task: Final = asyncio.create_task(forward_upstream_to_client())
+            tasks: Final = (client_task, upstream_task)
 
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if client_task.done() and _turn_owed(upstream_frame_kind, websocket_messages, ledger):
+                await asyncio.wait((upstream_task,), timeout=walkout_turn_drain_seconds)
+            done: Final = tuple(task for task in tasks if task.done())
+            pending: Final = tuple(task for task in tasks if not task.done())
 
             # Cancel remaining tasks
             for task in pending:
@@ -2958,67 +3726,20 @@ async def websocket_passthrough_request(
             if upstream_close is not None and _client_socket_is_open(websocket):
                 await websocket.close(
                     code=upstream_close.code,
-                    reason=_truncated_close_reason(upstream_close.reason),
+                    reason=truncated_close_reason(upstream_close.reason),
                 )
 
-            end_time: Final = datetime.now()
-
-            # Update passthrough logging payload with response data
-            passthrough_logging_payload["response_body"] = websocket_messages
-            passthrough_logging_payload["end_time"] = end_time
-
-            # Remove logging_obj from kwargs to avoid duplicate keyword argument
-            success_kwargs: Final = kwargs.copy()
-            success_kwargs.pop("logging_obj", None)
-
-            # # Add user authentication context for database logging
-            # if user_api_key_dict:
-            #     success_kwargs.setdefault('litellm_params', {})
-            #     success_kwargs['litellm_params'].update({
-            #         'proxy_server_request': {
-            #             'body': {
-            #                 'user': user_api_key_dict.user_id,
-            #                 'team_id': user_api_key_dict.team_id,
-            #                 'end_user_id': user_api_key_dict.end_user_id,
-            #             }
-            #         }
-            #     })
-            #     # Also add the user_api_key for direct access
-            #     success_kwargs['user_api_key'] = user_api_key_dict.api_key
-
-            # Create a dummy httpx.Response for WebSocket connections
-            class MockWebSocketResponse:
-                def __init__(self, target_url: str):
-                    self.status_code = 200
-                    self.text = "WebSocket connection successful"
-                    self.headers: dict[str, str] = {}
-                    self.request = MockWebSocketRequest(target_url)
-
-            class MockWebSocketRequest:
-                def __init__(self, target_url: str):
-                    self.method = "WEBSOCKET"
-                    self.url = target_url
-
-            mock_response: Final = MockWebSocketResponse(target)
             if meter is not None:
                 _log_session_usage(logging_obj, meter.price(metered_total))
 
-            # Use the same success handler as HTTP passthrough endpoints
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
-                    httpx_response=mock_response,
-                    response_body=websocket_messages,
-                    url_route=endpoint or "",
-                    result="websocket_connection_successful",
-                    start_time=start_time,
-                    end_time=end_time,
-                    logging_obj=logging_obj,
-                    cache_hit=False,
-                    request_body={},
-                    **success_kwargs,
+            if _session_end_needs_a_row(upstream_frame_kind, websocket_messages, ledger):
+                lanes_in_flight: Final = (
+                    () if upstream_frame_kind is None else _lanes_in_flight(upstream_frame_kind, websocket_messages)
                 )
-            )
-            bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
+                *earlier_lanes, last_lane = lanes_in_flight or (None,)
+                for lane in earlier_lanes:
+                    log_turn(lane, _frames_of_lane(lane))
+                log_turn(last_lane, _every_frame)
 
             # Call the proxy logging success hook
             if proxy_logging_obj:
@@ -3076,6 +3797,7 @@ async def websocket_passthrough_request(
         if _client_socket_is_open(websocket):
             await websocket.close(code=1011, reason="WebSocket passthrough error")
     finally:
+        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
         if _client_socket_is_open(websocket):
             await websocket.close()
 
@@ -4134,7 +4856,7 @@ async def update_pass_through_endpoints(
     # Find the index for updating the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -4367,7 +5089,7 @@ async def delete_pass_through_endpoints(
     # Find the index for deleting from the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -4415,7 +5137,7 @@ def _find_endpoint_by_id(
     for endpoint in endpoints_data:
         _endpoint: PassThroughGenericEndpoint | None = None
         if isinstance(endpoint, dict):
-            _endpoint = PassThroughGenericEndpoint(**endpoint)
+            _endpoint = PassThroughGenericEndpoint.model_validate(endpoint)
         elif isinstance(endpoint, PassThroughGenericEndpoint):
             _endpoint = endpoint
 

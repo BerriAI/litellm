@@ -164,16 +164,19 @@ def _ignored_settings(update: TranscriptionSessionUpdate) -> tuple[str, ...]:
 def build_start_request(
     model: str, update: TranscriptionSessionUpdate | None, options: SonioxRealtimeOptions, drop_params: bool = False
 ) -> SonioxStartRequest:
-    return SonioxStartRequest(
-        **options.model_dump(exclude={"language_hints"}),
-        language_hints=_language_hints(
-            None if update is None else update.language, options.language_hints, options.language_hints_strict
-        ),
-        model=model,
-        audio_format="pcm_s16le",
-        sample_rate=_sample_rate(update),
-        num_channels=1,
-        enable_endpoint_detection=update is None or _uses_endpoint_detection(update, drop_params),
+    configured_options: Final[Mapping[str, object]] = options.model_dump(exclude={"language_hints"})
+    return SonioxStartRequest.model_validate(
+        {
+            **configured_options,
+            "language_hints": _language_hints(
+                None if update is None else update.language, options.language_hints, options.language_hints_strict
+            ),
+            "model": model,
+            "audio_format": "pcm_s16le",
+            "sample_rate": _sample_rate(update),
+            "num_channels": 1,
+            "enable_endpoint_detection": update is None or _uses_endpoint_detection(update, drop_params),
+        }
     )
 
 

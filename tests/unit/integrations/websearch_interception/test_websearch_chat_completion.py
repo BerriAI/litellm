@@ -6,6 +6,7 @@ litellm.acompletion() for transparent server-side web search execution.
 """
 
 import datetime
+import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -420,6 +421,97 @@ async def test_execute_chat_completion_agentic_loop_strips_tool_choice():
         "tool_choice must not appear in follow-up acompletion kwargs; "
         "it would force the model to call the search tool again instead of synthesizing"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["auto", "required"])
+async def test_execute_chat_completion_agentic_loop_keeps_an_allowed_tools_choice_without_forcing_another_call(
+    mode: str,
+    perplexity_search: respx.Route,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    followup: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+        json={
+            "id": "followup",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+        }
+    )
+    tool_choice: Final = {
+        "type": "allowed_tools",
+        "allowed_tools": {
+            "mode": mode,
+            "tools": [{"type": "function", "function": {"name": "litellm_web_search"}}],
+        },
+    }
+
+    await WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI])._execute_chat_completion_agentic_loop(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "What is Bitcoin price?"}],
+        tool_calls=[{"id": "call_1", "name": "litellm_web_search", "input": {"query": "bitcoin price"}}],
+        optional_params={
+            "tools": [
+                {"type": "function", "function": {"name": "litellm_web_search"}},
+                {"type": "function", "function": {"name": "get_time"}},
+            ],
+            "tool_choice": tool_choice,
+        },
+        logging_obj=MagicMock(),
+        stream=False,
+        kwargs={},
+    )
+
+    assert perplexity_search.call_count == 1
+    assert json.loads(followup.calls.last.request.content)["tool_choice"] == {
+        "type": "allowed_tools",
+        "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "litellm_web_search"}}]},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_choice", "followup_tool_choice"),
+    [
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+            },
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+            },
+        ),
+        ({"type": "function", "function": {"name": "litellm_web_search"}}, None),
+        ("required", None),
+    ],
+)
+async def test_chat_followup_plan_keeps_only_an_allowed_tools_choice(
+    tool_choice: object, followup_tool_choice: object, perplexity_search: respx.Route
+) -> None:
+    plan: Final = await WebSearchInterceptionLogger().async_build_chat_completion_agentic_loop_plan(
+        tools={
+            "tool_calls": [{"id": "call_abc", "name": "litellm_web_search", "input": {"query": "latest ai news"}}],
+            "tool_type": "websearch",
+            "provider": "openai",
+            "response_format": "openai",
+        },
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "What's the latest AI news?"}],
+        response=MagicMock(),
+        optional_params={"tool_choice": tool_choice, "max_tokens": 512},
+        logging_obj=None,
+        stream=False,
+        kwargs={"custom_llm_provider": "openai"},
+    )
+
+    assert plan.request_patch is not None
+    assert plan.request_patch.optional_params.get("tool_choice") == followup_tool_choice
 
 
 if __name__ == "__main__":

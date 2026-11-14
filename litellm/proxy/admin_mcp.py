@@ -71,8 +71,12 @@ def _admin_route_allowed(auth: UserAPIKeyAuth, request: Request, method: str, pa
     return True
 
 
+def _scope_app(scope: Mapping[str, object]) -> object:
+    return scope["app"]
+
+
 def _admin_routes(request: Request) -> Iterator[tuple[tuple[str, str], APIRoute]]:
-    app: Final = request.app
+    app: Final = _scope_app(request.scope)
     if not isinstance(app, FastAPI):
         return
     for route in app.routes:

@@ -6,8 +6,10 @@ import copy
 import json
 import re
 import threading
+import uuid
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from concurrent.futures import wait
+from datetime import datetime
 from functools import partial
 from types import MappingProxyType
 from typing import Final, TypeAlias
@@ -21,10 +23,11 @@ from botocore.credentials import Credentials
 from respx.models import Call
 
 import litellm
+from litellm._version import version as litellm_version
 from litellm.constants import AWS_SIGNING_MAX_THREADS
 from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded, refetch_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded, install_model_cost_map
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
 from litellm.llms.bedrock.base_aws_llm import AWS_SIGNING_EXECUTOR
@@ -132,6 +135,7 @@ _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
         "https://openrouter.ai/api/alpha/decisions",
         "typesafe/jev-1.13",
     ),
+    ("empiriolabs", "empiriolabs/aplomb-1", "https://api.empiriolabs.ai/v1/decisions", "aplomb-1"),
 )
 
 _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
@@ -297,6 +301,43 @@ async def test_router_dispatches_typesafe_decisions_without_api_base(
     assert respx_mock.calls[0].request.headers["authorization"] == "Bearer k"
     assert isinstance(response.answers["sentiment"], ChoiceAnswer)
     assert response.answers["sentiment"].choice == "positive"
+
+
+@pytest.mark.asyncio
+async def test_least_busy_frees_a_decisions_deployment_once_a_proxy_logged_call_finishes(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "jev",
+                "litellm_params": {"model": "typesafe/jev-latest", "api_key": "k"},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in ("jev-a", "jev-b")
+        ],
+        routing_strategy="least-busy",
+    )
+
+    async def call_through_proxy_logging() -> object:
+        logging_obj, _ = litellm.utils.function_setup(
+            original_function="adecisions",
+            rules_obj=litellm.utils.Rules(),
+            start_time=datetime(2026, 1, 1),
+            model="jev",
+            litellm_call_id=str(uuid.uuid4()),
+        )
+        response: Final = await router.adecisions(
+            model="jev",
+            input="Is this a defect?",
+            questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+            litellm_logging_obj=logging_obj,
+        )
+        await _drain_logging_worker()
+        return response._hidden_params["model_id"]
+
+    assert (await call_through_proxy_logging(), await call_through_proxy_logging()) == ("jev-a", "jev-a")
 
 
 def test_decisions_uses_the_same_wire_contract_for_sync_calls(respx_mock: respx.MockRouter) -> None:
@@ -1549,6 +1590,7 @@ _PROVIDERS_WHOSE_CHAT_MODELS_ALSO_DECIDE: Final = frozenset(
         LlmProviders.LM_STUDIO.value,
         LlmProviders.OLLAMA.value,
         LlmProviders.OLLAMA_CHAT.value,
+        LlmProviders.EMPIRIOLABS.value,
     }
 )
 _DEDICATED_DECIDER_PROVIDERS: Final[tuple[str, ...]] = tuple(
@@ -1562,14 +1604,16 @@ _DEDICATED_DECIDER_PROVIDERS: Final[tuple[str, ...]] = tuple(
 
 
 @pytest.mark.parametrize("provider", _DEDICATED_DECIDER_PROVIDERS)
-def test_every_dedicated_decider_provider_ships_an_evaluation_mode_cost_map_entry(provider: str) -> None:
+def test_every_dedicated_decider_provider_ships_a_decisions_mode_cost_map_entry(provider: str) -> None:
     evaluation_entries: Final = tuple(
         name
         for name, info in litellm.model_cost.items()
-        if isinstance(info, Mapping) and info.get("litellm_provider") == provider and info.get("mode") == "evaluation"
+        if isinstance(info, Mapping)
+        and info.get("litellm_provider") == provider
+        and info.get("mode") in ("evaluation", "decisions")
     )
 
-    assert evaluation_entries, f"a {provider} decider would be health-checked as chat without a mode: evaluation entry"
+    assert evaluation_entries, f"a {provider} decider would be health-checked as chat without a Decisions mode entry"
 
 
 @pytest.mark.asyncio
@@ -2113,8 +2157,17 @@ _IMAGE_REFUSALS: Final[tuple[tuple[str, Mapping[str, object], str], ...]] = (
 )
 
 
+@pytest.mark.parametrize(
+    ("model", "url"),
+    (
+        ("perplexity/pplx-decider-v1-27b", _PERPLEXITY_DECISIONS_URL),
+        ("nace/drex-v2.0", "https://console.nace.ai/v1/systemone"),
+    ),
+)
 @pytest.mark.parametrize(("api", "request_kwargs", "param"), _IMAGE_REFUSALS, ids=_PREDICATE_REQUEST_IDS)
 def test_images_are_refused_before_http_when_the_provider_cannot_take_them(
+    model: str,
+    url: str,
     api: str,
     request_kwargs: Mapping[str, object],
     param: str,
@@ -2122,29 +2175,39 @@ def test_images_are_refused_before_http_when_the_provider_cannot_take_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
 
     with pytest.raises(litellm.UnsupportedParamsError, match=rf"\['{param}'\].*drop_params") as caught:
-        getattr(litellm, api)(model="perplexity/pplx-decider-v1-27b", api_key="caller-key", **request_kwargs)
+        getattr(litellm, api)(model=model, api_key="caller-key", **request_kwargs)
 
     assert caught.value.status_code == 400
     assert not route.called
 
 
+@pytest.mark.parametrize(
+    ("model", "url"),
+    (
+        ("perplexity/pplx-decider-v1-27b", _PERPLEXITY_DECISIONS_URL),
+        ("nace/drex-v2.0", "https://console.nace.ai/v1/systemone"),
+    ),
+)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("api", "request_kwargs"), _image_requests(_PNG_DATA_URL), ids=_PREDICATE_REQUEST_IDS)
 async def test_images_are_dropped_from_the_wire_under_drop_params(
-    api: str, request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    model: str,
+    url: str,
+    api: str,
+    request_kwargs: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
 
-    await getattr(litellm, f"a{api}")(
-        model="perplexity/pplx-decider-v1-27b", api_key="caller-key", drop_params=True, **request_kwargs
-    )
+    await getattr(litellm, f"a{api}")(model=model, api_key="caller-key", drop_params=True, **request_kwargs)
 
     assert json.loads(route.calls[0].request.content) == {
-        "model": "pplx-decider-v1-27b",
+        "model": model.split("/", 1)[1],
         "state": _SCREEN_TEXT,
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
@@ -3449,6 +3512,147 @@ async def test_fireworks_ai_bills_cached_input_tokens_at_the_cache_read_rate(
     assert recording_logger.standard_logging_object["response_cost"] < 300 * float(prices["input_cost_per_token"])
 
 
+_EMPIRIOLABS_MODEL: Final = "empiriolabs/aplomb-1"
+_EMPIRIOLABS_DEFAULT_URL: Final = "https://api.empiriolabs.ai/v1/decisions"
+_EMPIRIOLABS_STATE: Final = "I was charged twice for order 4411 and want a refund today."
+_EMPIRIOLABS_QUESTIONS: Final[Mapping[str, object]] = MappingProxyType(
+    {"is_refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"}}
+)
+_EMPIRIOLABS_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "aplomb-1",
+    "answers": {"is_refund": {"type": "noul", "noul": 0.97, "confidence": 0.94}},
+    "usage": {"input_tokens": 24, "output_tokens": 0},
+}
+
+
+@pytest.mark.parametrize(
+    ("api_base", "environment_api_base", "url"),
+    (
+        (None, None, _EMPIRIOLABS_DEFAULT_URL),
+        (None, "https://environment-gateway.example/v1", "https://environment-gateway.example/v1/decisions"),
+        (
+            "https://gateway.example/v1/",
+            "https://environment-gateway.example/v1",
+            "https://gateway.example/v1/decisions",
+        ),
+        ("https://gateway.example", None, "https://gateway.example/v1/decisions"),
+    ),
+    ids=("default_base", "environment_base", "explicit_base_over_environment", "explicit_base_without_v1"),
+)
+def test_empiriolabs_posts_the_systemone_body_to_v1_decisions_on_the_resolved_base(
+    api_base: str | None,
+    environment_api_base: str | None,
+    url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("EMPIRIOLABS_API_BASE", raising=False)
+    if environment_api_base is not None:
+        monkeypatch.setenv("EMPIRIOLABS_API_BASE", environment_api_base)
+    route: Final = respx_mock.post(url).respond(json=_EMPIRIOLABS_RESPONSE)
+
+    response: Final = litellm.systemone(
+        model=_EMPIRIOLABS_MODEL,
+        state=_EMPIRIOLABS_STATE,
+        questions=_EMPIRIOLABS_QUESTIONS,
+        api_base=api_base,
+        api_key="caller-key",
+    )
+
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "aplomb-1",
+        "state": _EMPIRIOLABS_STATE,
+        "questions": {"is_refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"}},
+    }
+    assert response.answers["is_refund"] == NoulAnswer(type="noul", noul=0.97, confidence=0.94)
+    assert response._hidden_params["custom_llm_provider"] == "empiriolabs"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_key", "authorization"),
+    ((None, "Bearer environment-key"), ("caller-key", "Bearer caller-key")),
+    ids=("environment_key", "caller_key_over_environment"),
+)
+async def test_empiriolabs_sends_the_caller_key_or_else_the_environment_key(
+    api_key: str | None,
+    authorization: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("EMPIRIOLABS_API_BASE", raising=False)
+    monkeypatch.setenv("EMPIRIOLABS_API_KEY", "environment-key")
+    route: Final = respx_mock.post(_EMPIRIOLABS_DEFAULT_URL).respond(json=_EMPIRIOLABS_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model=_EMPIRIOLABS_MODEL,
+        input=_EMPIRIOLABS_STATE,
+        questions=[{"type": "predicate", "name": "is_refund", "instructions": "Is the customer asking for a refund?"}],
+        api_key=api_key,
+    )
+
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == authorization
+    assert isinstance(response, OpenAIDecisionResponse)
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [
+        {"type": "predicate", "name": "is_refund", "probability": 0.97}
+    ]
+
+
+def test_empiriolabs_without_a_key_is_refused_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("EMPIRIOLABS_API_KEY", raising=False)
+    monkeypatch.delenv("EMPIRIOLABS_API_BASE", raising=False)
+
+    with pytest.raises(litellm.AuthenticationError, match="Missing API key for Decisions provider 'empiriolabs'"):
+        litellm.systemone(model=_EMPIRIOLABS_MODEL, state=_EMPIRIOLABS_STATE, questions=_EMPIRIOLABS_QUESTIONS)
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize(
+    ("status", "error_type", "code", "exception"),
+    (
+        (401, "authentication_error", "invalid_api_key", litellm.AuthenticationError),
+        (402, "insufficient_credits", "insufficient_credits", litellm.PaymentRequiredError),
+        (404, "not_found_error", "model_not_found", litellm.NotFoundError),
+        (422, "invalid_request_error", "invalid_request", litellm.BadRequestError),
+        (429, "rate_limit_error", "rate_limit_exceeded", litellm.RateLimitError),
+        (503, "service_unavailable", "model_unavailable", litellm.ServiceUnavailableError),
+    ),
+)
+def test_empiriolabs_upstream_errors_keep_their_status_and_message(
+    status: int,
+    error_type: str,
+    code: str,
+    exception: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("EMPIRIOLABS_API_BASE", raising=False)
+    message: Final = f"upstream refused the decision with {code}"
+    route: Final = respx_mock.post(_EMPIRIOLABS_DEFAULT_URL).respond(
+        status,
+        json={"error": {"message": message, "type": error_type, "code": code}},
+        headers={"retry-after": "1"},
+    )
+
+    with pytest.raises(exception, match=message) as caught:
+        litellm.systemone(
+            model=_EMPIRIOLABS_MODEL,
+            state=_EMPIRIOLABS_STATE,
+            questions=_EMPIRIOLABS_QUESTIONS,
+            api_key="caller-key",
+            num_retries=0,
+        )
+
+    assert getattr(caught.value, "status_code") == status
+    assert route.call_count == 1
+
+
 _BOX_QUESTION_REQUESTS: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
     (
         "decisions",
@@ -3781,13 +3985,8 @@ CatalogLoader: TypeAlias = Callable[[Mapping[str, Mapping[str, object]]], Awaita
 def load_catalog_with(monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None) -> Iterator[CatalogLoader]:
     async def load(rows: Mapping[str, Mapping[str, object]]) -> None:
         catalog: Final = {**litellm.get_model_cost_map(url=""), **rows}
-        transport: Final = httpx.MockTransport(lambda _: httpx.Response(200, json=catalog))
-        monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP")
-        async with httpx.AsyncClient(transport=transport) as client:
-            loaded: Final = await refetch_model_cost_map(url="https://catalog.example/prices.json", client=client)
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        assert isinstance(loaded, ModelCostMapReloaded)
-        monkeypatch.setattr(litellm, "model_cost", loaded.model_cost_map)
+        monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+        assert isinstance(install_model_cost_map(json.dumps(catalog).encode()), ModelCostMapReloaded)
         litellm.get_model_info.cache_clear()
 
     yield load
@@ -4723,3 +4922,137 @@ def test_hosted_vllm_systemone_maps_image_rejection_to_bad_request(
 
     assert caught.value.status_code == 400
     assert route.call_count == 1
+
+
+_NACE_SYSTEMONE_URL: Final = "https://console.nace.ai/v1/systemone"
+_DREX_MAX_RESPONSE: Final[Mapping[str, object]] = {**_RESPONSE, "model": "drex-max"}
+
+
+@pytest.fixture
+def nace_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NACE_API_KEY", "nace-key")
+    monkeypatch.delenv("NACE_API_BASE", raising=False)
+    monkeypatch.delenv("NACE_BASE_URL", raising=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("nace_account")
+async def test_input_images_reach_nace_drex_max_as_a_top_level_images_array(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_NACE_SYSTEMONE_URL).respond(json=_DREX_MAX_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="nace/drex-max",
+        input=(
+            *_screen_messages(_PNG_DATA_URL),
+            {"role": "user", "content": [{"type": "input_image", "image_url": "data:image/webp;base64,BB=="}]},
+            {"role": "user", "content": "Order 1234."},
+        ),
+        questions=_PREDICATE_QUESTIONS,
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "drex-max",
+        "state": f"{_SCREEN_TEXT}\n\nOrder 1234.",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        "images": [_PNG_DATA_URL, "data:image/webp;base64,BB=="],
+    }
+    assert isinstance(response, OpenAIDecisionResponse)
+
+
+@pytest.mark.usefixtures("nace_account")
+@pytest.mark.parametrize(
+    "nace_model", ["drex-max", "drex-max-v1.1", "drex-v1.0", "drex-v1.5", "drex-latest", "drex-unlisted"]
+)
+def test_systemone_images_reach_nace_as_data_urls(nace_model: str, respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_NACE_SYSTEMONE_URL).respond(json={**_DREX_MAX_RESPONSE, "model": nace_model})
+
+    response: Final = litellm.systemone(
+        model=f"nace/{nace_model}",
+        state="Inspect Image 1 and Image 2.",
+        questions=_SYSTEMONE_PREDICATE,
+        images=[_PNG_DATA_URL, {"content_type": "image/webp", "base64": "BB=="}],
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": nace_model,
+        "state": "Inspect Image 1 and Image 2.",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        "images": [_PNG_DATA_URL, "data:image/webp;base64,BB=="],
+    }
+    assert isinstance(response, DecisionsResponse)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("nace_account")
+@pytest.mark.parametrize(("api", "request_kwargs"), _image_requests(_REMOTE_IMAGE_URL), ids=_PREDICATE_REQUEST_IDS)
+@pytest.mark.parametrize("use_async", (False, True), ids=("sync", "async"))
+async def test_nace_remote_images_are_rejected_without_fetching_or_provider_calls(
+    api: str,
+    request_kwargs: Mapping[str, object],
+    use_async: bool,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    image_route: Final = respx_mock.get(_REMOTE_IMAGE_URL).respond(content=b"image")
+    route: Final = respx_mock.post(_NACE_SYSTEMONE_URL).respond(json=_DREX_MAX_RESPONSE)
+
+    if use_async:
+        with pytest.raises(litellm.BadRequestError, match="inline base64 images or data URLs"):
+            await getattr(litellm, f"a{api}")(model="nace/drex-max", **request_kwargs)
+    else:
+        with pytest.raises(litellm.BadRequestError, match="inline base64 images or data URLs"):
+            getattr(litellm, api)(model="nace/drex-max", **request_kwargs)
+
+    assert not image_route.called
+    assert not route.called
+
+
+@pytest.mark.usefixtures("nace_account")
+def test_nace_refuses_a_ninth_image_before_http(respx_mock: respx.MockRouter) -> None:
+    """Drex Max takes up to 8 images per request (console.nace.ai/docs/drex/guides/drex-max, read 2026-10-26)."""
+    route: Final = respx_mock.post(_NACE_SYSTEMONE_URL).respond(json=_DREX_MAX_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="at most 8 images per request, got 9") as caught:
+        litellm.systemone(
+            model="nace/drex-max",
+            state="Inspect the images.",
+            questions=_SYSTEMONE_PREDICATE,
+            images=[_PNG_DATA_URL] * 9,
+        )
+
+    assert caught.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("nace_account")
+async def test_nace_requests_identify_the_litellm_version(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_NACE_SYSTEMONE_URL).respond(json=_DREX_MAX_RESPONSE)
+
+    await litellm.adecisions(
+        model="nace/drex-max",
+        input="Order 1234.",
+        questions=_PREDICATE_QUESTIONS,
+        extra_headers={"X-Nace-Client": "caller/9", "X-Other": "kept"},
+    )
+
+    sent: Final = route.calls[0].request.headers
+    assert sent["x-nace-client"] == f"litellm/{litellm_version}"
+    assert re.fullmatch(r"litellm/[A-Za-z0-9 ._@+-]+", sent["x-nace-client"])
+    assert len(sent["x-nace-client"]) <= 64
+    assert sent["x-other"] == "kept"
+
+
+@pytest.mark.asyncio
+async def test_other_decisions_providers_do_not_get_the_nace_client_header(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model="openrouter/nace/drex-test-alias", input="Order 1234.", questions=_PREDICATE_QUESTIONS
+    )
+
+    assert "x-nace-client" not in route.calls[0].request.headers

@@ -512,6 +512,20 @@ def _provider_auth_failure_kwargs() -> dict[str, object]:
     }
 
 
+def _deployment_entra_rejection_kwargs() -> dict[str, object]:
+    from litellm.llms.azure.common_utils import EntraRejectionError
+
+    reason: Final = "Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided."
+    try:
+        raise litellm.AuthenticationError(message=reason, llm_provider="azure", model="gpt-4.1") from (
+            EntraRejectionError(status_code=401, message=reason)
+        )
+    except litellm.AuthenticationError as raised:
+        return {
+            key: value for key, value in _provider_auth_failure_kwargs().items() if key not in CALLED_THE_PROVIDER
+        } | {"exception": raised}
+
+
 def _metric_values(name: str, model_id: str) -> list[float]:
     return [
         sample.value
@@ -540,6 +554,20 @@ class TestProviderAuthFailures:
         assert _metric_values("litellm_llm_api_failed_requests_metric_total", "deployment-1") == [1.0]
         assert _metric_values("litellm_deployment_failure_responses_total", "deployment-1") == [1.0]
         assert _metric_values("litellm_deployment_state", "deployment-1") == [1.0]
+
+    @pytest.mark.asyncio
+    async def test_log_failure_event_records_entra_rejecting_the_deployment_credential_before_the_call(
+        self, prometheus_logger
+    ):
+        await prometheus_logger.async_log_failure_event(
+            kwargs=_deployment_entra_rejection_kwargs(),
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+
+        assert _metric_values("litellm_llm_api_failed_requests_metric_total", "deployment-1") == [1.0]
+        assert _metric_values("litellm_deployment_failure_responses_total", "deployment-1") == [1.0]
 
     def test_deployment_failure_metrics_record_a_provider_401(self, prometheus_logger):
         prometheus_logger.set_llm_deployment_failure_metrics(_provider_auth_failure_kwargs())

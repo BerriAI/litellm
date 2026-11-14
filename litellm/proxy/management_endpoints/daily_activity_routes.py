@@ -4,6 +4,7 @@ import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import asdict, fields, replace
 from datetime import date, datetime
+from types import MappingProxyType
 from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -23,6 +24,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     raise_public,
     spend_logs_window,
     sum_spend_metrics,
+    unless_database_fails,
 )
 from litellm.proxy.management_endpoints.daily_activity_scopes import (
     AGENT_RESOLVER,
@@ -149,9 +151,10 @@ async def _key_activity_rows(
     spend_window: Final[tuple[datetime, datetime] | None] = spend_logs_window(
         frozenset((resolved_scope.scope.start_date, resolved_scope.scope.end_date))
     )
-    metadata: Final[Mapping[str, KeyMetadataRow]] = await repository.key_metadata(
-        frozenset(row.api_key for row in rows if row.api_key),
-        spend_window,
+    metadata: Final[Mapping[str, KeyMetadataRow]] = await unless_database_fails(
+        repository.key_metadata(frozenset(row.api_key for row in rows if row.api_key), spend_window),
+        MappingProxyType({}),
+        "its key metadata",
     )
     return [_key_activity_row(row, metadata) for row in rows]
 
@@ -176,8 +179,10 @@ async def _user_activity_rows(
     repository: DailyActivityRepository,
     rows: Sequence[UserSpendRow],
 ) -> Sequence[UserActivityRow]:
-    metadata: Final[Mapping[str, UserMetadataRow]] = await repository.user_metadata(
-        frozenset(user_id for row in rows if (user_id := row.user_id) is not None)
+    metadata: Final[Mapping[str, UserMetadataRow]] = await unless_database_fails(
+        repository.user_metadata(frozenset(user_id for row in rows if (user_id := row.user_id) is not None)),
+        MappingProxyType({}),
+        "its user metadata",
     )
     return [_user_activity_row(row, metadata) for row in rows]
 
@@ -268,6 +273,7 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
         api_key_limit: Annotated[
             int, Query(ge=1, le=constants.USAGE_TOP_API_KEYS_MAX)
         ] = constants.USAGE_TOP_API_KEYS_DEFAULT,
+        include_entity_breakdown: Annotated[bool, Query(description="Include per-entity usage and key counts.")] = True,
     ) -> SpendAnalyticsPaginatedResponse:
         try:
             resolved: ResolvedScope = await _resolved_scope(
@@ -281,7 +287,7 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
                 repository,
                 resolved.scope,
                 entity_metadata_field=resolved.entity_metadata,
-                include_entity_breakdown=resolver.include_entity_breakdown,
+                include_entity_breakdown=resolver.include_entity_breakdown and include_entity_breakdown,
                 include_guardrail_breakdown=resolver.include_guardrail_breakdown,
                 api_key_limit=api_key_limit,
             )

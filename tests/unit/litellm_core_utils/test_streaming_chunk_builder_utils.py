@@ -10,6 +10,7 @@ import respx
 
 import litellm
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
     ChunkProcessor,
     stream_chunk_builder_text_completion,
@@ -29,6 +30,84 @@ from litellm.types.utils import (
     TextCompletionResponse,
     Usage,
 )
+
+
+@pytest.mark.parametrize("routed_provider", (False, True))
+@pytest.mark.parametrize(
+    ("profile_rates", "registered_rates", "expected_cost"),
+    [
+        (
+            {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+            {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+            0.0,
+        ),
+        (
+            {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+            {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+            0.02,
+        ),
+        ({"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}, {"input_cost_per_token": 0.0}, 0.1),
+        ({"input_cost_per_token": 0.0}, {"input_cost_per_token": 0.0}, None),
+    ],
+)
+def test_bedrock_stream_cost_uses_registered_rates_over_profile_prices(
+    monkeypatch: pytest.MonkeyPatch,
+    profile_rates: dict[str, float],
+    registered_rates: dict[str, float],
+    expected_cost: float | None,
+    routed_provider: bool,
+) -> None:
+    model: Final = "openai.stream-pricing-test"
+    profile: Final = f"us.{model}"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            profile: {"litellm_provider": "bedrock", "mode": "chat", **profile_rates},
+        },
+    )
+    litellm.register_model({model: registered_rates}, persist_across_reloads=False)
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[],
+        stream=True,
+        call_type="completion",
+        start_time=1.0,
+        litellm_call_id="bedrock-free-stream",
+        function_id="test",
+    )
+    logging_obj.optional_params = {}
+    logging_obj.litellm_params = (
+        {"metadata": {"model_info": {"pricing_provider": "bedrock"}}} if routed_provider else {}
+    )
+    logging_obj.model_call_details.update(
+        custom_llm_provider="openai" if routed_provider else "bedrock", model_id=profile
+    )
+    chunks: Final = [
+        ModelResponseStream(
+            id="bedrock-free-stream",
+            created=1,
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="hi"), finish_reason="stop")],
+        ),
+        ModelResponseStream(
+            id="bedrock-free-stream",
+            created=1,
+            model=model,
+            choices=[],
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        ),
+    ]
+
+    response: Final = stream_chunk_builder(chunks, logging_obj=logging_obj)
+
+    assert response is not None
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.completion_tokens == 5
+    assert getattr(response.usage, "cost", None) == (
+        pytest.approx(expected_cost) if expected_cost is not None else None
+    )
 
 
 def test_get_combined_tool_content():
@@ -2755,6 +2834,95 @@ def test_stream_chunk_builder_carries_the_bedrock_guardrail_trace_and_records_it
     (entry,) = logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
     assert entry["guardrail_usage"] == {"topicPolicyUnits": 2}
     assert entry["guardrail_cost"] == pytest.approx(2 * 0.00015)
+
+
+def _vllm_chat_chunk(index: int, content: str, finish_reason: str | None = None, **fields: object) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-1",
+        created=1,
+        model="qwen3",
+        choices=[StreamingChoices(index=index, delta=Delta(content=content), finish_reason=finish_reason, **fields)],
+    )
+
+
+@pytest.mark.parametrize("finish_content", ["", "4"], ids=["finish-only", "content-then-finish"])
+def test_stream_chunk_builder_keeps_the_vllm_stop_reason_and_every_token_id_of_each_choice(
+    finish_content: str,
+) -> None:
+    built: Final = stream_chunk_builder(
+        chunks=[
+            _vllm_chat_chunk(0, "1,", stop_reason=None, token_ids=[16, 11]),
+            _vllm_chat_chunk(1, "7,", stop_reason=None, token_ids=[22, 11]),
+            _vllm_chat_chunk(0, "2,3", stop_reason=None, token_ids=[17, 11, 18]),
+            _vllm_chat_chunk(0, finish_content, "stop", stop_reason=",5", token_ids=[19]),
+        ]
+    )
+
+    assert built is not None
+    assert [
+        {field: choice[field] for field in ("index", "stop_reason", "token_ids")}
+        for choice in built.model_dump()["choices"]
+    ] == [
+        {"index": 0, "stop_reason": ",5", "token_ids": [16, 11, 17, 11, 18, 19]},
+        {"index": 1, "stop_reason": None, "token_ids": [22, 11]},
+    ]
+
+
+def test_stream_chunk_builder_keeps_the_vllm_fields_of_a_sole_choice_streamed_on_a_nonzero_index() -> None:
+    built: Final = stream_chunk_builder(
+        chunks=[
+            _vllm_chat_chunk(1, "7,", stop_reason=None, token_ids=[22, 11]),
+            _vllm_chat_chunk(1, "8", "stop", stop_reason=",9", token_ids=[23]),
+        ]
+    )
+
+    assert built is not None
+    assert {field: built.model_dump()["choices"][0].get(field) for field in ("stop_reason", "token_ids")} == {
+        "stop_reason": ",9",
+        "token_ids": [22, 11, 23],
+    }
+
+
+def test_stream_chunk_builder_keeps_null_vllm_fields_and_adds_none_for_other_providers() -> None:
+    vllm_built: Final = stream_chunk_builder(
+        chunks=[
+            _vllm_chat_chunk(0, "hi", stop_reason=None, token_ids=None),
+            _vllm_chat_chunk(0, "", "stop", stop_reason=None, token_ids=None),
+        ]
+    )
+    other_built: Final = stream_chunk_builder(
+        chunks=[_vllm_chat_chunk(0, "hi"), _vllm_chat_chunk(0, "", "stop")]
+    )
+
+    assert vllm_built is not None and other_built is not None
+    assert {
+        field: vllm_built.model_dump()["choices"][0][field] for field in ("stop_reason", "token_ids")
+    } == {"stop_reason": None, "token_ids": None}
+    assert {"stop_reason", "token_ids"}.isdisjoint(other_built.model_dump()["choices"][0])
+
+
+def test_stream_chunk_builder_text_completion_keeps_each_choices_vllm_stop_reason_and_token_ids() -> None:
+    def text_chunk(index: int, text: str, **fields: object) -> TextCompletionResponse:
+        return TextCompletionResponse(
+            id="cmpl-1",
+            object="text_completion",
+            created=1,
+            model="qwen3",
+            choices=[TextChoices(index=index, text=text, **fields)],
+        )
+
+    built: Final = stream_chunk_builder_text_completion(
+        chunks=[
+            text_chunk(0, "1,", token_ids=[16, 11], stop_reason=None),
+            text_chunk(1, "7,", token_ids=[22, 11], stop_reason=None),
+            text_chunk(0, "2", token_ids=[17], stop_reason=", 3"),
+            text_chunk(1, "8", token_ids=[23], stop_reason=151645),
+        ]
+    )
+
+    assert [
+        (choice["index"], choice["stop_reason"], choice["token_ids"]) for choice in built.model_dump()["choices"]
+    ] == [(0, ", 3", [16, 11, 17]), (1, 151645, [22, 11, 23])]
 
 
 @pytest.mark.parametrize(

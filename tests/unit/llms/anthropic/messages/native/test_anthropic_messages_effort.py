@@ -386,20 +386,23 @@ def test_clear_thinking_edit_dropped_exactly_when_thinking_is(
 
 
 @pytest.mark.parametrize(
-    "model",
+    ("model", "keeps_edit"),
     [
-        "claude-fable-5",
-        "claude-sonnet-5",
-        "claude-opus-5",
-        "claude-haiku-5-5",
-        pytest.param("claude-sonnet-5-1", id="unmapped-claude-5-minor"),
-        pytest.param("claude-opus-5-2-20270101", id="unmapped-dated-claude-5-minor"),
+        pytest.param("claude-fable-5", True, id="always-on"),
+        pytest.param("claude-sonnet-5", False, id="default-thinking"),
+        pytest.param("claude-opus-5", False, id="default-thinking-opus"),
+        pytest.param("claude-haiku-5-5", False, id="default-thinking-haiku"),
+        pytest.param("claude-sonnet-5-1", False, id="unmapped-claude-5-minor"),
+        pytest.param("claude-opus-5-2-20270101", False, id="unmapped-dated-claude-5-minor"),
     ],
 )
-def test_clear_thinking_edit_kept_when_model_thinks_without_thinking_param(model: str) -> None:
+def test_reasoning_effort_none_keeps_clear_thinking_edit_exactly_when_the_model_still_thinks(
+    model: str, keeps_edit: bool
+) -> None:
     result: Final = _transform(
         model,
         {"max_tokens": 8192, "reasoning_effort": "none", "context_management": {"edits": [CLEAR_THINKING_EDIT]}},
     )
 
-    assert result["context_management"] == {"edits": [CLEAR_THINKING_EDIT]}
+    assert (result.get("thinking") == {"type": "disabled"}) is not keeps_edit
+    assert result.get("context_management") == ({"edits": [CLEAR_THINKING_EDIT]} if keeps_edit else None)

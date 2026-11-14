@@ -46,14 +46,13 @@ class BedrockMantleAnthropicMessagesConfig(BedrockMantleAuthMixin, AmazonMantleM
         }
     )
 
-    def _drop_thinking(
+    def _drop_clear_thinking_edits(
         self,
         optional_params: MutableMapping[str, object],  # mutable-ok: edits optional params in place
         model: str,
         custom_llm_provider: str,
         max_tokens: int | None,
     ) -> None:
-        super()._drop_thinking(optional_params, model, custom_llm_provider, max_tokens)
         if not self._adds_thinking_back_for_clear_thinking(optional_params, model, max_tokens):
             drop_clear_thinking_edits_for_model(optional_params, model, custom_llm_provider)
 

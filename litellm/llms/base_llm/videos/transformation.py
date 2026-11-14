@@ -235,7 +235,7 @@ class BaseVideoConfig(ABC):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-    ) -> dict[str, str]:
+    ) -> object:
         pass
 
     @abstractmethod

@@ -1,6 +1,12 @@
 import { test, expect, type APIRequestContext, type Locator, type Page as PlaywrightPage } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
-import { navigateToPage, dismissFeedbackPopup, setAriaHidden } from "../../helpers/navigation";
+import {
+  navigateToPage,
+  dismissFeedbackPopup,
+  expectUiRoute,
+  setAriaHidden,
+  sidebarLink,
+} from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import {
   CHAT_MODEL_A,
@@ -51,12 +57,18 @@ async function setRowsPerPage(page: PlaywrightPage, size: "25" | "50" | "100"): 
   await page.getByRole("option", { name: size, exact: true }).click();
 }
 
-test.describe("Logs pagination with Aria in the header", () => {
+async function openAriaFromSidebar(page: PlaywrightPage): Promise<void> {
+  await sidebarLink(page, "Aria Agent").click();
+  await expectUiRoute(page, "aria");
+  await expect(page.getByRole("region", { name: "Aria Agent", exact: true })).toBeVisible();
+}
+
+test.describe("Logs pagination with Aria in the sidebar", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
   test("keeps pagination reachable and Aria available at 1440px", async ({ page, request }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    const alias = `e2e-aria-header-${uniqueSuffix()}`;
+    const alias = `e2e-aria-sidebar-${uniqueSuffix()}`;
     const key = await createVirtualKey(request, { key_alias: alias });
     try {
       const ids = await Promise.all(
@@ -76,20 +88,13 @@ test.describe("Logs pagination with Aria in the header", () => {
       await expect(visibleTestId(page, "pagination-range")).toHaveText("Showing 1-25 of 26");
       await visibleTestId(page, "pagination-next").click();
       await expect(visibleTestId(page, "pagination-range")).toHaveText("Showing 26-26 of 26");
-
-      const aria = page.getByRole("banner").getByRole("button", { name: "Aria Agent", exact: true });
-      await aria.click();
-      await expect(page.getByRole("dialog", { name: "Aria Agent", exact: true })).toBeVisible();
-      await page.keyboard.press("Escape");
-      await expect(aria).toBeFocused();
       await visibleTestId(page, "pagination-first").click();
       await expect(visibleTestId(page, "pagination-range")).toHaveText("Showing 1-25 of 26");
+
+      await openAriaFromSidebar(page);
       for (const destination of [Page.NewUsage, Page.LlmPlayground, Page.ApiKeys]) {
         await navigateToPage(page, destination);
-        await aria.click();
-        await expect(page.getByRole("dialog", { name: "Aria Agent", exact: true })).toBeVisible();
-        await page.keyboard.press("Escape");
-        await expect(aria).toBeFocused();
+        await openAriaFromSidebar(page);
       }
     } finally {
       await deleteVirtualKey(request, key.token);

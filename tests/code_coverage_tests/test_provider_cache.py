@@ -377,7 +377,11 @@ def test_stream_completion_controls_publication(store: RedisResponseStore, provi
     assert len(provider.hits) == (2 if truncated else 1)
 
 
-def test_store_outage_preserves_provider_success(provider: Provider) -> None:
+@pytest.mark.parametrize("cluster_mode", ("0", "1"))
+def test_store_outage_preserves_provider_success(
+    provider: Provider, monkeypatch: pytest.MonkeyPatch, cluster_mode: str,
+) -> None:
+    monkeypatch.setenv("E2E_PROVIDER_CACHE_REDIS_CLUSTER", cluster_mode)
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port: Final = probe.getsockname()[1]
@@ -399,6 +403,20 @@ def test_old_lease_cannot_overwrite_new_owner(store: RedisResponseStore) -> None
     assert short.publish("key", current, b"new")
     hit: Final = short.lookup("key")
     assert isinstance(hit, CacheHit) and hit.payload == b"new"
+
+
+def test_separate_namespaces_keep_their_own_response(store: RedisResponseStore) -> None:
+    other: Final = replace(store, namespace=store.namespace + "-other")
+    first_lease: Final = store.lookup("shared-key")
+    assert isinstance(first_lease, CaptureLease)
+    assert store.publish("shared-key", first_lease, b"first namespace")
+    other_lease: Final = other.lookup("shared-key")
+    assert isinstance(other_lease, CaptureLease)
+    assert other.publish("shared-key", other_lease, b"other namespace")
+    first_hit: Final = store.lookup("shared-key")
+    other_hit: Final = other.lookup("shared-key")
+    assert isinstance(first_hit, CacheHit) and first_hit.payload == b"first namespace"
+    assert isinstance(other_hit, CacheHit) and other_hit.payload == b"other namespace"
 
 
 def test_identity_preserves_values_and_never_contains_credentials() -> None:

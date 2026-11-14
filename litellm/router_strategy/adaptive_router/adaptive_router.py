@@ -184,6 +184,7 @@ class AdaptiveRouter:
         messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
+        call_type: str | None = None,
     ) -> PreRoutingHookResponse | None:
         """
         Plugin entry point invoked by `Router.async_pre_routing_hook` when the

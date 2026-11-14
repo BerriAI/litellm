@@ -132,6 +132,19 @@ class PassthroughEndpointRouter:
             api_base=deployment_credentials.api_base if deployment_credentials is not None else None,
         )
 
+    def get_proxy_wide_deployment_credentials(self, custom_llm_provider: str) -> _PassThroughCredentials | None:
+        deployment_credentials: Final = self._get_deployment_credentials(
+            custom_llm_provider=custom_llm_provider,
+            region_name=None,
+            include_team_deployments=False,
+        )
+        if deployment_credentials is None:
+            return None
+        api_key: Final = _resolve_oidc_reference(deployment_credentials.api_key)
+        if not api_key:
+            return None
+        return _PassThroughCredentials(api_key=api_key, api_base=deployment_credentials.api_base)
+
     def has_credentials(self, custom_llm_provider: str) -> bool:
         if (
             self._get_deployment_credentials(
@@ -210,6 +223,12 @@ class PassthroughEndpointRouter:
         return provider
 
     def get_vertex_credentials_from_router_deployments(self, model: str | None) -> VertexPassThroughCredentials | None:
+        found: Final = self.get_vertex_deployment_from_router(model)
+        return found[1] if found is not None else None
+
+    def get_vertex_deployment_from_router(
+        self, model: str | None
+    ) -> tuple[DeploymentTypedDict, VertexPassThroughCredentials] | None:
         """
         Resolve vertex pass-through credentials from the live router deployments flagged ``use_in_pass_through``.
 
@@ -229,7 +248,7 @@ class PassthroughEndpointRouter:
         )
         matched: Final = next(
             (
-                credentials
+                (deployment, credentials)
                 for deployment, credentials in resolved
                 if model is not None and self._deployment_matches_model(deployment, model)
             ),
@@ -247,7 +266,7 @@ class PassthroughEndpointRouter:
         )
         if len(targets) != 1:
             return None
-        return resolved[0][1]
+        return resolved[0]
 
     def _resolve_vertex_deployment_credentials(
         self, litellm_params: LiteLLMParamsTypedDict

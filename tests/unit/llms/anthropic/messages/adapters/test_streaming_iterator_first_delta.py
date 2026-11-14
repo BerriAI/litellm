@@ -241,6 +241,57 @@ async def test_streaming_chat_length_takes_precedence_over_refusal(async_mode: b
     assert "stop_details" not in message_delta["delta"]
 
 
+CLAUDE_REFUSAL_STOP_DETAILS: Final = MappingProxyType(
+    {"type": "refusal", "category": "cyber", "explanation": "I can't help with that."}
+)
+
+
+def _claude_chat_stream(
+    stop_fields: Mapping[str, object], finish_reason: str, refusal: str | None = None
+) -> list[MagicMock]:
+    """The chunks the chat stream hands the adapter for a Claude turn: the stop fields
+    ride an empty delta ahead of the chunk that carries the finish_reason."""
+    return [
+        _make_chunk(Delta(content="Partial answer")),
+        _make_chunk(Delta(content="", refusal=refusal, provider_specific_fields=dict(stop_fields))),
+        _make_chunk(Delta(content=None), finish_reason=finish_reason),
+    ]
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+async def test_streaming_claude_refusal_keeps_the_explanation_in_stop_details_only(async_mode: bool):
+    """Claude's refusal explanation is API metadata, so streaming it as text puts words in Claude's mouth."""
+    chunks: Final = _claude_chat_stream(
+        {"stop_reason": "refusal", "stop_details": dict(CLAUDE_REFUSAL_STOP_DETAILS)},
+        "content_filter",
+        refusal=CLAUDE_REFUSAL_STOP_DETAILS["explanation"],
+    )
+    stream: Final = _AsyncStream(chunks) if async_mode else iter(chunks)
+    wrapper: Final = AnthropicStreamWrapper(completion_stream=stream, model="claude-model")
+
+    events: Final = await _drain_async(wrapper) if async_mode else _drain_sync(wrapper)
+
+    assert _text_deltas(events) == ["Partial answer"]
+    message_delta: Final = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"] == {"stop_reason": "refusal", "stop_details": dict(CLAUDE_REFUSAL_STOP_DETAILS)}
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+async def test_streaming_paused_claude_turn_ends_on_pause_turn(async_mode: bool):
+    """A paused Claude turn reaches chat as ``length``, which a /v1/messages client would read as a cut-off reply."""
+    chunks: Final = _claude_chat_stream({"stop_reason": "pause_turn"}, "length")
+    stream: Final = _AsyncStream(chunks) if async_mode else iter(chunks)
+    wrapper: Final = AnthropicStreamWrapper(completion_stream=stream, model="claude-model")
+
+    events: Final = await _drain_async(wrapper) if async_mode else _drain_sync(wrapper)
+
+    assert _text_deltas(events) == ["Partial answer"]
+    message_delta: Final = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"] == {"stop_reason": "pause_turn"}
+
+
 def _input_json_deltas(events: List[dict]) -> List[str]:
     return [
         e["delta"]["partial_json"]

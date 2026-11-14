@@ -2,9 +2,10 @@
 Claude Code Marketplace endpoint types for LiteLLM Proxy
 """
 
+from datetime import datetime
 from typing import Final, Literal, TypeAlias
 
-from pydantic import AliasChoices, Field, TypeAdapter, model_validator
+from pydantic import AliasChoices, ConfigDict, Field, TypeAdapter, model_validator
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -27,21 +28,12 @@ class PluginOwner(LiteLLMBaseModel):
     email: str | None = Field(None, description="Owner email")
 
 
-class PluginSpec(LiteLLMBaseModel):
+class PluginMetadata(LiteLLMBaseModel):
     """Mutable fields shared by plugin create and update requests."""
 
-    source: dict[str, str] = Field(
-        ...,
-        description=(
-            "Plugin source reference. Supported formats:\n"
-            "- GitHub: {'source': 'github', 'repo': 'org/repo'}\n"
-            "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n"
-            "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}\n"
-            "- Zip archive on any https host (e.g. S3): "
-            "{'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}"
-        ),
-    )
-    version: str | None = Field("1.0.0", description="Semantic version")
+    model_config = ConfigDict(frozen=True)
+
+    version: str | None = Field("1.0.0", description="Semantic version, defaults to 1.0.0 on creation")
     description: str | None = Field(None, description="Plugin description")
     author: PluginAuthor | None = Field(None, description="Plugin author")
     homepage: str | None = Field(None, description="Plugin homepage URL")
@@ -75,6 +67,20 @@ class PluginSpec(LiteLLMBaseModel):
         }
 
 
+class PluginSpec(PluginMetadata):
+    source: dict[str, str] = Field(
+        ...,
+        description=(
+            "Plugin source reference. Supported formats:\n"
+            "- GitHub: {'source': 'github', 'repo': 'org/repo'}\n"
+            "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n"
+            "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}\n"
+            "- Zip archive on any https host (e.g. S3): "
+            "{'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}"
+        ),
+    )
+
+
 class RegisterPluginRequest(PluginSpec):
     """
     Request body for registering a plugin in the marketplace.
@@ -90,17 +96,24 @@ class RegisterPluginRequest(PluginSpec):
     )
 
 
+class UploadPluginRequest(PluginMetadata):
+    name: str = Field(..., pattern=r"^[a-z0-9-]+$", description="Skill name (kebab-case)")
+
+
 class UpdatePluginRequest(PluginSpec):
     """
     Request body for replacing an existing plugin.
 
     The plugin name is the resource identity and is supplied as the path
     parameter, so it cannot be changed here. This is a full replace: omitted
-    fields reset to their defaults, so version is cleared rather than
-    defaulting to the create-time "1.0.0".
+    fields reset to their defaults, except version which automatically increments
+    the published patch version when omitted or null.
     """
 
-    version: str | None = Field(None, description="Semantic version; cleared if omitted")
+    version: str | None = Field(None, description="Explicit higher SemVer, or omit/null for an automatic patch bump")
+    expected_updated_at: datetime | None = Field(
+        None, description="Published updated_at read by the editor. A stale value returns 409", exclude=True
+    )
 
 
 class PluginResponse(LiteLLMBaseModel):
@@ -141,6 +154,12 @@ class PluginListItem(LiteLLMBaseModel):
     enabled: bool
     created_at: str | None
     updated_at: str | None
+    created_by: str | None = None
+    approved_by: str | None = None
+    published_by: str | None = None
+    security_scan_passed: bool = False
+    download_count: int | None = None
+    has_agent_skill_metadata: bool = Field(default=False, exclude=True)
 
 
 class ListPluginsResponse(LiteLLMBaseModel):

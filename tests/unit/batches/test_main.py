@@ -732,34 +732,30 @@ def test_resolve_timeout__httpx_timeout_returns_float_read():
     assert resolved == 99.0
 
 
-def test_retrieve__forwards_trusted_model_credentials_into_litellm_params(seams):
+def test_retrieve__keeps_the_deployment_bucket_settings_in_litellm_params(seams: Seams) -> None:
     """The batch's cost is computed by reading its output file after the retrieve, and
-    Bedrock resolves that bucket only from this immutable snapshot. get_litellm_params has
-    a fixed signature that drops it, so without re-adding it here the snapshot never
-    reaches the logging object and cost accounting fails on a bucket that is configured."""
-    snapshot = MappingProxyType({"s3_bucket_name": "configured-bucket"})
+    that read finds the Bedrock bucket in these litellm_params. Dropping them fails cost
+    accounting on a bucket the deployment has configured."""
     logging_obj = MagicMock()
 
     bm.retrieve_batch(
         batch_id="batch-1",
         custom_llm_provider="openai",
         litellm_logging_obj=logging_obj,
-        _litellm_internal_model_credentials=snapshot,
+        s3_bucket_name="configured-bucket",
+        s3_output_bucket_name="output-bucket",
+        allow_legacy_cloud_file_ids=True,
     )
 
     litellm_params = logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]
-    assert litellm_params["_litellm_internal_model_credentials"] is snapshot
-
-
-def test_retrieve__omits_trusted_model_credentials_when_not_supplied(seams):
-    """A retrieve with no snapshot must not invent an empty one, which would read as a
-    configured bucket of nothing."""
-    logging_obj = MagicMock()
-
-    bm.retrieve_batch(batch_id="batch-1", custom_llm_provider="openai", litellm_logging_obj=logging_obj)
-
-    litellm_params = logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]
-    assert "_litellm_internal_model_credentials" not in litellm_params
+    assert {
+        key: litellm_params[key]
+        for key in ("s3_bucket_name", "s3_output_bucket_name", "allow_legacy_cloud_file_ids")
+    } == {
+        "s3_bucket_name": "configured-bucket",
+        "s3_output_bucket_name": "output-bucket",
+        "allow_legacy_cloud_file_ids": True,
+    }
 
 
 # =========================================================================== #
@@ -858,7 +854,7 @@ async def test_batch_logging_azure_credentials_regression():
         "timeout": 600,
     }
 
-    batch_output = b'{"id": "batch_req_1", "custom_id": "request-1", "response": {"status_code": 200, "body": {"id": "chatcmpl-azure", "object": "chat.completion", "model": "gpt-4", "usage": {"prompt_tokens": 15, "completion_tokens": 25, "total_tokens": 40}}}}\n'
+    batch_output = b'{"id": "batch_req_1", "custom_id": "request-1", "response": {"status_code": 200, "body": {"id": "chatcmpl-azure", "object": "chat.completion", "model": "gpt-4.1", "usage": {"prompt_tokens": 15, "completion_tokens": 25, "total_tokens": 40}}}}\n'
 
     print("\n1. Testing credential extraction...")
 
@@ -1208,6 +1204,105 @@ async def test_delete_batch_output_file(respx_mock: respx.MockRouter, monkeypatc
     assert delete_response.deleted is True
 
 
+VERTEX_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
+VERTEX_IDENTITY: Final = MappingProxyType(
+    {"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"}
+)
+VERTEX_PROXY_METADATA: Final = MappingProxyType({**VERTEX_IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})
+VERTEX_BATCH_FILE: Final = "gs://bucket/publishers/google/models/gemini-3.8-flash/file-uuid"
+VERTEX_SENT_JOB: Final = TypeAdapter(Mapping[str, object])
+VERTEX_SENT_LABELS: Final = TypeAdapter(Mapping[str, str])
+VERTEX_BATCH_JOBS_URL: Final = (
+    "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/batchPredictionJobs"
+)
+
+
+async def _vertex_batch_job_sent(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, batch_metadata: Mapping[str, object]
+) -> Mapping[str, object]:
+    import litellm.llms.vertex_ai.batches.handler as vertex_batches
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+    reply: Final = MagicMock(
+        side_effect=lambda _request: httpx.Response(
+            200,
+            json={
+                "name": "projects/proj/locations/us-central1/batchPredictionJobs/123",
+                "state": "JOB_STATE_PENDING",
+                "createTime": "2026-10-29T00:00:00Z",
+            },
+        )
+    )
+    transport: Final = httpx.MockTransport(reply)
+    handler: Final = vertex_batches.VertexAIBatchPrediction(gcs_bucket_name="bucket")
+    monkeypatch.setattr(handler, "_ensure_access_token", lambda **_: ("token", "proj"))
+    monkeypatch.setattr(bm, "vertex_ai_batches_instance", handler)
+    monkeypatch.setattr(
+        vertex_batches, "get_httpx_client", lambda **_: HTTPHandler(client=httpx.Client(transport=transport))
+    )
+    monkeypatch.setattr(vertex_batches, "get_async_httpx_client", lambda **_: AsyncHTTPHandler(transport=transport))
+    batch: Final = {
+        "completion_window": "24h",
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": VERTEX_BATCH_FILE,
+        "custom_llm_provider": "vertex_ai",
+        "vertex_location": "us-central1",
+        **batch_metadata,
+    }
+    if is_async:
+        await bm.acreate_batch(**batch)
+    else:
+        bm.create_batch(**batch)
+
+    sent: Final[httpx.Request] = reply.call_args.args[0]
+    assert str(sent.url) == VERTEX_BATCH_JOBS_URL
+    return VERTEX_SENT_JOB.validate_json(sent.content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_vertex_batch_job_carries_proxy_identity_never_the_callers_batch_metadata(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", VERTEX_LABEL_FIELDS)
+
+    job: Final = await _vertex_batch_job_sent(
+        monkeypatch,
+        is_async,
+        {
+            "metadata": {"user_api_key_alias": "forged", "user_api_key_team_alias": "forged", "app": "bot"},
+            "litellm_metadata": dict(VERTEX_PROXY_METADATA),
+        },
+    )
+
+    labels: Final = VERTEX_SENT_LABELS.validate_python(job["labels"])
+    assert list(labels.items()) == [*VERTEX_IDENTITY.items(), ("cost-center", "cc-1")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_vertex_batch_metadata_alone_never_labels_the_job(monkeypatch: pytest.MonkeyPatch, is_async: bool):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", VERTEX_LABEL_FIELDS)
+
+    job: Final = await _vertex_batch_job_sent(
+        monkeypatch, is_async, {"metadata": {**VERTEX_IDENTITY, "spend_logs_metadata": "cc-1"}}
+    )
+
+    assert "labels" not in job
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_vertex_batch_job_with_the_setting_off_is_unlabelled(monkeypatch: pytest.MonkeyPatch, is_async: bool):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+
+    job: Final = await _vertex_batch_job_sent(
+        monkeypatch, is_async, {"metadata": {"app": "bot"}, "litellm_metadata": dict(VERTEX_PROXY_METADATA)}
+    )
+
+    assert "labels" not in job
+
+
 VLLM_ROUTER_API_BASE: Final = "http://vllm-router.test/v1"
 VLLM_ROUTER_BATCH: Final = MappingProxyType(
     {
@@ -1386,3 +1481,28 @@ async def test_openai_batch_list_items_come_back_as_openai_sent_them(respx_mock:
     assert first.usage is not None
     assert (first.usage.input_tokens_details.cached_tokens, first.usage.output_tokens_details.reasoning_tokens) == (4, 2)
     assert (second.id, second.object, second.status) == ("batch_def456", "batch", "queued")
+
+
+# =========================================================================== #
+# gemini - a provider-config provider, like mistral, so it requires `model`
+# =========================================================================== #
+
+
+def test_create__gemini_routes_to_base_http_handler_with_gemini_config(seams):
+    result = bm.create_batch(**CREATE_KW, custom_llm_provider="gemini", model="gemini/gemini-3.8-flash")
+
+    assert result is seams.base_http.create_batch.return_value
+    _assert_only(seams.base_http.create_batch, seams, "create_batch")
+    forwarded = seams.base_http.create_batch.call_args.kwargs
+    assert type(forwarded["provider_config"]).__name__ == "GeminiBatchesConfig"
+    assert forwarded["model"] == "gemini-3.8-flash"
+
+
+def test_retrieve__gemini_routes_to_base_http_handler_with_gemini_config(seams):
+    result = bm.retrieve_batch(batch_id="la6", custom_llm_provider="gemini", model="gemini/gemini-3.8-flash")
+
+    assert result is seams.base_http.retrieve_batch.return_value
+    _assert_only(seams.base_http.retrieve_batch, seams, "retrieve_batch")
+    forwarded = seams.base_http.retrieve_batch.call_args.kwargs
+    assert type(forwarded["provider_config"]).__name__ == "GeminiBatchesConfig"
+    assert forwarded["batch_id"] == "la6"

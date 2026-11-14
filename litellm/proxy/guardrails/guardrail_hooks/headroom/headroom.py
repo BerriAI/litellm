@@ -22,6 +22,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.prompt_templates.factory import (
     get_attribute_or_key,
     get_tool_calls_from_response,
@@ -76,10 +77,15 @@ _HASH_CACHE_TTL_SECONDS: Final = 15 * 60
 # untranslated messages can be read with concrete types (values pass through by
 # reference, so this is a shallow top-level reconstruction).
 _REQUEST_DATA_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _JsonResponse(Protocol):
     def json(self) -> object: ...
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
 
 
 def _json_body(response: _JsonResponse) -> object:
@@ -985,7 +991,12 @@ class HeadroomGuardrail(CustomGuardrail):
 
         full_model_name = model
         if logging_obj is not None:
-            agentic_params: Final = getattr(logging_obj, "model_call_details", {}).get("agentic_loop_params", {})
+            model_call_details: Final = require_attributes(
+                _DECODED_JSON.validate_python(getattr(logging_obj, "model_call_details", {})), _SupportsGet, "get"
+            )
+            agentic_params: Final = require_attributes(
+                model_call_details.get("agentic_loop_params", {}), _SupportsGet, "get"
+            )
             candidate: Final = agentic_params.get("model", model)
             if isinstance(candidate, str) and candidate:
                 full_model_name = candidate

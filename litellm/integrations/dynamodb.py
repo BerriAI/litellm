@@ -9,6 +9,8 @@ from typing import Final, Protocol
 
 import litellm
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 
 
 class _DynamoTable(Protocol):
@@ -22,11 +24,13 @@ class _DynamoResource(Protocol):
 class DyanmoDBLogger:
     # Class variables or attributes
 
-    def __init__(self):
+    def __init__(self, dynamodb: _DynamoResource | None = None):
         # Instance variables
         import boto3
 
-        self.dynamodb: Final[_DynamoResource] = boto3.resource("dynamodb", region_name=os.environ["AWS_REGION_NAME"])
+        self.dynamodb: Final[_DynamoResource] = dynamodb or boto3.resource(
+            "dynamodb", region_name=os.environ["AWS_REGION_NAME"]
+        )
         if litellm.dynamodb_table_name is None:
             raise ValueError(
                 "LiteLLM Error, trying to use DynamoDB but not table name passed. Create a table and set `litellm.dynamodb_table_name=<your-table>`"
@@ -45,23 +49,23 @@ class DyanmoDBLogger:
 
     _async_log_event = async_log_event
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(self, kwargs: Mapping[str, object], response_obj, start_time, end_time, print_verbose):
         try:
             print_verbose(f"DynamoDB Logging - Enters logging function for model {kwargs}")
 
             # construct payload to send to DynamoDB
             # follows the same params as langfuse.py
-            litellm_params: Final = kwargs.get("litellm_params", {})
-            metadata: Final = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
+            litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+            metadata: Final = as_str_mapping(litellm_params.get("metadata")) or {}
             messages: Final = kwargs.get("messages")
             optional_params: Final = kwargs.get("optional_params", {})
             call_type: Final = kwargs.get("call_type", "litellm.completion")
             usage: Final = response_obj["usage"]
-            id: Final = response_obj.get("id", str(uuid.uuid4()))
+            response_id: Final = response_obj.get("id", str(uuid.uuid4()))
 
             # Build the initial payload
             payload: Final[dict[str, object]] = {
-                "id": id,
+                "id": logged_event_key(kwargs, response_id) if isinstance(response_id, str) else response_id,
                 "call_type": call_type,
                 "startTime": start_time,
                 "endTime": end_time,

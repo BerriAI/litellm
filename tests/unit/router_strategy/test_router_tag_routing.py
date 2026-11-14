@@ -4,7 +4,6 @@
 
 import logging
 from typing import Final, Literal
-from unittest.mock import patch
 
 import pytest
 
@@ -1226,6 +1225,32 @@ def test_chain_tag_filtering_override_falls_back_to_healthy_deployments_on_looku
 
 
 @pytest.mark.asyncio()
+async def test_get_deployments_for_tag_without_a_model_keeps_the_router_wide_setting():
+    # model=None names no group, so no group-level enable_tag_filtering applies: the router-wide
+    # setting (off here) decides, even when a healthy deployment opts in on its own
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o", "api_key": "sk-test", "tags": ["teamA"]},
+                "model_info": {"id": "a", "enable_tag_filtering": True},
+            }
+        ]
+    )
+    healthy_deployments = router.registry().deployments("gpt-4", source="all")
+
+    picked = await get_deployments_for_tag(
+        router._core_ctx,
+        None,  # pyright: ignore[reportArgumentType]  # a direct caller passing no model
+        healthy_deployments,
+        request_kwargs={"metadata": {"tags": ["zzz"]}},
+        request_deployments=healthy_deployments,
+    )
+
+    assert [d["model_info"]["id"] for d in picked] == ["a"]
+
+
+@pytest.mark.asyncio()
 async def test_chain_enable_tag_filtering_true_overrides_router_level_false():
     # Router-wide tag filtering is off; this model group opts in on its own via
     # model_info.enable_tag_filtering, so tags still apply to requests for it.
@@ -1820,23 +1845,22 @@ async def test_tag_fail_open_survives_deployment_narrowing(
 ) -> None:
     router: Final = _fail_open_router(route=route)
     requested_model: Final = "chat" if route == "model" else "chat-test" if route == "wildcard" else "public-chat"
-    with patch("time.time", return_value=1_700_000_000.0):
-        if narrowing == "cooldown":
-            router.cooldown_cache.add_deployment_to_cooldown(
-                model_id="opted-in",
-                original_exception=RuntimeError("unavailable"),
-                exception_status=500,
-                cooldown_time=60,
-            )
-        candidates: Final = await router.async_get_healthy_deployments(
-            model=requested_model,
-            request_kwargs={
-                "litellm_metadata": {"tags": list(tags), "inherited_tags": [], "user_api_key_team_id": "team-a"},
-                **(
-                    {"previous_response_id": _response_id_for_remaining_deployment()} if narrowing == "affinity" else {}
-                ),
-            },
+    if narrowing == "cooldown":
+        router.cooldown_cache.add_deployment_to_cooldown(
+            model_id="opted-in",
+            original_exception=RuntimeError("unavailable"),
+            exception_status=500,
+            cooldown_time=60,
         )
+    candidates: Final = await router.async_get_healthy_deployments(
+        model=requested_model,
+        request_kwargs={
+            "litellm_metadata": {"tags": list(tags), "inherited_tags": [], "user_api_key_team_id": "team-a"},
+            **(
+                {"previous_response_id": _response_id_for_remaining_deployment()} if narrowing == "affinity" else {}
+            ),
+        },
+    )
     assert isinstance(candidates, (list, tuple))
     assert tuple(deployment["model_info"]["id"] for deployment in candidates) == ("remaining",)
 
@@ -2674,6 +2698,13 @@ def _quality_high_cost_low_router():
     )
 
 
+def _cool_down(router: litellm.Router, *model_ids: str) -> None:
+    for model_id in model_ids:
+        router.cooldown_cache.add_deployment_to_cooldown(
+            model_id=model_id, original_exception=RuntimeError("unavailable"), exception_status=500, cooldown_time=60
+        )
+
+
 @pytest.mark.asyncio()
 async def test_plain_tag_exhaustion_with_universal_default_tag_raises_by_default():
     # Every deployment in the group is tagged "default" (a legitimate cross-cutting
@@ -2681,21 +2712,16 @@ async def test_plain_tag_exhaustion_with_universal_default_tag_raises_by_default
     # the quality:high deployments unhealthy, a request asking for quality:high
     # must still hard-fail, not silently get served by a cost:low deployment just
     # because it happens to also carry "default".
-    from unittest.mock import AsyncMock, patch
-
     router = _quality_high_cost_low_router()
+    _cool_down(router, "quality-high-1", "quality-high-2")
 
-    with patch(
-        "litellm.router.async_get_cooldown_deployments",
-        new=AsyncMock(return_value=["quality-high-1", "quality-high-2"]),
-    ):
-        with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
-            await router.acompletion(
-                model="gpt-4",
-                messages=[{"role": "user", "content": "hi"}],
-                metadata={"tags": ["quality:high"]},
-                mock_response="hi",
-            )
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+        await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["quality:high"]},
+            mock_response="hi",
+        )
 
     from litellm.types.router import RouterErrors
 
@@ -2708,18 +2734,14 @@ async def test_plain_tag_exhaustion_with_universal_default_tag_falls_open_when_a
     for deployment in router.model_list:
         deployment["model_info"]["allow_fail_open"] = True
 
-    from unittest.mock import AsyncMock, patch
+    _cool_down(router, "quality-high-1", "quality-high-2")
 
-    with patch(
-        "litellm.router.async_get_cooldown_deployments",
-        new=AsyncMock(return_value=["quality-high-1", "quality-high-2"]),
-    ):
-        response = await router.acompletion(
-            model="gpt-4",
-            messages=[{"role": "user", "content": "hi"}],
-            metadata={"tags": ["quality:high"]},
-            mock_response="hi",
-        )
+    response = await router.acompletion(
+        model="gpt-4",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["quality:high"]},
+        mock_response="hi",
+    )
 
     assert response._hidden_params["model_id"] in ("cost-low-1", "cost-low-2")
 
@@ -3001,7 +3023,7 @@ class _RewriteToTierStrategy:
         self.rewrite_to = rewrite_to
 
     async def async_pre_routing_hook(
-        self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        self, model, request_kwargs, messages=None, input=None, specific_deployment=False, call_type=None
     ):
         from litellm.types.router import PreRoutingHookResponse
 
@@ -3067,24 +3089,6 @@ async def test_router_selecting_tag_is_consumed_on_litellm_metadata_shaped_reque
     )
 
     assert deployment["model_info"]["id"] == "tier-gemini-flash"
-
-
-def test_consumed_request_tags_stamp_names_the_routed_group_and_spent_tags_only_on_a_tag_match():
-    from litellm.types.router import ConsumedRequestTagsStamp, PreRoutingHookResponse
-
-    router = _tagged_marker_router()
-    strategy = router.auto_routers["gpt4o"][0]
-    rewrite = PreRoutingHookResponse(model="gemini-flash", messages=None)
-
-    consumed = router._consumed_request_tags_stamp(
-        selected_strategy=strategy, pre_routing_hook_response=rewrite, request_tags=["route"]
-    )
-    unmatched = router._consumed_request_tags_stamp(
-        selected_strategy=strategy, pre_routing_hook_response=rewrite, request_tags=["other"]
-    )
-
-    assert consumed == ConsumedRequestTagsStamp(model_group="gemini-flash", tags=("route",))
-    assert unmatched is None
 
 
 @pytest.mark.asyncio()

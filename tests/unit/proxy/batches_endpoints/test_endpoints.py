@@ -85,6 +85,12 @@ CREDS: Dict[str, Dict[str, str]] = {
         "api_base": "http://vllm.test/v1",
         "model": "hosted_vllm/qwen",
     },
+    "bedrock-batch": {
+        "custom_llm_provider": "bedrock",
+        "model": "bedrock/us.amazon.nova-lite-v1:0",
+        "s3_bucket_name": "model-bucket",
+        "s3_output_bucket_name": "model-bucket",
+    },
 }
 
 # A real model-encoded file id: decodes to "azure/gpt-4o", strips to "file-original123".
@@ -215,6 +221,7 @@ def harness(monkeypatch: pytest.MonkeyPatch):
     registry.access_groups = MagicMock(return_value={})
     registry.resolve = MagicMock(side_effect=lambda name, **_: name)
     registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
     creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
     registry.credentials = _route_credentials({"with_provider": creds_resolver})
     router.model_list = []
@@ -424,6 +431,81 @@ async def test_create__model_from_body(harness):
     assert payload["custom_llm_provider"] == "vertex_ai"
     assert payload["input_file_id"] == "file-plain"
     assert resp.id == encode_file_id_with_model("batch-provider-id", "vertex-model", id_type="batch")
+
+
+_TEAM_A_KEY: Final = UserAPIKeyAuth(
+    api_key="sk-team-a", team_id="team-a", team_metadata={"allowed_s3_buckets": ["team-a-bucket"]}
+)
+
+
+def _batch_body_with_output_bucket(bucket: str) -> dict[str, object]:
+    return {
+        "input_file_id": "file-plain",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "model": "vertex-model",
+        "s3_output_bucket_name": bucket,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create__output_bucket_on_the_team_allowlist_reaches_the_provider(harness):
+    set_body(harness, _batch_body_with_output_bucket("team-a-bucket"))
+
+    await call_create(harness, user=_TEAM_A_KEY)
+
+    assert harness.acreate_kwargs()["s3_output_bucket_name"] == "team-a-bucket"
+
+
+@pytest.mark.asyncio
+async def test_create__team_with_an_allowlist_and_no_request_bucket_leaves_the_bucket_to_the_model(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "model": "vertex-model",
+        },
+    )
+
+    await call_create(harness, user=_TEAM_A_KEY)
+
+    assert "s3_output_bucket_name" not in harness.acreate_kwargs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_bucket,expected_bucket", [("team-a-bucket", "team-a-bucket"), (None, "model-bucket")])
+@pytest.mark.parametrize(
+    "routing",
+    [
+        {"input_file_id": "file-plain", "model": "bedrock-batch"},
+        {"input_file_id": encode_file_id_with_model("file-plain", "bedrock-batch")},
+    ],
+    ids=["model_in_body", "model_encoded_file_id"],
+)
+async def test_create__model_routed_batch_keeps_the_team_bucket_over_the_deployment_bucket(
+    harness, routing: dict[str, str], request_bucket: str | None, expected_bucket: str
+):
+    body: Final = {"endpoint": "/v1/chat/completions", "completion_window": "24h", **routing}
+    set_body(harness, body if request_bucket is None else {**body, "s3_output_bucket_name": request_bucket})
+
+    await call_create(harness, user=_TEAM_A_KEY)
+
+    assert harness.acreate_kwargs()["s3_output_bucket_name"] == expected_bucket
+
+
+@pytest.mark.asyncio
+async def test_create__output_bucket_off_the_team_allowlist_is_rejected_before_the_provider(harness):
+    set_body(harness, _batch_body_with_output_bucket("team-b-bucket"))
+
+    with pytest.raises(ProxyException) as rejection:
+        await call_create(harness, user=_TEAM_A_KEY)
+
+    assert str(rejection.value.code) == "401"
+    assert "s3_output_bucket_name is not allowed in request body" in rejection.value.message
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1481,6 +1563,7 @@ def retrieve_harness():
     registry.access_groups = MagicMock(return_value={})
     registry.resolve = MagicMock(side_effect=lambda name, **_: name)
     registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
     creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
     router.model_list = []
     router.aretrieve_batch = AsyncMock(return_value=make_batch())
@@ -1722,11 +1805,6 @@ async def test_retrieve__unified_batch_id_routes_to_router(retrieve_harness):
     # DISPATCH - router fired, direct litellm did not.
     assert retrieve_harness.router_aretrieve.call_count == 1
     retrieve_harness.litellm_aretrieve.assert_not_called()
-
-    # Credentials are resolved for the deployment behind the unified id so the batch's
-    # output file can be read for cost accounting. This id resolves to nothing here, and
-    # the retrieve must still serve the batch rather than fail on the lookup.
-    retrieve_harness.creds_resolver.assert_called_once_with("gpt-4o-mini", form="with_provider")
 
     # router receives the (still-encoded) batch id verbatim - this layer does
     # not decode it for the unified path.
@@ -2073,6 +2151,7 @@ def list_harness():
     registry.access_groups = MagicMock(return_value={})
     registry.resolve = MagicMock(side_effect=lambda name, **_: name)
     registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
     creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
     registry.credentials = _route_credentials({"with_provider": creds_resolver})
     router.model_list = []
@@ -2498,6 +2577,7 @@ def cancel_harness():
     registry.access_groups = MagicMock(return_value={})
     registry.resolve = MagicMock(side_effect=lambda name, **_: name)
     registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
     creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
     registry.credentials = _route_credentials({"with_provider": creds_resolver})
     router.model_list = []

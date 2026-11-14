@@ -346,5 +346,15 @@ def test_a_broken_messages_stream_counts_toward_the_budget(gateway: Gateway) -> 
         _broken_messages_stream(gateway, model, key)
         after: Final = _messages(gateway, model, key, streamed=False)
 
-        assert_budget_refusal(after)
+        assert after.status_code == 422, after.text
+        body: Final = JSON_OBJECT.validate_json(after.content)
+        error: Final = JSON_OBJECT.validate_python(body["error"])
+        assert body == {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": error["message"],
+                "litellm_error_type": "budget_exceeded",
+            },
+        }, after.text
         assert _rows(gateway, key, 2) == (metered, StatusRow(status="failure", spend=0.0))
