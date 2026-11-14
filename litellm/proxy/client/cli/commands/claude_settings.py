@@ -14,6 +14,7 @@ any other key, so writing one credential strips the other, and it blanks
 import hashlib
 import json
 import ntpath
+import os
 import posixpath
 import shlex
 import shutil
@@ -320,10 +321,19 @@ def _land(
         raise ClaudeSettingsError(f"Could not {'remove' if staged is None else 'write'} {path}: {e}") from e
 
 
-def installed_executable(name: str, scripts_dir: str = sysconfig.get_path("scripts")) -> str | None:
+def installed_executable(
+    name: str,
+    scripts_dir: str = sysconfig.get_path("scripts"),
+    environ: Mapping[str, str] = os.environ,
+    platform: str = sys.platform,
+) -> str | None:
     """This interpreter's own `name` first, since a version manager's shim earlier on PATH may run a Python
-    that lacks it."""
-    return shutil.which(name, path=scripts_dir) or shutil.which(name)
+    that lacks it. Each directory is checked by full path, since `shutil.which` on Windows searches the
+    current directory before the ones it is given, and a repo could plant its own `lite.exe` there."""
+    file_name: Final = f"{name}.exe" if platform.startswith("win") else name
+    directories: Final = (scripts_dir, *environ.get("PATH", os.defpath).split(os.pathsep))
+    candidates: Final = (shutil.which(os.path.join(directory, file_name)) for directory in directories if directory)
+    return next((found for found in candidates if found is not None), None)
 
 
 _HELPER_SUBCOMMAND: Final = ("auth", "print-token")

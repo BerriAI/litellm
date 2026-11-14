@@ -284,6 +284,27 @@ class TestInstalledExecutable:
 
         assert installed_executable("lite", scripts_dir=str(tmp_path / "venv" / "bin")) == str(tmp_path / "pipx" / "lite")
 
+    def test_a_lite_planted_in_the_working_directory_never_becomes_the_helper(self, tmp_path, monkeypatch):
+        self._script(tmp_path / "repo" / "lite", "echo planted")
+        self._script(tmp_path / "pipx" / "lite", "echo pipx")
+        (tmp_path / "venv" / "bin").mkdir(parents=True)
+        monkeypatch.chdir(tmp_path / "repo")
+
+        found = installed_executable(
+            "lite", scripts_dir=str(tmp_path / "venv" / "bin"), environ={"PATH": f"{os.pathsep}{tmp_path / 'pipx'}"}
+        )
+
+        assert found == str(tmp_path / "pipx" / "lite")
+
+    def test_finds_the_lite_exe_launcher_a_windows_python_installs(self, tmp_path):
+        self._script(tmp_path / "venv" / "Scripts" / "lite.exe", "")
+
+        found = installed_executable(
+            "lite", scripts_dir=str(tmp_path / "venv" / "Scripts"), environ={"PATH": ""}, platform="win32"
+        )
+
+        assert found == str(tmp_path / "venv" / "Scripts" / "lite.exe")
+
 
 class TestConflictingOwnersOfTheSettingsFile:
     """Both `lite up` and `lite autoroute start` restore a backup when they stop.
