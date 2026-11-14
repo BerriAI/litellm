@@ -27,6 +27,7 @@ from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import Spen
 from litellm.proxy.middleware.admission_control_middleware import create_prometheus_admission_metrics
 from litellm.proxy.middleware.in_flight_requests_middleware import InFlightRequestsMiddleware
 from litellm.tracing.exporter import lens_export_counters
+from litellm.types.integrations.prometheus import DEFINED_PROMETHEUS_METRICS
 
 _GRAFANA_DIR: Final = Path(__file__).parents[3] / "litellm" / "integrations" / "prometheus_helpers" / "grafana_dashboards"
 _ALL_METRICS_DASHBOARD: Final = _GRAFANA_DIR / "dashboard_all_metrics" / "grafana_dashboard.json"
@@ -275,6 +276,62 @@ def test_all_defined_metrics_have_consistent_naming():
             "litellm_"
         ), f"Metric {metric_name} should start with 'litellm_'"
 
+
+
+@contextmanager
+def _logger_built_with_metrics_config(
+    monkeypatch: pytest.MonkeyPatch, metrics_config: list[dict[str, object]], logger_class: type[PrometheusLogger]
+) -> Iterator[PrometheusLogger]:
+    previous: Final = _registered_collectors()
+    _unregister_everything()
+    monkeypatch.setattr(litellm, "prometheus_metrics_config", metrics_config)
+    try:
+        yield logger_class()
+    finally:
+        _unregister_everything()
+        for collector in previous:
+            REGISTRY.register(collector)
+
+
+class _MetricNameRecordingLogger(PrometheusLogger):
+    def _is_metric_enabled(self, metric_name: str) -> bool:
+        self.__dict__.setdefault("requested_metric_names", set()).add(metric_name)
+        return super()._is_metric_enabled(metric_name)
+
+
+def test_every_metric_the_logger_builds_can_be_selected_in_prometheus_metrics_config(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with _logger_built_with_metrics_config(monkeypatch, [], _MetricNameRecordingLogger) as logger:
+        built: Final = frozenset(logger.__dict__["requested_metric_names"])
+
+    assert built, "the logger is expected to build its metrics through _is_metric_enabled"
+    assert built - frozenset(get_args(DEFINED_PROMETHEUS_METRICS)) == frozenset()
+
+
+@pytest.mark.parametrize(
+    "metric_name",
+    [
+        "litellm_total_users",
+        "litellm_active_users",
+        "litellm_teams_count",
+        "litellm_provider_remaining_budget_metric",
+    ],
+)
+def test_metric_listed_in_prometheus_metrics_config_is_exposed(monkeypatch: pytest.MonkeyPatch, metric_name: str):
+    metrics_config: Final[list[dict[str, object]]] = [{"group": "selected", "metrics": [metric_name]}]
+
+    with _logger_built_with_metrics_config(monkeypatch, metrics_config, PrometheusLogger):
+        exposed: Final = frozenset(metric.name for metric in REGISTRY.collect())
+
+    assert metric_name in exposed
+
+
+@pytest.mark.parametrize("metric_name", get_args(DEFINED_PROMETHEUS_METRICS))
+def test_every_defined_metric_has_labels_to_validate_include_labels_against(metric_name: str):
+    from litellm.types.integrations.prometheus import PrometheusMetricLabels
+
+    assert isinstance(PrometheusMetricLabels.get_labels(metric_name), list)
 
 if __name__ == "__main__":
     test_remaining_requests_metric_name_in_defined_metrics()

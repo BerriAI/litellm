@@ -315,6 +315,10 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_llm_api_failed_requests_metric",
     "litellm_callback_logging_failures_metric",
     "litellm_in_flight_requests",
+    "litellm_provider_remaining_budget_metric",
+    "litellm_total_users",
+    "litellm_active_users",
+    "litellm_teams_count",
     # Managed batch metrics
     "litellm_managed_batch_created_total",
     "litellm_managed_file_size_bytes",
@@ -999,6 +1003,16 @@ class PrometheusMetricLabels:
     ]
 
     litellm_mcp_tool_call_spend_metric: list[str] = list(litellm_mcp_tool_calls_total)
+
+    litellm_in_flight_requests: ClassVar[tuple[str, ...]] = ()
+
+    litellm_provider_remaining_budget_metric: ClassVar[tuple[str, ...]] = ("api_provider",)
+
+    litellm_total_users: ClassVar[tuple[str, ...]] = ()
+
+    litellm_active_users: ClassVar[tuple[str, ...]] = ()
+
+    litellm_teams_count: ClassVar[tuple[str, ...]] = ()
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> list[str]:
