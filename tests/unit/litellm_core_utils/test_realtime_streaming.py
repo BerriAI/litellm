@@ -1671,19 +1671,12 @@ async def test_client_ack_caches_setup_to_prevent_duplicate_session_update_setup
 
 
 @pytest.mark.asyncio
-async def test_session_update_tool_check_leaves_the_event_loop_free() -> None:
-    check_started: Final = threading.Event()
-    loop_ran_during_check: Final = threading.Event()
-    check_saw_loop: Final[list[bool]] = []
+async def test_session_update_tool_check_runs_off_the_event_loop_thread() -> None:
+    loop_thread: Final = threading.get_ident()
+    check_threads: Final[list[int]] = []
 
-    def _slow_tool_check(session: Mapping[str, object]) -> None:
-        check_started.set()
-        check_saw_loop.append(loop_ran_during_check.wait(timeout=2))
-
-    async def _run_on_loop_during_check() -> None:
-        while not check_started.is_set():
-            await asyncio.sleep(0.005)
-        loop_ran_during_check.set()
+    def _record_check_thread(session: Mapping[str, object]) -> None:
+        check_threads.append(threading.get_ident())
 
     websocket = MagicMock()
     websocket.receive_text = AsyncMock(
@@ -1694,7 +1687,7 @@ async def test_session_update_tool_check_leaves_the_event_loop_free() -> None:
     backend_ws.send = AsyncMock()
     provider_config = MagicMock()
     provider_config.setup_session_update_rejection = MagicMock(return_value=None)
-    provider_config.session_fields_rejection = MagicMock(side_effect=_slow_tool_check)
+    provider_config.session_fields_rejection = MagicMock(side_effect=_record_check_thread)
     provider_config.transform_realtime_request = MagicMock(return_value=[])
     streaming = RealTimeStreaming(
         websocket=websocket,
@@ -1704,11 +1697,10 @@ async def test_session_update_tool_check_leaves_the_event_loop_free() -> None:
         model="gemini-3.8-live",
     )
 
-    watcher: Final = asyncio.create_task(_run_on_loop_during_check())
     await streaming.client_ack_messages()
-    watcher.cancel()
 
-    assert check_saw_loop == [True]
+    assert len(check_threads) == 1
+    assert check_threads[0] != loop_thread
 
 
 @pytest.mark.asyncio
