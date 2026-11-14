@@ -94,7 +94,7 @@ if TYPE_CHECKING:
 
 
 _CHAT_COMPLETION_FIELDS: Final = frozenset((*ModelResponse.model_fields, "usage"))
-_RESPONSES_API_ONLY_FIELDS: Final = frozenset(
+_HIDDEN_RESPONSES_FIELDS: Final = frozenset(
     (
         *ResponsesAPIResponse.model_fields,
         "background",
@@ -257,7 +257,7 @@ def responses_provider_metadata(response_fields: Mapping[str, object] | None) ->
         {
             key: value
             for key, value in (response_fields.items() if response_fields else ())
-            if value is not None and key not in _CHAT_COMPLETION_FIELDS and key not in _RESPONSES_API_ONLY_FIELDS
+            if value is not None and key not in _CHAT_COMPLETION_FIELDS and key not in _HIDDEN_RESPONSES_FIELDS
         }
     )
 
