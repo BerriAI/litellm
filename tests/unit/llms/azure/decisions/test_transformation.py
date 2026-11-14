@@ -53,9 +53,10 @@ async def call_decisions(
     systemone: bool,
     credentials: Mapping[str, object],
     api_base: str = _BASE,
+    model: str = "azure/luna-deployment",
 ) -> DecisionsResponse | OpenAIDecisionResponse:
     params = {
-        "model": "azure/luna-deployment",
+        "model": model,
         "api_base": api_base,
         **credentials,
     }
@@ -218,6 +219,15 @@ async def test_azure_credential_lookup_does_not_block_the_event_loop(
 
     respx_mock.post(_URL).respond(json=_RESPONSE)
     await call_decisions(True, False, {"azure_ad_token_provider": provider})
+
+
+@pytest.mark.parametrize("systemone", (False, True))
+async def test_gpt5_series_selector_is_not_sent_as_part_of_the_deployment_name(
+    respx_mock: respx.MockRouter, systemone: bool
+) -> None:
+    route = respx_mock.post(_URL).respond(json=_RESPONSE)
+    await call_decisions(True, systemone, {"api_key": "synthetic-key"}, model="azure/gpt5_series/luna-deployment")
+    assert json.loads(route.calls.last.request.content)["model"] == "luna-deployment"
 
 
 def test_azure_decisions_requires_azure_endpoint(

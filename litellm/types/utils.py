@@ -896,6 +896,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/search": [CallTypes.asearch, CallTypes.search],
     "/decisions": [CallTypes.adecisions, CallTypes.decisions],
     "/v1/decisions": [CallTypes.adecisions, CallTypes.decisions],
+    "/openai/v1/decisions": [CallTypes.adecisions, CallTypes.decisions],
+    "/openai/decisions": [CallTypes.adecisions, CallTypes.decisions],
     "/systemone": [CallTypes.asystemone, CallTypes.systemone],
     "/v1/systemone": [CallTypes.asystemone, CallTypes.systemone],
     "/extraction": [CallTypes.aextraction, CallTypes.extraction],

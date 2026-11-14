@@ -391,6 +391,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/search/{search_tool_name}",
         "/decisions",
         "/v1/decisions",
+        "/openai/v1/decisions",
+        "/openai/decisions",
         "/systemone",
         "/v1/systemone",
         "/extraction",
