@@ -1,6 +1,7 @@
 import re
 from collections.abc import Mapping
 from typing import Final
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -53,7 +54,9 @@ def minimax_images_url(api_base: str, endpoint: str) -> str:
     base_url: Final = api_base.rstrip("/")
     if base_url.endswith(f"/{endpoint}"):
         return base_url
-    return join_api_base(_API_SURFACE_SUFFIX.sub("", base_url), f"v1/{endpoint}")
+    parts: Final = urlsplit(base_url)
+    root: Final = urlunsplit(parts._replace(path=_API_SURFACE_SUFFIX.sub("", parts.path)))
+    return join_api_base(root, f"v1/{endpoint}")
 
 
 def image_params_without_stream(params: Mapping[str, object], drop_params: object) -> Mapping[str, object]:
