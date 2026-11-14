@@ -7,6 +7,7 @@ import pathlib
 import subprocess
 import sys
 import textwrap
+import time
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, List, Optional, Tuple, cast
@@ -5155,6 +5156,28 @@ def test_system_injection_point_leaves_a_developer_prompt_unmarked_when_its_mark
         else ({"text": _DEVELOPER_PREFIX},)
     )
 
+
+
+def test_system_injection_point_stays_fast_when_a_one_hour_question_refuses_every_developer_mark() -> None:
+    developer_turns: Final = 3000
+    messages: Final[list[AllMessageValues]] = [
+        *({"role": "developer", "content": f"Rule {turn}."} for turn in range(developer_turns)),
+        {"role": "user", "content": [{"type": "text", "text": "Which rule?", "cache_control": dict(_ONE_HOUR)}]},
+    ]
+    started: Final = time.perf_counter()
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="anthropic/claude-haiku-5-5",
+        messages=messages,
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert time.perf_counter() - started < 3
+    assert _count_cache_control(processed) == 1
+    assert processed[-1]["content"][-1]["cache_control"] == dict(_ONE_HOUR)
 
 _TOOL_WITH_A_CACHE_CONTROL_ARGUMENT: Final = MappingProxyType(
     {

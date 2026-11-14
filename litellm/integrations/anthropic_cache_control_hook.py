@@ -836,7 +836,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 if targeted_role == "developer" and not keeps_one_ttl_within_the_cap(
                     (*messages_cache_control_ttls(messages), *outside_ttls, _cache_control_ttl(control))
                 ):
-                    continue
+                    break
 
                 messages[target_index] = AnthropicCacheControlHook._safe_insert_cache_control_in_message(
                     messages[target_index], control, openai_dialect
