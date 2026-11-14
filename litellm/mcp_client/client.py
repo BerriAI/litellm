@@ -995,9 +995,11 @@ class MCPClient:
             auth: httpx2.Auth | None = None,
         ) -> httpx2.AsyncClient:
             """Create an httpx2.AsyncClient with LiteLLM's SSL configuration."""
-            # Get unified SSL configuration using the same logic as http_handler.py
-            ssl_config: Final = get_ssl_configuration(self.ssl_verify)
-            verbose_logger.debug("MCP client using SSL configuration: %s", type(ssl_config).__name__)
+            # An explicit transport handles its own TLS configuration. In particular, do
+            # not resolve SSL settings that the supplied transport will not use.
+            ssl_config: Final = get_ssl_configuration(self.ssl_verify) if transport is None else True
+            if transport is None:
+                verbose_logger.debug("MCP client using SSL configuration: %s", type(ssl_config).__name__)
             # The MCP SDK's sse_client and streamable_http_client call this factory without
             # passing auth=, so the fallback is used: a v2-resolved auth if present, else the
             # SigV4 aws_auth. Both are None for the common case — no behavior change.

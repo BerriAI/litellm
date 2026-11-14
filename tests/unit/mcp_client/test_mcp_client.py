@@ -416,6 +416,36 @@ class TestMCPClient:
         assert call_args.env == {"DEBUG": "1"}
 
     @pytest.mark.asyncio
+    async def test_mcp_client_explicit_transport_skips_ssl_configuration(self):
+        """Injected HTTP transports must work even if ambient SSL resolution fails."""
+        transport = httpx2.MockTransport(lambda request: httpx2.Response(200, text="ok"))
+        client = MCPClient(server_url="https://example.test/mcp")
+
+        with patch.object(
+            mcp_client_module,
+            "get_ssl_configuration",
+            side_effect=RuntimeError("ssl-config-failure"),
+        ) as get_ssl_config:
+            factory = client._create_httpx_client_factory(transport=transport)
+            async with factory(headers={"X-Test": "custom-transport"}) as http_client:
+                response = await http_client.get("https://example.test/mcp")
+                assert response.status_code == 200
+                assert response.text == "ok"
+                assert response.request.headers["X-Test"] == "custom-transport"
+            get_ssl_config.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mcp_client_without_explicit_transport_resolves_ssl_configuration(self):
+        """Default transports must retain the existing SSL settings behavior."""
+        client = MCPClient(server_url="https://example.test/mcp", ssl_verify=False)
+
+        with patch.object(mcp_client_module, "get_ssl_configuration", return_value=False) as get_ssl_config:
+            factory = client._create_httpx_client_factory()
+            async with factory() as http_client:
+                assert isinstance(http_client, httpx2.AsyncClient)
+            get_ssl_config.assert_called_once_with(False)
+
+    @pytest.mark.asyncio
     @patch.object(mcp_client_module, "streamable_http_client")
     @patch.dict(
         os.environ,
