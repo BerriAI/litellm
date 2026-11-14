@@ -200,15 +200,29 @@ async def test_another_pod_holding_the_job_lock_skips_the_scan(router_redis: tup
 
 
 @pytest.mark.asyncio
-async def test_lock_holder_scans_then_releases_the_job_lock(router_redis: tuple[RedisCache, object]) -> None:
+async def test_only_the_first_pod_to_fire_runs_the_cycle(router_redis: tuple[RedisCache, object]) -> None:
     redis, _ = router_redis
-    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
-    manager: Final = KeyExpiryAlertManager(
-        _database((_key(),)), DualCache(), email, lambda: NOW, pod_lock_manager=PodLockManager(redis_cache=redis)
+    first_db: Final = _database((_key(),))
+    later_db: Final = _database((_key(),))
+    first: Final = KeyExpiryAlertManager(
+        first_db,
+        DualCache(),
+        MagicMock(send_key_expiring_email=AsyncMock()),
+        lambda: NOW,
+        pod_lock_manager=PodLockManager(redis_cache=redis),
     )
-    await manager.process_alerts()
-    assert email.send_key_expiring_email.await_count == 1
-    assert await PodLockManager(redis_cache=redis).acquire_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME)
+    later: Final = KeyExpiryAlertManager(
+        later_db,
+        DualCache(),
+        MagicMock(send_key_expiring_email=AsyncMock()),
+        lambda: NOW,
+        pod_lock_manager=PodLockManager(redis_cache=redis),
+    )
+    await first.process_alerts()
+    await later.process_alerts()
+    await first.process_alerts()
+    assert first_db.db.query_raw.await_count == 1
+    later_db.db.query_raw.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,11 @@ from typing import Final, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._internal_context import with_service_target
-from litellm.constants import KEY_EXPIRY_ALERT_JOB_NAME, KEY_EXPIRY_ALERT_MAX_DAYS
+from litellm.constants import (
+    KEY_EXPIRY_ALERT_JOB_NAME,
+    KEY_EXPIRY_ALERT_MAX_DAYS,
+    LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS,
+)
 from litellm.proxy.common_utils.key_expiry_alerts import key_expiry_alert_days
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.utils import PrismaClient
@@ -18,6 +22,11 @@ from litellm.repositories.user_repository import UserRepository
 _METADATA: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _ROWS: Final = TypeAdapter(tuple[object, ...])
+# Held for nearly a whole cycle so later-firing pods skip it; it expires before the next cycle's first firer
+# (the weekly spend report lock uses the same interval-minus-an-hour TTL).
+_CYCLE_LOCK_TTL: Final = max(
+    LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS - 3600, LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS // 2
+)
 _EXPIRING_KEYS_SQL: Final = """
 SELECT token, key_alias, key_name, user_id, expires, metadata
 FROM "LiteLLM_VerificationToken"
@@ -89,25 +98,25 @@ class KeyExpiryAlertManager:
         self.pod_lock_manager = pod_lock_manager
 
     async def process_alerts(self) -> None:
-        """Entry point for the scheduled job. Uses PodLockManager so only one pod scans keys per cycle in
-        multi-pod deployments. The cycle is skipped only when another pod holds the lock: if Redis cannot answer,
-        this pod scans anyway, because a missed warning can outlive the key while the per-key claim still guards
-        each email."""
+        """Entry point for the scheduled job: one pod runs it per cycle. Each pod's timer fires at its own boot time
+        plus jitter, so the first pod to fire takes the lock for nearly the whole cycle and never releases it; every
+        later pod in that cycle skips. If Redis cannot answer, this pod runs anyway: a skipped cycle can let a key
+        expire unwarned, and the per-key claim still guards each email."""
         lock: Final = self.pod_lock_manager if self.pod_lock_manager and self.pod_lock_manager.redis_cache else None
-        acquired: Final = lock is not None and bool(await lock.acquire_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME))
-        if lock is not None and lock.redis_cache is not None and not acquired:
-            holder: Final = await lock.redis_cache.async_get_cache(  # pyright: ignore[reportUnknownMemberType]  # RedisCache.async_get_cache leaves its key parameter untyped
-                PodLockManager.get_redis_lock_key(KEY_EXPIRY_ALERT_JOB_NAME)
-            )
-            if holder is not None:
-                logger.debug("Key expiry alerts: another pod is running this cycle, skipping.")
-                return
-            logger.warning("Key expiry alerts: could not take the job lock from Redis, scanning without it.")
-        try:
+        if lock is None or lock.redis_cache is None:
             await self._send_due_alerts()
-        finally:
-            if acquired and lock is not None:
-                await lock.release_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME)
+            return
+        if await lock.acquire_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME, ttl=_CYCLE_LOCK_TTL, allow_reentrant=False):
+            await self._send_due_alerts()
+            return
+        holder: Final = await lock.redis_cache.async_get_cache(  # pyright: ignore[reportUnknownMemberType]  # RedisCache.async_get_cache leaves its key parameter untyped
+            PodLockManager.get_redis_lock_key(KEY_EXPIRY_ALERT_JOB_NAME)
+        )
+        if holder is not None:
+            logger.debug("Key expiry alerts: another pod already ran this cycle, skipping.")
+            return
+        logger.warning("Key expiry alerts: could not take the job lock from Redis, running without it.")
+        await self._send_due_alerts()
 
     async def _send_due_alerts(self) -> None:
         try:
