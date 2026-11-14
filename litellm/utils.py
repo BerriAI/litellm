@@ -11541,6 +11541,7 @@ class ProviderConfigManager:
         from litellm.llms.searchapi.search.transformation import SearchAPIConfig
         from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
         from litellm.llms.serper.search.transformation import SerperSearchConfig
+        from litellm.llms.specstream.search.transformation import SpecStreamSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
         from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
         from litellm.llms.webiq.search.transformation import WebIQSearchConfig
@@ -11571,6 +11572,7 @@ class ProviderConfigManager:
             SearchProviders.WEBIQ: WebIQSearchConfig,
             SearchProviders.DEEPSEEK: DeepSeekSearchConfig,
             SearchProviders.XAI: XAISearchConfig,
+            SearchProviders.SPECSTREAM: SpecStreamSearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
