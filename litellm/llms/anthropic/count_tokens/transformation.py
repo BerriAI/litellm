@@ -49,7 +49,10 @@ _PLAIN_MESSAGE_KEYS: Final = frozenset({"role", "content"})
 def _count_image(block: JsonValue) -> JsonValue:
     if not isinstance(block, dict) or block.get("type") != "image_url":
         return block
-    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_image_obj
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_content_element_factory,
+        convert_to_anthropic_image_obj,
+    )
 
     image_block: Final = _IMAGE_BLOCK.validate_python(block)
     image_url: Final = image_block["image_url"]
@@ -57,7 +60,7 @@ def _count_image(block: JsonValue) -> JsonValue:
         openai_image_url=image_url if isinstance(image_url, str) else image_url["url"],
         format=image_url.get("format") if isinstance(image_url, dict) else None,
     )
-    image: Final = _COUNT_REQUEST.validate_python({"type": "image", "source": source})
+    image: Final = _COUNT_REQUEST.validate_python(anthropic_content_element_factory(source))
     return {**{key: value for key, value in block.items() if key not in {"type", "image_url"}}, **image}
 
 
