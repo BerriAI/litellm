@@ -240,6 +240,7 @@ class TestChatGPTResponsesAPITransformation:
                 "stream_options": {"include_usage": True},
                 # supported and should be preserved
                 "max_output_tokens": 123,
+                "prompt_cache_key": "session_123",
                 "truncation": "auto",
                 "previous_response_id": "resp_123",
                 "reasoning": {"effort": "medium"},
@@ -258,6 +259,7 @@ class TestChatGPTResponsesAPITransformation:
         assert "stream_options" not in request
 
         assert request["max_output_tokens"] == 123
+        assert request["prompt_cache_key"] == "session_123"
         assert request["truncation"] == "auto"
         assert request["previous_response_id"] == "resp_123"
         assert request["reasoning"] == {"effort": "medium"}
@@ -677,6 +679,10 @@ def test_prompt_cache_key_keeps_one_session_header_across_requests(call: str) ->
             )
 
     assert [call.args[0].headers["session_id"] for call in upstream.call_args_list] == ["conv-123", "conv-123"]
+    assert [json.loads(call.args[0].content)["prompt_cache_key"] for call in upstream.call_args_list] == [
+        "conv-123",
+        "conv-123",
+    ]
 
 
 _CITY_SCHEMA: Final = {
