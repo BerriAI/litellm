@@ -114,14 +114,20 @@ class AssemblyAIPassthroughLoggingHandler:
             "finished polling assembly for transcript response- got transcript response %s",
             json.dumps(transcript_response, indent=4),
         )
+        resolved_model = (
+            model
+            or (transcript_response.get("speech_model") if transcript_response else "")
+            or "best"
+        )
+        kwargs["model"] = resolved_model
         if transcript_response:
             cost: Final = self.get_cost_for_assembly_transcript(
-                speech_model=model,
+                speech_model=resolved_model,
                 transcript_response=transcript_response,
             )
             response_cost = cost
 
-        # Make standard logging object for Vertex AI
+        # Make standard logging object for AssemblyAI
         standard_logging_object: Final = get_standard_logging_object_payload(
             kwargs=kwargs,
             init_response_obj=transcript_response,
@@ -142,7 +148,7 @@ class AssemblyAIPassthroughLoggingHandler:
 
         # pretty print standard logging object
         verbose_proxy_logger.debug("standard_logging_object= %s", json.dumps(standard_logging_object, indent=4))
-        logging_obj.model_call_details["model"] = model
+        logging_obj.model_call_details["model"] = resolved_model
         logging_obj.model_call_details["custom_llm_provider"] = "assemblyai"
         logging_obj.model_call_details["response_cost"] = response_cost
 
@@ -262,16 +268,17 @@ class AssemblyAIPassthroughLoggingHandler:
             except Exception:
                 pass  # Continue to fallback if model not found
 
-            # Fallback to assemblyai/nano if speech model info not found
-            try:
-                model_info = litellm.get_model_info(
-                    model="assemblyai/nano",
-                    custom_llm_provider="assemblyai",
-                )
-                if model_info and model_info.get("input_cost_per_second") is not None:
-                    return model_info.get("input_cost_per_second")
-            except Exception:
-                pass
+            # Fallback to assemblyai/best then assemblyai/nano if speech model info not found
+            for fallback in ("assemblyai/best", "assemblyai/nano"):
+                try:
+                    model_info = litellm.get_model_info(
+                        model=fallback,
+                        custom_llm_provider="assemblyai",
+                    )
+                    if model_info and model_info.get("input_cost_per_second") is not None:
+                        return model_info.get("input_cost_per_second")
+                except Exception:
+                    pass
 
             return None
         except Exception as e:

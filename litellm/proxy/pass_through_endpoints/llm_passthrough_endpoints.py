@@ -2486,9 +2486,15 @@ async def assemblyai_proxy_route(
     is_streaming_request = False
     # assemblyai is streaming when 'stream' = True is in the body
     if request.method == "POST":
-        _request_body: Final = await _json_request_body(request)
-        if _request_body.get("stream"):
-            is_streaming_request = True
+        try:
+            _request_body = await _json_request_body(request)
+            if isinstance(_request_body, dict) and _request_body.get("stream"):
+                is_streaming_request = True
+        except Exception:
+            # Non-JSON payloads (e.g. binary audio file upload on /v2/upload)
+            raw_body = await request.body()
+            setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, raw_body)
+            safe_set_request_parsed_body(request, {})
 
     ## CREATE PASS-THROUGH
     endpoint_func: Final = create_pass_through_route(
