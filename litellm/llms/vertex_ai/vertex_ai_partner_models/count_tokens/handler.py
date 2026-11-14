@@ -12,6 +12,7 @@ from typing import Any, Final
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.anthropic.common_utils import (
+    anthropic_message_objects,
     is_claude_model_target,
     strip_unsigned_thinking_from_anthropic_messages,
 )
@@ -26,7 +27,7 @@ _COUNT_TOKENS_PUBLISHERS: Final = (
 )
 
 
-_ANTHROPIC_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
+_JSON_LIST: Final = TypeAdapter(list[JsonValue])
 
 
 def count_tokens_publisher(model: str) -> str | None:
@@ -35,12 +36,14 @@ def count_tokens_publisher(model: str) -> str | None:
 
 def count_tokens_request_body(request_data: Mapping[str, object], model: str) -> Mapping[str, object]:
     messages: Final = request_data.get("messages")
-    if not (is_claude_model_target("vertex_ai", model) and isinstance(messages, list)):
+    claude_messages: Final = (
+        anthropic_message_objects(_JSON_LIST.validate_python(messages))
+        if is_claude_model_target("vertex_ai", model) and isinstance(messages, list)
+        else None
+    )
+    if claude_messages is None:
         return request_data
-    return {
-        **request_data,
-        "messages": strip_unsigned_thinking_from_anthropic_messages(_ANTHROPIC_MESSAGES.validate_python(messages)),
-    }
+    return {**request_data, "messages": strip_unsigned_thinking_from_anthropic_messages(claude_messages)}
 
 
 class VertexAIPartnerModelsTokenCounter(VertexBase):

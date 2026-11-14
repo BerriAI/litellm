@@ -423,6 +423,27 @@ def test_count_drops_a_leading_system_message_without_text() -> None:
     assert result == {"model": "claude-opus-5-5", "messages": [{"role": "user", "content": "hi"}]}
 
 
+_GEMINI_THOUGHT_HISTORY: Final[list[dict[str, JsonValue]]] = [
+    {"role": "user", "content": "Pick a number."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+            {"type": "text", "text": "Seven."},
+        ],
+    },
+    {"role": "user", "content": "Double it."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "Gemini reasoning", "signature": ""},
+            {"type": "text", "text": "Fourteen."},
+        ],
+    },
+    {"role": "user", "content": "Halve it."},
+]
+
+
 @pytest.mark.parametrize(
     ("count_config", "messages_config"),
     (
@@ -434,25 +455,7 @@ def test_count_drops_a_leading_system_message_without_text() -> None:
 def test_count_sends_the_thinking_history_messages_sends(
     count_config: AnthropicCountTokensConfig, messages_config: AnthropicMessagesConfig, model: str
 ) -> None:
-    messages: Final[list[dict[str, JsonValue]]] = [
-        {"role": "user", "content": "Pick a number."},
-        {
-            "role": "assistant",
-            "content": [
-                {"type": "thinking", "thinking": "plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
-                {"type": "text", "text": "Seven."},
-            ],
-        },
-        {"role": "user", "content": "Double it."},
-        {
-            "role": "assistant",
-            "content": [
-                {"type": "thinking", "thinking": "Gemini reasoning", "signature": ""},
-                {"type": "text", "text": "Fourteen."},
-            ],
-        },
-        {"role": "user", "content": "Halve it."},
-    ]
+    messages: Final = _GEMINI_THOUGHT_HISTORY
 
     counted: Final = count_config.transform_request_to_count_tokens(model=model, messages=messages)
     sent: Final = messages_config.transform_anthropic_messages_request(
@@ -465,6 +468,33 @@ def test_count_sends_the_thinking_history_messages_sends(
 
     assert counted["messages"] == sent["messages"]
     assert (counted["messages"] == messages) is (model == "kimi-k3")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_base", "kept"),
+    (
+        ("https://api.anthropic.com", False),
+        ("https://api.deepseek.com/anthropic", True),
+        ("https://api.z.ai/api/anthropic", True),
+    ),
+)
+async def test_handler_sends_an_unsigned_thought_only_to_a_host_that_does_not_check_claude_signatures(
+    api_base: str, kept: bool, httpx_transport_clients
+):
+    with respx.mock:
+        route = respx.post(f"{api_base}/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 21})
+        )
+        await AnthropicCountTokensHandler().handle_count_tokens_request(
+            model="claude-sonnet-4-5",
+            messages=_GEMINI_THOUGHT_HISTORY,
+            auth_header={"x-api-key": "sk-ant-api03-test-key"},
+            api_base=api_base,
+        )
+
+    sent: Final = TypeAdapter(dict[str, JsonValue]).validate_json(route.calls.last.request.content)
+    assert (sent["messages"] == _GEMINI_THOUGHT_HISTORY) is kept
 
 
 @pytest.mark.asyncio

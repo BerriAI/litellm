@@ -138,6 +138,19 @@ def checks_claude_signatures(api_base: str) -> bool:
     return any(host == domain or host.endswith(f".{domain}") for domain in _CLAUDE_SIGNATURE_CHECKING_DOMAINS)
 
 
+_CLAUDE_SIGNATURE_CHECKING_PROVIDERS: Final = frozenset(
+    {"azure_ai", "vertex_ai", "bedrock", "bedrock_mantle", "databricks", "github_copilot"}
+)
+
+
+def verifies_claude_thinking_signatures(custom_llm_provider: str, model: str, api_base: str | None) -> bool:
+    if "claude" not in model.lower():
+        return False
+    if custom_llm_provider == "anthropic":
+        return checks_claude_signatures(AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com")
+    return custom_llm_provider in _CLAUDE_SIGNATURE_CHECKING_PROVIDERS
+
+
 def is_anthropic_messages_url(url: str) -> bool:
     """Check whether a URL addresses Anthropic's Messages API."""
     parsed_url: Final = urlparse(url)
@@ -1782,6 +1795,11 @@ def strip_unsigned_thinking_from_anthropic_messages(
     return strip_unreplayable_blocks_from_anthropic_messages(
         tuple(dict(message) for message in messages), is_unsignable_thinking_block
     )
+
+
+def anthropic_message_objects(messages: Sequence[JsonValue]) -> Sequence[Mapping[str, JsonValue]] | None:
+    objects: Final = tuple(message for message in messages if isinstance(message, dict))
+    return objects if len(objects) == len(messages) else None
 
 
 def strip_thinking_blocks_from_anthropic_messages_request_dict(

@@ -30,12 +30,12 @@ from litellm.types.router import GenericLiteLLMParams
 from ...common_utils import (
     AnthropicError,
     AnthropicModelInfo,
-    checks_claude_signatures,
     merge_anthropic_beta_headers,
     optionally_handle_anthropic_oauth,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
     strip_unreplayable_blocks_from_anthropic_messages,
+    verifies_claude_thinking_signatures,
 )
 from .mid_conversation_system import (
     as_system_content_blocks,
@@ -155,10 +155,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return False
 
     def verifies_thinking_signatures(self, model: str, api_base: str | None) -> bool:
-        return "claude" in model.lower() and (
-            self._resolved_provider != "anthropic"
-            or checks_claude_signatures(AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com")
-        )
+        return verifies_claude_thinking_signatures(self._resolved_provider, model, api_base)
 
     @staticmethod
     def _filter_billing_headers_from_system(system_param):

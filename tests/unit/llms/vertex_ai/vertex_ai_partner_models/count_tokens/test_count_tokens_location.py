@@ -346,3 +346,12 @@ def test_count_tokens_keeps_unsigned_thinking_for_a_model_that_is_not_claude():
     body: Final = count_tokens_request_body({"model": model, "messages": GEMINI_THOUGHT_HISTORY}, model)
 
     assert body["messages"] == GEMINI_THOUGHT_HISTORY
+
+
+def test_count_tokens_sends_a_message_that_is_not_an_object_as_it_came():
+    model: Final = "claude-sonnet-5-5"
+    messages: Final = ["hi", *GEMINI_THOUGHT_HISTORY]
+
+    body: Final = count_tokens_request_body({"model": model, "messages": messages}, model)
+
+    assert body["messages"] == messages

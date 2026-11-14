@@ -61,6 +61,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
                 messages=request["messages"],
                 tools=request.get("tools"),
                 system=request.get("system"),
+                custom_llm_provider="bedrock_mantle",
             )
             verbose_logger.debug("Making bedrock-mantle count_tokens request to: %s", endpoint_url)
             api_key: Final = litellm_params.get("api_key")
