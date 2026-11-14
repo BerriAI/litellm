@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Se
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from itertools import count
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar, get_args
 
@@ -104,21 +105,40 @@ def _items(value: object) -> Sequence[object] | None:
 
 
 def json_safe(value: object) -> object:
+    root: Final[list[object]] = [None]
+    pending: Final[list[tuple[Callable[[object], None], object, frozenset[int]]]] = [
+        (partial(root.__setitem__, 0), value, frozenset())
+    ]
+    while pending:
+        assign, current, path = pending.pop()
+        converted, children = _json_node(current)
+        assign(converted)
+        if children:
+            if id(current) in path:
+                raise ValueError("Circular reference detected")
+            nested = path | {id(current)}
+            pending.extend((child_assign, child, nested) for child_assign, child in reversed(children))
+    return root[0]
+
+
+def _json_node(value: object) -> tuple[object, Sequence[tuple[Callable[[object], None], object]]]:
     if value is None or isinstance(value, bool | str):
-        return value
+        return value, ()
     if isinstance(value, int):
-        return value if _JSON_INTS[0] <= value <= _JSON_INTS[1] else {NUMBER_KEY: str(value)}
+        return (value if _JSON_INTS[0] <= value <= _JSON_INTS[1] else {NUMBER_KEY: str(value)}), ()
     if isinstance(value, float):
-        return value if math.isfinite(value) else {NUMBER_KEY: repr(value)}
+        return (value if math.isfinite(value) else {NUMBER_KEY: repr(value)}), ()
     mapping: Final = _parsed(_DICT, value)
     if mapping is not None:
-        if all(isinstance(key, str) for key in mapping):
-            return {str(key): json_safe(item) for key, item in mapping.items()}
-        return _opaque(value)
+        if not all(isinstance(key, str) for key in mapping):
+            return _opaque(value), ()
+        converted: Final[dict[str, object]] = dict.fromkeys(str(key) for key in mapping)
+        return converted, [(partial(converted.__setitem__, str(key)), item) for key, item in mapping.items()]
     items: Final = _items(value)
     if items is not None:
-        return [json_safe(item) for item in items]
-    return _opaque(value)
+        listed: Final[list[object]] = [None] * len(items)
+        return listed, [(partial(listed.__setitem__, index), item) for index, item in enumerate(items)]
+    return _opaque(value), ()
 
 
 def _opaque(value: object) -> Mapping[str, object]:
